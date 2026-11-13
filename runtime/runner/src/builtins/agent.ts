@@ -375,8 +375,6 @@ export function agent(
     // instance the staging run addressed.
     const identity: ScopeKeyIdentity = tx.tx.scopeKeyIdentity ??
       runtime.scopeKeyIdentity;
-    // The identity the run carries, when it carries one.
-    const runIdentity = tx.tx.scopeKeyIdentity;
 
     if (!state.resultCell || state.cellScope !== outputScope) {
       state.resultCell = ownedCell(
@@ -850,7 +848,7 @@ export function agent(
         {
           builtinId: AGENT_SINK,
           effectKey,
-          identity: runIdentity,
+          identity,
           scope: outputScope,
           attributeToBuiltin: false,
           reportRejection: (rejection) =>

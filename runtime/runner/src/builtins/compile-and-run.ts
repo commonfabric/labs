@@ -466,9 +466,7 @@ function compileAndRunServed(
     return;
   }
 
-  // The identity the run carries, if any, and the one it acts as.
-  const runIdentity = tx.tx.scopeKeyIdentity;
-  const identity = runIdentity ?? runtime.scopeKeyIdentity;
+  const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
   const targetKey = effectTargetKey("compileAndRun", result, identity);
   // A recovered marker must first issue this instance's target-space compile
   // request, which registers closure replication before the cache is consumed.
@@ -567,7 +565,7 @@ function compileAndRunServed(
             {
               builtinId: "compileAndRun",
               effectKey,
-              identity: runIdentity,
+              identity,
               scope: pending.getAsNormalizedFullLink().scope ?? "space",
               attributeToBuiltin: true,
             },

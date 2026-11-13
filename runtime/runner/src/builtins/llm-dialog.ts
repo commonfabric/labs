@@ -4051,11 +4051,6 @@ export function llmDialog(
           });
 
           const identity = capturedRequest.scopeKeyIdentity;
-          // The identity a served run carries, when it carries one; `identity`
-          // falls back to the runtime's own.
-          const runIdentity = identity === undefined
-            ? undefined
-            : tx.tx.scopeKeyIdentity;
           const turn: DialogTurn = {
             result,
             internal,
@@ -4176,7 +4171,7 @@ export function llmDialog(
                     {
                       builtinId: "llmDialog",
                       effectKey: `llmDialog:${nextRequestId}`,
-                      identity: runIdentity,
+                      identity: capturedRequest.scopeKeyIdentity,
                       scope: outputScope,
                       attributeToBuiltin: true,
                     },

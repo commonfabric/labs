@@ -959,9 +959,6 @@ export function llm(
     const identity = served
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
-    // The identity a served run carries, when it carries one; `identity`
-    // falls back to the runtime's own.
-    const runIdentity = served ? tx.tx.scopeKeyIdentity : undefined;
     const stateKey = identity
       ? resolveScopeKey(outputScope ?? "space", identity)
       : "local";
@@ -1214,7 +1211,7 @@ export function llm(
         {
           builtinId: "llm",
           effectKey,
-          identity: runIdentity,
+          identity,
           scope: outputScope ?? "space",
         },
       );
@@ -1454,9 +1451,6 @@ export function generateText(
     const identity = served
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
-    // The identity a served run carries, when it carries one; `identity`
-    // falls back to the runtime's own.
-    const runIdentity = served ? tx.tx.scopeKeyIdentity : undefined;
     const stateKey = identity
       ? resolveScopeKey(outputScope ?? "space", identity)
       : "local";
@@ -1712,7 +1706,7 @@ export function generateText(
         {
           builtinId: "generateText",
           effectKey,
-          identity: runIdentity,
+          identity,
           scope: outputScope ?? "space",
         },
       );
@@ -1899,9 +1893,6 @@ export function generateObject<T extends Record<string, unknown>>(
     const identity = served
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
-    // The identity a served run carries, when it carries one; `identity`
-    // falls back to the runtime's own.
-    const runIdentity = served ? tx.tx.scopeKeyIdentity : undefined;
     const stateKey = identity
       ? resolveScopeKey(outputScope ?? "space", identity)
       : "local";
@@ -2266,7 +2257,7 @@ export function generateObject<T extends Record<string, unknown>>(
           {
             builtinId: "generateObject",
             effectKey,
-            identity: runIdentity,
+            identity,
             scope: outputScope ?? "space",
           },
         );
@@ -2686,7 +2677,7 @@ export function generateObject<T extends Record<string, unknown>>(
           {
             builtinId: "generateObject",
             effectKey,
-            identity: runIdentity,
+            identity,
             scope: outputScope ?? "space",
           },
         );

@@ -17,8 +17,11 @@ export type AbandonedRequest = {
   effectKey: string;
 
   /**
-   * The scope-key identity of the run that staged the request, when that run
-   * carried one. A served run that nobody demands carries none.
+   * The identity the run that staged the request wrote its cells under, so
+   * the ending lands in the instance that run wrote. A builtin whose runs fall
+   * back to the runtime's own identity passes that fallback; one whose runs
+   * carry only a demanded identity passes `undefined` for a served run that
+   * nobody demands.
    */
   identity: ScopeKeyIdentity | undefined;
 
@@ -46,9 +49,15 @@ export type AbandonedRequest = {
  * Nothing else will say that the request is not going out. `write` puts that
  * on the builtin's own result cells — the pending flag down, the refusal as the
  * error — and announces those cells again, because the announcement rode the
- * abandoned transaction and a reader has nothing to look at without it. The
- * transaction carries `request.identity`, so its scoped writes land in that
- * run's instance of the cells.
+ * abandoned transaction and a reader has nothing to look at without it.
+ *
+ * The ending lands in the instance the staging run itself wrote: the
+ * transaction carries `request.identity`, which is that run's. Builtins differ
+ * in what that is for a served run nobody demands, and the ending follows the
+ * run either way. The `llm` builtins, `compileAndRun` and `agent` act as the
+ * runtime's own identity then, so they pass it, and the ending is written in
+ * the runtime's instance, where their run wrote. The `fetch*` builtins,
+ * `fetchProgram` and `sqliteQuery` carry no identity then, so they pass none.
  *
  * How it commits depends on where it runs:
  *
@@ -62,9 +71,9 @@ export type AbandonedRequest = {
  *   earlier run's writes, pending in that wave; sealing behind them is what
  *   keeps the ending in front of them, in the serving runtime's view as well as
  *   in the store. Without an identity the wave resolves the cells against the
- *   service's own session, which is the one instance a space-scoped cell has,
- *   so the ending is written; for a user- or session-scoped cell it would be
- *   the service's instance rather than the requester's, so the ending is not
+ *   service's own session. For a space-scoped cell that is its one instance,
+ *   and the ending is written. For a user- or session-scoped cell there is no
+ *   instance the run could be said to have written, so the ending is not
  *   written, and the cells keep what the refused run left.
  * - Everywhere else, it commits on its own, marked as a completion of the
  *   request.

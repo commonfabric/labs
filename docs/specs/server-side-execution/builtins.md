@@ -72,8 +72,9 @@ see. It takes the pending flag down and re-announces, and the refusal is
 reported rather than written into the conversation.
 
 Every one of these endings, and `agent`'s, goes through
-`settleAbandonedRequest()`, which also decides how the ending commits. Under the
-serving posture that turns on whether the run that staged the request sealed.
+`settleAbandonedRequest()`, which also decides how the ending commits. The
+ending lands in the instance the run that staged the request wrote. Under the
+serving posture, how it commits turns on whether that run sealed.
 
 * **The staging run sealed.** The request was dropped after its transaction
   committed: its release check refused it, or a post-commit step of the builtin
@@ -87,12 +88,18 @@ serving posture that turns on whether the run that staged the request sealed.
   earlier run's writes, pending in that wave, and the wave orders the ending
   after them. Committed on its own, ahead of the wave, it would sit under those
   older writes in the serving runtime's view, which would read the request as
-  unanswered and stage it again. The identity puts the ending in the requesting
-  principal's instance of a scoped node's cells. A served run nobody demands
-  carries no identity: its ending is written for a space-scoped node, whose one
-  instance is the service session's, and not written for a user- or
-  session-scoped one, where that session would name the service's instance; the
-  cells then keep what the refused run left, and the omission is logged.
+  unanswered and stage it again. The stamp carries the staging run's identity,
+  which puts the ending in the requesting principal's instance of a scoped
+  node's cells.
+
+What the staging run wrote under, for a served run nobody demands, differs by
+builtin, and the ending follows it. The `llm` builtins, `llm-dialog`,
+`compileAndRun` and `agent` act as the runtime's own identity then: their run
+and their ending both write the runtime's instance, a user-scoped node's
+included. The `fetch*` builtins, `fetch-program` and `sqlite*` carry no identity
+then. Their ending is written for a space-scoped node, in its one instance, and
+not written for a user- or session-scoped one, which leaves the cells as the
+refused run found them; the omission is logged.
 
 Off the serving posture, the ending commits on its own, marked as a completion
 of the request.
@@ -102,11 +109,13 @@ it cannot be rebased onto a commit made to the same cells after the wave opened
 or when it read a write the wave withdrew. Nothing in the serving loop lands a
 dropped ending again. It is written again when the node runs again: a derivation
 that read the dropped write is withdrawn and re-armed with it, and a commit to
-cells the node reads reaches it through those reads. A node that reads its own
-result cells only as a write destination, as `sqlite*` does, is not reached by
-a commit to them, so its dropped ending waits for a change to something else it
-reads. Until then the cells keep what the last committed run left; the refused
-run's own writes, its pending flag among them, never committed.
+cells the node reads reaches it through those reads. A test has seen the first
+of these, a drop followed by a re-run and a refusal whose ending landed. A node
+that reads its own result cells only as a write destination, as `sqlite*` does,
+would not be reached by a commit to them, so its dropped ending would wait for a
+change to something else it reads; that is not established by a test. Until
+then the cells keep what the last committed run left, since the refused run's
+own writes, its pending flag among them, never committed.
 
 How often a refused node runs differs by builtin. An `llm` builtin's ending
 records the request hash, so the node's next run finds the request answered and
