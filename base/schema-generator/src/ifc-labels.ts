@@ -34,7 +34,10 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
 type IfcLabels = Readonly<Record<string, unknown>>;
@@ -192,6 +195,99 @@ export const joinMemberIfcLabels = (
     }
   }
   return Object.keys(joined).length > 0 ? joined : undefined;
+};
+
+/** The labels `schema` declares on itself, none where it declares none. */
+const ownIfcLabels = (schema: unknown): IfcLabels =>
+  isObjectNotArray(schema) && isObjectNotArray(schema.ifc) ? schema.ifc : {};
+
+/** The members `schema` lists by name, where it lists any. */
+const listedMembers = (
+  schema: MutableJSONSchema,
+): Record<string, MutableJSONSchema> | undefined =>
+  isObjectNotArray(schema) && isObjectNotArray(schema.properties)
+    ? schema.properties as Record<string, MutableJSONSchema>
+    : undefined;
+
+/**
+ * A schema of `schema`'s shape alone, as labels are placed on it: an object
+ * with each of its members, accepting anything, where it has any, and
+ * otherwise a schema accepting anything. Each member of a value that may be
+ * any one of several has its labels placed on one, to be joined
+ * (`joinPlacedIfcLabels()`).
+ */
+export const placementShape = (schema: MutableJSONSchema): MutableJSONSchema =>
+  isObjectNotArray(schema) && isObjectNotArray(schema.properties)
+    ? {
+      type: "object",
+      properties: Object.fromEntries(
+        Object.keys(schema.properties).map((name) => [name, {}]),
+      ),
+    }
+    : {};
+
+/**
+ * `schema`, the schema of a value that may be any one of several members,
+ * with their labels joined where they land: `placed` holds, for each member,
+ * a schema of the value's shape alone carrying the labels that member puts
+ * on the whole value and on each member of the value. The whole value
+ * carries those each puts on the whole, joined (`joinMemberIfcLabels()`). A
+ * label on the whole value is on each of its members too, so a member of the
+ * value carries every confidentiality atom any of them puts on it, and each
+ * other label every one of them puts on it or on the whole value alike, past
+ * those the whole value carries already.
+ */
+export const joinPlacedIfcLabels = (
+  schema: MutableJSONSchema,
+  placed: readonly MutableJSONSchema[],
+): MutableJSONSchema => {
+  const wholes = placed.map(ownIfcLabels);
+  const whole = joinMemberIfcLabels({}, wholes) ?? {};
+  const held = Array.isArray(whole.confidentiality)
+    ? whole.confidentiality
+    : [];
+  const members = listedMembers(schema);
+  const labeled = members && { ...members };
+  for (const name of Object.keys(members ?? {})) {
+    const own = placed.map((member) =>
+      ownIfcLabels(listedMembers(member)?.[name])
+    );
+    let labels: Record<string, unknown> = {};
+    const atoms = own.flatMap(({ confidentiality }) =>
+      Array.isArray(confidentiality) ? confidentiality : []
+    ).filter((atom) =>
+      !held.some((have) => valueEqual(have as FabricValue, atom as FabricValue))
+    );
+    if (atoms.length > 0) {
+      labels.confidentiality = dedupeByValueEqual(atoms as FabricValue[]);
+    }
+    for (
+      const [key, declared] of [
+        ...Object.entries(wholes[0] ?? {}),
+        ...Object.entries(own[0] ?? {}),
+      ]
+    ) {
+      if (key === "confidentiality" || declared === undefined) continue;
+      const alike = (value: unknown) =>
+        value !== undefined &&
+        valueEqual(value as FabricValue, declared as FabricValue);
+      if (
+        !alike(whole[key]) &&
+        wholes.every((onWhole, index) =>
+          alike(onWhole[key]) || alike(own[index]![key])
+        )
+      ) {
+        labels = combineIfcLabels(labels, { [key]: declared });
+      }
+    }
+    if (Object.keys(labels).length > 0) {
+      labeled![name] = withIfcLabels(labeled![name]!, labels);
+    }
+  }
+  const joined = labeled
+    ? { ...(schema as MutableJSONSchemaObj), properties: labeled }
+    : schema;
+  return Object.keys(whole).length > 0 ? withIfcLabels(joined, whole) : joined;
 };
 
 /**
