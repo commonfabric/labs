@@ -195,6 +195,13 @@ is relitigated.
   initializer is a call is refused. Two extensions are wanted later and
   are not designed: a default whose value the compiler can compute, and
   a default that is a link to another value.
+- A handle of `T` is assignable to the same kind of handle of `unknown`,
+  at the root of the value type. `Cell<T>` is not assignable to
+  `Cell<T | undefined>`, or the reverse. `object` is a type of the
+  subset, and a handle is assignable to it.
+- `typeof NAME` in a label argument, outside a writer or rule-set
+  position, stands for the value of a module-scope constant with a
+  static initializer.
 - `any` is refused. Published label typings are identity aliases, and no
   editor plugin is part of the design.
 - `streamData` and `llm` are removed. `wish` is structural.
@@ -592,20 +599,17 @@ as an assumption.
 89. **A client that holds spaces of both kinds** (SS question 42).
     *Assumed:* one runtime runs, per space, the path the space's mark
     names.
-90. **A handle of `T` where the same kind of handle of `unknown` is
-    declared** (LS question 29; 49 corpus sites). *Assumed:* assignable,
-    at the root of the value type only, and a write through it is allowed
-    and contained at run time by the rule for stored data that does not
-    match its schema.
-91. **`typeof CONSTANT` in a label argument** (LS question 30; 48 sites
-    as a label atom, 72 as an action or pattern name). *Assumed:* legal
-    for a module-scope constant with a static initializer, standing for
-    the constant's value, as the schema generator reads it today.
-92. **Three choices the language document made** in settling the type
-    checker's findings: `object` is a type of the subset; an authored
-    function called in the reactive tier is not bound by reference, so
-    its argument is `count.get()` and not `count`; and `Cell<T>` is not
-    assignable to `Cell<T | undefined>` or the reverse.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
+92. **An authored function called in the reactive tier is not bound by
+    reference** (LS §7.5.2), so its argument is `count.get()` and not
+    `count`. A pattern, a handler, and a `lift` result are. *Assumed:*
+    as written; the owner asked for examples.
+93. **Whether a write through a handle of `unknown` is refused,** on the
+    ground that a write needs a specific type, with `Cell<T>` then
+    assignable to `ReadonlyCell<unknown>`. Raised by the owner, not
+    ruled. The prototype is counting the corpus sites that write through
+    such a handle.
 
 ## Open, and not needing the owner
 
