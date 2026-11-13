@@ -1222,3 +1222,15 @@ fn property_read_on_an_ordinary_value_typed_unknown_is_a_type_error() {
         );
     }
 }
+
+#[test]
+fn receiver_that_is_an_optional_property_is_refused() {
+    let diagnostics = check(
+        "function show(donut: { note?: string }) { return donut.note.length; }\n\
+         function safe(donut: { note?: string }) { return (donut.note?.length ?? 0) + (donut.note ? donut.note.length : 0); }\n",
+    );
+    assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+    assert!(diagnostics[0]
+        .message
+        .contains("may be `null` or `undefined`"));
+}

@@ -180,18 +180,30 @@ impl<'a> Resolver<'_, 'a> {
                     Err(_) => Err(Origin::PropertyOfInferred),
                 },
             },
-            Expression::ChainExpression(chain) => match &chain.expression {
-                ChainElement::StaticMemberExpression(member) => self.declared_property(
-                    module,
-                    &member.object,
-                    member.property.name.as_str(),
-                    next,
-                ),
-                ChainElement::CallExpression(call) => self
-                    .declared_call(module, call, next)
-                    .or_else(|_| self.infer_call(module, call, next)),
-                _ => Err(Origin::Other),
-            },
+            Expression::ChainExpression(chain) => {
+                let inner = match &chain.expression {
+                    ChainElement::StaticMemberExpression(member) => self.declared_property(
+                        module,
+                        &member.object,
+                        member.property.name.as_str(),
+                        next,
+                    ),
+                    ChainElement::CallExpression(call) => self
+                        .declared_call(module, call, next)
+                        .or_else(|_| self.infer_call(module, call, next)),
+                    _ => Err(Origin::Other),
+                }?;
+                // The chain is `undefined` where a receiver tested by `?.`
+                // is absent. In tier R `a?.b` is a path projection, whose
+                // type is the type of `b` or `undefined` (§7.6).
+                let reactive =
+                    self.place_at(module, chain.span.start) == crate::program::Place::Reactive;
+                if reactive || self.chain_may_stop(module, &chain.expression, next) {
+                    Ok(self.or_absent(inner))
+                } else {
+                    Ok(inner)
+                }
+            }
             Expression::CallExpression(call) => self
                 .declared_call(module, call, next)
                 .or_else(|_| self.infer_call(module, call, next)),
@@ -226,6 +238,36 @@ impl<'a> Resolver<'_, 'a> {
             | Expression::SequenceExpression(_)
             | Expression::AssignmentExpression(_) => self.infer_operator(module, expression, next),
             _ => self.infer_other(module, expression, next),
+        }
+    }
+
+    /// Whether a receiver that `?.` tests in the chain may be absent.
+    fn chain_may_stop(&self, module: usize, element: &ChainElement<'a>, depth: u32) -> bool {
+        let (optional, mut object) = match element {
+            ChainElement::StaticMemberExpression(member) => (member.optional, &member.object),
+            ChainElement::ComputedMemberExpression(member) => (member.optional, &member.object),
+            ChainElement::CallExpression(call) => (call.optional, &call.callee),
+            _ => return true,
+        };
+        let mut optional = optional;
+        loop {
+            if optional {
+                let absent = match self.typed_at(module, object, depth) {
+                    Ok(ty) => self.present(ty) != ty || self.first_unresolved(ty, 0).is_some(),
+                    Err(_) => true,
+                };
+                if absent {
+                    return true;
+                }
+            }
+            (optional, object) = match object {
+                Expression::StaticMemberExpression(member) => (member.optional, &member.object),
+                Expression::ComputedMemberExpression(member) => (member.optional, &member.object),
+                Expression::CallExpression(call) => (call.optional, &call.callee),
+                Expression::TSNonNullExpression(inner) => (false, &inner.expression),
+                Expression::ParenthesizedExpression(inner) => (false, &inner.expression),
+                _ => return false,
+            };
         }
     }
 
@@ -477,6 +519,8 @@ impl<'a> Resolver<'_, 'a> {
         };
         for step in path {
             ty = match (self.shape(ty), step) {
+                // A binding with a default is never `undefined`.
+                (_, Step::Default) => self.defined_type(ty),
                 (Shape::Unresolved(why), _) => self.intern(Shape::Unresolved(why)),
                 (_, Step::Key(key)) => self
                     .property(ty, key)
@@ -866,6 +910,8 @@ impl<'a> Resolver<'_, 'a> {
 enum Step<'p> {
     Key(&'p str),
     Index(usize),
+    /// A default value: `{ note = "" }`.
+    Default,
 }
 
 /// Finds the binding of `symbol` in `pattern` and collects the steps that
@@ -878,7 +924,14 @@ fn path_to<'a>(
 ) -> bool {
     match pattern {
         BindingPattern::BindingIdentifier(identifier) => identifier.symbol_id.get() == Some(symbol),
-        BindingPattern::AssignmentPattern(assignment) => path_to(&assignment.left, symbol, path),
+        BindingPattern::AssignmentPattern(assignment) => {
+            path.push(Step::Default);
+            if path_to(&assignment.left, symbol, path) {
+                return true;
+            }
+            path.pop();
+            false
+        }
         BindingPattern::ObjectPattern(object) => object.properties.iter().any(|property| {
             let key = match &property.key {
                 PropertyKey::StaticIdentifier(name) if !property.computed => name.name.as_str(),

@@ -46,6 +46,9 @@ pub enum Class {
     ValueForCellOfAnotherType,
     /// An opaque named type against any other type (§7.2).
     Opaque,
+    /// A value that may be absent only because it is read from an optional
+    /// property, where the type declares it required (§7.6).
+    OptionalProperty,
     /// A read-only array, tuple, container, or property where a mutable
     /// one is declared.
     ReadOnly,
@@ -72,6 +75,7 @@ impl Class {
                 | Class::UndefinedInCell
                 | Class::ValueForCellOfAnotherType
                 | Class::Opaque
+                | Class::OptionalProperty
         )
     }
 
@@ -89,6 +93,9 @@ impl Class {
             Class::UndefinedInCell => "a value and a cell that differ by `undefined`",
             Class::ValueForCellOfAnotherType => "a value where a cell of another type is declared",
             Class::Opaque => "an opaque type against another type",
+            Class::OptionalProperty => {
+                "a value read from an optional property where the type declares it required"
+            }
             Class::ReadOnly => "read-only where mutable is declared",
             Class::MissingProperty => "a missing property",
             Class::ExcessProperty => "a property the type does not declare",
@@ -232,6 +239,11 @@ impl<'a> Resolver<'_, 'a> {
     /// `ty | undefined`.
     fn or_undefined(&self, ty: TypeId) -> TypeId {
         self.union_of(vec![ty, self.intern(Shape::Undefined)])
+    }
+
+    /// `ty` without an `undefined` member.
+    pub(crate) fn defined_type(&self, ty: TypeId) -> TypeId {
+        self.defined(ty)
     }
 
     /// `ty` without an `undefined` member.
@@ -1021,6 +1033,32 @@ impl<'a> Resolver<'_, 'a> {
             return Verdict::Unsure;
         };
         let verdict = self.relate_in(from, to, 0, by_reference);
+        if let Verdict::No(class, text) = &verdict {
+            // Whether the value is refused only because it is read from an
+            // optional property, and may so be absent (§7.6, §7.5.2).
+            let declared =
+                self.with_optional_reads_declared(|| self.typed_at(module, expression, 0));
+            if let Ok(declared) = declared {
+                // Where the rest of the comparison is not decided, the
+                // optional property is still the one reason found.
+                let absent = self.present(from) != from && self.present(declared) == declared;
+                if absent
+                    && *class != Class::OptionalProperty
+                    && !matches!(
+                        self.relate_in(declared, to, 0, by_reference),
+                        Verdict::No(..)
+                    )
+                {
+                    let _ = text;
+                    return self.refusal(
+                        Class::OptionalProperty,
+                        from,
+                        to,
+                        "the value is read from an optional property and may be absent, and the type declares it required",
+                    );
+                }
+            }
+        }
         if matches!(verdict, Verdict::No(..)) && self.is_instance(module, expression, 0) {
             // The value a pattern instantiation returns is assignable to a
             // cell of a type its result type is assignable to.

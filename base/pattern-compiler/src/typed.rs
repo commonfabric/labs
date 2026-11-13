@@ -153,12 +153,39 @@ impl<'a> TypedRules<'_, '_, 'a> {
             return;
         }
         if absent && !member.optional && !present.is_empty() {
-            self.count("property read", "refused: the receiver may be absent");
+            // Whether the receiver may be absent only because a property
+            // it is read from is optional (§7.6).
+            let declared = resolver
+                .with_optional_reads_declared(|| resolver.typed_at(self.module, &member.object, 0));
+            let optional_alone =
+                declared.is_ok_and(|declared| resolver.present(declared) == declared);
+            let handle = present
+                .iter()
+                .all(|shape| matches!(shape, Shape::Handle(..)));
+            let place = match resolver.place_at(self.module, member.span.start) {
+                crate::program::Place::Reactive => "in the reactive tier",
+                _ => "in a function body",
+            };
+            let (outcome, why) = match (optional_alone, handle) {
+                (true, true) => (
+                    "refused: the receiver is an optional property that holds a handle",
+                    "it is read from an optional property",
+                ),
+                (true, false) => (
+                    "refused: the receiver is an optional property",
+                    "it is read from an optional property",
+                ),
+                (false, _) => (
+                    "refused: the receiver's type names `null` or `undefined`",
+                    "its type names it",
+                ),
+            };
+            self.count("property read", &format!("{outcome}, {place}"));
             self.report(
                 "subset-type:mismatch",
                 member.object.span(),
                 &format!(
-                    "The receiver of `.{name}` may be `null` or `undefined`: its type is {}. Use `?.` or `??`, or test it first",
+                    "The receiver of `.{name}` may be `null` or `undefined`, because {why}: its type is {}. Use `?.` or `??`, or test it first",
                     resolver.display(object)
                 ),
             );

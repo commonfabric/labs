@@ -211,6 +211,10 @@ pub struct TypeStore {
     /// The number of required elements of each tuple type that has
     /// optional elements.
     tuple_required: HashMap<TypeId, usize>,
+    /// Set while a type is computed a second time to find whether its
+    /// `undefined` comes from the read of an optional property alone: the
+    /// read then has the property's declared type.
+    optional_reads_declared: bool,
     /// The functions whose return type is being inferred.
     in_progress: std::collections::HashSet<(usize, u32)>,
 }
@@ -637,10 +641,18 @@ impl<'a> Resolver<'_, 'a> {
     /// for an optional property left out.
     pub fn property(&self, ty: TypeId, name: &str) -> Option<TypeId> {
         match self.shape(ty) {
+            // A read of an optional property has the property's type or
+            // `undefined` (§7.6).
             Shape::Object(properties, index) => properties
                 .iter()
                 .find(|property| property.name == name)
-                .map(|property| property.ty)
+                .map(|property| {
+                    if property.optional && !self.types.borrow().optional_reads_declared {
+                        self.or_absent(property.ty)
+                    } else {
+                        property.ty
+                    }
+                })
                 .or(index),
             Shape::Union(members) => {
                 let present: Vec<TypeId> = members
@@ -664,6 +676,33 @@ impl<'a> Resolver<'_, 'a> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Runs `compute` with the read of an optional property typed as the
+    /// property is declared, without `undefined`. The measurement uses it
+    /// to tell a value that may be absent only because a property is
+    /// optional from one whose type names `undefined`.
+    pub(crate) fn with_optional_reads_declared<T>(&self, compute: impl FnOnce() -> T) -> T {
+        let before = std::mem::replace(&mut self.types.borrow_mut().optional_reads_declared, true);
+        let result = compute();
+        self.types.borrow_mut().optional_reads_declared = before;
+        result
+    }
+
+    /// `ty | undefined`, or `ty` where it has `undefined` or is not
+    /// evaluated.
+    pub(crate) fn or_absent(&self, ty: TypeId) -> TypeId {
+        match self.shape(ty) {
+            Shape::Undefined | Shape::Unknown | Shape::Unresolved(_) => ty,
+            Shape::Union(members)
+                if members
+                    .iter()
+                    .any(|member| self.shape(*member) == Shape::Undefined) =>
+            {
+                ty
+            }
+            _ => self.union(vec![ty, self.add(Shape::Undefined)]),
         }
     }
 

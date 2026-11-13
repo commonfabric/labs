@@ -277,3 +277,41 @@ fn kind_test_narrows_an_ordinary_value_typed_unknown() {
         ["string", "Error", "unknown[]"]
     );
 }
+
+// ----- §7.6: a value that may be absent -----
+
+#[test]
+fn read_of_an_optional_property_has_undefined() {
+    assert_eq!(
+        types(
+            "interface Donut { name: string; note?: string; glaze?: { kind: string } }\n\
+             function show(donut: Donut, cell: Cell<Donut>) {\n\
+               /*?*/(donut.note);\n\
+               if (donut.note) { /*?*/(donut.note); }\n\
+               const { note, name } = donut;\n\
+               const { note: other = \"\" } = donut;\n\
+               return [/*?*/note, /*?*/name, /*?*/other, /*?*/(cell.key(\"note\")), /*?*/(donut.glaze?.kind)];\n\
+             }\n"
+        ),
+        [
+            "string | undefined",
+            "string",
+            "string | undefined",
+            "string",
+            "string",
+            "Cell<string | undefined>",
+            "string | undefined"
+        ]
+    );
+}
+
+#[test]
+fn optional_chain_in_the_reactive_tier_has_undefined() {
+    assert_eq!(
+        types(
+            "const Show = pattern<{ donut: { name: string } }, { name: string | undefined }>(({ donut }) => ({ name: /*?*/(donut?.name) }));\n\
+             function show(donut: { name: string }) { return /*?*/(donut?.name); }\n"
+        ),
+        ["string | undefined", "string"]
+    );
+}
