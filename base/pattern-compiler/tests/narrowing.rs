@@ -651,3 +651,21 @@ fn in_narrows_nothing_on_a_data_position() {
         ["object", "unknown"]
     );
 }
+
+#[test]
+fn result_of_an_operator_and_a_let_are_ordinary_values() {
+    // §7.8: neither is a data position, so a kind test narrows it.
+    assert_eq!(
+        types(
+            "const h = handler<{ detail: unknown }, { fallback: unknown }>((event, state) => {\n\
+               const either = event.detail ?? state.fallback;\n\
+               if (typeof either === \"string\") { /*?*/either; }\n\
+               let later = event.detail;\n\
+               if (typeof later === \"number\") { /*?*/later; }\n\
+               const same = event.detail;\n\
+               if (typeof same === \"string\") { /*?*/same; }\n\
+             });\n"
+        ),
+        ["string", "number", "unknown"]
+    );
+}
