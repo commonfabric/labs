@@ -4,8 +4,11 @@
  * recorded memberships, or holding a container nobody has joined the chat
  * of, lists them. The manager lists a room by its membership alone, which
  * reads no room, so the host records each such membership once, a few rooms
- * at a time, by the `joinRoom` a visit to the room sends. Once every room the
- * catalog lists is adopted, adopting reads nothing in any room's space.
+ * at a time, by the `joinRoom` a visit to the room sends. The manager's
+ * handling of that join adds the user to the room's roster, which starts the
+ * room's piece on this runtime; adopting stops each piece its joins started,
+ * once they have been handled. Once every room the catalog lists is adopted,
+ * adopting reads nothing in any room's space.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -22,7 +25,10 @@ import { visitedRoomOf } from "./join-visited-room.ts";
 
 const logger = getLogger("piece.adopt-catalog-rooms");
 
-/** How many rooms one pass adopts before it releases what it read. */
+/**
+ * How many rooms one pass adopts before it stops the pieces it started and
+ * releases what it read.
+ */
 export const ADOPTION_BATCH_SIZE = 5;
 
 /** A link that declares nothing of what it reaches, so reading it reads none. */
@@ -122,17 +128,18 @@ async function unadoptedEntries(home: Cell<unknown>): Promise<Unadopted[]> {
 /**
  * Sends the manager's `joinRoom` for the room `entry`'s space declares, under
  * the entry's adoption request id, and resolves once the manager's handling
- * of it has committed. A space that declares no room, or that vetting
- * refuses, is sent a `joinRoom` naming no room, which the manager refuses,
- * reading nothing, and records under that id, so that the entry is not tried
- * again until it changes; a visit to it still joins it.
+ * of it has committed, with the space of the room it named, if it named one.
+ * A space that declares no room, or that vetting refuses, is sent a
+ * `joinRoom` naming no room, which the manager refuses, reading nothing, and
+ * records under that id, so that the entry is not tried again until it
+ * changes; a visit to it still joins it.
  */
 async function adopt(
   runtime: Runtime,
   joinRoom: Cell<unknown>,
   identity: DID,
   entry: Unadopted,
-): Promise<void> {
+): Promise<string | undefined> {
   const visited = await visitedRoomOf(runtime, identity, entry.space);
   const event = "room" in visited
     ? { requestId: entry.requestId, ...visited }
@@ -145,22 +152,50 @@ async function adopt(
       } else resolve();
     })
   );
+  return "room" in visited ? visited.room.space : undefined;
+}
+
+/**
+ * Stops each piece in one of `spaces` whose registration an event's delivery
+ * installed after `mark`, a value of `Runner.eventStartMark`, and that
+ * nothing else has asked for since, as `Runner.releaseEventStart()` does,
+ * and returns how many it stopped. The pieces a batch's joins start are the
+ * rooms they join, and the pieces in the same space the rooms' inputs come
+ * from; the scheduler is idle by then, so the joins have been handled.
+ */
+function stopStartedPieces(
+  runtime: Runtime,
+  mark: number,
+  spaces: ReadonlySet<string>,
+): number {
+  let stopped = 0;
+  for (const link of runtime.runner.eventStartsSince(mark)) {
+    if (!spaces.has(link.space)) continue;
+    if (runtime.runner.releaseEventStart(runtime.getCellFromLink(link))) {
+      stopped++;
+    }
+  }
+  return stopped;
 }
 
 /**
  * Has the chat manager of `home`, the Home of `identity`, record a membership
  * of each room its catalog lists saved with none, so that the manager lists
  * it, as a visit to the room would. It adopts `ADOPTION_BATCH_SIZE` entries at
- * a time, and asks the runtime to release the documents nothing reads after
- * each batch, so what it holds at once is bounded by the batch rather than by
- * the catalog. An entry is adopted once for each revision of it: its outcome,
- * a membership or a refusal, is recorded under its adoption request id.
+ * a time. Once the scheduler is idle after a batch, it stops each piece an
+ * event's delivery started during the batch in the space of a room the batch
+ * joined, which is where its joins start the rooms' pieces, and asks the runtime to release the documents nothing reads, so
+ * what it holds at once is bounded by the batch rather than by the catalog.
+ * A piece that was running before the batch, or that something other than an
+ * event's delivery has started or taken as a child since, keeps running. An
+ * entry is adopted once for each revision of it: its outcome, a membership or
+ * a refusal, is recorded under its adoption request id.
  *
  * Resolves once every saved entry has been tried, or once `signal` aborts
- * or the runtime begins disposal, after the batch under way. An entry whose
- * vetting or handling fails, other than by a refusal, is logged and tried
- * again by a later adoption, and holds back no other entry. Does nothing for
- * a Home whose chat manager has no `joinRoom`.
+ * or the runtime begins disposal, after the batch under way, with how many
+ * pieces it stopped. An entry whose vetting or handling fails, other than by
+ * a refusal, is logged and tried again by a later adoption, and holds back no
+ * other entry. Does nothing for a Home whose chat manager has no `joinRoom`.
  *
  * @throws When reading Home's records fails.
  */
@@ -169,19 +204,23 @@ export async function adoptCatalogRoomsOf(
   home: Cell<unknown>,
   identity: DID,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<number> {
   const joinRoom = home.key("chatManager").key("joinRoom");
-  if (joinRoom.getRaw() === undefined) return;
+  if (joinRoom.getRaw() === undefined) return 0;
   const tried = new Set<string>();
+  let stopped = 0;
   while (!signal?.aborted && !runtime.writeTeardownSignal.aborted) {
     const batch = (await unadoptedEntries(home))
       .filter((entry) => !tried.has(entry.requestId))
       .slice(0, ADOPTION_BATCH_SIZE);
-    if (batch.length === 0) return;
+    if (batch.length === 0) break;
+    const mark = runtime.runner.eventStartMark;
+    const spaces = new Set<string>();
     for (const entry of batch) {
       tried.add(entry.requestId);
       try {
-        await adopt(runtime, joinRoom, identity, entry);
+        const room = await adopt(runtime, joinRoom, identity, entry);
+        if (room !== undefined) spaces.add(room);
       } catch (error) {
         // One entry that can't be adopted holds back no other; this one is
         // tried again by a later adoption.
@@ -192,6 +231,8 @@ export async function adoptCatalogRoomsOf(
       }
     }
     await runtime.idle();
+    stopped += stopStartedPieces(runtime, mark, spaces);
     await runtime.releaseUnreadDocuments();
   }
+  return stopped;
 }

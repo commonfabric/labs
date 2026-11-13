@@ -168,6 +168,7 @@ import {
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
+  type RunnerStartOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -5414,8 +5415,11 @@ export class Runtime {
     );
   }
 
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.start(resultCell);
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.start(resultCell, options);
   }
 
   /**
@@ -5423,8 +5427,11 @@ export class Runtime {
    * it instantiates, rejecting when that commit failed; see
    * `Runner.startWithCommit()`.
    */
-  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.startWithCommit(resultCell);
+  startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell, options);
   }
 
   /**

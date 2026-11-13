@@ -589,8 +589,9 @@ type StartAttempt = {
   >;
 
   // The result this attempt resolved to, which a link start only learns by
-  // following the link.
+  // following the link, by its key and by its address.
   targetKey?: `${MemorySpace}/${ScopeKey}/${URI}`;
+  targetLink?: NormalizedFullLink;
   // The exact registration THIS attempt's `#startCore()` created, when it
   // created one. A walk can also report success for a registration it did
   // NOT create (doStart's already-started returns, including the
@@ -613,6 +614,33 @@ type StartAttempt = {
   // runs again from the top after the read, and must not read again for a
   // grant the durable metadata does not carry.
   authorityReadFor?: Set<string>;
+  // Whether every caller of this attempt asked for it to deliver an event
+  // (`RunnerStartOptions.forEvent`). A caller that joins the attempt for any
+  // other reason clears it.
+  forEventOnly?: boolean;
+};
+
+/** Options of `Runner.start()` and `Runner.startWithCommit()`. */
+export type RunnerStartOptions = {
+  /**
+   * The start delivers an event: the stream the event was sent to has no
+   * handler on this runtime, and starting its piece registers one. A piece
+   * whose every start was such a start is one `Runner.releaseEventStart()`
+   * may stop.
+   */
+  forEvent?: boolean;
+};
+
+/** A piece an event's delivery started, and that no other start has asked for. */
+type EventStart = {
+  /** The registration the event's start installed. */
+  readonly registration: PieceRegistration;
+
+  /** The piece's result document. */
+  readonly link: NormalizedFullLink;
+
+  /** Where the start falls in the runner's count of event starts. */
+  readonly sequence: number;
 };
 
 /**
@@ -3005,6 +3033,16 @@ export class Runner {
   >();
 
   /**
+   * The running pieces whose registration an event's delivery installed
+   * (`RunnerStartOptions.forEvent`), by result document, while no other
+   * start, and no enclosing pattern, has asked for them since.
+   */
+  #eventStarts = new Map<`${MemorySpace}/${ScopeKey}/${URI}`, EventStart>();
+
+  /** How many entries `#eventStarts` has been given, for `eventStartMark`. */
+  #eventStartCount = 0;
+
+  /**
    * The patterns a handler's result is set up from. A child one of them
    * instantiates was made by an event, not by its parent's program, so no
    * release of the parent re-instantiates it, whichever space it is in.
@@ -3555,6 +3593,14 @@ export class Runner {
   /** Registrations of running pieces, by space, scope, and document. */
   get cancels(): Map<`${MemorySpace}/${ScopeKey}/${URI}`, PieceRegistration> {
     return this.#cancels;
+  }
+
+  /**
+   * The count of event starts so far, for `eventStartsSince()`: the pieces
+   * an event's delivery starts from now on are the ones it returns.
+   */
+  get eventStartMark(): number {
+    return this.#eventStartCount;
   }
 
   /**
@@ -5548,9 +5594,16 @@ export class Runner {
    * different docs whose links resolve to the same piece do not join either;
    * they run separate resolutions and converge at the registration guard
    * before instantiation.
+   *
+   * `options.forEvent` says the start delivers an event; any other start of
+   * the piece, this one's join included, takes it off what
+   * `releaseEventStart()` may stop.
    */
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.#joinOrBeginStart(resultCell).settled;
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.#joinOrBeginStart(resultCell, options).settled;
   }
 
   /**
@@ -5574,8 +5627,11 @@ export class Runner {
    * @throws Error naming the failed piece-start commit, with storage's
    * verdict, or whatever else cut the commit short, as its `cause`.
    */
-  async startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    const { attempt, settled } = this.#joinOrBeginStart(resultCell);
+  async startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    const { attempt, settled } = this.#joinOrBeginStart(resultCell, options);
     const started = await settled;
     const commits = attempt.instantiationCommits ?? [];
     for (const failure of await Promise.all(commits)) {
@@ -5599,18 +5655,25 @@ export class Runner {
    */
   #joinOrBeginStart<T>(
     resultCell: Cell<T>,
+    options?: RunnerStartOptions,
   ): { attempt: StartAttempt; settled: Promise<boolean> } {
+    const forEvent = options?.forEvent === true;
     const startKey = this.#getDocKey(resultCell);
+    // A start for anything but an event asks for the piece from this moment,
+    // before it has resolved the piece the document leads to.
+    if (!forEvent) this.#eventStarts.delete(startKey);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
+      if (!forEvent) inFlight.forEventOnly = false;
       return { attempt: inFlight, settled: inFlight.settled };
     }
     const attempt: StartAttempt = {
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
+      forEventOnly: forEvent,
     };
     this.#activeStartAttempts.add(attempt);
     this.#trackStartAttempt(attempt, startKey);
@@ -5643,6 +5706,7 @@ export class Runner {
           this.#cancels.has(target);
         if (stillRunning) {
           this.#independentlyStartedResults.add(target);
+          this.#noteEventStart(attempt, target);
         }
         return stillRunning;
       })
@@ -5652,6 +5716,75 @@ export class Runner {
     attempt.settled = settled;
     this.#inFlightStartsByDoc.set(startKey, attempt);
     return { attempt, settled };
+  }
+
+  /**
+   * Helper for `#joinOrBeginStart()`, which records what a start attempt that
+   * left `target` running says about the piece: one made only to deliver
+   * events, that installed the piece's registration, makes the piece an
+   * event start; any other takes it off them.
+   */
+  #noteEventStart(
+    attempt: StartAttempt,
+    target: `${MemorySpace}/${ScopeKey}/${URI}`,
+  ): void {
+    const registration = this.#cancels.get(target);
+    if (attempt.forEventOnly !== true) {
+      this.#eventStarts.delete(target);
+    } else if (
+      registration !== undefined &&
+      registration === attempt.installedRegistration &&
+      attempt.targetLink !== undefined
+    ) {
+      this.#eventStarts.set(target, {
+        registration,
+        link: attempt.targetLink,
+        sequence: ++this.#eventStartCount,
+      });
+    }
+  }
+
+  /**
+   * The result documents of the running pieces whose registration an event's
+   * delivery installed after `mark`, a value of `eventStartMark`, and that no
+   * other start, and no enclosing pattern, has asked for since: the pieces
+   * `releaseEventStart()` stops.
+   */
+  eventStartsSince(mark: number): NormalizedFullLink[] {
+    const links: NormalizedFullLink[] = [];
+    for (const [key, start] of this.#eventStarts) {
+      if (start.sequence <= mark) continue;
+      if (this.#cancels.get(key) !== start.registration) continue;
+      links.push(start.link);
+    }
+    return links;
+  }
+
+  /**
+   * Stops the piece whose result document is `resultCell`'s when it is one
+   * `eventStartsSince()` names, and no start of its document is in flight,
+   * releasing the documents nothing reads then, as `stop()` does. The events
+   * it was started for have been handled once the scheduler is idle; an event
+   * sent to it later starts it again. A start that has not yet resolved the
+   * document it leads to is left to start the piece again, where `stop()`
+   * would end it.
+   *
+   * Returns whether it stopped the piece.
+   */
+  releaseEventStart<T>(resultCell: Cell<T>): boolean {
+    const key = this.#getDocKey(resultCell);
+    const start = this.#eventStarts.get(key);
+    if (start === undefined) return false;
+    if (this.#cancels.get(key) !== start.registration) {
+      this.#eventStarts.delete(key);
+      return false;
+    }
+    if ((this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0) {
+      return false;
+    }
+    this.#stopResult(resultCell);
+    void this.#runtime.releaseUnreadDocuments();
+    return true;
   }
 
   /**
@@ -5705,6 +5838,8 @@ export class Runner {
 
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
+    // An enclosing pattern now asks for the piece.
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     if (!this.#usesScopedPrograms(resultCell)) {
       return () => this.releaseChild(resultCell, undefined);
     }
@@ -7888,6 +8023,7 @@ export class Runner {
 
     const key = this.#getDocKey(rootCell);
     attempt.targetKey = key;
+    attempt.targetLink = { ...link, path: [] };
     // Step 2: Already started? Return success
     if (this.#cancels.has(key)) return Promise.resolve(true);
 
@@ -12486,6 +12622,7 @@ export class Runner {
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);
     this.#independentlyStartedResults.delete(key);
+    this.#eventStarts.delete(key);
     this.#registrationsInstalledByRefusedRuns.delete(key);
     // TODO(hixie): This reaches every pending commit-gated start for the result,
     // which is wider than a release's authority: one that another launch
@@ -12744,6 +12881,7 @@ export class Runner {
     // later start can join one; dropping the index releases the attempts too.
     this.#inFlightStartsByDoc.clear();
     this.#independentlyStartedResults.clear();
+    this.#eventStarts.clear();
     this.#registrationsInstalledByRefusedRuns.clear();
     for (const key of [...this.#pendingDeferredStarts.keys()]) {
       this.#cancelPendingDeferredStarts(key);
