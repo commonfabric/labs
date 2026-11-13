@@ -1,7 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { SessionDemand } from "@commonfabric/memory/v2/server";
-import { DemandShareCache } from "../../src/executor/demand-shares.ts";
+import {
+  DemandShareCache,
+  type SessionOfShare,
+} from "../../src/executor/demand-shares.ts";
 
 const space = "did:key:z6MkDemandSharesSpace";
 
@@ -26,8 +29,19 @@ const reader = (shares: Record<string, SessionDemand>) => {
   };
 };
 
-const live = (...entries: Array<[string, string | undefined]>) =>
-  new Map(entries.map(([id, principal]) => [id, { principal }]));
+/**
+ * Live sessions by id, each with its principal, and marked as a serving
+ * loop's own when its entry says `"serving"`.
+ */
+const live = (
+  ...entries: Array<[string, string | undefined, "serving"?]>
+) =>
+  new Map<string, SessionOfShare>(
+    entries.map(([id, principal, serving]) => [
+      id,
+      serving === undefined ? { principal } : { principal, servingOwn: true },
+    ]),
+  );
 
 describe("demand-shares", () => {
   for (const wholeSpace of [false, true]) {
@@ -124,7 +138,7 @@ describe("demand-shares", () => {
     const r = reader({ a: share("a"), c: share("c") });
     const first = await cache.sharesFor(
       space,
-      live(["a", "did:key:alice"], ["svc", "did:key:service"], [
+      live(["a", "did:key:alice"], ["svc", "did:key:service", "serving"], [
         "c",
         undefined,
       ]),
@@ -143,10 +157,31 @@ describe("demand-shares", () => {
     expect(r.asked).toEqual([["a", "c"], ["gone"]]);
   });
 
+  it("keeps the share of a client session signed by the excluded principal", async () => {
+    // A client that signs with the serving loop's own key is still a
+    // client; only the loop's own sessions are left out.
+
+    const cache = new DemandShareCache();
+    const r = reader({ svc: share("svc"), cli: share("cli") });
+    const shares = await cache.sharesFor(
+      space,
+      live(["svc", "did:key:service", "serving"], ["cli", "did:key:service"]),
+      "did:key:service",
+      r.read,
+    );
+
+    expect(shares.map((s) => s.sessionId)).toEqual(["cli"]);
+    expect(r.asked).toEqual([["cli"]]);
+  });
+
   it("re-reads a share that changed while its principal was excluded once a pass includes it", async () => {
     const cache = new DemandShareCache();
     const r = reader({ a: share("a"), svc: share("svc") });
-    const sessions = live(["a", "did:key:alice"], ["svc", "did:key:service"]);
+    const sessions = live(["a", "did:key:alice"], [
+      "svc",
+      "did:key:service",
+      "serving",
+    ]);
     await cache.sharesFor(space, sessions, undefined, r.read);
 
     cache.noteChanged(space, "svc");

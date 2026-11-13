@@ -136,7 +136,14 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below).
+below). A client session is any session except a serving loop's own,
+which is a session of the deployment's service identity that either
+reached the memory server from the process holding it or declared the
+serving binding (`actingAs: "space-owner"`, a serving runtime of another
+process). The connection decides, not the key: a local toolshed that runs
+under the identity its operator's client also signs with still counts
+that client's sessions as client sessions, for activation, parking and
+demand alike.
 Activation on: session open, event append, or explicit warm request.
 *(AMENDED 2026-09-09: a fourth trigger — a pattern-lifecycle verb
 request, which the host queues on the space's serving loop; the loop

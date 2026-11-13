@@ -149,6 +149,13 @@ export type SessionState = {
    * per open, in every access-list mode. */
   servingBinding?: true;
 
+  /** Whether the session is a serving loop's own, not a client's: its
+   * latest open came over a connection from the process that holds this
+   * server, or declared the serving binding (a serving runtime of another
+   * process). A client signed with the same key as the serving loop is
+   * still a client. Fresh per open, in every access-list mode. */
+  servingOwn?: true;
+
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
 
@@ -200,6 +207,8 @@ export type SessionLifecycleEvent =
     readonly sessionId: string;
     readonly principal?: string;
     readonly readCeiling?: SessionReadCeiling;
+    /** See `SessionState.servingOwn`. */
+    readonly servingOwn?: true;
   }
   | {
     readonly kind: "detached";
@@ -243,7 +252,21 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
   ...(session.readCeiling === undefined
     ? {}
     : { readCeiling: session.readCeiling }),
+  ...(session.servingOwn === true ? { servingOwn: true } : {}),
 });
+
+/**
+ * Whether `session` is one of `principal`'s serving loop's own sessions
+ * (`SessionState.servingOwn`), which are not client demand. A session of
+ * that principal from a client, and any session when `principal` is
+ * `undefined`, is not.
+ */
+export const isServingSessionOf = (
+  session: { readonly principal?: string; readonly servingOwn?: true },
+  principal: string | undefined,
+): boolean =>
+  principal !== undefined && session.servingOwn === true &&
+  session.principal === principal;
 
 export class SessionRegistry {
   readonly #ttlMs: number;
@@ -314,6 +337,7 @@ export class SessionRegistry {
     routed = false,
     elidedVerdicts = false,
     capabilityPrincipal?: string,
+    inProcess = false,
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
@@ -439,6 +463,9 @@ export class SessionRegistry {
       ...(actingPrincipal !== undefined ? { actingPrincipal } : {}),
       ...(session.actingAs === "space-owner"
         ? { servingBinding: true as const }
+        : {}),
+      ...(inProcess || session.actingAs === "space-owner"
+        ? { servingOwn: true as const }
         : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),

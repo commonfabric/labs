@@ -2355,6 +2355,9 @@ export type SessionViewHandle = {
 export type SessionViewInterest = {
   handle: SessionViewHandle;
   principal?: string;
+  /** Whether the session is a serving loop's own, not a client's (the
+   * server's `SessionState.servingOwn`). */
+  servingOwn?: true;
   /** Whether a connection currently owns the retained session. */
   attached: boolean;
   view: ViewInterest;

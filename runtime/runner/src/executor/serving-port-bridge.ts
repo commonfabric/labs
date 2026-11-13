@@ -125,12 +125,13 @@ export class ServingPortBridge {
         endpoint.notify("observer.commitAdmitted", { notice }),
       sessionOpened: (space) =>
         endpoint.notify("observer.sessionOpened", { space }),
-      demandChanged: (space, reason, principal, sessionId) =>
+      demandChanged: (space, reason, principal, sessionId, servingOwn) =>
         endpoint.notify("observer.demandChanged", {
           space,
           reason,
           principal,
           sessionId,
+          servingOwn,
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),

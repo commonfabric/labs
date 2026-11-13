@@ -49,11 +49,27 @@ describe("Server", () => {
   let writer: SpaceSession;
   let localSeq: number;
 
-  /** Mounts a session of the space as `principal`. */
-  async function mount(principal?: string): Promise<SpaceSession> {
-    const client = await connect({ transport: loopback(server) });
+  /**
+   * Mounts a session of the space as `principal`, over a connection the
+   * server takes as one from this process unless `inProcess` is `false`,
+   * declaring the serving binding when `actingAs` names it.
+   */
+  async function mount(
+    principal?: string,
+    { inProcess = true, actingAs }: {
+      inProcess?: boolean;
+      actingAs?: "space-owner";
+    } = {},
+  ): Promise<SpaceSession> {
+    const client = await connect({
+      transport: loopback(server, { inProcess }),
+    });
     clients.push(client);
-    return await client.mount(space, {}, openAs(principal));
+    return await client.mount(
+      space,
+      actingAs === undefined ? {} : { actingAs },
+      openAs(principal),
+    );
   }
 
   /** Commits `value` to `id` and resolves once `view` has the push. */
@@ -506,6 +522,42 @@ describe("Server", () => {
         expect(shares.map((share) => share.sessionId)).toEqual([
           watcher.sessionId,
         ]);
+      });
+
+      it("keeps the share of the excluded principal's session from another process", async () => {
+        // A client signed with the serving loop's own key is still a client:
+        // only that principal's sessions from this process are the loop's.
+
+        const local = await mount(bob);
+        await local.watchSet([follow("of:root")]);
+        const remote = await mount(bob, { inProcess: false });
+        await remote.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).toContain(
+          remote.sessionId,
+        );
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          local.sessionId,
+        );
+      });
+
+      it("omits the share of the excluded principal's session from another process that declares the serving binding", async () => {
+        // A serving runtime of another process reaches the space's owner
+        // over the network, and is no more a client than the local one.
+
+        const routed = await mount(bob, {
+          inProcess: false,
+          actingAs: "space-owner",
+        });
+        await routed.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          routed.sessionId,
+        );
       });
 
       it("returns an anonymous session's rows with no principal in their identity", async () => {

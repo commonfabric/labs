@@ -7,11 +7,15 @@
  * identity before it compares rows, no row comparisons either.
  */
 
-import type { SessionDemand } from "@commonfabric/memory/v2/server";
+import {
+  isServingSessionOf,
+  type SessionDemand,
+} from "@commonfabric/memory/v2/server";
 
 /** A session as the cache needs to see it, beside the id it is keyed by. */
 export type SessionOfShare = {
   readonly principal: string | undefined;
+  readonly servingOwn?: true;
 };
 
 /**
@@ -66,9 +70,10 @@ export class DemandShareCache {
   }
 
   /**
-   * The shares of `space`'s live `sessions`, those of `excludePrincipal`
-   * left out, in the order given: each held share that is not stale as it
-   * is, and the rest read through `read` in one call. A session `read` does
+   * The shares of `space`'s live `sessions`, the serving sessions of
+   * `excludePrincipal` (`isServingSessionOf()`) left out, in the order
+   * given: each held share that is not stale as it is, and the rest read
+   * through `read` in one call. A session `read` does
    * not return is one the server no longer holds, and contributes nothing.
    * An excluded session's stale mark is carried, not consumed, so the pass
    * that first includes it reads its share afresh.
@@ -93,9 +98,7 @@ export class DemandShareCache {
     const wanted: string[] = [];
     const missing: string[] = [];
     for (const [sessionId, session] of sessions) {
-      if (
-        excludePrincipal !== undefined && session.principal === excludePrincipal
-      ) {
+      if (isServingSessionOf(session, excludePrincipal)) {
         if (allStale || stale?.has(sessionId)) {
           this.noteChanged(space, sessionId);
         }

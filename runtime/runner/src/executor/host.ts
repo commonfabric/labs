@@ -24,7 +24,10 @@
 // spaces activate on their first session, event, warm request, or
 // session-implying authored admission.
 
-import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import {
+  type AdmittedCommitNotice,
+  isServingSessionOf,
+} from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
@@ -370,13 +373,20 @@ export class ExecutorHost {
       // demand pass (the arrival re-arm's trigger); an inactive space
       // waits for the session-open / admission activation triggers.
       // The serving runtime's OWN loopback session (the service
-      // principal) is dropped: its tracked-set growth is the serving
-      // graph's own reads (a wave's derivations re-traversed on push),
-      // not client demand — counting it in `pushGrowthWakes` and waking
-      // the loop spins an extra cycle and demand pass that finds no
-      // client delta (W1 review MINOR-4).
-      demandChanged: (space, reason, principal) => {
-        if (principal === this.#options.serviceIdentity) return;
+      // principal's serving session) is dropped: its tracked-set growth
+      // is the serving graph's own reads (a wave's derivations
+      // re-traversed on push), not client demand — counting it in
+      // `pushGrowthWakes` and waking the loop spins an extra cycle and
+      // demand pass that finds no client delta (W1 review MINOR-4).
+      demandChanged: (space, reason, principal, _sessionId, servingOwn) => {
+        if (
+          isServingSessionOf(
+            { principal, servingOwn },
+            this.#options.serviceIdentity,
+          )
+        ) {
+          return;
+        }
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
       },
@@ -704,7 +714,10 @@ export class ExecutorHost {
     // ACTIVE criteria like the admission and reactivation paths: the
     // service's OWN sessions (loopback planes) are not client demand,
     // and activating on one would hold a runtime and the lease with no
-    // client demanding anything.
+    // client demanding anything. The exclusion goes by the session's
+    // connection, not its principal alone: a local toolshed signs with
+    // the key its operator's client also uses, and that client's session
+    // is demand.
     if (
       !this.#options.server.hasLiveSessionsForSpace(space, {
         excludePrincipal: this.#options.serviceIdentity,
