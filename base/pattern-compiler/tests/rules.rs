@@ -9,7 +9,7 @@ use pattern_compiler::diagnostics::{Diagnostic, Severity};
 use pattern_compiler::program::{analyze, SourceFile};
 
 const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, \
-handler, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
+handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
 type Reactive } from \"commonfabric\";\n";
 const MARKER: &str = "/*!*/";
 
@@ -69,6 +69,11 @@ const CASES: &[Case] = &[
         "import { NAME } from \"commonfabric\";",
     ),
     case(
+        "module-scope:runtime-call",
+        "const QUOTE = /*!*/fetchJson({ url: \"https://donuts.example\" });",
+        "const Quote = pattern(() => fetchJson({ url: \"https://donuts.example\" }));",
+    ),
+    case(
         "builder-callback:indirect-reference",
         "import { save } from \"./elsewhere.ts\";\nconst saveDonut = handler(/*!*/save);",
         "const save = (_event: unknown, _state: unknown) => {};\nconst saveDonut = handler(save);",
@@ -102,6 +107,11 @@ const CASES: &[Case] = &[
         "pattern-context:early-return",
         "const Box = pattern<{ count: number }>(({ count }) => { /*!*/return { count }; const more = 1; });",
         "const Box = pattern<{ count: number }>(({ count }) => { const more = 1; return { count, more }; });",
+    ),
+    case(
+        "pattern-context:missing-return",
+        "const Box = pattern(() => { const count = 1; /*!*/return; });",
+        "const Box = pattern(() => { const count = 1; return { count }; });",
     ),
     case(
         "pattern-context:control-flow",
@@ -277,6 +287,11 @@ const CASES: &[Case] = &[
         "function-body:global-write",
         "function leak() { /*!*/Math.glazed = 1; }",
         "function keep() { const box = { glazed: 0 }; box.glazed = 1; return box; }",
+    ),
+    case(
+        "function-body:constructor",
+        "function Donut() { return { name: \"plain\" }; }\nfunction make() { return /*!*/new Donut(); }",
+        "function Donut() { return { name: \"plain\" }; }\nfunction make() { return Donut(); }",
     ),
     case(
         "function-body:ambient-read",
@@ -637,5 +652,103 @@ fn row_label_rule_of_table_is_accepted_in_the_reactive_tier() {
           const db = sqliteDatabase({ tables: { notes: cfSqlite.table({ id: \"text\" }, (row) => ({ owner: row.id })) } });\n\
           return { db };\n\
         });\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}
+
+fn all(snippet: &str) -> Vec<&'static str> {
+    check(snippet)
+        .iter()
+        .map(|diagnostic| diagnostic.id)
+        .collect()
+}
+
+#[test]
+fn reactive_block_without_a_return_is_refused() {
+    let module = "const Box = pattern(() => { const count = 1; });\n";
+    assert_eq!(ids(&check(module)), ["pattern-context:missing-return"]);
+    let callback = "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => { const upper = name.toUpperCase(); }) }));\n";
+    assert_eq!(ids(&check(callback)), ["pattern-context:missing-return"]);
+}
+
+#[test]
+fn staged_change_in_the_reactive_tier_is_an_effect_in_a_computation() {
+    let module = "const Box = pattern<{ room: unknown }>(({ room }) => ({ done: grantSpaceAccess(room, \"did:key:a\", \"READ\") }));\n";
+    assert_eq!(ids(&check(module)), ["function-body:effect-in-computation"]);
+    let handled = "const grant = handler<unknown, { room: unknown }>((_, { room }) => { grantSpaceAccess(room, \"did:key:a\", \"READ\"); });\n";
+    assert_eq!(ids(&check(handled)), Vec::<&str>::new());
+}
+
+#[test]
+fn builder_written_inside_frozen_data_follows_its_kind() {
+    let lifted = "const TOOLS = [lift((n: number) => n + 1)];\n";
+    assert_eq!(ids(&check(lifted)), ["module-scope:frozen-data-type"]);
+    let patterns = "const TOOLS = [pattern(() => ({ count: 1 })), handler(() => {})];\n";
+    assert_eq!(ids(&check(patterns)), Vec::<&str>::new());
+    let computed = "const TOTAL = computed(() => 1);\n";
+    assert_eq!(ids(&check(computed)), ["module-scope:runtime-call"]);
+}
+
+#[test]
+fn frozen_data_initializer_makes_no_runtime_call_through_a_function() {
+    let module = "function box() { return new Writable(0); }\nconst BOX = box();\n";
+    assert_eq!(ids(&check(module)), ["module-scope:runtime-call"]);
+    let clock = "function stamp() { return Date.now(); }\nconst LOADED = stamp();\n";
+    assert_eq!(ids(&check(clock)), ["function-body:ambient-read"]);
+    let pure = "function double(n: number) { return n * 2; }\nconst FOUR = double(2);\n";
+    assert_eq!(ids(&check(pure)), Vec::<&str>::new());
+}
+
+#[test]
+fn object_prototype_is_legal_as_an_operand_of_a_comparison_only() {
+    let test = "function plain(value: object) { return Object.getPrototypeOf(value) === Object.prototype; }\n";
+    assert_eq!(ids(&check(test)), Vec::<&str>::new());
+    let member = "function text(value: object) { return Object.prototype.toString.call(value); }\n";
+    assert_eq!(ids(&check(member)), ["stdlib:unsupported-member"]);
+}
+
+#[test]
+fn expression_statement_in_the_reactive_tier_is_reported_once() {
+    let void = "const Box = pattern<{ count: number }>(({ count }) => { void count; return { count }; });\n";
+    assert_eq!(ids(&check(void)), ["pattern-context:statement"]);
+    let log = "const Box = pattern<{ count: number }>(({ count }) => { console.log(count); return { count }; });\n";
+    assert_eq!(ids(&check(log)), ["pattern-context:statement"]);
+}
+
+#[test]
+fn default_in_a_collection_callback_parameter_is_refused() {
+    let module = "const Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name = \"plain\") => name) }));\n";
+    assert_eq!(ids(&check(module)), ["collection:callback-parameters"]);
+    let pattern = "const Box = pattern<{ pairs: [string, number][] }>(({ pairs }) => ({ rows: pairs.map(([name, price]) => `${name} ${price}`) }));\n";
+    assert_eq!(ids(&check(pattern)), Vec::<&str>::new());
+}
+
+#[test]
+fn default_in_a_const_destructuring_needs_a_constant_initializer() {
+    let module = "const Box = pattern<{ donut: { glaze?: string } }>(({ donut }) => { const { glaze = \"plain\" } = donut; return { glaze }; });\n";
+    assert_eq!(ids(&check(module)), ["reactive:unsupported-expression"]);
+    let constant = "const DONUT = { name: \"plain\" };\nconst Box = pattern(() => { const { name = \"none\", ...rest } = DONUT; return { name, rest }; });\n";
+    assert_eq!(ids(&check(constant)), Vec::<&str>::new());
+}
+
+#[test]
+fn object_literal_key_that_is_not_static_is_refused_in_the_reactive_tier() {
+    let module = "const Box = pattern<{ key: string }>(({ key }) => ({ [key]: 1 }));\n";
+    assert_eq!(ids(&check(module)), ["reactive:unsupported-expression"]);
+    let fixed =
+        "const KEY = \"count\";\nconst Box = pattern(() => ({ [KEY]: 1, [\"total\"]: 2 }));\n";
+    assert_eq!(ids(&check(fixed)), Vec::<&str>::new());
+}
+
+#[test]
+fn computed_that_calls_an_aggregate_or_takes_the_whole_array_is_not_promoted() {
+    let aggregate = "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ total: computed(() => prices.sum()) }));\n";
+    assert!(all(aggregate).contains(&"computed:not-promoted"));
+    let whole = "const Box = pattern<{ prices: number[] }>(({ prices }) => ({ shares: computed(() => prices.map((price, _index, every) => price / every.length)) }));\n";
+    assert!(all(whole).contains(&"computed:not-promoted"));
+}
+
+#[test]
+fn fabric_value_class_is_constructed_in_a_function_body() {
+    let module = "import { FabricBytes } from \"commonfabric\";\nfunction bytes() { return new FabricBytes(new Uint8Array(2)); }\n";
     assert_eq!(ids(&check(module)), Vec::<&str>::new());
 }

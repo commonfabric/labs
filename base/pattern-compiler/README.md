@@ -97,7 +97,7 @@ code.
 
 ## The specification it implements
 
-The crate follows `language-subset.md` as it stands at commit `a118e85a78`.
+The crate follows `language-subset.md` as it stands at commit `46ffb54cbd`.
 `catalog-ids.txt` holds the identifiers of that document's catalog, and
 `cargo test` fails when the document's catalog and the copy differ. To follow a
 change of the catalog, edit `catalog-ids.txt` and the table in `src/catalog.rs`

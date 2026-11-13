@@ -140,6 +140,12 @@ pub const CATALOG: &[Entry] = &[
          are computed need their literal type",
     ),
     done("module-scope:import-form", Error),
+    part(
+        "module-scope:runtime-call",
+        Error,
+        "reported for a call the callee's name decides; a call of a factory value \
+         needs the callee's type",
+    ),
     done("builder-callback:indirect-reference", Error),
     part(
         "cell-factory:empty-array",
@@ -153,6 +159,7 @@ pub const CATALOG: &[Entry] = &[
     done("pattern-context:assignment", Error),
     done("pattern-context:loop", Error),
     done("pattern-context:early-return", Error),
+    done("pattern-context:missing-return", Error),
     done("pattern-context:control-flow", Error),
     done("pattern-context:statement", Error),
     done("pattern-context:function-creation", Error),
@@ -232,6 +239,7 @@ pub const CATALOG: &[Entry] = &[
     done("function-body:accessor", Error),
     done("function-body:unsupported-global", Error),
     done("function-body:global-write", Error),
+    done("function-body:constructor", Error),
     done("function-body:ambient-read", Error),
     done("function-body:builder-call", Error),
     done("function-body:handler-capture", Error),

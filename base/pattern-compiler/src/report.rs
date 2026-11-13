@@ -260,32 +260,32 @@ impl Report {
         let any = self.construct("any");
         let as_any = self.construct("as-any");
         vec![
-            row("modules", "11.1", 403, self.modules),
+            row("modules", "11.1", 425, self.modules),
             row(
                 "`pattern` definitions",
                 "11.1",
-                475,
+                507,
                 self.body(BodyKind::Pattern),
             ),
             row(
                 "`handler` definitions at module scope",
                 "11.1",
-                593,
+                621,
                 self.site("handler, at module scope"),
             ),
             row(
                 "`lift` definitions at module scope",
                 "11.1",
-                45,
+                73,
                 self.site("lift, at module scope"),
             ),
             row(
                 "`computed` calls",
                 "11.1",
-                1466,
+                1493,
                 self.body(BodyKind::Computed),
             ),
-            row("`action` calls", "11.1", 246, self.body(BodyKind::Action)),
+            row("`action` calls", "11.1", 249, self.body(BodyKind::Action)),
             row(
                 "inline JSX event handlers",
                 "11.1",
@@ -295,19 +295,19 @@ impl Report {
             row(
                 "block-bodied pattern callbacks",
                 "11.2",
-                452,
+                472,
                 self.construct("pattern-block"),
             ),
             row(
                 "`const` statements in pattern callbacks",
                 "11.2",
-                2819,
+                2919,
                 self.construct("pattern-block:const"),
             ),
             row(
                 "expression statements in pattern callbacks",
                 "11.2",
-                15,
+                20,
                 self.construct("pattern-block:expression"),
             ),
             row(
@@ -328,7 +328,7 @@ impl Report {
                 1,
                 self.diagnostic("subset-type:mapped"),
             ),
-            row("`ifElse` calls", "11.3", 155, self.forms["ifElse"]),
+            row("`ifElse` calls", "11.3", 156, self.forms["ifElse"]),
             row("`when` calls", "11.3", 1, self.forms["when"]),
             row("`unless` calls", "11.3", 0, self.forms["unless"]),
             row("`str` tagged templates", "11.3", 1, self.forms["str"]),
@@ -342,10 +342,10 @@ impl Report {
             row(
                 "per-element bodies over plain values that bind a handler without the index",
                 "11.3",
-                6,
+                7,
                 self.diagnostic("collection:shared-element-state"),
             ),
-            row("`any` in a type", "11.3", 126, any.saturating_sub(as_any)),
+            row("`any` in a type", "11.3", 132, any.saturating_sub(as_any)),
             row("`as any`", "11.3", 52, as_any),
             row(
                 "`new` of a non-cell constructor in the reactive tier",
@@ -380,7 +380,7 @@ impl Report {
             row(
                 "`map` callbacks in the reactive tier",
                 "11.4",
-                303,
+                326,
                 self.construct("map callback in the reactive tier"),
             ),
             row(
@@ -392,7 +392,7 @@ impl Report {
             row(
                 "`.get()` in the reactive tier",
                 "11.4",
-                66,
+                68,
                 self.construct("reactive:get-call"),
             ),
             row(
@@ -404,43 +404,43 @@ impl Report {
             row(
                 "conditional expressions in the reactive tier",
                 "12.1",
-                439,
+                466,
                 self.construct("reactive:conditional"),
             ),
             row(
                 "`computed` in statement position",
                 "11.5",
-                11,
+                15,
                 self.promoted("in statement position"),
             ),
             row(
                 "`computed` promoted, structural operations only",
                 "11.5",
-                996,
+                1039,
                 self.promoted("promoted, structural operations only"),
             ),
             row(
                 "`computed` promoted, with a call of an authored function",
                 "11.5",
-                242,
+                222,
                 self.promoted("promoted, with a call of an authored function"),
             ),
             row(
                 "`computed` promoted through the guard form",
                 "11.5",
-                113,
+                108,
                 self.promoted("promoted through the guard form"),
             ),
             row(
                 "`computed` not promoted: a statement body",
                 "11.5",
-                81,
+                62,
                 self.promoted("not promoted: a statement body"),
             ),
             row(
                 "`computed` not promoted: a disqualifying expression",
                 "11.5",
-                34,
+                47,
                 self.promoted("not promoted: a disqualifying expression"),
             ),
         ]

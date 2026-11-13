@@ -384,6 +384,11 @@ impl<'a> Checker<'_, 'a> {
                     }
                 }
                 self.pure(&member.object, shape)?;
+                if api::is_selector_method(name) {
+                    return self::expression(format!(
+                        "`.{name}(...)`, an aggregate or a collection-index method"
+                    ));
+                }
                 if api::is_handle_collection_method(name) {
                     return self.pure_collection(call, name, shape);
                 }
@@ -432,6 +437,9 @@ impl<'a> Checker<'_, 'a> {
         }
         if !function.is_arrow() {
             return self::expression(format!("the callback of `{name}` is not an arrow function"));
+        }
+        if function.param_count() > if reduce { 3 } else { 2 } {
+            return self::expression(format!("the callback of `{name}` takes the whole array"));
         }
         self.pure_function(function, shape, false)
     }

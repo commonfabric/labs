@@ -32,6 +32,17 @@ pub fn rewrite(id: &str) -> &'static str {
             "Import a named binding from `commonfabric`, `commonfabric/<name>`, a relative \
              path, or a `cf:` specifier. External packages are not available to patterns."
         }
+        "module-scope:runtime-call" => {
+            "Move the call into a pattern body or a function body. Module scope has no \
+             instance to own what the call creates and no event."
+        }
+        "pattern-context:missing-return" => {
+            "End the body with `return` and the value: the pattern's result, or the value \
+             the callback gives for the element."
+        }
+        "function-body:constructor" => {
+            "Call the function without `new`. A function that builds a value returns it."
+        }
         "builder-callback:indirect-reference" => {
             "Write the function at the call, or bind it in this module \
              (`const save = (event, state) => ...; handler(save)`)."

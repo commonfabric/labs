@@ -318,11 +318,18 @@ fn reachable(facts: &HashMap<DefRef, &Facts>, target: DefRef) -> BTreeMap<ActKin
 }
 
 /// The diagnostic for an act of `kind` reached from the call `pending`.
-fn id_for(kind: ActKind, _pending: &Pending) -> Option<&'static str> {
+fn id_for(kind: ActKind, pending: &Pending) -> Option<&'static str> {
+    if pending.module_init {
+        return Some(match kind {
+            ActKind::Ambient => "function-body:ambient-read",
+            _ => "module-scope:runtime-call",
+        });
+    }
     Some(match kind {
         ActKind::Ambient => "function-body:ambient-read",
         ActKind::Effect => "function-body:effect-in-computation",
         ActKind::EventContext => "function-body:event-context-in-computation",
         ActKind::CellWithoutCause => "function-body:cell-needs-cause",
+        ActKind::Runtime => return None,
     })
 }

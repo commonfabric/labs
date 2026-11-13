@@ -10,6 +10,7 @@ module-scope:frozen-data-type error
 module-scope:frozen-data-write error
 module-scope:stateful-regexp error
 module-scope:import-form error
+module-scope:runtime-call error
 builder-callback:indirect-reference error
 cell-factory:empty-array error
 pattern-context:let-declaration error
@@ -17,6 +18,7 @@ pattern-context:var-declaration error
 pattern-context:assignment error
 pattern-context:loop error
 pattern-context:early-return error
+pattern-context:missing-return error
 pattern-context:control-flow error
 pattern-context:statement error
 pattern-context:function-creation error
@@ -59,6 +61,7 @@ function-body:dynamic-code error
 function-body:accessor error
 function-body:unsupported-global error
 function-body:global-write error
+function-body:constructor error
 function-body:ambient-read error
 function-body:builder-call error
 function-body:handler-capture error

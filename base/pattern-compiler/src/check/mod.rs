@@ -47,6 +47,9 @@ pub enum ActKind {
     EventContext,
     /// Creates a cell without an explicit cause.
     CellWithoutCause,
+    /// Makes another runtime call of §5.2: instantiates a pattern, binds a
+    /// handler, or reads context.
+    Runtime,
 }
 
 impl ActKind {
@@ -56,6 +59,7 @@ impl ActKind {
             ActKind::Effect => "requests an effectful built-in",
             ActKind::EventContext => "reads the event's key or principal",
             ActKind::CellWithoutCause => "creates a cell without an explicit cause",
+            ActKind::Runtime => "makes a runtime call",
         }
     }
 }
@@ -79,6 +83,8 @@ pub struct Facts {
 /// computation, whose target's acts are reported once every module is read.
 #[derive(Debug, Clone)]
 pub struct Pending {
+    /// Whether the call is made while a frozen-data constant is computed.
+    pub module_init: bool,
     pub target: DefRef,
     pub name: String,
     pub span: (u32, u32),
@@ -171,6 +177,12 @@ pub struct Checker<'p, 'a> {
     /// The starts of the references to a removed helper that are the callee
     /// of a call or the tag of a template.
     helper_callees: HashSet<u32>,
+    /// The start of the builder call that is the whole initializer of the
+    /// module-scope `const` being visited.
+    direct_builder: Option<u32>,
+    /// The starts of the `Object.prototype` reads that are an operand of
+    /// `===` or `!==`.
+    prototype_operands: HashSet<u32>,
 }
 
 /// Walks one module.
@@ -198,6 +210,8 @@ pub fn check_module(
         cause_given: HashSet::new(),
         name_hint: None,
         helper_callees: HashSet::new(),
+        direct_builder: None,
+        prototype_operands: HashSet::new(),
     };
     if model.tier == ModuleTier::Imported {
         checker.imported_module();
@@ -220,19 +234,6 @@ impl<'p, 'a> Checker<'p, 'a> {
             position,
             message.trim_end().to_string(),
         ));
-    }
-
-    fn report_note(
-        &mut self,
-        id: &'static str,
-        span: Span,
-        found: impl AsRef<str>,
-        note: &'static str,
-    ) {
-        self.report(id, span, found);
-        if let Some(last) = self.out.diagnostics.last_mut() {
-            last.note = Some(note);
-        }
     }
 
     fn count(&mut self, key: &str) {
@@ -277,6 +278,12 @@ impl<'p, 'a> Checker<'p, 'a> {
                 name: name.to_string(),
                 span: offsets(span),
             });
+        }
+        if matches!(
+            kind,
+            CallKind::Instantiate | CallKind::BindHandler | CallKind::ContextRead
+        ) {
+            self.act(ActKind::Runtime, span, "A runtime call");
         }
     }
 
@@ -461,7 +468,7 @@ impl<'p, 'a> Checker<'p, 'a> {
             if let Some(expression) = function.expression_body() {
                 checker.visit_expression(expression);
             } else if let Some(statements) = function.block_body() {
-                checker.reactive_block(statements, checker.out.bodies[body].kind);
+                checker.reactive_block(statements, checker.out.bodies[body].kind, function.span());
             }
         });
         if frame {
@@ -473,7 +480,7 @@ impl<'p, 'a> Checker<'p, 'a> {
         self.with_ctx(Ctx::Refused, walk);
     }
 
-    fn reactive_block(&mut self, statements: &[Statement<'a>], kind: BodyKind) {
+    fn reactive_block(&mut self, statements: &[Statement<'a>], kind: BodyKind, span: Span) {
         let last = statements
             .iter()
             .rposition(|statement| !matches!(statement, Statement::EmptyStatement(_)));
@@ -524,11 +531,10 @@ impl<'p, 'a> Checker<'p, 'a> {
                             "A `return` that is not the one last statement of a reactive body",
                         );
                     } else if statement.argument.is_none() {
-                        self.report_note(
-                            "pattern-context:early-return",
+                        self.report(
+                            "pattern-context:missing-return",
                             statement.span,
-                            "A `return` without an expression in a reactive body",
-                            "return-without-expression",
+                            "A reactive body that ends in `return;`",
                         );
                     }
                     returned = true;
@@ -591,6 +597,13 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.count(&format!("pattern-block:{tally}"));
             }
         }
+        if !returned {
+            self.report(
+                "pattern-context:missing-return",
+                span,
+                "A reactive body with no `return`",
+            );
+        }
     }
 
     fn reactive_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
@@ -600,6 +613,17 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.pattern_params.last() == Some(&Some(symbol))
             }))
         });
+        let constant = declarator
+            .init
+            .as_ref()
+            .is_some_and(|init| self.is_constant_expression(init, 0));
+        if !constant && has_default_or_rest(&declarator.id) {
+            self.report(
+                "reactive:unsupported-expression",
+                declarator.id.span(),
+                "A default value or a rest element in a destructuring of a value that is not a constant expression",
+            );
+        }
         let legal = std::mem::replace(&mut self.self_key_legal, from_input);
         self.visit_binding_pattern(&declarator.id);
         self.self_key_legal = legal;
@@ -631,6 +655,15 @@ impl<'p, 'a> Checker<'p, 'a> {
                 statement.span,
                 "An expression statement that is not a recorded call",
             );
+            if matches!(expression, Expression::UnaryExpression(unary)
+                if unary.operator == UnaryOperator::Void)
+            {
+                self.count("reactive:void");
+            }
+            // The statement is reported once: the expression in it is held
+            // to the grammar of the function tier alone.
+            self.refused(|checker| checker.visit_expression(&statement.expression));
+            return;
         }
         self.visit_expression(&statement.expression);
         self.statement_call = None;
@@ -890,6 +923,7 @@ impl<'p, 'a> Checker<'p, 'a> {
             {
                 if builder.is_module_scope() {
                     self.name_hint = Some((call.span.start, name.to_string()));
+                    self.direct_builder = Some(call.span.start);
                     self.builder_call(call, builder, false);
                     self.name_hint = None;
                     return;
@@ -1120,7 +1154,8 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.visit_argument(argument);
             }
         }
-        let placement = self.placement(builder, callee);
+        let direct = self.direct_builder.take() == Some(call.span.start);
+        let placement = self.placement(builder, callee, direct);
         if let Some((id, found)) = &placement {
             self.report(id, call.span, found);
         }
@@ -1252,7 +1287,12 @@ impl<'p, 'a> Checker<'p, 'a> {
 
     /// The diagnostic for a builder called where it may not be, if the
     /// current context is such a place.
-    fn placement(&self, builder: Builder, callee: bool) -> Option<(&'static str, String)> {
+    fn placement(
+        &self,
+        builder: Builder,
+        callee: bool,
+        direct: bool,
+    ) -> Option<(&'static str, String)> {
         let name = builder.name();
         match (self.cur(), builder) {
             (Ctx::Reactive { .. }, Builder::Lift | Builder::Handler) => Some((
@@ -1267,8 +1307,12 @@ impl<'p, 'a> Checker<'p, 'a> {
                 format!("`{name}(...)` called in a function body"),
             )),
             (Ctx::Module, Builder::Computed | Builder::Action | Builder::Assert) => Some((
-                "function-body:builder-call",
+                "module-scope:runtime-call",
                 format!("`{name}(...)` called at module scope"),
+            )),
+            (Ctx::Module, Builder::Lift) if !direct => Some((
+                "module-scope:frozen-data-type",
+                "A `lift(...)` call inside a frozen-data expression yields a function".to_string(),
             )),
             (Ctx::Module, _) => None,
         }
@@ -1308,20 +1352,20 @@ impl<'p, 'a> Checker<'p, 'a> {
                 );
                 if builder == Builder::Lift {
                     self.out.pending.push(Pending {
+                        module_init: false,
                         target: def,
                         name,
                         span: offsets(callback.span()),
                     });
                 }
             }
-            Some(_) => self.report_note(
+            Some(_) => self.report(
                 "builder-callback:indirect-reference",
                 callback.span(),
                 format!(
                     "The callback of `{}` is a name, and it has to be written at the call",
                     builder.name()
                 ),
-                "callback-by-name",
             ),
             None => self.report(
                 "builder-callback:indirect-reference",
@@ -1407,11 +1451,10 @@ impl<'p, 'a> Checker<'p, 'a> {
                     "A default value in the pattern parameter",
                 ),
                 BindingPattern::ObjectPattern(nested) => self.pattern_destructuring(nested),
-                BindingPattern::ArrayPattern(array) => self.report_note(
+                BindingPattern::ArrayPattern(array) => self.report(
                     "pattern-context:parameter-form",
                     array.span,
                     "An array destructuring in the pattern parameter",
-                    "pattern-parameter-nesting",
                 ),
             }
         }
@@ -1463,6 +1506,18 @@ impl<'p, 'a> Checker<'p, 'a> {
             ActKind::Effect => "function-body:effect-in-computation",
             ActKind::EventContext => "function-body:event-context-in-computation",
             ActKind::CellWithoutCause => "function-body:cell-needs-cause",
+            ActKind::Runtime => "module-scope:runtime-call",
+        };
+        let module_scope = |checker: &mut Self| {
+            if kind == ActKind::Ambient {
+                checker.report(id, span, format!("{found} at module scope"));
+            } else {
+                checker.report(
+                    "module-scope:runtime-call",
+                    span,
+                    "A runtime call while a module-scope constant is computed",
+                );
+            }
         };
         match self.cur() {
             Ctx::Reactive { .. } => {
@@ -1471,17 +1526,12 @@ impl<'p, 'a> Checker<'p, 'a> {
                 }
             }
             Ctx::Function { root, .. } => match root {
-                Root::Computation => self.report(id, span, format!("{found} in a computation")),
-                Root::ModuleInit => {
-                    if kind != ActKind::CellWithoutCause {
-                        self.report_note(
-                            id,
-                            span,
-                            format!("{found} while a module-scope constant is computed"),
-                            "frozen-data-prohibitions",
-                        );
+                Root::Computation => {
+                    if kind != ActKind::Runtime {
+                        self.report(id, span, format!("{found} in a computation"));
                     }
                 }
+                Root::ModuleInit => module_scope(self),
                 Root::Authored(def) => {
                     let (line, _) = self.parsed.lines.position(self.parsed.source, span.start);
                     self.out
@@ -1493,37 +1543,38 @@ impl<'p, 'a> Checker<'p, 'a> {
                 }
                 Root::Event => {}
             },
-            Ctx::Module => {
-                if kind != ActKind::CellWithoutCause {
-                    self.report_note(
-                        id,
-                        span,
-                        format!("{found} in the initializer of a module-scope constant"),
-                        "frozen-data-prohibitions",
-                    );
-                }
-            }
+            Ctx::Module => module_scope(self),
             Ctx::Refused => {}
         }
     }
 
     fn authored_call(&mut self, target: DefRef, name: &str, span: Span) {
-        match self.cur() {
+        let module_init = match self.cur() {
             Ctx::Reactive { .. }
             | Ctx::Function {
-                root: Root::Computation | Root::ModuleInit,
+                root: Root::Computation,
                 ..
-            } => self.out.pending.push(Pending {
-                target,
-                name: name.to_string(),
-                span: offsets(span),
-            }),
+            } => false,
+            Ctx::Module
+            | Ctx::Function {
+                root: Root::ModuleInit,
+                ..
+            } => true,
             Ctx::Function {
                 root: Root::Authored(def),
                 ..
-            } => self.out.facts.entry(def).or_default().calls.push(target),
-            _ => {}
-        }
+            } => {
+                self.out.facts.entry(def).or_default().calls.push(target);
+                return;
+            }
+            _ => return,
+        };
+        self.out.pending.push(Pending {
+            module_init,
+            target,
+            name: name.to_string(),
+            span: offsets(span),
+        });
     }
 
     // ----- Per-element state (§4.4.1) -----
@@ -1540,6 +1591,88 @@ impl<'p, 'a> Checker<'p, 'a> {
                 state.state.get_or_insert(span);
             }
             body = self.out.bodies[index].parent;
+        }
+    }
+
+    /// Whether an expression is a constant expression in the sense of §4.2:
+    /// a literal, a module-scope constant, an object or array literal of
+    /// constant expressions, or a `const` initialized by one.
+    fn is_constant_expression(&self, expression: &Expression<'a>, depth: u32) -> bool {
+        if depth > 4 {
+            return false;
+        }
+        match unwrap(expression) {
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            Expression::ArrayExpression(array) => array.elements.iter().all(|element| {
+                element
+                    .as_expression()
+                    .is_some_and(|element| self.is_constant_expression(element, depth + 1))
+            }),
+            Expression::ObjectExpression(object) => object.properties.iter().all(|property| {
+                matches!(property, ObjectPropertyKind::ObjectProperty(property)
+                    if !property.computed
+                        && self.is_constant_expression(&property.value, depth + 1))
+            }),
+            Expression::Identifier(identifier) => match self.thing(identifier) {
+                Thing::Def(_, DefKind::FrozenData, _) => true,
+                Thing::Local(symbol) => {
+                    let nodes = self.parsed.semantic.nodes();
+                    match nodes.kind(self.scoping.symbol_declaration(symbol)) {
+                        AstKind::VariableDeclarator(declarator)
+                            if declarator.kind == VariableDeclarationKind::Const
+                                && matches!(
+                                    declarator.id,
+                                    BindingPattern::BindingIdentifier(_)
+                                ) =>
+                        {
+                            declarator
+                                .init
+                                .as_ref()
+                                .is_some_and(|init| self.is_constant_expression(init, depth + 1))
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether a computed key is certainly not static (§4.3). A key that
+    /// names a module-scope constant is static when the constant has a
+    /// literal type, which is left to the type checker.
+    fn is_dynamic_key(&self, key: &Expression<'a>) -> bool {
+        let mut root = unwrap(key);
+        if matches!(
+            root,
+            Expression::StringLiteral(_) | Expression::NumericLiteral(_)
+        ) {
+            return false;
+        }
+        if let Expression::TemplateLiteral(template) = root {
+            return !template.expressions.is_empty();
+        }
+        if self
+            .api_of(root)
+            .is_some_and(|api| api.value() == ApiValue::WellKnownKey)
+        {
+            return false;
+        }
+        while let Expression::StaticMemberExpression(member) = root {
+            root = unwrap(&member.object);
+        }
+        match root {
+            Expression::Identifier(identifier) => !matches!(
+                self.thing(identifier),
+                Thing::Def(..) | Thing::Import | Thing::Api(_) | Thing::ApiNamespace(_)
+            ),
+            _ => true,
         }
     }
 
@@ -1787,9 +1920,9 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.record_call(CallKind::Effect, name, call.span);
                 if value == ApiValue::StagedChange && self.in_reactive() {
                     self.report(
-                        "reactive:unsupported-call",
+                        "function-body:effect-in-computation",
                         call.span,
-                        format!("`{name}` is requested from a handler only"),
+                        format!("`{name}`, which only a handler requests, in the reactive tier"),
                     );
                 }
                 self.act(ActKind::Effect, call.span, &format!("`{name}` requested"));
@@ -2246,6 +2379,18 @@ impl<'p, 'a> Checker<'p, 'a> {
                 format!("The callback of `{name}` takes the whole array as a parameter"),
             );
         }
+        let parameters = function.params();
+        if parameters.rest.is_some()
+            || parameters.items.iter().any(|parameter| {
+                parameter.initializer.is_some() || has_default_or_rest(&parameter.pattern)
+            })
+        {
+            self.report(
+                "collection:callback-parameters",
+                parameters.span,
+                format!("The callback of `{name}` has a default value or a rest element"),
+            );
+        }
         if reduce && function.expression_body().is_none() {
             self.report(
                 "collection:reduce-callback",
@@ -2501,8 +2646,44 @@ impl<'p, 'a> Checker<'p, 'a> {
         }
     }
 
+    /// Whether the callee of a `new` is not a global, a cell constructor,
+    /// or a Fabric value class (§5.1).
+    fn is_authored_constructor(&self, callee: &Expression<'a>) -> bool {
+        let mut root = unwrap(callee);
+        while let Some(member) = root.as_member_expression() {
+            root = unwrap(member.object());
+        }
+        match root {
+            Expression::Identifier(identifier) => match self.thing(identifier) {
+                Thing::Global | Thing::ApiNamespace(_) => false,
+                Thing::Api(api) => !api.name.starts_with("Fabric"),
+                Thing::Def(..) | Thing::Import | Thing::Local(_) => true,
+            },
+            _ => true,
+        }
+    }
+
     fn is_self_key(&self, key: &Expression<'a>) -> bool {
         self.is_api(key, "SELF")
+    }
+}
+
+/// Whether a binding pattern has a default value or a rest element at any
+/// depth.
+fn has_default_or_rest(pattern: &BindingPattern<'_>) -> bool {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => false,
+        BindingPattern::AssignmentPattern(_) => true,
+        BindingPattern::ObjectPattern(object) => {
+            object.rest.is_some()
+                || object
+                    .properties
+                    .iter()
+                    .any(|property| has_default_or_rest(&property.value))
+        }
+        BindingPattern::ArrayPattern(array) => {
+            array.rest.is_some() || array.elements.iter().flatten().any(has_default_or_rest)
+        }
     }
 }
 
@@ -2644,6 +2825,16 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             }
             return;
         }
+        if let Expression::BinaryExpression(binary) = it {
+            if matches!(
+                binary.operator,
+                BinaryOperator::StrictEquality | BinaryOperator::StrictInequality
+            ) {
+                for operand in [&binary.left, &binary.right] {
+                    self.prototype_operands.insert(unwrap(operand).span().start);
+                }
+            }
+        }
         if self.in_reactive() {
             let found = match it {
                 Expression::AssignmentExpression(_) | Expression::UpdateExpression(_) => Some((
@@ -2724,6 +2915,15 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                     "The `Function` constructor",
                 );
             }
+            if matches!(self.cur(), Ctx::Function { .. })
+                && self.is_authored_constructor(&it.callee)
+            {
+                self.report(
+                    "function-body:constructor",
+                    it.span,
+                    "`new` of a callee that is not a constructor of the standard library, a cell constructor, or a Fabric value class",
+                );
+            }
             let reported_by_name = global.is_some_and(|name| {
                 matches!(api::global(name), Global::Refused(_) | Global::Unlisted)
             });
@@ -2780,7 +2980,11 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                 if let Some(namespace) = self.global_name(&member.object) {
                     if api::is_global_namespace(namespace) {
                         let name = member.property.name.as_str();
+                        let compared = namespace == "Object"
+                            && name == "prototype"
+                            && self.prototype_operands.contains(&member.span.start);
                         match api::global_member(namespace, name) {
+                            _ if compared => {}
                             Some(GlobalMember::Ambient) => self.act(
                                 ActKind::Ambient,
                                 member.span,
@@ -2960,6 +3164,17 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
         let function = FunctionLike::of(&it.value);
         let accessor = it.method || it.kind != PropertyKind::Init;
+        if it.computed && self.in_reactive() {
+            if let Some(key) = it.key.as_expression() {
+                if self.is_dynamic_key(key) {
+                    self.report(
+                        "reactive:unsupported-expression",
+                        key.span(),
+                        "An object literal key that is not static, in the reactive tier",
+                    );
+                }
+            }
+        }
         match self.cur() {
             Ctx::Reactive { .. } if accessor || function.is_some() => {
                 self.report(
