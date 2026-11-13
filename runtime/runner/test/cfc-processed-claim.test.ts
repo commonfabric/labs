@@ -26,6 +26,8 @@ import {
   writeProcessedClaim,
 } from "../src/executor/processed-claim.ts";
 import { processedClaimJoinIsForeign } from "../src/cfc/prepare.ts";
+import { runBeforeAbort } from "../src/storage/extended-storage-transaction.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -392,9 +394,15 @@ describe("cfc-processed-claim", () => {
       const entry = { sidecarId: entriesId, index: 0 };
       writeProcessedClaim(runtime, tx, space, entry, { clearDeferral: false });
 
-      expect(withholdProcessedClaimOutcome(runtime, tx, space, entry)).toBe(
-        true,
-      );
+      expect(
+        withholdProcessedClaimOutcome(
+          runtime,
+          tx,
+          space,
+          entry,
+          runOutcomeIsWithheld(tx, space),
+        ),
+      ).toBe(true);
       expect(withheldOn(tx)).toBe(true);
       expect(preparedWriterFitReasons(tx)).toEqual([]);
       tx.abort();
@@ -403,42 +411,73 @@ describe("cfc-processed-claim", () => {
     it("notes a same-wave run's claim for the wave to record withheld", () => {
       const tx = handlerRun("same-wave-handler");
 
-      expect(withholdProcessedClaimOutcome(runtime, tx, space, undefined))
-        .toBe(true);
+      expect(
+        withholdProcessedClaimOutcome(
+          runtime,
+          tx,
+          space,
+          undefined,
+          runOutcomeIsWithheld(tx, space),
+        ),
+      ).toBe(true);
       expect(waveClaimIsWithheld(tx)).toBe(true);
       tx.abort();
     });
 
-    it("finds an aborted run that read a document of the stream's own space labeled outside it foreign", async () => {
-      // A foreign join needs no other space: a document of the stream's own
-      // space whose label the entries document doesn't admit makes it foreign
-      // too. Once the run's transaction has ended, its observations are gone.
-
-      const privateId = runtime.getCell(space, "same-space-private", undefined)
+    /** Writes the stream's own space's document `name`, labeled outside it or not. */
+    const seedLocal = async (
+      name: string,
+      secret: string,
+      labeled: boolean,
+    ) => {
+      const id = runtime.getCell(space, name, undefined)
         .getAsNormalizedFullLink().id;
       const seed = runtime.edit();
       writeSeedEnvelopeDoc(seed, space);
       seedStoredEnvelope(seed, {
         space,
         scope: "space",
-        id: privateId,
+        id,
         path: [],
       }, {
-        value: { secret: "s3cr3t" },
+        value: { secret },
         cfc: {
           version: 1,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: {
             version: 1,
-            entries: [{
-              path: ["secret"],
-              label: { confidentiality: [FOREIGN_ATOM] },
-            }],
+            entries: labeled
+              ? [{
+                path: ["secret"],
+                label: { confidentiality: [FOREIGN_ATOM] },
+              }]
+              : [],
           },
         },
       });
       expect((await seed.commit().settled).error).toBeUndefined();
+      return id;
+    };
 
+    /**
+     * Aborts `tx` with its decision registered to run first, as the serving
+     * loop registers it, and returns what was decided.
+     */
+    const decideAtAbort = (tx: IExtendedStorageTransaction) => {
+      let decided: boolean | undefined;
+      runBeforeAbort(tx, () => {
+        decided = runOutcomeIsWithheld(tx, space);
+      });
+      tx.abort();
+      return decided;
+    };
+
+    it("finds a run that read a document of the stream's own space labeled outside it foreign, decided as it aborts", async () => {
+      // A foreign join needs no other space: a document of the stream's own
+      // space whose label the entries document doesn't admit makes it foreign
+      // too.
+
+      const privateId = await seedLocal("same-space-private", "s3cr3t", true);
       const tx = plainRun("same-space-aborted");
       const read = runtime.getCellFromLink(
         { space, scope: "space", id: privateId, path: [] },
@@ -446,17 +485,50 @@ describe("cfc-processed-claim", () => {
         tx,
       ).getRaw() as { secret?: string };
       expect(read.secret).toBe("s3cr3t");
-      expect(processedClaimJoinIsForeign(tx, space)).toBe(true);
-      tx.abort();
 
-      expect(runOutcomeIsWithheld(runtime, tx, space)).toBe(true);
+      expect(decideAtAbort(tx)).toBe(true);
     });
 
-    it("finds an aborted run that read nothing labeled not foreign", () => {
-      const tx = plainRun("plain-aborted");
+    it("finds a run foreign by the label it read, though the label is released before it aborts", async () => {
+      // The decision is the run's own: what its transaction observed, not
+      // what the store holds once the run has ended.
+
+      const privateId = await seedLocal("released-private", "s3cr3t", true);
+      const tx = plainRun("released-aborted");
+      runtime.getCellFromLink(
+        { space, scope: "space", id: privateId, path: [] },
+        undefined,
+        tx,
+      ).getRaw();
+      await seedLocal("released-private", "released", false);
+      // The release has landed: a run that read now would find nothing
+      // labeled.
+      const after = plainRun("released-after");
+      expect(
+        runtime.getCellFromLink(
+          { space, scope: "space", id: privateId, path: [] },
+          undefined,
+          after,
+        ).getRaw(),
+      ).toEqual({ secret: "released" });
+      expect(processedClaimJoinIsForeign(after, space)).toBe(false);
+      after.abort();
+
+      expect(decideAtAbort(tx)).toBe(true);
+    });
+
+    it("finds a run that read nothing labeled not foreign, decided as it aborts", () => {
+      expect(decideAtAbort(plainRun("plain-aborted"))).toBe(false);
+    });
+
+    it("withholds the outcome of a run that ended undecided, whatever it read", () => {
+      // Its observations went with its transaction, so nothing says what its
+      // join was.
+
+      const tx = plainRun("plain-ended");
       tx.abort();
 
-      expect(runOutcomeIsWithheld(runtime, tx, space)).toBe(false);
+      expect(runOutcomeIsWithheld(tx, space)).toBe(true);
     });
 
     it("withholds nothing for a run whose join the stream's space admits", () => {
@@ -464,9 +536,15 @@ describe("cfc-processed-claim", () => {
       const entry = { sidecarId: entriesId, index: 0 };
       writeProcessedClaim(runtime, tx, space, entry, { clearDeferral: false });
 
-      expect(withholdProcessedClaimOutcome(runtime, tx, space, entry)).toBe(
-        false,
-      );
+      expect(
+        withholdProcessedClaimOutcome(
+          runtime,
+          tx,
+          space,
+          entry,
+          runOutcomeIsWithheld(tx, space),
+        ),
+      ).toBe(false);
       expect(withheldOn(tx)).toBeUndefined();
       expect(waveClaimIsWithheld(tx)).toBe(false);
       tx.abort();

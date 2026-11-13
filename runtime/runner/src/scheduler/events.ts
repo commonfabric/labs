@@ -33,7 +33,10 @@ import {
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
-import { commitPromiseRejectionOf } from "../storage/extended-storage-transaction.ts";
+import {
+  commitPromiseRejectionOf,
+  runBeforeAbort,
+} from "../storage/extended-storage-transaction.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
@@ -2402,18 +2405,23 @@ export async function dispatchQueuedEvent(state: {
   // clause its stream's space doesn't admit, so that its processed claim, and
   // every failure it reports, says the same thing whatever happened
   // (`runOutcomeIsWithheld()`). Decided once, while the transaction is still
-  // open: before the commit, or before a failed run's transaction is
-  // aborted.
+  // open: before the commit, before a failed run's transaction is aborted,
+  // or, when the handler aborts the transaction itself, first thing in that
+  // abort.
   let outcomeWithheld: boolean | undefined;
   const servedOutcomeWithheld = (): boolean => {
     if (served === undefined) return false;
     outcomeWithheld ??= runOutcomeIsWithheld(
-      state.runtime,
       tx,
       queuedEvent.eventLink.space,
     );
     return outcomeWithheld;
   };
+  if (served !== undefined) {
+    runBeforeAbort(tx, () => {
+      servedOutcomeWithheld();
+    });
+  }
   /** `outcome`, with `withheld` set when the served run's outcome is. */
   const servedErrorOutcome = (message: string): ServedEventFailureOutcome =>
     servedOutcomeWithheld()
@@ -3057,11 +3065,18 @@ export async function dispatchQueuedEvent(state: {
         // join's value may have chosen, and the drop notice it can harden
         // into is written on the entry. Decided before the abort below takes
         // the observations it reads.
-        const notRunMessage = servedOutcomeWithheld()
+        // The deferral of later events and the abort's error carry it too,
+        // into the serving host's log and the transaction's settle callbacks.
+        const withheld = servedOutcomeWithheld();
+        const notRunMessage = withheld
           ? "the handler did not run, and its outcome is withheld"
           : reason;
         if (tx.status().status === "ready") {
-          tx.abort(new Error(`handler did not run: ${reason}`));
+          tx.abort(
+            new Error(
+              withheld ? notRunMessage : `handler did not run: ${reason}`,
+            ),
+          );
         }
         if (served !== undefined) {
           // Mark/effects atomicity (events.md §4, RULED 2026-08-27 — the
@@ -3095,7 +3110,9 @@ export async function dispatchQueuedEvent(state: {
           deferLaterSameSpaceServedEvents(
             state,
             queuedEvent,
-            `whose served handler did not run (${reason})`,
+            withheld
+              ? "whose served handler did not run, its outcome withheld"
+              : `whose served handler did not run (${reason})`,
           );
           runFinalCommitCallback();
           return;
@@ -3182,11 +3199,12 @@ export async function dispatchQueuedEvent(state: {
       }
 
       if (served !== undefined) {
-        outcomeWithheld = withholdProcessedClaimOutcome(
+        withholdProcessedClaimOutcome(
           state.runtime,
           tx,
           queuedEvent.eventLink.space,
           served.streamEntry,
+          servedOutcomeWithheld(),
         );
       }
       try {
