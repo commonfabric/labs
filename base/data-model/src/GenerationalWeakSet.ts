@@ -20,10 +20,13 @@
  * owner next proves and adds it.
  *
  * Forgetting makes this fit for a cache and for nothing whose answers must
- * hold. A cache that forgets an entry only redoes the work the entry saved. An
- * interning table that forgot one would hand out a second object for a value
- * it had already interned, so two values it treats as the same would no longer
- * be `===`.
+ * hold. A cache that forgets an entry has to redo the work the entry saved,
+ * perhaps all at once: work first done in pieces, each leaning on the entries
+ * the pieces before it left, can be done whole the second time, so whatever
+ * limits the whole (time, or the depth of the call stack) can fail where every
+ * piece succeeded. An interning table that forgot an entry would be wrong rather than
+ * slow: it would hand out a second object for a value it had already interned,
+ * so two values it treats as the same would no longer be `===`.
  */
 export class GenerationalWeakSet<T extends WeakKey> {
   #newest = new WeakSet<T>();

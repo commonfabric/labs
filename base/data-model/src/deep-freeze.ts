@@ -83,13 +83,14 @@ function isInDeepFrozenCache(obj: object): boolean {
 
 /**
  * Makes `deepFrozenCache` forget every object it holds, as the dropping of
- * its generations eventually does. Safe at any time, since forgetting costs a
- * cache only the walks it saved.
+ * its generations eventually does. Every later answer stays the same, but the
+ * next check or freeze of each value walks its whole depth again, with the
+ * cost the file header describes.
  *
  * @internal Not in the package's barrel; `for-testing-only.ts` offers it to
- * tests.
+ * tests, and the suffix is there to keep it from gaining any other caller.
  */
-export function forgetDeepFrozenCache(): void {
+export function forgetDeepFrozenCacheForTestingOnly(): void {
   deepFrozenCache.clear();
 }
 
