@@ -39,6 +39,9 @@ describe("runner-event-starts", () => {
   let runtime: Runtime;
   let handled: unknown[];
 
+  /** The pattern every piece runs, as `runtime` trusts it. */
+  let trusted: Pattern;
+
   function newRuntime(storageManager: EmulatedStorageManager): Runtime {
     const made = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -70,15 +73,21 @@ describe("runner-event-starts", () => {
         },
       ],
     };
-    made.patternManager.associatePatternIdentity(
-      trustPattern(made, pattern),
-      patternIdentity,
-    );
+    const madeTrusted = trustPattern(made, pattern);
+    made.patternManager.associatePatternIdentity(madeTrusted, patternIdentity);
+    if (storageManager === storage) trusted = madeTrusted;
     return made;
   }
 
-  /** Commits, on `creator`, the piece whose result document is `name`. */
-  async function createPiece(name: string): Promise<void> {
+  /**
+   * Commits, on `creator`, the piece whose result document is `name`, its
+   * argument linking the result documents of `sources`, the pieces its inputs
+   * come from.
+   */
+  async function createPiece(
+    name: string,
+    sources: readonly string[] = [],
+  ): Promise<void> {
     const tx = creator.edit();
     const resultCell = creator.getCell(space, name, undefined, tx);
     const argumentCell = getMetaCell(resultCell, "argument", tx);
@@ -97,7 +106,27 @@ describe("runner-event-starts", () => {
       rawMetaWriteAuthorization,
     );
     setResultCell(eventsCell, resultCell);
-    argumentCell.set({});
+    argumentCell.setRaw(
+      Object.fromEntries(
+        sources.map((source) => [
+          source,
+          creator.getCell(space, source, undefined, tx).getAsLink(),
+        ]),
+      ) as never,
+    );
+    const { error } = await tx.commit().settled;
+    expect(error).toBeUndefined();
+  }
+
+  /**
+   * Commits, on `creator`, a document named `name` holding only a link to the
+   * result document of the piece named `piece`.
+   */
+  async function createLink(name: string, piece: string): Promise<void> {
+    const tx = creator.edit();
+    creator.getCell(space, name, undefined, tx).setRaw(
+      creator.getCell(space, piece, undefined, tx).getAsLink() as never,
+    );
     const { error } = await tx.commit().settled;
     expect(error).toBeUndefined();
   }
@@ -200,6 +229,64 @@ describe("runner-event-starts", () => {
       expect(namedSince(mark)).toEqual([]);
     });
 
+    it("names no piece another start has asked for while that start is in flight", async () => {
+      await createPiece("opening");
+      const mark = runtime.runner.eventStartMark;
+      expect(await send("opening", "hello")).toBe("done");
+
+      const opening = runtime.start(pieceNamed("opening"));
+
+      expect(namedSince(mark)).toEqual([]);
+      expect(await opening).toBe(true);
+    });
+
+    it("names no piece another start has asked for through a document linking it", async () => {
+      await createPiece("linked");
+      await createLink("link to linked", "linked");
+      const mark = runtime.runner.eventStartMark;
+      expect(await send("linked", "hello")).toBe("done");
+
+      expect(await runtime.start(pieceNamed("link to linked"))).toBe(true);
+
+      expect(namedSince(mark)).toEqual([]);
+    });
+
+    it("names no piece a start through a linking document asked for while the event's start was in flight", async () => {
+      await createPiece("raced");
+      await createLink("link to raced", "raced");
+      const mark = runtime.runner.eventStartMark;
+
+      const forEvent = runtime.start(pieceNamed("raced"), { forEvent: true });
+      const opened = runtime.start(pieceNamed("link to raced"));
+
+      expect(await Promise.all([forEvent, opened])).toEqual([true, true]);
+      expect(namedSince(mark)).toEqual([]);
+    });
+
+    it("names no piece a run has asked for since", async () => {
+      await createPiece("run");
+      const mark = runtime.runner.eventStartMark;
+      expect(await send("run", "hello")).toBe("done");
+
+      await runtime.runSynced(pieceNamed("run"), trusted, {});
+
+      expect(namedSince(mark)).toEqual([]);
+    });
+
+    it("names the pieces an event's start started its piece's inputs from", async () => {
+      await createPiece("source");
+      await createPiece("owner", ["source"]);
+      const mark = runtime.runner.eventStartMark;
+
+      expect(await send("owner", "hello")).toBe("done");
+
+      expect(namedSince(mark).sort()).toEqual(
+        [pieceNamed("owner"), pieceNamed("source")].map((piece) =>
+          piece.getAsNormalizedFullLink().id
+        ).sort(),
+      );
+    });
+
     it("names no piece another start joined while the event's start was in flight", async () => {
       await createPiece("joined");
       const mark = runtime.runner.eventStartMark;
@@ -273,6 +360,26 @@ describe("runner-event-starts", () => {
 
       expect(await starting).toBe(true);
       expect(runtime.runner.isRunning(pieceNamed("in-flight"))).toBe(true);
+    });
+
+    it("leaves a piece the scheduler holds an event for running, and returns `false`", async () => {
+      await createPiece("queued");
+      expect(await send("queued", "first")).toBe("done");
+      const settled = Promise.withResolvers<void>();
+      runtime.scheduler.queueEvent(
+        streamOf("queued"),
+        "second",
+        undefined,
+        () => settled.resolve(),
+      );
+
+      expect(runtime.runner.releaseEventStart(pieceNamed("queued"))).toBe(
+        false,
+      );
+
+      await settled.promise;
+      expect(handled).toEqual(["first", "second"]);
+      expect(runtime.runner.isRunning(pieceNamed("queued"))).toBe(true);
     });
 
     it("delivers a later event to the released piece by starting it again", async () => {
