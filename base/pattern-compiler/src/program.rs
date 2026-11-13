@@ -313,6 +313,13 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         resolver.check_assignments(module);
         resolver.check_typed_rules(module);
     }
+    // The footprint of each body (`footprint-analysis.md`), as counts.
+    for (module, check) in checks.iter_mut().enumerate() {
+        if let Some(check) = check {
+            let records = crate::footprint::analyze_module(&resolver, module, &check.bodies);
+            footprint_counts(&check.bodies, &records, &mut check.counts);
+        }
+    }
     let reports = std::mem::take(&mut resolver.types.borrow_mut().reports);
     for report in reports {
         let (Some(check), Some(parsed)) = (&mut checks[report.module], &parsed[report.module])
@@ -394,6 +401,165 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         });
     }
     ProgramAnalysis { modules, failures }
+}
+
+/// Adds the counts the measurement of `footprint-analysis.md` §11 compares:
+/// the bodies analyzed, where the analysis widens, the reads and the writes
+/// through handles. A site is counted once, for the innermost body around
+/// it.
+fn footprint_counts(
+    bodies: &[Body],
+    records: &[(usize, crate::footprint::Record)],
+    counts: &mut BTreeMap<String, usize>,
+) {
+    let mut add = |key: String, by: usize| {
+        if by > 0 {
+            *counts.entry(key).or_insert(0) += by;
+        }
+    };
+    // The innermost analyzed body around a site.
+    let innermost = |site: u32| {
+        records
+            .iter()
+            .map(|(index, _)| *index)
+            .filter(|index| bodies[*index].span.0 <= site && site < bodies[*index].span.1)
+            .min_by_key(|index| bodies[*index].span.1 - bodies[*index].span.0)
+    };
+    for (index, record) in records {
+        let kind = bodies[*index].kind.label();
+        add(format!("footprint:bodies:{kind}"), 1);
+        add("footprint:bodies".to_string(), 1);
+        let own: Vec<&str> = record
+            .sites
+            .iter()
+            .filter(|(site, _)| innermost(*site) == Some(*index))
+            .map(|(_, what)| what.as_str())
+            .collect();
+        let count = |prefix: &str| own.iter().filter(|what| what.starts_with(prefix)).count();
+        // Widenings: directly, and with the helpers the body calls.
+        let direct: BTreeSet<&str> = own
+            .iter()
+            .filter_map(|what| what.strip_prefix("widen:"))
+            .collect();
+        let all: BTreeSet<&str> = record.widenings.iter().map(String::as_str).collect();
+        for cause in &direct {
+            add(format!("footprint:widen:{cause}:bodies, directly"), 1);
+            add(
+                format!("footprint:widen:{cause}:sites"),
+                count(&format!("widen:{cause}")),
+            );
+        }
+        for cause in &all {
+            add(
+                format!("footprint:widen:{cause}:bodies, through helpers"),
+                1,
+            );
+        }
+        if !direct.is_empty() {
+            add("footprint:widen:any:bodies, directly".to_string(), 1);
+        }
+        if !all.is_empty() {
+            add("footprint:widen:any:bodies, through helpers".to_string(), 1);
+            add(format!("footprint:widen:any:through helpers:{kind}"), 1);
+        }
+        // Reads through handles.
+        let reads = count("read:");
+        add("footprint:reads:sites".to_string(), reads);
+        add("footprint:reads:static".to_string(), count("read:static"));
+        for reason in ["conditional", "alternatives", "not anchored"] {
+            add(
+                format!("footprint:reads:dynamic, {reason}"),
+                count(&format!("read:dynamic:{reason}")),
+            );
+        }
+        if reads > 0 {
+            add("footprint:reads:bodies".to_string(), 1);
+            if count("read:static") == reads {
+                add(
+                    "footprint:reads:bodies with static reads alone".to_string(),
+                    1,
+                );
+            }
+        }
+        // With the helpers applied: whether the body has a dynamic read.
+        if record.static_reads + record.dynamic_reads.len() > 0 {
+            add("footprint:reads:bodies, helpers applied".to_string(), 1);
+            if record.dynamic_reads.is_empty() {
+                add(
+                    "footprint:reads:bodies with no dynamic read, helpers applied".to_string(),
+                    1,
+                );
+            }
+        }
+        // Writes through handles.
+        let writes = count("write:");
+        if writes > 0 {
+            add(format!("footprint:writes:{kind}:bodies"), 1);
+            if count("write:dynamic") == 0 {
+                add(
+                    format!("footprint:writes:{kind}:bodies, every target static"),
+                    1,
+                );
+            }
+            add(format!("footprint:writes:{kind}:sites"), writes);
+            add(
+                format!("footprint:writes:{kind}:sites, static"),
+                count("write:static"),
+            );
+        }
+        let keys = count("key:dynamic");
+        add("footprint:dynamic keys:sites".to_string(), keys);
+        add(
+            "footprint:dynamic keys:bodies".to_string(),
+            usize::from(keys > 0),
+        );
+        add(
+            "footprint:observations of an expression with no type".to_string(),
+            record.untyped,
+        );
+    }
+}
+
+/// The footprint of every body of the program `files` that the analysis of
+/// `footprint-analysis.md` runs on.
+pub fn footprints(files: &[SourceFile]) -> Vec<crate::footprint::BodyFootprint> {
+    let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
+    let parsed: Vec<Option<Parsed<'_>>> = files
+        .iter()
+        .zip(&allocators)
+        .map(|(file, allocator)| parse::parse(allocator, &file.path, &file.text).ok())
+        .collect();
+    let models: Vec<Option<ModuleModel>> = parsed
+        .iter()
+        .map(|parsed| parsed.as_ref().map(ModuleModel::build))
+        .collect();
+    let resolver = Resolver::new(files, &models, &parsed);
+    let mut bodies: Vec<Vec<Body>> = Vec::new();
+    for (module, parsed) in parsed.iter().enumerate() {
+        match (parsed, &models[module]) {
+            (Some(parsed), Some(model)) => {
+                let check = check::check_module(parsed, model, module, &resolver);
+                resolver.set_bodies(module, &check.bodies);
+                bodies.push(check.bodies);
+            }
+            _ => bodies.push(Vec::new()),
+        }
+    }
+    let mut found = Vec::new();
+    for (module, file) in files.iter().enumerate() {
+        for (index, record) in crate::footprint::analyze_module(&resolver, module, &bodies[module])
+        {
+            let body = &bodies[module][index];
+            found.push(crate::footprint::BodyFootprint {
+                module: file.path.clone(),
+                name: body.name.clone(),
+                kind: body.kind,
+                line: body.line,
+                record,
+            });
+        }
+    }
+    found
 }
 
 /// The marker [`types_at_markers`] looks for.

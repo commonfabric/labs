@@ -240,3 +240,82 @@ numbers have gaps.
     section names "a pattern instantiated in a function body". Chosen: a
     JSX tag that names a pattern there is one, and its attributes are
     checked as the argument is.
+
+## Footprint analysis (`footprint-analysis.md`, cited as FA)
+
+64. **What of FA the crate implements.** The abstract values of §2.1, the
+    classes `value`, `shape`, `enumeration`, and `identity` of §2.2, the
+    normal form of §2.3, the transfer rules of §3.1 to §3.3 and §3.5 to
+    §3.8, the array, object, `JSON`, `Map`, `Set`, and `console` rows of
+    §3.4, the causes W1 to W5 of §5.2, the reads and the writes through
+    handles of §6.1, §6.2, §7.1, and §7.2, and the read envelope of §7.3
+    as the entries below a dynamic hop. Not implemented: `labelMetadata`
+    and resolved `identity` entries (§7.1, "Resolutions"), the context
+    reads and the runtime calls of §8, `Body.outputs` and `Body.computed`
+    (§3.8, §1.1), the templates of written values (§6.5), the split of a
+    computation into static side-write and materializer (§6.3),
+    idempotency (§6.6), W6, and the `sampled` mark of §2.3.
+65. **A summary is applied by evaluating the callee again** (FA §3.6). FA
+    computes one summary per function and applies it at each call. The
+    crate evaluates the callee's body at each call with the arguments'
+    abstract values bound, which gives the same record where the callee
+    does not call itself. A function that is being evaluated, and a call
+    nested more than eight deep, is not followed: each argument that is a
+    projection is read in full, and the site is counted as W7. FA's fixed
+    point over a group of recursive functions is not computed, and W6, the
+    cut on a recursive type, is not implemented, so a loop over a
+    recursive type records paths of the depth the body writes.
+66. **Control flow** (FA §3.7). The environment is not joined on the
+    control-flow graph. An assignment under a condition joins the old and
+    the new value of the binding, a loop body is evaluated twice, and a
+    `break` or a `continue` changes nothing. A `let` captured by a closure
+    holds what was assigned before the closure is evaluated, and not the
+    join over the body.
+67. **An index into an array that is a literal** (FA §3.1). The first row
+    of the table extends the path by a static key, `v[0]` included, and
+    the third row gives `v[i]` on an array the path `v/*`. Chosen: an
+    index into an array type is `v/*` with `enumeration` at `v` whatever
+    the index is, and a literal index extends the path on a tuple type
+    alone.
+68. **The `identity` entries that accompany a `value` entry** (FA §2.2) are
+    not emitted. A `value` entry over a container stands for its subtree,
+    and the positions of handle, reference, and factory type inside it
+    have no entry of their own.
+69. **A test the type decides** (FA §2.2). FA states the rule for
+    `typeof name` and for `donut?.glaze`. Chosen: a test of presence is
+    decided where the type admits neither `null` nor `undefined`; a kind
+    test where the type is of one kind, admits neither, and is not
+    `unknown`; a test of truthiness of a container, a handle, or a
+    reference under the same condition. A test of truthiness of a scalar
+    is never decided.
+70. **A truthiness test of a union** (FA §2.2, §2.3). "A test of truthiness
+    on `string | Donut` records `value` and `shape`", and the normal form
+    of §2.3 removes a `shape` entry at the path of a `value` entry. So the
+    record of such a body has `value` alone at the path, which by §2.2
+    covers the subtree of the `Donut`. FA does not say whether that is
+    meant, or whether the `value` of a union position is the value of its
+    scalar members alone.
+71. **A member of a built value that leaves the body** (FA §3.8). The table
+    decides by the member's type. A member the body put into a record
+    earlier has no expression at the place where the record leaves.
+    Chosen: an object literal written at that place is taken apart member
+    by member, and any other built value records `identity` at each
+    projection it holds, unless the body has a `value` entry there.
+72. **An expression that has no type** (FA §1.3). FA takes every
+    expression as typed. Where the checker has none, the crate takes the
+    position as a scalar, records `value`, and counts the observation
+    (`footprint:observations of an expression with no type`, 614 in the
+    corpus). A receiver with no type is taken as a handle where the call is
+    one only a handle has: `get()`, `sample()`, `resolveAsCell()`,
+    `key(k)`, `set(v)` with one argument, and five more writers.
+73. **The rest of an object** (FA §3.1). `const { a, ...rest } = v` binds
+    `rest` to a record that holds a spread of `v`, so `rest.a` reads `v.a`
+    where the document gives a record without `a`. The type checker
+    refuses such a read, so the difference shows in no accepted program.
+74. **Which bodies** (FA §1.2). A function nested in a body is part of the
+    body where it is a closure, and is a body of its own where the front
+    end records one: an inline event handler, an `action`, a `computed`.
+    The measurement counts a site once, for the innermost body around it.
+    A `computed` is a body where the typed promotion criterion does not
+    promote it, which FA §11 decides by syntax.
+

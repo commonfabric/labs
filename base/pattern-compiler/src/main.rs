@@ -47,6 +47,7 @@ fn main() -> ExitCode {
         }
         Some("check") if !operands.is_empty() => check(&operands, flags.contains(&"--hints")),
         Some("bodies") if !operands.is_empty() => bodies(&operands),
+        Some("footprint") if !operands.is_empty() => footprint(&operands),
         Some("types") if !operands.is_empty() => types(&operands, &flags),
         Some("corpus") if operands.len() == 1 => corpus_report(operands[0], &flags),
         _ => {
@@ -113,6 +114,37 @@ fn bodies(paths: &[&str]) -> std::io::Result<bool> {
         serde_json::to_string_pretty(&modules).map_err(std::io::Error::other)?
     );
     Ok(parsed(&analysis))
+}
+
+/// Prints the record of each body the footprint analysis runs on
+/// (`footprint-analysis.md`).
+fn footprint(paths: &[&str]) -> std::io::Result<bool> {
+    for body in pattern_compiler::footprint::footprints(&read(paths)?) {
+        let record = &body.record;
+        println!(
+            "{}:{} {} {}",
+            body.module,
+            body.line,
+            body.kind.label(),
+            body.name.as_deref().unwrap_or("(unnamed)")
+        );
+        let lists: [(&str, &[String]); 5] = [
+            ("reads", &record.reads),
+            ("read envelope of the dynamic reads", &record.envelope),
+            ("dynamic reads", &record.dynamic_reads),
+            ("writes", &record.writes),
+            ("widenings", &record.widenings),
+        ];
+        for (title, lines) in lists {
+            if !lines.is_empty() {
+                println!("  {title}");
+                for line in lines {
+                    println!("    {line}");
+                }
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn types(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
