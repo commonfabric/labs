@@ -24,9 +24,20 @@ each, and a row in the built-in targets table of
 
 The manager keeps `direct`, `requests`, `outgoingNotices`, and
 `roomMembership` in the home space. `rooms` is derived per user from those
-membership choices and the user's shared-space catalog, Home's, which Home
+membership records and the user's shared-space catalog, Home's, which Home
 hands the manager
-([`shared-space-catalog.md`](../../features/shared-space-catalog.md)).
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), and from
+nothing else: deriving it reads no room. Every link to a room the manager
+stores, in `roomMembership`, `direct`, `requests` and `outgoingNotices`, is
+declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
+them, Home's own sync among them, keeps the link and loads no room. The
+derivations that read rooms, `people` from the listed rooms' rosters and
+`outgoingNotices` from each notice's room's roster, first re-type the links to
+`ChatRoomLink`, which declares the rosters; nothing else reads them. `people`
+re-types each link where it reads that room's roster, in an instance of its
+own per room whose argument holds the handle, so no list the manager stores
+types a room as more than a handle; a reader that syncs such a list would walk
+into every room it names.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
@@ -38,79 +49,74 @@ writes that into its own instance of the second wish, never over the one
 another session of the user reads (see
 [`ChatManagerOutput`](ChatManagerOutput.md#scopes)).
 
-For each saved catalog entry, the manager resolves the space's root with
-`wish({ query: "#default", scope: [space] })`. A `fabrichat-room` entry names
-a standalone room at that root. Every other kind uses the root's explicit
-`chatRoom` link. An unknown kind uses that same declaration; the absence of a
-kind says nothing about whether the space has a chat. A declaration can appear
-or change after a space is saved, and discovery follows it reactively. Each
-entry is found on its own, and lists its room once the room's records say it
-is one. An entry whose space this replica can't serve, as a space on another
-host is, lists nothing until it can be served, and holds back no other entry.
-
-Each entry links the room itself, so opening it displays the full conversation.
-Resolved room identity, compared with `equals()`, deduplicates a conversation
-reached through several containers or both a container and its standalone
-entry. Membership records keep the resolved room reference, so retargeting an
-alias cannot move a choice to a different conversation. Distinct rooms in one
-space remain distinct entries. For container rooms, explicit
-`roomMembership` choices take precedence over discovery: an archived
-conversation stays forgotten even while a saved container still declares it.
-A saved explicit entry remains listed if the container changes its declaration.
-A saved explicit entry is listed once its room's records say it is a room, as
-a catalog entry's room is: one whose room this replica can't serve lists
-nothing until it can be served, and holds back no other room, nor the `people`
-the listed rooms' rosters hold.
-Forgetting a declared conversation never archives its container.
+Each saved membership lists its room, with what its handler recorded: the
+room's kind, from its `about`, a direct room's counterpart, verified as the
+room's labeled creator, its `since` and opaque `revision`, and its title as the
+handler last read it. A standalone room's catalog membership remains
+authoritative: its current catalog state and revision govern listing and
+forgetting, as `effectiveMemberships()` applies them, even when a container
+declares it. Catalog restoration supersedes an older room tombstone; catalog
+archive or removal supersedes a saved room record. A record's optional
+`catalogRevision` remembers that authority across catalog removal. A
+container's conversation is listed by its membership, whose `container` links
+the root declaring it; forgetting it never archives its container. Rooms are
+compared by their links, which a membership holds as its handler resolved
+them, so a comparison resolves nothing; a standalone room is listed once for
+its space, which holds no other. Clients pass the revision back unchanged to
+`forget`.
 
 Joining a record-backed standalone room registers its own space even when a
 container declares it, and records a membership of it, as creating or
-accepting a standalone room does: the record keeps the room's link where the
-catalog's finding of it, which reads the space, can't, so a deleted room is
-listed under `deletedRooms` by it. A standalone room's catalog membership remains authoritative. Its current
-catalog state and revision govern listing and forgetting even when the room
-also has an explicit membership record or a container declares it. Catalog
-restoration supersedes an older room tombstone; catalog archive or removal
-supersedes a saved room record. A record's optional `catalogRevision` remembers
-that authority across catalog removal.
+accepting a standalone room does, so a deleted room is listed under
+`deletedRooms` by its record.
 
-A room's `kind` comes from its `about`. Its `since` and opaque `revision` come
-from the explicit membership record, or from its discovery source until a
-choice is recorded. A discovered conversation's revision identifies its source
-catalog entry, that entry's revision, and the resolved room identity. Clients pass the revision back
-unchanged to `forget`; they need supply no container. A direct room's
-`counterpart` is the one `direct` holds the resolved room under, or else the
-room's labeled creator. `people` is drawn from listed rooms' rosters per
-user, keyed by the principal each profile attests.
-
-The manager's rendering labels each listed room with its `about.title`, read
-through the room's link, so a retitle shows there once the room records it. A
-direct room with no title is labeled by its counterpart. A standalone room's
+The manager's rendering labels each listed room with its entry's `title`, or,
+for a direct room with no title, by its counterpart. A standalone room's
 catalog entry holds its title too, as a display hint for readers of the
-catalog, which neither the rendering nor `rooms` reads. Registration takes the
-room's title, whatever its kind. Whenever the manager handles `accept` or
-`joinRoom` for a room its catalog lists, it reads the room's `about`, and
-retitles the entry (`retitleSharedSpaceIn()`) where the room's title differs
-from the entry's, moving neither its revision nor its membership. That is all a
-join of an already-listed room reads of the room, and it writes the catalog
-only on a mismatch. The one exception is a `joinRoom` marked `messageAct`,
-which a room sends with every message and reaction: none of those changes the
-title, so the manager reads nothing of the room's `about` for one. The member
-who retitles a room tells their manager at once; another member's entry follows
-on their manager's next event for that room other than a message or a
-reaction: their own retitle, an acceptance, or a client's `joinRoom` when they
-open it.
+catalog. Registration takes the room's title, whatever its kind. Whenever the
+manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
+and brings the title the room's membership holds, and the catalog entry's
+(`retitleSharedSpaceIn()`), up to the room's where they differ, moving neither
+its revision nor its membership. That is all a join of an already-listed room
+reads of the room, and it writes only on a mismatch. The one exception is a
+`joinRoom` marked `messageAct`, which a room sends with every message and
+reaction: none of those changes the title, so the manager reads nothing of the
+room's `about` for one. The member who retitles a room tells their manager at
+once; another member's entry follows on their manager's next event for that
+room other than a message or a reaction: their own retitle, an acceptance, or a
+client's `joinRoom` when they open it.
+
+### Adopting the catalog's rooms
+
+A room the catalog lists saved with no membership, as a catalog kept before
+memberships were recorded lists one, or a container whose chat nobody has
+joined, is not listed. The host adopts each one, at Home's bring-up, after the
+rest of Home's housekeeping has started (`adoptCatalogRoomsOf()` in
+`runtime/piece/src/ops/adopt-catalog-rooms.ts`): it vets the space as a visit
+does, and sends the manager's `joinRoom` for the room the space declares,
+under a request id naming the entry and its revision, so the manager records
+the outcome, a membership or a refusal, once per revision. A joined room joins
+the user to it, as a visit does: a user who saved a room has joined it. A
+space that declares no room, or that vetting refuses, is sent a `joinRoom`
+naming no room, which the manager refuses without reading anything, and which
+keeps the entry from being tried again until it changes; a visit to the room
+still joins it. An entry whose vetting fails otherwise is tried again at a
+later bring-up, and holds back no other entry. A membership adopted this way
+keeps the catalog entry's admission time as its `since`, so the room keeps its
+place in the list. The host adopts five entries at a time, and releases what
+it read after each five, so a catalog of many unadopted rooms costs a few
+rooms' documents at once rather than all of them. Once every entry is adopted,
+adopting reads only Home's own records.
 
 `direct` holds one entry per counterpart, including forgotten rooms, for direct
 rooms this manager created or accepted. `openDirect` finds a direct room there
 and restores its membership. A room found there that has a notice for its
 counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
-offers a new room, once a request names a profile of theirs. The notice stays,
-so that it still tells them of the room should the offer not be sent, and
-`outgoingNotices` leaves it out once the offer puts them on the room's roster. A
-counterpart the room's roster already lists
-has joined the room, and is offered nothing. A room another manager created and
+offers a new room, once a request names a profile of theirs. The offer puts
+them on the room's roster by that profile, wherever it points, and
+`outgoingNotices` leaves the notice out from then on. A counterpart the room's
+roster already lists has joined the room, and is offered nothing. A room another manager created and
 offered the user is there too once the host's share intake accepts it on the
 user's behalf. `rooms` can also hold a second direct room with the same
 counterpart, after crossing creations.
@@ -167,16 +173,20 @@ create a space for the conversation, with the room as its root, in four steps:
    member may add others.
 3. Offer the room to each other member whose profile the request names,
    through each distinct share inbox their profiles point at, once per inbox,
-   even an inbox profiles of more than one member point at, and add to the
-   room's participants each member it is offered to, once, by the first
-   profile it is offered through. Add a notice to `outgoingNotices`, for a
-   client to deliver, for each other member offered nothing: one the request
-   names only by principal, or one whose profile points at no inbox. Offers and
-   notices alike are made by an event of their own that follows the room's
-   creation. A notice is added to the manager's own records, which can carry
-   their owner's `PersonalSpace` label as the catalog can, and a profile's
-   inbox pointer can carry a label, such as its owner's `PersonalSpace`, that
-   neither the room's space nor this user's records admit.
+   even an inbox profiles of more than one member point at, and add each of
+   those members to the room's participants, once, by the first profile the
+   request names for them, wherever it points. Add a notice to
+   `outgoingNotices`, for a client to deliver, for each other member the
+   request names only by principal. Offers and notices alike are made by
+   events of their own that follow the room's creation: one adds the members
+   and queues the notices, reading no inbox pointer, and a second reads the
+   pointers and sends the offers, writing nothing else. A notice is added to
+   the manager's own records, which can carry their owner's `PersonalSpace`
+   label as the catalog can, and a profile's inbox pointer can carry a label,
+   such as its owner's `PersonalSpace`, that neither the room's space nor
+   this user's records admit, so where a profile points decides nothing either
+   of them holds. A member whose profiles point at no inbox that takes offers
+   is sent nothing, and nothing records that.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
    registration, like adding this user to the room's participants, is an
@@ -209,9 +219,8 @@ only an address, through the profiles `people` lists for that person, as the
 user sending it reads `people`, from an event of its own like step 3's, so
 that its own transaction reads no inbox pointer. It records `noticed` under the
 request's id at once for a person with no profile known for them, and
-`offered` for anyone else, which the event offering the room turns to
-`noticed` when no profile points at an inbox. The room reads it back as the
-add's `delivery`.
+`offered` for anyone else, wherever their profiles point. The room reads it
+back as the add's `delivery`.
 
 ## Prerequisites
 
@@ -241,11 +250,11 @@ When a request names a member's profile, as `openDirect` does with its `profile`
 and `createGroup` with its `profiles`, step 3 offers the
 room there, in that envelope, from an event of its own that follows the room's
 creation, since the offer names the room's space (see
-[`ChatManagerOutput`](ChatManagerOutput.md#offers)). The same event reads the
-profile's `inbox`, which the creating transaction never reads, and adds the
-member's profile to the room's participants, through the room's
-`addParticipant`, before they have opened the room, whose space already grants
-them OWNER. The recipient's host reads the offer and vets it before it registers
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)). The first of its two
+events adds the member's profile to the room's participants, through the
+room's `addParticipant`, before they have opened the room, whose space already
+grants them OWNER, and the second reads the profile's `inbox`, which neither
+the creating transaction nor the first event reads. The recipient's host reads the offer and vets it before it registers
 the room's space in the recipient's Home catalog ([the share
 intake](../../features/private-inbox.md#the-share-intake)). Once the host has
 registered a new entry for the room, it sends the room to the recipient's own
@@ -259,12 +268,12 @@ writer, but that is the `"*"` grant a room has only when its creator makes a
 group joinable by its link, and then its address, sent some other way, is the
 notice.
 
-That is why step 3 hands a notice for each member offered nothing to a client
-through `outgoingNotices` (see
-[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A profile
-pointing at no inbox gets a notice too, decided by the event that reads the
-pointer, and so does one whose pointer leads to nothing the event can send to
-(see [`ChatManagerOutput`](ChatManagerOutput.md#offers)), which leaves the
-offers to the request's other members standing. A member sent an offer gets no
-notice, and nothing tells the sender whether the offer arrived. Once offers
+That is why step 3 hands a notice for each member named only by principal to
+a client through `outgoingNotices` (see
+[`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A member named
+by a profile gets no notice, wherever the profile points, even at nothing the
+event sending the offer can send to (see
+[`ChatManagerOutput`](ChatManagerOutput.md#offers)), and the offers to the
+request's other members stand. Nothing tells the sender whether the offer
+arrived. Once offers
 deliver end to end, the manager can deliver notices itself.

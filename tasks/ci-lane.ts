@@ -139,7 +139,7 @@ import {
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
-import { appendSummary, say } from "./step-summary.ts";
+import { appendSummary, say, setStepOutput } from "./step-summary.ts";
 import {
   errorExcerpt,
   type FailedCommand,
@@ -2999,20 +2999,20 @@ export async function runLane(
   const workDir = await Deno.makeTempDir({
     prefix: "ci-lane-",
     // Under the job's own temporary directory where there is one, which
-    // is where a workflow step can upload what a failing lane left
-    // behind.
+    // is where a workflow step can upload what a lane kept.
     ...(temp === undefined ? {} : { dir: temp }),
   });
-  // A lane that passed leaves nothing behind. A lane that failed in a job
-  // keeps what its capabilities wrote, because a server's log is what
-  // says why a suite could not reach it, and a workflow step can upload
+  // A lane that passed with no failure excused leaves nothing behind. A
+  // lane in a job that failed, or that excused a failure, keeps what its
+  // capabilities wrote, because a server's log is what says why a suite
+  // could not reach it or why a test failed, and a workflow step uploads
   // the directory from the job's temporary directory. Anywhere else
   // nothing would collect it, and one directory would accumulate per
   // failed run.
   // A removal that fails is reported rather than thrown, so that it never
   // replaces the error a failing lane is ending with.
-  const leaveWorkDir = async (passed: boolean) => {
-    if (passed || temp === undefined) {
+  const leaveWorkDir = async (keep: boolean) => {
+    if (!keep || temp === undefined) {
       await Deno.remove(workDir, { recursive: true }).catch((error) =>
         console.log(
           `ci-lane: could not remove ${workDir}: ${describeFailure(error)}`,
@@ -3042,7 +3042,7 @@ export async function runLane(
       { partial: true },
     );
   } catch (error) {
-    await leaveWorkDir(false);
+    await leaveWorkDir(true);
     throw error;
   }
   if (spool !== undefined) {
@@ -3088,6 +3088,9 @@ export async function runLane(
   const notes: string[] = [];
   // Repeats a unit did not need, which the lane names without failing for.
   const omitted: string[] = [];
+  // The identities that failed and did not fail the run, once every batch
+  // has run.
+  let excusedFailures: string[] = [];
   // The batches the lane has not begun, and where it heard it was to stop.
   let notStarted = [...batches];
   let stoppedIn: string | undefined;
@@ -3211,10 +3214,12 @@ export async function runLane(
     // excusal is heard before any is recorded, and a report of this run
     // says what it did not fail for from what it did rather than from
     // what the manifest would have it do.
+    excusedFailures = [...excused].filter((key) => !unexcused.has(key))
+      .sort();
     if (spool !== undefined) {
       spoolRecords(
         spool,
-        [...excused].filter((key) => !unexcused.has(key)).sort().map((key) =>
+        excusedFailures.map((key) =>
           measurementRecord(excusedMeasurementName(key), 0, true)
         ),
       );
@@ -3274,7 +3279,7 @@ export async function runLane(
     // and the logs are large.
     if (!ok) {
       await describeCapabilityLogs(opened.logs);
-      await leaveWorkDir(false);
+      await leaveWorkDir(true);
     }
   }
   // A lane that has passed so far keeps its directory until its coverage
@@ -3299,7 +3304,13 @@ export async function runLane(
   // A signal can arrive while the conversion runs, and a lane told to stop
   // has failed whenever it was told.
   if (stop.signal !== undefined) ok = false;
-  if (undecided) await leaveWorkDir(ok);
+  // A failure that did not fail the run is one a later run can only
+  // explain from what the servers wrote, so its directory is kept too.
+  const kept = !ok || excusedFailures.length > 0;
+  if (undecided) await leaveWorkDir(kept);
+  // What the job's upload step reads, which a lane that passed would
+  // otherwise not reach.
+  if (kept && temp !== undefined) setStepOutput("kept", "true");
   const marked = await markMeasuredFailures(options, suites, failedUnits);
   if (compileCacheState !== undefined) {
     await writeCompileCacheState(options, compileCacheState);
@@ -3341,8 +3352,8 @@ export async function runLane(
     notes,
     omitted,
     logs: "the output above" +
-      (!ok && temp !== undefined
-        ? `, and ${workDir}, which the job uploads as its lane-failure artifact`
+      (kept && temp !== undefined
+        ? `, and ${workDir}, which the job uploads as its lane-kept artifact`
         : ""),
     seconds: (performance.now() - startedAt) / 1000,
   };

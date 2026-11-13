@@ -303,7 +303,12 @@ describe("resume node plan pre-sync", () => {
   beforeEach(() => {
     server = newSharedServer();
     managerA = EmulatedStorageManager.connectTo(server, { as: signer });
-    managerB = EmulatedStorageManager.connectTo(server, { as: signer });
+    // The resuming runtime serves the piece's space: only a serving runtime
+    // names what its plans read in other spaces.
+    managerB = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+      servingHomeSpace: space,
+    });
     rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerA,
@@ -311,6 +316,7 @@ describe("resume node plan pre-sync", () => {
     rt2 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerB,
+      servingPosture: true,
     });
   });
 
@@ -790,6 +796,86 @@ describe("resume node plan pre-sync", () => {
     expect(commitConflictCount()).toBe(before);
   });
 
+  it("leaves a document a body reads in another space to the client's run", async () => {
+    // A client that isn't serving names nothing outside the piece's spaces:
+    // the resume reads no plan and kicks no crossing load, and the lift that
+    // reads through the link loads the far document when it runs.
+    const txP = rt1.edit();
+    const leafDoc = rt1.getCell<{ name?: string }>(
+      spaceP,
+      "client cross-space leaf",
+      undefined,
+      txP,
+    );
+    leafDoc.withTx(txP).set({ name: "Ada" });
+    rt1.prepareTxForCommit(txP);
+    expect((await txP.commit().settled).error).toBeUndefined();
+    const tx1 = rt1.edit();
+    const midDoc = rt1.getCell<{ next?: unknown }>(
+      space,
+      "client cross-space mid",
+      undefined,
+      tx1,
+    );
+    midDoc.withTx(tx1).set({ next: leafDoc });
+    const top = rt1.getCell<{ next?: unknown }>(
+      space,
+      "client cross-space top",
+      undefined,
+      tx1,
+    );
+    top.withTx(tx1).set({ next: midDoc });
+    rt1.prepareTxForCommit(tx1);
+    expect((await tx1.commit().settled).error).toBeUndefined();
+
+    const managerC = EmulatedStorageManager.connectTo(server, { as: signer });
+    const rtC = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: managerC,
+    });
+    try {
+      let leafLocalAfterPresync: boolean | undefined;
+      rtC.runner.accessForTestingOnly.dependencySyncer = async (
+        target,
+        pattern,
+        inputs,
+        sync,
+      ) => {
+        const walked = await sync(target, pattern, inputs);
+        const link = leafDoc.getAsNormalizedFullLink();
+        const replica = managerC.open(spaceP) as unknown as {
+          get?: (uri: string, scope?: unknown) => unknown;
+        };
+        leafLocalAfterPresync ??= replica.get?.(link.id, link.scope) !==
+          undefined;
+        return walked;
+      };
+      resetAllTimingStats();
+      const resumed = await createAndResume(
+        DEEP_READ_PROGRAM,
+        { def: top },
+        "client cross-space parent",
+        rtC,
+      );
+      const stats = getTimingStatsBreakdown() as Record<
+        string,
+        Record<string, { count: number }>
+      >;
+      expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count ?? 0).toBe(0);
+      expect(managerC.pendingCrossingLoadAddresses()).toEqual([]);
+      expect(leafLocalAfterPresync).toBe(false);
+      await rtC.idle();
+      await rtC.storageManager.synced();
+      const label = resumed.key("label");
+      await label.pull();
+      expect(label.get()).toBe("n:Ada");
+    } finally {
+      rtC.runner.accessForTestingOnly.dependencySyncer = undefined;
+      await rtC.dispose();
+      await managerC.close();
+    }
+  });
+
   it("finds a plan's far document local from the server's crossing, reading no plan", async () => {
     const txP = rt1.edit();
     const leafDoc = rt1.getCell<{ name?: string }>(
@@ -909,12 +995,13 @@ describe("resume node plan pre-sync", () => {
     expect((await tx1.commit().settled).error).toBeUndefined();
 
     const managerD = TestStorageManager.create(
-      { as: signer, memoryHost: new URL("memory://") },
+      { as: signer, memoryHost: new URL("memory://"), servingHomeSpace: space },
       new DenyingSpaceSessionFactory(server, spaceP),
     );
     const rtD = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: managerD,
+      servingPosture: true,
     });
     try {
       const resumed = await createAndResume(
@@ -1041,7 +1128,17 @@ describe("resume node plan pre-sync", () => {
   });
 
   for (const scope of ["user", "session"] as const) {
-    it(`pre-syncs a principal-only family's ${scope} input beside its manager's session load`, async () => {
+    it(`leaves a principal-only family's ${scope} input in another space to the client's runs`, async () => {
+      // A client that isn't serving names nothing outside the piece's
+      // spaces, so its pre-sync finishes while the family's own load of the
+      // far document, and its manager's session load of it, are in flight.
+      const managerC = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const rtC = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: managerC,
+      });
       const txP = rt1.edit();
       const leaf = rt1.getCell<{ name?: string }>(
         spaceP,
@@ -1093,19 +1190,19 @@ describe("resume node plan pre-sync", () => {
       await rt1.idle();
       await rt1.patternManager.flushCompileCacheWrites();
       await rt1.storageManager.synced();
-      const resumed = rt2.getCellFromLink<Record<string, unknown>>(
+      const resumed = rtC.getCellFromLink<Record<string, unknown>>(
         r1.getAsNormalizedFullLink(),
       );
       await resumed.sync();
 
       const identity = { principal: signer.did() };
-      const tx = rt2.edit();
+      const tx = rtC.edit();
       tx.tx.scopeKeyIdentity = identity;
       const leafLink = leaf.getAsNormalizedFullLink();
       const sessionLink = { ...leafLink, scope: "session" as const };
-      const sessionKey = entityKey(sessionLink, rt2.scopeKeyIdentity);
+      const sessionKey = entityKey(sessionLink, rtC.scopeKeyIdentity);
       const userKey = entityKey({ ...leafLink, scope: "user" }, identity);
-      const replica = managerB.open(spaceP);
+      const replica = managerC.open(spaceP);
       const sync = replica.sync.bind(replica);
       const releaseUser = Promise.withResolvers<void>();
       const releaseSession = Promise.withResolvers<void>();
@@ -1118,17 +1215,17 @@ describe("resume node plan pre-sync", () => {
       });
       const waitedUser = Promise.withResolvers<"user wait">();
       const waitedSession = Promise.withResolvers<"session wait">();
-      const settle = managerB.loadsSettled.bind(managerB);
-      using _observed = stub(managerB, "loadsSettled", (keys) => {
+      const settle = managerC.loadsSettled.bind(managerC);
+      using _observed = stub(managerC, "loadsSettled", (keys) => {
         if (keys.includes(userKey)) waitedUser.resolve("user wait");
         if (keys.includes(sessionKey)) waitedSession.resolve("session wait");
         return settle(keys);
       });
-      const sessionLoad = rt2.getCellFromLink(sessionLink).sync();
+      const sessionLoad = rtC.getCellFromLink(sessionLink).sync();
       const userLoad = scope === "user"
-        ? rt2.getCellFromLink(leafLink).sync()
+        ? rtC.getCellFromLink(leafLink).sync()
         : Promise.resolve();
-      const presync = rt2.runner.syncStoredPieceCells(
+      const presync = rtC.runner.syncStoredPieceCells(
         resumed.withTx(tx),
         compiled,
       );
@@ -1140,13 +1237,13 @@ describe("resume node plan pre-sync", () => {
             waitedUser.promise,
             waitedSession.promise,
           ]),
-        ).toBe(scope === "user" ? "user wait" : "synced");
+        ).toBe("synced");
         releaseUser.resolve();
         expect(
           await Promise.race([completed, waitedSession.promise]),
         ).toBe("synced");
         expect(
-          managerB.pendingLoadAddresses().some((address) =>
+          managerC.pendingLoadAddresses().some((address) =>
             address.id === leafLink.id && address.scope === "session"
           ),
         ).toBe(true);
@@ -1157,6 +1254,8 @@ describe("resume node plan pre-sync", () => {
           await Promise.all([userLoad, sessionLoad, presync]);
         } finally {
           tx.abort("principal-only pre-sync complete");
+          await rtC.dispose();
+          await managerC.close();
         }
       }
     });

@@ -8,8 +8,11 @@
  * that arrangement.
  */
 
+// First, so that the document it installs is there when Lit loads.
+import { mount, settle } from "../../test-utils/dom.ts";
+
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { footerFades } from "./cf-screen.ts";
 import { CFScreen } from "./index.ts";
 
@@ -83,6 +86,8 @@ describe("cf-screen", () => {
   });
 
   describe("CFScreen", () => {
+    afterEach(() => document.body.replaceChildren());
+
     it("is the element registered as `cf-screen`", () => {
       expect(customElements.get("cf-screen")).toBe(CFScreen);
     });
@@ -102,6 +107,41 @@ describe("cf-screen", () => {
           expect(html).toContain('<slot name="footer"');
           expect(html).toContain("<slot></slot>");
         });
+      });
+    });
+
+    describe("the `data-footer-fade` attribute", () => {
+      /** A `cf-tab-bar` in the footer slot, inset unless `variant` says. */
+      function tabBar(variant = "inset") {
+        const bar = document.createElement("cf-tab-bar");
+        bar.setAttribute("slot", "footer");
+        bar.setAttribute("variant", variant);
+        return bar;
+      }
+
+      it("is set on a screen whose footer holds an inset tab bar", async () => {
+        const screen = new CFScreen();
+        screen.append(tabBar());
+        await mount(screen);
+        expect(screen.hasAttribute("data-footer-fade")).toBe(true);
+      });
+
+      it("is absent from a screen whose footer holds no inset tab bar", async () => {
+        const screen = new CFScreen();
+        screen.append(tabBar("floating"));
+        await mount(screen);
+        expect(screen.hasAttribute("data-footer-fade")).toBe(false);
+      });
+
+      it("follows the footer's content as it changes", async () => {
+        const screen = await mount(new CFScreen());
+        const bar = tabBar();
+        screen.append(bar);
+        await settle();
+        expect(screen.hasAttribute("data-footer-fade")).toBe(true);
+        bar.remove();
+        await settle();
+        expect(screen.hasAttribute("data-footer-fade")).toBe(false);
       });
     });
   });

@@ -318,6 +318,111 @@ describe("codemirror-presence", () => {
       expect(codeMirrorPresenceState(rejected)?.participants.size).toBe(0);
     });
 
+    it("holds a participant with no selection, and decorates nothing for it", () => {
+      const state = createState().update({
+        effects: upsert(participant({ selection: null })),
+      }).state;
+      const alice = codeMirrorPresenceState(state)?.participants.get("alice");
+
+      expect(alice?.displayed?.record.revision).toBe(1);
+      expect(alice?.displayed?.selection).toBe(null);
+      expect(decorationValues(state)).toHaveLength(0);
+    });
+
+    it("discards a selection that does not fit the document", () => {
+      // The document is four characters long.
+      const outside = presenceSelectionToJSON(EditorSelection.single(5));
+      const badMain = {
+        ...presenceSelectionToJSON(EditorSelection.single(1)),
+        main: 1,
+      };
+
+      const state = createState().update({
+        effects: [
+          upsert(participant({ selection: outside })),
+          upsert(participant({ participantId: "bob", selection: badMain })),
+          upsert(participant({ participantId: "carol" })),
+        ],
+      }).state;
+
+      expect([...codeMirrorPresenceState(state)!.participants.keys()])
+        .toEqual(["carol"]);
+    });
+
+    it("discards a record whose receiver overlay does not compose", () => {
+      // The second change starts from a three-character document, but the
+      // first leaves five.
+      const first = ChangeSet.of({ from: 0, insert: "X" }, 4);
+      const disjoint = ChangeSet.of({ from: 0, insert: "Y" }, 3);
+
+      const rejected = createState().update({
+        effects: upsert(participant(), [first, disjoint]),
+      }).state;
+
+      expect(codeMirrorPresenceState(rejected)?.participants.size).toBe(0);
+    });
+
+    it("keeps the cursor and every participant when the cursor moves backward", () => {
+      const advanced = createState().update({
+        effects: [
+          advance(cursor(2)),
+          upsert(participant({ cursor: cursor(2) })),
+          upsert(participant({
+            participantId: "bob",
+            cursor: cursor(3),
+          })),
+        ],
+      }).state;
+
+      const stale = advanced.update({ effects: advance(cursor(1)) }).state;
+      const presence = codeMirrorPresenceState(stale);
+
+      expect(presence?.cursor).toEqual(cursor(2));
+      expect(
+        presence?.participants.get("alice")?.displayed?.selection?.main.head,
+      )
+        .toBe(2);
+      expect(presence?.participants.get("bob")?.latest?.cursor).toEqual(
+        cursor(3),
+      );
+    });
+
+    it("removes a reached record with an invalid overlay and nothing displayed", () => {
+      const queued = createState().update({
+        effects: upsert(participant({ cursor: cursor(1) })),
+      }).state;
+      const wrongDocument = ChangeSet.of({ from: 0, insert: "X" }, 4);
+
+      const reached = queued.update({
+        effects: advance(cursor(1), [wrongDocument]),
+      }).state;
+
+      expect(
+        codeMirrorPresenceState(reached)?.participants.has("alice"),
+      ).toBe(false);
+    });
+
+    it("keeps a displayed participant with nothing queued across later advances", () => {
+      const skipped = createState().update({
+        effects: [
+          upsert(participant()),
+          upsert(participant({ revision: 2, cursor: cursor(1) })),
+          advance(cursor(2)),
+        ],
+      }).state;
+      expect(
+        codeMirrorPresenceState(skipped)?.participants.get("alice")?.latest,
+      ).toBe(undefined);
+
+      const advanced = skipped.update({ effects: advance(cursor(3)) }).state;
+      const alice = codeMirrorPresenceState(advanced)?.participants.get(
+        "alice",
+      );
+
+      expect(alice?.displayed?.record.revision).toBe(1);
+      expect(alice?.displayed?.selection?.main.head).toBe(2);
+    });
+
     it("keeps displayed state when a future promotion has an invalid overlay", () => {
       const queued = createState().update({
         effects: [
@@ -577,6 +682,43 @@ describe("codemirror-presence", () => {
         ),
       ).toHaveLength(2);
       expect(presenceParticipantColor("alice")).toBe("#a31545");
+    });
+
+    it("returns caret decorations that compare equal only for the same name, color, and label", () => {
+      // CodeMirror redraws a caret whose decoration does not compare equal to
+      // the one it replaces, and keeps the drawn one otherwise.
+
+      const caretsOf = (...records: ParticipantPresence[]) =>
+        decorationValues(
+          createState().update({
+            effects: records.map((record) => upsert(record)),
+          }).state,
+        ).filter((value) => value.spec.widget !== undefined);
+      const [caret] = caretsOf(participant());
+
+      const [moved] = caretsOf(participant({
+        selection: presenceSelectionToJSON(EditorSelection.single(0)),
+      }));
+      expect(moved.eq(caret)).toBe(true);
+
+      const [renamed] = caretsOf(participant({ name: "Alicia" }));
+      expect(renamed.eq(caret)).toBe(false);
+
+      const [recolored] = caretsOf(participant({ participantId: "bob" }));
+      expect(presenceParticipantColor("bob")).not.toBe(
+        presenceParticipantColor("alice"),
+      );
+      expect(recolored.eq(caret)).toBe(false);
+
+      // The second range is the main one, and only its caret is labeled.
+      const [unlabeled, labeled] = caretsOf(participant({
+        selection: presenceSelectionToJSON(EditorSelection.create([
+          EditorSelection.cursor(1),
+          EditorSelection.cursor(3),
+        ], 1)),
+      }));
+      expect(unlabeled.eq(caret)).toBe(false);
+      expect(labeled.eq(caret)).toBe(true);
     });
 
     it("renders untrusted names as bounded text content", () => {

@@ -176,9 +176,6 @@ export class CFLinkPreview extends BaseElement {
   private accessor _loading = false;
 
   @state()
-  private accessor _error = false;
-
-  @state()
   private accessor _title = "";
 
   @state()
@@ -220,7 +217,6 @@ export class CFLinkPreview extends BaseElement {
 
     // Reset state
     this._loading = true;
-    this._error = false;
     this._title = "";
     this._description = "";
     this._image = "";
@@ -245,14 +241,11 @@ export class CFLinkPreview extends BaseElement {
       this._description = data.description || "";
       this._image = data.image || "";
       this._loading = false;
-    } catch (error) {
+    } catch {
       // Only update state if this controller is still the active one;
-      // otherwise a newer fetch has already taken over.
+      // otherwise a newer fetch has already taken over. A failed fetch
+      // leaves no title or image, so the fallback card is shown.
       if (this._abortController !== controller) return;
-
-      if (error instanceof Error && error.name !== "AbortError") {
-        this._error = true;
-      }
       this._loading = false;
     }
   }
@@ -298,7 +291,7 @@ export class CFLinkPreview extends BaseElement {
     }
 
     // Error/fallback state
-    if (this._error || (!this._title && !this._image)) {
+    if (!this._title && !this._image) {
       return html`
         <a
           class="preview-card fallback"

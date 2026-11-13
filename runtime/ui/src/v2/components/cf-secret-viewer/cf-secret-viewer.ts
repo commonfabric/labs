@@ -128,9 +128,10 @@ export class CFSecretViewer extends BaseElement {
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    if (this._autoHideTimeout) {
-      clearTimeout(this._autoHideTimeout);
-    }
+    clearTimeout(this._autoHideTimeout);
+    this._autoHideTimeout = undefined;
+    this._revealed = false;
+    this.requestUpdate();
   }
 
   override render() {

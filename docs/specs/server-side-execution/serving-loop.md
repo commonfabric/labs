@@ -1643,13 +1643,15 @@ consequence mark and its watermark advance ride the wave commit, and
 write still commits that entry's consequence, and an entry held behind
 it (events.md §5) re-drains at that wave as it would behind any other
 consequence. The patches it keeps on a doc go through this
-class's CAS without the dropped ones. The store ends where applying the
-dropped writes at the event's position and the session's writes on top
-would have left it, and nothing can have read a dropped value in
-between, since it would have committed after the write that overwrites
-it. Whatever in the wave read a doc the consequence lost writes on folds
-into the withdrawal closure, as a reader of a superseded derivation
-write does.
+class's CAS without the dropped ones. The serving replica settles the
+consequence's sealed commit to match: the writes the wave commit carried
+promote at its seq, and only the dropped ones roll back. The store ends
+where applying the dropped writes at the event's position and the
+session's writes on top would have left it, and nothing can have read
+a dropped value in between, since it would have committed after the
+write that overwrites it. Whatever in the wave read a doc the
+consequence lost writes on folds into the withdrawal closure, as a
+reader of a superseded derivation write does.
 
 Two cases keep commit order. Both are OPEN, awaiting @seefeldb's
 ruling:
@@ -1743,7 +1745,9 @@ value (`scheduler/superseded-output.ts`). A commit that wrote a value
 keeps the disposition above: the derived output waits for the next
 input change. A run writes all its outputs again, so one document
 holding a value keeps the whole run from re-arming, and its other
-outputs wait with it.
+outputs wait with it. Writes of the run that were not dropped commit and
+promote in the serving replica as any committed write does, so such a
+settlement succeeds and still names the documents the run lost.
 
 The wait does not hold the scheduler's `idle()` open, since a frame may
 never arrive and `idle()` must still resolve. So a replica that had not
@@ -1819,7 +1823,10 @@ derived commit after success — per protocol.md §2b (today's
 `v2-transaction.ts`: sequential, stop at first failure). The wave does
 not close until the
 split completes or fails as a unit (same-host store sequencing, not a
-network await).
+network await). Each space after the first is checked again once the
+earlier ones are sealed, and an event appended meanwhile to the stream
+whose entry the run marks passes that check, as it commutes with the mark
+at the wave commit (memory-v2 03-commit-model.md §3.3.4).
 
 Phase 5 SANCTIONED the crossing, and the accumulation gate (RULED
 2026-08-14 (c)) survives as its AUTHORIZATION seat: a serving wave
@@ -1953,7 +1960,10 @@ installs) before it commits; a cycle awaiting the follow would wait on its
 own commit. A follow that completes counts from the next cycle's head, so
 every start a cycle asks about gets the same answer, and that cycle starts
 the piece on the adopted source: a first start is deferred by at least one
-cycle, and by the compile when the origin moved. A served event deferred for
+cycle, and by the compile when the origin moved. A terminal root a commit
+re-armed, whose retry is declined for the follow, holds W below that commit
+until then, and a settle does not wait to retry it meanwhile, since every such
+retry would be declined the same way. A served event deferred for
 the follow spends none of the drain's deferral budget and arms no backstop;
 the follow's completion owes the re-scan. A follow that fails, or an origin
 that cannot be reached, leaves the piece to start on its stored source, as a

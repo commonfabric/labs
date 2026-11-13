@@ -5,6 +5,7 @@ import {
   fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -196,7 +197,6 @@ import {
   normalizeSpaceHost,
   parseMemoryUrl,
   type SpaceHostRegistration,
-  SpaceHostValidationError,
 } from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
@@ -495,6 +495,19 @@ export interface ExperimentalOptions {
    * environment variable reaches it.
    */
   instanceNames?: boolean | undefined;
+
+  /**
+   * Take `cid:` schema documents by reference from a server that offers
+   * them (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
+   * "Delivery by reference"): this runtime's memory connections advertise
+   * the capability, and a server that advertises it too names the schema
+   * documents its registry holds by id, leaving this runtime to resolve or
+   * fetch their bodies. Defaults to off, which receives every body. Only
+   * the client side is switched here: a server offers it unless its
+   * deployment turns it off, and references flow only where both advertise
+   * it (`docs/development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1`).
+   */
+  syncCidReferences?: boolean | undefined;
 }
 
 /**
@@ -1861,15 +1874,10 @@ export class Runtime {
     inputs: readonly unknown[],
   ): void {
     for (const input of inputs) {
+      // Validation recomputes the digest from the manifest, so two artifacts
+      // under one digest are equal and replacing one with the other changes
+      // nothing.
       const artifact = validateCfcPolicyArtifactManifest(input);
-      const existing = this.#policyManifests.get(artifact.policyDigest);
-      // Reaching this branch requires a collision in the canonical SHA-256
-      // digest: validation recomputes the digest for both artifacts.
-      if (existing !== undefined && !deepEqual(existing, artifact)) {
-        throw new Error(
-          `cfcPolicyManifest: immutable digest collision for ${artifact.policyDigest}`,
-        );
-      }
       this.#policyManifests.set(artifact.policyDigest, artifact);
       let spaces = this.#policyManifestSpaces.get(artifact.policyDigest);
       if (spaces === undefined) {
@@ -2106,8 +2114,14 @@ export class Runtime {
     // Not console.error/warn either: the cf test console enforcement fails
     // tests on those. Direct process stderr in Deno; plain console in browser
     // realms (no stdout contract there).
+    // `serverExecution` at the first-party default is no override: a deployed
+    // entry point and every serving runtime state it explicitly, and only
+    // the other arm, selected per deployment, is worth announcing.
     const overrideFlags = Object.entries(this.experimental)
-      .filter(([_, v]) => v !== undefined)
+      .filter(([k, v]) =>
+        v !== undefined &&
+        !(k === "serverExecution" && v === SERVER_EXECUTION_DEFAULT_ENABLED)
+      )
       .map(([k, v]) => `${k}=${v}`);
     if (overrideFlags.length > 0) {
       const banner = `Experimental flag overrides: ${overrideFlags.join(", ")}`;
@@ -2197,7 +2211,6 @@ export class Runtime {
         try {
           route = normalizeSpaceHost(host);
         } catch (cause) {
-          if (!(cause instanceof SpaceHostValidationError)) throw cause;
           throw new Error(
             `Invalid spaceHostMap entry for ${space}`,
             { cause },
@@ -2250,6 +2263,11 @@ export class Runtime {
       // the mode and the server admits it by that (INV-16).
       this.storageManager.setInstanceNames?.(
         namesInstances(this.experimental),
+      );
+      // Declared before any session opens too, since each connection's
+      // `hello` advertises it.
+      this.storageManager.setSyncCidReferences?.(
+        this.experimental.syncCidReferences === true,
       );
       this.moduleByteCache = options.moduleByteCache;
       this.#compileTurns = options.compileTurns;
@@ -5676,7 +5694,6 @@ export class Runtime {
     try {
       return normalizeSpaceHost(host);
     } catch (cause) {
-      if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
         `Invalid host for space ${space}`,
         { cause },
@@ -5713,19 +5730,13 @@ export class Runtime {
     const generation = ++this.#healthCheckGeneration;
     this.#serverGitSha = null;
     const defaultHost = this.apiUrl.toString();
-    const hosts = new Set([defaultHost]);
-    for (
-      const host of [
-        ...Object.values(this.spaceHostMap ?? {}),
-        ...this.#dynamicHosts.values(),
-      ]
-    ) {
-      try {
-        hosts.add(new URL(host).toString());
-      } catch {
-        return false; // a malformed mapped host is unhealthy by definition
-      }
-    }
+    // Every mapped host is already a normalized origin, so equal hosts are
+    // equal strings.
+    const hosts = new Set([
+      defaultHost,
+      ...Object.values(this.spaceHostMap ?? {}),
+      ...this.#dynamicHosts.values(),
+    ]);
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(new DOMException("timed out", "TimeoutError")),

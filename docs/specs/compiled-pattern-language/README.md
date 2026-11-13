@@ -85,9 +85,9 @@ this tier. It then costs no sandboxed call, and its result gets a label per
 output path instead of one label for the whole result. A `computed` that
 instantiates a pattern or binds a handler is not promoted, because promotion
 would change which documents exist and how the state inside is named
-([language subset](language-subset.md), §6.1). For the instantiation that is
-an assumption
-([continuation plan](../../plans/compiled-pattern-language.md), question 49).
+([language subset](language-subset.md), §6.1). Both are assumptions
+([continuation plan](../../plans/compiled-pattern-language.md), questions 49
+and 60).
 
 ### Function bodies
 
@@ -310,18 +310,21 @@ and the writes of the events that were handled. The commit that stores an
 effect's result is among the changes of the set that follows it
 ([scheduler and serving loop](scheduler-and-serving-loop.md), §10.2). A
 change of demand is a cause because an output that becomes demanded may be
-stale, and its transaction runs as the principal whose demand changed. The
-runtime opens one transaction per cause, in one space
-([execution and storage](execution-and-storage.md), §1.1).
+stale, and its transaction runs as the principal whose demand changed. An
+event, a set of changes, and a change of demand each open one transaction,
+in one space ([execution and storage](execution-and-storage.md), §1.1).
 
 A transaction is one of two kinds.
 
 - **An event's transaction** evaluates the stale cones that compute what the
   handler reads, and then runs the handler body. It holds no other
   derivation.
-- **A derivation transaction** is what each of the other three kinds of cause
-  has. It evaluates the cones that are stale and that something demands, and
-  commits the kept outputs that changed, with their labels.
+- **A derivation transaction** is what a set of changes and a change of
+  demand each have. It evaluates the cones that are stale and that something
+  demands, and commits the kept outputs that changed, with their labels. The
+  completion of an effect has no derivation transaction of its own: what
+  reads the result is evaluated in the derivation transaction of the set of
+  changes its commit joins.
 
 Several events are handled in one batch. Each event of the batch has a
 transaction of its own. The stale cones a handler reads are evaluated before

@@ -132,8 +132,9 @@ describe("a commit the server accepted", () => {
           value: { value: { n: 1 } },
         }],
       });
-      // The failed send leaves the commit outstanding, for a replay on the
-      // next connection that the close comes before.
+      // The commit's acceptance reached the client before its send failed,
+      // so the commit settles with it, and the close that follows finds
+      // nothing left to settle.
       await transactFailed;
       await session.close();
       expect((await committed).seq).toBe(1);

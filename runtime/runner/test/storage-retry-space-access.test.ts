@@ -83,11 +83,11 @@ describe("storage space access retry", () => {
           if (signer?.did() === guest.did()) {
             guestSessions.push(session);
             const watchAddSync = session.watchAddSync.bind(session);
-            session.watchAddSync = (watches) => {
+            session.watchAddSync = (watches, consume) => {
               const failure = failNextGuestWatch;
               failNextGuestWatch = undefined;
               return failure === undefined
-                ? watchAddSync(watches)
+                ? watchAddSync(watches, consume)
                 : Promise.reject(failure);
             };
           }

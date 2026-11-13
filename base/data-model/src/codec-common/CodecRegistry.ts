@@ -128,9 +128,9 @@ export class CodecRegistry<Encoded> {
    *
    * This is what lets a single curated class list serve every format. Which
    * symbol a given class binds is a question about that class and that format
-   * -- `FabricRegExp` supplies a nonterminal codec to JSON, having no pattern
-   * type of its own to terminate into -- and reading it here means no caller
-   * has to keep one list per format in step with the others.
+   * -- `FabricUnavailable` supplies a nonterminal codec to JSON, having no
+   * unavailability type of its own to terminate into -- and reading it here
+   * means no caller has to keep one list per format in step with the others.
    *
    * The parameter is only `Constructor`, and cannot be narrower: naming the
    * symbol a class must bind would name a format, which is the thing a shared

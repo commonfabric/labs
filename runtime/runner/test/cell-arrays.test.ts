@@ -312,12 +312,17 @@ describe("plain-schema array traversal", () => {
     expect(sourceBatches).toEqual([true, false]);
 
     const activities = [...getTransactionReadActivities(tx)];
-    const referenceObservations = activities.filter((activity) =>
-      activity.id === sourceId && activity.path.length === 2 &&
-      isLinkResolutionProbe(activity.meta)
-    );
-    expect(new Set(referenceObservations.map((activity) => activity.path[1])))
-      .toEqual(new Set(["0", "1"]));
+    // One probe per followed item slot, at the slot and not beneath it.
+    const itemProbes = (journal: typeof activities) =>
+      journal.filter((activity) =>
+        activity.id === sourceId && ["0", "1"].includes(activity.path[1]) &&
+        isLinkResolutionProbe(activity.meta)
+      );
+    const referenceObservations = itemProbes(activities);
+    expect(referenceObservations.map((activity) => activity.path)).toEqual([
+      ["value", "0"],
+      ["value", "1"],
+    ]);
     expect(
       referenceObservations.every((activity) =>
         isReadIgnoredForScheduling(activity.meta)
@@ -370,6 +375,11 @@ describe("plain-schema array traversal", () => {
       "First",
       "Second",
     ]);
+    expect(
+      itemProbes([...getTransactionReadActivities(fallbackTx)]).map((
+        activity,
+      ) => activity.path),
+    ).toEqual([["value", "0"], ["value", "1"]]);
     const batchedLog = tx.getReactivityLog!();
     const fallbackLog = fallbackTx.getReactivityLog!();
     // Compared as sets of addresses: the reactivity log is one, so a repeated

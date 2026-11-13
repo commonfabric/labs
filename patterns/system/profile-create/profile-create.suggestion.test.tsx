@@ -3,8 +3,10 @@
  *
  * The surface starts its name field with the suggested name, shows the
  * suggested picture with a control that removes it, and adds no way to create
- * a profile but the trusted click. The seed step that follows a create gives
- * the new profile the picture the suggestion still holds.
+ * a profile but the trusted click. The user may remove the picture or choose
+ * their own on the surface, which leaves the host's suggestion as it was. The
+ * seed step that follows a create gives the new profile the picture the user
+ * chose, or else the suggested one.
  *
  * The create itself is a cross-space `inSpace()` push; here the seed step is
  * sent the profile it would be sent, made in this space. That the `#profile`
@@ -23,8 +25,8 @@ import {
   Writable,
 } from "commonfabric";
 import ProfileCreate, {
+  type PictureChoice,
   type ProfileSuggestion,
-  removeSuggestedPicture,
   seedProfileName,
   TRUSTED_PROFILE_CREATE_ACTION,
 } from "./profile-create.tsx";
@@ -65,6 +67,9 @@ function propValue(value: any): unknown {
 }
 
 const byTag = (tag: string) => (node: TestVNode) => node.name === tag;
+const byId = (id: string) => (node: TestVNode) =>
+  propValue(node.props.id) === id;
+
 const byRegion = (region: string) => (node: TestVNode) =>
   propValue(node.props["data-ui-region"]) === region;
 
@@ -92,7 +97,7 @@ export default pattern(() => {
     ) === "Sam Lee"
   );
   const assert_suggested_picture_is_shown = assert(() =>
-    find(surface[UI], byRegion("profile-create-suggested-picture")) !==
+    find(surface[UI], byRegion("profile-create-picture-preview")) !==
       undefined
   );
   const assert_create_stays_the_trusted_click = assert(() => {
@@ -103,16 +108,61 @@ export default pattern(() => {
       (profiles.get()?.length ?? 0) === 0;
   });
 
-  const removePicture = removeSuggestedPicture({
-    profileSuggestion: suggestion,
-  });
-  const assert_removal_keeps_the_name_and_drops_the_picture = assert(() =>
-    suggestion.get()?.name === "Sam Lee" &&
-    suggestion.get()?.picture === undefined
+  // The surface offers both picture controls while a picture shows.
+  const assert_picture_controls_are_offered = assert(() =>
+    find(surface[UI], byTag("cf-avatar-input")) !== undefined &&
+    find(surface[UI], byId("profile-create-remove-picture")) !== undefined
   );
+
   const assert_removed_picture_is_not_shown = assert(() =>
-    find(surface[UI], byRegion("profile-create-suggested-picture")) ===
+    find(surface[UI], byRegion("profile-create-picture-preview")) ===
       undefined
+  );
+  // The host's suggestion is the host's: removing the picture leaves it.
+  const assert_removal_leaves_the_suggestion = assert(() =>
+    suggestion.get()?.name === "Sam Lee" &&
+    bytesAre(suggestion.get()?.picture, PICTURE)
+  );
+
+  // A picture the user chooses shows in place of the suggested one. It is
+  // chosen on a surface of its own: the harness reaches a sub-pattern's
+  // streams in an `action` step only when the test holds none of its inputs.
+  const OWN = [0x47, 0x49, 0x46];
+  const chooser = ProfileCreate({
+    profiles: new Writable<ProfileHomeOutput[]>([]),
+    profileSuggestion: new Writable<ProfileSuggestion | undefined>({
+      name: "Sam Lee",
+      picture: new FabricBytes(new Uint8Array(PICTURE)),
+    }),
+  });
+  const chosenPicture = {
+    detail: { bytes: new FabricBytes(new Uint8Array(OWN)) },
+  };
+  const assert_chosen_picture_is_shown = assert(() => {
+    const shown = find(
+      chooser[UI],
+      byRegion("profile-create-picture-preview"),
+    );
+    return bytesAre(propValue(shown?.props.bytes) as FabricBytes, OWN);
+  });
+
+  // A surface handed no suggestion (the picker's) offers the choice too.
+  const bare = ProfileCreate({
+    profiles: new Writable<ProfileHomeOutput[]>([]),
+  });
+  const assert_bare_surface_shows_no_picture = assert(() =>
+    find(bare[UI], byTag("cf-avatar-input")) !== undefined &&
+    find(bare[UI], byRegion("profile-create-picture-preview")) === undefined
+  );
+  const barePicture = { picture: new FabricBytes(new Uint8Array(OWN)) };
+  const assert_bare_surface_shows_chosen_picture = assert(() =>
+    bytesAre(
+      propValue(
+        find(bare[UI], byRegion("profile-create-picture-preview"))?.props
+          .bytes,
+      ) as FabricBytes,
+      OWN,
+    )
   );
 
   // An empty picture is no picture: nothing would apply it, so none shows.
@@ -127,7 +177,7 @@ export default pattern(() => {
     propValue(
         find(emptyPicture[UI], byTag("cf-submit-input"))?.props.initialValue,
       ) === "Sam Lee" &&
-    find(emptyPicture[UI], byRegion("profile-create-suggested-picture")) ===
+    find(emptyPicture[UI], byRegion("profile-create-picture-preview")) ===
       undefined
   );
 
@@ -145,6 +195,36 @@ export default pattern(() => {
   const assert_seed_names_the_profile = assert(() => created.name === "Sam");
   const assert_seed_gives_the_suggested_picture = assert(() =>
     bytesAre(created.picture, PICTURE)
+  );
+
+  // A choice the user made wins over the suggestion: their own picture, or
+  // none at all once they removed it.
+  const chose = ProfileHome({});
+  const choice = new Writable<PictureChoice | undefined>({
+    picture: new FabricBytes(new Uint8Array(OWN)),
+  });
+  const choseSeed = seedProfileName({
+    profileSuggestion: withPicture,
+    pictureChoice: choice,
+  });
+  const action_seed_with_choice = action(() => {
+    // deno-lint-ignore no-explicit-any
+    choseSeed.send({ name: "Sam", profile: chose as any });
+  });
+  const assert_seed_gives_the_chosen_picture = assert(() =>
+    bytesAre(chose.picture, OWN)
+  );
+  const removed = ProfileHome({});
+  const removedSeed = seedProfileName({
+    profileSuggestion: withPicture,
+    pictureChoice: new Writable<PictureChoice | undefined>({}),
+  });
+  const action_seed_after_removal = action(() => {
+    // deno-lint-ignore no-explicit-any
+    removedSeed.send({ name: "Sam", profile: removed as any });
+  });
+  const assert_seed_after_removal_sets_no_picture = assert(() =>
+    removed.name === "Sam" && removed.picture === undefined
   );
 
   // Without a suggestion, the seed step names the profile and sets no
@@ -165,12 +245,35 @@ export default pattern(() => {
       { assertion: assert_suggested_picture_is_shown },
       { assertion: assert_create_stays_the_trusted_click },
       { assertion: assert_empty_picture_is_not_shown },
-      { action: removePicture },
-      { assertion: assert_removal_keeps_the_name_and_drops_the_picture },
+      { assertion: assert_picture_controls_are_offered },
+      // A click on the rendered control.
+      { press: surface[UI], control: "Remove picture" },
       { assertion: assert_removed_picture_is_not_shown },
+      { assertion: assert_removal_leaves_the_suggestion },
+      {
+        action: chooser.choosePicture,
+        event: chosenPicture,
+      },
+      { assertion: assert_chosen_picture_is_shown },
+      // A change without bytes decides nothing.
+      {
+        action: chooser.choosePicture,
+        event: { detail: {} },
+      },
+      { assertion: assert_chosen_picture_is_shown },
+      { assertion: assert_bare_surface_shows_no_picture },
+      {
+        action: bare.choosePicture,
+        event: barePicture,
+      },
+      { assertion: assert_bare_surface_shows_chosen_picture },
       { action: action_seed_created_profile },
       { assertion: assert_seed_names_the_profile },
       { assertion: assert_seed_gives_the_suggested_picture },
+      { action: action_seed_with_choice },
+      { assertion: assert_seed_gives_the_chosen_picture },
+      { action: action_seed_after_removal },
+      { assertion: assert_seed_after_removal_sets_no_picture },
       { action: action_seed_without_suggestion },
       { assertion: assert_plain_seed_sets_no_picture },
     ],

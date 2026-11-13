@@ -27,7 +27,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
  */
 export function streamData(
   inputsCell: Cell<{
-    url: string;
+    url?: string;
     options?: { body?: any; method?: string; headers?: Record<string, string> };
     result?: any;
   }>,

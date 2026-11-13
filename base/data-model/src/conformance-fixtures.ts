@@ -21,6 +21,7 @@ import { ProblematicValue, UnknownValue } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
+import { JSON_FORMAT } from "@/codec-json/interface.ts";
 import { deepFreeze } from "@/deep-freeze.ts";
 import {
   FabricError,
@@ -32,9 +33,11 @@ import {
 import { FabricRegExp } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
-import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
-import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
-import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
+import {
+  codecClassesFor,
+  createDefaultJsonRegistry,
+  jsonFromFabricValue,
+} from "./codecs.ts";
 
 //
 // Types
@@ -157,6 +160,14 @@ export type ClassCase = {
 //
 // Cases
 //
+
+/**
+ * Why the classes that bind no codec have no cases.
+ *
+ * TODO(danfuzz): Remove, with the `excluded` entries naming it, once
+ * `FabricRegExp` is deleted.
+ */
+export const NO_CODEC_EXCLUSION = "It binds no codec.";
 
 /** Why the classes whose codecs are stubs have no cases. */
 export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
@@ -852,9 +863,10 @@ function mutableEngineUnclaiming(
     for (const cls of claiming) leftOut.add(cls);
   }
   const kept = (cls: Constructor) => !leftOut.has(cls);
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, filter the two
+  // `codecClasses()` lists here directly.
   const registry = createBaseJsonRegistry().extend(
-    primitiveClasses().filter(kept),
-    instanceClasses().filter(kept),
+    codecClassesFor(JSON_FORMAT).filter(kept),
   );
   return new JsonCodecEngine({ registry, mutable: true });
 }
@@ -867,7 +879,9 @@ function mutableEngineUnclaiming(
  */
 function classesClaiming(tag: string): Constructor[] {
   const base = createBaseJsonRegistry();
-  return [...primitiveClasses(), ...instanceClasses()].filter((cls) =>
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, filter the two
+  // `codecClasses()` lists here directly.
+  return codecClassesFor(JSON_FORMAT).filter((cls) =>
     base.extend(cls).codecFromTag(tag) !== base.codecFromTag(tag)
   );
 }

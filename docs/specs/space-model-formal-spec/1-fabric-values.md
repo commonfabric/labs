@@ -464,7 +464,7 @@ included in `FabricValue` via the `FabricPrimitive` arm of the union (Section
 | `FabricHash` | `FabricPrimitive` | `Hash@1` | `Uint8Array` (hash bytes, private) + `string` (algorithm tag) | Content identifier / hash. Stringifies as `<tag>:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5). The first algorithm tag is `fid1` ("fabric ID, v1"). Wire state is `{ tag, hash }` (see Section 1.4.9). |
 | `FabricBytes` | `FabricPrimitive` | `Bytes@1` | `Uint8Array` (private byte storage) | Immutable byte sequence. The instance owns its bytes outright: input is copied at construction time, unless the caller cedes it with `transfer`. Callers access bytes via `slice()`, `sliceBuffer()`, `copyInto()`, and `length`. |
 | `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | Either two `CryptoKey` handles, or an algorithm name and the two keys' bytes | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair` (see Section 1.4.11). |
-| `FabricRegExp` | `FabricPrimitive` | `RegExp@1` | `source` / `flags` / `flavor` strings | Regular-expression value. `source` is the pattern string (`regex.source`); `flags` is the flag string (`regex.flags`); `flavor` is the regex dialect identifier (e.g. `"es2025"`). Stores strings only; `value` returns a fresh JS `RegExp` clone per call. Extra enumerable properties on a JS `RegExp` cause rejection. |
+| `FabricRegExp` | `FabricPrimitive` | `RegExp@1` | `source` / `flags` / `flavor` strings | Regular-expression value, disabled for codecs and likely to be removed entirely (see Section 1.4.5). `source` is the pattern string (`regex.source`); `flags` is the flag string (`regex.flags`); `flavor` is the regex dialect identifier (e.g. `"es2025"`). Stores strings only; `value` returns a fresh JS `RegExp` clone per call. Extra enumerable properties on a JS `RegExp` cause rejection. |
 | `FabricUnavailable` | `FabricPrimitive` | `Unavailable@1` | `reason` string; for reason `error`, an `errorKind` string and an optional `errorMessage` string | Marker standing in for data that is not available, saying why: `pending`, `syncing`, or `error`, the last sorted by a kind. Only the `error` reason carries a kind and a message. Wire state is `{ reason }`, `{ reason, errorKind }`, or `{ reason, errorKind, errorMessage }` (see Section 1.4.12). |
 
 #### Extra Enumerable Properties
@@ -816,6 +816,10 @@ It therefore has a dedicated hash tag (`TAG_REGEXP`, `2-hash-byte-format.md`
 Section 2). Like every fabric class, it hosts its own `[CODEC]` (tag `RegExp@1`)
 for wire-format encoding; being a `FabricPrimitive`, it does not implement the
 `FabricInstance` members.
+
+> **Disabled.** This type is disabled for codecs, and likely to be removed
+> entirely. The class binds no codec, so encoding an instance throws as it does
+> for any unregistered class, and a `RegExp@1` decodes as an unrecognized tag.
 
 ```typescript
 // Shown for illustration only.
@@ -3864,7 +3868,7 @@ registrations. A caller needing classes of its own extends what this returns.
 | 〃 | `FabricEpochDay` | `EpochDay@1` | 〃 |
 | 〃 | `FabricDurationNsec` | `DurationNsec@1` | 〃 |
 | 〃 | `FabricDurationDay` | `DurationDay@1` | 〃 |
-| 〃 | `FabricRegExp` | `RegExp@1` | 〃 |
+| — | `FabricRegExp` | `RegExp@1` | Not registered: disabled for codecs, and likely to be removed entirely (see Section 1.4.5). |
 | `register(cls[CODEC])` | `FabricError` | `Error@1` | Via `fabric-instances` `codecClasses()`. |
 | 〃 | `FabricMap` | `Map@1` | 〃 (stubbed; see Section 1.4.3). |
 | 〃 | `FabricSet` | `Set@1` | 〃 (stubbed; see Section 1.4.4). |

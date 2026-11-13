@@ -316,7 +316,7 @@ workflow. A run's lanes come from two jobs.
   failed. A test `deno test` reports as cancelled in a run the lane did not
   signal is one an error it did not catch stopped, and is recorded as failed.
   The lane then prints the end of each server's log, keeps its working
-  directory for the upload of what a failing lane left behind, and exits
+  directory for the job to upload, and exits
   without converting its coverage, which takes longer than GitHub waits. Its
   closing summary says which pass it was running and which batches it did not
   start, and does not report anything it stopped as having run no test.
@@ -395,9 +395,13 @@ compile byte cache is under `.ci-cache/compile`, keyed
 from the prefix `cc-lane-<fingerprint>-`, so a lane can start from the cache
 another lane or an earlier commit left and saves a fresher one.
 
-A lane uploads three artifacts. `lane-failure-tests-<lane>-a<attempt>`, where
-the lane failed, holds the working directory it kept and the core of any process
-in the lane that crashed natively: the lane step runs with `ulimit -c unlimited`
+A lane uploads three artifacts. `lane-kept-tests-<lane>-a<attempt>`, where
+the lane failed or excused a failure too flaky to fail the run for, holds the
+working directory it kept, with each Toolshed server's log, and the core of any
+process in the lane that crashed natively. A lane that passed after excusing a
+failure says it kept its directory through the lane step's `kept` output, which
+the upload step reads.
+The cores come from the lane step: the lane step runs with `ulimit -c unlimited`
 and puts cores under `$RUNNER_TEMP/ci-lane-cores`. `lane-coverage-tests-<lane>`
 holds `coverage/`: each report at
 `lcov/sets/<suite>/<member>/coverage.lcov`, where a `/` in the member's path is
@@ -533,8 +537,9 @@ in a directory of its own in the lane's work directory, beside its log. The
 suites are told a store as `MEMORY_DIR`: the server run from source tells them
 its own, since the shell suites read it through `cf inspect`, and a baked
 server gives them one of their own beside it, since the integration tests
-beside it start servers of their own that read that name. A failing lane in
-continuous integration uploads each server's log and not its store. A suite
+beside it start servers of their own that read that name. A lane in
+continuous integration that failed, or that excused a failure, uploads each
+server's log and not its store. A suite
 whose capability shares the checkout with its owner's own servers, as the
 local development stack does, is not run here, and the run lists its units
 apart.

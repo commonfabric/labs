@@ -150,7 +150,21 @@ const MAX_EVALUATED_MODULE_CACHE_SIZE = 1000;
  * still owes (`PatternManager.#retainedCompiles`). Each is one closure's
  * modules: their source, emitted code and source maps.
  */
-const MAX_RETAINED_COMPILES = 8;
+export const MAX_RETAINED_COMPILES = 8;
+
+/**
+ * Deletes the oldest entries of `map`, in insertion order, until it holds at
+ * most `cap`, and returns the keys it deleted, oldest first.
+ */
+function evictOldest<K, V>(map: Map<K, V>, cap: number): K[] {
+  const evicted: K[] = [];
+  for (const key of map.keys()) {
+    if (map.size <= cap) break;
+    map.delete(key);
+    evicted.push(key);
+  }
+  return evicted;
+}
 
 /**
  * How many times one session writes an entry's closure back into a space
@@ -1060,12 +1074,12 @@ export class PatternManager {
     if (parked === undefined) {
       parked = new Map();
       this.#parkedFailedReplications.set(wantedIdentity, parked);
-      while (
-        this.#parkedFailedReplications.size > MAX_PARKED_FAILED_REPLICATIONS
+      for (
+        const oldest of evictOldest(
+          this.#parkedFailedReplications,
+          MAX_PARKED_FAILED_REPLICATIONS,
+        )
       ) {
-        const oldest = this.#parkedFailedReplications.keys().next().value;
-        if (oldest === undefined) break;
-        this.#parkedFailedReplications.delete(oldest);
         logger.warn("closure-replication-park-evicted", () => [
           `wanted=${oldest}`,
           `cap=${MAX_PARKED_FAILED_REPLICATIONS}`,
@@ -1512,7 +1526,14 @@ export class PatternManager {
     if (toSpace === fromSpace) return;
 
     const entryRef = this.getArtifactEntryRef(pattern);
-    if (!entryRef) return;
+    if (!entryRef) {
+      logger.debug("closure-replication-skipped", () => [
+        `from=${fromSpace}`,
+        `to=${toSpace}`,
+        "reason=no-artifact-entry",
+      ]);
+      return;
+    }
     this.#issueReplication({
       entryIdentity: entryRef.identity,
       fromSpace,
@@ -1543,9 +1564,17 @@ export class PatternManager {
    * matching record wakes it instead.
    *
    * A copy a load issued on its own (`copyForLoad`) that its target refuses
-   * for want of a grant logs `closure-copy-refused` at debug instead: the
-   * session may only read that space, which is no fault, and no re-run can
-   * supply the grant. */
+   * for want of a grant logs `closure-copy-refused` instead: the session may
+   * only read that space, which is no fault, and no re-run can supply the
+   * grant.
+   *
+   * Each replication logs `closure-replication-issued` and then exactly one
+   * of `closure-replication-committed`, once its writes have been accepted,
+   * `closure-copy-refused` or `closure-replication-failed`, all at info or
+   * above and all naming its ticket, so a space left without a closure shows
+   * in the log whether its copy was issued and how it ended. A serving wave
+   * that later withdraws a write it accepted logs
+   * `compile-cache-writeback-withdrawn` with the entry and the space. */
   #issueReplication(
     replication: ClosureReplication,
     reissueOf?: { wantedIdentity: string },
@@ -1553,6 +1582,18 @@ export class PatternManager {
     const { entryIdentity, fromSpace, toSpace, delegated, copyForLoad } =
       replication;
     const ticket = this.#nextReplicationTicket++;
+    const issuedAt = performance.now();
+    logger.info("closure-replication-issued", () => [
+      `entry=${entryIdentity}`,
+      `from=${fromSpace}`,
+      `to=${toSpace}`,
+      `ticket=${ticket}`,
+      ...(reissueOf !== undefined
+        ? ["trigger=reissue"]
+        : copyForLoad
+        ? ["trigger=load-from-memory"]
+        : []),
+    ]);
     const settled = this.#replicateClosures(
       entryIdentity,
       fromSpace,
@@ -1561,6 +1602,12 @@ export class PatternManager {
       delegated,
       ticket,
     ).then(() => {
+      logger.info("closure-replication-committed", () => [
+        `entry=${entryIdentity}`,
+        `to=${toSpace}`,
+        `ticket=${ticket}`,
+        `ms=${Math.round(performance.now() - issuedAt)}`,
+      ]);
       if (reissueOf !== undefined) {
         logger.warn("closure-replication-healed", () => [
           `entry=${entryIdentity}`,
@@ -1571,10 +1618,11 @@ export class PatternManager {
       }
     }).catch((error) => {
       if (copyForLoad && isGrantRefusal(error)) {
-        logger.debug("closure-copy-refused", () => [
+        logger.info("closure-copy-refused", () => [
           `entry=${entryIdentity}`,
           `from=${fromSpace}`,
           `to=${toSpace}`,
+          `ticket=${ticket}`,
           String(error),
         ]);
         return;
@@ -1583,6 +1631,7 @@ export class PatternManager {
         `entry=${entryIdentity}`,
         `from=${fromSpace}`,
         `to=${toSpace}`,
+        `ticket=${ticket}`,
         String(error),
       ]);
       if (error instanceof ClosureReplicationSupplyError) {
@@ -1593,18 +1642,15 @@ export class PatternManager {
         );
       }
     });
-    let intoTarget = this.#replicationsIntoSpace.get(toSpace);
-    if (intoTarget === undefined) {
-      intoTarget = new Set();
-      this.#replicationsIntoSpace.set(toSpace, intoTarget);
-    }
+    // The set stays in the map while it holds a registration, so it is the
+    // map's entry when this registration leaves it.
+    const intoTarget = this.#replicationsIntoSpace.get(toSpace) ?? new Set();
+    this.#replicationsIntoSpace.set(toSpace, intoTarget);
     const registration = { ticket, settled };
     intoTarget.add(registration);
     settled.finally(() => {
-      const entries = this.#replicationsIntoSpace.get(toSpace);
-      if (entries === undefined) return;
-      entries.delete(registration);
-      if (entries.size === 0) this.#replicationsIntoSpace.delete(toSpace);
+      intoTarget.delete(registration);
+      if (intoTarget.size === 0) this.#replicationsIntoSpace.delete(toSpace);
     });
     this.#compileCacheWrites.add(settled);
     settled.finally(() => this.#compileCacheWrites.delete(settled));
@@ -1747,10 +1793,9 @@ export class PatternManager {
   #retainCompile(entryIdentity: string, compile: RetainedCompile): void {
     this.#retainedCompiles.delete(entryIdentity);
     this.#retainedCompiles.set(entryIdentity, compile);
-    while (this.#retainedCompiles.size > MAX_RETAINED_COMPILES) {
-      const oldest = this.#retainedCompiles.keys().next().value;
-      if (oldest === undefined) break;
-      this.#retainedCompiles.delete(oldest);
+    for (
+      const oldest of evictOldest(this.#retainedCompiles, MAX_RETAINED_COMPILES)
+    ) {
       logger.debug("retained-compile-evicted", () => [
         `entry=${oldest}`,
         `cap=${MAX_RETAINED_COMPILES}`,
@@ -1775,7 +1820,9 @@ export class PatternManager {
    * began is supplied by the next session that writes it), and a space the
    * session has written into, or is writing into, is copied into no more. A
    * space the session may only read refuses the copy, and the refusal is
-   * logged at debug as `closure-copy-refused`, not as a failed replication:
+   * logged at info as `closure-copy-refused`, not as a failed replication
+   * (a repair from a retained compile logs its own refusal at debug, as
+   * `compile-cache-repair-refused`):
    * the next session that writes the closure as a principal who may write
    * that space supplies it.
    */
@@ -1808,12 +1855,6 @@ export class PatternManager {
       return;
     }
     if (!this.#markClosureCopyIssued(space, entryIdentity)) return;
-    logger.debug("closure-replication-issued", () => [
-      `entry=${entryIdentity}`,
-      `from=${origin}`,
-      `to=${space}`,
-      "trigger=load-from-memory",
-    ]);
     this.#issueReplication({
       entryIdentity,
       fromSpace: origin,
@@ -3808,11 +3849,7 @@ export class PatternManager {
           }
         }
       }
-      while (this.#modulesByIdentity.size > this.#maxEvaluatedModuleCacheSize) {
-        const oldest = this.#modulesByIdentity.keys().next().value;
-        if (oldest === undefined) break;
-        this.#modulesByIdentity.delete(oldest);
-      }
+      evictOldest(this.#modulesByIdentity, this.#maxEvaluatedModuleCacheSize);
     }
 
     // Index the hoisted + non-exported top-level builder artifacts the module
@@ -4648,11 +4685,7 @@ export class PatternManager {
             );
           }
         }
-        while (this.#compiledByContent.size > MAX_EVALUATED_MODULE_CACHE_SIZE) {
-          const oldest = this.#compiledByContent.keys().next().value;
-          if (oldest === undefined) break;
-          this.#compiledByContent.delete(oldest);
-        }
+        evictOldest(this.#compiledByContent, MAX_EVALUATED_MODULE_CACHE_SIZE);
         return pattern;
       })
       .finally(() => {

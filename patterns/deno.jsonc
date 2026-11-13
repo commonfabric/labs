@@ -79,6 +79,9 @@
     // uses this to hand the runtime→OTel bridge the ambient tracer and meter.
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@xyflow/react": "npm:@xyflow/react@^12.11.5",
+    // The document an iframe guest's Deno tests load the guest into
+    // (tools/test-support/iframe-guest.ts).
+    "happy-dom": "npm:happy-dom@^20.14.6",
     // The browser-measurement helper parses authored and compiled Topics
     // sources with it, so no hand-written scanner decides what is code.
     "typescript": "npm:typescript@6.0.3"

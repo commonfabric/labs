@@ -3,8 +3,8 @@
  * the worker's requests against the memory server it holds, carries to the
  * worker the server's observer events its owner routes there, owns one
  * server connection per loopback transport the worker opens, applies the
- * worker's wave commits through a sink of its own per session, and keeps the
- * latest counters the worker posted.
+ * worker's wave commits through a sink of its own, and keeps the latest
+ * counters the worker posted.
  */
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -13,7 +13,6 @@ import {
   decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
-import type { Engine } from "@commonfabric/memory/v2/engine";
 import type {
   Server,
   ServerExecutionObserver,
@@ -45,13 +44,6 @@ const logger = getLogger("serving-port-bridge", {
   enabled: true,
   level: "warn",
 });
-
-/** The sink the bridge keeps for one worker-side session. */
-type BridgeSink = {
-  sink: EngineWaveCommitSink;
-  localSeq: { value: number };
-  engines: Map<string, Engine>;
-};
 
 /**
  * What a bridge serves: the memory server, the port its worker answers on, and
@@ -114,7 +106,6 @@ export class ServingPortBridge {
     PlaneNotices
   >;
   readonly #connections = new Map<number, LoopbackConnection>();
-  readonly #sinks = new Map<string, BridgeSink>();
   readonly #workerReady = Promise.withResolvers<void>();
   readonly #releaseServerExecution: () => void;
   readonly #observer: ForwardedObserver;
@@ -270,27 +261,25 @@ export class ServingPortBridge {
     return this.#options.server.executionLeases.releaseAllOf(holder);
   }
 
-  /** The sink for `sessionId`, built on first use. */
-  #sinkFor(sessionId: string): BridgeSink {
-    let entry = this.#sinks.get(sessionId);
-    if (entry !== undefined) return entry;
+  /**
+   * The sink one of the worker's commits into `space` goes through: keyed by
+   * `sessionId`, and numbered `localSeq`, the number the worker's counter
+   * minted for it.
+   */
+  async #sinkFor(
+    space: string,
+    sessionId: string,
+    localSeq: number,
+  ): Promise<EngineWaveCommitSink> {
     const { server } = this.#options;
-    const engines = new Map<string, Engine>();
-    const engineFor = (space: MemorySpace): Engine => {
-      const engine = engines.get(space);
-      if (engine === undefined) {
-        throw new Error(`no engine resolved for ${space} ahead of its commit`);
-      }
-      return engine;
-    };
-    const localSeq = { value: 0 };
-    const sink = new EngineWaveCommitSink({
-      engineFor,
+    const engine = await server.engineForSpace(space);
+    return new EngineWaveCommitSink({
+      engineFor: () => engine,
       sessionId,
-      localSeqRef: localSeq,
+      localSeqRef: { value: localSeq - 1 },
       sqliteAttachmentsFor: (space, operations, scopeKeyByOpIndex) =>
         server.attachWaveCommitSqliteDbs(
-          engineFor(space),
+          engine,
           space,
           operations,
           scopeKeyByOpIndex,
@@ -301,9 +290,6 @@ export class ServingPortBridge {
       commitServedAclChange: (change, envelope) =>
         server.commitServedAclChange({ ...change, ...envelope }),
     });
-    entry = { sink, localSeq, engines };
-    this.#sinks.set(sessionId, entry);
-    return entry;
   }
 
   #installHandlers(): void {
@@ -395,16 +381,8 @@ export class ServingPortBridge {
         const batch = decodeTrustedMemoryBoundary(
           encoded,
         ) as unknown as WaveSpaceCommit;
-        const entry = this.#sinkFor(sessionId);
-        entry.engines.set(
-          batch.space,
-          await server.engineForSpace(batch.space),
-        );
-        // The sink mints its number before its call returns, so the counter
-        // is set around the call with no await between: another space's commit
-        // under the same session may be in flight.
-        entry.localSeq.value = localSeq - 1;
-        const result = await entry.sink.commitWave(batch);
+        const sink = await this.#sinkFor(batch.space, sessionId, localSeq);
+        const result = await sink.commitWave(batch);
         if (result.error === undefined) {
           this.#options.onWaveCommitted?.(batch.space);
         }
@@ -413,14 +391,12 @@ export class ServingPortBridge {
     );
     endpoint.onRequest(
       "sink.commitSpaceAccessChange",
-      ({ sessionId, localSeq, change }) => {
-        const entry = this.#sinkFor(sessionId);
-        entry.localSeq.value = localSeq - 1;
-        return entry.sink.commitSpaceAccessChange(servedAclChangeOf(change));
+      async ({ sessionId, localSeq, change }) => {
+        const sink = await this.#sinkFor(change.space, sessionId, localSeq);
+        return await sink.commitSpaceAccessChange(servedAclChangeOf(change));
       },
     );
     endpoint.onRequest("loopback.open", ({ transport }) => {
-      if (this.#closed) throw new Error("the serving port bridge is closed");
       // The worker's sessions are this process's own: the serving loop's
       // home sessions reach the server over the port.
       const connection = server.connect(
@@ -468,11 +444,14 @@ export class ServingPortBridge {
     endpoint.onNotice("host.stats", ({ stats }) => {
       this.#stats = stats;
     });
-    // The port delivers in order, so a full post is never older than an
-    // events post that arrived before it: the merged events stand until
+    // The port delivers in order, so a full post is never older than a
+    // counters post that arrived before it: the merged counters stand until
     // the next full post replaces them with everything else.
-    endpoint.onNotice("host.eventStats", ({ events }) => {
-      this.#stats = { ...(this.#stats ?? emptyServingLoopStats()), events };
+    endpoint.onNotice("host.counters", ({ counters }) => {
+      this.#stats = {
+        ...(this.#stats ?? emptyServingLoopStats()),
+        ...counters,
+      };
     });
     endpoint.onNotice("host.activationSettled", ({ space, outcome }) => {
       this.#options.onActivationSettled?.(space, outcome);

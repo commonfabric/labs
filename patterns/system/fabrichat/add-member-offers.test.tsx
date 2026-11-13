@@ -8,8 +8,8 @@
  * Alice by her chat address alone is offered to her through the inbox her
  * profile points at, joins her to the room's roster, which makes her a member
  * with that profile whom the picker leaves out, and reads `offered`; an add of
- * Carol by a profile pointing at no inbox queues a notice for her, and reads
- * `noticed`.
+ * Carol by a profile pointing at no inbox joins her to the roster too, and
+ * reads `offered`, with nothing sent and no notice for her.
  * An add naming a profile that attests no one, or someone other than the
  * address it names, is refused. To a viewer with no manager, or one whose
  * manager hasn't resolved, an add reads `access-only` at once. The manager
@@ -555,7 +555,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             );
         }),
       },
-      // Carol, named by a profile pointing at no inbox, gets a notice.
+      // Carol, named by a profile pointing at no inbox, joins the roster by
+      // it as anyone named by a profile does, since where a profile points
+      // decides nothing the adder records, and gets no notice.
       {
         action: room.addMember,
         event: { requestId: "add-carol", profile: carolPlain },
@@ -565,8 +567,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         assertion: assert(() => {
           const outcome = room.addRequests["add-carol"];
           return outcome?.status === "done" &&
-            outcome.delivery === "noticed" &&
-            notices.get().some((notice) =>
+            outcome.delivery === "offered" &&
+            room.participantPrincipals.includes(setup.carolDid.get()) &&
+            !notices.get().some((notice) =>
               notice.recipient === setup.carolDid.get()
             );
         }),

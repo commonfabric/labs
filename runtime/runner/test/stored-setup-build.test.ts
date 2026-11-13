@@ -170,6 +170,21 @@ describe("stored-setup-build", () => {
         ["sCount", 0, ""],
       ]);
     });
+
+    it("passes over a descriptor that is not a record", () => {
+      const named = { $instance: "a" };
+      const result = {
+        aCount: { $alias: { partialCause: named, path: [] } },
+      };
+      const level = {
+        derivedInternalCells: [
+          "not a descriptor",
+          { partialCause: named, legacyPartialCause: { $generated: 1 } },
+        ],
+      };
+
+      expect(projectionMap(result, level)).toEqual([["aCount", 1, ""]]);
+    });
   });
 
   describe("readStoredSetupBuild()", () => {

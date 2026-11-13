@@ -17,7 +17,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { evaluateFunctionSourceInSES } from "../src/sandbox/ses-runtime.ts";
-import { pinLocales } from "../src/sandbox/locale-taming.ts";
+import {
+  pinLocales,
+  sanitizeLocaleMethods,
+} from "../src/sandbox/locale-taming.ts";
 
 const T = 1752192000000; // 2025-07-11T00:00:00Z (Friday)
 
@@ -25,6 +28,15 @@ const inSES = (expr: string): unknown =>
   evaluateFunctionSourceInSES(`(() => (${expr}))()`, { lockdown: true });
 
 describe("sanitized locale methods under SES lockdown", () => {
+  it("leaves the frozen sanitized methods in place when asked to sanitize again", () => {
+    inSES("0");
+    const sanitized = Date.prototype.toLocaleDateString;
+
+    expect(() => sanitizeLocaleMethods()).not.toThrow();
+    expect(Date.prototype.toLocaleDateString).toBe(sanitized);
+    expect(Object.isFrozen(Date.prototype)).toBe(true);
+  });
+
   describe("Date.prototype.toLocaleDateString", () => {
     it("honors the options bag (the localeTaming:'safe' alias ignored it)", () => {
       expect(

@@ -12,6 +12,7 @@ import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { captureLogs } from "./support/captured-logs.ts";
 import {
   type Options,
   type SessionFactory,
@@ -93,7 +94,7 @@ const PROGRAM: RuntimeProgram = {
 const logger = getLogger("pattern-manager");
 
 /** How often `logger` has logged `key` at `level` since `counter` was called. */
-const counter = (key: string, level: "debug" | "error") => {
+const counter = (key: string, level: "debug" | "info" | "error") => {
   const read = () => logger.countsByKey[key]?.[level] ?? 0;
   const base = read();
   return () => read() - base;
@@ -180,7 +181,8 @@ describe("pattern-manager", () => {
     it("copies nothing into a space the session may only read, and logs the refusal quietly, once", async () => {
       const reader = await readerWithCompiledProgram("READ");
       const errors = errorCounter();
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
+      using logs = captureLogs("pattern-manager");
 
       expect(await reader.load()).toBe(reader.compiled);
       await reader.runtime.patternManager.flushCompileCacheWrites();
@@ -189,6 +191,21 @@ describe("pattern-manager", () => {
 
       expect(refused()).toBe(1);
       expect(errors()).toBe(0);
+      const entry = reader.runtime.patternManager.getArtifactEntryRef(
+        reader.compiled,
+      )!;
+      const issued = logs.textsOf("closure-replication-issued");
+      expect(issued).toHaveLength(1);
+      const ticket = issued[0]!.match(/ ticket=(\d+) /)?.[1];
+      expect(issued[0]).toBe(
+        `entry=${entry.identity} from=${reader.home} to=${reader.shared} ` +
+          `ticket=${ticket} trigger=load-from-memory`,
+      );
+      const [refusal] = logs.textsOf("closure-copy-refused");
+      expect(refusal).toContain(
+        `entry=${entry.identity} from=${reader.home} to=${reader.shared} ` +
+          `ticket=${ticket}`,
+      );
     });
 
     it("logs a copy that fails for any other reason as a failed replication", async () => {
@@ -202,7 +219,7 @@ describe("pattern-manager", () => {
         "compile-cache-writeback-failed",
         "error",
       );
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
 
       expect(await reader.load()).toBe(reader.compiled);
       await reader.runtime.patternManager.flushCompileCacheWrites();
@@ -219,7 +236,7 @@ describe("pattern-manager", () => {
       const reader = await readerWithCompiledProgram("READ");
       const errors = errorCounter();
       const failed = counter("closure-replication-failed", "error");
-      const refused = counter("closure-copy-refused", "debug");
+      const refused = counter("closure-copy-refused", "info");
 
       reader.runtime.patternManager.replicatePatternToSpace(
         reader.compiled,
@@ -238,19 +255,27 @@ describe("pattern-manager", () => {
     // The write-back logs a refusal for want of a grant at debug and leaves
     // its caller to report it; a compile reports it by failing.
 
-    const compileInto = async () => {
+    /** Compiles `PROGRAM` into the space, and returns how many errors it
+     * logged and the texts it logged under `refusedKey`. */
+    const compileInto = async (refusedKey: string) => {
       const reader = await readerOf("READ");
       const errors = errorCounter();
+      using logs = captureLogs("pattern-manager");
       await expect(
         reader.runtime.patternManager.compilePattern(PROGRAM, {
           space: reader.shared,
         }),
       ).rejects.toMatchObject({ name: "AuthorizationError" });
-      return errors();
+      return { errors: errors(), refusals: logs.textsOf(refusedKey) };
     };
 
     it("rejects with the space's refusal, and logs no error", async () => {
-      expect(await compileInto()).toBe(0);
+      const { errors, refusals } = await compileInto(
+        "compile-cache-writeback-refused",
+      );
+      expect(errors).toBe(0);
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]).toMatch(/^entry=\S+ /);
     });
 
     it("rejects with the space's refusal, and logs no error, when it caches source alone", async () => {
@@ -259,7 +284,12 @@ describe("pattern-manager", () => {
 
       const restore = setCompileCacheRuntimeVersionForTesting(undefined);
       try {
-        expect(await compileInto()).toBe(0);
+        const { errors, refusals } = await compileInto(
+          "source-cache-writeback-refused",
+        );
+        expect(errors).toBe(0);
+        expect(refusals).toHaveLength(1);
+        expect(refusals[0]).toMatch(/^entry=\S+ /);
       } finally {
         restore();
       }

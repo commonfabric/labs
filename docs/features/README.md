@@ -108,7 +108,8 @@ a line for each new document to the index below.
   who the principal is, when the answer is `"none"` and when it is not known,
   and how it stays current; what `spaceMembers(target)` lists, the principals
   the space's access list names; what `spaceOf(target)` returns, the DID of
-  that space; and what `spaceDeleted(target)` says of a deleted space
+  that space, and `spaceOfLink(target)`, the space a link names without
+  reading it; and what `spaceDeleted(target)` says of a deleted space
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`

@@ -15,6 +15,7 @@
  */
 
 import type { RuntimeTelemetryMarkerResult } from "@commonfabric/runtime-client";
+import type { RuntimeTelemetryOtelBridge } from "@commonfabric/runner/telemetry-otel-bridge";
 
 // localStorage key that gates telemetry — the same flag the debugger controller
 // toggles (runtime/shell/src/lib/debugger-controller.ts).
@@ -120,7 +121,8 @@ export async function initBrowserOtel(
     const meter = metrics.getMeter(SERVICE_NAME);
 
     // The bridge holds this object by reference and reads it per marker, so
-    // mutating it (see setSpace below) updates attribution for later spans.
+    // mutating it (see `browserTelemetrySink()`) updates attribution for later
+    // spans.
     const attributes: Record<string, string> = {
       "ct.runtime": "browser",
       "user.did": options.userDid,
@@ -132,32 +134,46 @@ export async function initBrowserOtel(
       attributes,
     });
 
-    return {
-      handleMarker: (marker) => bridge.handleMarker(marker),
-      setSpace: (spaceDid) => {
-        if (spaceDid === undefined) {
-          delete attributes["space.did"];
-        } else {
-          attributes["space.did"] = spaceDid;
-        }
-      },
-      shutdown: async () => {
-        // Close any spans the bridge left open, then flush + tear down the SDK.
-        try {
-          bridge.shutdown();
-        } catch (error) {
-          console.error("[otel] bridge shutdown failed:", error);
-        }
-        try {
-          await provider.shutdown();
-        } catch (error) {
-          console.error("[otel] provider shutdown failed:", error);
-        }
-      },
-    };
+    return browserTelemetrySink(bridge, provider, attributes);
   } catch (error) {
     // Fail open: a setup error must not block the app.
     console.error("[otel] browser OpenTelemetry init failed:", error);
     return null;
   }
+}
+
+/**
+ * Helper for {@link initBrowserOtel}, which wraps `bridge` as the sink it
+ * returns. `attributes` is the object `bridge` stamps on each span, read per
+ * marker, so the sink's `setSpace()` changes it in place. Shutting the sink
+ * down closes the bridge's open spans and then shuts `provider` down, logging
+ * a failure of either step rather than throwing it.
+ */
+export function browserTelemetrySink(
+  bridge: RuntimeTelemetryOtelBridge,
+  provider: { shutdown(): Promise<void> },
+  attributes: Record<string, string>,
+): BrowserTelemetry {
+  return {
+    handleMarker: (marker) => bridge.handleMarker(marker),
+    setSpace: (spaceDid) => {
+      if (spaceDid === undefined) {
+        delete attributes["space.did"];
+      } else {
+        attributes["space.did"] = spaceDid;
+      }
+    },
+    shutdown: async () => {
+      try {
+        bridge.shutdown();
+      } catch (error) {
+        console.error("[otel] bridge shutdown failed:", error);
+      }
+      try {
+        await provider.shutdown();
+      } catch (error) {
+        console.error("[otel] provider shutdown failed:", error);
+      }
+    },
+  };
 }

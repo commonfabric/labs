@@ -102,6 +102,61 @@ describe("Engine.typeCheckBatch()", () => {
     ]).toEqual(["1: Type 'string' is not assignable to type 'number'."]);
   });
 
+  it("reports a transformer's diagnostic only where it transforms", async () => {
+    // A result schema declaring a reserved key `unknown` draws a transformer
+    // error, and no type error.
+
+    const program = programNamed(
+      "/main.tsx",
+      [
+        "/// <cts-enable />",
+        'import { pattern, UI } from "commonfabric";',
+        "type Out = { [UI]: unknown; label: string };",
+        "export default pattern<{ label: string }, Out>(",
+        "  (s) => ({ [UI]: <span>{s.label}</span>, label: s.label }),",
+        ");",
+      ].join("\n"),
+    );
+
+    const transformed = await engine.typeCheckBatch([program]);
+    const checked = await engine.typeCheckBatch([program], {
+      transform: false,
+    });
+
+    expect(transformed.diagnostics.map((diagnostic) => diagnostic.message))
+      .toEqual([expect.stringMatching(/^4: pattern\(\) output field `\$UI`/)]);
+    expect(checked.diagnostics).toEqual([]);
+  });
+
+  it("reports a compiled body the module verifier refuses, and only where it transforms", async () => {
+    // A module-scope `let` draws the transformer's own diagnostic too, so the
+    // verifier's is picked out by its wording.
+
+    const program = programNamed(
+      "/main.ts",
+      "let n = 0;\nexport const bump = () => ++n;\n",
+    );
+    const verifierSays = (
+      checked: Awaited<ReturnType<Engine["typeCheckBatch"]>>,
+    ) =>
+      checked.diagnostics.filter((diagnostic) =>
+        diagnostic.message.endsWith(
+          "Top-level mutable bindings are not allowed in SES mode",
+        )
+      );
+
+    const transformed = await engine.typeCheckBatch([program]);
+    const checked = await engine.typeCheckBatch([program], {
+      transform: false,
+    });
+
+    expect(verifierSays(transformed)).toEqual([{
+      file: expect.stringMatching(/^\/[^/]+\/main\.ts$/),
+      message: expect.stringMatching(/^\/[^/]+\/main\.ts:\d+:\d+: Top-level/),
+    }]);
+    expect(checked.diagnostics).toEqual([]);
+  });
+
   it("charges nothing for a batch with no programs in it", async () => {
     const checked = await engine.typeCheckBatch([]);
 

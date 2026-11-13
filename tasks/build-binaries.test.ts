@@ -288,6 +288,7 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
       join(patterns, "iframe-game", "interaction.browser.test.ts"),
       join(patterns, "integration", "helpers.ts"),
       join(patterns, "apps", "topics", "tools", "topics.ts"),
+      join(patterns, "tools", "test-support", "iframe-guest.ts"),
       join(patterns, "baselines", "counter", "counter.tsx", "a.json"),
       join(connector, "logic.test.ts"),
     ];

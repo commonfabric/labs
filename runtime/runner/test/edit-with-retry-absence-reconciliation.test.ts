@@ -13,6 +13,7 @@ import { Runtime } from "../src/runtime.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import type {
   IExtendedStorageTransaction,
+  IStorageManager,
   IStorageTransaction,
 } from "../src/storage/interface.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
@@ -95,6 +96,61 @@ describe("editWithRetry absence reconciliation", () => {
       // machinery. Without the pre-commit load, the same outcome arrives via
       // a rejected commit and this counter.
       expect(readinessConsulted).toBe(0);
+    } finally {
+      await runtimeB?.dispose();
+      await runtimeA.dispose();
+      await smB?.close();
+      await smA.close();
+      await server.close();
+    }
+  });
+
+  it("leaves a cold read to the commit verdict over a storage manager that cannot report its loads", async () => {
+    const server = newSharedServer();
+    const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtimeA = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: smA,
+    });
+    let smB: EmulatedStorageManager | undefined;
+    let runtimeB: Runtime | undefined;
+    try {
+      const txA = runtimeA.edit();
+      runtimeA.getCell(space, "shared-absence-doc", valueSchema, txA)
+        .set({ value: 42 });
+      await txA.commit().settled;
+      await smA.synced();
+
+      smB = EmulatedStorageManager.connectTo(server, { as: signer });
+      const capabilities: IStorageManager = smB;
+      capabilities.loadsSettled = undefined;
+      runtimeB = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smB,
+      });
+      let readinessConsulted = 0;
+      const readiness = runtimeB.awaitCommitRetryReadiness.bind(runtimeB);
+      runtimeB.awaitCommitRetryReadiness = (error: unknown) => {
+        readinessConsulted++;
+        return readiness(error);
+      };
+
+      let observed: { value?: number } | undefined;
+      const result = await runtimeB.editWithRetry((tx) => {
+        observed = runtimeB!.getCell(
+          space,
+          "shared-absence-doc",
+          valueSchema,
+          tx,
+        ).get();
+        runtimeB!.getCell(space, "b-own-doc", valueSchema, tx)
+          .set({ value: 1 });
+      });
+
+      // The same convergence as above, reached through a rejected commit.
+      expect(result.error).toBeUndefined();
+      expect(observed).toEqual({ value: 42 });
+      expect(readinessConsulted).toBeGreaterThan(0);
     } finally {
       await runtimeB?.dispose();
       await runtimeA.dispose();

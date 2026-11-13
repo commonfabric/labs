@@ -103,6 +103,34 @@ describe("space-invites", () => {
     await client.create(failure.retry);
     expect(requests[1]).toEqual(requests[0]);
   });
+  it("sends an invitation's names in the signed create body and keeps them for an exact retry", async () => {
+    const signer = await Identity.generate();
+    const names = { spaceName: "Garden plans", issuerName: "Pat Example" };
+    const requests: Record<string, unknown>[] = [];
+    const client = new SpaceInviteClient({
+      host: "https://example.com",
+      space: signer.did(),
+      signer,
+      fetch: async (input, init) => {
+        const body = await new Request(input, init).json();
+        requests.push(body);
+        if (requests.length === 1) throw new TypeError("connection closed");
+        return Response.json({ inviteId: body.inviteId, remainingUses: 1 });
+      },
+    });
+    let failure: unknown;
+    try {
+      await client.create({ access: "READ", ttlSeconds: 60, ...names });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SpaceInviteCreateError);
+    if (!(failure instanceof SpaceInviteCreateError)) throw failure;
+    expect(requests[0]).toMatchObject(names);
+    expect(failure.retry).toMatchObject(names);
+    await client.create(failure.retry);
+    expect(requests[1]).toEqual(requests[0]);
+  });
   it("retains supplied credentials and refusal codes without enumerating secrets", async () => {
     const signer = await Identity.generate();
     const credentials = createInviteCredentials();
@@ -303,6 +331,14 @@ describe("space-invites", () => {
       expect(posted).toEqual([]);
     });
 
+    it("throws a lost session connection as it came, and makes no HTTP request", async () => {
+      const lost = new Error("connection lost");
+      const { client, posted } = await clientWith(() => Promise.reject(lost));
+
+      await expect(client.list()).rejects.toBe(lost);
+      expect(posted).toEqual([]);
+    });
+
     it("redeems through the redeemer and makes no HTTP request for it", async () => {
       const signer = await Identity.generate();
       const posted: string[] = [];
@@ -378,6 +414,37 @@ describe("space-invites", () => {
         await client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) }),
       ).toEqual(receipt);
       expect(posted).toEqual(["redeem"]);
+    });
+
+    it("previews over HTTP even with a session, which a previewer has none of", async () => {
+      const { client, sent, posted } = await clientWith(() =>
+        Promise.reject(new Error("a preview must not go on a session"))
+      );
+      const credentials = createInviteCredentials();
+      await client.preview(credentials);
+      expect(sent).toEqual([]);
+      expect(posted).toEqual(["preview"]);
+    });
+
+    it("throws a lost redeemer connection as it came, and makes no HTTP request", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const lost = new Error("connection lost");
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: (input) => {
+          posted.push(String(input));
+          return Promise.resolve(Response.json({}));
+        },
+        redeemer: () => Promise.reject(lost),
+      });
+
+      await expect(
+        client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) }),
+      ).rejects.toBe(lost);
+      expect(posted).toEqual([]);
     });
 
     it("redeems over HTTP whatever session it was given", async () => {

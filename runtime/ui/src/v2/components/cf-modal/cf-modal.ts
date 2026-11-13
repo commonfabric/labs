@@ -63,6 +63,22 @@ import { modalStyles } from "./styles.ts";
 /** Z-index for an open modal: the `--cf-z-layer-overlay` token's value. */
 const MODAL_Z_INDEX = 1000;
 
+/**
+ * The open modals' hold on a page body's scrolling: how many modals hold it,
+ * and the style the first of them replaced.
+ */
+interface ScrollHold {
+  readonly body: HTMLElement;
+  holders: number;
+  readonly replaced: string;
+}
+
+/**
+ * Each page body's scroll hold, shared by its open modals so that they leave
+ * the page locked, whatever order they close in, until the last one closes.
+ */
+const scrollHolds = new WeakMap<HTMLElement, ScrollHold>();
+
 /** Finds the focused control through open renderer and component shadow roots. */
 function activeControl(): HTMLElement | SVGElement | null {
   let active = document.activeElement;
@@ -81,13 +97,19 @@ export class CFModal extends BaseElement {
   @property({ attribute: false })
   accessor open: CellHandle<boolean> | boolean = false;
 
-  /** Deprecated alias for dismissible. */
-  @property({ type: Boolean, reflect: true })
-  accessor dismissable = true;
-
   /** Allow dismiss via backdrop click, Escape key, and X button */
   @property({ type: Boolean, reflect: true })
   accessor dismissible = true;
+
+  /** The deprecated spelling of `dismissible`, which it reads and sets. */
+  @property({ type: Boolean })
+  set dismissable(value: boolean) {
+    this.dismissible = value;
+  }
+
+  get dismissable(): boolean {
+    return this.dismissible;
+  }
 
   /** Modal width preset */
   @property({ type: String, reflect: true })
@@ -121,8 +143,8 @@ export class CFModal extends BaseElement {
   @state()
   private accessor _footerHasContent = false;
 
-  /** Previous body overflow value for restoration */
-  private _previousBodyOverflow = "";
+  /** The page's scroll hold this modal shares, if it holds the page's. */
+  #hold: ScrollHold | undefined;
 
   /** Previously focused element for restoration */
   private _previousActiveElement: HTMLElement | SVGElement | null = null;
@@ -138,7 +160,6 @@ export class CFModal extends BaseElement {
   constructor() {
     super();
     this.open = false;
-    this.dismissable = true;
     this.dismissible = true;
     this.size = "md";
     this.preventScroll = true;
@@ -166,12 +187,13 @@ export class CFModal extends BaseElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    // Bind initial open value to the controller
-    this._openCellController.bind(this.open);
+    // Put back in the page while open, as when it moves, it takes the page's
+    // scrolling again.
+    if (this._wasOpen && this.preventScroll) this.#lockScroll();
   }
 
   override disconnectedCallback() {
-    this._cleanup();
+    this.#unlockScroll();
     super.disconnectedCallback();
   }
 
@@ -182,19 +204,7 @@ export class CFModal extends BaseElement {
     }
   }
 
-  override updated(changedProperties: PropertyValues) {
-    if (
-      changedProperties.has("dismissible") &&
-      this.dismissable !== this.dismissible
-    ) {
-      this.dismissable = this.dismissible;
-    } else if (
-      changedProperties.has("dismissable") &&
-      this.dismissible !== this.dismissable
-    ) {
-      this.dismissible = this.dismissable;
-    }
-
+  override updated() {
     const isOpen = this._getOpenValue();
 
     // Update open attribute for CSS styling
@@ -224,11 +234,7 @@ export class CFModal extends BaseElement {
 
     this._applyZIndex(MODAL_Z_INDEX);
 
-    // Prevent body scroll
-    if (this.preventScroll) {
-      this._previousBodyOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-    }
+    if (this.preventScroll) this.#lockScroll();
 
     this.emit("cf-modal-open");
 
@@ -255,10 +261,7 @@ export class CFModal extends BaseElement {
    * Handle modal closing
    */
   private _onClose() {
-    // Restore body scroll
-    if (this.preventScroll) {
-      document.body.style.overflow = this._previousBodyOverflow;
-    }
+    this.#unlockScroll();
 
     // Restore focus to previously focused element
     if (this._previousActiveElement?.isConnected) {
@@ -277,12 +280,33 @@ export class CFModal extends BaseElement {
   }
 
   /**
-   * Clean up on disconnect or close
+   * Hides the page's scrolling. A modal locks only after letting go of any
+   * hold it had, when it opens or is put back in the page.
    */
-  private _cleanup() {
-    if (this.preventScroll && document.body.style.overflow === "hidden") {
-      document.body.style.overflow = this._previousBodyOverflow;
+  #lockScroll() {
+    const body = document.body;
+    let hold = scrollHolds.get(body);
+    if (hold) {
+      hold.holders++;
+    } else {
+      hold = { body, holders: 1, replaced: body.style.overflow };
+      scrollHolds.set(body, hold);
     }
+    this.#hold = hold;
+    body.style.overflow = "hidden";
+  }
+
+  /**
+   * Lets go of the page's scrolling, if this modal holds it; the last modal
+   * to let go gives the page back the style the first one replaced.
+   */
+  #unlockScroll() {
+    const hold = this.#hold;
+    if (!hold) return;
+    this.#hold = undefined;
+    if (--hold.holders > 0) return;
+    scrollHolds.delete(hold.body);
+    hold.body.style.overflow = hold.replaced;
   }
 
   /**
@@ -302,7 +326,7 @@ export class CFModal extends BaseElement {
    */
   private _handleContainerClick = (e: MouseEvent) => {
     // Only dismiss if clicking directly on container (the backdrop area), not the dialog
-    if (e.target === e.currentTarget && this._isDismissible()) {
+    if (e.target === e.currentTarget && this.dismissible) {
       this._requestClose("backdrop");
     }
   };
@@ -338,7 +362,7 @@ export class CFModal extends BaseElement {
     }
 
     // Handle Escape
-    if (e.key === "Escape" && this._isDismissible()) {
+    if (e.key === "Escape" && this.dismissible) {
       e.preventDefault();
       this._requestClose("escape");
     }
@@ -373,10 +397,6 @@ export class CFModal extends BaseElement {
         first.focus();
       }
     }
-  }
-
-  private _isDismissible(): boolean {
-    return this.dismissible && this.dismissable;
   }
 
   /**

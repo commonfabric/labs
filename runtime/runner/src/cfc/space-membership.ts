@@ -99,6 +99,14 @@ export interface SpaceMembershipProvider {
    * arrives (and a revoke re-blocks).
    */
   subscribe(space: string, onChange: () => void): Cancel;
+
+  /**
+   * Resolves once the local replica holds the space's ACL doc as the space
+   * last sent it, or once the space refused the load, so that a decision
+   * made once, with no subscription to make it again, reads the role the
+   * ACL grants rather than the fail-closed `null` of a doc not yet synced.
+   */
+  load(space: string): Promise<void>;
 }
 
 /**
@@ -169,6 +177,10 @@ export const createRuntimeSpaceMembershipProvider = (
         }
         onChange();
       });
+    },
+    async load(space) {
+      if (serviceDids.includes(actingPrincipal)) return;
+      await aclCellFor(runtime, cells, space).sync();
     },
   };
 };

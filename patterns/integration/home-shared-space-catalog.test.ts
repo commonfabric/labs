@@ -2464,6 +2464,16 @@ describe("Home chat manager and a deleted room", () => {
         );
         expect(await manager.key("deletedRooms").pull()).toEqual([]);
         await chats.deleteSpaces([direct, group]);
+        // The manager reads no room's space to list it, so the deletions
+        // change nothing it lists until Home's catalog records them.
+        await runtime.idle();
+        await runtime.storageManager.synced();
+        expect((await manager.key("rooms").pull()).length).toBe(2);
+        expect(await manager.key("deletedRooms").pull()).toEqual([]);
+        // The shell's worker has the catalog record a deletion it hears of,
+        // as this does; each room then stays held by the membership the
+        // manager recorded when it created the room.
+        await chats.markDeleted([direct, group]);
         const gone = await waitForCellValue<
           { kind: string; counterpart?: string }[]
         >(
@@ -2474,21 +2484,7 @@ describe("Home chat manager and a deleted room", () => {
         );
         expect(gone.map((entry) => entry.kind)).toEqual(["group", "direct"]);
         expect(gone[1].counterpart).toBe(BOB);
-        // `deletedRooms` reads only the manager's memberships, where `rooms`
-        // reads each room's own records as well, which are in the deleted
-        // spaces. So `rooms` can leave the rooms out some time after
-        // `deletedRooms` lists them, and is waited for in its own right.
-        await waitForCellValue<unknown[]>(
-          runtime,
-          manager.key("rooms"),
-          (value) => value?.length === 0,
-          { stuckLabel: "both rooms left out of rooms" },
-        );
-        // Home's catalog records the deletions, as the shell's worker has it
-        // do, so the catalog no longer finds either room: each stays held by
-        // the membership the manager recorded when it created the room.
-        await chats.markDeleted([direct, group]);
-        expect((await manager.key("deletedRooms").pull()).length).toBe(2);
+        expect(await manager.key("rooms").pull()).toEqual([]);
       });
     });
 
@@ -2510,13 +2506,13 @@ describe("Home chat manager and a deleted room", () => {
         );
         await chats.forget("forget-d-1", room);
         await chats.deleteSpaces([first]);
+        await chats.markDeleted([first]);
         await waitForCellValue<unknown[]>(
           runtime,
           manager.key("deletedRooms"),
           (value) => value?.length === 1,
           { stuckLabel: "the room listed as deleted" },
         );
-        await chats.markDeleted([first]);
         // The next start with the same person creates a new room and
         // replaces the direct entry; the deleted room stays listed as
         // deleted, held by its membership.
@@ -2563,11 +2559,16 @@ describe("Home chat manager and a deleted room", () => {
         );
         await chats.forget("forget-it", forgotten);
         await chats.deleteSpaces([listed.space, forgotten.space]);
+        // Only the listed room's deletion reaches the catalog. The handlers
+        // ask the memory server whether a room can be read, so they refuse
+        // the forgotten room as well, and its entry shows that the refused
+        // join left it archived.
+        await chats.markDeleted([listed.space]);
         await waitForCellValue<unknown[]>(
           runtime,
           manager.key("deletedRooms"),
-          (value) => value?.length === 2,
-          { stuckLabel: "both rooms listed as deleted" },
+          (value) => value?.length === 1,
+          { stuckLabel: "the listed room listed as deleted" },
         );
 
         for (
@@ -2640,7 +2641,10 @@ describe("Home chat manager and a deleted room", () => {
         chats.refuseSpaces([refused.space]);
         // The deleted room is the control: `deletedRooms` is read once it has
         // taken this room in, so it has had its chance to take in the other.
+        // Its deletion reaches the catalog as the shell's worker records one
+        // it hears of; a refusal is not a deletion, and nothing records it.
         await chats.deleteSpaces([deleted.space]);
+        await chats.markDeleted([deleted.space]);
         const gone = await waitForCellValue<{ room: unknown }[]>(
           runtime,
           manager.key("deletedRooms"),
@@ -2660,9 +2664,10 @@ describe("Home chat manager and a deleted room", () => {
 
   it("keeps the counterpart of a forgotten direct room the manager held only through the catalog", async () => {
     // A room from before the manager recorded memberships is held through the
-    // catalog alone. Forgetting it records a membership, which has to name the
-    // counterpart while `direct` still does: once a replacement takes the
-    // room's place there, nothing else names it.
+    // catalog and `direct` alone, and isn't listed until a visit or Home's
+    // bring-up records its membership. Forgetting it records one, which has to
+    // name the counterpart while `direct` still does: once a replacement takes
+    // the room's place there, nothing else names it.
 
     await withChatManager(false, async (chats) => {
       const { runtime, manager } = chats;
@@ -2674,12 +2679,6 @@ describe("Home chat manager and a deleted room", () => {
         manager.key("roomMembership").withTx(tx).set([]);
       });
       expect(error).toBeUndefined();
-      await waitForCellValue<unknown[]>(
-        runtime,
-        manager.key("rooms"),
-        (value) => value?.length === 1,
-        { stuckLabel: "the room found through the catalog" },
-      );
       await chats.forget("forget-d-1", room);
       await chats.deleteSpaces([first]);
       await chats.markDeleted([first]);

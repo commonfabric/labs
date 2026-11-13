@@ -741,7 +741,8 @@ function writeWalked(
     seen: new Map(),
     nextAnchorId: anchorIds,
     anchored,
-    writtenKinds: new Map(),
+    // Only an anchored element consults what the walk wrote above it.
+    writtenKinds: anchorIds === undefined ? undefined : new Map(),
     carried,
   };
   const changes = normalizeAndDiff(

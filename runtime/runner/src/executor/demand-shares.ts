@@ -26,6 +26,13 @@ export class DemandShareCache {
   /** Spaces whose every share is stale. */
   readonly #allStale = new Set<string>();
 
+  /** The sessions whose share is stale, per space. */
+  get accessForTestingOnly(): {
+    readonly stale: Map<string, Set<string>>;
+  } {
+    return { stale: this.#stale };
+  }
+
   /**
    * Notes that `sessionId`'s demand in `space` changed, or every session's
    * when no session is named.

@@ -5,7 +5,11 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
-import { type EntityDocument, resolveScopeKey } from "@commonfabric/memory/v2";
+import {
+  type EntityDocument,
+  resolveScopeKey,
+  toDocumentPath,
+} from "@commonfabric/memory/v2";
 import type { URI } from "@commonfabric/memory/interface";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
@@ -788,5 +792,93 @@ describe("memory-v2-wave-promotion", () => {
       secondVerdict.resolve({ withdrawn: { message: "test cleanup" } });
       await manager.close();
     }
+  });
+
+  it("rejects a sealed commit that read a write its wave commit dropped, and keeps one that read only writes it carried", async () => {
+    const manager = StorageManager.emulate({ as: signer });
+    const replica = manager.open(signer.did()).replica;
+    const dropped = "of:wave-promotion-dropped" as URI;
+    const trimmed = "of:wave-promotion-trimmed" as URI;
+    const carried = "of:wave-promotion-carried" as URI;
+    const set = (target: URI, value: number | Record<string, number>) => ({
+      op: "set" as const,
+      id: target,
+      type: "application/json" as const,
+      value: { value },
+    });
+    const seeded = replica.sealNative!(
+      { operations: [set(trimmed, { a: 0, b: 0 })] },
+      undefined,
+      Promise.resolve({ committed: { seq: 5 } }),
+    );
+    expect((await seeded.settled).error).toBeUndefined();
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    const writer = replica.sealNative!(
+      {
+        operations: [
+          set(dropped, 1),
+          {
+            op: "patch",
+            id: trimmed,
+            type: "application/json",
+            patches: [
+              { op: "replace", path: "/value/a", value: 1 },
+              { op: "replace", path: "/value/b", value: 2 },
+            ],
+            value: { value: { a: 1, b: 2 } },
+          },
+          set(carried, 3),
+        ],
+      },
+      undefined,
+      verdict.promise,
+    );
+    const readerOf = (read: URI, write: URI) => {
+      const readerVerdict = Promise.withResolvers<SealedCommitVerdict>();
+      const sealed = replica.sealNative!(
+        { operations: [set(write, 4)] },
+        undefined,
+        readerVerdict.promise,
+        {
+          reads: {
+            confirmed: [],
+            pending: [{
+              id: read,
+              path: toDocumentPath([]),
+              localSeq: writer.localSeq,
+            }],
+          },
+        },
+      );
+      return { sealed, verdict: readerVerdict };
+    };
+    const readsDropped = readerOf(dropped, "of:wave-promotion-reader-a" as URI);
+    const readsTrimmed = readerOf(trimmed, "of:wave-promotion-reader-b" as URI);
+    const readsCarried = readerOf(carried, "of:wave-promotion-reader-c" as URI);
+
+    verdict.resolve({
+      committed: {
+        seq: 10,
+        dropped: new Map<number, "operation" | ReadonlySet<number>>([
+          [0, "operation"],
+          [1, new Set([1])],
+        ]),
+      },
+    });
+    expect((await writer.settled).error).toBeUndefined();
+    for (const rejected of [readsDropped, readsTrimmed]) {
+      expect((await rejected.sealed.settled).error?.message).toContain(
+        `pending dependency dropped locally: localSeq=${writer.localSeq}`,
+      );
+    }
+    readsCarried.verdict.resolve({ committed: { seq: 11 } });
+    expect((await readsCarried.sealed.settled).error).toBeUndefined();
+    expect(replica.getDocument(dropped)).toBeUndefined();
+    expect(replica.getDocument(trimmed)).toEqual({ value: { a: 1, b: 0 } });
+    expect(replica.getDocument(carried)).toEqual({ value: 3 });
+    for (const rejected of [readsDropped, readsTrimmed]) {
+      rejected.verdict.resolve({ withdrawn: { message: "test cleanup" } });
+    }
+    await manager.close();
   });
 });

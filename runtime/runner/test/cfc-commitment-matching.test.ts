@@ -416,6 +416,7 @@ describe("CFC commitment-form matching (inv-12 Stage 1)", () => {
         actingPrincipal: reader,
         membershipProvider: {
           readerRole: (id: string) => id === spaceId ? "reader" : null,
+          load: () => Promise.resolve(),
           subscribe: () => () => {},
         },
       });
@@ -442,6 +443,7 @@ describe("CFC commitment-form matching (inv-12 Stage 1)", () => {
         actingPrincipal: reader,
         membershipProvider: {
           readerRole: () => "reader",
+          load: () => Promise.resolve(),
           subscribe: () => () => {},
         },
       });

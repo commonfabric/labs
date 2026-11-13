@@ -14,6 +14,11 @@
  * the file, so durability-at-return was never this seam's job. Durability is
  * witnessed through an independent manager in
  * `runtime/runner/test/runtime-dispose-keep-storage.test.ts`.
+ *
+ * Every run here names `serverExecution: false`. The seam exists on the OFF
+ * arm only: a run that resolves ON refuses a caller-supplied store, which
+ * `test-runner-server-execution.serial.test.ts` checks, so on that arm there
+ * is no store, observer or hook here to check.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -23,7 +28,11 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { withEnv } from "./utils.ts";
-import { runTestPattern, runTests } from "../lib/test-runner.ts";
+import {
+  runTestPattern,
+  runTests,
+  type TestRunnerOptions,
+} from "../lib/test-runner.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/storage-host");
 
@@ -51,6 +60,7 @@ describe(
           storageHost: {
             identity,
             storageManager,
+            serverExecution: false,
             resultCause: RESULT_CAUSE,
             onPatternInstantiated: (i) => instantiated.push(i.identity),
           },
@@ -82,6 +92,31 @@ describe(
       await reader.dispose();
     });
 
+    it("runs on the OFF arm it names when the environment selects ON", async () => {
+      const identity = await Identity.fromPassphrase("cli storage host arm");
+      const storageManager = StorageManager.emulate({ as: identity });
+      try {
+        await withEnv("EXPERIMENTAL_SERVER_EXECUTION", "true", async () => {
+          const result = await runTestPattern(
+            resolve(FIXTURES, "counter.test.tsx"),
+            {
+              root: FIXTURES,
+              storageHost: {
+                identity,
+                storageManager,
+                serverExecution: false,
+              },
+            },
+          );
+          expect(result.error).toBeUndefined();
+          expect(result.results.filter((r) => !r.passed && !r.skipped))
+            .toEqual([]);
+        });
+      } finally {
+        await storageManager.close();
+      }
+    });
+
     it("preserves an existing home pattern when the storage host requests it", async () => {
       const identity = await Identity.fromPassphrase(
         "cli storage host preserved home",
@@ -107,6 +142,7 @@ describe(
             storageHost: {
               identity,
               storageManager,
+              serverExecution: false,
               preserveDefaultPattern: true,
             },
           },
@@ -144,6 +180,7 @@ describe(
               storageHost: {
                 identity,
                 storageManager,
+                serverExecution: false,
                 apiUrl: new URL("https://fabric.example"),
               },
             },
@@ -159,9 +196,10 @@ describe(
     it("awaits the storage host's external work before reading assertions", async () => {
       const identity = await Identity.fromPassphrase("cli external work");
       const storageManager = StorageManager.emulate({ as: identity });
-      const storageHost = {
+      const storageHost: TestRunnerOptions["storageHost"] = {
         identity,
         storageManager,
+        serverExecution: false,
         // Starting the write from `then` makes the test fail if the runner
         // invokes this hook without awaiting the returned work.
         beforeAssertions: (runtime: Runtime, result: Cell<unknown>) =>
@@ -200,9 +238,10 @@ describe(
         "cli rejected external work",
       );
       const storageManager = StorageManager.emulate({ as: identity });
-      const storageHost = {
+      const storageHost: TestRunnerOptions["storageHost"] = {
         identity,
         storageManager,
+        serverExecution: false,
         beforeAssertions: () =>
           Promise.reject(new Error("external agent failed")),
       };
@@ -245,6 +284,7 @@ describe(
           storageHost: {
             identity,
             storageManager: wedged,
+            serverExecution: false,
             resultCause: RESULT_CAUSE,
           },
         }),
@@ -266,7 +306,11 @@ describe(
 
       const { failed } = await runTests([fixture, fixture], {
         root: FIXTURES,
-        storageHost: { identity, storageManager: wedged },
+        storageHost: {
+          identity,
+          storageManager: wedged,
+          serverExecution: false,
+        },
       });
 
       expect(failed).toBe(2);

@@ -91,8 +91,9 @@ The vocabulary:
    boundaries in
    `runtime/html/src/worker/reconciler.ts`,
    `runtime/html/src/worker/display-fit.ts` and
-   `runtime/html/src/worker/display-fit-atoms.ts`, to the harness's CFC enforcement
-   in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+   `runtime/html/src/worker/display-fit-atoms.ts`, to the worker's decision on a
+   host's reads in `runtime/runtime-client/src/backends/host-read-gate.ts`, to
+   the harness's CFC enforcement in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
    `sandbox/runsc-cfc-result.ts`), to the harness console's display ceiling in
    `runtime/cf-harness/console/display-ceiling.ts`, or to a
    `docs/specs/cfc-*.md` document
@@ -318,7 +319,8 @@ on five things, each read against the committed snapshot:
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
   sources and their tests, the memory package's CFC sources and their tests,
   the render boundaries `reconciler.ts`,
-  `display-fit.ts` and `display-fit-atoms.ts` in `runtime/html`, the harness's `cfc-*.ts`,
+  `display-fit.ts` and `display-fit-atoms.ts` in `runtime/html`, the host read
+  gate `host-read-gate.ts` in `runtime/runtime-client`, the harness's `cfc-*.ts`,
   `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`, and the harness
   console's `display-ceiling.ts`; or one on a line
   naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker

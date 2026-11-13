@@ -356,6 +356,21 @@ describe("spaceDeleted()", () => {
     }
   });
 
+  it("throws in a computation whose frame holds no runtime", () => {
+    const frame = pushFrame({
+      runtime: undefined,
+      tx: undefined,
+      frameKind: "lift",
+    });
+    try {
+      expect(() => spaceDeleted(undefined)).toThrow(
+        "requires an executing runtime",
+      );
+    } finally {
+      popFrame(frame);
+    }
+  });
+
   it("throws for a string target that is not a well-formed DID", () => {
     expect(() => callIn("lift", "not a did")).toThrow(
       "takes a cell or a space's DID",
