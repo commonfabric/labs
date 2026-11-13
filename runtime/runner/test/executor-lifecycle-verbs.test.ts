@@ -28,6 +28,7 @@ import {
 import { waveSettlementOf } from "../src/executor/wave.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitUntil } from "./support/wait-until.ts";
+import { awaitReplica } from "./support/serving-waits.ts";
 
 const spaceSigner = await Identity.fromPassphrase("lifecycle verbs space");
 const space = spaceSigner.did() as MemorySpace;
@@ -243,11 +244,10 @@ describe("ExecutorHost.runLifecycleVerb", () => {
       "served-piece",
       staged.resultSchema,
     );
-    await piece.sync();
-    await waitUntil(async () => {
+    await awaitReplica(client.storageManager, async () => {
       await piece.sync();
       return piece.key("total").get() === 42;
-    }, "the served piece's first derivation");
+    });
     const input = client.getCell<number>(space, "served-input", undefined);
     await input.sync();
     const derived = piece.key("total").resolveAsCell();
@@ -271,9 +271,10 @@ describe("ExecutorHost.runLifecycleVerb", () => {
           "served-piece",
           staged.resultSchema,
         );
-        await waitUntil(
+        // The derivation's seal commits to the serving replica.
+        await awaitReplica(
+          runtime.storageManager,
           () => served.key("total").get() === 14,
-          "the served piece's derivation during the verb",
         );
         // The client then writes the derived document itself, after the
         // wave's basis: the wave commit drops the derivation's write.
