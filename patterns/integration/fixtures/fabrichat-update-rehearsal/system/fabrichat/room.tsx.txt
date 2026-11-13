@@ -64,6 +64,7 @@ import {
 } from "../loom/participants.tsx";
 import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 import {
+  sameNameMarks,
   type ShownIn,
   threadExcerpt,
   type ViewPlace,
@@ -85,6 +86,7 @@ import {
   type ComposerAttachment,
   type ComposerCell,
   type ComposerState,
+  dismissRemoval,
   dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
@@ -99,6 +101,7 @@ import {
   NO_MESSAGE_RIGHTS,
   ownersMayObliterateIn,
   prepareAttach,
+  removalRequestId,
   type RepliedMessage,
   rightsOf,
   type RoomStreamEvent,
@@ -681,6 +684,18 @@ export interface AddMemberOutput {
   canAdd: PerSession<boolean>;
 }
 
+/** A person the room's picker offers to add. */
+interface AddCandidate {
+  /** The first profile attesting them, which the add names them by. */
+  profile: ProfileCell;
+
+  /**
+   * What tells them apart from another person offered under the same name
+   * (`sameNameMarks()`); empty where no one else shows their name.
+   */
+  mark: string;
+}
+
 /**
  * Offers an OWNER of a group room's space a way to admit someone else to it,
  * by their chat address, or by picking them from the people the viewer's
@@ -742,19 +757,31 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       shown === "" ? "none" : "block"
     );
     // Each person the manager lists who isn't a member of the room's space, by
-    // the first profile attesting them, per user, as the manager's people are,
-    // and no one while the space's members aren't known. The binding's name is
-    // the value's cause, the identity of the document that stores it, so
-    // renaming it moves its data.
-    const candidatesForUser = computed((): PerUser<ProfileCell[]> =>
-      members === undefined ? [] : Object.entries(manager?.people ?? {})
-        .flatMap(([principal, profiles]): ProfileCell[] =>
-          members.some((member) => member.principal === principal) ||
-            profiles[0] === undefined
+    // the first profile attesting them, with what tells them apart from
+    // another of them under the same name, per user, as the manager's people
+    // are, and no one while the space's members aren't known. The binding's
+    // name is the value's cause, the identity of the document that stores it,
+    // so renaming it moves its data.
+    const candidatesForUser = computed((): PerUser<AddCandidate[]> => {
+      if (members === undefined) return [];
+      const listed = Object.entries(manager?.people ?? {}).flatMap(
+        ([principal, profiles]) => {
+          const profile = profiles[0];
+          return members.some((member) => member.principal === principal) ||
+              profile === undefined
             ? []
-            : [profiles[0]]
-        )
-    );
+            : [{ principal, profile }];
+        },
+      );
+      const marks = sameNameMarks(listed.map(({ principal, profile }) => ({
+        principal,
+        name: profile.key("name").get(),
+      })));
+      return listed.map(({ principal, profile }) => ({
+        profile,
+        mark: marks[principal] ?? "",
+      }));
+    });
     const candidatesDisplay = computed((): ChatDisplay =>
       candidatesForUser.length === 0 ? "none" : "block"
     );
@@ -788,19 +815,26 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidatesForUser.map((profile) => (
+              {candidatesForUser.map((candidate) => (
                 <cf-hstack
                   gap="2"
                   align="center"
                   data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
                   data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
                 >
-                  <cf-profile-badge variant="chip" $profile={profile} />
+                  <cf-profile-badge
+                    variant="chip"
+                    $profile={candidate.profile}
+                  />
+                  <cf-text variant="caption">{candidate.mark}</cf-text>
                   <cf-button
                     data-ui-action={CHAT_ADD_MEMBER_ACTION}
                     size="sm"
                     variant="ghost"
-                    onClick={commitAddMember({ ...bindings, picked: profile })}
+                    onClick={commitAddMember({
+                      ...bindings,
+                      picked: candidate.profile,
+                    })}
                   >
                     Add
                   </cf-button>
@@ -1360,12 +1394,24 @@ export interface FabriChatRoomCoreOutput extends ChatRoomOutput {
   threadComposerSend: Stream<RoomStreamEvent>;
 }
 
+/** A file taken out of a composer whose removal the store refused. */
+interface UnremovedFile {
+  /** The request that added the file. */
+  requestId: string;
+
+  /** What the composer says of it: its name, and why it wasn't removed. */
+  text: string;
+}
+
 /** What one file a composer is attaching renders. */
 interface AttachingFileInput {
   /** The file, as the request adding it to the space's store. */
   file: ComposerAttachment;
 
-  /** The space's file store, which records the request's outcome. */
+  /**
+   * The space's file store, which records the request's outcome, and which
+   * the file's remove control removes the entry from.
+   */
   store: Cell<FileStoreOutput> | undefined;
 
   /** The session's composer state, which the file's remove control changes. */
@@ -1375,7 +1421,7 @@ interface AttachingFileInput {
 /**
  * One file the composer is attaching: its name, whether the store has added
  * it yet, under which name, or why it refused it, and a control that takes it
- * out of the next send.
+ * out of the next send and removes its entry from the store.
  */
 const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
   ({ file, store, composer }) => {
@@ -1401,7 +1447,11 @@ const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
           <cf-button
             size="sm"
             variant="ghost"
-            onClick={dropAttachment({ composer, requestId: file.requestId })}
+            onClick={dropAttachment({
+              composer,
+              store,
+              requestId: file.requestId,
+            })}
           >
             Remove
           </cf-button>
@@ -1826,6 +1876,23 @@ export const FabriChatRoomCore = pattern<
   const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
     composer.get()?.attaching ?? []
   );
+  // The files taken out of this session's composer whose removal the store
+  // refused for a reason other than finding no entry, each with that reason,
+  // each removal's outcome read by its id alone.
+  const unremovedFiles = computed((): PerSession<UnremovedFile[]> =>
+    (composer.get()?.takenOut ?? []).flatMap((file) => {
+      if (file.removing !== true) return [];
+      const outcome = spaceFileStore?.key("requests").key(
+        removalRequestId(file.requestId),
+      ).get() as FileRequestOutcome | undefined;
+      return outcome?.status === "refused" && outcome.code !== "not-found"
+        ? [{
+          requestId: file.requestId,
+          text: `${file.name} stays in this chat's files: ${outcome.reason}`,
+        }]
+        : [];
+    })
+  );
   const threadComposers = threadComposerRoots.map((root) =>
     FabriChatThreadComposer({
       root,
@@ -2053,6 +2120,21 @@ export const FabriChatRoomCore = pattern<
               store={spaceFileStore}
               composer={composer}
             />
+          ))}
+          {unremovedFiles.map((file) => (
+            <cf-hstack gap="1" align="center">
+              <cf-text variant="caption">{file.text}</cf-text>
+              <cf-button
+                size="sm"
+                variant="ghost"
+                onClick={dismissRemoval({
+                  composer,
+                  requestId: file.requestId,
+                })}
+              >
+                Dismiss
+              </cf-button>
+            </cf-hstack>
           ))}
           <cf-file-input
             multiple
