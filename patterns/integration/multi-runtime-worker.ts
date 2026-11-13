@@ -1039,6 +1039,11 @@ const handlers: Record<
    * `path` (links resolved to the target cell, NO result-schema shaping) —
    * for state the declared schema does not carry, e.g. a query result's
    * `requestHash`. Nested links in the raw value stay sigils.
+   *
+   * The cell at `path` is pulled as well as the result, as `read` pulls it:
+   * a path that runs past a handle into another space loads what it reaches
+   * only when a read reaches it, and the pull loads and demands it without
+   * shaping the raw value read after it.
    */
   async readRaw({ path, piece }) {
     const target = await resultAt(piece);
@@ -1048,7 +1053,7 @@ const handlers: Record<
       cell = cell.key(segment as never);
     }
     if (boundedReads) cell.get();
-    if (boundedReads) await cell.pull();
+    await cell.pull();
     return cell.resolveAsCell().getRaw();
   },
 
