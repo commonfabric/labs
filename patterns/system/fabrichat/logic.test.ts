@@ -8,6 +8,8 @@ import {
   threadExcerpt,
   type ViewItem,
   viewPlaces,
+  windowCount,
+  windowSlice,
 } from "./logic.ts";
 
 describe("logic", () => {
@@ -86,6 +88,60 @@ describe("logic", () => {
         c: { inMain: true, replies: 0, thread: "a" },
         d: { inMain: true, replies: 0 },
         e: { inMain: false, replies: 0, thread: "a" },
+      });
+    });
+  });
+
+  describe("windowCount()", () => {
+    it("returns the count requested, rounded down, up to the most", () => {
+      expect(windowCount(3, 10)).toBe(3);
+      expect(windowCount(3.7, 10)).toBe(3);
+      expect(windowCount(30, 10)).toBe(10);
+    });
+
+    it("returns 0 for a count that is negative, not finite, or not a number", () => {
+      for (const requested of [-1, Number.NaN, Infinity, "3", undefined]) {
+        expect(windowCount(requested, 10)).toBe(0);
+      }
+    });
+  });
+
+  describe("windowSlice()", () => {
+    it("returns the newest messages of a view for a window at its end", () => {
+      expect(windowSlice(5, { before: "end" }, 2)).toEqual({
+        start: 3,
+        end: 5,
+        hasOlder: true,
+        hasNewer: false,
+      });
+    });
+
+    it("returns the oldest messages of a view for a window at its start", () => {
+      expect(windowSlice(5, { after: "start" }, 2)).toEqual({
+        start: 0,
+        end: 2,
+        hasOlder: false,
+        hasNewer: true,
+      });
+    });
+
+    it("returns the whole view, with nothing beyond it, for a window as large as it or larger", () => {
+      for (const anchor of [{ before: "end" }, { after: "start" }] as const) {
+        expect(windowSlice(3, anchor, 7)).toEqual({
+          start: 0,
+          end: 3,
+          hasOlder: false,
+          hasNewer: false,
+        });
+      }
+    });
+
+    it("returns an empty window over an empty view", () => {
+      expect(windowSlice(0, { before: "end" }, 4)).toEqual({
+        start: 0,
+        end: 0,
+        hasOlder: false,
+        hasNewer: false,
       });
     });
   });
