@@ -1103,6 +1103,126 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
+    /// The initializer of the module-scope `const` that `name` denotes, an
+    /// import followed, and the module that declares it. `None` where the
+    /// program does not hold the declaration, and an initializer of `None`
+    /// where the name denotes anything else.
+    fn constant_initializer(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+    ) -> Option<(usize, Option<&'a Expression<'a>>)> {
+        let parsed = self.parsed(module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+        let (module, symbol) = match self.model(module)?.binding(symbol) {
+            Some(Binding::Import(import, binding)) => {
+                let import = &self.model(module)?.imports[import];
+                let def =
+                    self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                (def.module, self.model(def.module)?.defs[def.def].symbol?)
+            }
+            _ => (module, symbol),
+        };
+        let parsed = self.parsed(module)?;
+        let scoping = parsed.semantic.scoping();
+        let declaration = scoping.symbol_declaration(symbol);
+        let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+        else {
+            return Some((module, None));
+        };
+        let at_module_scope = scoping.symbol_scope_id(symbol) == scoping.root_scope_id();
+        if declarator.kind != VariableDeclarationKind::Const || !at_module_scope {
+            return Some((module, None));
+        }
+        Some((module, declarator.init.as_ref()))
+    }
+
+    /// Whether `typeof NAME` in a label argument is a legal constant
+    /// reference (§8.5): `NAME` is a module-scope constant with a static
+    /// initializer, and its value is an atom, or a string where `string`
+    /// is set. `None` where the program does not hold the constant.
+    fn constant_reference(
+        &self,
+        module: usize,
+        query: &TSTypeQuery<'a>,
+        string: bool,
+    ) -> Option<bool> {
+        // `typeof NAME.path` names a part of a constant.
+        let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name else {
+            return Some(false);
+        };
+        let Some((home, init)) = self.constant_initializer(module, name) else {
+            // A name that resolves to nothing in the module is no constant.
+            let unbound = self
+                .parsed(module)
+                .is_some_and(|parsed| symbol_of(parsed.semantic.scoping(), name).is_none());
+            return if unbound { Some(false) } else { None };
+        };
+        let Some(init) = init else {
+            return Some(false);
+        };
+        if !self.is_static_initializer(home, init, 0) {
+            return Some(false);
+        }
+        self.is_atom_value(home, init, string, 0)
+    }
+
+    /// Whether the value of a static initializer is a label atom: a
+    /// string, a number, a boolean, `null`, or an object whose property
+    /// values are atoms or arrays of atoms (§8.5). With `string`, whether
+    /// it is a string.
+    fn is_atom_value(
+        &self,
+        module: usize,
+        value: &Expression<'a>,
+        string: bool,
+        depth: u32,
+    ) -> Option<bool> {
+        if depth > 8 {
+            return Some(false);
+        }
+        let next = depth + 1;
+        Some(match unwrap(value) {
+            Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
+            Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::UnaryExpression(_) => !string,
+            Expression::Identifier(name) => match self.constant_initializer(module, name)? {
+                (home, Some(init)) => return self.is_atom_value(home, init, string, next),
+                (_, None) => false,
+            },
+            Expression::ObjectExpression(object) if !string => {
+                for property in &object.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return Some(false);
+                    };
+                    let atom = match unwrap(&property.value) {
+                        Expression::ArrayExpression(array) => {
+                            let mut all = true;
+                            for element in &array.elements {
+                                let Some(element) = element.as_expression() else {
+                                    return Some(false);
+                                };
+                                if matches!(unwrap(element), Expression::ArrayExpression(_)) {
+                                    return Some(false);
+                                }
+                                all &= self.is_atom_value(module, element, false, next)?;
+                            }
+                            all
+                        }
+                        other => self.is_atom_value(module, other, false, next)?,
+                    };
+                    if !atom {
+                        return Some(false);
+                    }
+                }
+                true
+            }
+            _ => false,
+        })
+    }
+
     /// Whether the constant `name` has a static initializer (§8.8), and the
     /// type of the value the initializer denotes where this slice
     /// evaluates it. `None` where the program does not hold the constant.
@@ -1336,6 +1456,18 @@ impl<'a> Resolver<'_, 'a> {
                 }
             }
             TSType::TSNullKeyword(_) => {}
+            // A constant reference: `typeof NAME` stands for the value of
+            // a module-scope constant with a static initializer.
+            TSType::TSTypeQuery(query) => {
+                if self.constant_reference(module, query, false) == Some(false) {
+                    self.report(
+                        module,
+                        "cfc-label:not-static",
+                        alias,
+                        "A constant reference `typeof NAME` whose constant has no static initializer, or whose value is not a label atom",
+                    );
+                }
+            }
             TSType::TSParenthesizedType(inner) => {
                 self.label_atom(module, &inner.type_annotation, alias, depth + 1);
             }
@@ -1461,6 +1593,10 @@ impl<'a> Resolver<'_, 'a> {
             }
             TSType::TSParenthesizedType(inner) => {
                 self.is_string_literal_type(module, &inner.type_annotation, depth)
+            }
+            // A constant reference whose value is a string.
+            TSType::TSTypeQuery(query) => {
+                self.constant_reference(module, query, true) != Some(false)
             }
             TSType::TSTypeReference(reference) if depth < 8 => {
                 match self.label_term(module, reference) {
