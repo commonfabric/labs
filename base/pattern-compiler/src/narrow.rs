@@ -443,8 +443,8 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The assignments to a binding, for narrowing the reference
     /// `expression` to it. `None` where the reference is not narrowed at
-    /// all: it is written in another function than the binding is declared
-    /// in, or the binding is assigned in another function.
+    /// all: the binding is assigned in another function than the one the
+    /// reference is written in.
     fn writes_of(
         &self,
         module: usize,
@@ -462,16 +462,21 @@ impl<'a> Resolver<'_, 'a> {
             })
         };
         let declaration = scoping.symbol_declaration(symbol);
-        let home = function_of(declaration);
-        if function_of(expression.node_id()) != home {
+        // The function the reference is written in. Every assignment has to
+        // be written in it too: what another function assigns is not seen
+        // in this one's order of statements.
+        let home = function_of(expression.node_id());
+        let mut writes = Vec::new();
+        let AstKind::VariableDeclarator(declarator) = nodes.kind(declaration) else {
+            return None;
+        };
+        if !matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
             return None;
         }
-        let mut writes = Vec::new();
-        // The declaration assigns its initializer.
-        if let AstKind::VariableDeclarator(declarator) = nodes.kind(declaration) {
-            if !matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
-                return None;
-            }
+        // The declaration assigns its initializer, where it is written in
+        // the same function. A binding of an enclosing function has its
+        // declared type where this function begins.
+        if function_of(declaration) == home {
             if let Some(init) = &declarator.init {
                 // The statement of a declarator is the declaration.
                 let statement = nodes
@@ -487,8 +492,6 @@ impl<'a> Resolver<'_, 'a> {
                     value: Some(init),
                 });
             }
-        } else {
-            return None;
         }
         for reference in scoping.get_resolved_references(symbol) {
             if !reference.is_write() {

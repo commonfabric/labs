@@ -463,3 +463,35 @@ fn optional_chain_compared_with_a_present_value_narrows_its_receiver() {
         ]
     );
 }
+
+#[test]
+fn let_of_an_enclosing_function_is_narrowed_where_one_function_assigns_it() {
+    assert_eq!(
+        types(
+            "function index(names: string[]) {\n\
+               let seen: Set<string> | undefined;\n\
+               let other: string | undefined;\n\
+               const reset = () => { other = undefined; };\n\
+               return (name: string) => {\n\
+                 if (seen === undefined) { seen = new Set(names); }\n\
+                 if (other === undefined) { other = name; }\n\
+                 reset();\n\
+                 return [/*?*/seen, /*?*/other];\n\
+               };\n\
+             }\n"
+        ),
+        ["Set | undefined", "string | undefined"]
+    );
+    assert_eq!(
+        types(
+            "function index(names: string[]) {\n\
+               let seen: Set<string> | undefined;\n\
+               return (name: string) => {\n\
+                 if (seen === undefined) { seen = new Set(names); /*?*/seen; }\n\
+                 return name;\n\
+               };\n\
+             }\n"
+        ),
+        ["Set"]
+    );
+}
