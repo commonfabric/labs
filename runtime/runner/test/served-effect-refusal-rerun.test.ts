@@ -50,8 +50,10 @@ type Builtin = {
   name:
     | "fetchText"
     | "fetchJson"
+    | "llm"
     | "generateText"
     | "generateObject"
+    | "fetchProgram"
     | "compileAndRun"
     | "llmDialog";
 
@@ -71,6 +73,10 @@ const refusable: readonly Builtin[] = [
     call:
       `fetchJson<{ answer: string }>({ url, options: { headers: { "x-tag": tag } } })`,
   },
+  {
+    name: "llm",
+    call: `llm({ messages: [{ role: "user", content: url }], system: tag })`,
+  },
   { name: "generateText", call: `generateText({ prompt: url, system: tag })` },
   {
     name: "generateObject",
@@ -78,14 +84,30 @@ const refusable: readonly Builtin[] = [
   },
 ];
 
+/** The builtins of the `llm` family, whose request is a prompt. */
+const llmFamily = refusable.filter((builtin) =>
+  ["llm", "generateText", "generateObject"].includes(builtin.name)
+);
+
+const fetchProgram: Builtin = {
+  name: "fetchProgram",
+  call: `fetchProgram({ url })`,
+};
+
+const compileAndRun: Builtin = {
+  name: "compileAndRun",
+  call:
+    `compileAndRun({ files: [{ name: "/main.tsx", contents: url }], main: "/main.tsx" })`,
+};
+
 /** The error a builtin's node ends with when its request is refused. */
 const refusedMessage = (builtin: Builtin) =>
   `${builtin.name} request was refused before it started`;
 
 /**
  * How many times a case lets the node's request go out, or be refused, before
- * it calls the node a loop: a refused `fetch*` request is staged once more
- * before it stops, and nothing else runs twice.
+ * it calls the node a loop: a refused `fetch*` or `llm`-family request is
+ * staged once more before it stops, and nothing else runs twice.
  */
 const RUN_BOUND = 3;
 
@@ -131,6 +153,13 @@ type Fixture = {
    * stubs, as one of the node's requests.
    */
   countRequest: () => void;
+
+  /**
+   * Closes the serving host and starts another, whose serving runtimes declare
+   * `ceiling` for the builtin's sink, opens a session of Alice's on the space,
+   * and waits for the new serving runtime to run the node and to settle.
+   */
+  restartServing: (ceiling: readonly string[]) => Promise<void>;
 
   /** Resolves at the node's first request or refusal, waiting for no more. */
   firstRun: Promise<void>;
@@ -231,8 +260,7 @@ async function seedSource(
  * (see `seedSource()`), which the ceiling refuses when that document is
  * labeled. With `refusal: "holder"` the serving runtime declares no ceiling,
  * and what the case counts as a refusal is the served-run holder rule's
- * (§8.12.5.1) refusal of the run's own state write: not the refusal of an
- * ending's separate request-hash write.
+ * (§8.12.5.1) refusal of the run's own state write.
  */
 async function withFixture<T>(
   { builtin, scope, input, refusal = "ceiling" }: {
@@ -249,6 +277,10 @@ async function withFixture<T>(
   const servingRuntimes: Runtime[] = [];
   const abandonedStamps: ServerRunInfo[] = [];
   let host: ExecutorHost | undefined;
+  let ceiling: readonly string[] | undefined = refusal === "ceiling"
+    ? []
+    : undefined;
+  let nodeRun: PromiseWithResolvers<void> | undefined;
   let undemanded = false;
   let refusals = 0;
   let requests = 0;
@@ -264,10 +296,7 @@ async function withFixture<T>(
     if (
       reasons.some((reason) =>
         refusal === "holder"
-          // A refusal of an ending's request-hash write alone, which a
-          // builtin makes in a transaction of its own, is not a run.
-          ? reason.includes("(cross-holder, §8.12.5.1)") &&
-            !reason.includes(" at /requestHash ")
+          ? reason.includes("(cross-holder, §8.12.5.1)")
           : reason.includes(`exceeds ceiling for ${builtin.name}`)
       )
     ) {
@@ -299,45 +328,50 @@ async function withFixture<T>(
     const ownerRuntime = openClient(owner);
     const urlInput = await input(ownerRuntime);
 
-    host = new ExecutorHost({
-      server,
-      serviceIdentity: service.did(),
-      // The execution host owns an asynchronous factory contract.
-      // deno-lint-ignore require-await
-      createRuntime: async () => {
-        const manager = EmulatedStorageManager.connectTo(server, {
-          as: service,
-        });
-        const runtime = new Runtime({
-          apiUrl: new URL(import.meta.url),
-          storageManager: manager,
-          servingPosture: true,
-          experimental: { serverExecution: true },
-          ...(refusal === "ceiling"
-            ? { cfcSinkMaxConfidentiality: { [builtin.name]: [] } }
-            : {}),
-        });
-        const demanders = runtime.serverRunDemandersFor.bind(runtime);
-        runtime.serverRunDemandersFor = (pieceRootIds) =>
-          undemanded ? [] : demanders(pieceRootIds);
-        const stamp = runtime.stampServerRun.bind(runtime);
-        runtime.stampServerRun = (tx, info) => {
-          if (info.actionId.includes("/abandoned/")) {
-            abandonedStamps.push(info);
-          }
-          stamp(tx, info);
-        };
-        servingRuntimes.push(runtime);
-        return {
-          runtime,
-          dispose: async () => {
-            await runtime.dispose();
-            await manager.close();
-          },
-        };
-      },
-      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
-    });
+    const startHost = () =>
+      new ExecutorHost({
+        server,
+        serviceIdentity: service.did(),
+        // The execution host owns an asynchronous factory contract.
+        // deno-lint-ignore require-await
+        createRuntime: async () => {
+          const manager = EmulatedStorageManager.connectTo(server, {
+            as: service,
+          });
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: manager,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+            ...(ceiling !== undefined
+              ? { cfcSinkMaxConfidentiality: { [builtin.name]: ceiling } }
+              : {}),
+          });
+          const demanders = runtime.serverRunDemandersFor.bind(runtime);
+          runtime.serverRunDemandersFor = (pieceRootIds) =>
+            undemanded ? [] : demanders(pieceRootIds);
+          const stamp = runtime.stampServerRun.bind(runtime);
+          runtime.stampServerRun = (tx, info) => {
+            if (info.actionId.includes("/abandoned/")) {
+              abandonedStamps.push(info);
+            }
+            if (info.actionId.startsWith(`raw:${builtin.name}:`)) {
+              nodeRun?.resolve();
+            }
+            stamp(tx, info);
+          };
+          servingRuntimes.push(runtime);
+          return {
+            runtime,
+            dispose: async () => {
+              await runtime.dispose();
+              await manager.close();
+            },
+          };
+        },
+        policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      });
+    host = startHost();
 
     const client = openClient(alice);
     // The node reads `tag` beside its URL, so `tag`'s scope is the node's:
@@ -415,6 +449,19 @@ export default pattern<
       countRequest: () => {
         requests += 1;
         counted();
+      },
+      restartServing: async (admitted) => {
+        await host!.close();
+        servingRuntimes.length = 0;
+        ceiling = admitted;
+        nodeRun = Promise.withResolvers<void>();
+        host = startHost();
+        // A host activates a space when a session opens on it.
+        await openClient(alice).getCellFromLink(
+          result.key("fetched").getAsNormalizedFullLink(),
+        ).sync();
+        await nodeRun.promise;
+        await Promise.all(servingRuntimes.map((runtime) => runtime.settled()));
       },
       firstRun,
       servingSettled: () =>
@@ -539,42 +586,82 @@ function mockAnswer(
   return "the answer";
 }
 
+/**
+ * Checks that Alice's `scope`-scoped node calling `builtin`, over a labeled
+ * source document in `sourceSpace`, ends with the sink ceiling's refusal as
+ * its error, in her instance, and is not refused without end.
+ */
+async function expectRefusedEnding(
+  builtin: Builtin,
+  scope: "space" | "user",
+  sourceSpace: MemorySpace,
+): Promise<void> {
+  await withFixture({
+    builtin,
+    scope,
+    input: (ownerRuntime) =>
+      seedSource(
+        ownerRuntime,
+        `${url}?labeled`,
+        true,
+        ["medical"],
+        sourceSpace,
+      ),
+  }, async (f) => {
+    await f.settle();
+
+    expect(f.refusals()).toBeGreaterThan(0);
+    expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
+    expect(f.requests()).toBe(0);
+    const requester = f.client.scopeKeyIdentity;
+    const errorLink = await f.errorLink();
+    const ending = { pending: false, error: refusedMessage(builtin) };
+    expect(
+      f.servingView(
+        f.fetched.getAsNormalizedFullLink(),
+        scope === "user" ? requester : undefined,
+      ),
+    ).toMatchObject(ending);
+    expect(await f.freshView()).toMatchObject(ending);
+    expect(f.stored(errorLink, requester)).toBe(refusedMessage(builtin));
+    if (scope === "user") {
+      // Where the ending lands without the requester's identity.
+      expect(
+        f.stored(errorLink, {
+          principal: service.did(),
+          sessionId: requester.sessionId,
+        }),
+      ).toBeUndefined();
+    }
+    expect(f.unstampedSealRefusals()).toBe(0);
+  });
+}
+
+/**
+ * Seeds the source document of a case over a prompt read from the node's own
+ * space: labeled `medical`, which the served-run holder rule (§8.12.5.1)
+ * admits everywhere the node writes, so only the sink ceiling refuses it.
+ */
+const ownSpaceSource = (ownerRuntime: Runtime, value = `${url}?labeled`) =>
+  seedSource(ownerRuntime, value, true, ["medical"], space);
+
 describe("served-effect-refusal-rerun", () => {
   for (const builtin of refusable) {
     for (const scope of ["space", "user"] as const) {
       it(`ends a ${scope}-scoped served ${builtin.name} whose request the sink ceiling refuses, without running it again`, async () => {
-        await withFixture({
-          builtin,
-          scope,
-          input: (ownerRuntime) =>
-            seedSource(ownerRuntime, `${url}?labeled`, true),
-        }, async (f) => {
-          await f.settle();
+        await expectRefusedEnding(builtin, scope, ownerSpace);
+      });
+    }
+  }
 
-          expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
-          expect(f.requests()).toBe(0);
-          const requester = f.client.scopeKeyIdentity;
-          const errorLink = await f.errorLink();
-          const ending = { pending: false, error: refusedMessage(builtin) };
-          expect(
-            f.servingView(
-              f.fetched.getAsNormalizedFullLink(),
-              scope === "user" ? requester : undefined,
-            ),
-          ).toMatchObject(ending);
-          expect(await f.freshView()).toMatchObject(ending);
-          expect(f.stored(errorLink, requester)).toBe(refusedMessage(builtin));
-          if (scope === "user") {
-            // Where the ending lands without the requester's identity.
-            expect(
-              f.stored(errorLink, {
-                principal: service.did(),
-                sessionId: requester.sessionId,
-              }),
-            ).toBeUndefined();
-          }
-          expect(f.unstampedSealRefusals()).toBe(0);
-        });
+  for (const builtin of llmFamily) {
+    for (const scope of ["space", "user"] as const) {
+      it(`ends a ${scope}-scoped served ${builtin.name} whose request over a prompt from its own space the sink ceiling refuses, without running it again`, async () => {
+        // No request hash records the refused request, so the node's next
+        // run stages it again and is refused again. That run's ending writes
+        // what the first one wrote, and nothing the node reads changes.
+
+        await expectRefusedEnding(builtin, scope, space);
       });
     }
   }
@@ -678,16 +765,14 @@ describe("served-effect-refusal-rerun", () => {
     }
   });
 
-  for (const name of ["generateText", "generateObject"] as const) {
-    it(`answers a refused served ${name} once a prompt read from its own space changes to one the ceiling admits`, async () => {
-      // The labeled prompt comes from a document in the node's own space, so
-      // the served-run holder rule (§8.12.5.1) admits its label everywhere
-      // the node writes, and only the sink ceiling refuses the request. What
-      // the refused request's ending leaves in the node's fields carries none
-      // of that prompt's label into the node's next run, whose request is
-      // over the new prompt alone, and the ceiling admits it.
+  for (const builtin of llmFamily) {
+    it(`answers a refused served ${builtin.name} once a prompt read from its own space changes to one the ceiling admits`, async () => {
+      // The labeled prompt comes from a document in the node's own space (see
+      // `ownSpaceSource()`), so only the sink ceiling refuses the request.
+      // What the refused request's ending leaves in the node's fields carries
+      // none of that prompt's label into the node's next run, whose request
+      // is over the new prompt alone, and the ceiling admits it.
 
-      const builtin = refusable.find((candidate) => candidate.name === name)!;
       const prompt = "served effect rerun admitted prompt";
       let fixture: Fixture | undefined;
       enableMockMode();
@@ -696,14 +781,7 @@ describe("served-effect-refusal-rerun", () => {
         await withFixture({
           builtin,
           scope: "space",
-          input: (ownerRuntime) =>
-            seedSource(
-              ownerRuntime,
-              `${url}?labeled`,
-              true,
-              ["medical"],
-              space,
-            ),
+          input: (ownerRuntime) => ownSpaceSource(ownerRuntime),
         }, async (f) => {
           fixture = f;
           await f.settle();
@@ -733,6 +811,91 @@ describe("served-effect-refusal-rerun", () => {
       } finally {
         resetMockMode();
       }
+    });
+  }
+
+  for (const builtin of llmFamily) {
+    it(`answers a refused served ${builtin.name}'s unchanged request once a new serving runtime's ceiling admits its prompt`, async () => {
+      // The ceiling is the serving runtime's, so a ceiling that admits the
+      // prompt's label comes with a new serving runtime. Nothing the node
+      // reads has changed, and its request is the one refused, so it is
+      // staged again only because nothing records the refused request as
+      // answered.
+
+      const prompt = `${url}?labeled`;
+      let fixture: Fixture | undefined;
+      enableMockMode();
+      const answer = mockAnswer(builtin, prompt, () => fixture?.countRequest());
+      try {
+        await withFixture({
+          builtin,
+          scope: "space",
+          input: (ownerRuntime) => ownSpaceSource(ownerRuntime, prompt),
+        }, async (f) => {
+          fixture = f;
+          await f.settle();
+          const refused = f.refusals();
+          expect(refused).toBeGreaterThan(0);
+          expect(f.requests()).toBe(0);
+
+          await f.restartServing(["medical"]);
+
+          expect(f.refusals()).toBe(refused);
+          expect(f.requests()).toBe(1);
+          const answered = { pending: false, result: answer };
+          const servingView = f.servingView(
+            f.fetched.getAsNormalizedFullLink(),
+            undefined,
+          );
+          expect(servingView).toMatchObject(answered);
+          expect(servingView?.error).toBeUndefined();
+          const freshView = await f.freshView();
+          expect(freshView).toMatchObject(answered);
+          expect(freshView?.error).toBeUndefined();
+        });
+      } finally {
+        resetMockMode();
+      }
+    });
+  }
+
+  for (
+    const [builtin, labeled, admitted] of [
+      [fetchProgram, `${url}?labeled`, `${url}?admitted`],
+      [compileAndRun, "export default 1;", "export default 2;"],
+    ] as const
+  ) {
+    it(`refuses a served ${builtin.name}'s request again once its input, read from its own space, changes to one the ceiling admits`, async () => {
+      // TODO(danfuzz): The request over the new input should go out, as an
+      // `llm` builtin's does. It is refused instead: the refused request's
+      // ending reads the node's inputs to decide whether the request is still
+      // the node's, so everything it writes carries the old input's label,
+      // the record of the refused request included, and the node's next run
+      // reads that record and takes the label into its request. See the
+      // paired TODO at each builtin's ending, in `fetch-program.ts` and
+      // `compile-and-run.ts`.
+
+      await withFixture({
+        builtin,
+        scope: "space",
+        input: (ownerRuntime) => ownSpaceSource(ownerRuntime, labeled),
+      }, async (f) => {
+        await f.settle();
+        const refused = f.refusals();
+        expect(refused).toBeGreaterThan(0);
+
+        await f.settle(async () => {
+          const change = f.client.edit();
+          f.argument.withTx(change).key("url").set(admitted);
+          expect((await change.commit().settled).error).toBeUndefined();
+        });
+
+        expect(f.refusals()).toBeGreaterThan(refused);
+        expect(f.requests()).toBe(0);
+        expect(
+          f.servingView(f.fetched.getAsNormalizedFullLink(), undefined),
+        ).toMatchObject({ pending: false, error: refusedMessage(builtin) });
+      });
     });
   }
 
@@ -781,11 +944,6 @@ describe("served-effect-refusal-rerun", () => {
     // it", in `compile-and-run-served.test.ts`). See the paired TODO at the
     // ending in `compile-and-run.ts`.
 
-    const compileAndRun: Builtin = {
-      name: "compileAndRun",
-      call:
-        `compileAndRun({ files: [{ name: "/main.tsx", contents: url }], main: "/main.tsx" })`,
-    };
     const rejected: string[] = [];
     const originalError = console.error;
     console.error = (...args: unknown[]) => {
