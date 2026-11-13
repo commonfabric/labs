@@ -573,3 +573,19 @@ fn well_formed_did_test_narrows_unknown_to_a_string() {
         ["string"]
     );
 }
+
+#[test]
+fn assignment_of_a_container_without_type_arguments_narrows_to_the_declared_container() {
+    assert_eq!(
+        types(
+            "function index(names: string[]) {\n\
+               let seen: Map<string, string[]> | undefined;\n\
+               return (name: string) => {\n\
+                 if (seen === undefined) { seen = new Map(); for (const other of names) { /*?*/seen; } }\n\
+                 return name;\n\
+               };\n\
+             }\n"
+        ),
+        ["Map"]
+    );
+}

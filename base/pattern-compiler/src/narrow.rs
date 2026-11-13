@@ -611,7 +611,14 @@ impl<'a> Resolver<'_, 'a> {
                 match self.assignable(*given, *member) {
                     Some(true) => fits = true,
                     Some(false) => {}
-                    None => return declared,
+                    // A container made without type arguments is the
+                    // declared container of that name.
+                    None => match (self.shape(*given), self.shape(*member)) {
+                        (Shape::Code(given), Shape::Code(member)) if given == member => {
+                            fits = true;
+                        }
+                        _ => return declared,
+                    },
                 }
             }
             if fits {
