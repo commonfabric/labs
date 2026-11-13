@@ -12,8 +12,13 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
+import { isFabricPlainObject } from "@commonfabric/data-model";
+import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
+
 import { StorageManager } from "../src/storage/v2.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const service = await Identity.fromPassphrase("storage-session-demand service");
 
@@ -67,5 +72,54 @@ describe("storage-session-demand", () => {
     await openSession(space, {});
 
     expect(clientSessionsOn(space)).toBe(true);
+  });
+
+  describe("an emulated manager", () => {
+    /**
+     * Opens a session on a fresh space through an emulated manager signed by
+     * `service`, and returns the `demand` each `session.open` it sent
+     * declared.
+     */
+    const declaredDemand = async (
+      options: { demand?: boolean },
+    ): Promise<unknown[]> => {
+      const shared = newSharedServer();
+      cleanups.push(() => shared.close());
+      const declared: unknown[] = [];
+      const connect = shared.connect.bind(shared);
+      shared.connect = (send, syncParts, connectOptions) => {
+        const connection = connect(send, syncParts, connectOptions);
+        const receive = connection.receive.bind(connection);
+        connection.receive = (payload: string) => {
+          const message = decodeMemoryBoundary(payload);
+          if (
+            isFabricPlainObject(message) &&
+            message.type === "session.open" &&
+            isFabricPlainObject(message.session)
+          ) {
+            declared.push(message.session.demand);
+          }
+          return receive(payload);
+        };
+        return connection;
+      };
+      const manager = EmulatedStorageManager.connectTo(shared, {
+        as: service,
+        ...options,
+      });
+      cleanups.push(() => manager.close());
+      const space = (await Identity.fromPassphrase("emulated space")).did();
+      const { error } = await manager.open(space).sync("of:probe");
+      expect(error).toBeUndefined();
+      return declared;
+    };
+
+    it("declares its sessions not demand when opened with demand off", async () => {
+      expect(await declaredDemand({ demand: false })).toEqual([false]);
+    });
+
+    it("declares nothing when opened without the option", async () => {
+      expect(await declaredDemand({})).toEqual([undefined]);
+    });
   });
 });
