@@ -914,6 +914,17 @@ describe("cfc-write-policy-any-of", () => {
         ).toThrow(CfcEnvelopeStabilityError);
       });
 
+      it("throws for an appended alternative carrying a key no stored alternative carries", () => {
+        expect(() =>
+          merge(
+            candidateAdding({
+              ...alternative("reply", "Send", "new"),
+              intent: "reply",
+            }),
+          )
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
       it("throws for a candidate that drops a stored alternative while appending one", () => {
         expect(() =>
           merge(
@@ -1036,6 +1047,15 @@ describe("cfc-write-policy-any-of", () => {
       it("returns a refusal for an appended alternative naming no contract beside stored alternatives that all name one", () => {
         expect(kept([...STORED, alternative("reply", undefined, "new")]))
           .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative carrying a key no stored alternative carries", () => {
+        expect(
+          kept([
+            ...STORED,
+            { ...alternative("reply", "Send", "new"), intent: "reply" },
+          ]),
+        ).toContain("writePolicyAnyOf");
       });
 
       it("returns a refusal for a merged policy that drops a stored alternative", () => {
