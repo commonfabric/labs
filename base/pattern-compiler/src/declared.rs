@@ -429,6 +429,15 @@ impl<'a> Resolver<'_, 'a> {
         self.intern(Shape::Handle(kind, value))
     }
 
+    /// The declared type of a name.
+    pub(crate) fn typed_name(
+        &self,
+        module: usize,
+        identifier: &IdentifierReference<'a>,
+    ) -> Declared {
+        self.declared_name(module, identifier, 0)
+    }
+
     fn declared_name(
         &self,
         module: usize,

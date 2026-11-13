@@ -1504,6 +1504,66 @@ impl<'a> Assignments<'_, '_, 'a> {
         }
     }
 
+    /// The attributes of a JSX tag that names a pattern, each against the
+    /// property of the pattern's input it gives (§4.5, §7.5.2).
+    fn attributes(&mut self, element: &JSXOpeningElement<'a>) {
+        let resolver = self.resolver;
+        let JSXElementName::IdentifierReference(name) = &element.name else {
+            return;
+        };
+        let Ok(tag) = resolver.typed_name(self.module, name) else {
+            return;
+        };
+        let Shape::PatternFactory(input, _) = resolver.shape(resolver.present(tag)) else {
+            return;
+        };
+        let Shape::Object(properties, _) = resolver.shape(input) else {
+            return;
+        };
+        let place = resolver.place_at(self.module, element.span.start);
+        let by_reference = place == Place::Reactive;
+        let site = format!(
+            "attribute of a pattern tag, {}",
+            match place {
+                Place::Module => "at module scope",
+                Place::Reactive => "in the reactive tier",
+                Place::Function => "in a function body",
+            }
+        );
+        for attribute in &element.attributes {
+            let JSXAttributeItem::Attribute(attribute) = attribute else {
+                continue;
+            };
+            let JSXAttributeName::Identifier(key) = &attribute.name else {
+                continue;
+            };
+            // An attribute the input does not declare, such as a binding
+            // attribute of the host, is not this rule's question.
+            let Some(declared) = properties
+                .iter()
+                .find(|property| property.name == key.name.as_str())
+            else {
+                continue;
+            };
+            let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value else {
+                continue;
+            };
+            let Some(value) = container.expression.as_expression() else {
+                continue;
+            };
+            if FunctionLike::of(value).is_some() {
+                continue;
+            }
+            let expected = if declared.optional {
+                resolver.or_undefined(declared.ty)
+            } else {
+                declared.ty
+            };
+            let verdict = resolver.check_against_in(self.module, value, expected, by_reference);
+            resolver.record(self.module, &site, value.span(), verdict);
+        }
+    }
+
     fn arguments(&mut self, call: &CallExpression<'a>) {
         let resolver = self.resolver;
         let Some(parameters) = resolver.callee_parameters(self.module, call, 0) else {
@@ -1641,6 +1701,11 @@ impl<'a> Visit<'a> for Assignments<'_, '_, 'a> {
                 .record(self.module, "returned value", argument.span(), verdict);
         }
         walk::walk_return_statement(self, it);
+    }
+
+    fn visit_jsx_opening_element(&mut self, it: &JSXOpeningElement<'a>) {
+        self.attributes(it);
+        walk::walk_jsx_opening_element(self, it);
     }
 
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {

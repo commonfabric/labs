@@ -192,3 +192,18 @@ fn literal_is_checked_against_the_value_type_of_the_declared_cell() {
         "expected string, found 3",
     );
 }
+
+#[test]
+fn attributes_of_a_tag_that_names_a_pattern_are_bound_by_reference() {
+    assert_accepted(&format!(
+        "{ROW}const List = pattern<{{ donuts: Donut[]; shop: Writable<string>; chosen: string[] }}, {{ [UI]: unknown }}>(\n\
+           ({{ donuts, shop, chosen }}) => ({{ [UI]: <ul>{{donuts.map((donut) => <Row donut={{donut}} shop={{shop}} chosen={{chosen}} />)}}</ul> }}));\n"
+    ));
+    assert_refused(
+        &format!(
+            "{ROW}const List = pattern<{{ donuts: Donut[]; shop: number; chosen: string[] }}, {{ [UI]: unknown }}>(\n\
+               ({{ donuts, shop, chosen }}) => ({{ [UI]: <ul>{{donuts.map((donut) => <Row donut={{donut}} shop={{shop}} chosen={{chosen}} />)}}</ul> }}));\n"
+        ),
+        "expected string, found number",
+    );
+}
