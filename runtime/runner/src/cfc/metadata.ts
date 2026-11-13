@@ -529,9 +529,9 @@ export const cfcDeclaredLabelAt = (
 export type StoredCfcLabels = Pick<CfcMetadata, "labelMap">;
 
 /**
- * Helper for {@link readStoredCfcLabelsForReader}, which returns `entry`, of
- * a broader instance, holding its confidentiality alone, or nothing where it
- * holds none.
+ * Helper for {@link readStoredCfcLabelsForReader}, which returns an array
+ * of one entry, `entry` of a broader instance holding its confidentiality
+ * alone, or an empty array where `entry` holds none.
  */
 const confidentialityOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
   const label = confidentialityOnly(entry.label);
@@ -557,7 +557,9 @@ const confidentialityOfEntry = (entry: LabelMapEntry): LabelMapEntry[] => {
  * instance's envelope reads that envelope alone, through
  * {@link readStoredCfcMetadata}. The readers that answer to it are the cell
  * label views and the runtime read ceiling; the flow join reads an
- * instance's own envelope.
+ * instance's own envelope. The store's labeling of the anchors an edit moves
+ * (`cfc-anchors-label.ts` in `@commonfabric/memory`) reads stored envelopes
+ * itself, and holds to the same rule through `broaderEntriesForReader()`.
  */
 export const readStoredCfcLabelsForReader = (
   tx: IExtendedStorageTransaction,
