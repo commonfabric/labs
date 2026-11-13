@@ -233,6 +233,34 @@ pub fn rewrite(id: &str) -> &'static str {
              `Record<string, unknown>` or `JSONValue` for open data."
         }
         "cast-validation:forbidden-cast" => "Remove the cast.",
+        "subset-type:cannot-infer-type-argument" => "Write the type argument.",
+        "cast-validation:double-unknown" => {
+            "Declare the value with the type it has, or narrow it with a type predicate."
+        }
+        "schema:unknown-type-access" => {
+            "Replace `unknown` with a type that declares the properties read."
+        }
+        "schema:path-not-in-type" => "Add the property to the type.",
+        "pattern:any-result-schema" => "Declare the result: `pattern<Input, Output>(...)`.",
+        "pattern-result:unknown-type" => {
+            "Annotate the value that produces the field, or declare the result type."
+        }
+        "pattern-result:opaque-reserved-key" => "Type it as `VNode`, or as the value it holds.",
+        "reactive-capture:unknown-type" => "Annotate the captured value.",
+        "cfc-label:conflict" => "Declare the key once.",
+        "cfc-policy-authoring" => {
+            "Declare the rules in the initializer of an exported module-scope constant: \
+             `export const rules = exchangeRules([...])`."
+        }
+        "cfc-label:cast-ignored" => {
+            "Remove the cast; declare the label on the cell, the pattern input, or the \
+             pattern result."
+        }
+        "cfc-policy-of" => {
+            "Write `PolicyOf<typeof rules>` with `rules` an exported module-scope constant \
+             initialized by `exchangeRules([...])`, declared in this module or imported \
+             from the module that declares it."
+        }
         "subset-type:mismatch" => {
             "Write a value of the expected type, or declare the position with the type \
              the value has."

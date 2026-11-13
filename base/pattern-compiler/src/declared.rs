@@ -916,6 +916,12 @@ struct WrittenTypes<'r, 'm, 'a> {
 
 impl<'a> Visit<'a> for WrittenTypes<'_, '_, 'a> {
     fn visit_ts_type(&mut self, it: &TSType<'a>) {
+        // The `const` of `as const` is not a type.
+        if matches!(it, TSType::TSTypeReference(reference)
+            if matches!(&reference.type_name, TSTypeName::IdentifierReference(name) if name.name == "const"))
+        {
+            return;
+        }
         let ty = self.resolver.resolve_type(self.module, it);
         let label = match self.resolver.first_unresolved(ty, 0) {
             None => "evaluated",

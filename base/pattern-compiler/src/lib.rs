@@ -23,4 +23,5 @@ pub mod report;
 pub mod source;
 pub mod syntax;
 pub mod tiers;
+pub mod typed;
 pub mod types;

@@ -351,7 +351,7 @@ impl<'a> Resolver<'_, 'a> {
     /// Binds the type parameters of a function for one call: from the
     /// written type arguments, or from the argument whose parameter is the
     /// type parameter, an array of it, or a handle of it.
-    fn bind_type_parameters(
+    pub(crate) fn bind_type_parameters(
         &self,
         module: usize,
         function: FunctionLike<'_, 'a>,
@@ -446,9 +446,13 @@ impl<'a> Resolver<'_, 'a> {
                 vec![
                     property("pending", self.intern(Shape::Boolean)),
                     property("result", optional),
-                    property("error", self.intern(Shape::Unknown)),
+                    // The declared type of `error` is not read by this
+                    // slice, so the field has a type that is not evaluated.
+                    property("error", self.add_unresolved()),
                 ],
-                None,
+                // The declarations in `base/api/index.ts` have more fields,
+                // which this slice does not read.
+                Some(self.add_unresolved()),
             ))
         };
         match name {

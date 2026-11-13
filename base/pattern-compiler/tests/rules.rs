@@ -10,7 +10,8 @@ use pattern_compiler::program::{analyze, SourceFile};
 
 const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, \
 handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
-type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy } from \"commonfabric\";\n";
+type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy, \
+exchangeRules, UI, type Integrity, type PolicyOf, type VNode } from \"commonfabric\";\n";
 const MARKER: &str = "/*!*/";
 
 struct Case {
@@ -437,6 +438,66 @@ const CASES: &[Case] = &[
         "subset-type:mismatch",
         "function price(count: number) { return count * 2; }\nconst TOTAL = price(/*!*/\"two\");",
         "function price(count: number) { return count * 2; }\nconst TOTAL = price(2);",
+    ),
+    case(
+        "subset-type:cannot-infer-type-argument",
+        "function empty<T>(): T[] { return []; }\nconst ROWS = /*!*/empty();",
+        "function empty<T>(): T[] { return []; }\nconst ROWS = empty<string>();",
+    ),
+    case(
+        "cast-validation:double-unknown",
+        "function label(count: number) { return /*!*/count as unknown as string; }",
+        "function label(count: number | string) { return count as unknown as number; }",
+    ),
+    case(
+        "schema:unknown-type-access",
+        "const save = handler<unknown, { note: unknown }>((_event, state) => { /*!*/state.note.title; });",
+        "const save = handler<unknown, { note: { title: string } }>((_event, state) => { state.note.title; });",
+    ),
+    case(
+        "schema:path-not-in-type",
+        "function show(donut: { name: string }) { return /*!*/donut.glaze; }",
+        "function show(donut: { name: string }) { return donut.name; }",
+    ),
+    case(
+        "pattern:any-result-schema",
+        "const Box = /*!*/pattern<{ note: unknown }>(({ note }) => note);",
+        "const Box = pattern<{ note: unknown }, { note: unknown }>(({ note }) => ({ note }));",
+    ),
+    case(
+        "pattern-result:unknown-type",
+        "const Box = /*!*/pattern<{ note: unknown }>(({ note }) => ({ note }));",
+        "const Box = pattern<{ note: string }>(({ note }) => ({ note }));",
+    ),
+    case(
+        "pattern-result:opaque-reserved-key",
+        "const Box = pattern<{ name: string }, /*!*/{ [UI]: unknown }>(({ name }) => ({ [UI]: <div>{name}</div> }));",
+        "const Box = pattern<{ name: string }, { [UI]: VNode }>(({ name }) => ({ [UI]: <div>{name}</div> }));",
+    ),
+    case(
+        "reactive-capture:unknown-type",
+        "const Box = pattern<{ note: unknown }, { size: number }>(({ note }) => ({ size: /*!*/computed(() => String(note).length) }));",
+        "const Box = pattern<{ note: string }, { size: number }>(({ note }) => ({ size: computed(() => String(note).length) }));",
+    ),
+    case(
+        "cfc-label:conflict",
+        "type Secret = /*!*/Integrity<Integrity<string, [\"baker\"]>, [\"owner\"]>;",
+        "type Secret = Confidential<Confidential<string, [\"baker\"]>, [\"owner\"]>;",
+    ),
+    case(
+        "cfc-label:cast-ignored",
+        "function seal(text: string) { return /*!*/text as Confidential<string, [\"secret\"]>; }",
+        "function open(text: Confidential<string, [\"secret\"]>) { return text as string; }",
+    ),
+    case(
+        "cfc-policy-of",
+        "const rules = [1];\ntype Secret = Confidential<string, [/*!*/PolicyOf<typeof rules>]>;",
+        "export const rules = exchangeRules([]);\ntype Secret = Confidential<string, [PolicyOf<typeof rules>]>;",
+    ),
+    case(
+        "cfc-policy-authoring",
+        "function make() { return /*!*/exchangeRules([]); }",
+        "export const rules = exchangeRules([]);",
     ),
     case(
         "cast-validation:forbidden-cast",
@@ -983,4 +1044,60 @@ fn new_of_an_authored_function_in_a_frozen_data_initializer_is_refused() {
 fn state_cell_in_a_per_element_body_that_instantiates_a_child_is_accepted() {
     let module = "const GLAZES = [\"plain\", \"sugar\"];\nconst Row = pattern<{ glaze: string }>(({ glaze }) => ({ glaze }));\nconst Box = pattern(() => ({ rows: GLAZES.map((glaze) => { const open = new Writable(false); return { open, row: Row({ glaze }) }; }) }));\n";
     assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}
+
+#[test]
+fn type_name_that_resolves_to_nothing_is_refused() {
+    let diagnostics = check("function show(donut: Dount) { return donut; }\n");
+    assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+    assert!(diagnostics[0]
+        .message
+        .contains("`Dount` resolves to nothing"));
+}
+
+#[test]
+fn label_argument_is_decided_after_an_alias_is_replaced_by_its_body() {
+    assert!(check(
+        "type RecipeSecret = readonly [\"recipe-secret\"];\n\
+         type Who<T> = { owner: T };\n\
+         type Recipe = Confidential<string, RecipeSecret>;\n\
+         type Owned = Confidential<string, [Who<\"baker\">]>;\n"
+    )
+    .is_empty());
+    assert_eq!(
+        ids(&check(
+            "type Names = string[];\ntype Recipe = Confidential<string, Names>;\n"
+        )),
+        ["cfc-label:not-a-list"]
+    );
+    assert_eq!(
+        ids(&check(
+            "type Level = \"low\" | \"high\";\ntype Recipe = Confidential<string, [Level]>;\n"
+        )),
+        ["cfc-label:not-static"]
+    );
+}
+
+#[test]
+fn receiver_that_may_be_absent_is_refused() {
+    let diagnostics = check(
+        "function show(donut: { name: string } | undefined) { return donut.name; }\n\
+         function safe(donut: { name: string } | undefined) { return donut?.name ?? (donut ? donut.name : \"\"); }\n",
+    );
+    assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+    assert!(diagnostics[0]
+        .message
+        .contains("may be `null` or `undefined`"));
+}
+
+#[test]
+fn module_scope_call_of_a_factory_value_is_refused_by_the_callee_s_type() {
+    let diagnostics = check(
+        "const Box = pattern<{ count: number }>(({ count }) => ({ count }));\n\
+         const KINDS = { box: Box };\n\
+         const MADE = KINDS.box({ count: 1 });\n\
+         const SIZE = String(1).trim();\n",
+    );
+    assert_eq!(ids(&diagnostics), ["module-scope:runtime-call"]);
+    assert_eq!(diagnostics[0].line, 4);
 }

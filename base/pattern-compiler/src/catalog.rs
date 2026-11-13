@@ -76,14 +76,6 @@ const fn part(id: &'static str, severity: Severity, rest: &'static str) -> Entry
     }
 }
 
-const fn types(id: &'static str, severity: Severity, fact: &'static str) -> Entry {
-    Entry {
-        id,
-        severity: Some(severity),
-        status: Status::NeedsTypes(fact),
-    }
-}
-
 const fn footprint(id: &'static str, severity: Severity, need: &'static str) -> Entry {
     Entry {
         id,
@@ -102,8 +94,6 @@ const fn retired(id: &'static str) -> Entry {
 
 use Severity::{Error, Hint, Warning};
 
-const LABEL_TYPES: &str =
-    "the label annotations of a type, which the checker evaluates (`language-subset.md` §8)";
 const LABEL_TEMPLATES: &str =
     "the label templates of the plan, which are built from footprints and declared labels";
 const PROMOTION_REST: &str = "decided by syntax and by method names, as the measurement of \
@@ -326,10 +316,12 @@ pub const CATALOG: &[Entry] = &[
         "reported for primitive, literal, and object operands; an intersection with a handle, a function, or an opaque API type is not evaluated",
     ),
     done("subset-type:operator-operand", Error),
-    types(
+    part(
         "subset-type:cannot-infer-type-argument",
         Error,
-        "inference at a generic call",
+        "reported for a call of an authored generic function when no parameter that is \
+         given an argument names the type parameter; a type parameter that an argument \
+         names in a form the crate does not unify is counted and not reported",
     ),
     done("subset-type:any", Error),
     part(
@@ -339,10 +331,11 @@ pub const CATALOG: &[Entry] = &[
          initializer under an annotation that is not assignable, and for a wrong argument \
          count; a value whose type is not evaluated is not decided",
     ),
-    types(
+    part(
         "cast-validation:double-unknown",
         Error,
-        "whether the operand's type and the target type are related",
+        "reported when neither type is assignable to the other; a cast whose operand or \
+         target type is not evaluated is counted and not reported",
     ),
     part(
         "cast-validation:forbidden-cast",
@@ -356,35 +349,37 @@ pub const CATALOG: &[Entry] = &[
         "reported when the target is written as a cell type; a target reached \
          through an alias needs the evaluated type",
     ),
-    types(
+    part(
         "schema:unknown-type-access",
         Error,
-        "the type of the value read",
+        "reported for a property read with a static name inside a function; a receiver \
+         with no type is counted and not reported",
     ),
-    types(
+    part(
         "schema:path-not-in-type",
         Error,
-        "the type of the value read",
+        "reported for a property read with a static name on a closed object type, or on a \
+         union of them none of which declares the property; a receiver with no type is \
+         counted and not reported",
     ),
-    types(
+    part(
         "pattern:any-result-schema",
         Error,
-        "the inferred result type",
+        "reported for a declared result, and for an inferred one where the callback's \
+         result has a type; a result with no type is counted and not reported",
     ),
-    types(
+    part(
         "pattern-result:unknown-type",
         Error,
-        "the inferred result type",
+        "reported where the callback's result has a type; a result with no type is \
+         counted and not reported",
     ),
-    types(
-        "pattern-result:opaque-reserved-key",
-        Error,
-        "the declared result type",
-    ),
-    types(
+    done("pattern-result:opaque-reserved-key", Error),
+    part(
         "reactive-capture:unknown-type",
         Error,
-        "the type of the captured value",
+        "reported where a declaration gives the captured binding the type `unknown`; a \
+         binding with no type is not reported",
     ),
     done("schema-type:symbol", Error),
     retired("schema-type:unread"),
@@ -411,15 +406,38 @@ pub const CATALOG: &[Entry] = &[
     // §10.5 Labels, defaults, and scopes
     done("cfc-label:not-a-list", Error),
     done("cfc-label:not-static", Error),
-    types("cfc-label:conflict", Error, LABEL_TYPES),
-    types("cfc-label:cast-ignored", Warning, LABEL_TYPES),
+    part(
+        "cfc-label:conflict",
+        Error,
+        "reported for two annotations written around one type node; two annotations \
+         that meet on a property through an intersection are not compared",
+    ),
+    part(
+        "cfc-label:cast-ignored",
+        Warning,
+        "reported where the operand has a type; annotations are compared at the root \
+         and at the properties of an object type, three levels deep",
+    ),
     part(
         "cfc-write-authorized-by",
         Error,
-        "reported for `WriteAuthorizedBy`; the trusted-action aliases and `PolicyOf` are not read",
+        "reported for `WriteAuthorizedBy` and the two trusted-action write aliases; a \
+         binding written through an alias or a type parameter is accepted",
     ),
-    types("cfc-policy-of", Error, LABEL_TYPES),
-    types("cfc-policy-authoring", Error, LABEL_TYPES),
+    part(
+        "cfc-policy-of",
+        Error,
+        "reported for a `PolicyOf` atom of a label list; a binding imported from a \
+         module the program does not hold, a `cf:` specifier included, is not decided",
+    ),
+    part(
+        "cfc-policy-authoring",
+        Error,
+        "reported for `exchangeRule` or `exchangeRules` called outside the initializer \
+         of an exported module-scope constant, the one condition the document states \
+         (§4.4.4); the contract's conditions on the rule declaration itself are not in \
+         the document and are not checked",
+    ),
     retired("cfc-write-authorized-by:unread"),
     retired("cfc-label:unread"),
     retired("cfc-schema:recursion-limit"),

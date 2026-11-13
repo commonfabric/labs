@@ -923,14 +923,50 @@ impl<'a> Resolver<'_, 'a> {
                 if arguments.len() == 1 {
                     return self.annotate(self.add(Shape::Never), "default", argument_text(0));
                 }
-                self.annotate(
+                self.annotate_once(
+                    module,
+                    reference.span,
                     first(),
                     "default",
                     argument_text(arguments.len().saturating_sub(1)),
                 )
             }
             "PerSpace" | "PerUser" | "PerSession" | "PerAny" | "Scoped" => {
-                self.annotate(first(), "scope", name.to_string())
+                let scope = match name {
+                    "Scoped" => argument_text(1),
+                    other => other.to_string(),
+                };
+                self.annotate_once(module, reference.span, first(), "scope", scope)
+            }
+            "TrustedActionWrite"
+            | "TrustedActionWriteWithIntegrity"
+            | "TrustedActionUiContract" => {
+                // After the payload: a writer binding for the two write
+                // aliases, then the action and the pattern, then the
+                // required integrity where the alias has the parameter.
+                let mut next = 1;
+                if name != "TrustedActionUiContract" {
+                    if let Some(binding) = written(1) {
+                        self.writer_binding(module, binding, reference.span);
+                    }
+                    next = 2;
+                }
+                for index in [next, next + 1] {
+                    if let Some(literal) = written(index) {
+                        if !self.is_string_literal_type(module, literal, 0) {
+                            self.report(
+                                module,
+                                "cfc-label:not-static",
+                                reference.span,
+                                "An action or a pattern of a trusted-action alias that is not a string literal type",
+                            );
+                        }
+                    }
+                }
+                if let Some(list) = written(next + 2) {
+                    self.label_list(module, list, reference.span);
+                }
+                self.annotate(first(), "label", name.to_string())
             }
             "Confidential" | "Integrity" | "AddIntegrity" | "RequiresIntegrity"
             | "MaxConfidentiality" => {
@@ -944,13 +980,19 @@ impl<'a> Resolver<'_, 'a> {
                     "RequiresIntegrity" => "requiredIntegrity",
                     _ => "maxConfidentiality",
                 };
-                self.annotate(first(), key, argument_text(1))
+                self.annotate_once(module, reference.span, first(), key, argument_text(1))
             }
             "WriteAuthorizedBy" => {
                 if let Some(binding) = written(1) {
                     self.writer_binding(module, binding, reference.span);
                 }
-                self.annotate(first(), "writeAuthorizedBy", argument_text(1))
+                self.annotate_once(
+                    module,
+                    reference.span,
+                    first(),
+                    "writeAuthorizedBy",
+                    argument_text(1),
+                )
             }
             _ if api::is_transparent_wrapper(name) => {
                 self.annotate(first(), "label", name.to_string())
@@ -991,8 +1033,59 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
-    /// A label argument is a tuple of atoms (§8.5).
+    /// What a reference in a label argument stands for (§8.5).
+    fn label_term(&self, module: usize, reference: &TSTypeReference<'a>) -> LabelTerm<'a> {
+        let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+            return LabelTerm::Other;
+        };
+        let (Some(parsed), Some(model)) = (self.parsed(module), self.model(module)) else {
+            return LabelTerm::Undecided;
+        };
+        let Some(symbol) = symbol_of(parsed.semantic.scoping(), name) else {
+            return LabelTerm::Undecided;
+        };
+        if let Some(api) = model.api_ref(symbol) {
+            return LabelTerm::Api(api.name);
+        }
+        let (home, symbol) = match model.binding(symbol) {
+            Some(Binding::Import(import, binding)) => {
+                let import = &model.imports[import];
+                let target = self
+                    .resolve_import(module, import, &import.bindings[binding].imported)
+                    .and_then(|def| {
+                        Some((def.module, self.model(def.module)?.defs[def.def].symbol?))
+                    });
+                match target {
+                    Some(target) => target,
+                    None => return LabelTerm::Undecided,
+                }
+            }
+            _ => (module, symbol),
+        };
+        let Some(parsed) = self.parsed(home) else {
+            return LabelTerm::Undecided;
+        };
+        let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+        match parsed.semantic.nodes().kind(declaration) {
+            AstKind::TSTypeAliasDeclaration(alias) => LabelTerm::Body(home, &alias.type_annotation),
+            // A type parameter stands for a term that is written where the
+            // alias is used, and is decided there.
+            AstKind::TSTypeParameter(_) => LabelTerm::Undecided,
+            _ => LabelTerm::Other,
+        }
+    }
+
+    /// A label argument is a tuple of atoms (§8.5). A reference to an alias
+    /// is replaced by the alias's body before anything is decided, and the
+    /// report is made at the alias as written.
     fn label_list(&self, module: usize, list: &TSType<'a>, alias: Span) {
+        self.label_list_at(module, list, alias, 0);
+    }
+
+    fn label_list_at(&self, module: usize, list: &TSType<'a>, alias: Span, depth: u32) {
+        if depth > 8 {
+            return;
+        }
         let mut list = list;
         loop {
             list = match list {
@@ -1008,28 +1101,31 @@ impl<'a> Resolver<'_, 'a> {
         match list {
             TSType::TSTupleType(tuple) => {
                 for element in &tuple.element_types {
-                    let atom = match element {
+                    match element {
                         TSTupleElement::TSRestType(rest) => {
-                            self.label_list(module, &rest.type_annotation, alias);
-                            continue;
+                            self.label_list_at(module, &rest.type_annotation, alias, depth + 1);
                         }
                         TSTupleElement::TSOptionalType(_)
-                        | TSTupleElement::TSNamedTupleMember(_) => None,
-                        other => Some(other.to_ts_type()),
-                    };
-                    if !atom.is_some_and(is_label_atom) {
-                        self.report(
+                        | TSTupleElement::TSNamedTupleMember(_) => self.report(
                             module,
                             "cfc-label:not-static",
                             alias,
-                            "A label atom outside the constant language",
-                        );
+                            "An optional or named element in a label list",
+                        ),
+                        other => self.label_atom(module, other.to_ts_type(), alias, depth + 1),
                     }
                 }
             }
-            // An alias that stands for a list is evaluated by substitution,
-            // which this slice does not do for label arguments.
-            TSType::TSTypeReference(_) | TSType::TSTypeQuery(_) => {}
+            TSType::TSTypeReference(reference) => match self.label_term(module, reference) {
+                LabelTerm::Body(home, body) => self.label_list_at(home, body, alias, depth + 1),
+                LabelTerm::Undecided => {}
+                LabelTerm::Api(_) | LabelTerm::Other => self.report(
+                    module,
+                    "cfc-label:not-a-list",
+                    alias,
+                    "A label argument that is not a tuple of atoms",
+                ),
+            },
             _ => self.report(
                 module,
                 "cfc-label:not-a-list",
@@ -1037,6 +1133,199 @@ impl<'a> Resolver<'_, 'a> {
                 "A label argument that is not a tuple of atoms",
             ),
         }
+    }
+
+    /// An atom of the label-argument language (§8.5): a literal, `null`,
+    /// an object type literal of atoms and tuples of atoms, `AnyOf<list>`,
+    /// `PolicyOf<typeof rules>`, a marker type of the API, or an alias
+    /// whose body is an atom.
+    fn label_atom(&self, module: usize, atom: &TSType<'a>, alias: Span, depth: u32) {
+        if depth > 8 {
+            return;
+        }
+        let refuse = || {
+            self.report(
+                module,
+                "cfc-label:not-static",
+                alias,
+                "A label atom outside the constant language",
+            );
+        };
+        match atom {
+            TSType::TSLiteralType(literal) => {
+                if matches!(literal.literal, TSLiteral::TemplateLiteral(_)) {
+                    refuse();
+                }
+            }
+            TSType::TSNullKeyword(_) => {}
+            TSType::TSParenthesizedType(inner) => {
+                self.label_atom(module, &inner.type_annotation, alias, depth + 1);
+            }
+            TSType::TSTypeLiteral(literal) => {
+                for member in &literal.members {
+                    let TSSignature::TSPropertySignature(property) = member else {
+                        refuse();
+                        continue;
+                    };
+                    let Some(annotation) = &property.type_annotation else {
+                        refuse();
+                        continue;
+                    };
+                    let mut value = &annotation.type_annotation;
+                    if let TSType::TSTypeOperatorType(operator) = value {
+                        if operator.operator == TSTypeOperatorOperator::Readonly {
+                            value = &operator.type_annotation;
+                        }
+                    }
+                    match value {
+                        TSType::TSTupleType(_) => {
+                            self.label_list_at(module, value, alias, depth + 1);
+                        }
+                        other => self.label_atom(module, other, alias, depth + 1),
+                    }
+                }
+            }
+            TSType::TSTypeReference(reference) => match self.label_term(module, reference) {
+                LabelTerm::Body(home, body) => self.label_atom(home, body, alias, depth + 1),
+                LabelTerm::Undecided => {}
+                LabelTerm::Api(name) => match name.as_str() {
+                    "AnyOf" => {
+                        if let Some(list) = reference
+                            .type_arguments
+                            .as_ref()
+                            .and_then(|arguments| arguments.params.first())
+                        {
+                            self.label_list_at(module, list, alias, depth + 1);
+                        }
+                    }
+                    "PolicyOf" => self.policy_of(module, reference),
+                    _ => {}
+                },
+                LabelTerm::Other => refuse(),
+            },
+            _ => refuse(),
+        }
+    }
+
+    /// `cfc-policy-of`: the argument of `PolicyOf` is `typeof rules`
+    /// written in place, with `rules` an exported module-scope constant
+    /// initialized by `exchangeRules([...])`, declared in the module or
+    /// imported from the module that declares it (§8.5).
+    fn policy_of(&self, module: usize, reference: &TSTypeReference<'a>) {
+        let decided = (|| -> Option<bool> {
+            let argument = reference.type_arguments.as_ref()?.params.first()?;
+            let TSType::TSTypeQuery(query) = argument else {
+                return Some(false);
+            };
+            let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name else {
+                return Some(false);
+            };
+            let parsed = self.parsed(module)?;
+            let model = self.model(module)?;
+            let Some(symbol) = symbol_of(parsed.semantic.scoping(), name) else {
+                return Some(false);
+            };
+            let (home, def) = match model.binding(symbol) {
+                Some(Binding::Def(def)) => (module, def),
+                Some(Binding::Import(import, binding)) => {
+                    let import = &model.imports[import];
+                    // A module the program does not hold, a pinned `cf:`
+                    // specifier included, is not decided here.
+                    let direct = self.module_of(module, &import.specifier)?;
+                    let def =
+                        self.resolve_import(module, import, &import.bindings[binding].imported);
+                    match def {
+                        // A binding reached through a re-export is refused.
+                        Some(def) if def.module == direct => (def.module, def.def),
+                        _ => return Some(false),
+                    }
+                }
+                None => return Some(false),
+            };
+            let def = &self.model(home)?.defs[def];
+            if !def.exported {
+                return Some(false);
+            }
+            let parsed = self.parsed(home)?;
+            let declaration = parsed.semantic.scoping().symbol_declaration(def.symbol?);
+            let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+            else {
+                return Some(false);
+            };
+            let Some(Expression::CallExpression(call)) = declarator.init.as_ref().map(unwrap)
+            else {
+                return Some(false);
+            };
+            let callee = self
+                .model(home)?
+                .api_ref_of_callee(parsed.semantic.scoping(), &call.callee);
+            Some(
+                declarator.kind == VariableDeclarationKind::Const
+                    && callee.is_some_and(|api| api.name == "exchangeRules"),
+            )
+        })();
+        if decided == Some(false) {
+            self.report(
+                module,
+                "cfc-policy-of",
+                reference.span,
+                "The argument of `PolicyOf` is not `typeof` of an exported constant initialized by `exchangeRules([...])`",
+            );
+        }
+    }
+
+    /// Whether a written type is a string literal type, or an alias whose
+    /// body is one (§8.5, the trusted-action aliases).
+    fn is_string_literal_type(&self, module: usize, ty: &TSType<'a>, depth: u32) -> bool {
+        match ty {
+            TSType::TSLiteralType(literal) => {
+                matches!(literal.literal, TSLiteral::StringLiteral(_))
+            }
+            TSType::TSParenthesizedType(inner) => {
+                self.is_string_literal_type(module, &inner.type_annotation, depth)
+            }
+            TSType::TSTypeReference(reference) if depth < 8 => {
+                match self.label_term(module, reference) {
+                    LabelTerm::Body(home, body) => {
+                        self.is_string_literal_type(home, body, depth + 1)
+                    }
+                    LabelTerm::Undecided => true,
+                    LabelTerm::Api(_) | LabelTerm::Other => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// `cfc-label:conflict`: a second annotation under a key other than
+    /// `confidentiality` that declares the key differently (§8.4), and the
+    /// annotation added.
+    fn annotate_once(
+        &self,
+        module: usize,
+        span: Span,
+        ty: TypeId,
+        key: &'static str,
+        argument: String,
+    ) -> TypeId {
+        let squeezed = |text: &str| text.split_whitespace().collect::<String>();
+        let differs = self
+            .types
+            .borrow()
+            .annotations(ty)
+            .iter()
+            .any(|annotation| {
+                annotation.key == key && squeezed(&annotation.argument) != squeezed(&argument)
+            });
+        if differs && key != "confidentiality" {
+            self.report(
+                module,
+                "cfc-label:conflict",
+                span,
+                format!("Two annotations declare `{key}` differently on one path"),
+            );
+        }
+        self.annotate(ty, key, argument)
     }
 
     /// The writer binding of `WriteAuthorizedBy` is `typeof` of a
@@ -1070,7 +1359,7 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The kind of the module-scope definition a value name denotes, an
     /// import followed. `None` when the program does not hold it.
-    fn value_def(
+    pub(crate) fn value_def(
         &self,
         module: usize,
         name: &IdentifierReference<'a>,
@@ -1290,7 +1579,17 @@ impl<'a> Resolver<'_, 'a> {
             | "ReadonlyMap" | "ReadonlySet" | "URL" | "Uint8Array" | "Iterable" => {
                 self.code_type(name, arguments)
             }
-            _ => self.unresolved(Why::External),
+            _ => {
+                // A name that resolves to no declaration of the program, no
+                // API type, and no standard-library type (§7.10).
+                self.report(
+                    module,
+                    "subset-type:mismatch",
+                    reference.span,
+                    format!("The type name `{name}` resolves to nothing"),
+                );
+                self.unresolved(Why::External)
+            }
         }
     }
 
@@ -1890,19 +2189,16 @@ fn is_plain(shape: &Shape) -> bool {
     )
 }
 
-/// Whether a written type is an atom of the label-argument language (§8.5),
-/// as far as its form shows: a literal, `null`, an object type literal, or a
-/// reference, which is `AnyOf`, `PolicyOf`, a marker type, or an alias.
-fn is_label_atom(ty: &TSType<'_>) -> bool {
-    match ty {
-        TSType::TSLiteralType(literal) => !matches!(literal.literal, TSLiteral::TemplateLiteral(_)),
-        TSType::TSNullKeyword(_)
-        | TSType::TSTypeLiteral(_)
-        | TSType::TSTypeReference(_)
-        | TSType::TSTypeQuery(_) => true,
-        TSType::TSParenthesizedType(inner) => is_label_atom(&inner.type_annotation),
-        _ => false,
-    }
+/// What a reference in a label argument stands for.
+enum LabelTerm<'a> {
+    /// An alias of the program: the module that declares it, and its body.
+    Body(usize, &'a TSType<'a>),
+    /// A type `commonfabric` exports.
+    Api(String),
+    /// A type parameter, or a name the program does not hold.
+    Undecided,
+    /// A declaration that is not an alias.
+    Other,
 }
 
 /// The store a [`Resolver`] keeps its types in.

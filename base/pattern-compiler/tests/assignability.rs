@@ -243,7 +243,8 @@ fn initializer_is_checked_against_the_annotation() {
 #[test]
 fn value_whose_type_is_not_evaluated_is_not_decided() {
     assert_accepted(
-        "function first<T>(items: T[]): T { return items[0]; }\n\
+        "import type { Missing } from \"./missing.ts\";\n\
+         function first<T>(items: T[]): T { return items[0]; }\n\
          function run(names: string[], other: Missing) { return show(first(names)) + show(other); }\n\
          function show(name: string) { return name; }\n",
     );
@@ -297,6 +298,7 @@ fn value_checked_against_a_type_that_is_never_is_not_decided() {
 #[test]
 fn object_with_a_spread_of_an_untyped_value_is_not_decided() {
     assert_accepted(
-        "function row(base: Missing): { name: string; price: number } { return { ...base, price: 1 }; }\n",
+        "import type { Missing } from \"./missing.ts\";\n\
+         function row(base: Missing): { name: string; price: number } { return { ...base, price: 1 }; }\n",
     );
 }

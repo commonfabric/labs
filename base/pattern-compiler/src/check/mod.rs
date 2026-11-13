@@ -2764,6 +2764,17 @@ impl<'p, 'a> Checker<'p, 'a> {
             ),
             _ => (false, false),
         };
+        let unknown = self
+            .resolver
+            .declared_symbol_type(self.module, symbol, 0)
+            .is_ok_and(|ty| self.resolver.shape(ty) == Shape::Unknown);
+        if unknown {
+            self.report(
+                "reactive-capture:unknown-type",
+                span,
+                format!("This body captures `{name}`, whose type is `unknown`"),
+            );
+        }
         if callable {
             self.report(
                 "ses-callback:callable-capture",

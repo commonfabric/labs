@@ -248,6 +248,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
     for module in 0..files.len() {
         resolver.check_written_types(module);
         resolver.check_assignments(module);
+        resolver.check_typed_rules(module);
     }
     let reports = std::mem::take(&mut resolver.types.borrow_mut().reports);
     for report in reports {

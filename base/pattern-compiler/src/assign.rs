@@ -529,7 +529,12 @@ impl<'a> Resolver<'_, 'a> {
 
     /// Whether `expression` is an instantiation of a pattern, or a `const`
     /// bound to one (§7.5).
-    fn is_instance(&self, module: usize, expression: &Expression<'a>, depth: u32) -> bool {
+    pub(crate) fn is_instance(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> bool {
         if depth > 3 {
             return false;
         }
