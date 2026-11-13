@@ -11,8 +11,10 @@
  *     their colors override the syntax highlighting of the text that follows,
  *     until the next sequence or a reset. A tab advances to the next display
  *     column that is a multiple of {@link TAB_STOP}, drawn as one to
- *     {@link TAB_STOP} blank cells. Every other non-printable is shown as its
- *     Control Pictures glyph.
+ *     {@link TAB_STOP} blank cells. Characters overstruck through backspaces,
+ *     as `man` emphasizes text, are drawn as one character, bold or underlined
+ *     as {@link matchOverstrike} describes. Every other non-printable is shown
+ *     as its Control Pictures glyph.
  *   - "hidden": runs that parse as ANSI control sequences are dropped entirely.
  *     Each remaining run of non-printables collapses to a single ellipsis.
  *
@@ -30,11 +32,11 @@ export type DisplayMode = "pictures" | "ansi" | "hidden";
 /** The spacing of the tab stops in "ansi" mode, in display columns. */
 export const TAB_STOP = 4;
 
-/** The cycle order for the toggle, and the initial mode. */
+/** The cycle order for the toggle, starting with the initial mode. */
 export const DISPLAY_MODES: readonly DisplayMode[] = [
-  "pictures",
   "ansi",
   "hidden",
+  "pictures",
 ];
 
 /** A short label for the status line when the mode changes. */
@@ -63,25 +65,28 @@ export interface DisplayCell {
   readonly ansi?: Style;
 }
 
-/** One source code point with its column and token color. */
+/** One source code point with its column, UTF-16 index, and token color. */
 interface SourcePoint {
   readonly cp: string;
   readonly col: number;
+  readonly index: number;
   readonly syntax: Style;
 }
 
 /** Expand a line's spans into its code points, each tagged with its column (a
- * code-point index) and the token color of the span it belongs to. The spans
- * are gapless and concatenate to the verbatim line, so this reconstructs the
- * whole line. */
+ * code-point index), its UTF-16 index in the line's text, and the token color
+ * of the span it belongs to. The spans are gapless and concatenate to the
+ * verbatim line, so this reconstructs the whole line. */
 function sourcePoints(line: Line, styler: SpanStyler): SourcePoint[] {
   const out: SourcePoint[] = [];
+  let index = 0;
   for (const span of line.spans) {
     const syntax = styler(span);
     let col = span.col;
     for (const cp of span.text) {
-      out.push({ cp, col, syntax });
+      out.push({ cp, col, index, syntax });
       col += 1;
+      index += cp.length;
     }
   }
   return out;
@@ -139,18 +144,29 @@ export function displayWidth(line: Line, mode: DisplayMode): number {
 /**
  * Visit the UTF-16 source range represented by each visible display cell, in
  * display order. A tab in "ansi" mode draws several cells, so its range is
- * visited once per cell. Returning false from the visitor stops the scan.
+ * visited once per cell. An overstrike in "ansi" mode draws one character for
+ * its whole range, and the visitor also receives that character as `drawn`.
+ * Returning false from the visitor stops the scan.
  */
 export function visitDisplayCellSources(
   text: string,
   mode: DisplayMode,
-  visit: (start: number, end: number) => boolean,
+  visit: (start: number, end: number, drawn?: string) => boolean,
 ): boolean {
   let width = 0;
+  const overstrikes = mode === "ansi" && text.includes("\b");
   for (let i = 0; i < text.length;) {
     const sequence = mode === "pictures" ? null : matchTextCsi(text, i);
     if (sequence && (mode === "hidden" || sequence.final === "m")) {
       i = sequence.end;
+      continue;
+    }
+
+    const overstrike = overstrikes ? matchOverstrike(text, i) : null;
+    if (overstrike) {
+      if (!visit(i, overstrike.end, overstrike.ch)) return false;
+      width++;
+      i = overstrike.end;
       continue;
     }
 
@@ -201,17 +217,22 @@ export function displayLine(
         syntax: s.syntax,
       }));
     case "ansi":
-      return displayAnsi(src);
+      return displayAnsi(line.text, src);
     case "hidden":
       return displayHidden(src);
   }
 }
 
 /** ANSI mode: consume SGR color sequences and carry their color forward as an
- * override, expand each tab to the next tab stop, and show every other
- * non-printable as a Control Pictures glyph. */
-function displayAnsi(src: readonly SourcePoint[]): DisplayCell[] {
+ * override, draw each backspace overstrike once with its emphasis, expand each
+ * tab to the next tab stop, and show every other non-printable as a Control
+ * Pictures glyph. `src` holds the code points of `text`. */
+function displayAnsi(
+  text: string,
+  src: readonly SourcePoint[],
+): DisplayCell[] {
   const cells: DisplayCell[] = [];
+  const overstrikes = text.includes("\b");
   let active: Style = {};
   let i = 0;
   while (i < src.length) {
@@ -222,6 +243,27 @@ function displayAnsi(src: readonly SourcePoint[]): DisplayCell[] {
       continue;
     }
     const s = src[i];
+    const overstrike = overstrikes ? matchOverstrike(text, s.index) : null;
+    if (overstrike) {
+      // The emphasis adds to the escape sequence colors, or else to the
+      // syntax colors.
+      const { syntax } = src[i + overstrike.chOffset];
+      const colored = hasStyle(active);
+      const style: MutableStyle = { ...(colored ? active : syntax) };
+      if (overstrike.bold) style.bold = true;
+      if (overstrike.underline) style.underline = true;
+      cells.push({
+        ch: overstrike.ch,
+        col: s.col,
+        sourceEnd: s.col + overstrike.len,
+        syntax,
+        ansi: colored || overstrike.bold || overstrike.underline
+          ? style
+          : undefined,
+      });
+      i += overstrike.len;
+      continue;
+    }
     const cell: DisplayCell = {
       ch: s.cp === "\t" ? " " : glyphFor(s.cp),
       col: s.col,
@@ -234,6 +276,67 @@ function displayAnsi(src: readonly SourcePoint[]): DisplayCell[] {
     i += 1;
   }
   return cells;
+}
+
+interface OverstrikeMatch {
+  /** The UTF-16 index just past the overstruck characters. */
+  readonly end: number;
+
+  /** Number of source code points the overstruck characters span. */
+  readonly len: number;
+
+  /** The character drawn. */
+  readonly ch: string;
+
+  /** The code-point offset of the drawn character from the start. */
+  readonly chOffset: number;
+
+  readonly bold: boolean;
+  readonly underline: boolean;
+}
+
+/**
+ * Match a printable character overstruck through backspaces, starting at
+ * UTF-16 index `start`, or null. This is how `man` and `nroff` emphasize text
+ * for a printer. The character drawn is the last one struck other than an
+ * underscore, so the `+ BS o` that `man` prints for a bullet draws `o`. It is bold when it was struck more than once
+ * (`X BS X`), and underlined when an underscore was struck with it (`_ BS X`
+ * or `X BS _`), so `_ BS X BS X` is bold and underlined.
+ */
+function matchOverstrike(text: string, start: number): OverstrikeMatch | null {
+  const first = text.codePointAt(start)!;
+  let end = start + (first > 0xffff ? 2 : 1);
+  if (text.charCodeAt(end) !== 0x08 || isNonPrintableCode(first)) return null;
+  let ch = String.fromCodePoint(first);
+  let chOffset = 0;
+  let strikes = 1;
+  let underscore = false;
+  let len = 1;
+  while (text.charCodeAt(end) === 0x08) {
+    const code = text.codePointAt(end + 1);
+    if (code === undefined || isNonPrintableCode(code)) break;
+    const next = String.fromCodePoint(code);
+    if (next === ch) {
+      strikes++;
+    } else if (next === "_") {
+      underscore = true;
+    } else {
+      underscore ||= ch === "_";
+      ch = next;
+      chOffset = len + 1;
+      strikes = 1;
+    }
+    end += 1 + next.length;
+    len += 2;
+  }
+  return len === 1 ? null : {
+    end,
+    len,
+    ch,
+    chOffset,
+    bold: strikes > 1,
+    underline: underscore,
+  };
 }
 
 /** Hidden mode: drop every ANSI control sequence, and collapse each remaining
@@ -296,6 +399,24 @@ function isNonPrintableCode(codePoint: number): boolean {
 export function hasNonPrintable(text: string): boolean {
   for (const cp of text) if (isNonPrintable(cp)) return true;
   return false;
+}
+
+/** Whether `text` draws in `mode` exactly as in "pictures" mode: one cell per
+ * code point, each its control-picture glyph, with nothing hidden. */
+export function drawsAsPictures(text: string, mode: DisplayMode): boolean {
+  if (mode === "pictures") return true;
+  // "ansi" draws a tab blank, and "hidden" draws every non-printable as `…`.
+  const redrawn = mode === "ansi"
+    ? (code: number) => code === 0x09
+    : isNonPrintableCode;
+  let next = 0;
+  return visitDisplayCellSources(text, mode, (start, end) => {
+    const code = text.codePointAt(start)!;
+    const alike = start === next &&
+      end === start + (code > 0xffff ? 2 : 1) && !redrawn(code);
+    next = end;
+    return alike;
+  }) && next === text.length;
 }
 
 /** The glyph shown for a code point: itself when printable, else its Control

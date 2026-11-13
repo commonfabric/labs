@@ -71,6 +71,7 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
+  drawsAsPictures,
   hasNonPrintable,
   sourceColumnOf,
 } from "./display.ts";
@@ -356,7 +357,7 @@ export class Session {
   /** How long logical lines continue on later screen rows. */
   #wrapMode: WrapMode = "off";
 
-  /** How non-printable characters are shown; edit mode forces the first mode. */
+  /** How non-printable characters are shown; edit mode forces "pictures". */
   #displayMode: DisplayMode = DISPLAY_MODES[0];
 
   /** Whether the blame column is on. */
@@ -2984,8 +2985,11 @@ export class Session {
     this.#cursorOn = true;
     this.#selectedIndex = null;
     // Editing relies on every source column mapping to one display column, which
-    // only the first mode guarantees (it hides nothing and collapses nothing).
-    this.#displayMode = DISPLAY_MODES[0];
+    // only "pictures" guarantees (it hides nothing and collapses nothing).
+    const picturesAppear = this.#currentDoc.lines.some((line) =>
+      !drawsAsPictures(line.text, this.#displayMode)
+    );
+    this.#displayMode = "pictures";
     if (anchor) this.left = cursorCol;
     // Editing works on the full text, so expand every folded file; the top
     // display row becomes its document line.
@@ -2994,12 +2998,16 @@ export class Session {
     this.#buffer.place(topDoc, cursorCol);
     this.#seedHighlighter();
     this.#ensureCursorVisible();
-    if (leftRenderedView && wasWrapped) {
-      this.#message = "Source view; line wrapping turned off for editing.";
-    } else if (leftRenderedView) {
-      this.#message = "Source view for editing.";
-    } else if (wasWrapped) {
-      this.#message = "Line wrapping turned off for editing.";
+    const changes = [
+      leftRenderedView && "source view",
+      wasWrapped && "line wrapping turned off",
+      picturesAppear && "non-printables shown as control pictures",
+    ].filter((change) => change !== false);
+    if (changes.length > 0) {
+      const summary = changes.join("; ");
+      this.#message = `${summary[0].toUpperCase()}${
+        summary.slice(1)
+      } for editing.`;
     }
   }
 
@@ -6290,7 +6298,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  #", "line numbers: off / input position / file or message line"],
     ["  B", "blame: when each line last changed, and who changed it"],
     ["  \\", "line wrapping: off / hard / word"],
-    ["  c", "cycle non-printables: pictures / ANSI color / hidden"],
+    ["  c", "cycle non-printables: ANSI color / hidden / pictures"],
     ["  ?", "this help   ·   Q  quit"],
   ];
   const info: Line[] = rows.map(([k, v]) => {
