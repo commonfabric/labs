@@ -74,8 +74,11 @@ pub struct Resolver<'m, 'a> {
     pub(crate) types: Types,
     /// The span and kind of each body of each module, once the walk of
     /// `crate::check` has found them.
-    bodies: std::cell::RefCell<Vec<Vec<((u32, u32), crate::tiers::BodyKind)>>>,
+    bodies: std::cell::RefCell<Vec<Vec<BodySpan>>>,
 }
+
+/// The span of a body and its kind.
+type BodySpan = ((u32, u32), crate::tiers::BodyKind);
 
 /// Where code is written, for the rules that differ between the reactive
 /// tier and a function body (`language-subset.md` §7.5.2, §7.8).
