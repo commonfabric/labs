@@ -2215,11 +2215,16 @@ impl<'p, 'a> Checker<'p, 'a> {
                 None => true,
             };
             if !readable {
-                self.report(
-                    "opaque-get:invalid-call",
-                    call.span,
-                    "`.get()` on a value whose type is not `Cell`, `Writable`, or `ReadonlyCell`",
-                );
+                // A `Stream` has no value to read. A body that asks
+                // whether one is stored tests the position's presence
+                // (§12.9).
+                let found = match self.declared_shape(object) {
+                    Some(Shape::Handle(crate::types::HandleKind::Stream, _)) => {
+                        "`.get()` on a `Stream`, which has no value to read. To test that a stream is stored, read the position through a view typed `unknown`: declare the cell that holds it `ReadonlyCell<{ receive?: unknown }>`, with the property's own name, and compare `view.key(\"receive\").get()` with `undefined`"
+                    }
+                    _ => "`.get()` on a value whose type is not `Cell`, `Writable`, or `ReadonlyCell`",
+                };
+                self.report("opaque-get:invalid-call", call.span, found);
             }
         }
 

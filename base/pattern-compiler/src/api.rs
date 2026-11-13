@@ -555,39 +555,17 @@ pub fn is_function_tier_constructor(name: &str) -> bool {
     )
 }
 
+/// The interface and type-alias names `lib.dom.d.ts` of TypeScript 6.0.3
+/// declares, which is the version the repository pins, sorted by byte
+/// value. `src/dom-names.txt` says how the list is made.
+static DOM_TYPE_NAMES: &str = include_str!("dom-names.txt");
+
 /// Whether a global type name is a name of the DOM library
-/// (`language-subset.md` §7.10): an event, an element, or another object
-/// of the browser.
+/// (`language-subset.md` §7.10): a global type that TypeScript's
+/// `lib.dom.d.ts` declares.
 pub fn is_dom_type_name(name: &str) -> bool {
-    name == "Event"
-        || (name.ends_with("Event") && name.chars().next().is_some_and(char::is_uppercase))
-        || name.starts_with("HTML")
-        || name.starts_with("SVG")
-        || name.starts_with("DOM")
-        || matches!(
-            name,
-            "EventTarget"
-                | "EventListener"
-                | "Element"
-                | "Node"
-                | "NodeList"
-                | "Document"
-                | "DocumentFragment"
-                | "Window"
-                | "File"
-                | "FileList"
-                | "Blob"
-                | "FormData"
-                | "DataTransfer"
-                | "Touch"
-                | "TouchList"
-                | "Selection"
-                | "Range"
-                | "ShadowRoot"
-                | "CSSStyleDeclaration"
-                | "Storage"
-                | "Location"
-                | "History"
-                | "Navigator"
-        )
+    DOM_TYPE_NAMES
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .any(|line| line == name)
 }

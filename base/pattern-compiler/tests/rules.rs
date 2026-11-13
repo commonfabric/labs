@@ -1185,6 +1185,20 @@ fn type_name_of_the_dom_library_is_an_unsupported_member() {
     }
     let diagnostics = check("function show(donut: Doughnut) { return donut; }\n");
     assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+    // The names are those `lib.dom.d.ts` declares (§7.10), and not those
+    // that look like one.
+    for name in ["MediaQueryList", "AbortSignal", "Text"] {
+        let diagnostics = check(&format!(
+            "function show(value: {name}) {{ return value; }}\n"
+        ));
+        assert_eq!(ids(&diagnostics), ["stdlib:unsupported-member"], "{name}");
+    }
+    for name in ["DonutEvent", "HTMLDonutElement", "DOMDonut"] {
+        let diagnostics = check(&format!(
+            "function show(value: {name}) {{ return value; }}\n"
+        ));
+        assert_eq!(ids(&diagnostics), ["subset-type:mismatch"], "{name}");
+    }
     // A name written once is counted once (§13, question 32).
     let analysis = analyze(&[SourceFile {
         path: "case.tsx".to_string(),
@@ -1248,4 +1262,30 @@ fn receiver_that_is_an_optional_property_is_refused() {
     assert!(diagnostics[0]
         .message
         .contains("may be `null` or `undefined`"));
+}
+
+#[test]
+fn get_on_a_stream_names_the_presence_test_through_a_view_typed_unknown() {
+    // §12.9, §10.2.
+    let diagnostics = check(
+        "import { Stream } from \"commonfabric\";\n\
+         interface Inbox { receive?: Stream<string> }\n\
+         function takes(inbox: Cell<Inbox>) { return inbox.key(\"receive\").get(); }\n",
+    );
+    assert_eq!(ids(&diagnostics), ["opaque-get:invalid-call"]);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("through a view typed `unknown`"),
+        "{}",
+        diagnostics[0].message
+    );
+    let diagnostics = check(
+        "import { type ReadonlyCell, Stream } from \"commonfabric\";\n\
+         interface Inbox { receive?: Stream<string> }\n\
+         const hasReceive = (inbox: ReadonlyCell<{ receive?: unknown }>): boolean =>\n\
+           inbox.key(\"receive\").get() !== undefined;\n\
+         const takesOffers = (inbox: Cell<Inbox>): boolean => hasReceive(inbox);\n",
+    );
+    assert_eq!(ids(&diagnostics), [] as [&str; 0]);
 }
