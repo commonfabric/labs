@@ -1,10 +1,11 @@
 /**
  * Exercises what a served effect node does once CFC refuses its request: a
- * `fetchText`, `fetchJson` or `generateText` node whose request the sink
- * ceiling refuses ends with the refusal as its error, in the requesting
- * principal's instance, and runs again only when what it read changes. A
- * `fetchText` whose request goes out is the comparison: it issues one request
- * and keeps its result.
+ * `fetchText`, `fetchJson` or `llm`-family node whose request the sink ceiling
+ * refuses ends with the refusal as its error, in the requesting principal's
+ * instance, runs again only when what it read changes, and leaves a later
+ * request over inputs the ceiling admits free to go out. A `fetchText` whose
+ * request goes out is the comparison: it issues one request and keeps its
+ * result.
  */
 
 import { expect } from "@std/expect";
@@ -106,8 +107,9 @@ const refusedMessage = (builtin: Builtin) =>
 
 /**
  * How many times a case lets the node's request go out, or be refused, before
- * it calls the node a loop: a refused `fetch*` or `llm`-family request is
- * staged once more before it stops, and nothing else runs twice.
+ * it calls the node a loop: a refused `fetchText`, `fetchJson` or
+ * `llm`-family request is staged once more before it stops, and nothing else
+ * runs twice.
  */
 const RUN_BOUND = 3;
 

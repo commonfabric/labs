@@ -54,11 +54,11 @@ A request reaches the outbox only if the commit that staged it succeeds. A
 rejected commit clears the outbox, so nothing is sent and no receipt stands for
 a request that never ran, and the action is attempted again. When the scheduler
 stops attempting it, the transaction is abandoned and the builtin settles its
-result with the refusal as its error. `enqueueSinkRequestPostCommitEffect` carries that
-as its `onRejected` hook, and every builtin on this table settles through it:
-`llm` and its two siblings, `fetch`, `fetch-program`, `llm-dialog` and
-`stream-data`. `sqlite*` reaches the same ending without the seam, giving its
-effect an `abandon` directly, because it enqueues that effect by hand rather
+result with the refusal as its error. `enqueueSinkRequestPostCommitEffect`
+carries that as its `onRejected` hook, and every builtin on this table settles
+through it: `llm` and its two siblings, `fetch`, `fetch-program`, `llm-dialog`
+and `stream-data`. `sqlite*` reaches the same ending without the seam, giving
+its effect an `abandon` directly, because it enqueues that effect by hand rather
 than as a sink request.
 
 The settled shape differs by builtin, and each writes what its own result
@@ -164,9 +164,10 @@ again, which the ending is held not to do. `fetch-program`'s ending reads the
 inputs and the cache to decide whether the request is still the node's, so it
 too stamps the URL's label on everything it writes, the cache entry included,
 and the node's next run, which reads the whole cache, takes the label into a
-request over a URL the ceiling admits and is refused. `agent`'s ending reads no input, but
-writes the request hash, which derives from the request, from what the staging
-run left in memory, so the hash is stored without the request's labels.
+request over a URL the ceiling admits and is refused. `agent`'s ending reads no
+input, but writes the request hash, which derives from the request, from what
+the staging run left in memory, so the hash is stored without the request's
+labels.
 
 | built-in | request inputs (memo key basis) | result cell | authority | notes |
 | --- | --- | --- | --- | --- |
