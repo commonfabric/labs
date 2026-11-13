@@ -95,9 +95,9 @@ deno run -A patterns/tools/lunch-poll-diagnose.ts --production
 Record graph size, phase elapsed time, settle time, and commit churn together. A
 fast handler measured without the rendered result graph does not represent a
 browser vote. The probe runs the server-execution OFF arm unless
-`EXPERIMENTAL_SERVER_EXECUTION` is set explicitly: set ON, the harness moves the
-derivations behind a serving memory server it hosts, and the probe no longer
-measures them in the sessions' own runtimes.
+`EXPERIMENTAL_SERVER_EXECUTION` is set explicitly: set to `true`, the harness
+moves the derivations behind a serving memory server it hosts, and the probe no
+longer measures them in the sessions' own runtimes.
 
 Use `--program=<file>` to point the same scenario runner at another local lunch
 poll pattern variant when you intentionally want to compare a branch-local

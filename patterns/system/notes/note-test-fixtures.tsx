@@ -1,3 +1,5 @@
+// PATTERN TIER: fixture — scaffolding that pins a bug or drives the
+// runtime. Do not copy from this file. Tiers: patterns/index.md
 /**
  * Pieces the notes tests list in the space so that the notes patterns' wishes
  * find them, and a handler that stands in for the backlinks index.
