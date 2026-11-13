@@ -29,8 +29,9 @@ import type { DragState } from "../../core/drag-state.ts";
  * id, space and path, leaving out the main thread's display copy of its label.
  *
  * A drop delivers the drag's `droppedCell` where it has one, once that has
- * resolved, so `cf-drop` follows the release by a round trip to the worker;
- * it delivers nothing where that resolution fails.
+ * resolved, so `cf-drop` follows the release by a round trip to the worker.
+ * It delivers nothing where that resolution fails, or where the zone has
+ * left the document by the time it lands.
  *
  * @slot - Default slot for wrapped content
  *
@@ -202,9 +203,14 @@ export class CFDropZone extends BaseElement {
         });
       };
       if (dragState.droppedCell) {
-        dragState.droppedCell.then(drop, (error) => {
-          console.error("Failed to resolve the dropped cell:", error);
-        });
+        dragState.droppedCell.then(
+          (cell) => {
+            if (this.isConnected) drop(cell);
+          },
+          (error) => {
+            console.error("Failed to resolve the dropped cell:", error);
+          },
+        );
       } else {
         drop(dragState.cell);
       }

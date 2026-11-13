@@ -7,13 +7,20 @@ import { createNameChip } from "./name-chip.ts";
  * State information for an active drag operation.
  */
 export interface DragState {
-  /** The CellHandle being dragged */
+  /**
+   * The CellHandle being dragged: what the preview shows and what the drag's
+   * other events name.
+   */
   cell: CellHandle;
 
   /**
    * The cell a drop delivers, where that is not `cell` and is still being
    * worked out when the drag starts. A drop waits for it, and delivers
    * nothing where it fails. Without it, a drop delivers `cell`.
+   *
+   * `cf-drag-source` sets it to what its bound cell resolves to when the
+   * press begins, which can differ from `cell` read later: a `.map()` row's
+   * bound cell reads whatever entry the list has moved into that row.
    */
   droppedCell?: Promise<CellHandle>;
 

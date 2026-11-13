@@ -29,7 +29,8 @@ import {
  * shows and what `cf-drag-start` and `cf-drag-end` name. Resolving at any
  * other time would drop a stale row: a `.map()` row keeps its `cell` while
  * the list moves another entry into that row, and a resolution through an
- * inline list entry names that entry's content as it was.
+ * inline list entry names that entry's content as it was. Where that
+ * resolution fails, a drop delivers nothing.
  *
  * Each detail carries the dragged cell's link rather than its `CellHandle`,
  * so that the detail is a `FabricValue` and can cross to a handler in the
