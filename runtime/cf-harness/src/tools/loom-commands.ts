@@ -52,7 +52,12 @@ import {
   measureLoomRows,
 } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
-import { InvalidPatternReference, patternReference } from "./loom-authoring.ts";
+import {
+  heldPatternInstance,
+  InvalidPatternReference,
+  patternReference,
+  type UnheldPatternInstance,
+} from "./loom-authoring.ts";
 import { defineOwnEntry, swapTokensForRefs } from "../handle-table.ts";
 
 /** Commands whose reference fields name durable Loom components. */
@@ -82,6 +87,89 @@ const componentReferences = async (
       ? await patternReference(context, item)
       : await componentReferences(context, item);
     defineOwnEntry(result, key, resolved);
+  }
+  return result;
+};
+
+/** Most component references one answer has verified and held. */
+export const HELD_COMPONENT_LIMIT = 32;
+
+/**
+ * Helper for {@link heldComponentReferences}, which reads a host's stored
+ * component reference, `pattern:<space>/<piece-id>` or its legacy `piece:`
+ * spelling, as the space and id it names, or `undefined` for any other text.
+ */
+const componentAddress = (
+  ref: string,
+): { space: string; id: string } | undefined => {
+  const prefix = ["pattern:", "piece:"].find((p) => ref.startsWith(p));
+  if (prefix === undefined) return undefined;
+  const rest = ref.slice(prefix.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return undefined;
+  const id = rest.slice(slash + 1);
+  return id.includes(":") ? { space: rest.slice(0, slash), id } : undefined;
+};
+
+/** Helper for {@link heldComponentReferences}, which walks one value. */
+const heldComponentReferencesIn = async (
+  context: HarnessToolContext,
+  value: JSONValue,
+  budget: { remaining: number },
+): Promise<JSONValue> => {
+  if (Array.isArray(value)) {
+    const items: JSONValue[] = [];
+    for (const item of value) {
+      items.push(await heldComponentReferencesIn(context, item, budget));
+    }
+    return items;
+  }
+  return isObjectNotArray(value)
+    ? await heldComponentReferences(context, value, budget)
+    : value;
+};
+
+/**
+ * The outbound inverse of {@link componentReferences}: every `ref` in a
+ * command's answer that a host spelled as a piece's address becomes the
+ * reference the run holds for that piece, so a model that inspects a Loom can
+ * describe and call the pieces in it without ever holding an address. A
+ * reference the run cannot hold — another space, a cell that is no whole
+ * Pattern Instance, a read that failed, or one past the limit — is dropped and
+ * its `ref_unheld` says why: an address never reaches the model either way.
+ * A `pattern:<space>/<slug>` keeps its text, since a slug is a name.
+ */
+const heldComponentReferences = async (
+  context: HarnessToolContext,
+  value: JSONObject,
+  budget: { remaining: number },
+): Promise<JSONObject> => {
+  const result: { [key: string]: JSONValue } = {};
+  for (const [key, item] of Object.entries(value)) {
+    const address = (key === "ref" || key === "if_ref") &&
+        typeof item === "string"
+      ? componentAddress(item)
+      : undefined;
+    if (address === undefined) {
+      defineOwnEntry(
+        result,
+        key,
+        await heldComponentReferencesIn(context, item, budget),
+      );
+      continue;
+    }
+    let held: { ref: string } | { unheld: UnheldPatternInstance | "limit" };
+    if (budget.remaining <= 0) {
+      held = { unheld: "limit" };
+    } else {
+      budget.remaining -= 1;
+      held = await heldPatternInstance(context, address.space, address.id);
+    }
+    if ("ref" in held) {
+      defineOwnEntry(result, key, held.ref);
+    } else {
+      defineOwnEntry(result, `${key}_unheld`, held.unheld);
+    }
   }
   return result;
 };
@@ -624,7 +712,13 @@ const sendCall = async (
       landed: answered.landed,
     };
   }
-  const { body, bodyBytes } = answered;
+  const { bodyBytes } = answered;
+  const answer = JSON.stringify(answered.body);
+  const body = answer.includes("pattern:") || answer.includes("piece:")
+    ? await heldComponentReferences(context, answered.body, {
+      remaining: HELD_COMPONENT_LIMIT,
+    })
+    : answered.body;
   const { command, loomId } = invocation;
   const outcome = outcomeOf(body, bodyBytes);
   const version = isRecord(body.outputs) ? body.outputs.version : undefined;

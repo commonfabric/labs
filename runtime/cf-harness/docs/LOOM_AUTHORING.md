@@ -136,6 +136,16 @@ addresses do not authorize this handoff. The Loom deployment route remains
 responsible for recording actual success under its broker run identity
 independently of best-effort placeholder placement.
 
+A host command's answer through `run_command` is the other handoff, under the
+same check. Each `ref` in the answer that a host spelled as
+`pattern:<space>/<piece-id>` (or legacy `piece:`) is verified against the
+configured Fabric session as a whole Pattern Instance in its own space, and
+replaced by its canonical link, which the outbound swap holds as a handle; at
+most 32 are verified per answer. A ref that fails, including one from another
+space, is dropped and a `ref_unheld` reason stands in its place, so the stored
+reference still stays outside model-visible output. A `pattern:<space>/<slug>`
+is a name, and passes as written.
+
 Choose one `request_id` for one logical composition and retain its exact
 arguments on retry. The host atomically commits components, operations, and a
 receipt. A successful tool observation has `kind: "loom-authored"`, its

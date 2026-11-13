@@ -46,6 +46,15 @@ piece identity after checking that the run holds an unrestricted whole piece.
 Source-reader references need a retained Page first: read the source, write the
 relevant material with `page.write`, then compose the Page receipt's `ref`.
 
+The same bridge runs the other way. A `ref` in any command's answer that names a
+piece by its address (`pattern:<space>/<piece-id>`, or the legacy `piece:`)
+reaches the model as the handle the run holds for that piece, once the bridge
+has checked it is a whole Pattern Instance in the session's own space. So an
+agent that inspects a Loom can describe and call the pieces in it. A component
+it cannot hold (another space, not a Pattern Instance, unreadable, or past 32 in
+one answer) loses its `ref` and gains a `ref_unheld` saying why: the address
+never reaches the model either way.
+
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry
 no more than those three values, whatever the data behind it turned out to be.
