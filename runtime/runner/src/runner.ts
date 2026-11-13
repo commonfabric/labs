@@ -3043,14 +3043,6 @@ export class Runner {
   #eventStartCount = 0;
 
   /**
-   * The running pieces, by result document, that something other than an
-   * event's delivery has asked for: another start, an enclosing pattern, or a
-   * run. An event's start never puts one of these in `#eventStarts`, however
-   * the starts interleave.
-   */
-  #askedForOtherThanEvents = new Set<`${MemorySpace}/${ScopeKey}/${URI}`>();
-
-  /**
    * The patterns a handler's result is set up from. A child one of them
    * instantiates was made by an event, not by its parent's program, so no
    * release of the parent re-instantiates it, whichever space it is in.
@@ -5669,7 +5661,7 @@ export class Runner {
     const startKey = this.#getDocKey(resultCell);
     // A start for anything but an event asks for the piece from this moment,
     // before it has resolved the piece the document leads to.
-    if (!forEvent) this.#askFor(startKey);
+    if (!forEvent) this.#eventStarts.delete(startKey);
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
@@ -5690,7 +5682,10 @@ export class Runner {
     // promise, so it runs on the turn that promise settles. Each promise
     // between them is a turn later, and a piece-start commit that fails in
     // those turns retires the registration the claim reports on, so the start
-    // would report that a piece it installed is not running.
+    // would report that a piece it installed is not running. Recording an
+    // event start relies on the same: `#doStart()` returns as soon as it has
+    // installed the registration, so no other start settles on that
+    // registration before this claim runs.
     let outcome: Promise<boolean>;
     try {
       outcome = this.#doStart(resultCell, new Set(), attempt);
@@ -5730,8 +5725,7 @@ export class Runner {
    * Helper for `#joinOrBeginStart()`, which records what a start attempt that
    * left `target` running says about the piece: one made only to deliver
    * events, that installed the piece's registration, makes the piece an
-   * event start, unless something else has asked for it already; any other
-   * attempt asks for it.
+   * event start; any other takes it off them.
    */
   #noteEventStart(
     attempt: StartAttempt,
@@ -5739,12 +5733,11 @@ export class Runner {
   ): void {
     const registration = this.#cancels.get(target);
     if (attempt.forEventOnly !== true) {
-      this.#askFor(target);
+      this.#eventStarts.delete(target);
     } else if (
       registration !== undefined &&
       registration === attempt.installedRegistration &&
-      attempt.targetLink !== undefined &&
-      !this.#askedForOtherThanEvents.has(target)
+      attempt.targetLink !== undefined
     ) {
       this.#eventStarts.set(target, {
         registration,
@@ -5805,19 +5798,9 @@ export class Runner {
   }
 
   /**
-   * Helper for the starts, runs and child retentions of the piece whose result
-   * document is `key`, which takes it off `#eventStarts` and, while it runs,
-   * keeps any later event start from putting it there.
-   */
-  #askFor(key: `${MemorySpace}/${ScopeKey}/${URI}`): void {
-    this.#eventStarts.delete(key);
-    if (this.#cancels.has(key)) this.#askedForOtherThanEvents.add(key);
-  }
-
-  /**
    * Helper for the teardowns of `registration`, the registration of the piece
-   * whose result document is `key`, outside `#stopResult()`, which forgets
-   * what the two start records hold for it.
+   * whose result document is `key`, outside `#stopResult()`, which takes it
+   * off `#eventStarts`.
    */
   #forgetStartsOf(
     key: `${MemorySpace}/${ScopeKey}/${URI}`,
@@ -5826,7 +5809,6 @@ export class Runner {
     if (this.#eventStarts.get(key)?.registration === registration) {
       this.#eventStarts.delete(key);
     }
-    this.#askedForOtherThanEvents.delete(key);
   }
 
   /**
@@ -5881,7 +5863,7 @@ export class Runner {
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
     // An enclosing pattern now asks for the piece.
-    this.#askFor(this.#getDocKey(resultCell));
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     if (!this.#usesScopedPrograms(resultCell)) {
       return () => this.releaseChild(resultCell, undefined);
     }
@@ -8396,7 +8378,7 @@ export class Runner {
     }
     if (this.#cancels.has(key)) {
       // A run of a piece that is running asks for it.
-      this.#askFor(key);
+      this.#eventStarts.delete(key);
       return undefined;
     }
 
@@ -10466,7 +10448,7 @@ export class Runner {
       throw new Error("a synced run requires a pattern");
     }
     // A run asks for the piece, whether or not it finds it running.
-    this.#askFor(this.#getDocKey(resultCell));
+    this.#eventStarts.delete(this.#getDocKey(resultCell));
     // A module runs as the one-node pattern `run()` wraps it in, and the
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
@@ -12677,7 +12659,6 @@ export class Runner {
     this.#scopedChildOwners.delete(key);
     this.#independentlyStartedResults.delete(key);
     this.#eventStarts.delete(key);
-    this.#askedForOtherThanEvents.delete(key);
     this.#registrationsInstalledByRefusedRuns.delete(key);
     // TODO(hixie): This reaches every pending commit-gated start for the result,
     // which is wider than a release's authority: one that another launch
@@ -12937,7 +12918,6 @@ export class Runner {
     this.#inFlightStartsByDoc.clear();
     this.#independentlyStartedResults.clear();
     this.#eventStarts.clear();
-    this.#askedForOtherThanEvents.clear();
     this.#registrationsInstalledByRefusedRuns.clear();
     for (const key of [...this.#pendingDeferredStarts.keys()]) {
       this.#cancelPendingDeferredStarts(key);
