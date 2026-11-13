@@ -6,7 +6,7 @@
  * run that read that pointer, and every run that reads it or the profile,
  * carries the owner's label too. Ensuring the Home's inbox creates one of its own in that one's place,
  * in a step that reads neither, retains that one, and points the profile at
- * its own, with nothing refused by the CFC write gate. The fixture is
+ * its own, with nothing refused by the CFC write gate and no event dropped. The fixture is
  * `private-inbox-multi-runtime.test.ts`'s.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
@@ -35,12 +35,26 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
  */
 const OWNER = "private-inbox-owner";
 
+/** One runtime's logger counts, by logger and then by key. */
+type LoggerCounts = Record<
+  string,
+  Record<string, { total: number; warn?: number }> | number
+>;
+
 /** The CFC write gate's refusals, out of one runtime's logger counts. */
-const writeRefusals = (
-  counts: Record<string, Record<string, { total: number }> | number>,
-): number => {
+const writeRefusals = (counts: LoggerCounts): number => {
   const cfc = counts.cfc;
   return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
+};
+
+/**
+ * The events dropped for want of a handler to take them, out of one runtime's
+ * logger counts: the scheduler warns under its `scheduler` key for each one,
+ * and for nothing else.
+ */
+const droppedEvents = (counts: LoggerCounts): number => {
+  const scheduler = counts.scheduler;
+  return typeof scheduler === "object" ? scheduler.scheduler?.warn ?? 0 : 0;
 };
 
 /** What the host found when it ensured a Home's inbox. */
@@ -60,6 +74,14 @@ describe("private inbox through a labeled pointer across runtimes", () => {
   const refusals = async (): Promise<number> =>
     writeRefusals(await owner.loggerCounts()) +
     writeRefusals((await harness.servingDiagnostics()).loggerCounts);
+
+  /**
+   * How many events have been dropped for want of a handler, in the owner's
+   * runtime and where the serving loop runs.
+   */
+  const dropped = async (): Promise<number> =>
+    droppedEvents(await owner.loggerCounts()) +
+    droppedEvents((await harness.servingDiagnostics()).loggerCounts);
 
   beforeAll(async () => {
     const home = (await Identity.fromPassphrase(
@@ -97,6 +119,7 @@ describe("private inbox through a labeled pointer across runtimes", () => {
       (await owner.link(held)).id === loom.id
     );
     const refusedBefore = await refusals();
+    const droppedBefore = await dropped();
 
     const ensured = await owner.client().call("ensurePrivateInbox", {
       path: ["labeledHoldingHome"],
@@ -111,6 +134,7 @@ describe("private inbox through a labeled pointer across runtimes", () => {
     expect(ensured.outcome).toBe("replace");
     expect(ensured.inboxes?.[0].space).toBe(loom.space);
     expect(await refusals()).toBe(refusedBefore);
+    expect(await dropped()).toBe(droppedBefore);
     const own = await owner.link(held);
     expect(own.space).not.toBe(loom.space);
     expect(own.space).not.toBe(harness.spaceDid);

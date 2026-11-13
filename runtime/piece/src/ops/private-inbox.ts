@@ -150,9 +150,10 @@ const pointerSchema = {
  * having then sent no event.
  * Rejects, sending nothing, when a profile ordered ahead of the deciding one
  * cannot be loaded, since which profile decides is then unknown. Sends
- * nothing, and returns `abandoned`, when `signal` has aborted or `runtime`
- * has begun disposal by the time the reads are done, so that an ensure its
- * caller has stopped waiting for sends no event after teardown.
+ * nothing more, and returns `abandoned`, when `signal` has aborted or
+ * `runtime` has begun disposal by the time the reads are done, or by the time
+ * the creation it waited for has committed, so that an ensure its caller has
+ * stopped waiting for sends no event after teardown.
  */
 export async function ensurePrivateInboxOf(
   runtime: Runtime,
@@ -163,9 +164,7 @@ export async function ensurePrivateInboxOf(
   const ensure = home.key("ensurePrivateInbox");
   if (ensure.getRaw() === undefined) return { outcome: "unavailable" };
   const found = await vetAdvertisedInbox(runtime, home, identity);
-  if (signal?.aborted || runtime.writeTeardownSignal.aborted) {
-    return { outcome: "abandoned" };
-  }
+  if (stopped(runtime, signal)) return { outcome: "abandoned" };
   const refusal = found.outcome === "refused"
     ? found
     : found.outcome === "replace"
@@ -178,16 +177,23 @@ export async function ensurePrivateInboxOf(
     ]);
   }
   const createOwn = home.key("createOwnPrivateInbox");
-  if (
-    createOwn.getRaw() !== undefined && await needsOwnInbox(home, found)
-  ) {
+  const createFirst = createOwn.getRaw() !== undefined &&
+    await needsOwnInbox(home, found);
+  if (stopped(runtime, signal)) return { outcome: "abandoned" };
+  if (createFirst) {
     await handled(createOwn, {});
-    if (signal?.aborted || runtime.writeTeardownSignal.aborted) {
-      return { outcome: "abandoned" };
-    }
+    if (stopped(runtime, signal)) return { outcome: "abandoned" };
   }
   await handled(ensure, ensureEventOf(found));
   return found;
+}
+
+/**
+ * Whether an ensure is to send nothing more: `signal` has aborted, or
+ * `runtime` has begun disposal.
+ */
+function stopped(runtime: Runtime, signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true || runtime.writeTeardownSignal.aborted;
 }
 
 /**

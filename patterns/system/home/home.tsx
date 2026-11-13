@@ -73,6 +73,7 @@ import { refusalReasonText } from "../private-inbox/private-inbox-refusal-text.t
 import type { BackwardsCompatibleProfile } from "../profile-home/profile-home.tsx";
 import {
   createOwnPrivateInbox,
+  createOwnPrivateInboxOnly,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   pointProfilesAtPrivateInbox,
@@ -166,22 +167,24 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
-  // The user's private inbox, where others deliver offers to them: the one the
-  // deciding profile points at, if the host vetted it and Home made it, or
-  // Home's own, `ownPrivateInbox`, when no profile advertises an inbox, and in
-  // place of an inbox Home did not make. The deciding profile is the first, in
-  // the order `#profile` answers in, that points at an inbox. Home keeps the
-  // inbox it holds while that profile points at it, and while no profile
-  // points at an inbox. Each of their profiles that points at no inbox, or at
+  // The user's private inbox, where others deliver offers to them: an inbox
+  // Home adopted from a profile in its list that points at it, or Home's own,
+  // `ownPrivateInbox`, when no profile advertises an inbox, and in place of an
+  // inbox Home did not make. The host names an inbox to adopt only once it has
+  // vetted it and found that Home made it, though the owner's own code can
+  // have Home adopt another, through `ensurePrivateInbox`. Home keeps the
+  // inbox it holds while the deciding profile, the first in the order
+  // `#profile` answers in that points at an inbox, points at it, and while no
+  // profile points at an inbox. Each of their profiles that points at no inbox, or at
   // one Home gave up or replaced, is pointed here; one that points at any
   // other inbox keeps it. Absent until `ensurePrivateInbox` runs, and while
   // Home holds none and the advertised inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
   // The private inbox Home created for itself, which it takes in place of one
-  // it replaces, or when it holds none. Only `createOwnPrivateInbox` writes
-  // it, and only once. Absent until Home first needs an inbox of its own: a
-  // Home that adopted an inbox it made, or holds one it made before this
-  // field, may never need one.
+  // it replaces, or when it holds none. Only `createOwnPrivateInbox` and
+  // `createOwnPrivateInboxOnly` write it, and only once between them. Absent
+  // until Home first needs an inbox of its own: a Home that adopted an inbox
+  // it made, or holds one it made before this field, may never need one.
   ownPrivateInbox: Writable<PrivateInboxHolder>;
   // The inboxes `privateInbox` held before, in the order Home gave them up, so
   // that what senders delivered to them stays readable.
@@ -882,7 +885,7 @@ const Home = pattern(
         ensure: ensurePrivateInboxStream,
       }),
       replaceRefusedPrivateInbox: replaceRefusedInboxStream,
-      createOwnPrivateInbox: createOwnPrivateInbox({ ownPrivateInbox }),
+      createOwnPrivateInbox: createOwnPrivateInboxOnly({ ownPrivateInbox }),
     };
   },
   homeArgumentSchema,

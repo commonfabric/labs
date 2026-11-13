@@ -808,24 +808,13 @@ export const ensurePrivateInbox = handler<
 
 /**
  * Creates Home's own private inbox when `ownPrivateInbox` holds none, and
- * records it there. Nothing else creates an inbox for Home. Home binds it
- * twice:
- *
- * - As Home's `createOwnPrivateInbox` stream, with no `ensure`. The host sends
- *   it when its vetting finds that Home may need an inbox of its own and has
- *   none, and waits for the run to commit before it sends the ensure, so a
- *   creation that fails fails the host's ensure, and the next bring-up tries
- *   again.
- * - As the step {@link ensurePrivateInbox} sends its event to when Home may
- *   need an inbox and has none of its own, for a sender of the ensure that
- *   has not had one created first, such as `requestPrivateInbox`. This binding
- *   hands `event` on to `ensure`, which decides what Home holds now that it has
- *   an inbox of its own. Nothing waits for it: a sender of the ensure learns of
- *   the ensure's own run, not of this one.
+ * records it there. {@link createOwnPrivateInbox} and
+ * {@link createOwnPrivateInboxOnly} are its callers, and nothing else creates
+ * an inbox for Home.
  *
  * Before the creation the run reads nothing but `ownPrivateInbox`, which only
- * this step writes, and its event, which carries no label. That is the point
- * of the step. The documents a creation writes take on the confidentiality its
+ * these steps write, and its event, which carries no label. That is the point
+ * of the steps. The documents a creation writes take on the confidentiality its
  * run has read, so after a read of the owner's labeled state, such as the
  * links Home's holder and its profiles keep, the write gate refuses the
  * creation; and an inbox carrying the owner's label would pass it into the run
@@ -840,18 +829,45 @@ export const ensurePrivateInbox = handler<
  * The inbox's space is named in Home's own space, so one identity gets one such
  * space however many times, and from however many runtimes, this runs.
  */
+function createOwnIfNone(ownPrivateInbox: Writable<PrivateInboxHolder>): void {
+  if (ownPrivateInbox.get()?.piece === undefined) {
+    ownPrivateInbox.set({ piece: createPrivateInbox() });
+  }
+}
+
+/**
+ * Creates Home's own private inbox, as `createOwnIfNone()` says, and hands
+ * `event` on to `ensure`, which decides what Home holds now that it has an
+ * inbox of its own. {@link ensurePrivateInbox} sends it its event when Home may
+ * need an inbox and has none of its own, for a sender of the ensure that has
+ * not had one created first, such as `requestPrivateInbox`. Nothing waits for
+ * it: a sender of the ensure learns of the ensure's own run, not of this one.
+ */
 export const createOwnPrivateInbox = handler<
   EnsurePrivateInboxEvent,
   {
     ownPrivateInbox: Writable<PrivateInboxHolder>;
-    /** Absent from the binding the host sends, which hands nothing on. */
-    ensure?: Stream<EnsurePrivateInboxEvent>;
+    ensure: Stream<EnsurePrivateInboxEvent>;
   }
 >((event, { ownPrivateInbox, ensure }) => {
-  if (ownPrivateInbox.get()?.piece === undefined) {
-    ownPrivateInbox.set({ piece: createPrivateInbox() });
-  }
-  ensure?.send(event ?? {});
+  createOwnIfNone(ownPrivateInbox);
+  ensure.send(event ?? {});
+});
+
+/**
+ * Creates Home's own private inbox, as `createOwnIfNone()` says, and does
+ * nothing else. Home binds it as its `createOwnPrivateInbox` stream, which the
+ * host sends when its vetting finds that Home may need an inbox of its own and
+ * has none, and waits for the run to commit before it sends the ensure, so a
+ * creation that fails fails the host's ensure, and the next bring-up tries
+ * again. It binds no stream to hand on to: a `Stream` binding a handler leaves
+ * out is still a stream, and a send through it is dropped.
+ */
+export const createOwnPrivateInboxOnly = handler<
+  EnsurePrivateInboxEvent,
+  { ownPrivateInbox: Writable<PrivateInboxHolder> }
+>((_event, { ownPrivateInbox }) => {
+  createOwnIfNone(ownPrivateInbox);
 });
 
 /**

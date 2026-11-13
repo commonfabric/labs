@@ -343,9 +343,12 @@ absent or present, and a Home's source is changed in place, which keeps both
 
 ### Creating Home's own
 
-Home creates an inbox in one step only, `createOwnPrivateInbox` in
+Home creates an inbox in one place only, `createOwnIfNone()` in
 `private-inbox.tsx`, which records the inbox in Home's `ownPrivateInbox` and
-creates one only while that field is empty. The ensure and the replacement of a
+creates one only while that field is empty. Two steps call it:
+`createOwnPrivateInboxOnly`, which does nothing more, and
+`createOwnPrivateInbox`, which then hands its event on to the ensure. The ensure
+and the replacement of a
 refused inbox create none: they take the inbox that field holds, and the ensure
 has the step create it first when Home may need it.
 
@@ -365,13 +368,14 @@ writes, and its event, which carries no label.
 The host has Home take the step first. When Home has no inbox of its own and the
 event the host is about to send names none to adopt and either names inboxes to
 replace or Home holds none, the host sends Home's `createOwnPrivateInbox`
-stream, a binding of the step that does nothing more, and waits for that run to
+stream, which `createOwnPrivateInboxOnly` handles, and waits for that run to
 commit before it sends the ensure, so a creation that fails fails the ensure and
 the next bring-up tries again. For a sender of the ensure that has not had the
 step taken first, such as `requestPrivateInbox`, or a host sending a Home
 without that stream, the ensure takes it itself: in the same case it does
-nothing but send its event to the creating step, which creates Home's inbox,
-records it, and hands the event on to a second binding of the ensure, one with
+nothing but send its event to `createOwnPrivateInbox`, which creates Home's
+inbox, records it, and hands the event on to a second binding of the ensure, one
+with
 no creating step to send to, which decides as the list above says. Nothing waits
 for those two runs: the sender learns only of the first ensure's. Whether the
 ensure sends depends only on the host's event, `ownPrivateInbox` and whether

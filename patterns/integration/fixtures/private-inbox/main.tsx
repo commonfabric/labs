@@ -58,6 +58,7 @@ import ProfileHome, {
 } from "../../../system/profile-home/profile-home.tsx";
 import PrivateInbox, {
   createOwnPrivateInbox,
+  createOwnPrivateInboxOnly,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   type Offer,
@@ -699,7 +700,7 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
         seedName: seedProfileName({}),
       }),
       createEarlierProfile: createEarlierProfile({ profiles }),
-      createOwnPrivateInbox: createOwnPrivateInbox({ ownPrivateInbox }),
+      createOwnPrivateInbox: createOwnPrivateInboxOnly({ ownPrivateInbox }),
     };
   },
 );
@@ -1276,7 +1277,7 @@ export default pattern<MainInput, MainOutput>((
         }),
       }),
     }),
-    createOwnPrivateInbox: createOwnPrivateInbox({ ownPrivateInbox }),
+    createOwnPrivateInbox: createOwnPrivateInboxOnly({ ownPrivateInbox }),
     createProfile: createProfile({
       profiles,
       seedName: seedProfileName({}),
