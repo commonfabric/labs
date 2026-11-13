@@ -159,7 +159,7 @@ fn property_path_is_narrowed_inside_its_function_only() {
 }
 
 #[test]
-fn reassigned_binding_is_not_narrowed() {
+fn reassigned_binding_is_narrowed_by_a_condition_after_its_last_assignment() {
     assert_eq!(
         types(
             "function show(first: string | undefined) {\n\
@@ -169,7 +169,7 @@ fn reassigned_binding_is_not_narrowed() {
                return \"\";\n\
              }\n"
         ),
-        ["string | undefined"]
+        ["string"]
     );
 }
 
@@ -313,5 +313,73 @@ fn optional_chain_in_the_reactive_tier_has_undefined() {
              function show(donut: { name: string }) { return /*?*/(donut?.name); }\n"
         ),
         ["string | undefined", "string"]
+    );
+}
+
+// ----- §7.6: narrowing by an assignment to a `let` -----
+
+#[test]
+fn assignment_narrows_a_let_until_the_next_assignment() {
+    assert_eq!(
+        types(
+            "function show(names: string[], fallback: string | undefined) {\n\
+               let name: string | undefined = undefined;\n\
+               /*?*/name;\n\
+               name = \"ring\";\n\
+               /*?*/name;\n\
+               name = fallback;\n\
+               /*?*/name;\n\
+               if (!name) { name = names.join(\",\"); /*?*/name; }\n\
+               return /*?*/name;\n\
+             }\n"
+        ),
+        [
+            "undefined",
+            "string",
+            "string | undefined",
+            "string",
+            "string | undefined"
+        ]
+    );
+}
+
+#[test]
+fn condition_narrows_a_let_while_nothing_assigns_it() {
+    assert_eq!(
+        types(
+            "function show(names: string[]) {\n\
+               let best: string | undefined = names[0];\n\
+               if (best) { /*?*/best; best = undefined; /*?*/best; }\n\
+               if (!best) return \"\";\n\
+               /*?*/best;\n\
+               for (const name of names) { /*?*/best; if (name > \"m\") best = undefined; }\n\
+               const late = () => /*?*/best;\n\
+               return late();\n\
+             }\n"
+        ),
+        [
+            "string",
+            "undefined",
+            "string",
+            "string | undefined",
+            "string | undefined"
+        ]
+    );
+}
+
+#[test]
+fn assignment_inside_a_loop_or_a_branch_does_not_narrow_after_it() {
+    assert_eq!(
+        types(
+            "function show(names: string[]) {\n\
+               let best: string | undefined = undefined;\n\
+               for (const name of names) { if (name) best = name; }\n\
+               /*?*/best;\n\
+               let last: string | undefined = undefined;\n\
+               for (const name of names) { /*?*/last; last = name; /*?*/last; }\n\
+               return [best, last];\n\
+             }\n"
+        ),
+        ["string | undefined", "string | undefined", "string"]
     );
 }

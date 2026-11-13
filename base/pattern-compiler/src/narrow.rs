@@ -306,42 +306,82 @@ impl<'a> Resolver<'_, 'a> {
             return ty;
         };
         reference.data = self.is_data_expression(module, expression, 0);
-        if parsed.semantic.scoping().symbol_is_mutated(reference.root) {
-            return ty;
-        }
         let nodes = parsed.semantic.nodes();
+        // A binding that is assigned is narrowed by the assignment that
+        // reaches the reference, and by the conditions no assignment
+        // follows (§7.6).
+        let writes = if parsed.semantic.scoping().symbol_is_mutated(reference.root) {
+            if !reference.path.is_empty() {
+                return ty;
+            }
+            match self.writes_of(module, reference.root, expression) {
+                Some(writes) => Some(writes),
+                None => return ty,
+            }
+        } else {
+            None
+        };
+        let at = expression.span().start;
+        let ty = match &writes {
+            Some(writes) => self.assigned(module, writes, at, ty),
+            None => ty,
+        };
         // The conditions that hold, innermost first, each with whether it
         // is true or false there.
-        let mut conditions: Vec<(Condition<'_, 'a>, bool)> = Vec::new();
+        let mut conditions: Vec<(Condition<'_, 'a>, bool, u32)> = Vec::new();
         let mut child = expression.span();
         for kind in nodes.ancestor_kinds(expression.node_id()) {
             match kind {
                 AstKind::IfStatement(statement) => {
                     if contains(statement.consequent.span(), child) {
-                        conditions.push((Condition::Test(&statement.test), true));
+                        conditions.push((
+                            Condition::Test(&statement.test),
+                            true,
+                            statement.test.span().end,
+                        ));
                     } else if statement
                         .alternate
                         .as_ref()
                         .is_some_and(|alternate| contains(alternate.span(), child))
                     {
-                        conditions.push((Condition::Test(&statement.test), false));
+                        conditions.push((
+                            Condition::Test(&statement.test),
+                            false,
+                            statement.test.span().end,
+                        ));
                     }
                 }
                 AstKind::ConditionalExpression(conditional) => {
                     if contains(conditional.consequent.span(), child) {
-                        conditions.push((Condition::Test(&conditional.test), true));
+                        conditions.push((
+                            Condition::Test(&conditional.test),
+                            true,
+                            conditional.test.span().end,
+                        ));
                     } else if contains(conditional.alternate.span(), child) {
-                        conditions.push((Condition::Test(&conditional.test), false));
+                        conditions.push((
+                            Condition::Test(&conditional.test),
+                            false,
+                            conditional.test.span().end,
+                        ));
                     }
                 }
                 AstKind::LogicalExpression(logical) => {
                     if contains(logical.right.span(), child) {
                         match logical.operator {
                             LogicalOperator::And => {
-                                conditions.push((Condition::Test(&logical.left), true));
+                                conditions.push((
+                                    Condition::Test(&logical.left),
+                                    true,
+                                    logical.left.span().end,
+                                ));
                             }
                             LogicalOperator::Or => {
-                                conditions.push((Condition::Test(&logical.left), false));
+                                conditions.push((
+                                    Condition::Test(&logical.left),
+                                    false,
+                                    logical.left.span().end,
+                                ));
                             }
                             LogicalOperator::Coalesce => {}
                         }
@@ -366,8 +406,11 @@ impl<'a> Resolver<'_, 'a> {
                                 .last()
                                 .is_some_and(leaves);
                         if let (Some(test), true) = (&case.test, entered_alone) {
-                            conditions
-                                .push((Condition::Equal(&statement.discriminant, test), true));
+                            conditions.push((
+                                Condition::Equal(&statement.discriminant, test),
+                                true,
+                                statement.discriminant.span().end,
+                            ));
                         }
                     }
                 }
@@ -381,7 +424,13 @@ impl<'a> Resolver<'_, 'a> {
             child = kind.span();
         }
         let mut narrowed = ty;
-        for (condition, sense) in conditions.into_iter().rev() {
+        for (condition, sense, guard) in conditions.into_iter().rev() {
+            if writes
+                .as_ref()
+                .is_some_and(|writes| writes.follows(guard, at))
+            {
+                continue;
+            }
             narrowed = match condition {
                 Condition::Test(test) => self.assume(module, test, sense, &reference, narrowed),
                 Condition::Equal(left, right) => {
@@ -390,6 +439,179 @@ impl<'a> Resolver<'_, 'a> {
             };
         }
         narrowed
+    }
+
+    /// The assignments to a binding, for narrowing the reference
+    /// `expression` to it. `None` where the reference is not narrowed at
+    /// all: it is written in another function than the binding is declared
+    /// in, or the binding is assigned in another function.
+    fn writes_of(
+        &self,
+        module: usize,
+        symbol: SymbolId,
+        expression: &Expression<'a>,
+    ) -> Option<Writes<'a>> {
+        let parsed = self.parsed(module)?;
+        let scoping = parsed.semantic.scoping();
+        let nodes = parsed.semantic.nodes();
+        let function_of = |node| {
+            nodes.ancestor_kinds(node).find_map(|kind| match kind {
+                AstKind::ArrowFunctionExpression(arrow) => Some(arrow.span),
+                AstKind::Function(function) => Some(function.span),
+                _ => None,
+            })
+        };
+        let declaration = scoping.symbol_declaration(symbol);
+        let home = function_of(declaration);
+        if function_of(expression.node_id()) != home {
+            return None;
+        }
+        let mut writes = Vec::new();
+        // The declaration assigns its initializer.
+        if let AstKind::VariableDeclarator(declarator) = nodes.kind(declaration) {
+            if !matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
+                return None;
+            }
+            if let Some(init) = &declarator.init {
+                // The statement of a declarator is the declaration.
+                let statement = nodes
+                    .ancestor_kinds(declaration)
+                    .find_map(|kind| match kind {
+                        AstKind::VariableDeclaration(declaration) => Some(declaration.span),
+                        _ => None,
+                    })
+                    .unwrap_or(declarator.span);
+                writes.push(Write {
+                    span: declarator.span,
+                    statement: Some(statement),
+                    value: Some(init),
+                });
+            }
+        } else {
+            return None;
+        }
+        for reference in scoping.get_resolved_references(symbol) {
+            if !reference.is_write() {
+                continue;
+            }
+            let node = reference.node_id();
+            if function_of(node) != home {
+                return None;
+            }
+            let mut ancestors = nodes.ancestor_kinds(node);
+            let write = match ancestors.next() {
+                Some(AstKind::AssignmentExpression(assignment))
+                    if assignment.operator == oxc_syntax::operator::AssignmentOperator::Assign =>
+                {
+                    // An assignment that is a statement of its own.
+                    let statement = match ancestors.next() {
+                        Some(AstKind::ExpressionStatement(statement)) => Some(statement.span),
+                        _ => None,
+                    };
+                    Write {
+                        span: assignment.span,
+                        statement,
+                        value: Some(&assignment.right),
+                    }
+                }
+                Some(other) => Write {
+                    span: other.span(),
+                    statement: None,
+                    value: None,
+                },
+                None => continue,
+            };
+            writes.push(write);
+        }
+        // The loops and the blocks around the reference, innermost first.
+        let mut loops = Vec::new();
+        let mut blocks = Vec::new();
+        for kind in nodes.ancestor_kinds(expression.node_id()) {
+            match kind {
+                AstKind::ForStatement(_)
+                | AstKind::ForInStatement(_)
+                | AstKind::ForOfStatement(_)
+                | AstKind::WhileStatement(_)
+                | AstKind::DoWhileStatement(_) => loops.push(kind.span()),
+                AstKind::BlockStatement(block) => blocks.push(&block.body),
+                AstKind::FunctionBody(body) => blocks.push(&body.statements),
+                AstKind::Program(program) => blocks.push(&program.body),
+                AstKind::SwitchCase(case) => blocks.push(&case.consequent),
+                AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => break,
+                _ => {}
+            }
+        }
+        let blocks = blocks
+            .into_iter()
+            .map(|statements| statements.iter().map(GetSpan::span).collect())
+            .collect();
+        Some(Writes {
+            writes,
+            loops,
+            blocks,
+        })
+    }
+
+    /// `declared`, the declared type of a binding, narrowed by the
+    /// assignment that reaches the reference at `at`: the last assignment
+    /// before it, where that assignment is a statement of a block around
+    /// the reference and no loop around the reference assigns the binding
+    /// outside it.
+    fn assigned(&self, module: usize, writes: &Writes<'a>, at: u32, declared: TypeId) -> TypeId {
+        let Shape::Union(members) = self.shape(declared) else {
+            return declared;
+        };
+        let Some(last) = writes
+            .writes
+            .iter()
+            .filter(|write| write.span.start < at && !contains(write.span, Span::new(at, at)))
+            .max_by_key(|write| write.span.start)
+        else {
+            return declared;
+        };
+        let (Some(statement), Some(value)) = (last.statement, last.value) else {
+            return declared;
+        };
+        let reaches = writes
+            .blocks
+            .iter()
+            .any(|block: &Vec<Span>| block.contains(&statement));
+        let looped = writes.loops.iter().any(|around| {
+            !contains(*around, last.span)
+                && writes
+                    .writes
+                    .iter()
+                    .any(|write| contains(*around, write.span))
+        });
+        if !reaches || looped {
+            return declared;
+        }
+        let Ok(assigned) = self.typed_at(module, value, 0) else {
+            return declared;
+        };
+        let given = match self.shape(assigned) {
+            Shape::Union(given) => given,
+            _ => vec![assigned],
+        };
+        let mut kept = Vec::new();
+        for member in &members {
+            let mut fits = false;
+            for given in &given {
+                match self.assignable(*given, *member) {
+                    Some(true) => fits = true,
+                    Some(false) => {}
+                    None => return declared,
+                }
+            }
+            if fits {
+                kept.push(*member);
+            }
+        }
+        if kept.is_empty() {
+            declared
+        } else {
+            self.union_of(kept)
+        }
     }
 
     /// `ty` with the members `keep` rejects removed. A type every member of
@@ -842,6 +1064,46 @@ impl<'a> Resolver<'_, 'a> {
     }
 }
 
+/// One assignment to a binding.
+struct Write<'a> {
+    span: Span,
+    /// The statement the assignment is, where it is one of its own.
+    statement: Option<Span>,
+    /// The value assigned, for `=` and for an initializer.
+    value: Option<&'a Expression<'a>>,
+}
+
+/// The assignments to a binding, with the loops and the blocks around the
+/// reference that is narrowed.
+struct Writes<'a> {
+    writes: Vec<Write<'a>>,
+    loops: Vec<Span>,
+    /// The spans of the statements of each block around the reference.
+    blocks: Vec<Vec<Span>>,
+}
+
+impl Writes<'_> {
+    /// Whether an assignment may run after the condition tested at `guard`
+    /// and before the reference at `at`: one is written between the two, or
+    /// a loop that begins after the condition holds the reference and an
+    /// assignment.
+    fn follows(&self, guard: u32, at: u32) -> bool {
+        let between = self.writes.iter().any(|write| {
+            guard <= write.span.start
+                && write.span.start < at
+                && !contains(write.span, Span::new(at, at))
+        });
+        let looped = self.loops.iter().any(|around| {
+            guard <= around.start
+                && self
+                    .writes
+                    .iter()
+                    .any(|write| contains(*around, write.span))
+        });
+        between || looped
+    }
+}
+
 /// A condition that holds or fails where a reference is written.
 enum Condition<'e, 'a> {
     Test(&'e Expression<'a>),
@@ -884,7 +1146,7 @@ fn same_literal(left: &str, right: &str) -> bool {
 fn earlier<'e, 'a>(
     statements: &'e [Statement<'a>],
     child: Span,
-    conditions: &mut Vec<(Condition<'e, 'a>, bool)>,
+    conditions: &mut Vec<(Condition<'e, 'a>, bool, u32)>,
 ) {
     for statement in statements.iter().rev() {
         if statement.span().end > child.start {
@@ -896,8 +1158,16 @@ fn earlier<'e, 'a>(
         let then_leaves = leaves(&statement.consequent);
         let else_leaves = statement.alternate.as_ref().is_some_and(leaves);
         match (then_leaves, else_leaves) {
-            (true, false) => conditions.push((Condition::Test(&statement.test), false)),
-            (false, true) => conditions.push((Condition::Test(&statement.test), true)),
+            (true, false) => conditions.push((
+                Condition::Test(&statement.test),
+                false,
+                statement.test.span().end,
+            )),
+            (false, true) => conditions.push((
+                Condition::Test(&statement.test),
+                true,
+                statement.test.span().end,
+            )),
             _ => {}
         }
     }
