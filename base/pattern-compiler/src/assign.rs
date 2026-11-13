@@ -994,6 +994,22 @@ impl<'a> Resolver<'_, 'a> {
                     return verdict;
                 }
             }
+            Expression::CallExpression(call) => {
+                if let Some(verdict) = self.callback_against(module, call, to) {
+                    return verdict;
+                }
+            }
+            Expression::ChainExpression(chain) => {
+                if let ChainElement::CallExpression(call) = &chain.expression {
+                    // `rows?.map(...)` is `undefined` where `rows` is.
+                    let present = self.present(to);
+                    if present != to {
+                        if let Some(verdict) = self.callback_against(module, call, present) {
+                            return verdict;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         let Ok(from) = self.typed_at(module, expression, 0) else {
@@ -1017,6 +1033,68 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         verdict
+    }
+
+    /// A generic call whose result type only its callback determines,
+    /// against the type expected of the call (§7.3, "Inference at a call"):
+    /// `map` and `flatMap` with a function written in place, and
+    /// `computed`. The body of the function is checked against the result
+    /// type that follows from `to`. `None` where the call is of another
+    /// form, so that it is checked by its type.
+    fn callback_against(
+        &self,
+        module: usize,
+        call: &CallExpression<'a>,
+        to: TypeId,
+    ) -> Option<Verdict> {
+        let function = call.arguments.first().and_then(FunctionLike::of_argument)?;
+        let annotated = match function {
+            FunctionLike::Arrow(arrow) => arrow.return_type.is_some(),
+            FunctionLike::Function(function) => function.return_type.is_some(),
+        };
+        if annotated || function.is_async() || function.is_generator() {
+            return None;
+        }
+        let expected = if self.api_callee(module, call).as_deref() == Some("computed") {
+            to
+        } else {
+            let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+                return None;
+            };
+            let method = member.property.name.as_str();
+            if !matches!(method, "map" | "flatMap") {
+                return None;
+            }
+            // The receiver is a collection, and the call has an array type.
+            let receiver = self.typed_at(module, &member.object, 0).ok()?;
+            self.element_of(receiver)?;
+            let arrays: Vec<TypeId> = match self.shape(to) {
+                Shape::Array(_) => vec![to],
+                Shape::Union(members) => members
+                    .into_iter()
+                    .filter(|member| matches!(self.shape(*member), Shape::Array(_)))
+                    .collect(),
+                _ => return None,
+            };
+            let [array] = arrays.as_slice() else {
+                return None;
+            };
+            let Shape::Array(element) = self.shape(*array) else {
+                return None;
+            };
+            if method == "flatMap" {
+                self.union_of(vec![element, *array])
+            } else {
+                element
+            }
+        };
+        let returns = crate::infer::returned_expressions(function);
+        if returns.is_empty() {
+            return None;
+        }
+        Some(all(returns.into_iter().map(|returned| {
+            self.check_against(module, returned, expected)
+        })))
     }
 
     /// An object literal against the object types among `to`. `None` where

@@ -100,6 +100,12 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The builder a call is a call of, if its callee is one through its
     /// import.
+    /// The name of the `commonfabric` function a call calls, through its
+    /// import.
+    pub(crate) fn api_callee(&self, module: usize, call: &CallExpression<'a>) -> Option<String> {
+        self.api_name(module, &call.callee)
+    }
+
     fn builder_of(&self, module: usize, call: &CallExpression<'a>) -> Option<(Builder, String)> {
         let parsed = self.parsed(module)?;
         let api = self
@@ -345,12 +351,20 @@ impl<'a> Resolver<'_, 'a> {
             }
         };
         self.leave(key);
-        // A function that returns one literal has the primitive type as
-        // its inferred result type.
-        result.map(|ty| match self.shape(ty) {
-            Shape::Literal(_) => self.widened(ty),
-            _ => ty,
-        })
+        // The inferred result type of a function is widened (§7.5), unless
+        // the function returns under `as const`.
+        let constant = function.expression_body().is_some_and(is_as_const)
+            || function.block_body().is_some_and(|body| {
+                let mut returns = Vec::new();
+                for statement in body {
+                    returned(statement, &mut returns);
+                }
+                !returns.is_empty()
+                    && returns
+                        .iter()
+                        .all(|statement| statement.argument.as_ref().is_some_and(is_as_const))
+            });
+        result.map(|ty| if constant { ty } else { self.widened(ty) })
     }
 
     /// Binds the type parameters of a function for one call: from the
@@ -1259,6 +1273,35 @@ fn handle_kind_of(shape: &Shape) -> HandleKind {
 
 fn is_number_literal(shape: &Shape) -> bool {
     matches!(shape, Shape::Literal(text) if text.starts_with(|c: char| c.is_ascii_digit() || c == '-'))
+}
+
+fn is_as_const(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::ParenthesizedExpression(inner) => is_as_const(&inner.expression),
+        Expression::TSAsExpression(cast) => {
+            matches!(&cast.type_annotation, TSType::TSTypeReference(reference)
+                if matches!(&reference.type_name, TSTypeName::IdentifierReference(name) if name.name == "const"))
+        }
+        _ => false,
+    }
+}
+
+/// The expressions a function written in place returns: its expression
+/// body, or the arguments of its `return` statements.
+pub(crate) fn returned_expressions<'e, 'a>(
+    function: FunctionLike<'e, 'a>,
+) -> Vec<&'e Expression<'a>> {
+    if let Some(body) = function.expression_body() {
+        return vec![body];
+    }
+    let mut returns = Vec::new();
+    for statement in function.block_body().unwrap_or(&[]) {
+        returned(statement, &mut returns);
+    }
+    returns
+        .into_iter()
+        .filter_map(|statement| statement.argument.as_ref())
+        .collect()
 }
 
 /// Collects the `return` statements of a body, without those of functions

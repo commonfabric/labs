@@ -521,3 +521,69 @@ fn json_value_and_json_schema_are_structural() {
         "expected JSONSchema",
     );
 }
+
+// ----- §7.5, §7.3: where a literal type is widened, and the expected type -----
+
+const TOPPING: &str = "interface Topping { kind: \"mix\" | \"plain\"; name: string }\n";
+
+#[test]
+fn expected_type_reaches_the_body_of_a_callback_of_a_generic_method() {
+    assert_accepted(&format!(
+        "{TOPPING}function a(rows: string[]): Topping[] {{ return rows.map((name) => ({{ kind: \"mix\", name }})); }}\n\
+         function b(rows: string[]): Topping[] {{\n\
+           return rows.flatMap((name) => {{ if (!name) return []; return [{{ kind: \"plain\", name }}]; }});\n\
+         }}\n\
+         function c(rows: string[] | undefined): readonly Topping[] | undefined {{ return rows?.map((name) => ({{ kind: \"mix\", name }})); }}\n"
+    ));
+    assert_refused(
+        &format!(
+            "{TOPPING}function a(rows: string[]): Topping[] {{ return rows.map((name) => ({{ kind: \"glazed\", name }})); }}\n"
+        ),
+        "found \"glazed\"",
+    );
+    assert_refused(
+        &format!(
+            "{TOPPING}function a(rows: string[]): Topping[] {{ return rows.map((name) => ({{ kind: \"mix\" }})); }}\n"
+        ),
+        "the property `name` is missing",
+    );
+}
+
+#[test]
+fn expected_type_reaches_the_body_of_a_computed() {
+    assert_accepted(&format!(
+        "{TOPPING}const Show = pattern<{{ name: string }}, {{ topping: Topping }}>(({{ name }}) => {{\n\
+           const topping: Topping = computed(() => ({{ kind: \"mix\", name }}));\n\
+           return {{ topping }};\n\
+         }});\n"
+    ));
+}
+
+#[test]
+fn inferred_result_of_a_function_is_widened() {
+    assert_refused(
+        "function glaze(kind: \"plain\" | \"sugar\") { return kind; }\n\
+         function pick(sweet: boolean) { return sweet ? \"sugar\" : \"plain\"; }\n\
+         function run() { return glaze(pick(true)); }\n",
+        "expected \"plain\" | \"sugar\", found string",
+    );
+    assert_accepted(
+        "function glaze(kind: \"plain\" | \"sugar\") { return kind; }\n\
+         function pick(sweet: boolean): \"plain\" | \"sugar\" { return sweet ? \"sugar\" : \"plain\"; }\n\
+         function fixed() { return \"plain\" as const; }\n\
+         function run() { return glaze(pick(true)) + glaze(fixed()); }\n",
+    );
+}
+
+#[test]
+fn element_of_an_array_literal_is_widened() {
+    assert_refused(
+        "function glaze(kinds: (\"plain\" | \"sugar\")[]) { return kinds; }\n\
+         function run() { const kinds = [\"plain\", \"sugar\"]; return glaze(kinds); }\n",
+        "expected \"plain\" | \"sugar\", found string",
+    );
+    assert_accepted(
+        "function glaze(kinds: (\"plain\" | \"sugar\")[]) { return kinds; }\n\
+         function run() { return glaze([\"plain\", \"sugar\"]); }\n",
+    );
+}
