@@ -352,6 +352,26 @@ impl<'a> Resolver<'_, 'a> {
         result
     }
 
+    /// `ty`, the type of `expression`, widened where the expression is a
+    /// literal (§7.5). A value of a declared union of literal types keeps
+    /// its type.
+    pub(crate) fn widened_literal(&self, expression: &Expression<'a>, ty: TypeId) -> TypeId {
+        match expression {
+            Expression::ParenthesizedExpression(inner) => {
+                self.widened_literal(&inner.expression, ty)
+            }
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::TemplateLiteral(_)
+            | Expression::UnaryExpression(_)
+            | Expression::ConditionalExpression(_)
+            | Expression::LogicalExpression(_) => self.widened(ty),
+            _ => ty,
+        }
+    }
+
     /// The type a returned expression gives the inferred result type of its
     /// function. A literal written there is widened (§7.5), in each branch
     /// of a conditional too. A literal under `as const` and a value of a
@@ -1065,11 +1085,10 @@ impl<'a> Resolver<'_, 'a> {
                             );
                         }
                         ArrayExpressionElement::Elision(_) => {}
-                        other => elements.push(self.widened(self.part(
-                            module,
+                        other => elements.push(self.widened_literal(
                             other.to_expression(),
-                            next,
-                        ))),
+                            self.part(module, other.to_expression(), next),
+                        )),
                     }
                 }
                 if elements.is_empty() {
@@ -1104,7 +1123,10 @@ impl<'a> Resolver<'_, 'a> {
                                 index = Some(self.add_unresolved());
                                 continue;
                             };
-                            let ty = self.widened(self.part(module, &property.value, next));
+                            let ty = self.widened_literal(
+                                &property.value,
+                                self.part(module, &property.value, next),
+                            );
                             properties.retain(|own| own.name != name);
                             properties.push(Property {
                                 name: name.to_string(),

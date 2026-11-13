@@ -493,7 +493,7 @@ impl<'a> Resolver<'_, 'a> {
                     (None, Some(init)) => self.declared_initializer(module, init, depth + 1).map(
                         |ty| match declarator.kind {
                             VariableDeclarationKind::Const => ty,
-                            _ => self.widened(ty),
+                            _ => self.widened_literal(init, ty),
                         },
                     ),
                     (None, None) => self.loop_variable(module, declarator, depth + 1),

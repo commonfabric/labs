@@ -208,6 +208,8 @@ pub struct TypeStore {
     pub counts: HashMap<(usize, String), usize>,
     /// The array and tuple types that are read-only (§7.5).
     readonly: std::collections::HashSet<TypeId>,
+    /// The constraint of each unbound type parameter that declares one.
+    constraints: HashMap<TypeId, TypeId>,
     /// The number of required elements of each tuple type that has
     /// optional elements.
     tuple_required: HashMap<TypeId, usize>,
@@ -681,6 +683,9 @@ impl<'a> Resolver<'_, 'a> {
                     }
                 }
             }
+            Shape::Parameter(_) => self
+                .constraint_of(ty)
+                .and_then(|constraint| self.property(constraint, name)),
             _ => None,
         }
     }
@@ -897,7 +902,7 @@ impl<'a> Resolver<'_, 'a> {
                     let bound = match (arguments.get(index), &parameter.default) {
                         (Some(argument), _) => *argument,
                         (None, Some(default)) => self.resolve(module, default, &Env::new(), depth),
-                        (None, None) => self.add(Shape::Parameter(parameter.name.name.to_string())),
+                        (None, None) => self.parameter(module, parameter, depth),
                     };
                     Some((symbol, bound))
                 })
@@ -915,23 +920,24 @@ impl<'a> Resolver<'_, 'a> {
                     let Expression::Identifier(base) = &heritage.expression else {
                         continue;
                     };
-                    let Some(base) = symbol_of(scoping, base) else {
-                        continue;
-                    };
                     let arguments = heritage
                         .type_arguments
                         .iter()
                         .flat_map(|arguments| &arguments.params)
                         .map(|argument| self.resolve(module, argument, &env, depth))
                         .collect();
-                    let base = self.named(module, base, arguments, depth);
+                    let base = match symbol_of(scoping, base) {
+                        Some(symbol) => self.named(module, symbol, arguments, depth),
+                        // A native type operator: `extends Omit<T, K>`.
+                        None => {
+                            self.global_of(module, heritage.span, base.name.as_str(), arguments)
+                        }
+                    };
                     ty = self.intersect(base, ty, 0);
                 }
                 ty
             }
-            AstKind::TSTypeParameter(parameter) => {
-                self.add(Shape::Parameter(parameter.name.name.to_string()))
-            }
+            AstKind::TSTypeParameter(parameter) => self.parameter(module, parameter, depth),
             _ => self.unresolved(Why::NotEvaluated),
         };
         if plain {
@@ -945,6 +951,29 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         resolved
+    }
+
+    /// An unbound type parameter, with its constraint kept beside it: a
+    /// generic function is checked with each parameter replaced by its
+    /// constraint (§7.3), so a property read on the parameter reads the
+    /// constraint.
+    fn parameter(&self, module: usize, parameter: &TSTypeParameter<'a>, depth: u32) -> TypeId {
+        let unbound = self.add(Shape::Parameter(parameter.name.name.to_string()));
+        if let Some(constraint) = &parameter.constraint {
+            if depth < MAX_DEPTH {
+                let constraint = self.resolve(module, constraint, &Env::new(), depth + 1);
+                self.types
+                    .borrow_mut()
+                    .constraints
+                    .insert(unbound, constraint);
+            }
+        }
+        unbound
+    }
+
+    /// The constraint of an unbound type parameter.
+    pub(crate) fn constraint_of(&self, ty: TypeId) -> Option<TypeId> {
+        self.types.borrow().constraints.get(&ty).copied()
     }
 
     /// The type a symbol of module `module` names, an import followed.
@@ -1749,6 +1778,12 @@ impl<'a> Resolver<'_, 'a> {
         depth: u32,
     ) -> TypeId {
         let arguments = self.arguments(module, reference, env, depth);
+        self.global_of(module, reference.span, name, arguments)
+    }
+
+    /// [`Self::global`] for a name written at `span` with its type
+    /// arguments resolved.
+    fn global_of(&self, module: usize, span: Span, name: &str, arguments: Vec<TypeId>) -> TypeId {
         let first = arguments.first().copied();
         let operand = |checker: &Self| -> Option<(TypeId, Shape)> {
             let operand = first?;
@@ -1763,7 +1798,7 @@ impl<'a> Resolver<'_, 'a> {
                     checker.report(
                         module,
                         "subset-type:operator-operand",
-                        reference.span,
+                        span,
                         format!("`{name}` applied to a type that is not an object type"),
                     );
                     None
@@ -1820,7 +1855,7 @@ impl<'a> Resolver<'_, 'a> {
                             self.report(
                             module,
                             "subset-type:operator-operand",
-                            reference.span,
+                            span,
                             format!("`Pick` with the key `{missing}`, which the type does not declare"),
                         );
                         }
@@ -1842,7 +1877,7 @@ impl<'a> Resolver<'_, 'a> {
                             self.report(
                                 module,
                                 "subset-type:operator-operand",
-                                reference.span,
+                                span,
                                 format!("`{name}` with keys that are not string literal types"),
                             );
                         }
@@ -1896,7 +1931,7 @@ impl<'a> Resolver<'_, 'a> {
                     .function_result(function)
                     .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
                 Some((operand, shape)) => {
-                    self.outside_the_table(module, reference, name, operand, &shape);
+                    self.outside_the_table(module, span, name, operand, &shape);
                     self.unresolved(Why::NotEvaluated)
                 }
                 None => self.unresolved(Why::NotEvaluated),
@@ -1912,7 +1947,7 @@ impl<'a> Resolver<'_, 'a> {
                     _ => self.unresolved(Why::NotEvaluated),
                 },
                 Some((operand, shape)) => {
-                    self.outside_the_table(module, reference, name, operand, &shape);
+                    self.outside_the_table(module, span, name, operand, &shape);
                     self.unresolved(Why::NotEvaluated)
                 }
                 None => self.unresolved(Why::NotEvaluated),
@@ -1961,7 +1996,7 @@ impl<'a> Resolver<'_, 'a> {
                 self.report(
                     module,
                     "stdlib:unsupported-member",
-                    reference.span,
+                    span,
                     format!("The utility type `{name}` is not part of the subset"),
                 );
                 self.unresolved(Why::RefusedForm)
@@ -1970,7 +2005,7 @@ impl<'a> Resolver<'_, 'a> {
                 self.report(
                     module,
                     "function-body:unsupported-global",
-                    reference.span,
+                    span,
                     format!("The type of the global `{name}` is not available"),
                 );
                 self.unresolved(Why::RefusedForm)
@@ -1985,12 +2020,12 @@ impl<'a> Resolver<'_, 'a> {
                 self.note(
                     module,
                     format!("a type name of the DOM library: {name}"),
-                    reference.span,
+                    span,
                 );
                 self.report(
                     module,
                     "stdlib:unsupported-member",
-                    reference.span,
+                    span,
                     format!(
                         "`{name}` is a type name of the DOM library, which is not part of the subset. An event arrives as data: declare the shape of the event the handler reads, such as `{{ detail: {{ value: string }} }}`"
                     ),
@@ -2003,7 +2038,7 @@ impl<'a> Resolver<'_, 'a> {
                 self.report(
                     module,
                     "subset-type:mismatch",
-                    reference.span,
+                    span,
                     format!("The type name `{name}` resolves to nothing"),
                 );
                 self.unresolved(Why::External)
@@ -2017,7 +2052,7 @@ impl<'a> Resolver<'_, 'a> {
     fn outside_the_table(
         &self,
         module: usize,
-        reference: &TSTypeReference<'a>,
+        span: Span,
         name: &str,
         operand: TypeId,
         shape: &Shape,
@@ -2028,7 +2063,7 @@ impl<'a> Resolver<'_, 'a> {
         self.report(
             module,
             "subset-type:operator-operand",
-            reference.span,
+            span,
             format!("`{name}` applied to a type that is not a function type or a factory type"),
         );
     }

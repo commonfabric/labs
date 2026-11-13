@@ -118,6 +118,11 @@ impl<'a> TypedRules<'_, '_, 'a> {
             self.count("property read", "not decided: the receiver has no type");
             return;
         };
+        // A type parameter is read through its constraint (§7.3).
+        let object = match resolver.shape(object) {
+            Shape::Parameter(_) => resolver.constraint_of(object).unwrap_or(object),
+            _ => object,
+        };
         let text = |limit: usize| -> String {
             resolver
                 .parsed(self.module)

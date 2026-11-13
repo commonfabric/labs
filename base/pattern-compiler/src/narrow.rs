@@ -97,6 +97,14 @@ impl<'a> Resolver<'_, 'a> {
                     path.push(member.property.name.to_string());
                     &member.object
                 }
+                // `a?.b` reads the path `a.b`.
+                Expression::ChainExpression(chain) => match &chain.expression {
+                    ChainElement::StaticMemberExpression(member) => {
+                        path.push(member.property.name.to_string());
+                        &member.object
+                    }
+                    _ => return None,
+                },
                 Expression::ComputedMemberExpression(member) => {
                     match unparen(&member.expression) {
                         Expression::NumericLiteral(index) => {
@@ -831,6 +839,27 @@ impl<'a> Resolver<'_, 'a> {
                     _ => Kind::No,
                 })
             }
+            // `isWellFormedDID(x)` has the predicate `x is DID`, and a DID
+            // is a string.
+            Expression::Identifier(_)
+                if self.api_callee(module, call).as_deref() == Some("isWellFormedDID") =>
+            {
+                if argument(0)
+                    .and_then(|argument| self.reference_of(module, argument))
+                    .as_ref()
+                    != Some(reference)
+                {
+                    return ty;
+                }
+                let string = self.intern(Shape::String);
+                if self.shape(ty) == Shape::Unknown {
+                    return if sense { string } else { ty };
+                }
+                self.filter(ty, |member, _| {
+                    self.assignable(member, string)
+                        .is_none_or(|fits| fits == sense)
+                })
+            }
             // A call of a function with a type predicate.
             Expression::Identifier(callee) => {
                 let Some((home, symbol)) =
@@ -1012,7 +1041,14 @@ impl<'a> Resolver<'_, 'a> {
                 if defined && self.chain_tests(module, &chain.expression, reference) {
                     return self.present(ty);
                 }
-                continue;
+                // The path the chain reads is narrowed as a path is. A
+                // receiver of the chain is not narrowed by it otherwise.
+                match self.reference_of(module, tested) {
+                    Some(tested) if tested == *reference => {
+                        return self.assume_value(&value, strict, sense, ty);
+                    }
+                    _ => continue,
+                }
             }
             let Some(tested) = self.reference_of(module, tested) else {
                 continue;

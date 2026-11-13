@@ -509,3 +509,67 @@ fn typeof_object_narrows_an_ordinary_unknown_to_a_type_with_no_property() {
         ["object | null", "object", "object"]
     );
 }
+
+#[test]
+fn optional_chain_compared_with_undefined_narrows_the_path_it_reads() {
+    assert_eq!(
+        types(
+            "function show(place: { latest?: bigint } | undefined, reply: { thread?: string } | undefined) {\n\
+               const a = place?.latest === undefined ? 0n : /*?*/(place.latest);\n\
+               const b = reply?.thread === undefined ? undefined : /*?*/(reply.thread);\n\
+               return [a, b];\n\
+             }\n"
+        ),
+        ["bigint", "string"]
+    );
+}
+
+#[test]
+fn property_of_a_type_parameter_is_read_through_its_constraint() {
+    assert_eq!(
+        types(
+            "interface Entry { since: number }\n\
+             function newest<T extends Entry>(entries: readonly T[]) {\n\
+               return entries.map((entry) => /*?*/(entry.since));\n\
+             }\n"
+        ),
+        ["number"]
+    );
+}
+
+#[test]
+fn interface_extends_a_native_type_operator() {
+    assert_eq!(
+        types(
+            "interface Notice { id: string; room: string; note?: string }\n\
+             interface Linked extends Omit<Notice, \"room\"> { room: number }\n\
+             interface Whole extends Required<Notice> { extra: boolean }\n\
+             function show(linked: Linked, whole: Whole) { return [/*?*/(linked.id), /*?*/(linked.room), /*?*/(whole.note)]; }\n"
+        ),
+        ["string", "number", "string"]
+    );
+}
+
+#[test]
+fn property_of_an_object_literal_keeps_a_declared_union_of_literals() {
+    assert_eq!(
+        types(
+            "function show(kind: \"direct\" | \"group\") {\n\
+               const bindings = { kind, plain: \"x\" };\n\
+               return [/*?*/(bindings.kind), /*?*/(bindings.plain)];\n\
+             }\n"
+        ),
+        ["\"direct\" | \"group\"", "string"]
+    );
+}
+
+#[test]
+fn well_formed_did_test_narrows_unknown_to_a_string() {
+    assert_eq!(
+        types(
+            "import { isWellFormedDID } from \"commonfabric\";\n\
+             function show(value: unknown) { return isWellFormedDID(value) && /*?*/value; }\n"
+        ),
+        ["string"]
+    );
+}
