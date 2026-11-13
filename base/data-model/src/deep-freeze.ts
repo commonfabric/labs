@@ -13,7 +13,7 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import { GenerationalWeakSet } from "./generational-weak-set.ts";
+import { GenerationalWeakSet } from "./GenerationalWeakSet.ts";
 import type { FabricValue } from "./interface.ts";
 import {
   BaseFabricInstance,

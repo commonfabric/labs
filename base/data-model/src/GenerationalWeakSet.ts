@@ -18,6 +18,12 @@
  * answers `true` and leaves the key where it is, so a key in steady use is
  * forgotten with its generation too, and enters the newest one again when its
  * owner next proves and adds it.
+ *
+ * Forgetting makes this fit for a cache and for nothing whose answers must
+ * hold. A cache that forgets an entry only redoes the work the entry saved. An
+ * interning table that forgot one would hand out a second object for a value
+ * it had already interned, so two values it treats as the same would no longer
+ * be `===`.
  */
 export class GenerationalWeakSet<T extends WeakKey> {
   #newest = new WeakSet<T>();

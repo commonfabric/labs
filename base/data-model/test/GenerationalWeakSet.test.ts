@@ -7,7 +7,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { GenerationalWeakSet } from "@/generational-weak-set.ts";
+import { GenerationalWeakSet } from "@/GenerationalWeakSet.ts";
 
 describe("GenerationalWeakSet", () => {
   describe("has()", () => {
