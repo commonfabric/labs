@@ -26,9 +26,26 @@ pub enum Class {
     CellForValue,
     /// A handle of another kind, or a writable handle of another type.
     Handle,
-    /// A handle of some type where a writable handle of `unknown` is
-    /// declared.
-    HandleOfUnknown,
+    /// A handle where a structural type with the methods of a cell is
+    /// declared (§7.5.1).
+    CellForStructural,
+    /// In an argument bound by reference: a value where a stream, a SQLite
+    /// handle, or an index handle is declared (§7.5.2).
+    ValueForStream,
+    /// In an argument bound by reference: a stream or a SQLite handle where
+    /// a value is declared.
+    StreamForValue,
+    /// In an argument bound by reference: a handle that cannot be read
+    /// where a value is declared.
+    UnreadableCellForValue,
+    /// In an argument bound by reference: a value of `T` where a cell of
+    /// `T | undefined` is declared, or the reverse.
+    UndefinedInCell,
+    /// In an argument bound by reference: a value whose type a cell of the
+    /// declared handle does not hold.
+    ValueForCellOfAnotherType,
+    /// An opaque named type against any other type (§7.2).
+    Opaque,
     /// A read-only array, tuple, container, or property where a mutable
     /// one is declared.
     ReadOnly,
@@ -43,12 +60,35 @@ pub enum Class {
 }
 
 impl Class {
+    /// Whether the class names the difference itself, so that a refusal of
+    /// it is kept as it is where a union surrounds it.
+    fn is_specific(self) -> bool {
+        matches!(
+            self,
+            Class::CellForStructural
+                | Class::ValueForStream
+                | Class::StreamForValue
+                | Class::UnreadableCellForValue
+                | Class::UndefinedInCell
+                | Class::ValueForCellOfAnotherType
+                | Class::Opaque
+        )
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Class::ValueForCell => "a value where a cell is declared",
             Class::CellForValue => "a cell where a value is declared",
             Class::Handle => "a handle of another kind or of another value type",
-            Class::HandleOfUnknown => "a cell of a known type where `Cell<unknown>` is declared",
+            Class::CellForStructural => {
+                "a cell where a structural type such as `{ get(): T }` is declared"
+            }
+            Class::ValueForStream => "a value where a stream or a SQLite handle is declared",
+            Class::StreamForValue => "a stream or a SQLite handle where a value is declared",
+            Class::UnreadableCellForValue => "a cell that cannot be read where a value is declared",
+            Class::UndefinedInCell => "a value and a cell that differ by `undefined`",
+            Class::ValueForCellOfAnotherType => "a value where a cell of another type is declared",
+            Class::Opaque => "an opaque type against another type",
             Class::ReadOnly => "read-only where mutable is declared",
             Class::MissingProperty => "a missing property",
             Class::ExcessProperty => "a property the type does not declare",
@@ -120,6 +160,12 @@ fn same_literal(left: &str, right: &str) -> bool {
 }
 
 const MAX_DEPTH: u32 = 12;
+
+/// Whether an API type is opaque (§7.2): its structure is not part of the
+/// language.
+fn is_opaque(name: &str) -> bool {
+    name == "VNode"
+}
 
 impl<'a> Resolver<'_, 'a> {
     /// Whether a value of type `from` is assignable to a position of type
@@ -204,10 +250,37 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The assignability of `from` to `to` (§7.5).
     pub fn relate(&self, from: TypeId, to: TypeId, depth: u32) -> Verdict {
+        self.relate_in(from, to, depth, false)
+    }
+
+    /// The assignability of an argument bound by reference in tier R
+    /// (§7.5.2): a value and a handle of that value stand for each other,
+    /// position by position.
+    pub fn relate_by_reference(&self, from: TypeId, to: TypeId) -> Verdict {
+        self.relate_in(from, to, 0, true)
+    }
+
+    /// A refusal of a class that is kept as it is, whatever union it was
+    /// found in.
+    fn refusal(&self, class: Class, from: TypeId, to: TypeId, why: &str) -> Verdict {
+        Verdict::No(
+            class,
+            format!(
+                "expected {}, found {}: {why}",
+                self.display(to),
+                self.display(from)
+            ),
+        )
+    }
+
+    /// `from` against `to`. With `by_reference`, the table of §7.5.2
+    /// applies at every position.
+    fn relate_in(&self, from: TypeId, to: TypeId, depth: u32, by_reference: bool) -> Verdict {
         if depth > MAX_DEPTH {
             return Verdict::Unsure;
         }
         let next = depth + 1;
+        let rel = |from: TypeId, to: TypeId| self.relate_in(from, to, next, by_reference);
         let (source, target) = (self.shape(from), self.shape(to));
         match (&source, &target) {
             (Shape::Parameter(a), Shape::Parameter(b)) if a == b => return Verdict::Yes,
@@ -216,8 +289,21 @@ impl<'a> Resolver<'_, 'a> {
             (_, Shape::Unknown) | (Shape::Never, _) => return Verdict::Yes,
             _ => {}
         }
+        if by_reference {
+            if let (Shape::Union(members), Shape::Handle(kind, wanted)) = (&source, &target) {
+                // A value that may be absent is one value at one place, and
+                // is compared whole with the value type of the handle.
+                let handles = members
+                    .iter()
+                    .any(|member| matches!(self.shape(*member), Shape::Handle(..)));
+                if !handles {
+                    return self.value_for_handle(from, to, *kind, *wanted, next);
+                }
+            }
+        }
         if let Shape::Union(members) = &source {
-            return match all(members.iter().map(|member| self.relate(*member, to, next))) {
+            return match all(members.iter().map(|member| rel(*member, to))) {
+                Verdict::No(class, text) if class.is_specific() => Verdict::No(class, text),
                 Verdict::No(class, _) => self.mismatch(class, from, to, class.label()),
                 other => other,
             };
@@ -225,26 +311,25 @@ impl<'a> Resolver<'_, 'a> {
         if let Shape::Union(members) = &target {
             if source == Shape::Boolean {
                 // `boolean` is `true | false`.
-                let both = ["true", "false"].map(|text| {
-                    self.relate(self.intern(Shape::Literal(text.to_string())), to, next)
-                });
+                let both = ["true", "false"]
+                    .map(|text| rel(self.intern(Shape::Literal(text.to_string())), to));
                 if all(both) == Verdict::Yes {
                     return Verdict::Yes;
                 }
             }
             let mut unsure = false;
-            let mut refusal = None;
+            let mut refusal: Option<(Class, String)> = None;
             for member in members {
-                match self.relate(from, *member, next) {
+                match rel(from, *member) {
                     Verdict::Yes => return Verdict::Yes,
                     Verdict::Unsure => unsure = true,
-                    Verdict::No(class, _) => {
+                    Verdict::No(class, text) => {
                         // The refusal that says most is the one against the
                         // member of the same kind as the value.
                         let same_kind = std::mem::discriminant(&self.shape(*member))
                             == std::mem::discriminant(&source);
                         if refusal.is_none() || same_kind {
-                            refusal = Some(class);
+                            refusal = Some((class, text));
                         }
                     }
                 }
@@ -252,12 +337,14 @@ impl<'a> Resolver<'_, 'a> {
             if unsure {
                 return Verdict::Unsure;
             }
-            let class = match (&source, refusal) {
-                (Shape::Null | Shape::Undefined, _) => Class::Absent,
-                (_, Some(class)) => class,
-                (_, None) => Class::Other,
+            return match (&source, refusal) {
+                (Shape::Null | Shape::Undefined, _) => {
+                    self.mismatch(Class::Absent, from, to, Class::Absent.label())
+                }
+                (_, Some((class, text))) if class.is_specific() => Verdict::No(class, text),
+                (_, Some((class, _))) => self.mismatch(class, from, to, class.label()),
+                (_, None) => self.mismatch(Class::Other, from, to, ""),
             };
-            return self.mismatch(class, from, to, class.label());
         }
         match (&source, &target) {
             (Shape::Literal(a), Shape::Literal(b)) if same_literal(a, b) => Verdict::Yes,
@@ -268,25 +355,178 @@ impl<'a> Resolver<'_, 'a> {
             | (Shape::BigInt, Shape::BigInt)
             | (Shape::Null, Shape::Null)
             | (Shape::Undefined, Shape::Undefined | Shape::Void)
-            | (Shape::Void, Shape::Void) => Verdict::Yes,
-            (Shape::Null | Shape::Undefined, _) if !matches!(target, Shape::Handle(..)) => {
+            | (Shape::Void, Shape::Void)
+            | (Shape::NonPrimitive, Shape::NonPrimitive) => Verdict::Yes,
+            (Shape::Null | Shape::Undefined, _)
+                if !matches!(target, Shape::Handle(..) | Shape::Opaque(_)) =>
+            {
                 self.mismatch(Class::Absent, from, to, "")
             }
-            (Shape::Handle(source_kind, value), Shape::Handle(target_kind, wanted)) => {
-                self.relate_handles(from, to, *source_kind, *value, *target_kind, *wanted, next)
+            // `object` takes every value that is not a primitive (§7.1).
+            (
+                Shape::Object(..)
+                | Shape::Array(_)
+                | Shape::Tuple(_)
+                | Shape::Handle(..)
+                | Shape::PatternFactory(..)
+                | Shape::HandlerFactory(..)
+                | Shape::Function
+                | Shape::Code(_),
+                Shape::NonPrimitive,
+            ) => Verdict::Yes,
+            (Shape::Opaque(name), Shape::NonPrimitive) if name != "JSONValue" => {
+                if is_opaque(name) {
+                    Verdict::Yes
+                } else {
+                    Verdict::Unsure
+                }
             }
-            (Shape::Handle(..), _) => self.mismatch(
-                Class::CellForValue,
-                from,
-                to,
-                "a cell where a value is declared",
-            ),
-            (_, Shape::Handle(..)) => self.mismatch(
-                Class::ValueForCell,
-                from,
-                to,
-                "a value where a cell is declared",
-            ),
+            (_, Shape::NonPrimitive) => self.mismatch(Class::Other, from, to, ""),
+            (Shape::Handle(source_kind, value), Shape::Handle(target_kind, wanted)) => self
+                .relate_handles(
+                    from,
+                    to,
+                    *source_kind,
+                    *value,
+                    *target_kind,
+                    *wanted,
+                    next,
+                    by_reference,
+                ),
+            (Shape::Handle(kind, value), _) => {
+                if by_reference {
+                    // A handle that can be read stands for the value it
+                    // holds (§7.5.2, the third row).
+                    return if kind.is_readable() {
+                        rel(*value, to)
+                    } else if kind.is_cell() {
+                        self.refusal(
+                            Class::UnreadableCellForValue,
+                            from,
+                            to,
+                            &format!(
+                                "a {} cannot be read, so it does not stand for the value",
+                                kind.name()
+                            ),
+                        )
+                    } else {
+                        self.refusal(
+                            Class::StreamForValue,
+                            from,
+                            to,
+                            &format!("a {} has no value to read", kind.name()),
+                        )
+                    };
+                }
+                // A structural type with the methods of a cell is not a
+                // handle type (§7.5.1).
+                if let Shape::Object(wanted, _) = &target {
+                    let method = wanted.iter().find(|property| {
+                        matches!(property.name.as_str(), "get" | "set" | "key" | "send")
+                            && self.shape(property.ty) == Shape::Function
+                    });
+                    if method.is_some() {
+                        let read = wanted
+                            .iter()
+                            .find(|property| property.name == "get")
+                            .and_then(|property| self.function_result(property.ty))
+                            .unwrap_or(*value);
+                        return self.refusal(
+                            Class::CellForStructural,
+                            from,
+                            to,
+                            &format!(
+                                "a cell where a structural type is declared. A structural type is not a handle: declare the parameter `ReadonlyCell<{}>`",
+                                self.display(read)
+                            ),
+                        );
+                    }
+                }
+                self.mismatch(
+                    Class::CellForValue,
+                    from,
+                    to,
+                    "a cell where a value is declared",
+                )
+            }
+            (_, Shape::Handle(kind, wanted)) => {
+                if by_reference {
+                    return self.value_for_handle(from, to, *kind, *wanted, next);
+                }
+                self.mismatch(
+                    Class::ValueForCell,
+                    from,
+                    to,
+                    "a value where a cell is declared",
+                )
+            }
+            // `JSONValue` and `JSONSchema` are structural (§7.2).
+            (_, Shape::Opaque(wanted)) if wanted == "JSONValue" => match &source {
+                Shape::String | Shape::Number | Shape::Boolean | Shape::Null => Verdict::Yes,
+                Shape::Literal(text) if literal_kind(text) != Shape::BigInt => Verdict::Yes,
+                Shape::Opaque(name) if name == "JSONValue" || name == "JSONSchema" => Verdict::Yes,
+                Shape::Opaque(name) if !is_opaque(name) => Verdict::Unsure,
+                Shape::Array(element) => rel(*element, to),
+                Shape::Tuple(elements) => all(elements.iter().map(|element| rel(*element, to))),
+                Shape::Object(properties, index) => all(properties
+                    .iter()
+                    .map(|property| {
+                        if property.optional {
+                            self.defined(property.ty)
+                        } else {
+                            property.ty
+                        }
+                    })
+                    .chain(*index)
+                    .map(|ty| rel(ty, to))),
+                _ => self.mismatch(Class::Other, from, to, ""),
+            },
+            (_, Shape::Opaque(wanted)) if wanted == "JSONSchema" => match &source {
+                Shape::Boolean => Verdict::Yes,
+                Shape::Literal(text) if literal_kind(text) == Shape::Boolean => Verdict::Yes,
+                Shape::Opaque(name) if name == "JSONSchema" => Verdict::Yes,
+                Shape::Opaque(name) if !is_opaque(name) && name != "JSONValue" => Verdict::Unsure,
+                Shape::Object(..) => {
+                    match rel(from, self.intern(Shape::Opaque("JSONValue".to_string()))) {
+                        Verdict::No(..) => self.mismatch(Class::Other, from, to, ""),
+                        other => other,
+                    }
+                }
+                _ => self.mismatch(Class::Other, from, to, ""),
+            },
+            (Shape::Opaque(name), Shape::Opaque(wanted)) if name == wanted => Verdict::Yes,
+            (Shape::Opaque(name), _) if name == "JSONValue" || name == "JSONSchema" => {
+                match &target {
+                    Shape::Opaque(wanted) if !is_opaque(wanted) => Verdict::Unsure,
+                    _ => self.mismatch(Class::Other, from, to, ""),
+                }
+            }
+            // An opaque named type is assignable to itself, to a union
+            // that names it, and to `unknown`, and nothing else is
+            // assignable to it (§7.2, §7.5).
+            (Shape::Opaque(name), _) if is_opaque(name) => match &target {
+                Shape::Opaque(wanted) if !is_opaque(wanted) => Verdict::Unsure,
+                _ => self.refusal(
+                    Class::Opaque,
+                    from,
+                    to,
+                    &format!(
+                        "a {name} is assignable only to itself, to a union that names it, and to `unknown`"
+                    ),
+                ),
+            },
+            (_, Shape::Opaque(wanted)) if is_opaque(wanted) => match &source {
+                Shape::Opaque(_) => Verdict::Unsure,
+                _ => self.refusal(
+                    Class::Opaque,
+                    from,
+                    to,
+                    &format!("nothing but a {wanted} is assignable to it"),
+                ),
+            },
+            // The declaration of any other API type is not read, so
+            // nothing is decided against one.
+            (Shape::Opaque(_), _) | (_, Shape::Opaque(_)) => Verdict::Unsure,
             (Shape::Object(properties, index), Shape::Object(wanted, wanted_index)) => {
                 let mut verdicts = Vec::new();
                 for want in wanted {
@@ -339,45 +579,65 @@ impl<'a> Resolver<'_, 'a> {
                     } else {
                         have.ty
                     };
-                    verdicts.push(self.relate(have_type, want.ty, next));
+                    verdicts.push(rel(have_type, want.ty));
                 }
                 if let Some(wanted_index) = wanted_index {
                     for have in properties {
-                        verdicts.push(self.relate(have.ty, *wanted_index, next));
+                        verdicts.push(rel(have.ty, *wanted_index));
                     }
                     if let Some(index) = index {
-                        verdicts.push(self.relate(*index, *wanted_index, next));
+                        verdicts.push(rel(*index, *wanted_index));
                     }
                 }
                 all(verdicts)
             }
             (Shape::Array(element), Shape::Array(wanted)) => self
                 .mutable_enough(from, to, "array")
-                .and(|| self.relate(*element, *wanted, next)),
-            (Shape::Tuple(elements), Shape::Array(wanted)) => {
-                self.mutable_enough(from, to, "array").and(|| {
-                    all(elements
-                        .iter()
-                        .map(|element| self.relate(*element, *wanted, next)))
-                })
-            }
+                .and(|| rel(*element, *wanted)),
+            (Shape::Tuple(elements), Shape::Array(wanted)) => self
+                .mutable_enough(from, to, "array")
+                .and(|| all(elements.iter().map(|element| rel(*element, *wanted)))),
             (Shape::Tuple(elements), Shape::Tuple(wanted)) => {
                 self.mutable_enough(from, to, "tuple").and(|| {
                     if elements.len() > wanted.len() {
                         return self.mismatch(Class::Other, from, to, "the tuple is longer");
                     }
-                    let pairs = all(elements
+                    let (have, need) = (self.tuple_required(from), self.tuple_required(to));
+                    if elements.len() < need {
+                        return self.mismatch(
+                            Class::Other,
+                            from,
+                            to,
+                            &format!(
+                                "the tuple has {} element{} and the type requires {need}",
+                                elements.len(),
+                                if elements.len() == 1 { "" } else { "s" }
+                            ),
+                        );
+                    }
+                    if have < need {
+                        return self.mismatch(
+                            Class::Other,
+                            from,
+                            to,
+                            &format!(
+                                "element {} is optional in the value and required in the type",
+                                have + 1
+                            ),
+                        );
+                    }
+                    all(elements
                         .iter()
                         .zip(wanted)
-                        .map(|(element, wanted)| self.relate(*element, *wanted, next)));
-                    // Whether a trailing element is optional is not kept.
-                    if elements.len() < wanted.len() {
-                        pairs.and(|| Verdict::Unsure)
-                    } else {
-                        pairs
-                    }
+                        .map(|(element, wanted)| rel(*element, *wanted)))
                 })
             }
+            (Shape::Array(_), Shape::Tuple(_)) => self.mismatch(
+                Class::Other,
+                from,
+                to,
+                "an array where a tuple is declared",
+            ),
             (Shape::Function, Shape::Function) => {
                 let (have, want) = (self.signature(from), self.signature(to));
                 let parameters = match (&have.parameters, &want.parameters) {
@@ -444,14 +704,10 @@ impl<'a> Resolver<'_, 'a> {
             }
             (Shape::Array(element), Shape::Code(wanted)) if wanted == "Iterable" => {
                 match self.code_arguments(to).first() {
-                    Some(wanted) => self.relate(*element, *wanted, next),
+                    Some(wanted) => rel(*element, *wanted),
                     None => Verdict::Unsure,
                 }
             }
-            (Shape::Opaque(name), Shape::Opaque(wanted)) if name == wanted => Verdict::Yes,
-            // The structure of an opaque API type is not part of the
-            // language (§7.2), so nothing is decided against one.
-            (Shape::Opaque(_), _) | (_, Shape::Opaque(_)) => Verdict::Unsure,
             // The members of a standard-library object, and whether a
             // factory is callable as a function type, are not modelled.
             (Shape::Code(_), Shape::Object(..))
@@ -464,6 +720,63 @@ impl<'a> Resolver<'_, 'a> {
             }
             _ => self.mismatch(Class::Other, from, to, ""),
         }
+    }
+
+    /// A value of type `from` where a handle of `wanted` is declared, in an
+    /// argument bound by reference (§7.5.2, the second row): accepted when
+    /// a `Cell` of the value's type would be assignable to the handle.
+    fn value_for_handle(
+        &self,
+        from: TypeId,
+        to: TypeId,
+        kind: HandleKind,
+        wanted: TypeId,
+        depth: u32,
+    ) -> Verdict {
+        if !kind.is_cell() {
+            return self.refusal(
+                Class::ValueForStream,
+                from,
+                to,
+                &format!(
+                    "a value where a {} is declared. A plain value is not one, and it is given where it is declared",
+                    kind.name()
+                ),
+            );
+        }
+        let cell = self.intern(Shape::Handle(HandleKind::Cell, from));
+        let verdict =
+            self.relate_handles(cell, to, HandleKind::Cell, from, kind, wanted, depth, true);
+        let Verdict::No(..) = verdict else {
+            return verdict;
+        };
+        // Whether the two sides differ by `undefined` alone.
+        let strip = |ty: TypeId| self.defined(ty);
+        let stripped = self.intern(Shape::Handle(HandleKind::Cell, strip(from)));
+        let alike = self.relate_handles(
+            stripped,
+            to,
+            HandleKind::Cell,
+            strip(from),
+            kind,
+            strip(wanted),
+            depth,
+            true,
+        );
+        if alike == Verdict::Yes {
+            return self.refusal(
+                Class::UndefinedInCell,
+                from,
+                to,
+                "the value and the cell differ by `undefined`. Declare both sides alike, or make the property optional",
+            );
+        }
+        self.refusal(
+            Class::ValueForCellOfAnotherType,
+            from,
+            to,
+            "a cell of the value's type would not be assignable to the declared handle",
+        )
     }
 
     /// A read-only array or tuple is not assignable to a mutable one.
@@ -479,6 +792,8 @@ impl<'a> Resolver<'_, 'a> {
         Verdict::Yes
     }
 
+    /// One handle against another (§7.5.1): the kind, then the value type
+    /// as the kind of the target compares it.
     #[allow(clippy::too_many_arguments)]
     fn relate_handles(
         &self,
@@ -489,6 +804,7 @@ impl<'a> Resolver<'_, 'a> {
         target_kind: HandleKind,
         wanted: TypeId,
         depth: u32,
+        by_reference: bool,
     ) -> Verdict {
         let narrower = source_kind == HandleKind::Cell
             && matches!(
@@ -498,32 +814,55 @@ impl<'a> Resolver<'_, 'a> {
                     | HandleKind::ComparableCell
                     | HandleKind::OpaqueCell
             );
-        if source_kind != target_kind && !narrower {
+        // `AnyCell` has no method, so a handle of every kind is one.
+        let any = target_kind == HandleKind::Any && source_kind != HandleKind::Sqlite;
+        if source_kind != target_kind && !narrower && !any {
             return self.mismatch(
                 Class::Handle,
                 from,
                 to,
-                &format!("a {source_kind:?} where a {target_kind:?} is declared"),
+                &format!(
+                    "a {} where a {} is declared",
+                    source_kind.name(),
+                    target_kind.name()
+                ),
             );
         }
-        let forward = self.relate(value, wanted, depth);
-        if target_kind == HandleKind::ReadonlyCell || target_kind == HandleKind::Sqlite {
-            return forward;
+        // A handle of `T` is a handle of `unknown`, at the root of the
+        // value type only.
+        match (self.shape(value), self.shape(wanted)) {
+            (Shape::Unresolved(_) | Shape::Parameter(_), _) => return Verdict::Unsure,
+            (_, Shape::Unknown) => return Verdict::Yes,
+            _ => {}
         }
-        // A handle that can write holds the same type, up to annotations.
-        let same = forward.and(|| self.relate(wanted, value, depth));
-        match same {
-            Verdict::No(..) => self.mismatch(
-                if self.shape(wanted) == Shape::Unknown {
-                    Class::HandleOfUnknown
-                } else {
-                    Class::Handle
-                },
-                from,
-                to,
-                "a cell that can be written has to hold the same type",
-            ),
-            other => other,
+        let forward = || self.relate_in(value, wanted, depth, by_reference);
+        let reverse = || self.relate_in(wanted, value, depth, by_reference);
+        match target_kind {
+            // Nothing is written through the target.
+            HandleKind::ReadonlyCell
+            | HandleKind::ComparableCell
+            | HandleKind::OpaqueCell
+            | HandleKind::Any
+            | HandleKind::Sqlite => forward(),
+            // Nothing is read through the target.
+            HandleKind::WriteonlyCell | HandleKind::Stream => match reverse() {
+                Verdict::No(..) => self.mismatch(
+                    Class::Handle,
+                    from,
+                    to,
+                    "what is written through the declared handle is not what the source accepts",
+                ),
+                other => other,
+            },
+            HandleKind::Cell => match forward().and(reverse) {
+                Verdict::No(..) => self.mismatch(
+                    Class::Handle,
+                    from,
+                    to,
+                    "a cell that can be read and written has to hold the same type",
+                ),
+                other => other,
+            },
         }
     }
 
@@ -761,6 +1100,24 @@ impl<'a> Resolver<'_, 'a> {
             _ => None,
         };
         let mut verdicts = Vec::new();
+        let spread = array
+            .elements
+            .iter()
+            .any(|element| matches!(element, ArrayExpressionElement::SpreadElement(_)));
+        if let (Shape::Tuple(_), false) = (self.shape(*candidate), spread) {
+            let need = self.tuple_required(*candidate);
+            if array.elements.len() < need {
+                return Some(Verdict::No(
+                    Class::Other,
+                    format!(
+                        "expected {}: the array literal has {} element{} and the type requires {need}",
+                        self.display(*candidate),
+                        array.elements.len(),
+                        if array.elements.len() == 1 { "" } else { "s" }
+                    ),
+                ));
+            }
+        }
         for (position, element) in array.elements.iter().enumerate() {
             match element {
                 ArrayExpressionElement::SpreadElement(spread) => {

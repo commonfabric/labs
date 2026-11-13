@@ -179,7 +179,7 @@ impl<'a> TypedRules<'_, '_, 'a> {
         let closed = !present.is_empty()
             && present
                 .iter()
-                .all(|shape| matches!(shape, Shape::Object(_, None)));
+                .all(|shape| matches!(shape, Shape::Object(_, None) | Shape::NonPrimitive));
         let declared = present.iter().any(|shape| match shape {
             Shape::Object(properties, _) => properties.iter().any(|property| property.name == name),
             _ => false,

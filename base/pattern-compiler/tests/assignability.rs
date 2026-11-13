@@ -5,7 +5,8 @@
 use pattern_compiler::program::{analyze, SourceFile};
 
 const PRELUDE: &str = "import { Cell, handler, pattern, Stream, Writable, \
-type Confidential, type ReadonlyCell } from \"commonfabric\";\n";
+type Confidential, type ReadonlyCell, type WriteonlyCell, type ComparableCell, type OpaqueCell, \
+type AnyCell, type VNode, type JSONValue, type JSONSchema, lift, computed, UI, type SqliteDb } from \"commonfabric\";\n";
 
 /// The `subset-type:mismatch` messages of a snippet, and its other errors.
 fn check(snippet: &str) -> (Vec<String>, Vec<&'static str>) {
@@ -134,7 +135,7 @@ fn cell_is_assignable_to_a_cell_of_the_same_type_only() {
     assert_refused(
         "function write(cell: Cell<string | number>) { cell.set(1); }\n\
          function run(cell: Cell<string>) { return write(cell); }\n",
-        "a cell that can be written has to hold the same type",
+        "a cell that can be read and written has to hold the same type",
     );
     assert_refused(
         "function write(cell: Cell<string>) { cell.set(\"\"); }\n\
@@ -148,7 +149,7 @@ fn handle_is_not_assignable_to_an_object_type_with_the_same_methods() {
     assert_refused(
         "function read(source: { get(): string[] }) { return source.get(); }\n\
          function run(cell: Cell<string[]>) { return read(cell); }\n",
-        "a cell where a value is declared",
+        "a cell where a structural type is declared",
     );
 }
 
@@ -300,5 +301,223 @@ fn object_with_a_spread_of_an_untyped_value_is_not_decided() {
     assert_accepted(
         "import type { Missing } from \"./missing.ts\";\n\
          function row(base: Missing): { name: string; price: number } { return { ...base, price: 1 }; }\n",
+    );
+}
+
+// ----- §7.5.1: the value type of a handle, by the kind of the target -----
+
+#[test]
+fn value_type_goes_forward_for_a_target_that_does_not_write() {
+    assert_accepted(
+        "function a(cell: ReadonlyCell<string | number>) { return cell; }\n\
+         function b(cell: ComparableCell<string | number>) { return cell; }\n\
+         function c(cell: OpaqueCell<string | number>) { return cell; }\n\
+         function run(cell: Cell<string>, read: ReadonlyCell<string>) { return [a(cell), b(cell), c(cell), a(read)]; }\n",
+    );
+    assert_refused(
+        "function b(cell: ComparableCell<string>) { return cell; }\n\
+         function run(cell: Cell<string | number>) { return b(cell); }\n",
+        "expected string, found string | number",
+    );
+}
+
+#[test]
+fn value_type_goes_in_reverse_for_a_target_that_only_writes() {
+    assert_accepted(
+        "function w(cell: WriteonlyCell<string>) { return cell; }\n\
+         function s(stream: Stream<{ name: string; price: number }>) { return stream; }\n\
+         function run(cell: Cell<string | number>, stream: Stream<{ name: string }>) { return [w(cell), s(stream)]; }\n",
+    );
+    assert_refused(
+        "function w(cell: WriteonlyCell<string | number>) { return cell; }\n\
+         function run(cell: Cell<string>) { return w(cell); }\n",
+        "what is written through the declared handle",
+    );
+    assert_refused(
+        "function s(stream: Stream<{ name: string }>) { return stream; }\n\
+         function run(stream: Stream<{ name: string; price: number }>) { return s(stream); }\n",
+        "what is written through the declared handle",
+    );
+}
+
+#[test]
+fn cell_of_t_and_cell_of_t_or_undefined_are_not_assignable_either_way() {
+    assert_refused(
+        "function w(cell: Cell<string | undefined>) { return cell; }\n\
+         function run(cell: Cell<string>) { return w(cell); }\n",
+        "a cell that can be read and written has to hold the same type",
+    );
+    assert_refused(
+        "function w(cell: Cell<string>) { return cell; }\n\
+         function run(cell: Cell<string | undefined>) { return w(cell); }\n",
+        "a cell that can be read and written has to hold the same type",
+    );
+}
+
+#[test]
+fn handle_is_assignable_to_the_same_kind_of_handle_of_unknown_at_the_root_only() {
+    assert_accepted(
+        "function c(cell: Cell<unknown>) { return cell; }\n\
+         function w(cell: WriteonlyCell<unknown>) { return cell; }\n\
+         function s(stream: Stream<unknown>) { return stream; }\n\
+         function run(cell: Cell<{ name: string }[]>, stream: Stream<string>) { return [c(cell), w(cell), s(stream)]; }\n",
+    );
+    assert_refused(
+        "function c(cell: Cell<unknown[]>) { return cell; }\n\
+         function run(cell: Cell<string[]>) { return c(cell); }\n",
+        "a cell that can be read and written has to hold the same type",
+    );
+    assert_refused(
+        "function c(cell: Cell<string>) { return cell; }\n\
+         function run(cell: Cell<unknown>) { return c(cell); }\n",
+        "a cell that can be read and written has to hold the same type",
+    );
+    assert_refused(
+        "function c(cell: Cell<unknown>) { return cell; }\n\
+         function run(cell: ReadonlyCell<string>) { return c(cell); }\n",
+        "a ReadonlyCell where a Cell is declared",
+    );
+}
+
+#[test]
+fn any_cell_takes_a_handle_of_every_kind() {
+    assert_accepted(
+        "function id(cell: AnyCell<unknown>) { return cell; }\n\
+         function named(cell: AnyCell<{ name: string }>) { return cell; }\n\
+         function run(cell: Cell<{ name: string; price: number }>, read: ReadonlyCell<string>, stream: Stream<string>) {\n\
+           return [id(cell), id(read), id(stream), named(cell)];\n\
+         }\n",
+    );
+    assert_refused(
+        "function id(cell: AnyCell<unknown>) { return cell; }\n\
+         function run(name: string) { return id(name); }\n",
+        "a value where a cell is declared",
+    );
+    assert_refused(
+        "function c(cell: Cell<string>) { return cell; }\n\
+         function run(cell: AnyCell<string>) { return c(cell); }\n",
+        "a AnyCell where a Cell is declared",
+    );
+}
+
+#[test]
+fn cell_passed_to_a_structural_type_is_told_to_declare_a_read_only_cell() {
+    assert_refused(
+        "function read(source: { get(): string[] }) { return source.get(); }\n\
+         function run(cell: Cell<string[]>) { return read(cell); }\n",
+        "declare the parameter `ReadonlyCell<string[]>`",
+    );
+}
+
+// ----- §7.1, §7.5: `object` -----
+
+#[test]
+fn object_takes_every_value_that_is_not_a_primitive() {
+    assert_accepted(
+        "function id(value: object) { return value; }\n\
+         const Note = pattern<{ title: string }, { title: string }>(({ title }) => ({ title }));\n\
+         function run(donut: { name: string }, rows: string[], pair: [string, number], cell: Cell<string>) {\n\
+           return [id(donut), id(rows), id(pair), id(cell), id(Note), id({})];\n\
+         }\n",
+    );
+    assert_refused(
+        "function id(value: object) { return value; }\n\
+         function run(name: string) { return id(name); }\n",
+        "expected object, found string",
+    );
+    assert_refused(
+        "function id(value: object) { return value; }\n\
+         function run(donut: { name: string } | undefined) { return id(donut); }\n",
+        "expected object",
+    );
+}
+
+#[test]
+fn object_declares_no_property() {
+    let (_, others) = check("function run(value: object) { return value.name; }\n");
+    assert_eq!(others, ["schema:path-not-in-type"]);
+}
+
+// ----- §7.5: tuples -----
+
+#[test]
+fn tuple_is_assignable_to_a_tuple_with_its_required_elements() {
+    assert_accepted(
+        "function a(pair: [string, number?]) { return pair; }\n\
+         function b(rows: (string | number)[]) { return rows; }\n\
+         function run(one: [string], two: [string, number]) { return [a(one), a(two), b(two)]; }\n",
+    );
+    assert_refused(
+        "function a(pair: [string, number]) { return pair; }\n\
+         function run(one: [string]) { return a(one); }\n",
+        "the tuple has 1 element and the type requires 2",
+    );
+    assert_refused(
+        "function a(pair: [string]) { return pair; }\n\
+         function run(two: [string, number]) { return a(two); }\n",
+        "the tuple is longer",
+    );
+    assert_refused(
+        "function a(pair: [string, number]) { return pair; }\n\
+         function run(rows: string[]) { return a(rows); }\n",
+        "an array where a tuple is declared",
+    );
+    assert_refused(
+        "function a(pair: [string, number]) { return pair; }\n\
+         function run(two: [string, number?]) { return a(two); }\n",
+        "optional in the value and required in the type",
+    );
+}
+
+// ----- §7.2, §7.5: opaque types, and the two that are structural -----
+
+#[test]
+fn opaque_type_is_assignable_to_itself_a_union_that_names_it_and_unknown() {
+    assert_accepted(
+        "function a(node: VNode) { return node; }\n\
+         function b(node: VNode | undefined, any: unknown) { return [node, any]; }\n\
+         function run(node: VNode) { return [a(node), b(node, node), a(<div />)]; }\n",
+    );
+    assert_refused(
+        "function a(node: VNode) { return node; }\n\
+         function run(name: string) { return a(name); }\n",
+        "nothing but a VNode is assignable to it",
+    );
+    assert_refused(
+        "function a(view: { type: string }) { return view; }\n\
+         function run(node: VNode) { return a(node); }\n",
+        "a VNode is assignable only to itself",
+    );
+}
+
+#[test]
+fn json_value_and_json_schema_are_structural() {
+    assert_accepted(
+        "function v(value: JSONValue) { return value; }\n\
+         function s(schema: JSONSchema) { return schema; }\n\
+         function run(rows: readonly { name: string; tags: string[] }[], flag: boolean, other: JSONValue) {\n\
+           return [v(rows), v(null), v(3), v({ a: [1, \"b\", { c: null }] }), v(other),\n\
+             s(flag), s({ type: \"object\", properties: { name: { type: \"string\" } } })];\n\
+         }\n",
+    );
+    assert_refused(
+        "function v(value: JSONValue) { return value; }\n\
+         function run(cell: Cell<string>) { return v(cell); }\n",
+        "a cell where a value is declared",
+    );
+    assert_refused(
+        "function v(value: JSONValue) { return value; }\n\
+         function run(when: Date) { return v(when); }\n",
+        "expected JSONValue, found Date",
+    );
+    assert_refused(
+        "function v(value: string) { return value; }\n\
+         function run(other: JSONValue) { return v(other); }\n",
+        "expected string, found JSONValue",
+    );
+    assert_refused(
+        "function s(schema: JSONSchema) { return schema; }\n\
+         function run() { return s(\"object\"); }\n",
+        "expected JSONSchema",
     );
 }

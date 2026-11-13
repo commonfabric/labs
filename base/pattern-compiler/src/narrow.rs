@@ -582,6 +582,7 @@ impl<'a> Resolver<'_, 'a> {
                     Shape::Function => "function",
                     Shape::Null
                     | Shape::Object(..)
+                    | Shape::NonPrimitive
                     | Shape::Array(_)
                     | Shape::Tuple(_)
                     | Shape::Code(_)

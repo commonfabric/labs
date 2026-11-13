@@ -41,6 +41,8 @@ pub enum HandleKind {
     OpaqueCell,
     Stream,
     Sqlite,
+    /// `AnyCell<T>`: a handle of any kind, with no method of its own.
+    Any,
 }
 
 impl HandleKind {
@@ -53,8 +55,29 @@ impl HandleKind {
             "OpaqueCell" => HandleKind::OpaqueCell,
             "Stream" => HandleKind::Stream,
             "SqliteDb" => HandleKind::Sqlite,
+            "AnyCell" => HandleKind::Any,
             _ => return None,
         })
+    }
+
+    /// The name of the kind, as the API exports the type.
+    pub fn name(self) -> &'static str {
+        match self {
+            HandleKind::Cell => "Cell",
+            HandleKind::ReadonlyCell => "ReadonlyCell",
+            HandleKind::WriteonlyCell => "WriteonlyCell",
+            HandleKind::ComparableCell => "ComparableCell",
+            HandleKind::OpaqueCell => "OpaqueCell",
+            HandleKind::Stream => "Stream",
+            HandleKind::Sqlite => "Sqlite",
+            HandleKind::Any => "AnyCell",
+        }
+    }
+
+    /// Whether a handle of this kind is a cell handle (§7.5.2): not a
+    /// stream and not a SQLite handle.
+    pub fn is_cell(self) -> bool {
+        !matches!(self, HandleKind::Stream | HandleKind::Sqlite)
     }
 
     /// Whether `.get()` reads a handle of this kind (§4.4).
@@ -95,6 +118,9 @@ pub enum Shape {
     BigInt,
     /// A literal type, as its source text.
     Literal(String),
+    /// `object`: every value that is not a primitive, `null`, or
+    /// `undefined` (§7.1). It declares no property.
+    NonPrimitive,
     /// An object type: its properties, and the value type of its index
     /// signature.
     Object(Vec<Property>, Option<TypeId>),
@@ -182,6 +208,9 @@ pub struct TypeStore {
     pub counts: HashMap<(usize, String), usize>,
     /// The array and tuple types that are read-only (§7.5).
     readonly: std::collections::HashSet<TypeId>,
+    /// The number of required elements of each tuple type that has
+    /// optional elements.
+    tuple_required: HashMap<TypeId, usize>,
     /// The functions whose return type is being inferred.
     in_progress: std::collections::HashSet<(usize, u32)>,
 }
@@ -254,6 +283,9 @@ impl<'a> Resolver<'_, 'a> {
         if types.readonly.contains(&ty) {
             types.readonly.insert(annotated);
         }
+        if let Some(required) = types.tuple_required.get(&ty).copied() {
+            types.tuple_required.insert(annotated, required);
+        }
         if let Some(signature) = types.signatures.get(&ty).cloned() {
             types.signatures.insert(annotated, signature);
         }
@@ -299,7 +331,7 @@ impl<'a> Resolver<'_, 'a> {
             TSType::TSNumberKeyword(_) => self.add(Shape::Number),
             TSType::TSBooleanKeyword(_) => self.add(Shape::Boolean),
             TSType::TSBigIntKeyword(_) => self.add(Shape::BigInt),
-            TSType::TSObjectKeyword(_) => self.add(Shape::Object(Vec::new(), None)),
+            TSType::TSObjectKeyword(_) => self.add(Shape::NonPrimitive),
             TSType::TSLiteralType(literal) => match &literal.literal {
                 TSLiteral::TemplateLiteral(_) => self.unresolved(Why::RefusedForm),
                 other => self.add(Shape::Literal(self.text(module, other.span()))),
@@ -312,26 +344,44 @@ impl<'a> Resolver<'_, 'a> {
                 self.add(Shape::Array(element))
             }
             TSType::TSTupleType(tuple) => {
-                let elements = tuple
-                    .element_types
-                    .iter()
-                    .map(|element| match element {
-                        TSTupleElement::TSOptionalType(optional) => {
-                            self.resolve(module, &optional.type_annotation, env, next)
-                        }
+                // The elements, and how many of them are required: an
+                // optional element is trailing (§7.1).
+                let mut required = 0;
+                let mut elements = Vec::new();
+                for element in &tuple.element_types {
+                    let (ty, optional) = match element {
+                        TSTupleElement::TSOptionalType(optional) => (
+                            self.resolve(module, &optional.type_annotation, env, next),
+                            true,
+                        ),
                         TSTupleElement::TSRestType(rest) => {
-                            self.resolve(module, &rest.type_annotation, env, next)
+                            (self.resolve(module, &rest.type_annotation, env, next), true)
                         }
                         TSTupleElement::TSNamedTupleMember(member) => match &member.element_type {
                             TSTupleElement::TSOptionalType(_) | TSTupleElement::TSRestType(_) => {
-                                self.unresolved(Why::NotEvaluated)
+                                (self.unresolved(Why::NotEvaluated), true)
                             }
-                            other => self.resolve(module, other.to_ts_type(), env, next),
+                            other => (
+                                self.resolve(module, other.to_ts_type(), env, next),
+                                member.optional,
+                            ),
                         },
-                        other => self.resolve(module, other.to_ts_type(), env, next),
-                    })
-                    .collect();
-                self.add(Shape::Tuple(elements))
+                        other => (self.resolve(module, other.to_ts_type(), env, next), false),
+                    };
+                    if !optional {
+                        required = elements.len() + 1;
+                    }
+                    elements.push(ty);
+                }
+                let count = elements.len();
+                let tuple = self.add(Shape::Tuple(elements));
+                if required < count {
+                    self.types
+                        .borrow_mut()
+                        .tuple_required
+                        .insert(tuple, required);
+                }
+                tuple
             }
             TSType::TSUnionType(union) => {
                 let members: Vec<TypeId> = union
@@ -1877,6 +1927,17 @@ impl<'a> Resolver<'_, 'a> {
         self.types.borrow().readonly.contains(&ty)
     }
 
+    /// The number of elements a value of the tuple type `ty` has at least.
+    pub(crate) fn tuple_required(&self, ty: TypeId) -> usize {
+        if let Some(required) = self.types.borrow().tuple_required.get(&ty) {
+            return *required;
+        }
+        match self.shape(ty) {
+            Shape::Tuple(elements) => elements.len(),
+            _ => 0,
+        }
+    }
+
     /// The read-only counterpart of `ty`: of an array or a tuple, and of an
     /// object type with every property `readonly`. Any other type is
     /// unchanged. With `deep`, the parts of the type are read-only too, as
@@ -1891,8 +1952,16 @@ impl<'a> Resolver<'_, 'a> {
                 array
             }
             Shape::Tuple(elements) => {
+                let required = self.tuple_required(ty);
+                let count = elements.len();
                 let tuple = self.add(Shape::Tuple(elements.into_iter().map(inner).collect()));
                 self.types.borrow_mut().readonly.insert(tuple);
+                if required < count {
+                    self.types
+                        .borrow_mut()
+                        .tuple_required
+                        .insert(tuple, required);
+                }
                 tuple
             }
             Shape::Object(properties, index) => {
@@ -2275,6 +2344,7 @@ impl<'a> Resolver<'_, 'a> {
             Shape::Boolean => "boolean".to_string(),
             Shape::BigInt => "bigint".to_string(),
             Shape::Literal(text) => text,
+            Shape::NonPrimitive => "object".to_string(),
             Shape::Object(properties, index) => {
                 let mut parts: Vec<String> = properties
                     .iter()
@@ -2326,7 +2396,7 @@ impl<'a> Resolver<'_, 'a> {
                     ),
                 }
             }
-            Shape::Handle(kind, value) => format!("{kind:?}<{}>", show(value)),
+            Shape::Handle(kind, value) => format!("{}<{}>", kind.name(), show(value)),
             Shape::PatternFactory(input, output) => {
                 format!("PatternFactory<{}, {}>", show(input), show(output))
             }
