@@ -515,12 +515,15 @@ async function handleLLMError<T, P>(
     if (!splitsHash) requestHashCell.withTx(tx).set(requestHash);
   };
   if (abandoned !== undefined) {
-    await settleAbandonedRequest(
+    const endingCommitted = await settleAbandonedRequest(
       runtime,
       { ...abandoned, attributeToBuiltin: false, reportRejection },
       write,
     );
-    if (splitsHash && wrote) {
+    // Only behind an ending that committed: a node that holds the hash takes
+    // its request as answered, so a hash without its ending would leave the
+    // node showing no error.
+    if (splitsHash && wrote && endingCommitted) {
       await settleAbandonedRequest(
         runtime,
         {

@@ -4556,6 +4556,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /** Starts this commit attempt and exposes its verdict and settlement. */
   commit(options?: TransactionCommitOptions): TransactionCommitReceipt {
+    // A commit is this transaction's verdict as much as an abort is, so a
+    // callback registered for an abort is dropped here rather than kept for
+    // as long as the transaction is.
+    this.#beforeAbort = undefined;
     const ready = this.status().status === "ready";
     const settled = this.#commit(options);
     return createTransactionCommitReceipt(
