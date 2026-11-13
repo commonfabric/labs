@@ -454,9 +454,10 @@ async function handleLLMError<T, P>(
   /** Whether this refusal can replace the instance's request fields. */
   ownsRefusal?: () => boolean,
   /**
-   * Present when the error is the ending of a request whose staging
-   * transaction was abandoned, which commits through
-   * `settleAbandonedRequest()` rather than as a completion of the request.
+   * Present when the error is the ending of a request that will never be
+   * sent, which commits through `settleAbandonedRequest()`: as a completion of
+   * the request where that helper finds the request's carriage, and otherwise
+   * stamped into the serving loop's open wave.
    */
   abandoned?: AbandonedLLMRequest,
 ): Promise<void> {

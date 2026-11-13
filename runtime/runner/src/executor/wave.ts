@@ -123,7 +123,7 @@ const logger = getLogger("wave-accumulator", {
  *   space the doc simply lags (while the wave's commit metadata and
  *   the loop's in-memory W, decided before the drop, already carry the
  *   advance — see space-server.ts's bookkeeping-write comment). A
- *   builtin's ending for a request whose staging run never sealed
+ *   builtin's ending for a request that never went out
  *   (builtins.md §2) is not input-driven, and the loop does not land a
  *   dropped one again: it is written again only when its node runs
  *   again, which the requeue closure's re-arm of a derivation that read

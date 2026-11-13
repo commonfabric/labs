@@ -74,23 +74,32 @@ reported rather than written into the conversation.
 Every one of these endings, and `agent`'s, goes through
 `settleAbandonedRequest()`, which also decides how the ending commits. The
 ending lands in the instance the run that staged the request wrote. Under the
-serving posture, how it commits turns on whether that run sealed.
+serving posture with server execution on, how it commits turns on whether the
+serving loop still holds the identity carriage of a request that went out, and
+the helper asks that inside the ending's transaction, the latest point before
+the commit.
 
-* **The staging run sealed.** The request was dropped after its transaction
-  committed: its release check refused it, or a post-commit step of the builtin
-  failed. The serving loop holds the identity carriage that seal recorded, and
-  the ending commits as a completion of the request under it, as any other
-  completion does (serving-loop.md §4).
-* **The staging run never sealed.** The request was refused at prepare, so
-  there is no carriage. The ending is stamped as a `bookkeeping` run carrying
-  the scope-key identity of the run that staged the request, and seals into the
-  open wave (serving-loop.md §3d). The cells it overwrites can still hold an
-  earlier run's writes, pending in that wave, and the wave orders the ending
-  after them. Committed on its own, ahead of the wave, it would sit under those
-  older writes in the serving runtime's view, which would read the request as
-  unanswered and stage it again. The stamp carries the staging run's identity,
-  which puts the ending in the requesting principal's instance of a scoped
-  node's cells.
+* **The request went out, and its work is running.** This is a failure inside
+  the builtin's own post-commit work. The serving loop holds the carriage the
+  staging run's seal recorded until that work settles, and the ending commits
+  as a completion of the request under it, as any other completion does
+  (serving-loop.md §4).
+* **No request went out.** The staging run never sealed, because it was
+  refused at prepare, or it sealed and the request's release check refused it
+  after the commit, in which case the loop retires the carriage as soon as the
+  refusing flush returns. The ending is stamped as a `bookkeeping` run
+  carrying the identity of the run that staged the request, which the builtin
+  captured from that run, and seals into the open wave (serving-loop.md §3d).
+  The cells it overwrites can still hold an earlier run's writes, pending in
+  that wave, and the wave orders the ending after them. Committed on its own,
+  ahead of the wave, it would sit under those older writes in the serving
+  runtime's view, which would read the request as unanswered and stage it
+  again. The stamp's identity puts the ending in the requesting principal's
+  instance of a scoped node's cells.
+
+Off the serving posture, and on a serving runtime with server execution off,
+which runs no serving loop, an ending commits on its own, marked as a completion
+of the request.
 
 What the staging run wrote under, for a served run nobody demands, differs by
 builtin, and the ending follows it. The `llm` builtins, `llm-dialog`,
@@ -100,9 +109,6 @@ included. The `fetch*` builtins, `fetch-program` and `sqlite*` carry no identity
 then. Their ending is written for a space-scoped node, in its one instance, and
 not written for a user- or session-scoped one, which leaves the cells as the
 refused run found them; the omission is logged.
-
-Off the serving posture, the ending commits on its own, marked as a completion
-of the request.
 
 An ending sealed into the wave can be dropped with its wave contribution, when
 it cannot be rebased onto a commit made to the same cells after the wave opened
@@ -114,8 +120,10 @@ of these, a drop followed by a re-run and a refusal whose ending landed. A node
 that reads its own result cells only as a write destination, as `sqlite*` does,
 would not be reached by a commit to them, so its dropped ending would wait for a
 change to something else it reads; that is not established by a test. Until
-then the cells keep what the last committed run left, since the refused run's
-own writes, its pending flag among them, never committed.
+then the cells keep what the last committed run left. For a request refused
+before its staging run sealed, that run's writes, its pending flag among them,
+never committed. A request refused at its release check did commit them, so its
+dropped ending leaves that pending flag up until the node runs again.
 
 How often a refused node runs differs by builtin. An `llm` builtin's ending
 records the request hash, so the node's next run finds the request answered and

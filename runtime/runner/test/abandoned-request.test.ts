@@ -214,8 +214,9 @@ describe("settleAbandonedRequest", () => {
       stamps = [];
       carriage = false;
       // The serving loop's two answers the helper asks for, without a loop:
-      // whether the staging run sealed, and what the ending was stamped as.
-      serving.hasServedEffectCarriage = () => carriage;
+      // whether the request went out under a carriage it still holds, and
+      // what the ending was stamped as.
+      serving.hasDispatchedEffectCarriage = () => carriage;
       const stamp = serving.stampServerRun.bind(serving);
       serving.stampServerRun = (tx, info) => {
         stamps.push(info);
@@ -253,7 +254,7 @@ describe("settleAbandonedRequest", () => {
       };
     }
 
-    it("stamps the ending as a bookkeeping run carrying the identity when the staging run never sealed", async () => {
+    it("stamps the ending as a bookkeeping run carrying the identity when no request went out", async () => {
       const { completionKey } = await settle({ identity: requester });
 
       expect(completionKey).toBeUndefined();
@@ -264,7 +265,7 @@ describe("settleAbandonedRequest", () => {
       }]);
     });
 
-    it("commits the ending as a completion when the staging run has sealed", async () => {
+    it("commits the ending as a completion while the request's work runs under its carriage", async () => {
       carriage = true;
       const { completionKey } = await settle({
         identity: requester,

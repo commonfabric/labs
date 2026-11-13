@@ -1627,10 +1627,10 @@ export class Runtime {
     | undefined;
 
   /**
-   * Whether the serving loop holds the identity carriage for an effect key
-   * (installed _with_ the destination).
+   * Whether the serving loop holds the identity carriage of an effect whose
+   * request has gone out (installed _with_ the destination).
    */
-  #servedEffectCarriage: ((effectKey: string) => boolean) | undefined;
+  #dispatchedEffectCarriage: ((effectKey: string) => boolean) | undefined;
 
   /**
    * The client speculation overlay (`speculation.md`): the _default_ seal
@@ -3241,10 +3241,11 @@ export class Runtime {
        * the wave-level fallback — the Phase-1 cardinality-1 posture. */
       runDemanderResolver?: ServerRunDemanderResolver;
 
-      /** Whether the serving loop's outbox holds the identity carriage for
-       * an effect key, captured when the run that staged the effect sealed
+      /** Whether the serving loop's outbox holds the identity carriage of
+       * an effect whose request has gone out: captured when the run that
+       * staged the effect sealed, held until the effect retires
        * (serving-loop.md §4). */
-      effectCarriage?: (effectKey: string) => boolean;
+      dispatchedEffectCarriage?: (effectKey: string) => boolean;
     } = {},
   ): void {
     if (this.experimental.serverExecution !== true) {
@@ -3263,7 +3264,7 @@ export class Runtime {
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;
-    this.#servedEffectCarriage = options.effectCarriage;
+    this.#dispatchedEffectCarriage = options.dispatchedEffectCarriage;
   }
 
   /** The installed seal destination (the serving loop), if any —
@@ -3286,17 +3287,19 @@ export class Runtime {
     this.#transactionSealDestination = undefined;
     this.#serverRunStamper = undefined;
     this.#serverRunDemanderResolver = undefined;
-    this.#servedEffectCarriage = undefined;
+    this.#dispatchedEffectCarriage = undefined;
   }
 
   /**
-   * Whether the serving loop holds the identity carriage for `effectKey`:
-   * true once the run that staged the effect has sealed, until the effect
-   * retires. An effect completion commits under that carriage
-   * (serving-loop.md §4). False everywhere a serving loop installed none.
+   * Whether `effectKey`'s request has gone out and the serving loop still
+   * holds the identity carriage the staging run's seal recorded: an effect
+   * completion committed now commits under that carriage (serving-loop.md
+   * §4). False for a request whose release check refused it, whose carriage
+   * retires without a request going out, and everywhere a serving loop
+   * installed no answer.
    */
-  hasServedEffectCarriage(effectKey: string): boolean {
-    return this.#servedEffectCarriage?.(effectKey) ?? false;
+  hasDispatchedEffectCarriage(effectKey: string): boolean {
+    return this.#dispatchedEffectCarriage?.(effectKey) ?? false;
   }
 
   /**
