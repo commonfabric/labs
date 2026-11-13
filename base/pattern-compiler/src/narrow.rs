@@ -23,10 +23,20 @@ use crate::syntax::unparen;
 use crate::types::{Shape, TypeId};
 
 /// A reference: a binding and the property names read from it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct Reference {
     root: SymbolId,
     path: Vec<String>,
+    /// Whether the reference narrowed is a data position (§7.8). It is set
+    /// for the reference whose type is asked for, and takes no part in
+    /// comparing two references.
+    data: bool,
+}
+
+impl PartialEq for Reference {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root && self.path == other.path
+    }
 }
 
 /// What a `typeof` test, `Array.isArray`, or `instanceof` asks about.
@@ -101,29 +111,83 @@ impl<'a> Resolver<'_, 'a> {
                     let parsed = self.parsed(module)?;
                     let root = symbol_of(parsed.semantic.scoping(), identifier)?;
                     path.reverse();
-                    return Some(Reference { root, path });
+                    return Some(Reference {
+                        root,
+                        path,
+                        data: false,
+                    });
                 }
                 _ => return None,
             };
         }
     }
 
-    /// Whether a binding is a parameter of a builder's callback, so that a
-    /// position of its type declared `unknown` is a reference to stored
-    /// data and not a value the body computed (§7.8).
-    fn is_data_position(&self, module: usize, symbol: SymbolId) -> bool {
+    /// Whether a binding is a root of data positions, or is reached from
+    /// one through `const` bindings and destructuring alone (§7.8): a
+    /// parameter of the callback of a builder, of an inline event handler,
+    /// or of a reactive collection callback, and a binding of tier R. A
+    /// position typed `unknown` that is reached from such a binding is a
+    /// reference to stored data and not a value the body computed.
+    pub(crate) fn is_data_binding(&self, module: usize, symbol: SymbolId, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let Some((home, symbol)) = self.origin(module, symbol) else {
+            return false;
+        };
+        let module = home;
         let Some((parsed, model)) = self.parsed(module).zip(self.model(module)) else {
             return false;
         };
         let scoping = parsed.semantic.scoping();
         let nodes = parsed.semantic.nodes();
-        let mut function = None;
-        for kind in nodes.ancestor_kinds(scoping.symbol_declaration(symbol)) {
+        let declaration = scoping.symbol_declaration(symbol);
+        let mut kinds = vec![nodes.kind(declaration)];
+        kinds.extend(nodes.ancestor_kinds(declaration));
+        let mut function: Option<Span> = None;
+        for kind in kinds {
             match kind {
                 AstKind::ArrowFunctionExpression(arrow) if function.is_none() => {
                     function = Some(arrow.span);
                 }
                 AstKind::Function(found) if function.is_none() => function = Some(found.span),
+                AstKind::FormalParameters(_)
+                | AstKind::FormalParameter(_)
+                | AstKind::BindingRestElement(_)
+                | AstKind::ObjectPattern(_)
+                | AstKind::ArrayPattern(_)
+                | AstKind::BindingProperty(_)
+                | AstKind::BindingIdentifier(_)
+                | AstKind::AssignmentPattern(_) => {}
+                // A local binding: every binding of tier R, and a `const`
+                // whose initializer is a data position.
+                AstKind::VariableDeclarator(declarator) if function.is_none() => {
+                    if self.place_at(module, declarator.span.start)
+                        == crate::program::Place::Reactive
+                    {
+                        return true;
+                    }
+                    if declarator.kind != VariableDeclarationKind::Const {
+                        return false;
+                    }
+                    return match &declarator.init {
+                        Some(init) => self.is_data_expression(module, init, depth + 1),
+                        // The variable of a `for...of` over a data position.
+                        None => nodes
+                            .ancestor_kinds(declarator.node_id.get())
+                            .take(3)
+                            .find_map(|kind| match kind {
+                                AstKind::ForOfStatement(statement) => Some(
+                                    self.is_data_expression(module, &statement.right, depth + 1),
+                                ),
+                                _ => None,
+                            })
+                            .unwrap_or(false),
+                    };
+                }
+                // The parameter of a function: the function is the callback
+                // of a builder, an inline event handler, or a reactive
+                // collection callback.
                 AstKind::CallExpression(call) => {
                     let Some(function) = function else {
                         return false;
@@ -132,24 +196,88 @@ impl<'a> Resolver<'_, 'a> {
                         .arguments
                         .iter()
                         .any(|argument| argument.span() == function);
-                    return is_argument
+                    if is_argument
                         && model
                             .api_ref_of_callee(scoping, &call.callee)
-                            .is_some_and(|api| matches!(api.value(), ApiValue::Builder(_)));
+                            .is_some_and(|api| matches!(api.value(), ApiValue::Builder(_)))
+                    {
+                        return true;
+                    }
+                    return self.is_reactive_callback(module, function);
                 }
-                AstKind::FormalParameters(_)
-                | AstKind::FormalParameter(_)
-                | AstKind::BindingRestElement(_)
-                | AstKind::ObjectPattern(_)
-                | AstKind::ArrayPattern(_)
-                | AstKind::BindingProperty(_)
-                | AstKind::AssignmentPattern(_) => {}
-                _ if function.is_some() => return false,
-                AstKind::VariableDeclarator(_) => return false,
-                _ => {}
+                _ => {
+                    return function
+                        .is_some_and(|function| self.is_reactive_callback(module, function))
+                }
             }
         }
         false
+    }
+
+    /// Whether the function at `span` is a reactive collection callback or
+    /// an inline event handler.
+    fn is_reactive_callback(&self, module: usize, span: Span) -> bool {
+        use crate::tiers::BodyKind;
+        matches!(
+            self.body_of_span(module, (span.start, span.end)),
+            Some(BodyKind::ElementCallback | BodyKind::InlineHandler)
+        )
+    }
+
+    /// Whether an expression typed `unknown` is a data position (§7.8): it
+    /// is written in tier R, or it is reached through property reads,
+    /// element reads, destructuring, and `const` bindings from a root of
+    /// data positions or from the result of `get()` or `sample()` on a
+    /// handle.
+    pub(crate) fn is_data_expression(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        if self.place_at(module, expression.span().start) == crate::program::Place::Reactive {
+            return true;
+        }
+        let mut current = expression;
+        loop {
+            current = match current {
+                Expression::ParenthesizedExpression(inner) => &inner.expression,
+                Expression::TSNonNullExpression(inner) => &inner.expression,
+                Expression::StaticMemberExpression(member) => &member.object,
+                Expression::ComputedMemberExpression(member) => &member.object,
+                Expression::ChainExpression(chain) => match &chain.expression {
+                    ChainElement::StaticMemberExpression(member) => &member.object,
+                    ChainElement::ComputedMemberExpression(member) => &member.object,
+                    ChainElement::CallExpression(call) => return self.is_handle_read(module, call),
+                    _ => return false,
+                },
+                Expression::CallExpression(call) => return self.is_handle_read(module, call),
+                Expression::Identifier(identifier) => {
+                    return self
+                        .parsed(module)
+                        .and_then(|parsed| symbol_of(parsed.semantic.scoping(), identifier))
+                        .is_some_and(|symbol| self.is_data_binding(module, symbol, depth + 1));
+                }
+                _ => return false,
+            };
+        }
+    }
+
+    /// Whether a call is `get()` or `sample()` on a handle.
+    fn is_handle_read(&self, module: usize, call: &CallExpression<'a>) -> bool {
+        let Expression::StaticMemberExpression(member) = unparen(&call.callee) else {
+            return false;
+        };
+        matches!(member.property.name.as_str(), "get" | "sample")
+            && call.arguments.is_empty()
+            && self
+                .typed_at(module, &member.object, 0)
+                .is_ok_and(|receiver| {
+                    matches!(self.shape(self.present(receiver)), Shape::Handle(..))
+                })
     }
 
     /// The type of the reference `expression`, whose declared type is `ty`,
@@ -171,12 +299,13 @@ impl<'a> Resolver<'_, 'a> {
         ) {
             return ty;
         }
-        let Some(reference) = self.reference_of(module, expression) else {
+        let Some(mut reference) = self.reference_of(module, expression) else {
             return ty;
         };
         let Some(parsed) = self.parsed(module) else {
             return ty;
         };
+        reference.data = self.is_data_expression(module, expression, 0);
         if parsed.semantic.scoping().symbol_is_mutated(reference.root) {
             return ty;
         }
@@ -366,17 +495,13 @@ impl<'a> Resolver<'_, 'a> {
                     }
                     let name = constructor.name.as_str();
                     let instance = self.code_type(name, Vec::new());
-                    self.assume_kind(module, sense, reference, ty, Some(instance), |shape| {
-                        match shape {
-                            Shape::Code(code) if code == name => Kind::Yes,
-                            Shape::Code(code) if name == "Error" && code.ends_with("Error") => {
-                                Kind::Yes
-                            }
-                            Shape::Unknown | Shape::Unresolved(_) | Shape::Parameter(_) => {
-                                Kind::Unsure
-                            }
-                            _ => Kind::No,
+                    self.assume_kind(sense, reference, ty, Some(instance), |shape| match shape {
+                        Shape::Code(code) if code == name => Kind::Yes,
+                        Shape::Code(code) if name == "Error" && code.ends_with("Error") => {
+                            Kind::Yes
                         }
+                        Shape::Unknown | Shape::Unresolved(_) | Shape::Parameter(_) => Kind::Unsure,
+                        _ => Kind::No,
                     })
                 }
                 _ => ty,
@@ -413,7 +538,6 @@ impl<'a> Resolver<'_, 'a> {
     /// `unknown` value has where the test is true.
     fn assume_kind(
         &self,
-        module: usize,
         sense: bool,
         reference: &Reference,
         ty: TypeId,
@@ -424,7 +548,7 @@ impl<'a> Resolver<'_, 'a> {
             // A kind test sees the reference of a data position typed
             // `unknown`, and not what is stored behind it (§7.8).
             return match whole {
-                Some(whole) if sense && !self.is_data_position(module, reference.root) => whole,
+                Some(whole) if sense && !reference.data => whole,
                 _ => ty,
             };
         }
@@ -463,18 +587,11 @@ impl<'a> Resolver<'_, 'a> {
                     return ty;
                 }
                 let whole = self.intern(Shape::Array(self.intern(Shape::Unknown)));
-                self.assume_kind(
-                    module,
-                    sense,
-                    reference,
-                    ty,
-                    Some(whole),
-                    |shape| match shape {
-                        Shape::Array(_) | Shape::Tuple(_) => Kind::Yes,
-                        Shape::Unknown | Shape::Unresolved(_) | Shape::Parameter(_) => Kind::Unsure,
-                        _ => Kind::No,
-                    },
-                )
+                self.assume_kind(sense, reference, ty, Some(whole), |shape| match shape {
+                    Shape::Array(_) | Shape::Tuple(_) => Kind::Yes,
+                    Shape::Unknown | Shape::Unresolved(_) | Shape::Parameter(_) => Kind::Unsure,
+                    _ => Kind::No,
+                })
             }
             // A call of a function with a type predicate.
             Expression::Identifier(callee) => {
@@ -571,7 +688,7 @@ impl<'a> Resolver<'_, 'a> {
                 _ => None,
             }
             .map(|shape| self.intern(shape));
-            return self.assume_kind(module, sense, reference, ty, whole, |shape| {
+            return self.assume_kind(sense, reference, ty, whole, |shape| {
                 let found = match shape {
                     Shape::String => "string",
                     Shape::Number => "number",

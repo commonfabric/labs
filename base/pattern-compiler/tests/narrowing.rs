@@ -224,3 +224,56 @@ fn either_operand_of_or_holding_narrows_to_the_union_of_the_two() {
         ["number | undefined | string", "1 | 2"]
     );
 }
+
+// ----- §7.8: which expressions are data positions -----
+
+#[test]
+fn kind_test_does_not_narrow_a_data_position_reached_through_a_const() {
+    assert_eq!(
+        types(
+            "const save = handler<{ detail: unknown }, { box: Cell<unknown> }>((event, state) => {\n\
+               const first = event;\n\
+               const detail = first.detail;\n\
+               if (typeof detail === \"string\") { /*?*/detail; }\n\
+               const { detail: other } = event;\n\
+               if (typeof other === \"string\") { /*?*/other; }\n\
+               const held = state.box.get();\n\
+               if (typeof held === \"string\") { /*?*/held; }\n\
+             });\n"
+        ),
+        ["unknown", "unknown", "unknown"]
+    );
+}
+
+#[test]
+fn kind_test_does_not_narrow_in_the_reactive_tier_or_a_capture_of_it() {
+    assert_eq!(
+        types(
+            "import { computed } from \"commonfabric\";\n\
+             const Show = pattern<{ notes: { text: unknown }[]; one: { text: unknown } }, { n: unknown }>(({ notes, one }) => {\n\
+               const text = one.text;\n\
+               const shown = typeof text === \"string\" ? /*?*/text : \"\";\n\
+               const all = notes.map((note) => typeof note.text === \"string\" ? /*?*/(note.text) : \"\");\n\
+               const late = computed(() => typeof text === \"string\" ? /*?*/text : \"\");\n\
+               return { n: [shown, all, late] };\n\
+             });\n"
+        ),
+        ["unknown", "unknown", "unknown"]
+    );
+}
+
+#[test]
+fn kind_test_narrows_an_ordinary_value_typed_unknown() {
+    assert_eq!(
+        types(
+            "const save = handler<{ text: string }, { name: Cell<string> }>((event, state) => {\n\
+               const parsed = JSON.parse(event.text);\n\
+               const same = parsed;\n\
+               if (typeof same === \"string\") { /*?*/same; }\n\
+               try { state.name.set(\"\"); } catch (error) { if (error instanceof Error) { /*?*/error; } }\n\
+             });\n\
+             function show(value: unknown) { if (Array.isArray(value)) { /*?*/value; } }\n"
+        ),
+        ["string", "Error", "unknown[]"]
+    );
+}

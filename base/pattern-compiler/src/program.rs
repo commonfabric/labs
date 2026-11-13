@@ -124,6 +124,18 @@ impl<'m, 'a> Resolver<'m, 'a> {
             .map(|(_, kind)| *kind)
     }
 
+    /// The kind of the body whose span is `span`.
+    pub(crate) fn body_of_span(
+        &self,
+        module: usize,
+        span: (u32, u32),
+    ) -> Option<crate::tiers::BodyKind> {
+        self.bodies.borrow()[module]
+            .iter()
+            .find(|(found, _)| *found == span)
+            .map(|(_, kind)| *kind)
+    }
+
     /// Where the code at the offset is written. The body of a pattern and
     /// of a reactive collection callback is the reactive tier. The body of
     /// a `computed` is a function body, whether it is promoted or not

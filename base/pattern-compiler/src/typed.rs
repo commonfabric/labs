@@ -168,12 +168,39 @@ impl<'a> TypedRules<'_, '_, 'a> {
             .iter()
             .any(|shape| matches!(shape, Shape::Unknown | Shape::Parameter(_)))
         {
-            self.count("property read", "refused: the receiver is `unknown`");
-            self.report(
-                "schema:unknown-type-access",
-                member.span,
-                &format!("`{}` reads a property of a value typed `unknown`", text(60)),
-            );
+            // A data position, in every tier, and an unbound type
+            // parameter (§7.8, §10.4). An ordinary value typed `unknown`
+            // is narrowed before it is read.
+            let parameter = present
+                .iter()
+                .any(|shape| matches!(shape, Shape::Parameter(_)));
+            if parameter || resolver.is_data_expression(self.module, &member.object, 0) {
+                self.count(
+                    "property read",
+                    "refused: the receiver is a data position typed `unknown`",
+                );
+                self.report(
+                    "schema:unknown-type-access",
+                    member.span,
+                    &format!(
+                        "`{}` reads a property of a data position typed `unknown`",
+                        text(60)
+                    ),
+                );
+            } else {
+                self.count(
+                    "property read",
+                    "refused: the receiver is an ordinary value typed `unknown`",
+                );
+                self.report(
+                    "subset-type:mismatch",
+                    member.span,
+                    &format!(
+                        "`{}` reads a property of a value typed `unknown`. Narrow it first: `typeof`, `Array.isArray`, `instanceof`, or a type predicate",
+                        text(60)
+                    ),
+                );
+            }
             return;
         }
         let closed = !present.is_empty()

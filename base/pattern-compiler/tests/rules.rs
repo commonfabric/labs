@@ -1165,17 +1165,60 @@ fn symbol_is_refused_as_an_operand_of_exclude() {
 
 #[test]
 fn type_name_of_the_dom_library_is_an_unsupported_member() {
-    for name in ["Event", "CustomEvent<{ value: string }>", "KeyboardEvent", "HTMLInputElement"] {
+    for name in [
+        "Event",
+        "CustomEvent<{ value: string }>",
+        "KeyboardEvent",
+        "HTMLInputElement",
+    ] {
         let diagnostics = check(&format!(
             "const save = handler<{name}, {{ name: Writable<string> }}>((_, state) => state.name.set(\"\"));\n"
         ));
         assert_eq!(ids(&diagnostics), ["stdlib:unsupported-member"], "{name}");
         assert!(
-            diagnostics[0].message.contains("declare the shape of the event"),
+            diagnostics[0]
+                .message
+                .contains("declare the shape of the event"),
             "{}",
             diagnostics[0].message
         );
     }
     let diagnostics = check("function show(donut: Doughnut) { return donut; }\n");
     assert_eq!(ids(&diagnostics), ["subset-type:mismatch"]);
+}
+
+#[test]
+fn property_read_on_a_data_position_typed_unknown_is_an_unknown_type_access() {
+    for snippet in [
+        "const save = handler<unknown, { note: unknown }>((event, state) => { state.note?.title; });",
+        "const save = handler<{ detail: unknown }, { n: Writable<number> }>((event) => { const d = event.detail; d.title; });",
+        "const save = handler<unknown, { box: Writable<unknown> }>((_, state) => { state.box.get().title; });",
+        "const Show = pattern<{ note: unknown }, { title: unknown }>(({ note }) => ({ title: note.title }));",
+        "const Show = pattern<{ notes: { text: unknown }[] }, { titles: unknown[] }>(({ notes }) => ({ titles: notes.map((note) => note.text?.title) }));",
+        "const Show = pattern<{ note: { body: unknown } }, { title: unknown }>(({ note }) => ({ title: computed(() => note.body.title) }));",
+        "function first<T>(value: T) { return value.name; }",
+    ] {
+        assert_eq!(
+            ids(&check(snippet)),
+            ["schema:unknown-type-access"],
+            "{snippet}"
+        );
+    }
+}
+
+#[test]
+fn property_read_on_an_ordinary_value_typed_unknown_is_a_type_error() {
+    for snippet in [
+        "function show(value: unknown) { return value.name; }",
+        "function show(text: string) { const parsed = JSON.parse(text); return parsed?.name; }",
+        "function show() { try { return 1; } catch (error) { return error.message; } }",
+    ] {
+        let diagnostics = check(snippet);
+        assert_eq!(ids(&diagnostics), ["subset-type:mismatch"], "{snippet}");
+        assert!(
+            diagnostics[0].message.contains("Narrow it"),
+            "{}",
+            diagnostics[0].message
+        );
+    }
 }
