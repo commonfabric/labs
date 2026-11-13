@@ -2,8 +2,8 @@
 
 A standalone Markdown document for a shared space or an embedded Loom panel. It
 uses `cf-code-editor` in collaborative prose mode, with the document title and
-body in `PerSpace` state, and a panel of comments on ranges of the body beside
-the editor. The same compact view is available as `UI` and `TILE_UI`.
+body in `PerSpace` state, and comments on ranges of the body in the editor's
+margin. The same compact view is available as `UI` and `TILE_UI`.
 
 Each viewer resolves their Fabric profile through `#profile` and `#profileName`.
 The header shows the live profile badge, and the editor uses the profile's name
@@ -133,16 +133,24 @@ body is that text, and nothing selected until the editor's next report
 otherwise, so a selection the body has changed under is never kept. The composer
 checks again that the body holds the selected text at its range before it adds
 the anchors, refusing a selection an edit has moved since. From then on
-everything typed while the person writes moves the anchors with their text. The
-panel lists comments in the order their text appears in the body.
+everything typed while the person writes moves the anchors with their text.
 `commentAnchors` gives every comment's two anchors.
+
+The comments sit in the editor's margin, under the header with the Comment
+button, each beside the line where its text starts, and the composer beside the
+text it is about. Where two comments would overlap, the lower one moves down,
+and the selected comment keeps its place beside its text where the comments
+above it have room to move up. The selected comment's reply field and actions
+sit under it. Where the note is too narrow for the margin beside the text, the
+comments sit below it, in the order their text appears in the body.
 
 The mark in the editor shows what a comment is about, so the row of a marked
 comment shows the comment, not its text. A row whose comment marks nothing — a
 draft, a resolved comment, or a comment whose text an edit deleted — also shows
 its quote, the text its author selected, which the comment stores. A comment
-whose text an edit deleted stays listed after the rest, and shows its quote
-struck through, beside "text no longer in note".
+whose text an edit deleted sits beside where its text was, and after the rest
+where the comments are below the note, and shows its quote struck through,
+beside "text no longer in note".
 
 Comments and replies are labeled `authored-by` the person each was written for,
 by the runtime, and only the handlers their write policies name can write them,

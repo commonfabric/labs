@@ -170,16 +170,16 @@ const anchoredRange = (
     : [anchors[from], anchors[to]];
 };
 
-/** Whether the comments panel shows `text`. */
 /** Whether the comment composer is shown. */
 const composerShown = (probe: ProbeApi): boolean =>
   probe.collect("#shared-note-composer").some((composer) =>
     getComputedStyle(composer).display !== "none"
   );
 
+/** Whether a comment's row in the editor's margin shows `text`. */
 const commentShown = (probe: ProbeApi, text: string): boolean =>
-  probe.collect("#shared-note-comments").some((panel) =>
-    probe.deepText(panel).includes(text)
+  probe.collect("[data-comment-id]").some((row) =>
+    probe.deepText(row).includes(text)
   );
 
 async function expectNoteFits(page: Page, width: number): Promise<void> {
