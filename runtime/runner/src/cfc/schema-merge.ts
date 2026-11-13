@@ -236,6 +236,7 @@ const mergeSetLikeIfcArray = (
   candidate: unknown,
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
+  writePolicyRelease: WritePolicyRelease | undefined,
 ): unknown => {
   if (existing === undefined) {
     return candidate;
@@ -338,7 +339,13 @@ const mergeSetLikeIfcArray = (
       return mergeArraySet(candidateArray);
     }
     case "writePolicyAnyOf":
-      return mergeWritePolicyAnyOf(existing, candidate, path, adoptsStamp);
+      return mergeWritePolicyAnyOf(
+        existing,
+        candidate,
+        path,
+        adoptsStamp,
+        writePolicyRelease,
+      );
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -363,51 +370,153 @@ const mergeSetLikeIfcArray = (
 };
 
 /**
+ * What a release says about the artifacts a write policy's alternatives name,
+ * which is what lets it append an alternative to a stored policy (see
+ * {@link writePolicyAlternativeAdmissible}).
+ */
+export interface WritePolicyRelease {
+  /** Whether the release installs the module `moduleIdentity` names. */
+  installs(moduleIdentity: string): boolean;
+
+  /**
+   * Whether the space of the write attests that module `successor` succeeds
+   * module `predecessor`, directly or through a chain.
+   */
+  succeeds(successor: string, predecessor: string): boolean;
+}
+
+/**
+ * Helper for `mergeWritePolicyAnyOf()`: the stored alternative `stored` as a
+ * merge with the candidate's alternative `candidate` keeps it, or `undefined`
+ * where the two do not correspond. Two alternatives correspond when they hold
+ * the same keys, name the same contract, and name writer claims that
+ * reconcile as two lone `writeAuthorizedBy` claims do, which is how an
+ * alternative gains its stamp.
+ */
+const keptWritePolicyAlternative = (
+  stored: unknown,
+  candidate: unknown,
+  adoptsStamp: ((claim: unknown) => boolean) | undefined,
+): unknown | undefined => {
+  if (
+    !isObjectNotArray(stored) || !isObjectNotArray(candidate) ||
+    !sameKeys(stored, candidate) ||
+    !deepEqual(stored.uiContract, candidate.uiContract)
+  ) {
+    return undefined;
+  }
+  if (deepEqual(stored.writeAuthorizedBy, candidate.writeAuthorizedBy)) {
+    return stored;
+  }
+  const writer = reconcileWriterClaimStamp(
+    stored.writeAuthorizedBy,
+    candidate.writeAuthorizedBy,
+    adoptsStamp,
+  );
+  return writer === undefined
+    ? undefined
+    : { ...stored, writeAuthorizedBy: writer };
+};
+
+/**
  * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
- * lists. The alternatives stay as stored — the same ones, in the same order,
- * each with the same contract — so a later schema can neither admit a writer
- * nor drop one. Each alternative's writer claim reconciles as a lone
- * `writeAuthorizedBy` does, which is how an alternative gains its stamp.
+ * lists. The list is a set: every stored alternative is kept, matched to a
+ * candidate's alternative by content rather than by its place in the list,
+ * and stays as stored, in stored order. A candidate's alternative matching
+ * none of them is appended after them, and only in a release, and only where
+ * {@link writePolicyAlternativeAdmissible} admits it; anything else refuses
+ * the whole merge.
  */
 const mergeWritePolicyAnyOf = (
   existing: unknown,
   candidate: unknown,
   path: string,
-  adoptsStamp?: (claim: unknown) => boolean,
+  adoptsStamp: ((claim: unknown) => boolean) | undefined,
+  release: WritePolicyRelease | undefined,
 ): unknown => {
-  const unstable = () =>
+  const unstable = (why: string) =>
     new CfcEnvelopeStabilityError(
-      `writePolicyAnyOf must remain stable at ${path || "/"}`,
+      `writePolicyAnyOf must remain stable at ${path || "/"}: ${why}`,
     );
-  if (
-    !Array.isArray(existing) || !Array.isArray(candidate) ||
-    existing.length !== candidate.length
-  ) {
-    throw unstable();
+  if (!Array.isArray(existing) || !Array.isArray(candidate)) {
+    throw unstable("one side is not a list of alternatives");
   }
-  return existing.map((policy, index) => {
-    const other = candidate[index];
-    if (
-      !isObjectNotArray(policy) || !isObjectNotArray(other) ||
-      !sameKeys(policy, other) ||
-      !deepEqual(policy.uiContract, other.uiContract)
-    ) {
-      throw unstable();
+  const kept = existing.map((policy) => {
+    for (const other of candidate) {
+      const merged = keptWritePolicyAlternative(policy, other, adoptsStamp);
+      if (merged !== undefined) return merged;
     }
-    if (deepEqual(policy.writeAuthorizedBy, other.writeAuthorizedBy)) {
-      return policy;
-    }
-    const writer = reconcileWriterClaimStamp(
-      policy.writeAuthorizedBy,
-      other.writeAuthorizedBy,
-      adoptsStamp,
+    throw unstable("the candidate drops a stored alternative");
+  });
+  const added = candidate.filter((other) =>
+    !existing.some((policy) =>
+      keptWritePolicyAlternative(policy, other, adoptsStamp) !== undefined
+    )
+  );
+  if (added.length === 0) return kept;
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
+  if (release === undefined) {
+    throw unstable("the candidate adds an alternative outside a release");
+  }
+  if (
+    !added.every((other) =>
+      writePolicyAlternativeAdmissible(other, existing, release)
+    )
+  ) {
+    throw unstable(
+      "the release adds an alternative no stored alternative admits",
     );
-    if (writer === undefined) throw unstable();
-    return { ...policy, writeAuthorizedBy: writer };
+  }
+  return [...kept, ...added];
+};
+
+/**
+ * Whether a release may append the write-policy alternative `added` to the
+ * stored alternatives `stored`. It may when ONE stored alternative pairs the
+ * contract `added` names (or names none where `added` names none) with a
+ * stamped artifact whose lineage includes the one `added` is stamped with,
+ * and the release installs that artifact: the same module, or one the space
+ * attests succeeds it. The appended alternative then differs from that stored
+ * one only in its symbol, so every write it admits is one the same artifact,
+ * on the same gesture, could already make through the stored one. Asking the
+ * two conditions of two different stored alternatives would let an artifact
+ * authorized on one gesture gain another.
+ */
+export const writePolicyAlternativeAdmissible = (
+  added: unknown,
+  stored: readonly unknown[],
+  release: WritePolicyRelease,
+): boolean => {
+  const module = alternativeModuleIdentity(added);
+  if (module === undefined || !release.installs(module)) return false;
+  return stored.some((base) => {
+    const baseModule = alternativeModuleIdentity(base);
+    return baseModule !== undefined &&
+      isObjectNotArray(base) && isObjectNotArray(added) &&
+      sameKeys(base, added) &&
+      deepEqual(base.uiContract, added.uiContract) &&
+      (baseModule === module || release.succeeds(module, baseModule));
   });
 };
 
-/** Helper for `mergeWritePolicyAnyOf()`, which compares two key sets. */
+/**
+ * Helper for `writePolicyAlternativeAdmissible()`: the module identity an
+ * alternative's writer claim is stamped with, or `undefined` for an
+ * alternative whose writer is no binding claim or carries no such stamp.
+ */
+const alternativeModuleIdentity = (
+  alternative: unknown,
+): string | undefined => {
+  if (!isObjectNotArray(alternative)) return undefined;
+  const writer = alternative.writeAuthorizedBy;
+  if (!isWriterIdentityClaim(writer)) return undefined;
+  const moduleIdentity = writer.__ctWriterIdentityOf.moduleIdentity;
+  return typeof moduleIdentity === "string" && moduleIdentity.length > 0
+    ? moduleIdentity
+    : undefined;
+};
+
+/** Whether two objects hold the same set of keys. */
 const sameKeys = (a: object, b: object): boolean => {
   const keys = Object.keys(a);
   const other = new Set(Object.keys(b));
@@ -419,6 +528,7 @@ const mergeIfc = (
   candidate: JSONSchemaObj["ifc"],
   path: string,
   adoptsStamp?: (claim: unknown) => boolean,
+  writePolicyRelease?: WritePolicyRelease,
 ): JSONSchemaObj["ifc"] => {
   if (existing === undefined) {
     return candidate;
@@ -438,6 +548,7 @@ const mergeIfc = (
       candidateIfc[key],
       path,
       adoptsStamp,
+      writePolicyRelease,
     );
     if (value !== undefined) merged[key] = value;
   }
@@ -619,6 +730,13 @@ export interface MergeCfcSchemaEnvelopeOptions {
    * Absent, no claim adopts across roots.
    */
   adoptsStamp?: (claim: unknown) => boolean;
+
+  /**
+   * The release this merge is part of, which may append alternatives to a
+   * stored write policy (see `writePolicyAlternativeAdmissible`). Absent, the
+   * merge is no release's, and appends none.
+   */
+  writePolicyRelease?: WritePolicyRelease;
 }
 
 const generatedOutputCovers = (
@@ -1147,7 +1265,13 @@ const mergeSchemaNode = (
 
   const ifc = options.beneathStoredLink?.(logicalPath)
     ? right.ifc ?? left.ifc
-    : mergeIfc(left.ifc, right.ifc, path, options.adoptsStamp);
+    : mergeIfc(
+      left.ifc,
+      right.ifc,
+      path,
+      options.adoptsStamp,
+      options.writePolicyRelease,
+    );
   const required = mergeRequired(
     left.required,
     right.required,

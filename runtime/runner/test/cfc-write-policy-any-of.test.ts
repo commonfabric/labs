@@ -2,7 +2,12 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
-import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
+import { droppedStoredClaim } from "../src/cfc/claim-preservation.ts";
+import { CfcEnvelopeStabilityError } from "../src/cfc/envelope-stability-reason.ts";
+import {
+  mergeCfcSchemaEnvelopes,
+  type WritePolicyRelease,
+} from "../src/cfc/schema-merge.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
@@ -734,6 +739,309 @@ describe("cfc-write-policy-any-of", () => {
         policy("send", "Send"),
         policy("edit", "Edit"),
       ]);
+    });
+
+    it("returns the stored alternatives in stored order for a candidate listing them in another order", () => {
+      const merged = mergeCfcSchemaEnvelopes(SCHEMA, {
+        type: "string",
+        ifc: {
+          writePolicyAnyOf: [policy("edit", "Edit"), policy("send", "Send")],
+        },
+      }) as JSONSchemaObj;
+
+      expect(merged.ifc?.writePolicyAnyOf).toEqual([
+        policy("send", "Send"),
+        policy("edit", "Edit"),
+      ]);
+    });
+
+    it("throws when a later schema drops an alternative", () => {
+      expect(() =>
+        mergeCfcSchemaEnvelopes(SCHEMA, {
+          type: "string",
+          ifc: { writePolicyAnyOf: [policy("send", "Send")] },
+        })
+      ).toThrow("writePolicyAnyOf must remain stable");
+    });
+  });
+
+  describe("a release appending alternatives", () => {
+    // The stored policy's writers are of the module `old`, which the release
+    // succeeds with `new`, the module it installs. `other` is installed too,
+    // and succeeds nothing.
+
+    const RELEASE: WritePolicyRelease = {
+      installs: (module) => module === "new" || module === "other",
+      succeeds: (successor, predecessor) =>
+        successor === "new" && predecessor === "old",
+    };
+
+    /** An alternative admitting `writer` of `module` through `action`. */
+    function alternative(
+      writer: string,
+      action: string | undefined,
+      module: string | undefined,
+    ) {
+      return {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: {
+            file: "/records.tsx",
+            path: [writer],
+            ...(module === undefined ? {} : { moduleIdentity: module }),
+          },
+        },
+        ...(action === undefined ? {} : { uiContract: contract(action) }),
+      };
+    }
+
+    /** A schema whose one position holds `alternatives`. */
+    function schemaOf(alternatives: unknown[]): JSONSchemaObj {
+      return {
+        type: "string",
+        ifc: { writePolicyAnyOf: alternatives },
+      } as JSONSchemaObj;
+    }
+
+    const STORED = [
+      alternative("send", "Send", "old"),
+      alternative("edit", "Edit", "old"),
+    ];
+
+    /** The candidate restating the stored alternatives, then `added`. */
+    function candidateAdding(...added: unknown[]): JSONSchemaObj {
+      return schemaOf([
+        alternative("edit", "Edit", "new"),
+        ...added,
+        alternative("send", "Send", "new"),
+      ]);
+    }
+
+    /**
+     * What merging `candidate` over the stored policy returns, as part of
+     * `release`, or of no release where it is `null`.
+     */
+    function merge(
+      candidate: JSONSchemaObj,
+      release: WritePolicyRelease | null = RELEASE,
+    ) {
+      return mergeCfcSchemaEnvelopes(schemaOf(STORED), candidate, {
+        ...(release === null ? {} : { writePolicyRelease: release }),
+      }) as JSONSchemaObj;
+    }
+
+    /**
+     * What the keep rule says of `merged` against the stored policy, as part
+     * of `release`, or of no release where it is `null`.
+     */
+    function kept(
+      merged: unknown[],
+      release: WritePolicyRelease | null = RELEASE,
+    ) {
+      return droppedStoredClaim(
+        schemaOf(STORED),
+        schemaOf(merged),
+        undefined,
+        release ?? undefined,
+      );
+    }
+
+    describe("the merge", () => {
+      it("returns the stored alternatives as stored, in stored order, and the appended one after them", () => {
+        const merged = merge(
+          candidateAdding(alternative("reply", "Send", "new")),
+        );
+
+        expect(merged.ifc?.writePolicyAnyOf).toEqual([
+          ...STORED,
+          alternative("reply", "Send", "new"),
+        ]);
+      });
+
+      it("returns an alternative appended from the stored alternatives' own module", () => {
+        const merged = mergeCfcSchemaEnvelopes(
+          schemaOf(STORED),
+          schemaOf([...STORED, alternative("reply", "Send", "old")]),
+          {
+            writePolicyRelease: {
+              installs: (module) => module === "old",
+              succeeds: () => false,
+            },
+          },
+        ) as JSONSchemaObj;
+
+        expect(merged.ifc?.writePolicyAnyOf).toEqual([
+          ...STORED,
+          alternative("reply", "Send", "old"),
+        ]);
+      });
+
+      it("throws for an appended alternative outside a release", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", "new")), null)
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative of a module the release does not install", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", "new")), {
+            ...RELEASE,
+            installs: (module) => module === "other",
+          })
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative of an installed module no stored alternative's lineage includes", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", "other")))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative whose writer carries no stamp", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", undefined)))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative naming a contract no stored alternative names", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Delete", "new")))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative naming no contract beside stored alternatives that all name one", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", undefined, "new")))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for a candidate that drops a stored alternative while appending one", () => {
+        expect(() =>
+          merge(
+            schemaOf([
+              alternative("send", "Send", "new"),
+              alternative("reply", "Send", "new"),
+            ]),
+          )
+        ).toThrow("the candidate drops a stored alternative");
+      });
+
+      describe("an artifact pairing taken from two stored alternatives", () => {
+        // `send` is of `a` and `edit` of `b`. The appended alternative is of
+        // `a2`, which succeeds `a` alone, and names `edit`'s contract: its
+        // artifact holds authority only on `Send`, and its contract only
+        // `b`'s lineage pairs.
+
+        const CROSSED_STORED = [
+          alternative("send", "Send", "a"),
+          alternative("edit", "Edit", "b"),
+        ];
+
+        /** What the release says when `a2` succeeds each of `predecessors`. */
+        function releaseSucceeding(
+          ...predecessors: string[]
+        ): WritePolicyRelease {
+          return {
+            installs: (module) => module === "a2",
+            succeeds: (successor, predecessor) =>
+              successor === "a2" && predecessors.includes(predecessor),
+          };
+        }
+
+        const CROSSED = schemaOf([
+          ...CROSSED_STORED,
+          alternative("amend", "Edit", "a2"),
+        ]);
+
+        it("throws", () => {
+          expect(() =>
+            mergeCfcSchemaEnvelopes(schemaOf(CROSSED_STORED), CROSSED, {
+              writePolicyRelease: releaseSucceeding("a"),
+            })
+          ).toThrow(CfcEnvelopeStabilityError);
+        });
+
+        it("returns the appended alternative where its artifact succeeds the one the contract is paired with", () => {
+          const merged = mergeCfcSchemaEnvelopes(
+            schemaOf(CROSSED_STORED),
+            CROSSED,
+            { writePolicyRelease: releaseSucceeding("b") },
+          ) as JSONSchemaObj;
+
+          expect(merged.ifc?.writePolicyAnyOf).toEqual(
+            CROSSED.ifc?.writePolicyAnyOf,
+          );
+        });
+
+        it("refuses the same pairing in the keep rule", () => {
+          expect(
+            droppedStoredClaim(
+              schemaOf(CROSSED_STORED),
+              CROSSED,
+              undefined,
+              releaseSucceeding("a"),
+            ),
+          ).toContain("writePolicyAnyOf");
+          expect(
+            droppedStoredClaim(
+              schemaOf(CROSSED_STORED),
+              CROSSED,
+              undefined,
+              releaseSucceeding("b"),
+            ),
+          ).toBeUndefined();
+        });
+      });
+    });
+
+    describe("the keep rule", () => {
+      it("returns `undefined` for the stored alternatives and one a stored alternative admits", () => {
+        expect(kept([...STORED, alternative("reply", "Send", "new")]))
+          .toBeUndefined();
+      });
+
+      it("returns `undefined` for the stored alternatives in another order", () => {
+        expect(kept([STORED[1], STORED[0]], null)).toBeUndefined();
+      });
+
+      it("returns a refusal for an appended alternative outside a release", () => {
+        expect(
+          kept([...STORED, alternative("reply", "Send", "new")], null),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative of a module the release does not install", () => {
+        expect(
+          kept([...STORED, alternative("reply", "Send", "new")], {
+            ...RELEASE,
+            installs: (module) => module === "other",
+          }),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative of an installed module no stored alternative's lineage includes", () => {
+        expect(kept([...STORED, alternative("reply", "Send", "other")]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative whose writer carries no stamp", () => {
+        expect(kept([...STORED, alternative("reply", "Send", undefined)]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative naming a contract no stored alternative names", () => {
+        expect(kept([...STORED, alternative("reply", "Delete", "new")]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative naming no contract beside stored alternatives that all name one", () => {
+        expect(kept([...STORED, alternative("reply", undefined, "new")]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for a merged policy that drops a stored alternative", () => {
+        expect(kept([STORED[0], alternative("reply", "Send", "new")]))
+          .toContain("drops the stored writePolicyAnyOf");
+      });
     });
   });
 });
