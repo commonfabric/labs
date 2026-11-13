@@ -481,13 +481,16 @@ async function handleLLMError<T, P>(
     );
   // A served request that will never be sent, where a request guard binds
   // writebacks to the request's live inputs, ends without reading those
-  // inputs and without recording its hash. The hash is the one field of the
-  // ending that derives from the inputs, so it would carry their labels, and
-  // the node's next run reads it to tell whether its request was answered: a
-  // hash recorded over a refused request's labels would carry them into
-  // every later request the node makes, a request over other inputs included,
-  // and the ceiling that refused the first would refuse those as well. With
-  // no hash to find, the node's next run stages its request again
+  // inputs, and clears the stored request hash rather than recording its own.
+  // The hash is the one field of the ending that derives from the inputs, so
+  // it would carry their labels, and the node's next run reads it to tell
+  // whether its request was answered: a hash recorded over a refused
+  // request's labels would carry them into every later request the node
+  // makes, a request over other inputs included, and the ceiling that refused
+  // the first would refuse those as well. A hash left from an earlier request
+  // would instead match that request's inputs if they came back, and the run
+  // on them would take this refusal's error as their answer. With no hash to
+  // find, the node's next run stages its request again
   // (`docs/specs/server-side-execution/builtins.md` §2).
   const servedEnding = abandoned !== undefined && requestGuard !== undefined;
   let wrote = false;
@@ -511,7 +514,7 @@ async function handleLLMError<T, P>(
     errorCell.withTx(tx).set(message);
     resultCell.withTx(tx).set(undefined as T);
     partialCell.withTx(tx).set(undefined as P);
-    if (!servedEnding) requestHashCell.withTx(tx).set(requestHash);
+    requestHashCell.withTx(tx).set(servedEnding ? undefined : requestHash);
   };
   if (abandoned !== undefined) {
     await settleAbandonedRequest(
@@ -797,11 +800,14 @@ function servedLLMRequestGuard(
  * cannot resolve. A refused request never reaches the model, so the builtin
  * settles on the refusal rather than leaving `pending` true forever.
  *
- * The settled error is recorded against the request hash, so this request is
- * over and the builtin waits for a different one. A refusal that turns on
- * something other than the request — the ceiling its result store declares,
- * say — outlives the change that resolves it, because that change leaves the
- * hash where it was. Editing the pattern is what moves it.
+ * Off the serving posture, the settled error is recorded against the request
+ * hash, so this request is over and the builtin waits for a different one. A
+ * refusal that turns on something other than the request — the ceiling its
+ * result store declares, say — outlives the change that resolves it, because
+ * that change leaves the hash where it was. Editing the pattern is what moves
+ * it. A served refusal's ending clears the hash instead (`handleLLMError()`),
+ * so the node's next run stages the request again, and a request over other
+ * inputs, or under a ceiling that admits it, goes out.
  */
 function enqueuePostCommitLLMWork(
   tx: IExtendedStorageTransaction,

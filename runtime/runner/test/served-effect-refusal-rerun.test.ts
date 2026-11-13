@@ -169,6 +169,12 @@ type Fixture = {
    */
   restartServing: (ceiling: readonly string[]) => Promise<void>;
 
+  /**
+   * Runs `trigger`, then waits for the serving runtime to run the node and to
+   * settle: the wait for a run that might neither send nor refuse a request.
+   */
+  settleRun: (trigger: () => Promise<void>) => Promise<void>;
+
   /** Resolves at the node's first request or refusal, waiting for no more. */
   firstRun: Promise<void>;
 
@@ -482,6 +488,12 @@ export default pattern<
         await openClient(alice).getCellFromLink(
           result.key("fetched").getAsNormalizedFullLink(),
         ).sync();
+        await nodeRun.promise;
+        await Promise.all(servingRuntimes.map((runtime) => runtime.settled()));
+      },
+      settleRun: async (trigger) => {
+        nodeRun = Promise.withResolvers<void>();
+        await trigger();
         await nodeRun.promise;
         await Promise.all(servingRuntimes.map((runtime) => runtime.settled()));
       },
@@ -874,6 +886,64 @@ describe("served-effect-refusal-rerun", () => {
 
           expect(f.refusals()).toBe(refused);
           expect(f.requests()).toBe(1);
+          const answered = { pending: false, result: answer };
+          const servingView = f.servingView(
+            f.fetched.getAsNormalizedFullLink(),
+            undefined,
+          );
+          expect(servingView).toMatchObject(answered);
+          expect(servingView?.error).toBeUndefined();
+          const freshView = await f.freshView();
+          expect(freshView).toMatchObject(answered);
+          expect(freshView?.error).toBeUndefined();
+        });
+      } finally {
+        resetMockMode();
+      }
+    });
+  }
+
+  for (const builtin of llmFamily) {
+    it(`answers a served ${builtin.name}'s earlier prompt again once a refused prompt it changed to changes back`, async () => {
+      // The node answers a plain prompt, then changes to a labeled one the
+      // ceiling refuses, then back. The refusal's ending leaves no request
+      // hash of the answered prompt standing, so the node's run on that prompt
+      // again doesn't take the refusal as its answer: it asks again.
+
+      const prompt = "served effect rerun answered prompt";
+      let fixture: Fixture | undefined;
+      enableMockMode();
+      const answer = mockAnswer(builtin, prompt, () => fixture?.countRequest());
+      mockAnswer(builtin, prompt, () => fixture?.countRequest());
+      try {
+        await withFixture({
+          builtin,
+          scope: "space",
+          input: () => Promise.resolve(prompt),
+        }, async (f) => {
+          fixture = f;
+          await f.settle();
+          expect(f.requests()).toBe(1);
+          const labeled = await ownSpaceSource(f.ownerRuntime);
+
+          await f.settle(async () => {
+            const change = f.client.edit();
+            f.argument.withTx(change).key("url").set(
+              f.client.getCellFromLink(labeled) as never,
+            );
+            expect((await change.commit().settled).error).toBeUndefined();
+          });
+          const refused = f.refusals();
+          expect(refused).toBeGreaterThan(0);
+
+          await f.settleRun(async () => {
+            const change = f.client.edit();
+            f.argument.withTx(change).key("url").set(prompt);
+            expect((await change.commit().settled).error).toBeUndefined();
+          });
+
+          expect(f.refusals()).toBe(refused);
+          expect(f.requests()).toBe(2);
           const answered = { pending: false, result: answer };
           const servingView = f.servingView(
             f.fetched.getAsNormalizedFullLink(),
