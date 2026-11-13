@@ -393,12 +393,13 @@ export class ServingWorkerPool {
     options.server.setServerExecutionObserver({
       commitAdmitted: (notice) => this.#onCommitAdmitted(notice),
       sessionOpened: (space) => this.#onSessionOpened(space),
-      demandChanged: (space, reason, principal, sessionId) => {
+      demandChanged: (space, reason, principal, sessionId, servingOwn) => {
         this.#servingWorkerOf(space)?.bridge.observer.demandChanged(
           space,
           reason,
           principal,
           sessionId,
+          servingOwn,
         );
       },
       viewsChanged: (space, sessionId) => {

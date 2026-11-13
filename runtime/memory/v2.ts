@@ -1705,6 +1705,18 @@ export type SessionDescriptor = {
    */
   instanceNames?: true;
 
+  /**
+   * Declares that no one waits on this session's results: a server-side
+   * component that reads and writes a space as an ordinary client, such as a
+   * toolshed's webhook runtime, and keeps its sessions open for as long as it
+   * runs. The server counts the session as it counts its serving loop's own,
+   * so the session neither activates its space for serving, nor keeps it from
+   * parking, nor adds to its demand. Only the literal `false`; absent, the
+   * session is demand. Declared afresh on every open, and signed into the
+   * session.open invocation with the rest of this descriptor.
+   */
+  demand?: false;
+
   sessionId?: SessionId;
   seenSeq?: number;
   sessionToken?: SessionToken;
@@ -2355,6 +2367,9 @@ export type SessionViewHandle = {
 export type SessionViewInterest = {
   handle: SessionViewHandle;
   principal?: string;
+  /** Whether the session is a serving loop's own, not a client's (the
+   * server's `SessionState.servingOwn`). */
+  servingOwn?: true;
   /** Whether a connection currently owns the retained session. */
   attached: boolean;
   view: ViewInterest;

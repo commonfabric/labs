@@ -73,6 +73,7 @@ const sameSessionDescriptor = (
     genesisRoot?: FabricValue;
     spaceKind?: string;
     instanceNames?: true;
+    demand?: false;
     invite?: { inviteId: string; code: string };
   },
 ): boolean =>
@@ -105,6 +106,9 @@ const sameSessionDescriptor = (
   // declaration cannot be attached or stripped in transit either. Compared
   // as signed, like the kind.
   left.instanceNames === right.instanceNames &&
+  // Whether the session is demand decides whether its space is served, so
+  // the declaration cannot be attached or stripped in transit either.
+  left.demand === right.demand &&
   // An invitation redeems as the signer, so one cannot be attached to or
   // taken off a signed open in transit.
   valueEqual(left.invite, right.invite);
@@ -121,6 +125,7 @@ export type SessionOpenMessage = {
     genesisRoot?: FabricValue;
     spaceKind?: string;
     instanceNames?: true;
+    demand?: false;
     invite?: { inviteId: string; code: string };
   };
   invocation?: FabricPlainObject;
