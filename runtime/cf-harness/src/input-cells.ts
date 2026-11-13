@@ -35,17 +35,20 @@ import {
 } from "./foreign-spaces.ts";
 import {
   createHarnessHandleTable,
+  handleRefsShareAddress,
   mintAddressHandle,
   parseHandleRef,
 } from "./handle-table.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type {
+  HarnessHeldInput,
   HarnessInputCell,
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
 
 export type {
+  HarnessHeldInput,
   HarnessInputCell,
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
@@ -230,14 +233,30 @@ export const checkInputCellSpec = (
   }
 };
 
-/** Refuses a new attachment name already associated with a held handle. */
+/**
+ * Refuses an attachment whose name is already held for another cell. A held
+ * name stays available to the cell it names, so a host may attach on a later
+ * turn what it attached on an earlier one, under the same name.
+ *
+ * The references are compared as written, by
+ * {@link handleRefsShareAddress}, since this runs before a session exists to
+ * resolve one. A named piece address under a held name is therefore refused
+ * rather than resolved, as is any attachment under a name held without a
+ * reference.
+ *
+ * @throws Error naming the attachment.
+ */
 export const assertInputCellNamesAvailable = (
   specs: readonly HarnessInputCellSpec[],
-  heldNames: Iterable<string>,
+  held: Iterable<HarnessHeldInput>,
 ): void => {
-  const names = new Set(heldNames);
+  const holds = [...held];
   for (const spec of specs) {
-    if (names.has(spec.name)) {
+    const refused = holds.some((hold) =>
+      hold.name === spec.name &&
+      (hold.ref === undefined || !handleRefsShareAddress(spec.ref, hold.ref))
+    );
+    if (refused) {
       throw new Error(
         `--input-cell name \`${spec.name}\` is already held by this run`,
       );
