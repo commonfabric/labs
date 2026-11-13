@@ -1785,6 +1785,7 @@ higher-kinded types to express the same rules to TypeScript.
 | --- | --- |
 | `Cell<T>`, `Writable<T>` | A read-write handle to a value of type `T`. `Writable` is the same type as `Cell` |
 | `ReadonlyCell<T>`, `WriteonlyCell<T>`, `ComparableCell<T>`, `OpaqueCell<T>` | Handles with fewer capabilities. `Cell<T>` is assignable to each |
+| `AnyCell<T>` | A handle of a kind the type does not state. Every cell handle and every `Stream` is assignable to it, and it is assignable to `AnyCell` alone ([§7.5.1](#751-handles)). It has no method of [§4.7](#47-cell-and-handle-methods): a value of it is compared with `equals`, given to a context read, or passed on |
 | `Stream<T>` | A handle that accepts events of type `T` |
 | `Reactive<T>` | The same type as `T` |
 | `Default<T, V>`, `DeepDefault<V>` | `T` with a default-value annotation `V`; `V` is a literal-like type, or `typeof` of a constant with a static initializer, and its value is assignable to `T` ([§8.8](#88-defaults-and-scopes)) |
@@ -1806,7 +1807,10 @@ that names it, and to `unknown`, and nothing else is assignable to it
 ([§7.5](#75-assignability)). `JSONValue` is not opaque. It is the union
 of `string`, `number`, `boolean`, `null`, an array of `JSONValue`, and a
 record of `JSONValue`, and a read-only array or record is assignable to
-it. `JSONSchema` is `boolean` or a record of `JSONValue`: the checker
+it. An object type is assignable to a record of `JSONValue` when each
+property is, and an optional property counts by its declared type: a
+property that is absent is not stored. `JSONSchema` is `boolean` or a
+record of `JSONValue`: the checker
 does not check the keywords of a schema. *Assumed:* each built-in
 parameter and state type is an ordinary object type unless
 `builtin-inventory.md` names it as opaque.
@@ -1915,9 +1919,11 @@ Assignability is structural, with these rules.
   correction of such a helper.
 - A value that is not a handle is not assignable to a handle type, and a
   handle is not assignable to its value type. A function body reads the
-  value with `get()`. The arguments of three kinds of call in tier R are
-  the exception, because they are bound by reference
-  ([§7.5.2](#752-arguments-bound-by-reference-in-tier-r)).
+  value with `get()`. There are two exceptions: the arguments of three
+  kinds of call in tier R, which are bound by reference
+  ([§7.5.2](#752-arguments-bound-by-reference-in-tier-r)), and the
+  argument of a pattern instantiated in a function body
+  ([§7.5.3](#753-the-argument-of-an-instantiation-in-a-function-body)).
 - An opaque named API type ([§7.2](#72-api-types)), such as `VNode`, is
   assignable to itself, to a union that names it, and to `unknown`.
   Nothing else is assignable to it.
@@ -1926,16 +1932,18 @@ Assignability is structural, with these rules.
 
 **Where a literal type is widened.** A literal type is widened to its
 primitive type where the value is bound to a place that can be assigned
-again, or where its type is inferred with nothing expected of it: a `let`
-binding, a mutable property of an object literal, an element of an array
-literal, and the inferred result type of a function. `as const` prevents
-each. A literal written where a type is expected is checked part by part
-against that type and is not widened there: `{ kind: "mix" }` is
-assignable to `{ kind: "mix" | "plain" }` as an argument, as a returned
-value under a declared result type, and as the initializer of an
-annotated binding. The expected type reaches the body of a function
-written in place through the function type expected at its position, a
-callback of a generic method included
+again, or where its type is inferred with nothing expected of it: a
+`let` binding, a mutable property of an object literal, an element of an
+array literal, and the inferred result type of a function. `as const`
+prevents each. Only a literal written in the expression is widened: a
+value whose type is a declared union of literal types keeps that type
+wherever it is bound or returned. A literal written where a type is
+expected is checked part by part against that type and is not widened
+there: `{ kind: "mix" }` is assignable to `{ kind: "mix" | "plain" }` as
+an argument, as a returned value under a declared result type, and as
+the initializer of an annotated binding. The expected type reaches the
+body of a function written in place through the function type expected
+at its position, a callback of a generic method included
 ([§7.3](#73-generics), "Inference at a call").
 
 #### 7.5.1 Handles
@@ -1946,16 +1954,18 @@ of another: one about the kind, and one about the value type.
 **Kind.** A handle is assignable to a handle of its own kind. `Cell<T>`,
 which is `Writable<T>`, is also assignable to `ReadonlyCell`,
 `WriteonlyCell`, `ComparableCell`, and `OpaqueCell`
-([§7.2](#72-api-types)). No other pair of kinds is assignable: a
-`ReadonlyCell` is not a `Cell`, and a `Stream` is assignable to a
-`Stream` alone.
+([§7.2](#72-api-types)). A handle of every cell kind, and a `Stream`, is
+assignable to `AnyCell`. No other pair of kinds is assignable: a
+`ReadonlyCell` is not a `Cell`, a `Stream` is assignable to a `Stream`
+and to `AnyCell` alone, and an `AnyCell` is assignable to an `AnyCell`
+alone.
 
 **Value type.** What the target handle can do decides how the value type
 `T` of the source is compared with the value type `U` of the target.
 
 | Target | Condition | Reason |
 | --- | --- | --- |
-| `ReadonlyCell<U>`, `ComparableCell<U>`, `OpaqueCell<U>` | `T` is assignable to `U` | Nothing is written through the target. What is read through it, or projected from it, is a `T`, which is a `U` |
+| `ReadonlyCell<U>`, `ComparableCell<U>`, `OpaqueCell<U>`, `AnyCell<U>` | `T` is assignable to `U` | Nothing is written through the target. What is read through it, or projected from it, is a `T`, which is a `U` |
 | `WriteonlyCell<U>`, `Stream<U>` | `U` is assignable to `T` | Nothing is read through the target. What is written or sent through it is a `U`, which the cell or the stream accepts as a `T` |
 | `Cell<U>`, `Writable<U>` | `T` and `U` are the same type up to annotations | The target reads and writes, so both conditions hold |
 
@@ -1969,15 +1979,30 @@ no value is declared so on both sides, or the property that holds the
 handle is optional. `ReadonlyCell<T>` is assignable to
 `ReadonlyCell<T | undefined>` by the first row.
 
-**A handle of `unknown`.** *Assumed*
-([§13](#13-open-questions), question 29): a handle of `T` is assignable
+**A handle of a narrower view.** A record type that declares some of the
+properties of `T` is a view of `T`: with `Message` declaring `body`,
+`sentAt`, and `reactions`, the type `{ body: string }` is a view of it.
+`Message` is assignable to the view, so `Cell<Message>` is assignable to
+`ReadonlyCell<{ body: string }>` by the first row, and a read through
+the target loads the view's properties alone. `Cell<Message>` is not
+assignable to `Cell<{ body: string }>`, by the third row. Through that
+target a body could `set` a record that has `body` and nothing else, and
+every reader that declares `Message` would then find stored data that
+does not match its type and fail its cone
+(`plan-and-label-templates.md`, §5.2). A position that holds a link read
+through a view is declared `ReadonlyCell` of the view,
+`quotes?: ReadonlyCell<RepliedMessage>`. A body that also writes through
+the link declares the type the cell has.
+
+**A handle of `unknown`.** A handle of `T` is assignable
 to a handle of `unknown` of a kind the kind rule admits, whatever the
 row: `Cell<Donut>` to `Cell<unknown>`, and `Stream<Donut>` to
 `Stream<unknown>`. The reverse is refused, by the table.
 [§7.8](#78-any-and-unknown) says what a body may do through such a
 handle. The rule is about a value type that is `unknown` itself, and not
 about an `unknown` inside it: `Cell<Donut[]>` is not assignable to
-`Cell<unknown[]>`.
+`Cell<unknown[]>`. Whether a write through such a handle stays legal is
+open ([§13](#13-open-questions), question 29).
 
 **A structural type is not a handle.** A helper declared with
 `{ get(): T }`, to accept "anything that can be read", accepts no cell
@@ -2018,10 +2043,13 @@ where it declares the value, which is legal at every tier-R expression
 site ([§4.4](#44-calls)). It does not hold for the value a pattern body
 returns against a declared result type, for an annotated `const`, or for
 a cast. And it does not hold in tier F, in any call: a value of a
-function body is a JavaScript value and not a place, so a function body
-passes a handle where a handle is declared and reads with `get()` where
-a value is declared, in the argument of an instantiation and in the
-state of a handler binding alike ([§5.2](#52-runtime-calls)).
+function body is a JavaScript value and not a place. The body of a
+`computed` is tier F for this rule whether or not the `computed` is
+promoted ([§6.2](#62-what-promotion-preserves)). In a function body the
+state of a handler binding is checked by §7.5 alone
+([§5.2](#52-runtime-calls)), and the argument of an instantiation has a
+rule of its own
+([§7.5.3](#753-the-argument-of-an-instantiation-in-a-function-body)).
 
 **The rule.** The type of the argument is compared with the declared
 type position by position: through the properties of an object type,
@@ -2035,7 +2063,14 @@ each position one of four cases applies.
 | A handle of `T` that can be read: `Cell`, `Writable`, or `ReadonlyCell` | A value type `U` | `T` is assignable to `U` | The value the cell holds, as `h.get()` written at the position would give it. The callee depends on the value and is evaluated again when it changes |
 | A handle | A handle | [§7.5.1](#751-handles) | The handle |
 
-Five points complete the table.
+Six points complete the table.
+
+- **A literal where a cell is declared** is checked part by part against
+  the value type of the declared cell, as a literal is wherever a type is
+  expected (§7.5). `kind="ring"` meets a declared `Writable<string>`.
+  The place the callee's handle names is then a constant of the
+  instance, which is a value the instance computes for the point on
+  writability below.
 
 - **The value types of two handles** are compared by this table too. A
   `Cell<Donut[]>` meets a declared `Cell<Cell<Donut>[]>`, because each
@@ -2053,13 +2088,18 @@ Five points complete the table.
   value of type `T` is refused where `Cell<T | undefined>` is declared,
   and a value of type `T | undefined` where `Cell<T>` is. Both are
   accepted where a `ReadonlyCell<T | undefined>` is declared. One case is
-  wider. Where the declared property is optional, `note?: Writable<string>`,
-  an argument of type `string | undefined` is accepted, as an argument
-  that is an optional property of the caller's own input is: the binding
-  refers to the place, whether or not something is stored there, and the
-  callee has declared that the property may be absent. What a read
-  through that handle returns while nothing is stored is the matter of
-  question 12 of [§13](#13-open-questions).
+  wider, and it depends on the callee's declaration alone. Where the
+  callee declares the property optional, `note?: Writable<string>`, an
+  argument whose type has `undefined` is accepted, with `undefined`
+  removed before the comparison: the binding refers to the place,
+  whether or not something is stored there, and the callee has declared
+  that the property may be absent. Where the callee declares the
+  property required, an argument whose type has `undefined` is refused,
+  an argument read from an optional property of the caller's own input
+  included, unless that read has no `undefined` in its type
+  ([§7.6.1](#761-optional-properties-of-an-input)). What a read through
+  a handle returns while nothing is stored is the matter of question 12
+  of [§13](#13-open-questions).
 - **Writability.** The second row does not ask whether the place the
   argument denotes can be written, whatever the kind of the declared
   handle. The type of a reactive value does not say whether it is an
@@ -2119,12 +2159,71 @@ at every depth and accepts the value or any cell of it at each position.
 typings are wider in two ways that were read from those declarations:
 they accept a value of `T` where a cell of `T | undefined` is declared,
 and they accept a cell that cannot be read where a value is declared.
+The project owner has ruled that the first stays refused, and that an
+authored function is not bound by reference
+([§13](#13-open-questions)).
 The prototype of the type checker counts the sites in the corpus. In
 218 arguments of a pattern or of a handler, a value is named where a
 cell is declared or a cell where a value is declared. In about 37 more a
 cell is named where a `lift` result or an authored function declares the
 value; how many of the 37 are arguments of an authored function, which
 this rule does not cover, was not measured.
+
+#### 7.5.3 The argument of an instantiation in a function body
+
+A pattern instantiated in a function body gets an argument document of
+its own, which the request writes path by path
+(`plan-and-label-templates.md`, §3.14, "Instantiating a pattern", and
+§3.15). What the body gives at a path is a JavaScript value or a handle,
+and the callee declares a value or a handle there. The four cases of
+[§7.5.2](#752-arguments-bound-by-reference-in-tier-r) are accepted under
+the same conditions, the points on a literal and on `undefined`
+included. What two of them mean differs, because a value of a function
+body has no place of its own.
+
+| The body gives | The callee declares | What the argument document holds at the path | What the callee has |
+| --- | --- | --- | --- |
+| A value | A value | The value: a copy of a scalar and of a container the body computed, and a link to a container the body read and passes on unchanged | The value |
+| A value | A cell handle | The same. The value is the initial value of the new instance at that path | A handle to that path of its own argument document. A write through it changes the instance's argument and nothing the caller holds |
+| A handle that can be read | A value | A link to the cell | The value the cell holds, read through the link. The instance depends on the cell and is evaluated again when it changes |
+| A handle | A handle | A link to the cell | The handle |
+
+So `Note({ title: "New note" })` in a handler, with `Note` declaring
+`title?: Writable<string | Default<"">>`, starts an instance whose title
+is `"New note"`, and the instance's own writes to `title` stay in it.
+The same value given in tier R would bind the callee's handle to a place
+of the caller (§7.5.2).
+
+- **Copy or link** follows the ruling on what a binding made in a
+  function body holds ([§5.2](#52-runtime-calls), "What a binding
+  holds"): a scalar and a computed container are copied, and a handle
+  and a container that has a stored address stay links.
+- **A container passed on unchanged where a cell is declared.** The
+  argument document holds a link to the container's address, and the
+  callee's handle names the path that holds the link. A write through
+  the handle follows the rule for a cell whose value is a link
+  (`plan-and-label-templates.md`, §3.11, "A write through a resolved
+  reference"). A caller that wants the new instance to have a record of
+  its own gives a copy: `{ ...donut }`.
+- **An instance named again.** In a `lift` or a `computed` an evaluation
+  that names the same instance updates its argument (§5.2), so what the
+  evaluation gives at a path replaces what the instance wrote there
+  through its handle. Under an explicit cause in a handler, a later
+  event writes no argument (§5.2, "An explicit cause in a handler").
+- **The state of a handler binding** made in a function body has no such
+  rule. A value given where the handler declares a cell is refused: the
+  copy would live in the binding's state document, whose identity
+  derives from the copied values (§5.2), and a write would change the
+  state the identity was derived from. A handle given where the handler
+  declares the value is refused too, and the body reads it with `get()`.
+
+**Today.** The published typings accept these arguments: the input of a
+pattern is typed `FactoryInput<StripCell<T>>` wherever it is called
+(`base/api/index.ts`). The prototype of the type checker reports 35
+arguments in the corpus that give a value where the instantiated pattern
+declares a cell, for example in
+`patterns/dev/default-app-ben/default-app-ben.tsx` and
+`patterns/system/quick-capture/quick-capture.tsx`.
 
 ### 7.6 Inference and narrowing
 
@@ -2141,6 +2240,37 @@ on `typeof x === "..."`, on `===` and `!==` against a literal, `null`, or
 property of a union of object types, on a call of a function with a type
 predicate, and on an assignment to a `let`.
 
+**`"k" in x`** narrows by what the type of `x` declares.
+
+- Where `x` is a union of object types, the true branch keeps the
+  members that declare `k`, and the false branch keeps the members that
+  do not declare it or declare it optional.
+- Where `x` has the type `object`, or an object type that does not
+  declare `k`, the true branch gives `x` that type with the property
+  `k: unknown` added. Several tests add several properties:
+  after `"id" in x && "name" in x` the type is
+  `{ id: unknown; name: unknown }`. The false branch leaves the type as
+  it was.
+- The property so added is an ordinary value typed `unknown`, and a
+  kind test on the path narrows it: after `typeof x.id === "string"`,
+  `x.id` is a `string`.
+
+This is how a body inspects an ordinary value typed `unknown`, such as
+the result of `JSON.parse`:
+
+```ts
+// Shown for illustration only.
+function idOf(parsed: unknown): string | undefined {
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  if (!("id" in parsed)) return undefined;
+  return typeof parsed.id === "string" ? parsed.id : undefined;
+}
+```
+
+`typeof x === "object"` narrows an ordinary `unknown` to `object | null`.
+On a data position typed `unknown` or `object`, `in` narrows nothing, as
+a kind test does not ([§7.8](#78-any-and-unknown)).
+
 The variable of a `catch` clause has type `unknown`.
 
 **A value that may be absent.** A read of an optional property has the
@@ -2151,7 +2281,85 @@ property read, an element read, or a call on a receiver whose type has
 (`subset-type:mismatch`), a receiver that is an optional property
 included. The author writes `?.`, `??`, or a test that narrows. In tier R
 `a?.b` is a path projection ([§4.3](#43-expressions)), and its type is
-the type of `b` or `undefined`.
+the type of `b` or `undefined`. One kind of optional property is read
+without `undefined`: a property of a pattern's input whose type declares
+a default (§7.6.1).
+
+#### 7.6.1 Optional properties of an input
+
+A `?` on a property of a pattern's input type says one thing to the
+caller and, for some properties, nothing to the body.
+
+**The caller's side.** A caller may leave out a property declared with
+`?`, and may give `undefined` for it. A property declared without `?` is
+required of the caller, whether or not its type declares a default.
+`Default<T, V>` says what a reader finds where nothing is stored. It
+does not make the property optional, and an input that a caller may
+leave out is written with both: `glaze?: Default<string, "plain">`.
+
+**The body's side.** The type the body of a `pattern` sees for a
+property of its input is decided by whether the property's type declares
+a default: `Default<T, V>`, `T | Default<V>`, or `DeepDefault<V>`
+([§8.8](#88-defaults-and-scopes)), written as the property's type or as
+the value type of the handle the property holds.
+
+| The property is declared | Example | The body reads | At run time |
+| --- | --- | --- | --- |
+| Optional, a handle whose value type declares a default | `chosen?: Writable<string \| Default<"">>` | The handle, without `undefined`. `get()` has the value type without `undefined` | The body is handed a handle whether or not the caller gave the property. A read through it finds the stored value, or the default where nothing is stored |
+| Optional, a value whose type declares a default | `glaze?: Default<string, "plain">` | The value type, without `undefined` | The stored value, or the default where nothing is stored |
+| Optional, a handle whose value type declares no default | `note?: Writable<string>` | The handle or `undefined`. The body tests it, or uses `?.` | The body is handed a handle here too. The type keeps `undefined` so that the checker reports what an editor reports (rule 2 of [§2](#2-design-rules)), and the test costs a comparison that always succeeds. What `get()` returns while nothing is stored is question 12 of [§13](#13-open-questions) |
+| Optional, a value whose type declares no default | `note?: string` | The value type or `undefined` | `undefined` where nothing is stored |
+| Required | `donuts: Donut[]` | The declared type | The caller gave it |
+
+Four rules complete the table.
+
+- **Where it holds.** The first two rows hold for the properties of the
+  input type of a `pattern` itself, read from the parameter or from its
+  destructuring pattern ([§4.1](#41-pattern-callback)). They do not hold
+  for a property of a nested object type, for the state or the event of
+  a `handler`, or for the argument of a `lift`: there a read of an
+  optional property has `undefined`, whatever the property's type
+  declares. The run-time behavior of the first two rows is the same in
+  those places. The checker asks for the test there because the
+  published typings do.
+- **A caller's optional property given where the callee requires it.**
+  In tier R the argument is bound by reference
+  ([§7.5.2](#752-arguments-bound-by-reference-in-tier-r)). It is
+  accepted where the read has no `undefined`, which is the first two
+  rows, and refused for the third and the fourth unless the callee
+  declares the property optional. So a pattern that declares
+  `events?: Writable<Entry[] | Default<[]>>` may give `events` to a
+  handler whose state declares `events: Writable<Entry[]>`.
+- **The default belongs to the place.** In that example the handler
+  declares no default, and it reads the place the pattern's input is
+  bound to. *Assumed* ([§13](#13-open-questions), question 33): a place
+  whose declaration has a default reads as the default, where nothing is
+  stored, for every reader bound to it by reference, a reader whose own
+  type declares no default included. Without this the handler's
+  `events.get()` would find nothing where its type requires a list, and
+  its cone would fail (`plan-and-label-templates.md`, §5.2). The
+  published typings accept the argument and do not state the guarantee.
+- **A parameter default is still refused**
+  (`pattern-context:parameter-form`, §4.1). The default is declared in
+  the type ([§12.7](#127-declare-defaults-in-types-not-in-the-parameter)).
+
+**Today.** `PatternFunction` in `base/api/index.ts` types the body's
+parameter as `Reactive<RequireDefaults<T>>`. `RequireDefaults` makes
+required, and removes `undefined` from, each property of `T` whose type
+carries the default brand, directly or as the value type of a cell
+(`IsDefaultField`), and leaves every other property as declared. It maps
+the properties of `T` and not those of a nested type. The caller's side
+is `FactoryInput<StripCell<T>>`, which keeps each `?`. A handler's state
+is typed `HandlerState<T>`, which applies no such mapping. At run time
+an absent value takes its schema's default before it is validated
+(`materializeSchemaView` in `runtime/runner/src/schema-view.ts`, through
+`defaultForAbsentValue`), and a property declared as a cell is handed
+to the body as a handle whether or not anything is stored
+(`processDefaultValue` in `runtime/runner/src/schema.ts`). The corpus
+declares 506 optional properties that hold a handle, 255 of them with a
+default (prototype). It uses a property of the first two rows without a
+test at 503 receivers, of which 434 hold a handle and 69 a value, and
+gives one to a callee that requires it in 223 arguments (prototype).
 
 ### 7.7 Casts
 
@@ -2193,8 +2401,9 @@ and it cannot read through it.
   (`schema:unknown-type-access`), in every tier: the `?.` tests the
   receiver and then reads through it. The position is declared with a
   type that has the property.
-- **A kind test** (`typeof`, `Array.isArray`, `instanceof`) sees the
-  reference and not the kind of what is stored behind it. A stored string
+- **A kind test** (`typeof`, `Array.isArray`, `instanceof`, `"k" in x`)
+  sees the reference and not the kind of what is stored behind
+  it. A stored string
   and a stored record give the same result, so a kind test does not narrow
   such a position to the stored type. A body that needs the value declares
   the position with the type it reads.
@@ -2229,8 +2438,10 @@ destructuring, and `const` bindings alone, from one of these roots:
 
 Every tier-R expression is therefore a data position, and a kind test
 in a tier-R conditional never narrows `unknown`. An expression rooted
-anywhere else is an ordinary value: the result of a call, a local the
-body built, and a parameter of an authored function. A parameter of an
+anywhere else is an ordinary value: the result of a call other than
+`get()` and `sample()`, the result of an operator, `detail ?? fallback`
+included, a local the body built, a `let`, and a parameter of an
+authored function. A parameter of an
 authored function may be handed a reference by a caller that passes on
 a data position. Narrowing it is sound all the same: the only kind test
 a reference passes is `typeof x === "object"`, which narrows to a type
@@ -2242,9 +2453,9 @@ A property read on an ordinary value typed `unknown` is an ordinary
 type error (`subset-type:mismatch`), and its correction is a narrowing.
 
 **A handle of `unknown`.** A handle of any type is assignable to the
-same kind of handle of `unknown` ([§7.5.1](#751-handles); *assumed,*
-question 29 of [§13](#13-open-questions)). Through a `Cell<unknown>` a
-body can do the following.
+same kind of handle of `unknown` ([§7.5.1](#751-handles)). Through a
+`Cell<unknown>` a body can do the following. The write is the one part
+that is open ([§13](#13-open-questions), question 29).
 
 - **Walk.** `key(name)` takes any string and yields a `Cell<unknown>`.
 - **Read.** `get()` returns a data position typed `unknown`: a
@@ -2389,13 +2600,17 @@ A name that resolves to none of these is an ordinary type error
 
 **The type names of the browser** are not types of the subset: `Event`,
 `CustomEvent`, `KeyboardEvent`, `HTMLElement`, and every other name of
-the DOM library. No DOM object reaches a pattern. An event arrives as
+the DOM library. A name is one of them when it is a global type that
+TypeScript's DOM library (`lib.dom.d.ts`) declares, and it resolves to
+no declaration of the program, no API type, and no type of §7.1 or
+[§9](#9-standard-library-surface). No DOM object reaches a pattern. An event arrives as
 data, and a handler declares the shape of the part it reads:
 `handler<{ detail: { value: string } }, State>` in place of
 `handler<CustomEvent<{ value: string }>, State>`. A reference to such a
 name is refused as a name of a library this document does not list
 (`stdlib:unsupported-member`), with that correction in the message.
-*Assumed* ([§13](#13-open-questions), question 32).
+The corpus has four such references, in three modules (prototype;
+[§11.3](#113-what-the-subset-refuses-in-the-corpus)).
 
 ## 8. Labels as annotations
 
@@ -2565,8 +2780,8 @@ which the compiler evaluates itself.
 - A **constant reference** is `typeof NAME` at any other position of a
   label argument: an element of a label list, a property of an object
   atom, an alternative of `AnyOf`, and the action and the pattern of a
-  trusted-action alias. *Assumed* ([§13](#13-open-questions), question
-  30): it is legal where `NAME` is a module-scope constant with a static
+  trusted-action alias. It is legal where `NAME` is a module-scope
+  constant with a static
   initializer in the sense of [§8.8](#88-defaults-and-scopes), declared
   in the module or imported from another module of the program, and it
   stands for the value of that initializer, as `typeof NAME` does in a
@@ -2970,7 +3185,7 @@ construct found and the replacement given here.
 | `pattern-context:callback-container` | error | An arrow function passed to a method or function that §4.4 does not give a callback position (`forEach`, `toSorted`, `findLast`, `replace`, `then`) | Wrap the whole expression: `computed(() => xs.toSorted((a, b) => a.price - b.price))` | changes (now covers every non-structural callback, in every tier-R site, not only JSX) |
 | `reactive:unsupported-call` | error | A call in tier R whose callee matches no row of §4.4, such as a method the standard-library table does not mark "R". Where the callee does not resolve to a definition, the row is decided by its type, so a call of a value of a factory type is not reported (§4.4). An ambient read, a removed form, and a staged change are not reported here: they are `function-body:ambient-read`, the `removed-form:` entries, and `function-body:effect-in-computation`. Neither is a call that is an expression statement (`pattern-context:statement`) | Wrap the expression in `computed(() => ...)`, or call an authored function that does the work | new (replaces `pattern-context:receiver-method-call`, `pattern-context:inline-reactive-root-access`, `reactive:call-argument-computation`) |
 | `reactive:unsupported-expression` | error | `new` of a non-cell constructor other than `new Date()` with no argument (which is `function-body:ambient-read`), `await`, `yield`, `this`, `instanceof`, a tagged template whose tag is not `debugStr` (§4.4.4), `void`, or the comma operator in tier R. Also an object literal with a computed key that is not static (§4.3), and a default value or a rest element in a `const` destructuring whose initializer is not a constant expression (§4.2). An expression that is an expression statement, such as `void x;`, is `pattern-context:statement` and is not reported here | Wrap the expression in `computed(() => ...)`. For a default in a destructuring, write it as an expression: `const glaze = donut.glaze ?? "plain"` | new (replaces the remaining cases of `pattern-context:computation`) |
-| `opaque-get:invalid-call` | error | `.get()` on a value of a data type that is not `Cell`, `Writable`, or `ReadonlyCell`. A call of a `get` method that the value's own type declares, as on a `Map` or on a local object typed `{ get(): T }`, is an ordinary method call and is not reported (§4.4) | Read the value directly: `donut.name`, not `donut.get().name`. Only `Cell<T>`, `Writable<T>`, and `ReadonlyCell<T>` are read with `.get()` | carries |
+| `opaque-get:invalid-call` | error | `.get()` on a value of a data type that is not `Cell`, `Writable`, or `ReadonlyCell`, a `Stream` included: to test that a stream is stored, read the position through a view typed `unknown` ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)). A call of a `get` method that the value's own type declares, as on a `Map` or on a local object typed `{ get(): T }`, is an ordinary method call and is not reported (§4.4) | Read the value directly: `donut.name`, not `donut.get().name`. Only `Cell<T>`, `Writable<T>`, and `ReadonlyCell<T>` are read with `.get()` | carries |
 | `pattern-context:self-access` | error | `x[SELF]` where `x` is not the pattern's own input parameter, or anywhere in tier F | Read `const self = input[SELF]` in the pattern body, or destructure `[SELF]: self`, and capture `self` | carries |
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope. In a function body: the state of a handler binding, in either spelling of §5.2, or an inline `pattern(...)` used as a callee (§4.4.2) holds or captures a function value or a value of another code type, such as a `Map`, a `Set`, a `Date`, or an `Error` | Move the function to module scope. For a value of another code type, capture data, such as an array of entries or a timestamp, and build the value inside the body that uses it | changes (now also covers a handler binding and an inline pattern in a function body, and a code type other than a function) |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
@@ -3039,7 +3254,7 @@ construct found and the replacement given here.
 | `subset-type:operator-operand` | error | A native type operator applied to an operand outside the table of §7.10: `Pick`, `Omit`, `Partial`, or `Required` applied to a type that is not an object type; `Pick` or `Omit` with keys that are not string literals, or `Pick` with a key the type does not declare; `ReturnType` or `Parameters` applied to a type that is neither a function type nor a factory type | Apply the operator to the object type and label the result. For `ReturnType` and `Parameters`, name a function: `ReturnType<typeof priceOf>` | new |
 | `subset-type:cannot-infer-type-argument` | error | A generic call leaves a type parameter undetermined and without a default | Write the type argument | new |
 | `subset-type:any` | error | `any` written as a type or as a cast target | The explicit form of §7.8 for the use found: `unknown` or `Cell<unknown>` for a reference, no cast for a pattern instance or a labeled value, `instanceof Error` for a caught error, `Record<string, unknown>` or `JSONValue` for open data | new |
-| `subset-type:mismatch` | error | An ordinary type error: assignability, a missing property, a wrong argument count, a name that resolves to no type, a property read on an ordinary value typed `unknown` (§7.8), and a receiver whose type has `undefined` or `null`, in any tier, a receiver that is an optional property included (§7.6) | The expected and found types. For a receiver that may be absent, the `?.` or `??` form. For a value where a cell is declared or a cell where a value is declared, outside the three calls of §7.5.2: the declaration to change, or `get()`. For a cell passed to a structural type such as `{ get(): T }`: declare the parameter `ReadonlyCell<T>` (§7.5.1). For `Cell<T>` against `Cell<T \| undefined>`: declare both sides alike, or make the property optional | new (reported by TypeScript today) |
+| `subset-type:mismatch` | error | An ordinary type error: assignability, a missing property, a wrong argument count, a name that resolves to no type, a property read on an ordinary value typed `unknown` (§7.8), and a receiver whose type has `undefined` or `null`, in any tier, a receiver that is an optional property included, other than a property of a pattern's input whose type declares a default (§7.6, §7.6.1) | The expected and found types. For a receiver that may be absent, the `?.` or `??` form. For a value where a cell is declared or a cell where a value is declared, outside the three calls of §7.5.2: the declaration to change, or `get()`. For a cell passed to a structural type such as `{ get(): T }`: declare the parameter `ReadonlyCell<T>` (§7.5.1). For `Cell<T>` against `Cell<T \| undefined>`: declare both sides alike, or make the property optional. For a cell of `T` where a cell of a view of `T` is declared: declare `ReadonlyCell` of the view. For a value where the state of a handler bound in a function body declares a cell: give a cell (§7.5.3) | new (reported by TypeScript today) |
 | `cast-validation:double-unknown` | error | A cast through `unknown` to an unrelated type | Declare the value with the type it has, or narrow it with a type predicate | carries |
 | `cast-validation:forbidden-cast` | error | A cast to `Reactive<T>` | Remove the cast | carries |
 | `cast-validation:cell-cast` | error | A cast to a cell type | Declare the cell type where the value is received (the pattern input or the handler state) | carries |
@@ -3154,6 +3369,9 @@ and 2 local type declarations, and nothing else.
 | A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them (needs types) | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
 | A function type in a type used as data | 1 declaration, 35 uses in 10 modules (prototype) | `MentionablePiece` in `patterns/system/backlinks-index/backlinks-index.tsx`, whose property `mentionable` is declared `MentionablePiece[] \| { get?: () => MentionablePiece[] }`. The type is a pattern input, a cell value, and a handler state | Rewrite: the declaration says what the value is, a list or a cell of one (`subset-type:function-in-data`, §7.9) |
 | A cell passed to a parameter declared with a structural type | About 25 arguments (prototype) | Declarations of the kind are `roster: { get(): ... }` in `patterns/system/loom/participants.tsx` and `sources` in `patterns/apps/topics/main.tsx` | Rewrite: declare the parameter `ReadonlyCell<T>`, which accepts every cell the structural type was written to accept (§7.5.1) |
+| A cell of `T` given where a cell of a view of `T` is declared | 13 arguments (prototype) | `Cell<Message>` where `quotes?: Cell<RepliedMessage>` is declared, in `patterns/system/fabrichat/room-records.tsx` | Rewrite: declare `ReadonlyCell` of the view where the link is read, and the type the cell has where it is written (§7.5.1) |
+| A type name of the DOM library | 4 (3) (prototype) | `Event` in `patterns/apps/annotation/annotation.tsx` and `patterns/examples/form-demo/form-demo.tsx`; `CustomEvent` in `patterns/dev/catalog/stories/cf-chat-story.tsx` | Rewrite: declare the shape of the event the handler reads (`stdlib:unsupported-member`, §7.10) |
+| `.get()` on a stream reached through `key` | 1 (1) (prototype) | `takesOffers` in `patterns/system/fabrichat/manager.tsx` | Rewrite: test presence through a view typed `unknown` ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)) |
 | A default named by `typeof` of a constant whose initializer is a call | 1 (1) (prototype) | `Default<typeof INITIAL_SHOTS>` in `patterns/showcase/battleship/multiplayer/schemas.tsx`, where `INITIAL_SHOTS = createInitialShots()` | Rewrite: write the value as a literal (`default:not-static`, §8.8) |
 | `any` in a type | 132 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
 | `as any` | 52 (21) | for example `patterns/system/notes/daily-journal.tsx`, `patterns/system/agent-queue/agent-queue.tsx` | Remove: the rules of §7.5, §7.6, and §8.6 make most of them unnecessary |
@@ -3191,7 +3409,8 @@ the two assignability rules remove every one of them needs the type-checking
 prototype; the script classified them by syntax.
 
 **FabriChat** uses none of `ifElse`, `when`, `unless`, `str`, or
-`patternTool`. It would need one change: the four overload signatures in
+`patternTool`. By the rules that syntax and name resolution decide it
+needs one change: the four overload signatures in
 `manager.tsx`
 ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)). One
 of the four, `aboutRecordOf`, needs only its overload signature deleted,
@@ -3203,8 +3422,27 @@ the index and declares no state cell (§4.4.1). Nothing else in its eight
 modules is refused by a rule that syntax and name resolution decide. In
 particular it uses no `any`, and its two generic helpers and its use of
 `keyof T & string` are inside the generics of §7.3 and the intersections
-of §7.4. What the type rules refuse in FabriChat beyond the overloads was
-not measured.
+of §7.4.
+
+The type rules refuse more. The prototype of the type checker, run on a
+later tree of the eight modules, reports the following (prototype).
+
+- Five overload signatures in `manager.tsx`, one more than the script
+  counted on the measured tree.
+- One `.get()` on a stream: `takesOffers` in `manager.tsx` reads
+  `inboxOf(inbox).key("receive").get()` to test that the inbox has its
+  stream. With `key` flattening, the receiver is a `Stream`, which has
+  no `get`
+  ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)).
+- One cell given to a helper that declares a structural `{ get(): T }`,
+  in `room.tsx` (§7.5.1).
+- Two arguments in `room.tsx` that give a `Cell<T>` where a handler
+  declares `Cell<T | undefined>`, and two in `room-records.tsx` that
+  give a `Cell<Message>` where a `Cell` of a view of `Message` is
+  declared (§7.5.1).
+- Six uses of an optional property of a pattern's input without a test.
+  [§7.6.1](#761-optional-properties-of-an-input) accepts each one whose
+  property declares a default; how many of the six do was not measured.
 
 ### 11.4 Where the subset was adjusted to the corpus
 
@@ -3220,8 +3458,11 @@ counts shown or because the project owner asked for them.
 | The index parameter of a `map` callback in a pattern body | Used in 44 of 326 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-keyed` |
 | A handler bound, without the index, in a per-element body over plain values | 7 (7) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx`, `patterns/examples/group-chat-room/group-chat-room.tsx`, and `patterns/system/fabrichat/message-row.tsx`. A further 95 callbacks, over a local constant or a parameter, bind a handler without the index; which of those collections are stored lists, and which have a primitive element type, needs types | Accepted (§4.4.1): equal elements bind equal state and share one stream. No callback in the corpus declares a state cell, so `collection:shared-element-state` refuses nothing in it. How many per-element bodies over plain values instantiate a child, and are therefore keyed by position, was not measured |
 | A value named where the callee declares a cell, or a cell where it declares the value, in an argument written in tier R | 218 arguments of a pattern or of a handler, and about 37 arguments of a `lift` result or of an authored function (prototype) | Accepted for a pattern, a handler, and a `lift` result: the argument is bound by reference (§7.5.2). An argument of an authored function is not covered; how many of the 37 are such was not measured |
-| A cell of a declared type given where `Cell<unknown>` is declared | 49 (prototype) | Accepted. *Assumed* (§7.5.1; [§13](#13-open-questions), question 29) |
-| `typeof` of a module-scope constant as a label atom, and as the action or the pattern of a trusted-action alias | 48; 72 (prototype). For example `readonly [typeof LOBBY_ADMIN_INTEGRITY]` and `typeof TRUSTED_LOBBY_ACTION` in `patterns/product/lobby/main.tsx`, `typeof FACT_CHECK_GATE_ACTION` in `patterns/system/cfc/trusted-surfaces/fact-check-gate.tsx`, and `readonly [typeof LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY]` in `patterns/system/profile-home/profile-home.tsx` | Accepted as a constant reference, with the constant's value as the atom or the name. *Assumed* (§8.5; [§13](#13-open-questions), question 30) |
+| An optional property of a pattern's input whose type declares a default, used without a test | 503 receivers, 434 of a handle and 69 of a value; 223 arguments that give one to a callee that requires it (prototype). For example `bookmarks.get()` in `patterns/apps/bookmarks/bookmarks.tsx`, `selected.set(option)` in `patterns/product/primitives/option-picker.tsx`, and `logEventHandler({ events, mentioned })` in `patterns/apps/activity-log/activity-log.tsx` | Accepted: the body reads such a property without `undefined` (§7.6.1). Whether every one of the 726 is a property whose type declares a default has to be confirmed by the prototype |
+| A value given where a pattern instantiated in a function body declares a cell | 35 arguments (prototype), for example `Notebook({ title: "New Notebook" })` in `patterns/dev/default-app-ben/default-app-ben.tsx` | Accepted: the value is the initial value of the new instance's argument at that path (§7.5.3) |
+| `"k" in x` on a value narrowed to `object`, followed by a read of `x.k` | 14 reads (4) (prototype) | Accepted: the test adds the property `k: unknown` (§7.6) |
+| A handle of a declared type given where a handle of `unknown` is declared | 82 sites (prototype) | Accepted (§7.5.1). Whether a write through such a handle stays legal is open ([§13](#13-open-questions), question 29) |
+| `typeof` of a module-scope constant as a label atom, and as the action or the pattern of a trusted-action alias | 48; 72 (prototype). For example `readonly [typeof LOBBY_ADMIN_INTEGRITY]` and `typeof TRUSTED_LOBBY_ACTION` in `patterns/product/lobby/main.tsx`, `typeof FACT_CHECK_GATE_ACTION` in `patterns/system/cfc/trusted-surfaces/fact-check-gate.tsx`, and `readonly [typeof LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY]` in `patterns/system/profile-home/profile-home.tsx` | Accepted as a constant reference, with the constant's value as the atom or the name (§8.5) |
 | A cell passed to a parameter typed `object` | About 23 arguments (prototype), for example `sameRoom` in `patterns/system/fabrichat/manager.tsx`, whose parameters are `object \| undefined` | Accepted: `object` is a type of the subset, and a handle is assignable to it (§7.1, §7.5) |
 | `as T` casts other than `as const` and `as any` | 243 (58) | Accepted as assertions between related types (§7.7) |
 | Non-null `!` | 57 (34) | Accepted |
@@ -3298,8 +3539,7 @@ then `Confidential` (32) and `AddIntegrity` (15).
   not tell a binding reference from a constant reference. The prototype
   reports 48 sites where `typeof` of a module-scope constant is a label
   atom and 72 where it is the action or the pattern of a trusted-action
-  alias (prototype). They are in the language on the assumption of
-  question 30 ([§13](#13-open-questions)).
+  alias (prototype). Both are constant references (§8.5).
 - 42 payloads are themselves label aliases (nesting), 11 are arrays, and 1
   is a union with `undefined`. None is an intersection.
 - 12 generic aliases wrap a label alias, such as `OwnerPrivate<T>` in
@@ -3336,8 +3576,8 @@ the bodies that call it.
 
 ## 12. Recommended syntax changes
 
-Each change keeps today's form valid unless it says otherwise. §12.1 and
-§12.8 do say otherwise.
+Each change keeps today's form valid unless it says otherwise. §12.1,
+§12.8, and §12.9 do say otherwise.
 
 ### 12.1 Conditionals and templates are JavaScript
 
@@ -3525,8 +3765,12 @@ export function firstTopping(toppings: string[]): string | undefined {
 pattern<{ glaze?: string }>(({ glaze = "plain" }) => ({ glaze }));
 
 // After
-pattern<{ glaze: Default<string, "plain"> }>(({ glaze }) => ({ glaze }));
+pattern<{ glaze?: Default<string, "plain"> }>(({ glaze }) => ({ glaze }));
 ```
+
+The `?` stays: it is what lets a caller leave the property out. The
+default is what lets the body read `glaze` as a `string` without a test
+([§7.6.1](#761-optional-properties-of-an-input)).
 
 ### 12.8 Use the index for a per-element state cell over plain values
 
@@ -3560,6 +3804,48 @@ changes for this rule today. A body that binds a handler and declares no
 state cell needs no index and stays as written: the corpus has such bodies
 in seven files, FabriChat's quick-reaction buttons among them.
 
+### 12.9 Test that a stream is present through a view typed `unknown`
+
+A body sometimes has to know whether a stream is stored at a position
+before it sends to it. `takesOffers` in
+`patterns/system/fabrichat/manager.tsx` does so by reading the stored
+link: `inboxOf(inbox).key("receive").get()`. In this language `key`
+flattens ([§4.7](#47-cell-and-handle-methods)), so the receiver is the
+`Stream` itself, and a `Stream` has no `get` (`opaque-get:invalid-call`).
+
+The test is a test of presence, and a position typed `unknown` is what
+supports one without reading the content
+([§7.8](#78-any-and-unknown)). The body reads the same cell through a
+read-only view that declares the property `unknown`. A `Cell` of the
+record is assignable to that view, because a `Stream` is assignable to
+`unknown` and the target does not write ([§7.5.1](#751-handles)).
+
+```ts
+// Shown for illustration only.
+interface Inbox {
+  receive?: Stream<Offer>;
+}
+
+// Before
+const takesOffers = (inbox: Cell<Inbox>): boolean =>
+  isStreamHandle(inbox.key("receive").get());
+
+// After
+const hasReceive = (inbox: ReadonlyCell<{ receive?: unknown }>): boolean =>
+  inbox.key("receive").get() !== undefined;
+
+const takesOffers = (inbox: Cell<Inbox>): boolean => hasReceive(inbox);
+```
+
+`key("receive")` on the view is a `ReadonlyCell<unknown>`, and its
+`get()` returns a reference that the body compares with `undefined`.
+The footprint of the test is the presence of `receive` and nothing of
+the stream. The test says that something is stored at the position. It
+does not say that what is stored is a stream: a kind test on a position
+typed `unknown` sees the reference alone (§7.8). The declared type of
+the position, `Stream<Offer>`, is what says that, and the send is typed
+by it: `inbox.key("receive").send(offer)`.
+
 ## 13. Open questions
 
 Decided in this document, and written into the sections above: tier I is
@@ -3570,8 +3856,14 @@ body is a handler binding (§5.2); the published typings become identity
 aliases, with no editor plugin (§8.6.1); an argument of a pattern, of a
 handler, or of a `lift` result written in tier R is bound by reference,
 so a value and a handle of it stand for each other there (§7.5.2); two
-handles are compared by what the target can do (§7.5.1); `object` is a
-type, to which a handle is assignable (§7.1); a data position typed
+handles are compared by what the target can do, and a cell of `T` is
+assignable to a `ReadonlyCell` of a view of `T` and not to a `Cell` of
+it (§7.5.1); a value given where a pattern instantiated in a function
+body declares a cell is the initial value of the instance's argument
+(§7.5.3); an optional property of a pattern's input whose type declares
+a default is read without `undefined` (§7.6.1); `"k" in x` adds the
+property to a type that does not declare it (§7.6); `AnyCell` is a type
+of the subset (§7.2); a data position typed
 `unknown` is told from an ordinary value by where the expression is
 rooted (§7.8); a read of an optional property may be `undefined`
 (§7.6); and `ReturnType` and `Parameters` are defined on both factory
@@ -3601,6 +3893,17 @@ Decided by the project owner:
   exception for a type that describes a value probed for a method (§7.9);
 - a default is static, and a default named by `typeof` of a constant whose
   initializer is a call is refused (§8.8);
+- a handle of `T` is assignable to the same kind of handle of `unknown`
+  (§7.5.1, §7.8);
+- `typeof` of a module-scope constant with a static initializer is a
+  legal label atom, and a legal action or pattern name of a
+  trusted-action alias, and stands for the constant's value (§8.5);
+- an authored function called in tier R is not bound by reference: its
+  arguments are checked by the ordinary rule (§7.5.2);
+- `Cell<T>` is not assignable to `Cell<T | undefined>`, nor the reverse
+  (§7.5.1);
+- `object` is a type of the subset, to which a handle is assignable
+  (§7.1);
 - a handler factory may be received as a value and bound (§4.4.2);
 - a handler binding made in a function body copies a scalar and a
   container the body computed, and binds a container that has a stored
@@ -3630,13 +3933,13 @@ the type admits `undefined` or declares a default, and otherwise fails the
 cone that reads it (§5.2). The last is what keeps the strict `null` checks
 of §7 sound: value code never sees a value its type excludes.
 
-Questions 15, 16, 17, 21, 25, 26, 29, and 30 need a decision from the
+Questions 15, 16, 17, 21, 25, 26, and 29 need a decision from the
 project owner. The
 [continuation plan](../../plans/compiled-pattern-language.md) lists the
 first three as its questions 49 with 60, 28, and 59. It lists 21, 25,
-and 26 as its questions 72, 82, and 78, and does not have 29 and 30. The
+26, and 29 as its questions 72, 82, 78, and 93. The
 others do not need the owner. Each names
-the document it is addressed to. The numbers 9, 14, and 19 are not in use,
+the document it is addressed to. The numbers 9, 14, 19, and 30 are not in use,
 so that the other numbers stay as other documents cite them.
 
 1. **Whether declared types can replace every re-typing overload** (to the
@@ -3857,51 +4160,55 @@ so that the other numbers stay as other documents cite them.
     derived cell is understood to behave today (not verified against
     source). The prototype has to count the arguments that name a
     computed value where a writable handle is declared.
-29. **A handle of `T` where a handle of `unknown` is declared** (to the
-    project owner). §7.5.1 requires the same value type of two handles
-    that can write, and §7.8 recommends `Cell<unknown>` for a cell of
-    unknown content. The prototype reports 49 sites in the corpus that
-    give a cell of a declared type where `Cell<unknown>` is declared.
-    *Assumed:* a handle of `T` is assignable to the same kind of handle
-    of `unknown`, at the root of the value type only. A body may walk
-    it with `key`, read a reference through it, compare it, pass it on,
-    and write any data value through it. The type checker then does not
-    protect the other holders of the cell from a write of another type.
-    The stored-data rule does: such a value reads as `undefined` where
-    the reader's type admits it and fails the reading cone otherwise
-    (`plan-and-label-templates.md`, §5.2). The alternative keeps the
-    assignability and refuses `set`, `update`, the array writes, and
-    `send` through a handle of `unknown`, so that a body which writes
-    declares the type it writes. A second alternative refuses the
-    assignability, and each of the 49 sites declares the type.
-30. **`typeof` of a constant as a label atom, and as the action or the
-    pattern of a trusted-action alias** (to the project owner). §8.5
-    reads `typeof NAME` as a constant reference at every position of a
-    label argument that does not expect a writer or a rule set. The
-    prototype reports 48 sites where it is a label atom and 72 where it
-    is an action or a pattern (§11.4). *Assumed:* legal where `NAME` is
-    a module-scope constant with a static initializer in the sense of
-    §8.8, and the atom or the name is the constant's value, as the
-    lowering reads it today. Two constants with equal values are one
-    atom, and renaming a constant changes no label. The alternative
-    refuses the form (`cfc-label:not-static`), and each site writes the
-    literal or names a type alias whose body is the literal.
+29. **Whether a write through a handle of `unknown` is refused** (to
+    the project owner; the continuation plan's question 93). By ruling,
+    a handle of `T` is assignable to the same kind of handle of
+    `unknown` (§7.5.1). §7.8 lets a body write any data value through
+    such a handle, and relies on the stored-data rule to protect the
+    other holders of the cell (`plan-and-label-templates.md`, §5.2).
+    The owner is considering the alternative: a write needs a specific
+    type, so `set`, `update`, the array writes, and `send` through a
+    handle of `unknown` are refused, and a `Cell<T>` is then given where
+    a `ReadonlyCell<unknown>` is declared, which the first row of the
+    table of §7.5.1 already accepts. *Assumed* until it is ruled: the
+    write is legal. The prototype's count (prototype): 82 sites pass a
+    handle of a known `T` where a handle of `unknown` is declared. For
+    33 of them the alternative needs only the declaration retyped to
+    `ReadonlyCell<unknown>`. The other 49 need more: 33 are the generic
+    control `SelectControl`, whose `value: Writable<unknown>` is bound
+    to `<cf-select $value>`; 9 call `resolveAsCell`, which
+    `ReadonlyCell` does not have (§4.7); and 5 are stored record fields
+    that an overload re-types later. Three authored sites write
+    directly through a handle of `unknown`. This document does not
+    design the alternative.
 31. **What the by-reference rule leaves refused** (to the prototype).
-    §7.5.2 is narrower than the published typings in four places: it
-    does not cover an argument of an authored function called in tier R;
-    it refuses a value of `T` where `Cell<T | undefined>` is declared,
-    and the reverse, unless the declared property is optional; it
-    refuses a handle that cannot be read where a value is declared; and
-    it does not hold in a function body. *Assumed:* each stays refused.
-    The prototype has to count the sites of each among the remaining
-    mismatches. Covering an authored function would break rule 2 of §2
-    unless the function's parameter were declared with a type the
-    published typings read the same way.
-32. **The type names of the browser** (to the prototype and to
-    `builtin-inventory.md`). §7.10 refuses `Event`, `CustomEvent`, and
-    the other names of the DOM library, and has a handler declare the
-    shape of the event it reads. *Assumed.* The prototype has to count
-    the sites. The alternative defines `CustomEvent<T>` as the object
-    type `{ detail: T }` and the other event names as object types with
-    the properties an element delivers, which `builtin-inventory.md`
-    would have to list for each host element.
+    §7.5.2 is narrower than the published typings in four places. Two
+    are ruled: an argument of an authored function called in tier R is
+    not bound by reference, and a value of `T` is refused where
+    `Cell<T | undefined>` is declared, and the reverse, unless the
+    declared property is optional. Two are decided in this document: a
+    handle that cannot be read is refused where a value is declared,
+    and the state of a handler binding made in a function body is
+    checked by §7.5 alone (§7.5.3). The prototype has to count the
+    sites of each among the remaining mismatches.
+32. **The event types of host elements** (to `builtin-inventory.md`).
+    §7.10 refuses the type names of the DOM library, and a handler
+    declares the shape of the event it reads. The corpus has four such
+    references (§11.3). *Assumed:* an author learns the shape of the
+    event an element delivers from the documentation of the element.
+    The alternative has `builtin-inventory.md` list, for each host
+    element, the event types it delivers as object types of the API,
+    such as one for the event of `cf-input`.
+33. **A default belongs to the place** (to `plan-and-label-templates.md`
+    and `execution-and-storage.md`). §7.6.1 lets a pattern give an
+    optional property of its input whose type declares a default to a
+    callee that requires the property and declares no default, bound by
+    reference, as the published typings do in 223 arguments of the
+    corpus (prototype). *Assumed:* where nothing is stored, the place
+    reads as the default its declaration has, for every reader bound to
+    it by reference, whatever that reader's own type declares. The
+    alternative refuses the argument unless the callee's type declares
+    the same default, which changes those 223 arguments. A second point
+    is assumed with it: a handle to a place where nothing is stored is
+    handed to the body all the same, for an optional property of a
+    pattern's input, as the runtime does today.
