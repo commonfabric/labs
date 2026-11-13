@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  attachRequests,
   isInMain,
   isSingleEmoji,
   sameNameMarks,
@@ -175,6 +176,40 @@ describe("logic", () => {
         { principal: ada, name: undefined },
         { principal: otherAda, name: "  " },
       ])).toStrictEqual({ [ada]: "", [otherAda]: "" });
+    });
+  });
+
+  describe("attachRequests()", () => {
+    const files = ["a.txt", "b.txt", "c.txt"];
+    const none = () => false;
+
+    it("names each file's request by the event's key and its place", () => {
+      expect(attachRequests("k", files, none, 0, 10)).toStrictEqual([
+        { requestId: "attach-k-0", file: "a.txt" },
+        { requestId: "attach-k-1", file: "b.txt" },
+        { requestId: "attach-k-2", file: "c.txt" },
+      ]);
+    });
+
+    it("leaves out a request an earlier run of the event made", () => {
+      const handled = (id: string) => id === "attach-k-1";
+      expect(attachRequests("k", files, handled, 2, 10).map((r) => r.file))
+        .toStrictEqual(["a.txt", "c.txt"]);
+    });
+
+    it("adds nothing again for an event already handled at the limit", () => {
+      const handled = (id: string) => id.startsWith("attach-k-");
+      expect(attachRequests("k", files, handled, 10, 10)).toStrictEqual([]);
+    });
+
+    it("allows exactly as many attachments as `max`", () => {
+      expect(attachRequests("k", files, none, 7, 10)).toHaveLength(3);
+    });
+
+    it("throws when the requests it adds would pass `max`", () => {
+      expect(() => attachRequests("k", files, none, 8, 10)).toThrow(
+        "A message can have at most 10 attachments.",
+      );
     });
   });
 });

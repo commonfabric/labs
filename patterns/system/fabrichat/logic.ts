@@ -1,7 +1,8 @@
 /**
  * FabriChat's rules that need no runtime: what counts as a single emoji, how
- * the two views of a conversation are derived from replies, and how a
- * thread's title reads when no member has set one. The room applies them to
+ * the two views of a conversation are derived from replies, how a thread's
+ * title reads when no member has set one, and which of an attach event's
+ * files a run of it adds. The room applies them to
  * its records; `logic.test.ts` states them directly.
  */
 
@@ -161,4 +162,33 @@ export const sameNameMarks = (
         : "",
     ]),
   );
+};
+
+/**
+ * The requests a run of an attach event adds to the composer, one for each of
+ * `files`, named by the event's `key` and the file's place in it, so that every
+ * run of one event names the same requests. A request `isHandled` reports an
+ * earlier run of the event made is left out, so a run of an event the composer
+ * has handled already adds none, and only the requests this run adds count
+ * toward `max` beside the `attached` the composer holds already, which include
+ * those an earlier run of the event attached.
+ *
+ * @throws If the requests this run adds would make more than `max`
+ *   attachments.
+ */
+export const attachRequests = <File>(
+  key: string,
+  files: readonly File[],
+  isHandled: (requestId: string) => boolean,
+  attached: number,
+  max: number,
+): { requestId: string; file: File }[] => {
+  const adding = files.flatMap((file, index) => {
+    const requestId = `attach-${key}-${index}`;
+    return isHandled(requestId) ? [] : [{ requestId, file }];
+  });
+  if (attached + adding.length > max) {
+    throw new Error(`A message can have at most ${max} attachments.`);
+  }
+  return adding;
 };
