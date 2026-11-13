@@ -16,6 +16,7 @@ import {
   connect,
   connectionError,
   loopback,
+  SpaceSession,
   type Transport,
 } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
@@ -358,6 +359,41 @@ describe("client", () => {
       expect((await session.transact(commit())).seq).toBe(1);
       // The first mount's open, its restore's, and the second mount's.
       expect(opens).toBe(3);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects a mount whose `session.open` was answered on a replaced connection with its caller's reason, when the caller cancels it just as its session's restore completes", async () => {
+    // The restore completes, and the caller cancels before the mount has
+    // gone on to hand the session out. The cancellation is scheduled from
+    // the restore's own completion, which is the earliest it can follow it.
+
+    const server = serverFor("cancelled-as-restored");
+    const { client } = await clientReplacingConnectionUnderOpen(server);
+    const cancel = new AbortController();
+    const reason = new Error("test cancels the mount");
+    const whenRestored = SpaceSession.prototype.whenRestored;
+    using _restored = stub(
+      SpaceSession.prototype,
+      "whenRestored",
+      function (this: SpaceSession) {
+        const restored = whenRestored.call(this);
+        void restored.then(() => queueMicrotask(() => cancel.abort(reason)));
+        return restored;
+      },
+    );
+    try {
+      const outcome = await client.mount(
+        spaceFor("cancelled-as-restored"),
+        {},
+        testSessionOpenAuthFactory,
+        cancel.signal,
+      ).then((session) => session, (error) => error);
+
+      expect(cancel.signal.aborted).toBe(true);
+      expect(outcome).toBe(reason);
     } finally {
       await client.close();
       await server.close();

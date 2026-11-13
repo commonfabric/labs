@@ -1265,6 +1265,9 @@ export class Client {
             await session.whenRestored();
           },
         );
+        // The caller may have cancelled just as the restore completed, as it
+        // may just as the open is answered.
+        if (signal?.aborted) throw mountCancelled(signal);
       } catch (error) {
         // No caller is handed this session, so nothing else would close it.
         await session.close().catch(() => undefined);
