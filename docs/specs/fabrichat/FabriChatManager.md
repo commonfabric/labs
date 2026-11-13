@@ -103,10 +103,18 @@ keeps the entry from being tried again until it changes; a visit to the room
 still joins it. An entry whose vetting fails otherwise is tried again at a
 later bring-up, and holds back no other entry. A membership adopted this way
 keeps the catalog entry's admission time as its `since`, so the room keeps its
-place in the list. The host adopts five entries at a time, and releases what
-it read after each five, so a catalog of many unadopted rooms costs a few
-rooms' documents at once rather than all of them. Once every entry is adopted,
-adopting reads only Home's own records.
+place in the list. The manager's handling of the join adds the user to the
+room's roster, and that event starts the room's piece on the host, as an event
+to a piece that isn't running does. The host adopts five entries at a time.
+Once the scheduler is idle after each five, it stops each piece an event's
+delivery started during them in the space of a room they joined
+(`Runner.releaseEventStart()`), leaving running a piece that ran before, and
+one that something else has since started, taken as a child, or has a start
+of in flight, and then releases the documents nothing reads. So a catalog of
+many unadopted rooms costs a few rooms' pieces and documents at once rather
+than all of them. Stopping a room's piece does not undo what its start wrote
+into the room's space. Once every entry is adopted, adopting reads only Home's
+own records.
 
 `direct` holds one entry per counterpart, including forgotten rooms, for direct
 rooms this manager created or accepted. `openDirect` finds a direct room there
