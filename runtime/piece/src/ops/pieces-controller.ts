@@ -1188,7 +1188,6 @@ export class PiecesController<T = unknown> {
     try {
       // Get the argument data - this is where references to other pieces are stored
       const argumentCell = await this.#syncedArgument(piece);
-      if (!argumentCell) return result;
 
       // Get the raw argument value
       let argumentValue;
@@ -1475,33 +1474,41 @@ export class PiecesController<T = unknown> {
       return false;
     };
 
-    // Check each piece to see if it references this piece
-    for (const otherPiece of registeredPieces) {
-      if (otherPiece.resolveAsCell().equals(resolvedPiece)) continue; // Skip self
+    const others = registeredPieces.filter((otherPiece) =>
+      !otherPiece.resolveAsCell().equals(resolvedPiece)
+    );
+    // The arguments, where references are commonly found, are synced all at
+    // once, and a piece whose argument cannot be read is passed over alone.
+    const argumentCells = await Promise.all(
+      others.map((otherPiece) =>
+        this.#syncedArgument(otherPiece).catch(() => undefined)
+      ),
+    );
 
+    // Check each piece to see if it references this piece
+    for (const [index, otherPiece] of others.entries()) {
       if (checkRefersToTarget(otherPiece, otherPiece, new Set(), 0)) {
         addReadingPiece(otherPiece);
         continue; // Skip additional checks for this piece
       }
 
-      // Also specifically check the argument data where references are commonly found
+      // Also specifically check the argument data
+      const argumentCell = argumentCells[index];
+      if (argumentCell === undefined) continue;
       try {
-        const argumentCell = await this.#syncedArgument(otherPiece);
-        if (argumentCell) {
-          const argumentValue = argumentCell.getRaw();
+        const argumentValue = argumentCell.getRaw();
 
-          // Check if the argument references our target
-          if (argumentValue && typeof argumentValue === "object") {
-            if (
-              checkRefersToTarget(
-                argumentValue,
-                argumentCell,
-                new Set(),
-                0,
-              )
-            ) {
-              addReadingPiece(otherPiece);
-            }
+        // Check if the argument references our target
+        if (argumentValue && typeof argumentValue === "object") {
+          if (
+            checkRefersToTarget(
+              argumentValue,
+              argumentCell,
+              new Set(),
+              0,
+            )
+          ) {
+            addReadingPiece(otherPiece);
           }
         }
       } catch (_) {

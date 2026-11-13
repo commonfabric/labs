@@ -86,8 +86,9 @@ const targetProgram: RuntimeProgram = {
 describe("pieces-controller", () => {
   // Two sessions over one server, each with a replica of its own: the creator
   // registers a piece, and the reader has loaded nothing of that space when it
-  // lists the registry. Its registry pull brings the root and the list, and
-  // the piece's own document arrives only on the open that follows.
+  // lists the registry. Its registry pull brings the root, the list, and each
+  // listed piece's own document, but not what those documents link to, such
+  // as a piece's argument, which the open that follows loads.
 
   let server: ReturnType<typeof newLoopbackServer>;
   let space: MemorySpace;
@@ -212,6 +213,24 @@ describe("pieces-controller", () => {
     });
 
     it("is named in the other's `getReadByPieces()` list", async () => {
+      const source = await reader.get(sourceId, false);
+
+      expect(
+        (await reader.getReadByPieces(source.getCell())).map(pieceId),
+      ).toEqual([targetId]);
+    });
+
+    it("is named in the other's `getReadByPieces()` list beside a registry entry whose argument cannot be read", async () => {
+      const notAPiece = readerRuntime.getCell(
+        space,
+        "fresh-replica-not-a-piece",
+      );
+      const registry = await reader.getPieceRegistry();
+      Object.defineProperty(reader, "getPieceRegistry", {
+        configurable: true,
+        value: () =>
+          Promise.resolve({ get: () => [notAPiece, ...registry.get()] }),
+      });
       const source = await reader.get(sourceId, false);
 
       expect(
