@@ -200,6 +200,22 @@ describe("run_command: components a host names", () => {
       .toContain(`of:${instanceId}`);
   });
 
+  it("renames an object key that spells an address, held or not", async () => {
+    const own = pieces.getSpace();
+    const foreign = (await Identity.generate()).did();
+    const { seen, engine } = await inspect([], {
+      notes: {
+        [`pattern:${own}/${instanceId}`]: "held",
+        [`pattern:${foreign}/${instanceId}`]: "foreign",
+      },
+    });
+    expect(seen).not.toContain(instanceId);
+    expect(seen).toContain("unheld:foreign-space:0");
+    const token = seen.match(/cfh:a:[A-Za-z0-9]+/)?.[0];
+    expect(resolveHandleToken(engine.handleTable!, token!)?.ref)
+      .toContain(`of:${instanceId}`);
+  });
+
   it("withholds a component it cannot hold, saying why, and never its address", async () => {
     const foreign = (await Identity.generate()).did();
     const own = pieces.getSpace();

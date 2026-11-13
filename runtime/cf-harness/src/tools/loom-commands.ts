@@ -104,6 +104,9 @@ const componentReferences = async (
  */
 export const HELD_COMPONENT_LIMIT = 32;
 
+/** Most of one answer's piece checks in flight at once. */
+const HELD_COMPONENT_FAN_IN = 8;
+
 /** What one stored address became: the run's reference, or why not. */
 type HeldAddress =
   | { ref: string }
@@ -120,7 +123,10 @@ const storedAddressesIn = (
   } else if (Array.isArray(value)) {
     for (const item of value) storedAddressesIn(item, found);
   } else if (isObjectNotArray(value)) {
-    for (const item of Object.values(value)) storedAddressesIn(item, found);
+    for (const [key, item] of Object.entries(value)) {
+      storedAddressesIn(key, found);
+      storedAddressesIn(item, found);
+    }
   }
 };
 
@@ -145,7 +151,16 @@ const withHeldMembers = (
   held: ReadonlyMap<string, HeldAddress>,
 ): JSONObject => {
   const result: { [key: string]: JSONValue } = {};
-  for (const [key, item] of Object.entries(value)) {
+  let unheldKeys = 0;
+  for (const [stored, item] of Object.entries(value)) {
+    // A key that spells an address is renamed like a value: to the run's
+    // reference, which the outbound swap mints in keys too, or to a reason.
+    const heldKey = held.get(stored);
+    const key = heldKey === undefined
+      ? stored
+      : "ref" in heldKey
+      ? heldKey.ref
+      : `unheld:${heldKey.unheld}:${unheldKeys++}`;
     const replaced = typeof item === "string" ? held.get(item) : undefined;
     if (replaced === undefined) {
       defineOwnEntry(result, key, withHeldAddresses(item, held));
@@ -181,21 +196,35 @@ const heldComponentReferences = async (
   const found = new Map<string, StoredPieceAddress>();
   storedAddressesIn(body, found);
   if (found.size === 0) return body;
-  const pieces = new Map<string, Promise<HeldAddress>>();
-  const held = new Map<string, HeldAddress>();
-  await Promise.all([...found].map(async ([text, address]) => {
-    const key = `${address.space}/${address.id}`;
-    let verdict = pieces.get(key);
-    if (verdict === undefined) {
-      verdict = pieces.size >= HELD_COMPONENT_LIMIT
-        ? Promise.resolve({ unheld: "limit" as const })
-        : context.signal?.aborted
-        ? Promise.resolve({ unheld: "unavailable" as const })
-        : heldPatternInstance(context, address.space, address.id);
-      pieces.set(key, verdict);
-    }
-    held.set(text, await verdict);
+  const pieces = new Map<string, StoredPieceAddress>();
+  for (const address of found.values()) {
+    pieces.set(`${address.space}/${address.id}`, address);
+  }
+  const distinct = [...pieces].map(([key, address], index) => ({
+    key,
+    address,
+    index,
   }));
+  const verdicts = new Map<string, HeldAddress>(
+    await mapWithFanIn(
+      distinct,
+      HELD_COMPONENT_FAN_IN,
+      async ({ key, address, index }): Promise<[string, HeldAddress]> => [
+        key,
+        index >= HELD_COMPONENT_LIMIT
+          ? { unheld: "limit" }
+          // Checked as each read starts, so a cancelled turn starts no more.
+          : context.signal?.aborted
+          ? { unheld: "unavailable" }
+          : await heldPatternInstance(context, address.space, address.id),
+      ],
+    ),
+  );
+  const held = new Map<string, HeldAddress>();
+  for (const [text, address] of found) {
+    const verdict = verdicts.get(`${address.space}/${address.id}`);
+    if (verdict !== undefined) held.set(text, verdict);
+  }
   return withHeldMembers(body, held);
 };
 
