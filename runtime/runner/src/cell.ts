@@ -120,6 +120,7 @@ import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
+  storesCfcEnvelope,
 } from "./cfc/metadata.ts";
 import { cfcConfidentialityForObservationNode } from "./cfc/observation.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
@@ -626,6 +627,14 @@ export const recordWriteDestinationPolicyInput = (
   schema: JSONSchema | undefined,
   schemaRole?: "output",
 ): void => {
+  // A write whose schema declares no policy, into a document that stores no
+  // envelope, has no policy input at the destination or at any array above
+  // it, so it reads no parent and builds no array schema.
+  if (
+    !schemaHasIfc(resolveSchema(schema)) && !storesCfcEnvelope(tx, destination)
+  ) {
+    return;
+  }
   const policyInput = arrayItemPolicyInput(tx, destination, schema);
   recordRelevantSchemaWritePolicyInput(
     tx,
@@ -1512,7 +1521,8 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Keeps this cell's document loaded for as long as this cell can read it
-   * (`IStorageManager.holdDocument()`), once the cell has loaded it.
+   * (`IStorageManager.holdDocument()`), once the cell has loaded it or was
+   * taken by `key()` from a cell holding it.
    */
   #documentHold: object | undefined;
 
@@ -1922,33 +1932,26 @@ export class CellImpl<T extends FabricValue>
   }
 
   get(options?: { traverseCells?: boolean }): Readonly<StripDefaultBrand<T>> {
-    if (!this.#synced) this.#startLoad(); // No await, just kicking this off
+    let synced = this.#synced;
+    if (!synced) {
+      this.#startLoad(); // No await, just kicking this off
+      synced = this.#synced;
+    }
 
-    // Per-transaction read cache: within one ready transaction, repeatedly
-    // reading the same cell with no intervening write recomputes an identical
-    // result -- same value, the same reactive reads already registered on the
-    // tx, and the same CFC state. Reuse the prior result when the tx supports
-    // caching (the non-reactive sample() wrapper does not) and is still open.
-    // The tx clears this cache on any write, so a hit only happens when nothing
-    // has changed since the last read. Key by the stable value of the view ref
+    // Per-transaction read cache: within one transaction, repeatedly reading
+    // the same cell with no intervening write recomputes an identical result
+    // -- same value, the same reactive reads already registered on the tx, and
+    // the same CFC state. The tx decides when it may serve a cached result
+    // (`IExtendedStorageTransaction.getCachedReadResult()`); the non-reactive
+    // sample() wrapper caches nothing. Key by the stable value of the view ref
     // (link + CFC label view), not link object identity, so equivalent CellImpl
     // wrappers in the same tx can share the cached traversal result. `variant`
     // separates reads that differ in options or synced state.
     const tx = this.#tx;
-    const cacheable = tx !== undefined &&
-      tx.getCachedReadResult !== undefined &&
-      tx.status().status === "ready" &&
-      // Once CFC is prepared, the real read path's `read-after-prepare`
-      // invalidation is load-bearing: bypass the cache so a post-prepare read
-      // still goes through readOrThrow() and invalidates the prepared digest.
-      tx.getCfcState().prepare.status !== "prepared";
-    const variant = `${options?.traverseCells ?? false}|${this.#synced}`;
-    const cacheKey = cacheable ? this.#viewRefHash() : undefined;
-    if (cacheable) {
-      const cached = tx.getCachedReadResult!(cacheKey!, variant);
-      if (cached !== undefined) {
-        return cached.value as Readonly<StripDefaultBrand<T>>;
-      }
+    const variant = `${options?.traverseCells ?? false}|${synced}`;
+    const cached = tx?.getCachedReadResult?.(this.#viewRefHash(), variant);
+    if (cached !== undefined) {
+      return cached.value as Readonly<StripDefaultBrand<T>>;
     }
 
     logger.timeStart("cell", "get");
@@ -1957,7 +1960,7 @@ export class CellImpl<T extends FabricValue>
       this.#tx,
       this.#viewRef,
       [],
-      { ...options, synced: this.#synced },
+      { ...options, synced },
     );
     // A stream holds no value, so a read of a stream handle returns the
     // stream. The read finds that out rather than assuming it, because the
@@ -1983,12 +1986,7 @@ export class CellImpl<T extends FabricValue>
         this.#link,
       );
     }
-    if (cacheable) {
-      // Re-read `#_link`: validateAndTransform (via viewRef -> link) may have
-      // run `#ensureLink()` and replaced it with the completed link object, which
-      // is the identity subsequent get()s will hash.
-      tx.setCachedReadResult!(this.#viewRefHash(), variant, value);
-    }
+    tx?.setCachedReadResult?.(this.#viewRefHash(), variant, value);
     return value;
   }
 
@@ -3938,7 +3936,7 @@ export class CellImpl<T extends FabricValue>
       }
     }
 
-    return new CellImpl(
+    const child = new CellImpl(
       this.#runtime,
       this.#tx,
       currentLink,
@@ -3946,7 +3944,11 @@ export class CellImpl<T extends FabricValue>
       this.#causeContainer,
       kind,
       rebaseCfcLabelView(this.#cfcLabelView, childPath),
-    ) as unknown as Cell<any>;
+    );
+    // A key addresses the same document, in the same transaction, so the
+    // child shares this cell's hold on it.
+    child.#documentHold = this.#documentHold;
+    return child as unknown as Cell<any>;
   }
 
   asSchema<S extends JSONSchema = JSONSchema>(

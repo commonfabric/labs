@@ -53,16 +53,14 @@ const snapshots = new Map<
   { value: WeakRef<ImmutableSnapshot>; owners: number }
 >();
 
-/** Ephemeron edges: live values and handles retain their element owners. */
-const elementSnapshotOwners = new WeakMap<
-  ImmutableSnapshot,
-  WeakMap<ImmutableCellStore, ImmutableCellStore>
->();
 const handleSnapshots = new WeakMap<object, ImmutableSnapshot>();
 const finalizedElementStores = new FinalizationRegistry<{
   owners: Set<WeakRef<ImmutableCellStore>>;
   ref: WeakRef<ImmutableCellStore>;
 }>(({ owners, ref }) => owners.delete(ref));
+
+/** The dependencies of a value that links to no snapshot or schema. */
+const NO_DEPENDENCIES: readonly ImmutableSnapshot[] = Object.freeze([]);
 
 /** Owners and their transactions share one store without extending its life. */
 const owners = new WeakMap<object, ImmutableCellStore>();
@@ -88,24 +86,28 @@ const finalizedStores = new FinalizationRegistry<Set<URI>>(releaseSnapshots);
  * Disposal releases both kinds.
  */
 export class ImmutableCellStore {
-  #elementStores = new WeakMap<object, ImmutableCellStore>();
-  readonly #elementOwners = new Set<WeakRef<ImmutableCellStore>>();
-  readonly #ids = new Set<URI>();
-  readonly #snapshots = new Map<URI, ImmutableSnapshot>();
-  #dependencies = new WeakMap<object, readonly ImmutableSnapshot[]>();
-  #readerSchemas = new WeakMap<object, FabricValue>();
-  readonly #settled = new Set<URI>();
-  readonly #pending = new Set<ImmutableSnapshot>();
-  readonly #pendingValues = new Set<FabricValue>();
-  readonly #retaining = new Set<URI>();
-  #unsubscribeSchemas: (() => void) | undefined;
-  #origins = new Map<string, { value: SnapshotOrigin; hash: string }>();
-  #disposed = false;
+  // Each collection is allocated on first use: a transaction's store usually
+  // retains nothing, and an element owner retains a single snapshot.
 
-  /** Registers cleanup without retaining the store or its values. */
-  constructor() {
-    finalizedStores.register(this, this.#ids, this);
-  }
+  /**
+   * Ephemeron edges to element owners: while this store lives, a live snapshot
+   * and a live frozen value it was created from each retain the snapshot's
+   * owner. No snapshot object is ever passed in as a value, so the two kinds of
+   * key never meet.
+   */
+  #elementStores: WeakMap<object, ImmutableCellStore> | undefined;
+  #elementOwners: Set<WeakRef<ImmutableCellStore>> | undefined;
+  #ids: Set<URI> | undefined;
+  #snapshots: Map<URI, ImmutableSnapshot> | undefined;
+  #dependencies: WeakMap<object, readonly ImmutableSnapshot[]> | undefined;
+  #readerSchemas: WeakMap<object, FabricValue> | undefined;
+  #settled: Set<URI> | undefined;
+  #pending: Set<ImmutableSnapshot> | undefined;
+  #pendingValues: Set<FabricValue> | undefined;
+  #retaining: Set<URI> | undefined;
+  #unsubscribeSchemas: (() => void) | undefined;
+  #origins: Map<string, { value: SnapshotOrigin; hash: string }> | undefined;
+  #disposed = false;
 
   /**
    * Returns a snapshot, copying only mutable input. The content hash is the
@@ -148,25 +150,19 @@ export class ImmutableCellStore {
       : undefined;
     const snapshot = this.#findSnapshot(frozen, base);
     // Equal content shares one weak owner even across distinct source objects.
-    let snapshotOwners = elementSnapshotOwners.get(snapshot);
-    if (snapshotOwners === undefined) {
-      snapshotOwners = new WeakMap();
-      elementSnapshotOwners.set(snapshot, snapshotOwners);
-    }
-    let store = snapshotOwners.get(this) ??
-      (owner === undefined ? undefined : this.#elementStores.get(owner));
+    const elementStores = this.#elementStores ??= new WeakMap();
+    let store = elementStores.get(snapshot) ??
+      (owner === undefined ? undefined : elementStores.get(owner));
     if (store === undefined) {
       store = new ImmutableCellStore();
       const ref = new WeakRef(store);
-      this.#elementOwners.add(ref);
-      finalizedElementStores.register(store, {
-        owners: this.#elementOwners,
-        ref,
-      });
+      const elementOwners = this.#elementOwners ??= new Set();
+      elementOwners.add(ref);
+      finalizedElementStores.register(store, { owners: elementOwners, ref });
     }
-    if (owner !== undefined) this.#elementStores.set(owner, store);
+    if (owner !== undefined) elementStores.set(owner, store);
     store.#retain(snapshot);
-    snapshotOwners.set(this, store);
+    elementStores.set(snapshot, store);
     return snapshot;
   }
 
@@ -175,17 +171,18 @@ export class ImmutableCellStore {
     if (this.#disposed) throw new Error("Immutable cell store is disposed");
     if (schema === undefined || typeof schema === "boolean") return;
     const frozen = cloneIfNecessary(schema);
-    let value = this.#readerSchemas.get(frozen);
+    const readerSchemas = this.#readerSchemas ??= new WeakMap();
+    let value = readerSchemas.get(frozen);
     if (value === undefined) {
       value = linkRefFrom({ schema: frozen });
-      this.#readerSchemas.set(frozen, value);
+      readerSchemas.set(frozen, value);
     }
     this.#retainValue(value);
   }
 
   /** Returns a live snapshot, or throws for an absent or expired identifier. */
   get(id: URI): ImmutableSnapshot {
-    const snapshot = this.#snapshots.get(id);
+    const snapshot = this.#snapshots?.get(id);
     if (snapshot === undefined) throw new Error("Unknown immutable cell");
     return snapshot;
   }
@@ -193,19 +190,20 @@ export class ImmutableCellStore {
   /** Releases this runtime's snapshots and invalidates their identifiers. */
   dispose(): void {
     this.#disposed = true;
-    for (const owner of this.#elementOwners) owner.deref()?.dispose();
-    this.#elementOwners.clear();
-    this.#elementStores = new WeakMap();
-    this.#snapshots.clear();
-    this.#settled.clear();
-    this.#pending.clear();
-    this.#pendingValues.clear();
+    for (const owner of this.#elementOwners ?? []) owner.deref()?.dispose();
+    this.#elementOwners = undefined;
+    this.#elementStores = undefined;
+    this.#snapshots = undefined;
+    this.#settled = undefined;
+    this.#pending = undefined;
+    this.#pendingValues = undefined;
     this.#unsubscribeSchemas?.();
     this.#unsubscribeSchemas = undefined;
-    this.#dependencies = new WeakMap();
-    this.#readerSchemas = new WeakMap();
-    this.#origins.clear();
-    releaseSnapshots(this.#ids);
+    this.#dependencies = undefined;
+    this.#readerSchemas = undefined;
+    this.#origins = undefined;
+    if (this.#ids !== undefined) releaseSnapshots(this.#ids);
+    this.#ids = undefined;
     finalizedStores.unregister(this);
   }
 
@@ -219,7 +217,7 @@ export class ImmutableCellStore {
     ]);
     let cachedOrigin = originKey === undefined
       ? undefined
-      : this.#origins.get(originKey);
+      : this.#origins?.get(originKey);
     if (
       resolved !== undefined && originKey !== undefined &&
       cachedOrigin === undefined
@@ -230,13 +228,13 @@ export class ImmutableCellStore {
         ...(resolved.scope === undefined ? {} : { scope: resolved.scope }),
       });
       cachedOrigin = { value, hash: hashStringOf(value) };
-      this.#origins.set(originKey, cachedOrigin);
+      (this.#origins ??= new Map()).set(originKey, cachedOrigin);
     }
     const origin = cachedOrigin?.value;
     const key = hashStringOf(frozen) +
       (cachedOrigin === undefined ? "" : `:${cachedOrigin.hash}`);
     const id: URI = `snapshot:${key}`;
-    let snapshot = this.#snapshots.get(id);
+    let snapshot = this.#snapshots?.get(id);
     if (snapshot === undefined) {
       snapshot = snapshots.get(id)?.value.deref();
       if (snapshot === undefined) {
@@ -254,9 +252,9 @@ export class ImmutableCellStore {
     for (const dependency of dependencies) {
       this.#retain(dependency, deferExpired);
     }
-    if (complete) this.#pendingValues.delete(value);
+    if (complete) this.#pendingValues?.delete(value);
     else {
-      this.#pendingValues.add(value);
+      (this.#pendingValues ??= new Set()).add(value);
       this.#watchSchemas();
     }
   }
@@ -271,7 +269,7 @@ export class ImmutableCellStore {
       : undefined;
     const cached = object === undefined
       ? undefined
-      : this.#dependencies.get(object);
+      : this.#dependencies?.get(object);
     if (cached !== undefined) return { dependencies: cached, complete: true };
     const nested = new Set<ImmutableSnapshot>();
     let hasExpired = false;
@@ -295,30 +293,39 @@ export class ImmutableCellStore {
       }, { allowCycles: true });
     };
     collect(value);
-    const closure = walkSchemaDocumentClosure({
-      roots: schemaRoots,
-      load: (hash) => {
-        const schema = lookupSchemaDocument(hash);
-        return schema === undefined ? undefined : { kind: "verified", schema };
-      },
-      onVerified: (_hash, schema, walk) => {
-        collect(schema, (hash) => walk.follow(hash));
-      },
-    });
-    const dependencies = Object.freeze([...nested]);
-    const complete = closure.missing.size === 0 && !hasExpired;
+    const closure = schemaRoots.size === 0
+      ? undefined
+      : walkSchemaDocumentClosure({
+        roots: schemaRoots,
+        load: (hash) => {
+          const schema = lookupSchemaDocument(hash);
+          return schema === undefined
+            ? undefined
+            : { kind: "verified", schema };
+        },
+        onVerified: (_hash, schema, walk) => {
+          collect(schema, (hash) => walk.follow(hash));
+        },
+      });
+    const dependencies = nested.size === 0
+      ? NO_DEPENDENCIES
+      : Object.freeze([...nested]);
+    const complete = (closure?.missing.size ?? 0) === 0 && !hasExpired;
     if (object !== undefined && complete) {
-      this.#dependencies.set(object, dependencies);
+      (this.#dependencies ??= new WeakMap()).set(object, dependencies);
     }
     return { dependencies, complete };
   }
 
   /** Acquires dependencies, revisiting incomplete closures when documents arrive. */
   #retain(snapshot: ImmutableSnapshot, deferExpired = false): void {
-    if (this.#settled.has(snapshot.id) || this.#retaining.has(snapshot.id)) {
+    if (
+      this.#settled?.has(snapshot.id) || this.#retaining?.has(snapshot.id)
+    ) {
       return;
     }
-    this.#retaining.add(snapshot.id);
+    const retaining = this.#retaining ??= new Set();
+    retaining.add(snapshot.id);
     try {
       const collected = this.#collectDependencies(
         snapshot.value,
@@ -337,25 +344,41 @@ export class ImmutableCellStore {
         else if (deferExpired) complete = false;
         else immutableSnapshot(snapshot.origin.id);
       }
-      if (!this.#snapshots.has(snapshot.id)) {
+      if (!this.#snapshots?.has(snapshot.id)) {
         const shared = snapshots.get(snapshot.id);
-        snapshots.set(snapshot.id, {
-          value: new WeakRef(snapshot),
-          owners: (shared?.owners ?? 0) + 1,
-        });
-        this.#snapshots.set(snapshot.id, snapshot);
-        this.#ids.add(snapshot.id);
+        if (shared?.value.deref() === snapshot) {
+          shared.owners += 1;
+        } else {
+          snapshots.set(snapshot.id, {
+            value: new WeakRef(snapshot),
+            owners: (shared?.owners ?? 0) + 1,
+          });
+        }
+        (this.#snapshots ??= new Map()).set(snapshot.id, snapshot);
+        this.#retainedIds().add(snapshot.id);
       }
       if (complete) {
-        this.#settled.add(snapshot.id);
-        this.#pending.delete(snapshot);
+        (this.#settled ??= new Set()).add(snapshot.id);
+        this.#pending?.delete(snapshot);
       } else {
-        this.#pending.add(snapshot);
+        (this.#pending ??= new Set()).add(snapshot);
         this.#watchSchemas();
       }
     } finally {
-      this.#retaining.delete(snapshot.id);
+      retaining.delete(snapshot.id);
     }
+  }
+
+  /**
+   * Returns the identifiers this store retains, registering the store on first
+   * use to release them if it is reclaimed without disposal.
+   */
+  #retainedIds(): Set<URI> {
+    if (this.#ids === undefined) {
+      this.#ids = new Set();
+      finalizedStores.register(this, this.#ids, this);
+    }
+    return this.#ids;
   }
 
   #watchSchemas(): void {
@@ -371,9 +394,11 @@ export class ImmutableCellStore {
 
   /** Acquires newly visible dependencies before schema registration returns. */
   #refreshPending(): void {
-    for (const snapshot of this.#pending) this.#retain(snapshot, true);
-    for (const value of this.#pendingValues) this.#retainValue(value, true);
-    if (this.#pending.size === 0 && this.#pendingValues.size === 0) {
+    for (const snapshot of this.#pending ?? []) this.#retain(snapshot, true);
+    for (const value of this.#pendingValues ?? []) {
+      this.#retainValue(value, true);
+    }
+    if (!this.#pending?.size && !this.#pendingValues?.size) {
       this.#unsubscribeSchemas?.();
       this.#unsubscribeSchemas = undefined;
     }

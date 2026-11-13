@@ -646,7 +646,7 @@ export class CFInput extends BaseElement {
     });
 
     // Register with form after binding is complete
-    this._formField.register(this.name);
+    this._formField.register();
 
     if (this.autofocus) {
       this._input?.focus();
@@ -746,7 +746,6 @@ export class CFInput extends BaseElement {
   }
 
   private _handleFocus(_event: Event) {
-    this._cellController.onFocus();
     this.emit("cf-focus", {
       value: this.getValue(),
       name: this.name,

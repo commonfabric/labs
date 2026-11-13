@@ -137,15 +137,21 @@ describe("utf8SortedKeysOf()", () => {
     expect(utf8SortedKeysOf(obj)).toEqual(["￿", "\u{10000}"]);
   });
 
-  it("returns a frozen value", () => {
-    const obj = { beep: "x", bop: "y", awOOOOga: "z" };
-    const sorted = utf8SortedKeysOf(obj);
+  it("returns a frozen value when it returns that value again on later calls", () => {
+    const sorted = utf8SortedKeysOf(
+      Object.freeze({ beep: "x", bop: "y", awOOOOga: "z" }),
+    );
+    expect(sorted).toEqual(["awOOOOga", "beep", "bop"]);
     expect(Object.isFrozen(sorted)).toBe(true);
   });
 
-  it("returns a frozen value for keys that arrive already in order", () => {
-    const sorted = utf8SortedKeysOf({ awOOOOga: "z", beep: "x", bop: "y" });
-    expect(Object.isFrozen(sorted)).toBe(true);
+  it("returns a new value on each call, given an object that is not frozen", () => {
+    const obj = { beep: "x", bop: "y", awOOOOga: "z" };
+    const sorted1 = utf8SortedKeysOf(obj);
+    const sorted2 = utf8SortedKeysOf(obj);
+    expect(sorted1).toEqual(["awOOOOga", "beep", "bop"]);
+    expect(sorted2).toEqual(sorted1);
+    expect(sorted2).not.toBe(sorted1);
   });
 
   it("returns the same (`===`) value on two different calls, given the same frozen object", () => {

@@ -48,7 +48,6 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_SYNCING,
 } from "@/fabric-primitives";
@@ -498,41 +497,17 @@ describe("RealmCodecEngine", () => {
       expect(() => fabricFromRealmValue(wire(walked))).toThrow(/reserves/);
     });
 
-    it("returns a `ProblematicValue` for a `RegExp@1` state lacking a field", () => {
-      // Section 7.1: all three fields of this codec's state are required, and
-      // none has a default.
-
-      const engine = newDefaultRealmCodecEngine({ lenient: true });
-      for (
-        const state of [
-          {},
-          { source: "a", flags: "g" },
-          { flavor: "es2025", flags: "g" },
-          { flavor: "es2025", source: "a" },
-        ]
-      ) {
-        const decoded = engine.decode(
-          wire(tagged("RegExp@1", state)),
-          NULL_LIVE_ENVIRONMENT,
-        );
-
-        expect(decoded).toBeInstanceOf(ProblematicValue);
-        expect((decoded as ProblematicValue).error)
-          .toMatch(/state is not one this codec decodes/);
-      }
-    });
-
-    it("returns a `ProblematicValue` for a `RegExp@1` field present as `undefined`", () => {
+    it("returns a `ProblematicValue` for an `Unavailable@1` field present as `undefined`", () => {
       // This format is where a field present as `undefined` can arise:
       // cloning carries `undefined` directly, so a peer can send one on
       // purpose.
 
       const engine = newDefaultRealmCodecEngine({ lenient: true });
       const decoded = engine.decode(
-        wire(tagged("RegExp@1", {
-          source: undefined,
-          flags: "g",
-          flavor: "es2025",
+        wire(tagged("Unavailable@1", {
+          reason: "error",
+          errorKind: "general",
+          errorMessage: undefined,
         })),
         NULL_LIVE_ENVIRONMENT,
       );
@@ -638,25 +613,18 @@ describe("RealmCodecEngine", () => {
       // Not a record at all, then a record with the wrong field types.
       expect(bad("Hash@1", 42).error).toMatch(refused);
       expect(bad("Hash@1", { tag: 1, hash: 2 }).error).toMatch(refused);
-      expect(bad("RegExp@1", 42).error).toMatch(refused);
-      expect(bad("RegExp@1", { source: 1, flags: 2, flavor: 3 }).error)
-        .toMatch(refused);
 
       // Bytes wants the transport's own byte carrier and takes nothing else.
       expect(bad("Bytes@1", "nope").error).toMatch(refused);
 
-      // Well-typed fields that still do not make a value. `RegExp@1` is the
-      // one codec here whose construction can fail on data that passed every
-      // type check, so its refusal has to survive a throw rather than only a
-      // shape test: a source and a flag set that `RegExp` itself rejects.
+      // Well-typed fields that still do not make a value. `Unavailable@1`'s
+      // construction can fail on data that passed every type check, so its
+      // refusal has to survive a throw rather than only a shape test: a
+      // transient reason paired with an error kind.
       expect(
-        bad("RegExp@1", { source: "(", flags: "g", flavor: "es2025" })
+        bad("Unavailable@1", { reason: "pending", errorKind: "general" })
           .error,
-      ).toMatch(/Invalid regular expression/);
-      expect(
-        bad("RegExp@1", { source: "a", flags: "zz", flavor: "es2025" })
-          .error,
-      ).toMatch(/Invalid flags/);
+      ).toMatch(/takes neither/);
     });
 
     it("throws when given a symbol or a function untagged", () => {
@@ -1281,7 +1249,6 @@ describe("RealmCodecEngine", () => {
         span: new FabricDurationNsec(-31_556_952_000_000_000_001n),
         daySpan: new FabricDurationDay(-9_007_199_254_740_993n),
         hash: new FabricHash(new Uint8Array([9, 8, 7]), "fid1"),
-        regexp: new FabricRegExp(/ab+c/gi),
         unavailable: new FabricUnavailable("error", "general", "boom"),
         prefab: UNAVAILABLE_SYNCING,
       });
@@ -1296,7 +1263,6 @@ describe("RealmCodecEngine", () => {
         span: "FabricDurationNsec",
         daySpan: "FabricDurationDay",
         hash: "FabricHash",
-        regexp: "FabricRegExp",
         unavailable: "FabricUnavailable",
         prefab: "FabricUnavailable",
       });
@@ -1310,7 +1276,6 @@ describe("RealmCodecEngine", () => {
       expect(report.facts?.daySpan).toBe(-9_007_199_254_740_993n);
       expect(report.facts?.hashTag).toBe("fid1");
       expect(report.facts?.hashBytes).toEqual([9, 8, 7]);
-      expect(report.facts?.regexpParts).toEqual(["es2025", "ab+c", "gi"]);
       expect(report.facts?.unavailableParts)
         .toEqual(["error", "general", "boom"]);
       // The far realm has its own prefab, and a message-less reason decodes to
@@ -1473,7 +1438,6 @@ describe("RealmCodecEngine", () => {
         ["FabricDurationNsec", FabricDurationNsec],
         ["FabricDurationDay", FabricDurationDay],
         ["FabricHash", FabricHash],
-        ["FabricRegExp", FabricRegExp],
         ["FabricUnavailable", FabricUnavailable],
       ] as const
     ) {

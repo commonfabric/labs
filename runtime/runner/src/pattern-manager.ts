@@ -1526,7 +1526,14 @@ export class PatternManager {
     if (toSpace === fromSpace) return;
 
     const entryRef = this.getArtifactEntryRef(pattern);
-    if (!entryRef) return;
+    if (!entryRef) {
+      logger.debug("closure-replication-skipped", () => [
+        `from=${fromSpace}`,
+        `to=${toSpace}`,
+        "reason=no-artifact-entry",
+      ]);
+      return;
+    }
     this.#issueReplication({
       entryIdentity: entryRef.identity,
       fromSpace,
@@ -1557,9 +1564,17 @@ export class PatternManager {
    * matching record wakes it instead.
    *
    * A copy a load issued on its own (`copyForLoad`) that its target refuses
-   * for want of a grant logs `closure-copy-refused` at debug instead: the
-   * session may only read that space, which is no fault, and no re-run can
-   * supply the grant. */
+   * for want of a grant logs `closure-copy-refused` instead: the session may
+   * only read that space, which is no fault, and no re-run can supply the
+   * grant.
+   *
+   * Each replication logs `closure-replication-issued` and then exactly one
+   * of `closure-replication-committed`, once its writes have been accepted,
+   * `closure-copy-refused` or `closure-replication-failed`, all at info or
+   * above and all naming its ticket, so a space left without a closure shows
+   * in the log whether its copy was issued and how it ended. A serving wave
+   * that later withdraws a write it accepted logs
+   * `compile-cache-writeback-withdrawn` with the entry and the space. */
   #issueReplication(
     replication: ClosureReplication,
     reissueOf?: { wantedIdentity: string },
@@ -1567,6 +1582,18 @@ export class PatternManager {
     const { entryIdentity, fromSpace, toSpace, delegated, copyForLoad } =
       replication;
     const ticket = this.#nextReplicationTicket++;
+    const issuedAt = performance.now();
+    logger.info("closure-replication-issued", () => [
+      `entry=${entryIdentity}`,
+      `from=${fromSpace}`,
+      `to=${toSpace}`,
+      `ticket=${ticket}`,
+      ...(reissueOf !== undefined
+        ? ["trigger=reissue"]
+        : copyForLoad
+        ? ["trigger=load-from-memory"]
+        : []),
+    ]);
     const settled = this.#replicateClosures(
       entryIdentity,
       fromSpace,
@@ -1575,6 +1602,12 @@ export class PatternManager {
       delegated,
       ticket,
     ).then(() => {
+      logger.info("closure-replication-committed", () => [
+        `entry=${entryIdentity}`,
+        `to=${toSpace}`,
+        `ticket=${ticket}`,
+        `ms=${Math.round(performance.now() - issuedAt)}`,
+      ]);
       if (reissueOf !== undefined) {
         logger.warn("closure-replication-healed", () => [
           `entry=${entryIdentity}`,
@@ -1585,10 +1618,11 @@ export class PatternManager {
       }
     }).catch((error) => {
       if (copyForLoad && isGrantRefusal(error)) {
-        logger.debug("closure-copy-refused", () => [
+        logger.info("closure-copy-refused", () => [
           `entry=${entryIdentity}`,
           `from=${fromSpace}`,
           `to=${toSpace}`,
+          `ticket=${ticket}`,
           String(error),
         ]);
         return;
@@ -1597,6 +1631,7 @@ export class PatternManager {
         `entry=${entryIdentity}`,
         `from=${fromSpace}`,
         `to=${toSpace}`,
+        `ticket=${ticket}`,
         String(error),
       ]);
       if (error instanceof ClosureReplicationSupplyError) {
@@ -1785,7 +1820,9 @@ export class PatternManager {
    * began is supplied by the next session that writes it), and a space the
    * session has written into, or is writing into, is copied into no more. A
    * space the session may only read refuses the copy, and the refusal is
-   * logged at debug as `closure-copy-refused`, not as a failed replication:
+   * logged at info as `closure-copy-refused`, not as a failed replication
+   * (a repair from a retained compile logs its own refusal at debug, as
+   * `compile-cache-repair-refused`):
    * the next session that writes the closure as a principal who may write
    * that space supplies it.
    */
@@ -1818,12 +1855,6 @@ export class PatternManager {
       return;
     }
     if (!this.#markClosureCopyIssued(space, entryIdentity)) return;
-    logger.debug("closure-replication-issued", () => [
-      `entry=${entryIdentity}`,
-      `from=${origin}`,
-      `to=${space}`,
-      "trigger=load-from-memory",
-    ]);
     this.#issueReplication({
       entryIdentity,
       fromSpace: origin,

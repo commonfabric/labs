@@ -47,22 +47,11 @@ export class CFProgress extends BaseElement {
   declare max: number;
   declare indeterminate: boolean;
 
-  private _indicatorElement: HTMLElement | null = null;
-
   constructor() {
     super();
     this.value = 0;
     this.max = 100;
     this.indeterminate = false;
-  }
-
-  get indicatorElement(): HTMLElement | null {
-    if (!this._indicatorElement) {
-      this._indicatorElement = this.shadowRoot?.querySelector(".indicator") as
-        | HTMLElement
-        | null;
-    }
-    return this._indicatorElement;
   }
 
   override connectedCallback() {
@@ -90,7 +79,6 @@ export class CFProgress extends BaseElement {
       changedProperties.has("value") || changedProperties.has("max") ||
       changedProperties.has("indeterminate")
     ) {
-      this.updateProgress();
       this.updateAriaAttributes();
     }
   }
@@ -141,46 +129,5 @@ export class CFProgress extends BaseElement {
   private getPercentage(): number {
     if (this.max === 0 || !Number.isFinite(this.max)) return 0;
     return ((this.value ?? 0) / this.max) * 100;
-  }
-
-  private updateProgress(): void {
-    // Progress visual update is now handled by render method
-    // This method is kept for compatibility with public API
-  }
-
-  /**
-   * Set the progress value programmatically
-   */
-  setValue(value: number): void {
-    this.value = value;
-  }
-
-  /**
-   * Get the current progress percentage
-   */
-  getPercentageValue(): number {
-    return this.getPercentage();
-  }
-
-  /**
-   * Set indeterminate state
-   */
-  setIndeterminate(indeterminate: boolean): void {
-    this.indeterminate = indeterminate;
-  }
-
-  /**
-   * Check if progress is complete
-   */
-  isComplete(): boolean {
-    return !this.indeterminate && (this.value ?? 0) >= (this.max ?? 100);
-  }
-
-  /**
-   * Reset progress to 0
-   */
-  reset(): void {
-    this.value = 0;
-    this.indeterminate = false;
   }
 }

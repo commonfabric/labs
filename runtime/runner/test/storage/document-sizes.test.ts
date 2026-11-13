@@ -16,7 +16,7 @@ import {
   FabricBytes,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
+  FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
 import type { FabricInstance, FabricValue } from "@commonfabric/data-model";
 import type { EntityDocument } from "@commonfabric/memory/v2";
@@ -249,7 +249,7 @@ describe("DocumentSizeEstimate", () => {
         });
       });
 
-      it("counts any Fabric class by the state its codec hands over, a preserved unknown value and a regular expression's source among them", () => {
+      it("counts any Fabric class by the state its codec hands over, a preserved unknown value and an unavailable value's message among them", () => {
         const estimate = new DocumentSizeEstimate();
         const payloads: EntityDocument[] = [
           { value: new UnknownValue("FutureType@1", "x".repeat(1_000_000)) },
@@ -260,7 +260,13 @@ describe("DocumentSizeEstimate", () => {
               "bad state",
             ),
           },
-          { value: new FabricRegExp("es2025", "x".repeat(1_000_000), "") },
+          {
+            value: new FabricUnavailable(
+              "error",
+              "general",
+              "x".repeat(1_000_000),
+            ),
+          },
         ];
 
         for (const payload of payloads) {

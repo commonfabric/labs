@@ -71,6 +71,17 @@ export function appendSummary(text: string): void {
 }
 
 /**
+ * Sets the step output `name` to `value`, for a later step's condition to
+ * read. A run with no output file named is every run outside a GitHub job,
+ * and sets nothing.
+ */
+export function setStepOutput(name: string, value: string): void {
+  const at = Deno.env.get("GITHUB_OUTPUT");
+  if (at === undefined || at.length === 0) return;
+  Deno.writeTextFileSync(at, `${name}=${value}\n`, { append: true });
+}
+
+/**
  * Says something both on the job's output and in its summary. The summary
  * renders Markdown and the log does not, so the log gets each table drawn.
  * `log` is where the output goes, for a command whose standard output is

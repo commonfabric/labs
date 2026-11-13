@@ -306,9 +306,10 @@ compact commits. See [commit metadata encoding](#negotiated-commit-metadata-enco
 `syncCrossingsV1` is a server capability: its session sync payloads carry
 `crossings`, the links its schema traversals followed out of the space, as
 described in [Session Sync Payload](#423-session-sync-payload). It defaults to
-`false` when absent. A client of a server that does not advertise it finds
-those links by reading the documents it synced, and sends nothing on account
-of the flag.
+`false` when absent. A serving runtime of a server that does not advertise it
+finds those links by reading the documents it synced, and sends nothing on
+account of the flag; a client that isn't serving looks for them in neither
+form.
 
 `watchRemoveV1` advertises support for `session.watch.remove` (section
 4.3.9). It defaults to `false` when absent. A client must not send the request
@@ -902,7 +903,7 @@ descriptor's `invite`. Both sides refuse anything else there, and the refusal
 is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
-records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
+records: a `FabricBytes`, a `FabricLink`, a `FabricHash`, a
 `FabricError`. None of those carries properties, so reading named fields
 off one reads nothing at all. The shape check at the position is what
 settles whether a value belongs there; the field checks that follow it
@@ -1151,9 +1152,13 @@ Semantics:
   another space. The server walks one space, so it stops at such a link and
   reports it instead: the target document by space, scope name, and id, and
   the path within the document's value and the schema the read needed there,
-  which is what a walk rooted at the target would deliver. A client loads
-  each from the target space under that selector, so the documents a read
-  through the link reaches are local before anything reads them. A session
+  which is what a walk rooted at the target would deliver. A serving runtime
+  loads each from the target space under that selector, so the documents a
+  read through the link reaches are local before anything reads them. A
+  client that isn't serving loads none of them: it loads a document in
+  another space when one of its reads reaches the link, so what a piece's
+  derivations declare of another space costs it nothing until it runs one
+  that reads there. A session
   is told of each crossing once, on the first frame whose watches reach it,
   and of all of them again on a `session.watch.set` that declares no
   `holdings`. A crossing is a hint about what to load, never a holding: a

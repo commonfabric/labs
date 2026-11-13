@@ -1,4 +1,5 @@
 import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
@@ -89,7 +90,6 @@ import {
   getSchedulerActionId,
   getSchedulerActionTelemetryInfo,
   handleSchedulerError,
-  queueTask,
   recordTriggerTrace as recordTriggerTraceState,
   type SchedulerActionIdentityState,
 } from "./diagnostics.ts";
@@ -183,6 +183,7 @@ import type {
   ActionRunTraceEntry,
   EventHandler,
   EventPreflightTraceContext,
+  LoadingReadWithdrawal,
   QueuedEvent,
   ReactivityLog,
   SchedulerObservationIdentity,
@@ -268,6 +269,17 @@ function isReactivityLog(value: unknown): value is ReactivityLog {
 function isAuthorizationLoadFailure(error: unknown): boolean {
   return error instanceof ReplicaLoadFailureError &&
     error.failure.failureClass === "authorization";
+}
+
+/**
+ * Like `isAuthorizationLoadFailure()`, except that the failure also carries
+ * durable evidence of the refusal (`permanentEvidence`), as one naming the
+ * access list's revision does, rather than being one a remounted session may
+ * not repeat.
+ */
+function isLastingAuthorizationLoadFailure(error: unknown): boolean {
+  return isAuthorizationLoadFailure(error) &&
+    (error as ReplicaLoadFailureError).failure.permanentEvidence === true;
 }
 
 function normalizeRegistrationArgs(
@@ -448,7 +460,7 @@ export class Scheduler {
   #diagnosisControlState!: SchedulerDiagnosisControlState;
 
   // Debounce infrastructure for throttling slow actions
-  #pendingQueueTaskTimer: ReturnType<typeof setTimeout> | null = null;
+  #queuedPass: ArmedTurn | null = null;
   #eventQueueState!: SchedulerEventQueueState;
   #eventExecutionState!: SchedulerEventExecutionState;
   readonly #gates = new SchedulerGates({
@@ -551,14 +563,19 @@ export class Scheduler {
   /**
    * Head event parked on in-flight document loads, keyed by event id. The
    * park ends once every load it waits on has settled: with no failure among
-   * them — or, for a client event, none but `authorization`-class failures —
-   * execution is re-queued, and otherwise `#failHeadEventLoadPark()` drops a
-   * client event and defers a served one.
+   * them — or none but `authorization`-class failures, for a client event or
+   * (lasting ones) for one its own run's loading reads parked — execution is
+   * re-queued, and
+   * otherwise `#failHeadEventLoadPark()` drops a client event and defers a
+   * served one.
    */
   #headEventLoadPark: {
     eventId: string;
     keys: readonly string[];
     generations: ReadonlyMap<string, number>;
+
+    /** Present when the event's own run was withdrawn into this park. */
+    withdrawal?: LoadingReadWithdrawal;
   } | null = null;
 
   /**
@@ -668,7 +685,7 @@ export class Scheduler {
     readonly gates: SchedulerGates;
     readonly nodes: NodeRegistry;
     readonly pending: Set<Action>;
-    pendingQueueTaskTimer: ReturnType<typeof setTimeout> | null;
+    queuedPass: ArmedTurn | null;
     scheduled: boolean;
     readonly settlingTracker: SettlingTracker;
     clearBackoffForCleanNodes(): void;
@@ -702,11 +719,11 @@ export class Scheduler {
       gates: this.#gates,
       nodes: this.#nodes,
       pending: this.#pending,
-      get pendingQueueTaskTimer() {
-        return outerThis.#pendingQueueTaskTimer;
+      get queuedPass() {
+        return outerThis.#queuedPass;
       },
-      set pendingQueueTaskTimer(value) {
-        outerThis.#pendingQueueTaskTimer = value;
+      set queuedPass(value) {
+        outerThis.#queuedPass = value;
       },
       get scheduled() {
         return outerThis.#scheduled;
@@ -1664,13 +1681,13 @@ export class Scheduler {
   queueExecution(): void {
     if (this.#disposed) return;
     if (this.#scheduled) {
-      if (this.#pendingQueueTaskTimer === null) {
+      if (this.#queuedPass === null) {
         this.#rerunAfterCurrentExecute = true;
       }
       return;
     }
-    this.#pendingQueueTaskTimer = queueTask(() => {
-      this.#pendingQueueTaskTimer = null;
+    this.#queuedPass = armTurn(() => {
+      this.#queuedPass = null;
       this.#execute();
     });
     this.#scheduled = true;
@@ -2732,10 +2749,8 @@ export class Scheduler {
       record.cancelLocalReadWake = undefined;
     }
     this.#gates.cancelWake();
-    if (this.#pendingQueueTaskTimer !== null) {
-      clearTimeout(this.#pendingQueueTaskTimer);
-      this.#pendingQueueTaskTimer = null;
-    }
+    this.#queuedPass?.cancel();
+    this.#queuedPass = null;
     this.#triggerIndex.clear();
     this.#wakeShaper.dispose();
     // Release waiters already parked when dispose arrived. The disposed check
@@ -2790,7 +2805,7 @@ export class Scheduler {
   async #execute(): Promise<void> {
     if (this.#disposed) return;
     logger.timeStart("scheduler", "execute");
-    // Each execute pass starts in a fresh macrotask (queueTask): restart
+    // Each execute pass starts in a fresh macrotask (armTurn): restart
     // the serving posture's yield slice so idle time between passes never
     // reads as spent work (stage C tuning T3).
     this.#cooperativeYield?.noteMacrotaskBoundary();
@@ -3463,8 +3478,8 @@ export class Scheduler {
       resetConvergenceHoldPasses: () => {
         this.#resetConvergenceHoldPasses();
       },
-      setPendingQueueTaskTimer: (timer) => {
-        this.#pendingQueueTaskTimer = timer;
+      setQueuedPass: (turn) => {
+        this.#queuedPass = turn;
       },
       execute: () => this.#execute(),
     };
@@ -3502,10 +3517,11 @@ export class Scheduler {
       backpressure: this.runtime.commitBackpressure,
       collectPendingLoadParkKeys: (event, deps) =>
         this.#collectPendingLoadParkKeys(event, deps),
+      unawaitedLoadKeys: (event, keys) => this.#unawaitedLoadKeys(event, keys),
       capturePendingLoadGenerations: () =>
         this.#capturePendingLoadGenerations(),
-      parkHeadEventForLoads: (event, keys) =>
-        this.#parkHeadEventForLoads(event, keys),
+      parkHeadEventForLoads: (event, keys, withdrawal) =>
+        this.#parkHeadEventForLoads(event, keys, withdrawal),
       isHeadEventLoadParked: (event) => this.#isHeadEventLoadParked(event),
       nodes: this.#nodes,
       pending: this.#pending,
@@ -3907,9 +3923,26 @@ export class Scheduler {
       pendingLoadAddresses,
       log,
     );
-    if (keys.length === 0) return keys;
+    return this.#unawaitedLoadKeys(event, keys);
+  }
+
+  /**
+   * The members of `keys`, keys of documents whose loads are in flight, that
+   * `event` has not already waited for. A key whose load the event parked on
+   * and saw settle is left out, unless the load in flight now was already in
+   * flight when the current preflight began, which makes it a refresh rather
+   * than a load the event's own reads kicked again. A load that settles
+   * leaving the replica no basis for its document, as one failing with an
+   * authorization-class failure does where no refusal of its space is
+   * recorded, is kicked again by every read, so without this the event would
+   * park on it every time it ran.
+   */
+  #unawaitedLoadKeys(
+    event: QueuedEvent,
+    keys: readonly string[],
+  ): string[] {
     const history = this.#headEventLoadParkHistory;
-    if (!history || history.eventId !== event.id) return keys;
+    if (!history || history.eventId !== event.id) return [...keys];
     return keys.filter((key) => {
       const currentGeneration =
         this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
@@ -3938,6 +3971,7 @@ export class Scheduler {
   #parkHeadEventForLoads(
     event: QueuedEvent,
     keys: readonly string[],
+    withdrawal?: LoadingReadWithdrawal,
   ): void {
     if (this.#headEventLoadPark?.eventId === event.id) return;
     const generations = new Map(
@@ -3962,7 +3996,12 @@ export class Scheduler {
           failures.push(error);
         })
       ));
-    this.#headEventLoadPark = { eventId: event.id, keys, generations };
+    this.#headEventLoadPark = {
+      eventId: event.id,
+      keys,
+      generations,
+      ...(withdrawal !== undefined ? { withdrawal } : {}),
+    };
     void settled.then(() => {
       if (failures.length === 0) this.#releaseHeadEventLoadPark(event.id);
       else this.#failHeadEventLoadPark(event, failures);
@@ -4041,6 +4080,17 @@ export class Scheduler {
    * class among them still drops the event, since that document may yet
    * hold what the closure reads.
    *
+   * A park its own run's loading reads put the event in
+   * (`LoadingReadWithdrawal`) releases when every failure is of the
+   * `authorization` class, and for a served event only when each also carries
+   * durable evidence of the refusal, so that a run reading into a space its
+   * principal cannot read proceeds on the absence and holds no later event
+   * behind it, as it would with no load in flight. A served event whose
+   * failure is no such evidence, as a revoked session's about to remount is
+   * not, defers as at the preflight. Such a park's drop of a client event
+   * also reports the error the withdrawn run threw, which no later run will,
+   * and abandons the work that run staged.
+   *
    * `errors` holds every failed load's error, in the order they failed. A
    * served deferral reports the first; a client drop reports the first of
    * another class than `authorization`, the one that decided it.
@@ -4050,8 +4100,12 @@ export class Scheduler {
     errors: readonly unknown[],
   ): void {
     if (this.#headEventLoadPark?.eventId !== event.id) return;
+    const withdrawn = this.#headEventLoadPark.withdrawal;
     if (
-      event.served === undefined && errors.every(isAuthorizationLoadFailure)
+      event.served === undefined
+        ? errors.every(isAuthorizationLoadFailure)
+        : withdrawn !== undefined &&
+          errors.every(isLastingAuthorizationLoadFailure)
     ) {
       this.#releaseHeadEventLoadPark(event.id);
       return;
@@ -4064,12 +4118,19 @@ export class Scheduler {
     this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
     const detail = describeFailure(error);
+    const when = withdrawn === undefined
+      ? "before dispatch"
+      : "before the handler ran again";
     if (event.served === undefined) {
       this.#dropEvent(
         event,
-        `Event dropped: required replica load failed before dispatch ` +
+        `Event dropped: required replica load failed ${when} ` +
           `(${keys}: ${detail})`,
       );
+      withdrawn?.abandonStagedWork();
+      if (withdrawn?.error !== undefined) {
+        this.#handleError(withdrawn.error, event.action, event.id);
+      }
       return;
     }
     const failure = error instanceof ReplicaLoadFailureError ? error.failure : {
@@ -4082,7 +4143,7 @@ export class Scheduler {
     // the durable checkpoint and terminal attention surface persistent failure.
     this.#dropEvent(
       event,
-      `Event deferred: required replica load failed before dispatch ` +
+      `Event deferred: required replica load failed ${when} ` +
         `(${keys}: ${detail}); the entry stays pending and a later drain ` +
         `re-delivers it`,
       {
@@ -4102,7 +4163,7 @@ export class Scheduler {
       this.#dropEvent(
         later,
         `Event deferred: held behind ${event.id}, whose required replica ` +
-          `load failed before dispatch (${keys}); later-arrived events wait ` +
+          `load failed ${when} (${keys}); later-arrived events wait ` +
           `behind it`,
         {
           servedKind: "deferred",

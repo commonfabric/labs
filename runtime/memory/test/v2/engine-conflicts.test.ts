@@ -119,7 +119,7 @@ describe("engine-conflicts", () => {
           seq: 0,
         }))
       );
-      using scans = spy(engine.statements.selectSetDeleteConflict, "get");
+      using scans = spy(engine.statement("selectSetDeleteConflict"), "get");
       let caught: unknown;
       try {
         commitReads(reads);
@@ -206,7 +206,7 @@ describe("engine-conflicts", () => {
         },
       });
     }
-    using scans = spy(engine.statements.selectSetDeleteConflict, "get");
+    using scans = spy(engine.statement("selectSetDeleteConflict"), "get");
     let caught: unknown;
     try {
       commitReads(
@@ -258,8 +258,8 @@ describe("engine-conflicts", () => {
         },
       });
     }
-    using scans = spy(engine.statements.selectSetDeleteConflict, "get");
-    using patches = spy(engine.statements.selectPatchConflicts, "iter");
+    using scans = spy(engine.statement("selectSetDeleteConflict"), "get");
+    using patches = spy(engine.statement("selectPatchConflicts"), "iter");
     let caught: unknown;
     try {
       commitReads(["b", "a"].map((key) => ({
@@ -317,8 +317,8 @@ describe("engine-conflicts", () => {
             );
           }
           const statement = kind === "confirmed"
-            ? engine.statements.selectPatchConflicts
-            : engine.statements.selectPatchConflictsExcludingSession;
+            ? engine.statement("selectPatchConflicts")
+            : engine.statement("selectPatchConflictsExcludingSession");
           const iterate = statement.iter.bind(statement);
           let rowsRead = 0;
           using scans = stub(statement, "iter", function* (...params) {
@@ -403,7 +403,7 @@ describe("engine-conflicts", () => {
           ids[0],
         );
       }
-      const statement = engine.statements.selectPatchConflicts;
+      const statement = engine.statement("selectPatchConflicts");
       const get = statement.get.bind(statement);
       const cleanupError = new Error("cursor cleanup failed");
       using cleanup = stub(statement, "get", (...params) => {
@@ -799,8 +799,11 @@ describe("engine-conflicts", () => {
 
     it("runs each conflict statement once for many reads of one document at one basis", () => {
       writePatch(1, { op: "replace", path: "/value/a", value: 10 });
-      using setOrDelete = spy(engine.statements.selectSetDeleteConflict, "get");
-      using patches = spy(engine.statements.selectPatchConflicts, "iter");
+      using setOrDelete = spy(
+        engine.statement("selectSetDeleteConflict"),
+        "get",
+      );
+      using patches = spy(engine.statement("selectPatchConflicts"), "iter");
       const reads = ["b", "c", "d", "e"].map((key) => ({
         id,
         path: toDocumentPath(["value", key]),
@@ -813,10 +816,24 @@ describe("engine-conflicts", () => {
 
     it("runs no patch statement when a `set` follows the basis", () => {
       const set = write(1, { op: "set", id, value: { value: { a: 5 } } });
-      using patches = spy(engine.statements.selectPatchConflicts, "iter");
+      using patches = spy(engine.statement("selectPatchConflicts"), "iter");
       expect(conflictsOf([untouched].map((read) => ({ ...read, seq: 1 }))))
         .toEqual(conflictAt(set));
       expect(patches.calls).toHaveLength(0);
+    });
+
+    it("runs a patch statement only for a basis a patch follows", () => {
+      const seq = writePatch(1, { op: "replace", path: "/value/a", value: 10 });
+      using patches = spy(engine.statement("selectPatchConflicts"), "iter");
+      // The read at the patch's own basis needs no scan, and the read at an
+      // earlier basis, which the patch follows, needs one.
+      expect(
+        conflictsOf([
+          { id, path: toDocumentPath(["value", "a"]), seq },
+          { ...untouched, seq: seq - 1 },
+        ]),
+      ).toEqual([]);
+      expect(patches.calls).toHaveLength(1);
     });
 
     it("runs one patch statement for reads at several bases when the earliest comes first", () => {
@@ -827,7 +844,7 @@ describe("engine-conflicts", () => {
           value: localSeq,
         })
       );
-      using patches = spy(engine.statements.selectPatchConflicts, "iter");
+      using patches = spy(engine.statement("selectPatchConflicts"), "iter");
       expect(
         conflictsOf([
           { ...untouched, seq: 1 },
@@ -851,7 +868,7 @@ describe("engine-conflicts", () => {
           value: localSeq,
         })
       );
-      using patches = spy(engine.statements.selectPatchConflicts, "iter");
+      using patches = spy(engine.statement("selectPatchConflicts"), "iter");
       expect(
         conflictsOf([
           { ...untouched, seq: seqs[1] },
@@ -863,7 +880,12 @@ describe("engine-conflicts", () => {
       expect(patches.calls).toHaveLength(2);
     });
 
-    it("runs one patch statement for pending reads naming the same layers in another order", () => {
+    /**
+     * Commits pending reads of `id` naming the session's two layers in three
+     * orders, after another session's patch where `foreignPatch` says, and
+     * returns how many patch scans their validation ran.
+     */
+    const layerOrderScans = (foreignPatch: boolean): number => {
       const sessionId = "session:layer-order";
       for (
         const [localSeq, path] of [[1, "/value/a"], [2, "/value/b"]] as const
@@ -881,8 +903,11 @@ describe("engine-conflicts", () => {
           },
         });
       }
+      if (foreignPatch) {
+        writePatch(1, { op: "replace", path: "/value/c", value: 0 });
+      }
       using patches = spy(
-        engine.statements.selectPatchConflictsExcludingSession,
+        engine.statement("selectPatchConflictsExcludingSession"),
         "iter",
       );
       applyCommit(engine, {
@@ -901,7 +926,15 @@ describe("engine-conflicts", () => {
           operations: [{ op: "set", id: "of:output", value: { value: 1 } }],
         },
       });
-      expect(patches.calls).toHaveLength(1);
+      return patches.calls.length;
+    };
+
+    it("runs one patch statement for pending reads naming the same layers in another order", () => {
+      expect(layerOrderScans(true)).toBe(1);
+    });
+
+    it("runs no patch statement for pending reads whose layers wrote every patch after the basis", () => {
+      expect(layerOrderScans(false)).toBe(0);
     });
 
     it("reports a conflict with the newest `set` after the basis where a newer patch also conflicts with the read", () => {

@@ -299,6 +299,15 @@ export function isValidDeepFrozenFabricValue(
 }
 
 /**
+ * Records `value` as a deep-frozen `FabricValue`, so that checking it costs a
+ * lookup. The caller vouches for the claim, having proved it some other way.
+ */
+export function recordValidDeepFrozenFabricValue(value: object): void {
+  addToDeepFrozenCache(value);
+  deepFrozenFabricValueCache.add(value);
+}
+
+/**
  * Checks frozen Fabric membership with operation-local failure caches. Callers
  * must discard both caches before any input mutation.
  */

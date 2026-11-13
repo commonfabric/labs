@@ -6,7 +6,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { armTurn } from "../v2/turn.ts";
+import { armTurn } from "../src/turn.ts";
 
 // Counts zero-delay timers that are armed and have not yet run — what the
 // runner's fake-clock harness looks at to decide a test has settled.

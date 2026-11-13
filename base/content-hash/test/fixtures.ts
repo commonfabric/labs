@@ -155,6 +155,14 @@ const NUMBERS_FIXTURES: readonly NumbersHashTuple[] = [
     sha256: "E6BbH-dzBowLZ0WWjdeKcfbx_2DngSYOccwgfKo6fHE",
   },
   {
+    numbers: rainbowBytes(192, 11),
+    sha256: "fKUlBH6YICf86czBgC5q324BKkEVyFskD9meH2NNCSM",
+  },
+  {
+    numbers: rainbowBytes(193, 13),
+    sha256: "vBkAu2-2qH0vXEK95UKYVgFXjFlIHbnURP3PBUKRje8",
+  },
+  {
     numbers: rainbowBytes(235, 7),
     sha256: "5w7_tbfxM-lGLQEgrLvBZ22cAjykQKhIlzGzciRAbeU",
   },

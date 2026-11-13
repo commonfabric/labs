@@ -1348,8 +1348,10 @@ outside the timed interval.
 The reused-memo case includes its first miss. The cleared-memo control clears
 only the active snapshot memo before each request; storage read caches remain
 active. That control includes clearing the map and journaling the additional
-reads. Both cases still merge label views for every request. They measure the
-cost of repeated derivation in this fixture, not a whole-pattern speedup.
+reads. The memo holds each dereference's merged view as well as the view at
+each address, so the reused-memo case merges label views once and the
+cleared-memo control merges them for every request. They measure the cost of
+repeated derivation in this fixture, not a whole-pattern speedup.
 
 Untimed diagnostics verify one metadata read with reuse and one per request
 with clearing. These are transaction read activities, not proxy-access counts

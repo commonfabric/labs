@@ -1,145 +1,188 @@
+// First, so that the document it installs is there when Lit loads.
+import { mount } from "../../test-utils/dom.ts";
+
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 
 import {
   createMockCellHandle,
+  holdReads,
   pushRefusal,
   pushUpdate,
 } from "../../test-utils/mock-cell-handle.ts";
+import { defaultTheme } from "../theme-context.ts";
 import { CFMarkdown } from "./index.ts";
 
+/** A markdown element mounted with `properties`. */
+function markdownWith(properties: Partial<CFMarkdown>): Promise<CFMarkdown> {
+  return mount(Object.assign(new CFMarkdown(), properties));
+}
+
+/**
+ * Resolves once every promise the mock worker's answers settle has run: the
+ * answers arrive as microtasks, so one macrotask boundary is past them all.
+ */
+const answersDelivered = () =>
+  new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** The element's content wrapper. */
+const content = (element: CFMarkdown) =>
+  element.shadowRoot!.querySelector(".markdown-content")!;
+
 describe("cf-markdown", () => {
-  // What the component renders is covered by cf-markdown.browser.test.ts, which
-  // runs in a browser and asserts against the DOM the component built.
+  // `cf-markdown.browser.test.ts` covers the rendering of each kind of
+  // markdown in a browser; these cases cover what the element itself decides.
 
-  it("is defined", () => {
-    expect(CFMarkdown).toBeDefined();
+  afterEach(() => document.body.replaceChildren());
+
+  it("starts with empty content in the default variant, neither streaming nor compact", async () => {
+    const element = await markdownWith({});
+
+    expect(element.content).toBe("");
+    expect([...content(element).classList]).toEqual(["markdown-content"]);
+    expect(content(element).textContent!.trim()).toBe("");
   });
 
-  it("creates an element instance", () => {
-    expect(new CFMarkdown()).toBeInstanceOf(CFMarkdown);
+  it("renders a string as markdown", async () => {
+    const element = await markdownWith({ content: "# Title\n\nSome **bold**" });
+
+    expect(content(element).querySelector("h1")?.textContent).toBe("Title");
+    expect(content(element).querySelector("strong")?.textContent).toBe("bold");
   });
 
-  it("starts with empty content", () => {
-    expect(new CFMarkdown().content).toBe("");
-  });
-
-  it("starts in the default variant", () => {
-    expect(new CFMarkdown().variant).toBe("default");
-  });
-
-  it("starts with streaming off", () => {
-    expect(new CFMarkdown().streaming).toBe(false);
-  });
-
-  it("accepts the inverse variant", () => {
-    const element = new CFMarkdown();
-    element.variant = "inverse";
-    expect(element.variant).toBe("inverse");
-  });
-
-  it("accepts streaming", () => {
-    const element = new CFMarkdown();
-    element.streaming = true;
-    expect(element.streaming).toBe(true);
-  });
-
-  it("reads content from a string", () => {
-    const element = new CFMarkdown();
-    element.content = "test content";
-
-    expect((element as any)._getContentValue()).toBe("test content");
-  });
-
-  it("reads empty content from a null content property", () => {
-    const element = new CFMarkdown();
-    element.content = null as any;
-
-    expect((element as any)._getContentValue()).toBe("");
-  });
-
-  describe("Cell integration", () => {
-    // Note: Full Cell integration testing requires real CellImpl instances
-    // which are complex to mock. These tests verify the component's
-    // subscription management logic with manual _unsubscribe manipulation.
-
-    it("has no subscription before content is bound", () => {
-      expect((new CFMarkdown() as any)._unsubscribe).toBeNull();
+  it("classes its content by variant, streaming, and compact", async () => {
+    const element = await markdownWith({
+      variant: "inverse",
+      streaming: true,
+      compact: true,
     });
 
-    it("drops its subscription on disconnect", () => {
-      const element = new CFMarkdown();
+    expect([...content(element).classList].sort()).toEqual([
+      "compact",
+      "inverse",
+      "markdown-content",
+      "streaming",
+    ]);
+  });
 
-      // Simulate having a subscription
-      let cleaned = false;
-      (element as any)._unsubscribe = () => {
-        cleaned = true;
-      };
+  it("shows a character reference as the character, and markup as text", async () => {
+    // marked leaves `<i` without its `>` in the text, where an HTML parser
+    // given it unescaped would take it for the start of a tag.
+    const element = await markdownWith({ content: "a &amp; b &lt;i&gt; <i" });
 
-      element.disconnectedCallback();
+    expect(content(element).textContent!.trim()).toBe("a & b <i> <i");
+    expect(content(element).querySelectorAll("i").length).toBe(0);
+  });
 
-      expect(cleaned).toBe(true);
-      expect((element as any)._unsubscribe).toBeNull();
+  it("reports the index and state of a task-list checkbox a reader toggles", async () => {
+    const element = await markdownWith({ content: "- [ ] one\n- [x] two" });
+    const changes: unknown[] = [];
+    element.addEventListener("cf-checkbox-change", (event) => {
+      if (event instanceof CustomEvent) changes.push(event.detail);
+    });
+    const second = content(element).querySelectorAll("input")[1];
+
+    second.checked = false;
+    second.dispatchEvent(new Event("change"));
+
+    expect(changes).toEqual([{ index: 1, checked: false }]);
+  });
+
+  it("writes a theme given to it onto itself", async () => {
+    const element = await markdownWith({ theme: defaultTheme });
+
+    expect(element.style.getPropertyValue("--cf-theme-font-family")).toBe(
+      defaultTheme.fontFamily,
+    );
+  });
+
+  describe("a cell as content", () => {
+    it("renders the cell's text, and renders again when it changes", async () => {
+      const cell = createMockCellHandle("first");
+      const element = await markdownWith({ content: cell });
+      expect(content(element).textContent!.trim()).toBe("first");
+
+      pushUpdate(cell, "second");
+      await element.updateComplete;
+
+      expect(content(element).textContent!.trim()).toBe("second");
     });
 
-    it("drops the old subscription when the content property changes", () => {
-      const element = new CFMarkdown();
-
-      // Simulate having an old subscription
-      let oldCleaned = false;
-      (element as any)._unsubscribe = () => {
-        oldCleaned = true;
-      };
-
-      element.content = "new content";
-      (element as any).willUpdate(new Map([["content", "old content"]]));
-
-      expect(oldCleaned).toBe(true);
-      // No new subscription for string content
-      expect((element as any)._unsubscribe).toBeNull();
-    });
-
-    it("shows the placeholder for content the worker refuses, and renders again", () => {
-      const element = new CFMarkdown();
-      const cell = createMockCellHandle<string>("shown before the seal");
-      let requestUpdates = 0;
-      element.requestUpdate = (() => {
-        requestUpdates++;
-      }) as typeof element.requestUpdate;
-      element.content = cell;
-      (element as any).willUpdate(new Map([["content", "old content"]]));
-      const before = requestUpdates;
+    it("shows the placeholder for content the worker refuses", async () => {
+      const cell = createMockCellHandle("shown before the seal");
+      const element = await markdownWith({ content: cell });
 
       pushRefusal(cell);
+      await element.updateComplete;
 
-      expect(requestUpdates).toBe(before + 1);
-      expect((element as any)._getContentValue()).toBe(
+      expect(content(element).textContent!.trim()).toBe(
         "Content hidden by policy",
       );
     });
 
-    it("syncs uncached cell content on first bind", async () => {
-      const element = new CFMarkdown();
-      const cell = createMockCellHandle<string>(undefined as any);
-      let syncCalls = 0;
-      let requestUpdates = 0;
+    it("renders a cell that has read nothing once the worker answers its read", async () => {
+      const cell = createMockCellHandle<string>();
+      const answer = holdReads(cell);
+      const element = await markdownWith({ content: cell });
+      expect(content(element).textContent!.trim()).toBe("");
 
-      (cell as any).sync = () => {
-        syncCalls++;
-        pushUpdate(cell, "loaded from sync");
-        return Promise.resolve("loaded from sync");
-      };
-      element.requestUpdate = (() => {
-        requestUpdates++;
-      }) as typeof element.requestUpdate;
+      answer({ value: "loaded" });
+      await answersDelivered();
+      await element.updateComplete;
 
-      element.content = cell;
-      (element as any).willUpdate(new Map([["content", "old content"]]));
-      await Promise.resolve();
+      expect(content(element).textContent!.trim()).toBe("loaded");
+    });
 
-      expect(syncCalls).toBe(1);
-      expect((element as any)._getContentValue()).toBe("loaded from sync");
-      expect(requestUpdates).toBeGreaterThan(0);
+    it("renders nothing for a cell that is no longer its content when the read is answered", async () => {
+      const cell = createMockCellHandle<string>();
+      const answer = holdReads(cell);
+      const element = await markdownWith({ content: cell });
+      element.content = "replacement";
+      await element.updateComplete;
+      const updates = spy(element, "requestUpdate");
+
+      answer({ value: "loaded" });
+      await answersDelivered();
+
+      expect(updates.calls.length).toBe(0);
+    });
+
+    it("stops following a cell it is no longer bound to", async () => {
+      const cell = createMockCellHandle("first");
+      const element = await markdownWith({ content: cell });
+      element.content = "replacement";
+      await element.updateComplete;
+      const updates = spy(element, "requestUpdate");
+
+      pushUpdate(cell, "second");
+
+      expect(updates.calls.length).toBe(0);
+      expect(content(element).textContent!.trim()).toBe("replacement");
+    });
+
+    it("stops following its cell once removed from the page", async () => {
+      const cell = createMockCellHandle("first");
+      const element = await markdownWith({ content: cell });
+      element.remove();
+      const updates = spy(element, "requestUpdate");
+
+      pushUpdate(cell, "second");
+
+      expect(updates.calls.length).toBe(0);
+    });
+
+    it("follows its cell again once put back in the page", async () => {
+      const cell = createMockCellHandle("first");
+      const element = await markdownWith({ content: cell });
+      element.remove();
+      document.body.append(element);
+      await element.updateComplete;
+
+      pushUpdate(cell, "second");
+      await element.updateComplete;
+
+      expect(content(element).textContent!.trim()).toBe("second");
     });
   });
 });

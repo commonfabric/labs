@@ -54,7 +54,6 @@ import {
   FabricHash,
   FabricKeyPair,
   type FabricPrimitiveClassesByName,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import { hashOf } from "@/value-hash";
@@ -69,6 +68,7 @@ import {
   type FixtureRequirements,
   fixtureTextOf,
   hexOf,
+  NO_CODEC_EXCLUSION,
   requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
@@ -155,7 +155,6 @@ const SECTION_ARRAY = "2-hash-byte-format.md section 4.12";
 const SECTION_OBJECT = "2-hash-byte-format.md section 4.13";
 const SECTION_INSTANCE = "2-hash-byte-format.md section 4.14";
 const SECTION_HOLES = "2-hash-byte-format.md section 4.15";
-const SECTION_REGEXP = "2-hash-byte-format.md section 4.16";
 const SECTION_KEY_PAIR = "2-hash-byte-format.md section 4.17";
 const SECTION_UNAVAILABLE = "2-hash-byte-format.md section 4.18";
 const SECTION_CYCLES = "2-hash-byte-format.md section 4.19";
@@ -563,30 +562,6 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     name: "hash under an algorithm tag of 65 UTF-8 bytes",
     section: SECTION_HASH,
     make: () => new FabricHash(new Uint8Array([1]), "t".repeat(65)),
-  },
-
-  // Regular expressions.
-  {
-    name: "regular expression",
-    section: SECTION_REGEXP,
-    spec: "2B  24 03 61 62 63  24 02 67 69  24 06 65 73 32 30 32 35",
-    make: () => new FabricRegExp(/abc/gi),
-  },
-  {
-    name: "regular expression from its parts",
-    section: SECTION_REGEXP,
-    equals: "regular expression",
-    make: () => new FabricRegExp("es2025", "abc", "gi"),
-  },
-  {
-    name: "regular expression of another flavor",
-    section: SECTION_REGEXP,
-    make: () => new FabricRegExp("other", "abc", "gi"),
-  },
-  {
-    name: "regular expression of a source of 65 UTF-8 bytes",
-    section: SECTION_REGEXP,
-    make: () => new FabricRegExp("es2025", "x".repeat(65), ""),
   },
 
   // Key pairs.
@@ -1025,7 +1000,7 @@ const PRIMITIVE_CLASS_NOTES: {
   FabricEpochNsec: { section: SECTION_EPOCH_NSEC },
   FabricHash: { section: SECTION_HASH },
   FabricKeyPair: { section: SECTION_KEY_PAIR },
-  FabricRegExp: { section: SECTION_REGEXP },
+  FabricRegExp: { excluded: NO_CODEC_EXCLUSION },
   FabricUnavailable: { section: SECTION_UNAVAILABLE },
 };
 

@@ -2127,28 +2127,15 @@ const listedEntries = (
 };
 
 /**
- * An entry, its room a link that declares what reading the room reads, as a
- * reader that reads the room takes the entry.
+ * What reading one room's roster needs: the room, as the entry it is listed
+ * by holds it. The argument is stored, so the room stays a handle there,
+ * which declares nothing of the room, and the read re-types it where it reads.
  */
-interface LinkedEntry extends Omit<ChatIndexEntry, "room"> {
-  /** The room. */
-  // `Cell<…>` is written out rather than reached through an alias: a schema
-  // marks a reference position only where the wrapper is written in the type.
-  room: Cell<ChatRoomLink>;
-}
-
-/** `entry`, its room re-typed by `linkedRoom()`; it reads nothing. */
-const linkedEntryOf = (entry: ChatIndexEntry): LinkedEntry => ({
-  ...entry,
-  room: linkedRoom(entry.room),
-});
-
-/** What reading one room's roster needs: the room, linked to declare it. */
 interface RoomRosterInput {
-  /** The room. */
+  /** The room, as its entry holds it. */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<ChatRoomLink>;
+  room: Cell<unknown>;
 }
 
 /** One room's roster, once it is read. */
@@ -2162,12 +2149,17 @@ interface RoomRosterOutput {
  * replica can't serve holds back its own roster alone, and the people the
  * other rooms list are drawn all the same.
  */
-const RoomRoster = pattern<RoomRosterInput, RoomRosterOutput>(({ room }) => ({
-  roster: computed((): ManagerProfileCell[] | undefined => {
-    const roster = room.key("roster").get();
-    return roster === undefined ? undefined : [...roster];
-  }),
-}));
+const RoomRoster = pattern<RoomRosterInput, RoomRosterOutput>(({ room }) => {
+  // Re-typed here rather than in a list stored for it: a stored list of
+  // links typed as the room is walked into every room by whoever syncs it.
+  const linked = linkedRoom(room);
+  return {
+    roster: computed((): ManagerProfileCell[] | undefined => {
+      const roster = linked.key("roster").get();
+      return roster === undefined ? undefined : [...roster];
+    }),
+  };
+});
 
 /**
  * The people the rosters in `rosters` list, other than `self`: by the
@@ -2334,15 +2326,9 @@ export const FabriChatManagerCore = pattern<
         direct.get() ?? {},
       )
     );
-    // The listed rooms as links that declare what reading a room reads,
-    // which `rooms` doesn't, for the people drawn from their rosters alone:
-    // only what reads these reads the rooms.
-    const linkedRoomsForUser = computed((): PerUser<LinkedEntry[]> =>
-      roomsForUser.map(linkedEntryOf)
-    );
     // Each listed room's roster, each read on its own and per user, as
     // `roomsForUser` is: a room's space is read under the reader's access.
-    const rostersForUser = linkedRoomsForUser.map((entry) =>
+    const rostersForUser = roomsForUser.map((entry) =>
       RoomRoster.asScope("user")({ room: entry.room })
     );
     // The people the listed rooms' rosters hold, per user, as `roomsForUser`

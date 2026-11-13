@@ -431,6 +431,65 @@ describe("extended-storage-transaction", () => {
     });
   });
 
+  describe("a recorded dereference trace", () => {
+    const address = (id: string, path: string[]) => ({
+      space,
+      id,
+      scope: "space" as const,
+      path,
+    });
+
+    it("is kept frozen where it stands, with its addresses and their paths", () => {
+      const tx = runtime.edit();
+      const trace = {
+        source: address("of:holder", ["value", "link"]),
+        target: address("of:held", []),
+        kind: "value" as const,
+      };
+
+      tx.recordCfcDereferenceTrace(trace);
+
+      expect(tx.getCfcState().dereferenceTraces[0]).toBe(trace);
+      for (
+        const object of [
+          trace,
+          trace.source,
+          trace.source.path,
+          trace.target,
+          trace.target.path,
+        ]
+      ) {
+        expect(Object.isFrozen(object)).toBe(true);
+      }
+      tx.abort("recorded");
+    });
+
+    it("freezes a member that is not a primitive, on the trace or an address", () => {
+      const tx = runtime.edit();
+      const onAddress = { type: "string" };
+      const onTrace = { note: "beside the trace" };
+
+      const withAddressMember = {
+        source: { ...address("of:holder", ["value"]), schema: onAddress },
+        target: address("of:held", []),
+        kind: "value" as const,
+      };
+      const withTraceMember = {
+        source: address("of:holder", ["value"]),
+        target: address("of:held", []),
+        kind: "value" as const,
+        detail: onTrace,
+      };
+
+      tx.recordCfcDereferenceTrace(withAddressMember);
+      tx.recordCfcDereferenceTrace(withTraceMember);
+
+      expect(Object.isFrozen(onAddress)).toBe(true);
+      expect(Object.isFrozen(onTrace)).toBe(true);
+      tx.abort("recorded");
+    });
+  });
+
   describe("a wrapped transaction", () => {
     it("preserves document-narrowed write lookup and its compatibility fallback", () => {
       const target = {

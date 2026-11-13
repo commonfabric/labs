@@ -732,11 +732,12 @@ Two pieces of machinery come up often enough in unit tests, and dispatch
 differently enough from each other, that guessing at their timing is where fixed
 delays tend to creep back in.
 
-The **scheduler** delivers a runtime-backed cell's updates through `queueTask`
-(`runtime/runner/src/scheduler/diagnostics.ts`), which is `setTimeout(fn, 0)`.
-That is a macrotask, so yielding to the microtask queue never reaches a change
-made through a real cell, however many times the test yields. Wait for these
-with `runtime.idle()`, which resolves once the scheduler has settled.
+The **scheduler** delivers a runtime-backed cell's updates in passes, each on a
+turn of the event loop that `armTurn` (`base/async/src/turn.ts`) claims
+through a zero-delay timer and a `setImmediate` at once. That is a macrotask, so
+yielding to the microtask queue never reaches a change made through a real cell,
+however many times the test yields. Wait for these with `runtime.idle()`, which
+resolves once the scheduler has settled.
 
 The **worker reconciler** (`runtime/html/src/worker/reconciler.ts`) is
 synchronous apart from one line. It queues its VDOM ops as it renders and
@@ -958,7 +959,7 @@ transport itself delivers each server frame on its own turn, so
 `clock.settle()` drains in-flight deliveries without letting any coalescing
 window elapse.
 
-Both take that turn through `armTurn` in `runtime/memory/v2/turn.ts`, which
+Both take that turn through `armTurn` in `base/async/src/turn.ts`, which
 claims it twice over: a zero-delay timer, which is what `settle()` counts, and
 a `setImmediate`, which is the same turn for a fraction of the cost. Whichever
 arrives first runs the handler and cancels the other. So an outstanding turn
@@ -970,7 +971,7 @@ its event loop for a timer.
 
 `runtime/runtime-client` keeps its unit tests on the real clock. Most of its
 tests need no wait at all, or only a macrotask drain — a `setTimeout(fn, 0)`
-that lets the scheduler's own `queueTask` dispatch land, an awaited round-trip,
+that lets the scheduler's own pass land, an awaited round-trip,
 or a sink fire once. Those drains cross one macrotask boundary, carry no
 real-time floor, and stay as they are. A positive-delay sleep is still the
 shape to avoid here: the waits that once needed one are event-driven instead —
