@@ -41,7 +41,10 @@ assignments to a `let`, and decides assignability (`language-subset.md` §7.5)
 at four sites: an argument, an attribute of a tag that names a pattern, a
 returned value under a written return type, and an initializer under an
 annotation. The arguments of a pattern, of a handler, and of a `lift` result
-written in the reactive tier are bound by reference (§7.5.2). It does not check
+written in the reactive tier are bound by reference (§7.5.2), and the argument
+of a pattern instantiated in a function body is accepted under the same
+conditions (§7.5.3). The body of a `pattern` reads an optional property of its
+input whose type declares a default without `undefined` (§7.6.1). It does not check
 a generic function per instantiation, and it does not apply assignability at an
 assignment or at the argument of a handle method. Where it has no type for an
 expression, the expression is counted under the reason, and a rule that needs
@@ -141,7 +144,7 @@ code.
 
 ## The specification it implements
 
-The crate follows `language-subset.md` as it stands at commit `d0973bc0de`.
+The crate follows `language-subset.md` as it stands at commit `8bc4a3001a`.
 `catalog-ids.txt` holds the identifiers of that document's catalog, and
 `cargo test` fails when the document's catalog and the copy differ. To follow a
 change of the catalog, edit `catalog-ids.txt` and the table in `src/catalog.rs`
