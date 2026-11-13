@@ -199,6 +199,10 @@ is relitigated.
   at the root of the value type. `Cell<T>` is not assignable to
   `Cell<T | undefined>`, or the reverse. `object` is a type of the
   subset, and a handle is assignable to it.
+- In the reactive tier an argument of a pattern, a handler, or a `lift`
+  result is bound by reference: a value stands for a handle of it and a
+  readable handle for its value. An authored function called there is
+  not, so its argument is `count.get()` and not `count`.
 - `typeof NAME` in a label argument, outside a writer or rule-set
   position, stands for the value of a module-scope constant with a
   static initializer.
@@ -601,10 +605,6 @@ as an assumption.
     names.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
-92. **An authored function called in the reactive tier is not bound by
-    reference** (LS §7.5.2), so its argument is `count.get()` and not
-    `count`. A pattern, a handler, and a `lift` result are. *Assumed:*
-    as written; the owner asked for examples.
 93. **Whether a write through a handle of `unknown` is refused,** on the
     ground that a write needs a specific type, with `Cell<T>` then
     assignable to `ReadonlyCell<unknown>`. Raised by the owner, not
