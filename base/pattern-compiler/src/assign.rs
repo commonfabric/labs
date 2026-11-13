@@ -13,7 +13,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 
 use crate::module::ModuleTier;
-use crate::program::Resolver;
+use crate::program::{Place, Resolver};
 use crate::syntax::{unparen, unwrap, FunctionLike};
 use crate::types::{HandleKind, Shape, TypeId};
 
@@ -917,7 +917,50 @@ impl<'a> Resolver<'_, 'a> {
     /// so that a literal keeps its literal type there, and an object
     /// literal may not have a property the type does not declare (§7.5).
     pub fn check_against(&self, module: usize, expression: &Expression<'a>, to: TypeId) -> Verdict {
+        self.check_against_in(module, expression, to, false)
+    }
+
+    /// `to` with each cell handle among its members replaced by the value
+    /// type of the handle.
+    fn value_types(&self, to: TypeId) -> TypeId {
+        let value = |ty: TypeId| match self.shape(ty) {
+            Shape::Handle(kind, value) if kind.is_cell() => value,
+            _ => ty,
+        };
+        match self.shape(to) {
+            Shape::Union(members) => self.union_of(members.into_iter().map(value).collect()),
+            _ => value(to),
+        }
+    }
+
+    /// [`Self::check_against`], with `by_reference` for an argument bound
+    /// by reference in tier R (§7.5.2).
+    fn check_against_in(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        to: TypeId,
+        by_reference: bool,
+    ) -> Verdict {
         let expression = unparen(expression);
+        // A literal written where a cell is declared has no declared type
+        // of its own, and is checked part by part against the value type
+        // of the cell.
+        let literal = matches!(
+            expression,
+            Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral(_)
+                | Expression::TemplateLiteral(_)
+                | Expression::ObjectExpression(_)
+                | Expression::ArrayExpression(_)
+        );
+        let to = if by_reference && literal {
+            self.value_types(to)
+        } else {
+            to
+        };
         let target = self.shape(to);
         // A type that is `never` was refused where it was written, and
         // nothing more is decided against it.
@@ -933,19 +976,21 @@ impl<'a> Resolver<'_, 'a> {
         match expression {
             Expression::ConditionalExpression(conditional) => {
                 return self
-                    .check_against(module, &conditional.consequent, to)
-                    .and(|| self.check_against(module, &conditional.alternate, to));
+                    .check_against_in(module, &conditional.consequent, to, by_reference)
+                    .and(|| {
+                        self.check_against_in(module, &conditional.alternate, to, by_reference)
+                    });
             }
             Expression::TSSatisfiesExpression(inner) => {
-                return self.check_against(module, &inner.expression, to);
+                return self.check_against_in(module, &inner.expression, to, by_reference);
             }
             Expression::ObjectExpression(object) => {
-                if let Some(verdict) = self.object_against(module, object, to) {
+                if let Some(verdict) = self.object_against(module, object, to, by_reference) {
                     return verdict;
                 }
             }
             Expression::ArrayExpression(array) => {
-                if let Some(verdict) = self.array_against(module, array, to) {
+                if let Some(verdict) = self.array_against(module, array, to, by_reference) {
                     return verdict;
                 }
             }
@@ -954,7 +999,7 @@ impl<'a> Resolver<'_, 'a> {
         let Ok(from) = self.typed_at(module, expression, 0) else {
             return Verdict::Unsure;
         };
-        let verdict = self.relate(from, to, 0);
+        let verdict = self.relate_in(from, to, 0, by_reference);
         if matches!(verdict, Verdict::No(..)) && self.is_instance(module, expression, 0) {
             // The value a pattern instantiation returns is assignable to a
             // cell of a type its result type is assignable to.
@@ -981,6 +1026,7 @@ impl<'a> Resolver<'_, 'a> {
         module: usize,
         object: &ObjectExpression<'a>,
         to: TypeId,
+        by_reference: bool,
     ) -> Option<Verdict> {
         let candidates: Vec<TypeId> = match self.shape(to) {
             Shape::Object(..) => vec![to],
@@ -993,7 +1039,7 @@ impl<'a> Resolver<'_, 'a> {
         let mut refusal = None;
         let mut unsure = false;
         for candidate in candidates {
-            match self.object_against_one(module, object, candidate) {
+            match self.object_against_one(module, object, candidate, by_reference) {
                 Verdict::Yes => return Some(Verdict::Yes),
                 Verdict::Unsure => unsure = true,
                 no @ Verdict::No(..) => {
@@ -1012,6 +1058,7 @@ impl<'a> Resolver<'_, 'a> {
         module: usize,
         object: &ObjectExpression<'a>,
         to: TypeId,
+        by_reference: bool,
     ) -> Verdict {
         let Shape::Object(wanted, index) = self.shape(to) else {
             return Verdict::Unsure;
@@ -1043,10 +1090,20 @@ impl<'a> Resolver<'_, 'a> {
                     } else {
                         want.ty
                     };
-                    verdicts.push(self.check_against(module, &property.value, expected));
+                    verdicts.push(self.check_against_in(
+                        module,
+                        &property.value,
+                        expected,
+                        by_reference,
+                    ));
                 }
                 (None, Some(index)) => {
-                    verdicts.push(self.check_against(module, &property.value, index));
+                    verdicts.push(self.check_against_in(
+                        module,
+                        &property.value,
+                        index,
+                        by_reference,
+                    ));
                 }
                 (None, None) => {
                     return Verdict::No(
@@ -1082,6 +1139,7 @@ impl<'a> Resolver<'_, 'a> {
         module: usize,
         array: &ArrayExpression<'a>,
         to: TypeId,
+        by_reference: bool,
     ) -> Option<Verdict> {
         let candidates: Vec<TypeId> = match self.shape(to) {
             Shape::Array(_) | Shape::Tuple(_) => vec![to],
@@ -1130,7 +1188,7 @@ impl<'a> Resolver<'_, 'a> {
                             .ok()
                             .and_then(|spread| self.element_of(spread))
                         {
-                            Some(element) => self.relate(element, wanted, 0),
+                            Some(element) => self.relate_in(element, wanted, 0, by_reference),
                             None => Verdict::Unsure,
                         },
                     );
@@ -1138,7 +1196,12 @@ impl<'a> Resolver<'_, 'a> {
                 ArrayExpressionElement::Elision(_) => {}
                 other => match wanted(position) {
                     Some(wanted) => {
-                        verdicts.push(self.check_against(module, other.to_expression(), wanted));
+                        verdicts.push(self.check_against_in(
+                            module,
+                            other.to_expression(),
+                            wanted,
+                            by_reference,
+                        ));
                     }
                     None => {
                         return Some(Verdict::No(
@@ -1172,7 +1235,7 @@ impl<'a> Resolver<'_, 'a> {
         pass.visit_program(parsed.program);
     }
 
-    fn record(&self, module: usize, site: &'static str, span: Span, verdict: Verdict) {
+    fn record(&self, module: usize, site: &str, span: Span, verdict: Verdict) {
         let outcome = match &verdict {
             Verdict::Yes => "assignable".to_string(),
             Verdict::Unsure => "not decided".to_string(),
@@ -1186,6 +1249,30 @@ impl<'a> Resolver<'_, 'a> {
                 span,
                 &format!("The {site} is not assignable: {found}"),
             );
+        }
+    }
+}
+
+/// What a call calls, as §7.5.2 tells the callees apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Callee {
+    Pattern,
+    Handler,
+    Lift,
+    /// An authored function, or a local binding of a function.
+    Function,
+    /// A method, or a callee that is another expression.
+    Other,
+}
+
+impl Callee {
+    fn label(self) -> &'static str {
+        match self {
+            Callee::Pattern => "a pattern",
+            Callee::Handler => "a handler",
+            Callee::Lift => "a lift result",
+            Callee::Function => "an authored function",
+            Callee::Other => "a method or another callee",
         }
     }
 }
@@ -1213,6 +1300,39 @@ impl<'a> Assignments<'_, '_, 'a> {
         }
     }
 
+    /// What the callee of a call is, for the rule of §7.5.2.
+    fn callee_kind(&self, call: &CallExpression<'a>) -> Callee {
+        use crate::module::DefKind;
+        let resolver = self.resolver;
+        let callee = unwrap(&call.callee);
+        let named = match callee {
+            Expression::Identifier(name) => resolver.value_def(self.module, name),
+            _ => None,
+        };
+        match named {
+            Some(DefKind::Pattern) => return Callee::Pattern,
+            Some(DefKind::Handler) => return Callee::Handler,
+            Some(DefKind::Lift) => return Callee::Lift,
+            Some(DefKind::Function) => return Callee::Function,
+            _ => {}
+        }
+        // `lift(...)(argument)`, written in place.
+        if let Expression::CallExpression(inner) = callee {
+            if resolver.is_lift_call(self.module, inner) {
+                return Callee::Lift;
+            }
+        }
+        match resolver
+            .typed_at(self.module, &call.callee, 0)
+            .map(|callee| resolver.shape(resolver.present(callee)))
+        {
+            Ok(Shape::PatternFactory(..)) => Callee::Pattern,
+            Ok(Shape::HandlerFactory(..)) => Callee::Handler,
+            _ if matches!(callee, Expression::Identifier(_)) => Callee::Function,
+            _ => Callee::Other,
+        }
+    }
+
     fn arguments(&mut self, call: &CallExpression<'a>) {
         let resolver = self.resolver;
         let Some(parameters) = resolver.callee_parameters(self.module, call, 0) else {
@@ -1222,20 +1342,25 @@ impl<'a> Assignments<'_, '_, 'a> {
             .arguments
             .iter()
             .any(|argument| matches!(argument, Argument::SpreadElement(_)));
-        let callee = resolver
-            .typed_at(self.module, &call.callee, 0)
-            .map(|callee| resolver.shape(resolver.present(callee)));
+        let callee = self.callee_kind(call);
+        let place = resolver.place_at(self.module, call.span.start);
+        // The arguments of a pattern, of a handler, and of a `lift` result
+        // are bound by reference where the call is written in tier R
+        // (§7.5.2).
+        let by_reference = place == Place::Reactive
+            && matches!(callee, Callee::Pattern | Callee::Handler | Callee::Lift);
         // A factory is called with one argument, and what it is called
         // with when the argument is left out is not this rule's question.
-        let counted = !matches!(
-            callee,
-            Ok(Shape::PatternFactory(..) | Shape::HandlerFactory(..))
+        let counted = !matches!(callee, Callee::Pattern | Callee::Handler);
+        let site = format!(
+            "argument of {}, {}",
+            callee.label(),
+            match place {
+                Place::Module => "at module scope",
+                Place::Reactive => "in the reactive tier",
+                Place::Function => "in a function body",
+            }
         );
-        let site = if counted {
-            "argument"
-        } else {
-            "argument of a pattern or a handler"
-        };
         if counted && !spread {
             let required = parameters
                 .iter()
@@ -1256,7 +1381,7 @@ impl<'a> Assignments<'_, '_, 'a> {
                 };
                 resolver.record(
                     self.module,
-                    "argument",
+                    &site,
                     call.span,
                     Verdict::No(
                         Class::ArgumentCount,
@@ -1295,8 +1420,8 @@ impl<'a> Assignments<'_, '_, 'a> {
             } else {
                 expected
             };
-            let verdict = resolver.check_against(self.module, argument, expected);
-            resolver.record(self.module, site, argument.span(), verdict);
+            let verdict = resolver.check_against_in(self.module, argument, expected, by_reference);
+            resolver.record(self.module, &site, argument.span(), verdict);
         }
     }
 }

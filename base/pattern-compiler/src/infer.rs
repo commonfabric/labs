@@ -111,6 +111,11 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
+    /// Whether a call is a `lift(...)` definition.
+    pub(crate) fn is_lift_call(&self, module: usize, call: &CallExpression<'a>) -> bool {
+        matches!(self.builder_of(module, call), Some((Builder::Lift, _)))
+    }
+
     fn api_name(&self, module: usize, callee: &Expression<'a>) -> Option<String> {
         let parsed = self.parsed(module)?;
         let api = self

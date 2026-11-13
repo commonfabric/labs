@@ -72,6 +72,18 @@ pub struct Resolver<'m, 'a> {
     parsed: &'m [Option<Parsed<'a>>],
     /// The types resolved so far (`crate::types`).
     pub(crate) types: Types,
+    /// The span and kind of each body of each module, once the walk of
+    /// `crate::check` has found them.
+    bodies: std::cell::RefCell<Vec<Vec<((u32, u32), crate::tiers::BodyKind)>>>,
+}
+
+/// Where code is written, for the rules that differ between the reactive
+/// tier and a function body (`language-subset.md` §7.5.2, §7.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    Module,
+    Reactive,
+    Function,
 }
 
 impl<'m, 'a> Resolver<'m, 'a> {
@@ -91,6 +103,34 @@ impl<'m, 'a> Resolver<'m, 'a> {
             files,
             parsed,
             types: Types::default(),
+            bodies: std::cell::RefCell::new(vec![Vec::new(); files.len()]),
+        }
+    }
+
+    fn set_bodies(&self, module: usize, bodies: &[Body]) {
+        self.bodies.borrow_mut()[module] =
+            bodies.iter().map(|body| (body.span, body.kind)).collect();
+    }
+
+    /// The kind of the innermost body that contains the offset.
+    pub(crate) fn body_at(&self, module: usize, offset: u32) -> Option<crate::tiers::BodyKind> {
+        self.bodies.borrow()[module]
+            .iter()
+            .filter(|((start, end), _)| *start <= offset && offset < *end)
+            .min_by_key(|((start, end), _)| end - start)
+            .map(|(_, kind)| *kind)
+    }
+
+    /// Where the code at the offset is written. The body of a pattern and
+    /// of a reactive collection callback is the reactive tier. The body of
+    /// a `computed` is a function body, whether it is promoted or not
+    /// (`language-subset.md` §6.2).
+    pub(crate) fn place_at(&self, module: usize, offset: u32) -> Place {
+        use crate::tiers::BodyKind;
+        match self.body_at(module, offset) {
+            None => Place::Module,
+            Some(BodyKind::Pattern | BodyKind::ElementCallback) => Place::Reactive,
+            Some(_) => Place::Function,
         }
     }
 
@@ -243,6 +283,11 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         .collect();
 
     link(files, &parsed, &mut checks);
+    for (module, check) in checks.iter().enumerate() {
+        if let Some(check) = check {
+            resolver.set_bodies(module, &check.bodies);
+        }
+    }
 
     // The rules that resolving a written type decides.
     for module in 0..files.len() {
@@ -345,6 +390,13 @@ pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
         .map(|parsed| parsed.as_ref().map(ModuleModel::build))
         .collect();
     let resolver = Resolver::new(files, &models, &parsed);
+    for (module, parsed) in parsed.iter().enumerate() {
+        if let (Some(parsed), Some(model)) = (parsed, &models[module]) {
+            let check = check::check_module(parsed, model, module, &resolver);
+            resolver.set_bodies(module, &check.bodies);
+        }
+    }
+    resolver.types.borrow_mut().reports.clear();
     let mut types = Vec::new();
     for (module, file) in files.iter().enumerate() {
         let Some(parsed) = &parsed[module] else {
