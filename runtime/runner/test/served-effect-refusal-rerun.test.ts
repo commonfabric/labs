@@ -633,16 +633,18 @@ async function expectRefusedEnding(
   }, async (f) => {
     await f.settle();
 
-    expect(f.refusals()).toBeGreaterThan(0);
-    expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
-    expect(f.requests()).toBe(0);
-    // Each request is staged again at most once after its refusal. A
-    // user-scoped node can first stage a request built before its `PerUser`
-    // input reached the serving runtime, which is a request of its own.
+    // Each request is staged again at most once after its refusal, checked
+    // first so that a node that keeps staging one request is reported by
+    // that request. A user-scoped node can first stage a request built
+    // before its `PerUser` input reached the serving runtime, which is a
+    // request of its own.
     expect(f.abandonments().size).toBeGreaterThan(0);
     for (const [effectId, count] of f.abandonments()) {
       expect(count, effectId).toBeLessThanOrEqual(2);
     }
+    expect(f.refusals()).toBeGreaterThan(0);
+    expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
+    expect(f.requests()).toBe(0);
     const requester = f.client.scopeKeyIdentity;
     const errorLink = await f.errorLink();
     const ending = { pending: false, error: refusedMessage(builtin) };
