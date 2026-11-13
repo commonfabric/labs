@@ -315,6 +315,28 @@ describe("memory-v2-sync-crossings", () => {
       expect(await top3.pull()).toEqual({ next: { name: "Ada" } });
       expect(localOnC(leaf, farSpace)).toBe(true);
     });
+
+    it("loads the far document once a pull reaches it past a handle", async () => {
+      // The link is held as a handle, declaring nothing of what it links,
+      // so a read of the document holding it loads nothing in the far
+      // space; a pull of a path through the handle is a read that reaches
+      // the far document, and loads it.
+      const { leaf, top } = await writeCrossing("client handle read");
+      const top3 = rt3.getCellFromLink<{ next?: unknown }>({
+        ...top.getAsNormalizedFullLink(),
+        schema: {
+          type: "object",
+          properties: { next: { type: "unknown", asCell: ["cell"] } },
+        },
+      });
+      await top3.pull();
+      expect(localOnC(leaf, farSpace)).toBe(false);
+      const name = top3.key("next").key("name" as never).asSchema<string>({
+        type: "string",
+      });
+      expect(await name.pull()).toBe("Ada");
+      expect(localOnC(leaf, farSpace)).toBe(true);
+    });
   });
 
   it("leaves a link the schema does not follow unloaded", async () => {
