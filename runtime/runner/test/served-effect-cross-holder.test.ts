@@ -37,9 +37,9 @@ describe("served-effect-cross-holder", () => {
     // the response back into Alice's space, unstamped. The rule refuses the
     // node's own run, which writes its pending state there, before the
     // request goes out, so no completion exists to write anything back.
-    // The case ends on the refusal itself, not on the serving runtime
-    // settling: a served effect node whose write is refused runs again
-    // without end, which is tracked as its own defect.
+    // The case ends on the refusal itself and checks that no request had
+    // gone out by then; what the node does after it is refused is not what
+    // this case pins.
 
     const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     const originalFetch = globalThis.fetch;
