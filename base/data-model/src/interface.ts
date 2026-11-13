@@ -214,12 +214,15 @@ export abstract class FabricPrimitive extends BaseFabricSpecialObject {
 
   /**
    * Name of this instance's class in the schema `type` vocabulary: the `type`
-   * a schema names to admit this value by its class. Every instance of a class
-   * reports the same name, which need not be the name of the class. Each
-   * concrete class supplies its own, and the getter reads no instance state,
-   * so that it returns the same name when read off the class's `prototype`.
+   * a schema names to admit this value by its class, or `object` for a class
+   * the vocabulary does not name. Every instance of a class reports the same
+   * name, which need not be the name of the class. Each concrete class
+   * supplies its own, and the getter reads no instance state, so that it
+   * returns the same name when read off the class's `prototype`.
    */
-  abstract get schemaType(): FabricPrimitiveSchemaType;
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
+  // `FabricPrimitiveSchemaType`.
+  abstract get schemaType(): FabricPrimitiveSchemaType | "object";
 
   static {
     Object.freeze(this);

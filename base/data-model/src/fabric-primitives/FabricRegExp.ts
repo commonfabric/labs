@@ -38,7 +38,8 @@ const JS_FLAVOR = "es2025";
  * `1-fabric-values.md`.
  *
  * The type is disabled for codecs: this class binds no codec, so encoding an
- * instance throws as it does for any unregistered class.
+ * instance throws as it does for any unregistered class. Nor is it in the
+ * schema `type` vocabulary: an instance reports `object` as its `.schemaType`.
  */
 export class FabricRegExp extends BaseFabricPrimitive
   implements ApiFabricRegExp {
@@ -107,8 +108,8 @@ export class FabricRegExp extends BaseFabricPrimitive
   }
 
   /** @inheritDoc */
-  get schemaType(): "FabricRegExp" {
-    return "FabricRegExp";
+  get schemaType(): "object" {
+    return "object";
   }
 
   /** The pattern source text. */

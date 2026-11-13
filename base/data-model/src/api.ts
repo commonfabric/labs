@@ -19,8 +19,8 @@
  * Every concrete `FabricPrimitive` subclass needs an instanceof-capable
  * declaration here, that being an interface, a constructor interface, and a
  * `declare const` combining the two. The interface narrows `.schemaType` to
- * the one name its class reports, and the interface is a member of
- * `ConcreteFabricPrimitive`.
+ * the one name its class reports, and where that name is not `object`, the
+ * interface is a member of `ConcreteFabricPrimitive`.
  *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
@@ -256,10 +256,13 @@ export interface FabricPrimitive {
 
   /**
    * Name of this instance's class in the schema `type` vocabulary: the `type`
-   * a schema names to admit this value by its class. Every instance of a class
-   * reports the same name, which need not be the name of the class.
+   * a schema names to admit this value by its class, or `object` for a class
+   * the vocabulary does not name. Every instance of a class reports the same
+   * name, which need not be the name of the class.
    */
-  readonly schemaType: FabricPrimitiveSchemaType;
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
+  // `FabricPrimitiveSchemaType`.
+  readonly schemaType: FabricPrimitiveSchemaType | "object";
 }
 
 export interface FabricPrimitiveConstructor {
@@ -492,7 +495,7 @@ export declare const FabricKeyPair: FabricKeyPairConstructor;
  */
 export interface FabricRegExp extends FabricPrimitive {
   /** @inheritDoc */
-  readonly schemaType: "FabricRegExp";
+  readonly schemaType: "object";
 
   readonly source: string;
   readonly flags: string;
@@ -604,8 +607,9 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
 //
 
 /**
- * Union of the concrete `FabricPrimitive` classes this module declares. Every
- * type that ranges over those classes is derived from this one.
+ * Union of the concrete `FabricPrimitive` classes this module declares whose
+ * instances report a `.schemaType` other than `object`. Every type that ranges
+ * over those classes is derived from this one.
  */
 export type ConcreteFabricPrimitive =
   | FabricBytes
@@ -615,7 +619,6 @@ export type ConcreteFabricPrimitive =
   | FabricEpochNsec
   | FabricHash
   | FabricKeyPair
-  | FabricRegExp
   | FabricUnavailable;
 
 /**

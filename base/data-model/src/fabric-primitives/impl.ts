@@ -121,16 +121,27 @@ const CODEC_CLASSES: readonly FabricPrimitiveClass[] = Object.freeze(
 );
 
 // Each name is read off its class's `prototype`. The contract of `.schemaType`
-// is what makes that sound: the getter reads no instance state.
+// is what makes that sound: the getter reads no instance state. A class
+// reporting `object` has no name in the vocabulary.
+// TODO(danfuzz): Once `FabricRegExp` is deleted, map every class in
+// `CODEC_CLASSES` without the filter.
+const SCHEMA_TYPED_CLASSES: readonly (readonly [
+  FabricPrimitiveSchemaType,
+  FabricPrimitiveClass,
+])[] = CODEC_CLASSES.flatMap((cls) => {
+  const type = cls.prototype.schemaType;
+  return (type === "object") ? [] : [[type, cls] as const];
+});
+
 const CLASS_OF_SCHEMA_TYPE: ReadonlyMap<string, FabricPrimitiveClass> = new Map(
-  CODEC_CLASSES.map((cls) => [cls.prototype.schemaType, cls]),
+  SCHEMA_TYPED_CLASSES,
 );
 
 /**
- * Every `FabricPrimitiveSchemaType`, one entry per concrete class: the runtime
- * form of that type, and the value `api.ts` declares under this name.
+ * Every `FabricPrimitiveSchemaType`, one entry per class reporting one: the
+ * runtime form of that type, and the value `api.ts` declares under this name.
  */
 export const FABRIC_PRIMITIVE_SCHEMA_TYPES:
   readonly FabricPrimitiveSchemaType[] = Object.freeze(
-    CODEC_CLASSES.map((cls) => cls.prototype.schemaType),
+    SCHEMA_TYPED_CLASSES.map(([type]) => type),
   );

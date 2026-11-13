@@ -2,7 +2,8 @@
  * Compile-time agreement between the set of concrete primitive classes in
  * `impl.ts` and what `api.ts` declares of them. Against
  * `FabricPrimitiveSchemaType`: a class for every name in the vocabulary, a
- * name in the vocabulary for every class, and no name reported by two classes.
+ * name in the vocabulary for every class not reporting `object`, and no name
+ * reported by two classes.
  * Against the declarations by name: each class keyed by the name `api.ts`
  * declares it under, and the runtime vocabulary and its predicate typed as
  * declared. No module imports this one: it exists to be type-checked, which
@@ -61,9 +62,11 @@ export type NamedClassesSatisfy<ByName, Declared> = {
 }[keyof ByName];
 
 /** Whether the names the classes report are exactly the vocabulary. */
+// TODO(danfuzz): Once `FabricRegExp` is deleted, compare the reported names
+// without excluding `object`.
 export type SchemaTypesAgree = MustBeTrue<
   Same<
-    FabricPrimitiveClass["prototype"]["schemaType"],
+    Exclude<FabricPrimitiveClass["prototype"]["schemaType"], "object">,
     Api.FabricPrimitiveSchemaType
   >
 >;

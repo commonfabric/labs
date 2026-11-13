@@ -279,7 +279,7 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   below, not an integer.
 - `FabricPrimitive` types — `"FabricBytes"`, `"FabricDurationDay"`,
   `"FabricDurationNsec"`, `"FabricEpochDay"`, `"FabricEpochNsec"`,
-  `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`, `"FabricUnavailable"` —
+  `"FabricHash"`, `"FabricKeyPair"`, `"FabricUnavailable"` —
   each naming a
   concrete `FabricPrimitive` class from the data-model. A value matches by
   prototype (`instanceof`), not by structure: these values are opaque leaves
