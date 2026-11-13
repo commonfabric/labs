@@ -168,6 +168,18 @@ is relitigated.
   to a reactive form. The diagnostic names two corrections: wrap the
   expression in an inline `pattern(...)`, which keeps it reactive, or read
   first, `aCell.get().map(...)`, which processes the values synchronously.
+- A handle type may hold a handle type: `Cell<Cell<T>>` is valid, and
+  `get()` on the outer handle returns the inner one. `key(...)` flattens
+  every handle it passes through, so `key` on a `Cell<{ a: Cell<T> }>`
+  with `"a"` is a `Cell<T>`. The subset type checker gives `key` this
+  type itself, and a pattern needs no overload or cast to state it.
+- A function type is refused in data, with no exception for a type that
+  describes a value probed for a method. A declaration says whether a
+  value is a cell or is not.
+- A default is static. A default named by `typeof` of a constant whose
+  initializer is a call is refused. Two extensions are wanted later and
+  are not designed: a default whose value the compiler can compute, and
+  a default that is a link to another value.
 - `any` is refused. Published label typings are identity aliases, and no
   editor plugin is part of the design.
 - `streamData` and `llm` are removed. `wish` is structural.
@@ -216,8 +228,10 @@ is relitigated.
   cell identity otherwise. The index joins the key only when the callback
   uses it. A value-derived key is salted with a secret of the space.
 - Equal plain values share a cone for computation only. A per-element body
-  over plain values that declares a state cell or binds a handler without
-  using the index is a compile error.
+  over plain values that declares a state cell without using the index is
+  a compile error. A body that binds a handler and declares no state cell
+  is accepted: equal elements bind equal state, and they share one
+  stream.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -521,17 +535,6 @@ assumption.
     (SS §7.2). *Written in:* the event holds its place until the
     materializer has run. A materializer that stays invalid keeps the
     event waiting.
-71. **A per-element handler over plain values** (LS §4.4.1, question
-    19). The ruling refuses a per-element body over plain values that
-    binds a handler without using the index. The front-end prototype
-    found that it refuses a harmless case in FabriChat: a row of buttons
-    over a constant list of six distinct reactions. Where the body
-    declares no state cell, equal elements bind equal state, and one
-    shared stream behaves as two would, which is the argument the
-    language already accepts for a binding made in a function body.
-    *Assumed:* the rule stands as ruled, and FabriChat takes the rewrite
-    of LS §12.8. The alternatives refuse only a state cell, or exempt a
-    collection the compiler can show to hold distinct values.
 
 ## Open, and not needing the owner
 
@@ -557,6 +560,23 @@ assumption.
 - **A container bound by reference from an inline plain element that two
   positions share** has two addresses and one shared evaluation. No
   document examines it.
+- **Three corrections to the pattern corpus** that the type checker's
+  first slice found: `MentionablePiece` in
+  `patterns/system/backlinks-index/backlinks-index.tsx` declares an
+  optional `get` method, left from code that probed whether a value is a
+  cell, and is to say what the value is; the battleship pattern's
+  `Default<typeof INITIAL_SHOTS>` names a call result and is to take a
+  static default; and `aboutRecordOf` in FabriChat's `manager.tsx` needs
+  no overload once `key` flattens.
+- **Four rulings are not yet in `language-subset.md`:** the per-element
+  rule narrowed to state cells (§4.4.1, §12.8, and the catalog entry),
+  `key` flattening handles, the function type in data, and the static
+  default.
+- **The type checker's notes are not yet in `language-subset.md`:** what
+  an intersection with a handle or an opaque API type evaluates to,
+  `Default<T, typeof NAME>` for an annotated constant, `get()` on a type
+  that declares `get`, a label list given as an alias, and the
+  conditional utility types.
 - **Uneven wording.** `language-subset.md` says selector where the other
   documents say key function, and it cites open questions of the newer
   documents by number.
