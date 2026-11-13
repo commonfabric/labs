@@ -10,8 +10,7 @@ next.
 ## Where the work is
 
 - **Branch:** `claude/fable-pattern-language-redesign-vvh48e` in
-  `commonfabric/labs`. No pull request is open. The project owner decides when
-  one is.
+  `commonfabric/labs`, draft pull request #9788.
 - **Documents**, all under `docs/specs/compiled-pattern-language/`:
 
   | Document | Owns |
