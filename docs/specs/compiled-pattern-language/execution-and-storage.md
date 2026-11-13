@@ -91,6 +91,12 @@ beside the operation's own completion transaction: what reads the result is
 evaluated in the derivation transaction of the set of changes its commit
 joins. A transaction covers one space.
 
+An effect operation has transactions of its own, which no cause of the
+table opens for an instance: its request transaction, its completion
+transaction, and, for a language-model built-in, a send transaction
+before each send after the first (section 6.4). They are the boundary's
+transactions. Each commits or is rejected by itself.
+
 | Cause | What it carries into the transaction | Its transaction |
 | --- | --- | --- |
 | An event delivered to a handler | The event's payload (the `event` slot root), its key and its acting principal (the `cause` slot root), the handling it is (section 5.4), and the binding the stream belongs to (the `binding` slot root) | An **event's transaction**: the stale cone instances the handler reads, then the handler body. It holds no other derivation |
@@ -261,7 +267,13 @@ During the call:
   (`plan-and-label-templates.md` §3.11 and §7.4). A write through what
   `resolveAsCell()` returned, a target with `resolved`, lands in the cell
   where the resolution ends. The runtime resolves the reference when the
-  write is made.
+  write is made. A write through a handle that `key` flattened lands in
+  the inner cell: for `h` of type `Cell<{ a: Cell<T> }>`, a write through
+  `h.key("a")` is staged in the cell the link at `a` leads to, at the
+  path below it, and does not replace the link stored at `a`
+  (`plan-and-label-templates.md` §3.11; `footprint-analysis.md` §6.2).
+  The runtime follows the link at `a` when the write is made, and the
+  staged write names the inner cell's document as its target.
 - A **read through a handle** follows the rules of section 2.4: it returns
   the materialized slots where slots cover it, it is journaled under the
   entry's envelope where the handle is listed in `Body.handles`, and it is
@@ -1062,14 +1074,43 @@ of the argument of a child or of an instance the cone makes (sections 4.6
 and 2.8), a side-write, a copied path of a binding or of an inline
 pattern's parameters (sections 4.7 and 4.6), and an entry of the cache
 document (section 8.4). The element slots of those positions can resolve
-to different labels. *Assumed*, as open question 27 of
-`plan-and-label-templates.md` and its §2.6 state it for every item of
-this list: what is stored once per key carries the join over the
-positions that hold the key, formed from the label identifiers the table
-holds per position (section 11, request 51). An output at one position
-that reads such a result through a slot then carries the labels of the
-other positions that hold an equal element, which is looser than today,
-so the question is the project owner's.
+to different labels. By ruling, what is stored once per key carries the
+join over the positions that hold the key, formed from the label
+identifiers the table holds per position
+(`plan-and-label-templates.md` §2.6 has the rule for every item of this
+list; section 11, request 51). An output at one position that reads such
+a result through a slot then carries the labels of the other positions
+that hold an equal element, which is looser than today. It is the third
+deliberate exception to "equal to or tighter", after the collection index
+and the static handle read on a run that throws before the read. The
+ruling is marked to be revisited.
+
+Two positions that hold equal plain values share a key only where the key
+holds no position (section 5.3). Where the body uses the index, or
+instantiates a child, each such position has a key of its own, nothing is
+stored once for two positions, and no join is formed.
+
+**State, handlers and children over plain values.** Three rules decide
+what an element body may hold where a position can hold a plain value.
+`language-subset.md` has the diagnostic of the first.
+
+- **A state cell.** A body that declares a state cell without using the
+  index is a compile error, by ruling. Two rows that show equal values
+  would share one cell.
+- **A handler.** A body that binds a handler and declares no state cell is
+  accepted, by ruling. Positions that hold equal values share the key, so
+  they bind equal state and share one stream: the binding is made once
+  for the key, the stream's identifier holds the key (section 5.2), and
+  an event sent from either row is an event on that one stream. The
+  handler's element slots then resolve to the join over the positions
+  that hold the key (`scheduler-and-serving-loop.md` §5.1).
+- **A child.** Where the body instantiates a child, the position joins
+  the key of every position that holds a plain value, by ruling, as it
+  does where the body uses the index. Two equal plain elements then have
+  two children, and each factory of
+  `factories.map((F) => F({ ... }))` has a child per position. The
+  paragraph "Children of a body over plain values" below has what a
+  change of the collection does to them.
 
 The runtime evaluates a `map` over the collection as follows.
 
@@ -1080,16 +1121,19 @@ The runtime evaluates a `map` over the collection as follows.
 2. Compute the key of every position. A position that holds a link is keyed
    by the identity of the cell it links to. A position that holds a plain
    value is keyed by the salted hash of the value (section 5.3). The index
-   joins the key when `Collection.bodyUses` says the body uses it. Record
-   each position's binding.
+   joins the key of every position when `Collection.bodyUses.index` is
+   set. Where it is not and `Collection.bodyUses.child` is set, the index
+   joins the key of each position that holds a plain value, and of no
+   other. Record each position's binding.
 3. For each key not in the table, create its cone instances and evaluate
    them with the `element` slots bound to that element. Equal keys share
    one evaluation.
 4. For each key in the table whose cone instances are stale, evaluate them.
 5. For each key in the table that no position holds any more, drop its cone
    instances and its memo entries, and tear down the instances their
-   evaluations made (section 2.8). State cells and operation state declared
-   under the key are not deleted by this step (section 9.6).
+   evaluations made (section 2.8) and the children the body has under the
+   key. State cells and operation state declared under the key are not
+   deleted by this step (section 9.6).
 6. Assemble the result: position `i` receives the outputs of the cone
    instances of the key at position `i`. A hole stays a hole.
 
@@ -1119,6 +1163,79 @@ the derived collection is kept.
 Nested element bodies nest tables: the cone instances of an inner body are
 keyed by the outer element's key and then the inner one's, outermost first.
 
+**Children of a body over plain values.** A body instantiates a child
+where a pattern is called in it in the reactive tier: a `Child` of the
+`plan-and-label-templates.md` §1.3 says where a body instantiates a
+child, and records it as `Collection.bodyUses.child`: a factory value
+called in the reactive tier of the body, or a pattern that a `lift` or a
+`computed` written in the body instantiates, whose instances are named
+through the body's `within` (section 5.5). The second kind is an
+assumption there (its open question 37). An instance that only a handler
+requests does not count. Whether a sub-pattern the compiler compiles into
+the body counts is not stated there. *Assumed:* it does, because whether
+a callee is compiled in is the compiler's choice and not the author's
+(section 11, request 65).
+
+- **The key.** For a position `i` that holds a plain value, the key is
+  the pair of the salted hash of the value and `i`, the form the key has
+  where the body uses the index (section 5.3). `i` is the position in
+  the collection the body is applied to. A position that holds a link is
+  keyed by the cell alone, as everywhere, so two positions that link to
+  one cell share one child. The decision is made per position, when the
+  key is computed, from what the position holds.
+- **What is per position.** The key is the key of the body's cone
+  instances, so everything the body has for such a position is per
+  position: its cone instances, the child with its documents, a stream
+  a handler bound in the body yields, and the state of an operation
+  declared in the body.
+- **A state cell of the body itself.** Its key holds the position, so
+  the standing rule that a state cell needs a key that is a cell's
+  identity or holds the index is met, and its document is identified per
+  position. *Assumed,* as `plan-and-label-templates.md` §1.3 assumes it
+  (its open question 34): the compiler accepts such a state cell. The
+  ruling on state cells names the use of the index and not the
+  instantiation of a child, so this is a question for the project owner
+  (section 11, question 64).
+- **A reorder.** A value that moves from position `i` to position `j`
+  leaves the key of `i` and enters the key of `j`. The child of a key
+  that no position holds any more is torn down, and a child is set up
+  for each key that entered. A child does not move with its value. Its
+  state cells, the state of its operations and the settled results of
+  its effects are stored under the key that left, and the child at the
+  new position starts without them and requests its effects again. Two
+  positions that exchange equal values change no key.
+- **An insertion.** Every position at or after the inserted one moves by
+  one. Each position among them that holds a plain value gets another
+  key, unless the position before it held an equal value. Their children
+  are torn down and set up again as for a reorder. An insertion at the
+  head of a collection of `n` plain values with no two equal neighbors
+  tears down `n` children and sets up `n + 1`. An element appended at
+  the end changes no other key.
+- **A removal.** The child of the removed position is torn down. Every
+  position after it moves by one and is treated as for an insertion. A
+  removal at the end changes no other key.
+- **A plain value edited in place** is another key at the same position:
+  the child of the earlier value is torn down and a child is set up for
+  the new one. Today's key for an inline value is its position
+  (`plan-and-label-templates.md` §1.3; `listElementKeys` in
+  `runtime/runner/src/builtins/list-element-keys.ts`), so today such a
+  child stays and receives the new value as its argument.
+- **Teardown.** A child whose key no position holds is torn down as an
+  instance that a computation no longer makes is: by the mark in its
+  setup record, with the instances that belong to it, and with its
+  documents retired (section 2.8, "Teardown"). So that such a child is
+  found after a restart, when the element table is empty, the instances
+  document of the enclosing instance lists the children of an element
+  body per element key, as it lists the instances a computation made.
+- **A key that returns.** A child set up under a key that was held
+  before, such as a value moved back to its earlier position, is made
+  again under the identity of the one that was torn down, with the
+  outcome section 2.8 gives ("Made again").
+
+An author who needs a child to stay with its element makes the elements
+cells: a position that holds a link keeps its key, and so its child,
+across a reorder, an insertion and a removal.
+
 ### 2.6 What a change re-evaluates
 
 | Change | Made stale | Evaluated when demanded | Written |
@@ -1128,8 +1245,9 @@ keyed by the outer element's key and then the inner one's, outermost first.
 | A child of a captured outer output changes, and the body reaches that output only through a `pick` | The cone instances whose `pick` chose that child (section 3.3) | Those | Their changed kept paths |
 | An element is appended or inserted | The collection's membership; no existing element's cone | The new key's cone instances | The new positions; for an insertion, the positions after it move in the stored array (section 4.2) |
 | An element is removed | The collection's membership | Nothing | The stored array loses the position, and a part document of the row is deleted (section 4.10) |
-| Elements are reordered | The collection's membership | Nothing, unless the body uses the index | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
+| Elements are reordered | The collection's membership | Nothing, unless the body uses the index or instantiates a child | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
 | The body uses the index and an element moves | The moved elements' cone instances | The moved elements | Their kept paths |
+| The body instantiates a child and a position that holds a plain value moves | Membership: the key of the earlier position leaves and the key of the new position enters (section 2.5) | The new key's cone instances, and the child set up under it when its result is demanded | The position, the documents of the new child, and the mark of the child that was torn down |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
 | A plain value is edited in place | Membership: the old key leaves and a new key enters | The new key | The position |
 
@@ -1198,9 +1316,9 @@ that reads it stale, and the bound above is what limits the effect.
 
 A `lift` or a `computed` may instantiate a pattern, by ruling: an inline
 `pattern(...)` used as the callee, a named pattern, or a pattern factory
-value. The pattern may request effects. A `lift` or a `computed` still does
-not request an effect directly (*assumed*, question 38 of the continuation
-plan). The instance belongs to the computation that makes it: to the cone
+value. The pattern may request effects. A `lift` or a `computed` does not
+request an effect directly, by ruling. The instance belongs to the
+computation that makes it: to the cone
 that runs the body, for the element key and the scope key it is evaluated
 for. `plan-and-label-templates.md` §3.14 has the label rules, and
 `footprint-analysis.md` §8.1 what the body records. A `computed` that
@@ -1226,17 +1344,20 @@ computation releases the synthesized pattern (`releaseChild`).
 **In this design** each instantiation is a `Child` of the plan, requested
 at a `BodyCall` site of kind `instantiate`.
 
-- **Identity.** An instance is identified by the enclosing instance, the
-  body's `name` and `within`, the site, and the ordinal of the
+- **Identity.** By ruling, an instance is identified by the enclosing
+  instance, the body's `name`, the calls and callbacks the body is
+  written in (its `within`), the site, and the ordinal of the
   instantiation among those this evaluation makes at that site, or, with
   `.for(cause)`, by that cause in place of the ordinal
-  (`plan-and-label-templates.md` §1.3). This is *assumed*, as question 38
-  of the continuation plan states it. Section 5.5 gives the preimage. A
+  (`plan-and-label-templates.md` §1.3). Section 5.5 gives the preimage. A
   site inside a loop makes one instance per iteration, numbered from zero.
   The ordinal is per site, so adding a site renames nothing. When the
   items a loop instantiates for change order, an instance and the state it
   holds go to the item that takes its position. A cause taken from the
-  item keeps the instance with the item.
+  item keeps the instance with the item. For that reason the compiler
+  warns, and does not refuse, where an instantiation inside a loop or a
+  callback of a function body has no `.for(cause)`
+  (`language-subset.md` has the catalog entry).
 - **A re-evaluation names the same instances.** An evaluation that
   instantiates at the same site with the same ordinal or cause names the
   same result cell. The request returns a link to it at once.
@@ -1286,23 +1407,24 @@ at a `BodyCall` site of kind `instantiate`.
   under its own result cell. The enclosing instance stores the link
   wherever the computation's result or a write of it holds it, and one
   record of what the computation made (below).
-- **The record of what was made.** The enclosing instance has one
-  **instances document** per scope key. For each computation that makes
-  instances, and each of its cone instances, it lists per site the result
-  cells the last committed evaluation made, each with the identity of its
-  compiled pattern. It is written in the transaction of an evaluation that
-  makes a different set, and not otherwise. It exists so that an instance
-  an evaluation stops making can be found after a restart, when the memo is
-  empty. Its label is the confidentiality of the making body's template,
-  instantiated, with no integrity (`plan-and-label-templates.md` §2.6),
-  and it is a store the runtime owns. Where the making cone is an element
-  cone, the document holds one record per element key, under the key, and
-  a key derived from a value is the salted one (section 5.3). The record
-  of one key carries the join of section 2.5 ("What is stored once per
-  key"). The set of keys says which elements the collection has, so it
-  carries the collection's instantiated membership label
-  (`plan-and-label-templates.md` §2.6, "The state of an operation inside
-  an element body").
+- **The record of what was made.** The enclosing instance has one **instances
+  document** per scope key. For each computation that makes instances, and each
+  of its cone instances, it lists per site the result cells the last committed
+  evaluation made, each with the identity of its compiled pattern. It also
+  lists, per element key, the children an element body has under the key, so
+  that the child of a key that left is found (section 2.5). It is written in
+  the transaction of an evaluation that makes a different set, and not
+  otherwise. It exists so that an instance an evaluation stops making can be
+  found after a restart, when the memo is empty. Its label is the
+  confidentiality of the making body's template, instantiated, with no
+  integrity (`plan-and-label-templates.md` §2.6), and it is a store the runtime
+  owns. Where the making cone is an element cone, the document holds one record
+  per element key, under the key, and a key derived from a value is the salted
+  one (section 5.3). The record of one key carries the join of section 2.5
+  ("What is stored once per key"), by ruling. The set of keys says which
+  elements the collection has, so it carries the collection's instantiated
+  membership label (`plan-and-label-templates.md` §2.6, "The state of an
+  operation inside an element body").
 - **Teardown.** An instance that the last committed evaluation made and
   this evaluation does not make is torn down in this transaction. The
   transaction removes it from the instances document and writes a mark
@@ -1912,9 +2034,17 @@ body instantiates (`plan-and-label-templates.md` §3.15).
   new one on the same result cell. The new child's kept outputs replace the
   old ones at their paths. The old child's state cells are found again
   where the new plan declares a cell under the same name, and are otherwise
-  left unreferenced.
+  left unreferenced. A child inside an element body has the element key
+  as a step of `within`. Where a position holds a plain value, that key
+  holds the position (section 2.5, "Children of a body over plain
+  values"), and a factory that is itself the element, as in
+  `factories.map((F) => F({ ... }))`, is part of the key: another
+  factory at the position is another key, so the earlier child is torn
+  down and the new one has a result cell of its own.
 - **A child a handler requested** has a result cell named from the handling
-  and the request's ordinal (section 5.4). Its result document and its
+  and the request's ordinal, or, with `.for(tag)`, from the handler's
+  instance and the tag, so that every event names the same child and
+  only the first creates it (section 5.4). Its result document and its
   argument document, and for an inline pattern its parameters document,
   are staged when the handler's body returns, where the link was stored or
   passed to `navigateTo`. A request whose link the handler dropped stages
@@ -1983,7 +2113,12 @@ the binding was made.
   body of a per-element callback: in
   `list.map((el) => … action(() => otherList.push(el)))`, written in a
   pattern body, `el` is bound by reference, and the push stores a link to
-  the original element. The stream has an identifier (section 5.2), and
+  the original element. In an element body the binding is made once per
+  element key. Positions that hold equal plain values share a key where
+  the body neither uses the index nor instantiates a child, and they
+  then share one stream, by ruling (section 2.5): the two rows hold links
+  to one identifier, and an event from either is an event on that
+  stream. The stream has an identifier (section 5.2), and
   wherever the stream is a kept output, such as an event attribute in the
   rendered tree or an exported stream of the result, the document that
   stores the path holds a link to that identifier.
@@ -2546,7 +2681,12 @@ The `key` of an `element` step is:
 - for a position that holds a plain value: the hash of a secret of the
   space and the canonical form of the value;
 - with the index, where the body uses it: the pair of the above and the
-  index.
+  index;
+- for a position that holds a plain value, where the body instantiates a
+  child and does not use the index: the pair of the hash above and the
+  index, which is the same form (section 2.5, "Children of a body over
+  plain values"). A position of such a body that holds a link keeps the
+  first form.
 
 The secret is a runtime secret of the space, minted and read by the runtime
 alone (`ensureRuntimeSecret`, described in
@@ -2565,27 +2705,31 @@ Two consequences.
 - **The memo needs no salt.** A key that only indexes the element table in
   memory never enters an identifier. The runtime may use the unsalted hash
   there.
-- **A client cannot read the secret**, by ruling. A reader who could would
-  be able to confirm a guess at a confidential value from an identifier,
-  which is what the salt prevents. A client therefore cannot name
-  per-element state over plain values or a binding with copied paths
-  before the server stores a link to it, and it learns such an identifier
-  from the stored link. It cannot derive the identifier of a part document
-  at or below a row of a kept collection, and does not need to: it names
-  the result cell and a path, and reaches the part through the storage
-  link (section 4.10). A speculative handler that makes a binding with
-  copied paths cannot name the stream the server will name. What a client
-  shows for such state before the server's result arrives belongs to
-  `scheduler-and-serving-loop.md`.
+- **A client cannot read the secret**, by ruling. A reader who could would be
+  able to confirm a guess at a confidential value from an identifier, which is
+  what the salt prevents. A client therefore cannot name per-element state over
+  plain values, a stream bound in an element body at a key that holds a value
+  hash, a child under such a key, or a binding with copied paths before the
+  server stores a link to it, and it learns such an identifier from the stored
+  link. It cannot derive the identifier of a part document at or below a row of
+  a kept collection, and does not need to: it names the result cell and a path,
+  and reaches the part through the storage link (section 4.10). A speculative
+  handler that makes a binding with copied paths cannot name the stream the
+  server will name. What a client shows for such state before the server's
+  result arrives belongs to `scheduler-and-serving-loop.md`.
 
-State and handlers over plain values exist only where the index is in the
-key (`plan-and-label-templates.md` §1.3), so the first case is a state cell
-keyed by a salted value hash and an index.
+A state cell over plain values exists only where the position is in the
+key (section 2.5), so the first case is a state cell keyed by a salted
+value hash and an index. A stream of a handler bound over plain values
+exists with or without the position: without it, the key is the salted
+value hash alone, and equal values share the stream.
 
 ### 5.4 Cells and instances a handler invocation creates
 
-Each handler invocation is a new frame, so what it creates is new. An
-occurrence is identified by the handling and by its order in the invocation.
+Each handler invocation is a new frame. What it creates without an
+explicit cause is new on every event: the occurrence is identified by the
+handling and by its order in the invocation, so its identifier derives
+from the event, as today.
 
 ```text
 createRef({ request: <ordinal> }, { handling: <receipt identifier> })
@@ -2600,18 +2744,44 @@ createRef({ request: <ordinal> }, { handling: <receipt identifier> })
   handling whoever sends it. The identifier is the same in a client's
   speculative run and in the served run.
 - **The ordinal** counts the body's requests of every kind in the order
-  they were made: cells, instances, effects. A retry with the same control
-  flow names the same things.
+  they were made: cells, instances, effects. A request under an explicit
+  cause is counted like any other, although its own identifier does not
+  hold the ordinal. A retry with the same control flow names the same
+  things.
 - **An event the handler sends** to a stream is identified by the handling
   and the event's order among the events that invocation sends
   (`plan-and-label-templates.md` §1.3). The speculative run and the served
   run of one handling therefore name the same event.
-- **A request with `.for(tag)`** is identified by the handler's instance
-  and the tag, without the handling, so that different events name the
-  same thing (`plan-and-label-templates.md` §1.3). Today every identifier
-  minted in a handler's frame derives from a cause that holds the event
-  identifier, so this is new behavior and not a carried-over one. It is
-  *assumed*, pending question 19 of the continuation plan.
+- **A request under an explicit cause**, which is a cell created with
+  `X.for(cause)` or an instantiation with `.for(tag)`, is identified by
+  the handler's instance and the cause, without the handling, by ruling
+  (`plan-and-label-templates.md` §1.3). Its preimage is the one section
+  5.5 gives a cell or an instance, with the handler's name in the plan as
+  `<body name>`, the handler's `within`, and, for an instance, the cause
+  in the place of the ordinal. The rules are these.
+  - **The same thing on every event.** Two events whose handler requests
+    under equal causes name one cell or one instance. Two handlers of one
+    instance that pass equal causes name two, as two bodies do (section
+    5.5).
+  - **First creation.** The transaction of the first event that requests
+    it and commits stages its documents: for a cell the document with
+    the initial value, and for an instance the documents of section 4.6.
+    The existence label is fixed there. It is the template of the cause
+    as that transaction instantiated it, because which document exists
+    shows the cause's value (`plan-and-label-templates.md` §3.14).
+  - **A later event** that requests under an equal cause finds what is
+    stored. The request returns the handle or the link, stages no
+    document, does not write the initial value again, and does not
+    change the existence label. A read through the handle or the link is
+    journaled, as a read through any handle of `Body.handles` is
+    (section 1.4).
+  - **An identifier a client can derive.** The cause enters the
+    identifier unsalted (`plan-and-label-templates.md` §1.3), so the
+    speculative run names the same cell or instance as the served run.
+
+  Today every identifier minted in a handler's frame derives from a cause
+  that holds the event identifier, the ones under an explicit cause
+  included, so this is new behavior and not a carried-over one.
 - **A binding** made in a handler is identified as in section 5.5.
 
 The identifier of a requested instance is that of its result cell. Its
@@ -2680,12 +2850,16 @@ an instance: createRef({ instance: <ordinal> } | { cause: <cause value> },
 - For an instance, `<body name>` and `within` are the body's, and
   `<child name>` is `Child.name` of the site. `<ordinal>` is the ordinal of
   the instantiation among those this evaluation makes at that site, and
-  `<cause value>` the cause of a `.for(cause)`, which takes the place of
-  the ordinal. This is the rule of `plan-and-label-templates.md` §1.3,
-  which is the assumption of question 38 of the continuation plan (section
-  2.8). The record has members no preimage of today has, so the identifier
-  is new: today such an instance is a node of a pattern synthesized from
-  the computation's frame (section 2.8).
+  `<cause value>` the cause of a `.for(cause)`, which takes the place of the
+  ordinal. This is the rule of `plan-and-label-templates.md` §1.3, and it is
+  ruled (section 2.8). An evaluation counts the instantiations of one site
+  from zero, in the order it makes them, so two evaluations that make the
+  same number of instances at a site name the same instances, whatever each
+  is made for. A cause is compared by its canonical form, so two
+  instantiations at one site under equal causes name one instance. The
+  record has members no preimage of today has, so the identifier is new:
+  today such an instance is a node of a pattern synthesized from the
+  computation's frame (section 2.8).
 
 A binding of the reactive tier is not identified this way. It has a name,
 and its stream has the identifier of section 5.2.
@@ -2822,7 +2996,8 @@ client does not create a space.
 ## 6. Durable state of operations
 
 `builtin-inventory.md` says which operations have durable state: the
-aggregates, `reduce`, the collection index, and every effectful built-in.
+aggregates, `reduce`, the collection index, every effectful built-in, and
+a `sqliteDatabase` declaration.
 `plan-and-label-templates.md` records each as an `Operation`, with a forced
 cache (section 8.5) and a materializer beside them, and gives the label of
 its result and of the rest of its state. This section says where the state
@@ -2834,7 +3009,8 @@ the instance, the enclosing sites and element keys, and `Operation.name`. An
 operation a handler requests has the identifier of section 5.4. The
 documents of aggregates, `reduce`, indexes, caches and materializers can be
 recomputed and take the `computed:` scheme. The document of an effect
-cannot and takes `of:`.
+cannot and takes `of:`. The document of a database declaration cannot
+either: it is written once and takes `of:` (section 6.8).
 
 An operation's state document is a store the runtime owns: the runtime
 alone writes it, and no authored schema declares a label for it
@@ -2858,8 +3034,7 @@ elements.
 
 The state of one key is stored once for the positions that hold the key.
 Where those positions resolve to different labels, it carries the join
-over them, as open question 27 of that document assumes (section 2.5,
-"What is stored once per key").
+over them, by ruling (section 2.5, "What is stored once per key").
 
 The keys an aggregate or an index holds contributions for are those of
 the collection the operation folds, and they are paths of the operation's
@@ -2961,6 +3136,21 @@ document holds and which transaction writes each part.
   (`scheduler-and-serving-loop.md` §2.3 and §10.6). The row is not a
   document, and `plan-and-label-templates.md` §2.6 gives it the label of
   the other rows beside the documents.
+- **The send transaction** is the operation's own as well, and only a
+  language-model built-in has one. Such a built-in sends content after
+  its request was checked: the result of a tool call, a system prompt
+  rendered again from live context, and a dialog's live transcript with
+  each model call. By ruling, the egress ceiling is checked again on each
+  of those sends, in a transaction that reads what the send will hold
+  (`plan-and-label-templates.md` §3.14, "Each later send is checked";
+  `scheduler-and-serving-loop.md` §6.3). Where the operation stores the
+  conversation, that transaction writes the part the send adds, and
+  otherwise it writes nothing. A send that fails the check is not made.
+  The failure rejects that transaction and no other, no further send is
+  made for the request, and the operation's result takes the refusal as
+  an error state, which the completion transaction writes. What the
+  effect stored before the refused send stays stored, and the event
+  whose handler requested the effect is not rejected.
 - **The completion transaction** is the operation's own as well. It writes
   the settled result or the error with the label the boundary declares,
   clears the pending mark, and commits by itself. That commit dirties the
@@ -3033,7 +3223,8 @@ materializer's result is written by its own run (section 6.7).
 State is discarded and rebuilt when the compiled pattern changes in a way
 that changes the operation: its `implementation`, its `input` template, or
 the code of its per-element cone. The state document records the content
-address of each of the three for that comparison.
+address of each of the three for that comparison. The handle of a
+database declaration is never discarded (section 6.8).
 
 ### 6.7 Materializers
 
@@ -3080,6 +3271,71 @@ runs is `scheduler-and-serving-loop.md` §7.
   data has the identifier of section 5.5 and is reached through whatever
   link the body stored.
 - **If lost.** The materializer runs again.
+
+### 6.8 Database declarations
+
+A `sqliteDatabase` declaration is an `Operation` of kind `database`
+(`plan-and-label-templates.md` §3.14). It has no request, no transaction
+of its own and no cone. Its state is the database's handle.
+
+- **Stored once, not recomputable.** The state document holds the handle:
+  `id`, `tables`, `scope`, `owner` and `rev`. Two of its members cannot be
+  computed again. The `owner` is the acting principal of the transaction
+  that first wrote the handle, and a later transaction has another
+  principal or none. The `rev` is the revision that each write of
+  `db.exec` advances. A third,
+  the `id`, names the database and has to stay what it was first written
+  as, whatever the document's identifier is (the migration, below). The
+  document therefore takes the `of:` scheme, like an effect's, and no
+  step of this design rebuilds it.
+- **Identifier.** That of section 5.2 with type `operation`: the
+  instance, the `within` steps and `Operation.name`. One document exists
+  per scope key of `Operation.scope`, the scope the declared type of the
+  handle gives. The identifier holds nothing of the `tables` option, so
+  a change to the table declarations names the same database
+  (`builtin-inventory.md`, "`sqliteDatabase`").
+- **The first write.** The first transaction that resolves a slot with
+  root `operation` to the handle, for a scope key, and finds no document
+  stages the handle: the `id`, which is the document's own identifier
+  without its scheme, as today; the `tables` of the plan; the `scope`;
+  and the `owner`, the acting principal of that transaction. A
+  transaction with no acting principal writes no `owner`, and the handle
+  stays without one, which is the assumption of question 69 of the
+  continuation plan. The handle is a write of the runtime and not of a
+  cone or a body, so no constraint of a template applies to it.
+- **Later writes.** A transaction that finds the document changes two
+  members and no other. It merges the `tables` of the plan into the
+  stored ones, grow-only, when the compiled pattern's declarations
+  differ, as `growOnlyMergeDbTables` in
+  `runtime/runner/src/builtins/sqlite-builtins.ts` does today. And a
+  `db.exec` in a handler advances `rev`, in the event's transaction. No
+  transaction writes `id` or `owner` again, and an `owner` that is
+  absent stays absent.
+- **A change of the compiled pattern** discards nothing here. The rule of
+  section 6.6 that rebuilds an operation's state does not apply: a source
+  update keeps `id`, `owner` and `rev` and merges the tables.
+- **If lost.** The handle cannot be rebuilt. A first write that follows
+  the loss derives the same `id` for an instance that was not migrated,
+  so the same database is named, and it takes the `owner` from the
+  acting principal of that transaction, who can be another principal.
+  Loss of the document is therefore loss of who owns the database.
+- **Migration.** The identifier of the compiled layout is not today's:
+  today the handle is a cell under the cause
+  `{ sqliteDatabase: { result: cause } }`, and its `id` is that cell's
+  identifier (`sqliteDatabase` in
+  `runtime/runner/src/builtins/sqlite-builtins.ts`). *Assumed:* the
+  switch of the space copies the stored handle into the operation's
+  state document as it is, in the setup transaction that writes the
+  instance's compiled setup (section 9.4), with its `id`, its `owner`, or
+  the absence of one, and its `rev`. The `id` of a migrated instance
+  then names the database the instance had, and is not the identifier
+  of the document that holds it. The stored handle is found as the
+  carry-over record finds a state cell (section 9.3).
+- **Label.** The declaration has no label rule of its own
+  (`plan-and-label-templates.md` §3.14), and the table declarations the
+  handle holds carry the rules that queries and writes enforce. This
+  section adds none. Which label the state document itself carries is
+  that document's to state (section 11, request 66).
 
 ## 7. Provenance
 
@@ -3358,6 +3614,22 @@ section proposes a procedure. It assumes the runtime that migrates contains
 both the builder path and the compiled path, which is the case until stage
 6 of the overview's staging.
 
+By ruling, the scheduler is switched per space. A space runs either the
+builder path with Scheduler v2 or the compiled path with the scheduler of
+`scheduler-and-serving-loop.md`, and never both. The two paths exist side
+by side only for validation, and the builder path is to be retired soon
+after. A space is therefore migrated as a whole, by a **switch**: one
+step that gives every instance of the space its compiled setup and marks
+the space. No instance is migrated by itself when it is loaded, and no
+space holds instances of both kinds.
+
+Migrating an instance has two parts. Its **compiled setup** is written at
+the switch: the setup record that names its compiled pattern, and its
+carry-over record. Its **first compiled evaluation** replaces the stored
+layout of its result with the compiled one, and happens when the instance
+is first loaded after the switch. Sections 9.2 and 9.3 say what the two
+write, and section 9.4 has the procedure.
+
 ### 9.1 What an instance stored by the current runtime consists of
 
 Section 4.8 lists it: a result document whose value is links, an argument
@@ -3367,8 +3639,10 @@ of structural built-ins.
 
 ### 9.2 What migrating means
 
-An instance is migrated by one setup transaction that replaces the stored
-layout with the compiled one, for the same authored source.
+The first compiled evaluation of an instance is one setup transaction
+that replaces the stored layout with the compiled one, for the same
+authored source. The table says what an instance's documents hold once it
+committed.
 
 | Stored today | After migration |
 | --- | --- |
@@ -3382,9 +3656,10 @@ layout with the compiled one, for the same authored source.
 | A state cell inside a `map` body | Not carried over. The compiled instance starts it empty under its new identifier |
 | A node output document: a `computed`, a conditional's store, a `map` container, an element result, an aggregate node | No longer written. Retired (section 9.6) |
 | The result and argument documents of a sub-pattern instance that is now compiled in | No longer written. Retired, with a forwarding link where section 9.5 says |
-| A child instance a handler created | Unchanged, and migrated on its own when it is next loaded |
+| A child instance a handler created | An instance of its own: it gets its compiled setup at the switch, and its first compiled evaluation when it is next loaded |
 | The pattern a `lift` or a `computed` synthesized, and the instances in it | No longer written. Retired. The first compiled evaluation makes the instances under their new identifiers (section 5.7), so state inside them is not carried over |
 | The settled result of an effect | See open question 2 for the owner |
+| The handle of a `sqliteDatabase` declaration | Copied into the operation's state document as stored, with its `id`, `owner` and `rev` (section 6.8) |
 | The `internal` manifest | Kept as the list of retired documents until they are deleted |
 
 Per-element state is not carried over by ruling. In FabriChat the one such
@@ -3418,63 +3693,132 @@ migration reports it.
 
 Two consequences.
 
-- An instance migrated after the builder path is retired cannot have this
-  record computed. Its sub-pattern state starts empty.
+- A space switched after the builder path is retired cannot have this
+  record computed for its instances. Their sub-pattern state starts
+  empty.
 - The record also carries the scheme of each state cell declared directly
   in the body, taken from the stored manifest (section 5.2).
 
 ### 9.4 The procedure
 
-For one instance, when a runtime that can execute compiled patterns loads
-it and finds the stored setup record written by the builder path:
+**When a space is switched.** *Assumed:* the deployment names the spaces
+that run the compiled path, and the serving runtime switches a named
+space at an activation, after it holds the lease and before the first
+cycle. No graph of the space is running at that point and no wave is
+open. The switch is not triggered by a load, by demand, or by an event
+(section 11, question 69).
 
-1. **Compile.** Compile the instance's stored source. If the compiler
-   refuses it, the instance is not migrated and keeps running on the
-   builder path (open question 4 for the owner).
-2. **Compare contracts.** Apply the existing compatibility comparison of a
-   source update to the compiled pattern's argument and result schemas
-   against the stored instance
+**The switch.** It has three steps, and a space is switched when the
+third commits.
+
+1. **Check, without writing.** Find the instances of the space: the
+   result documents whose setup record the builder path wrote. Compile
+   the stored source of each, and apply the existing compatibility
+   comparison of a source update to the compiled pattern's argument and
+   result schemas against the stored instance
    ([piece source lifecycle](../piece-source-lifecycle.md), "Compatibility
    policy"). The source is the same, so a difference means the two
-   compilers generate different schemas, and the migration stops and
-   reports it.
-3. **Compute the carry-over record** (section 9.3).
-4. **Evaluate.** Run the first compiled evaluation inside the setup
-   transaction, reading state through the record. Every cone instance is
-   stale, because no basis row exists under the compiled pattern's
-   identity. Every kept output of the space's scope instance is demanded
-   for the length of the transaction, and so is every kept output of a
-   narrower scope for the scope keys that demand the instance, so that the
-   whole layout is written.
-5. **Write, in one transaction:** the result document and its part
+   compilers generate different schemas. *Assumed:* if the compiler
+   refuses the source of one instance, or one comparison fails, the space
+   is not switched. It stays on the builder path as a whole, and the
+   switch reports the instances (section 11, questions 4 and 70).
+2. **Write the compiled setup of every instance.** For each instance, a
+   setup transaction writes the setup record that names the compiled
+   pattern, the carry-over record (section 9.3), and the copied handle of
+   each database declaration (section 6.8), and its store transaction
+   writes the stream rows of the instance's bindings outside every
+   element body, whose identifiers need no evaluation
+   (`scheduler-and-serving-loop.md` §5.1). The compiled setup record is
+   written beside the record the builder path wrote and does not replace
+   it, so the builder path does not read it. The runtime may write
+   several instances in one transaction. An instance that the compiled
+   pattern of another compiles in, a sub-pattern instance or an element
+   instance of a `map`, gets no setup of its own: it is found from the
+   stored manifest of the instance that holds it, and its documents are
+   retired by that instance's first compiled evaluation.
+3. **Mark the space.** One transaction writes the mark of the space
+   (section 9.7) and deletes the basis rows the builder path kept for the
+   space. From this commit on, the compiled setup records are in force,
+   the serving runtime runs the scheduler of
+   `scheduler-and-serving-loop.md` for the space, and no node document of
+   the space is written.
+
+The transactions of steps 2 and 3 are setup transactions in the sense of
+the [serving loop](../server-side-execution/serving-loop.md) (§3e): each
+commits by itself, in no wave, and is the transaction of none of the four
+causes of section 1.1.
+
+**No instance is evaluated at the switch.** The switch runs no pattern
+code. A space can hold many instances that nothing demands, and
+evaluating all of them would make the switch cost as much as loading the
+whole space.
+
+**Demand and queued events during the switch.** The serving runtime runs
+no cycle of the space between the start of step 1 and the commit of step
+3. Sessions stay connected and read the stored values, which the builder
+path wrote. The demand they register is pending, and the first cycle
+after the switch counts it. An event appended to a stream of the space
+during the switch is stored in its stream document and holds its place,
+and the first cycle after the switch drains it. *Assumed:* the switch
+starts only when the builder path has handled every event that was
+queued before it, so that no event appended for the builder path's
+bindings waits across the switch (section 11, question 73).
+
+**The first compiled evaluation.** After the switch, no basis row exists
+under the compiled identity of any instance, so every cone instance of
+the space is stale. When demand or a queued event first loads an
+instance, the scheduler runs, in one setup transaction:
+
+1. **Evaluate.** Run the first compiled evaluation, reading state through
+   the carry-over record. Every kept output of the space's scope instance
+   is demanded for the length of the transaction, and so is every kept
+   output of a narrower scope for the scope keys that demand the
+   instance, so that the whole layout is written.
+2. **Write, in one transaction:** the result document and its part
    documents, with values, envelopes and provenance in the compiled
-   layout; the setup record naming the compiled pattern; the carry-over
-   record; forwarding links (section 9.5); and the mark that makes the
-   space refuse older builds (section 9.7). The store transaction of this
-   setup transaction also writes the rows beside the documents: the basis
-   rows of the cone instances step 4 evaluated, and the stream rows of
-   the streams whose identifiers it computed. The transaction is in no
-   wave, and the memo holds its evaluations afterward, so no later
-   transaction of the process would write those rows
+   layout; forwarding links (section 9.5); and the removal of the setup
+   record the builder path wrote. The store transaction of this setup
+   transaction also writes the rows beside the documents: the basis rows
+   of the cone instances it evaluated, and the stream rows of the streams
+   whose identifiers it computed. The transaction is in no wave, and the
+   memo holds its evaluations afterward, so no later transaction of the
+   process would write those rows
    (`scheduler-and-serving-loop.md` §10.8).
-6. **Load the compiled instance.** From this commit on, no node document
-   of the instance is written.
+3. **Load the compiled instance.**
 
-The transaction is a setup transaction in the sense of the
-[serving loop](../server-side-execution/serving-loop.md) (§3e): the
-running graph is replaced only after the commit is accepted, and a
-withdrawn commit leaves the builder-path instance running. It is not the
-transaction of one of the four causes of section 1.1. Where a setup
-transaction sits in the scheduler's cycle, and whether one serving runtime
-runs compiled and builder-path instances in one space, belong to
-`scheduler-and-serving-loop.md` and to question 24 of the continuation
-plan.
+Until that transaction commits, the instance's result document holds the
+links the builder path wrote, and a reader follows them to the node
+documents and reads the values the builder path last stored. A read by a
+handler or a cone of another instance of the space finds no basis rows
+for the writer, which shows the stored value stale, so the instance is
+loaded and evaluated first (sections 1.3 and 3.4). The instance stays
+unloaded, with its demand pending and its events holding their place,
+until the commit is accepted.
 
-Instances are migrated one at a time, when they are loaded. A space can
-hold migrated and unmigrated instances, and they read each other through
-links in both directions: a link into a migrated result reaches a value
-where it used to reach a link, and a link into an unmigrated result is
-followed through the node document as today.
+**What a withdrawn or failed switch leaves.**
+
+- **Before the mark commits, nothing is in force.** A check that fails
+  writes nothing. A setup transaction of step 2 that is withdrawn, or a
+  process that stops between the steps, leaves compiled setup records,
+  carry-over records, copied handles and stream rows that the builder
+  path does not read. The space is not marked, so the next activation
+  runs the builder path, or starts the switch again from step 1 and
+  writes the same records over the ones it finds.
+- **A withdrawn marking transaction** leaves the space on the builder
+  path, in the same state.
+- **After the mark commits, the space is switched.** A first compiled
+  evaluation whose transaction is withdrawn leaves that instance
+  unloaded, with its stored layout as the builder path wrote it, and the
+  next load runs it again. A cone that fails in it takes an error state
+  like any cone (section 1.7), and does not undo the switch.
+- **A switch is not reversed.** *Assumed:* a switched space stays
+  switched. The first compiled evaluations replace stored layouts, and
+  per-element state is stored under identifiers the builder path does
+  not derive, so the builder path cannot take the space back without
+  loss (section 11, question 71).
+
+Where a setup transaction sits in the scheduler's cycle belongs to
+`scheduler-and-serving-loop.md` (§10.8).
 
 ### 9.5 Links that point at retired documents
 
@@ -3535,11 +3879,12 @@ deleted
 ### 9.7 What a reader on an older client sees
 
 - **A client that only reads** the instance's result, and runs none of its
-  code, reads the result through the result schema. Before the migration
-  commit it follows links to node documents. After it, it finds values at
-  the same paths, in the result document or in a part document behind a
-  storage link. The migration is one transaction, so it sees one layout or
-  the other and never a mixture. A runtime that does not know the stored
+  code, reads the result through the result schema. Before the instance's
+  first compiled evaluation commits it follows links to node documents.
+  After it, it finds values at the same paths, in the result document or
+  in a part document behind a storage link. That evaluation is one
+  transaction, so the client sees one layout or the other for an
+  instance and never a mixture. A runtime that does not know the stored
   form of a storage link cannot resolve a path that passes through one.
 - **A client that runs the instance's pattern on the builder path** would
   set the instance up again from the stored source. A start holds the
@@ -3549,19 +3894,21 @@ deleted
   projection over the compiled result. Its speculative run would also read
   retired node documents that no longer change.
 
-Both kinds of client have to be refused. The migration's commit marks
-the space, and the memory server admits to a marked space only a runtime
-that declares it executes the compiled layout, as it does today for
-instance naming ([memory invariants](../memory-v2/09-invariants.md), INV-16).
+Both kinds of client have to be refused. The marking transaction of the
+switch marks the space, and the memory server admits to a marked space
+only a runtime that declares it executes the compiled layout, as it does
+today for instance naming
+([memory invariants](../memory-v2/09-invariants.md), INV-16). The mark is
+also what tells a serving runtime at activation, and a client when it
+opens the space, which of the two schedulers runs the space.
 
-*Assumed:* migration happens only in a space that runs under server
-execution, so that the one runtime that commits derived values is a
-compiled one, and a client's part is to read, to speculate, and to send
-events.
+*Assumed:* a space is switched only if it runs under server execution, so
+that the one runtime that commits derived values is a compiled one, and a
+client's part is to read, to speculate, and to send events.
 
 ### 9.8 Interaction with the pattern-update mechanism
 
-A pattern update after migration is a source transition as today
+A pattern update in a switched space is a source transition as today
 ([piece source lifecycle](../piece-source-lifecycle.md)). What the update's
 setup does changes.
 
@@ -3582,24 +3929,55 @@ setup does changes.
   compiled pattern writes the kept outputs whose values or instantiation
   keys differ. A part document whose path the new result no longer has is
   deleted with its storage link.
-- **Memo entries are dropped**, because they are keyed by the compiled
-  pattern (section 3.2), and the basis rows under the earlier identity
-  match nothing, so every cone instance starts stale
-  (`scheduler-and-serving-loop.md` §10.4). The store transaction of the
-  update's setup transaction deletes the basis rows of the earlier compiled
-  identity and writes the basis rows of the cone instances it evaluated
-  and the stream rows of the streams it computed, as a migration's does
-  (section 9.4; §10.8 there). Cache entries and operation state survive
-  where the code they were computed by is unchanged (sections 6.6 and
-  8.4).
+- **Memo entries are dropped**, because they are keyed by the compiled pattern
+  (section 3.2), and the basis rows under the earlier identity match nothing,
+  so every cone instance starts stale (`scheduler-and-serving-loop.md` §10.4).
+  The store transaction of the update's setup transaction deletes the basis
+  rows of the earlier compiled identity and writes the basis rows of the cone
+  instances it evaluated and the stream rows of the streams it computed, as a
+  first compiled evaluation does (section 9.4; §10.8 there). Cache entries and
+  operation state survive where the code they were computed by is unchanged
+  (sections 6.6 and 8.4).
 - **The compatibility comparison is unchanged.** It compares argument and
   result schemas and retained input links, none of which the layout
   affects.
-- **Migration is itself a setup under a new setup record.** An instance
-  that follows an origin is migrated when the origin's release is first
-  compiled by the new compiler. A detached instance is migrated by
-  rebuilding its retained source, which the lifecycle already has as a
-  transition.
+- **The switch compiles what an instance runs.** The switch compiles the
+  source that each instance's stored setup record names. An instance that
+  follows an origin is compiled from the release it follows, and a
+  detached instance from its retained source. A release that arrives
+  after the switch is a source transition of a compiled instance.
+
+### 9.9 A link between a switched space and one that is not
+
+During the validation period a link can cross between a space that is
+switched and one that is not. Each space is derived by its own loop
+(`scheduler-and-serving-loop.md` §9), so the rule of one scheduler per
+space is not affected. What crosses is a stored value and its stored
+label. *Assumed*, for the project owner (section 11, question 72):
+
+- **The reading side reads what the other path stored.** A compiled
+  instance that reads an output of an instance in a space that is not
+  switched reads the stored value, following the links to node documents
+  as today, with the label the builder path stored: today's join over
+  the reads of the node that wrote it. A builder-path instance that
+  reads a kept output of a switched space reads the value and the
+  envelope the compiled path stored, through a storage link where the
+  path lies in a part document. The runtime of the validation period
+  contains both paths, so its builder path resolves a storage link.
+- **The tighter labels hold only along switched spaces.** A label that
+  the compiled path computes from templates is tighter than today's
+  only for what its own space derived. A value that passed through a
+  space that is not switched carries that space's label from there on.
+  The tighter labels therefore hold for an output only where every
+  space in the chain of links it was derived through is switched.
+- **Nothing else crosses.** No basis row of one space is read by the
+  other, and no slot is bound to a node of another space's graph. An
+  event for a stream of the other space leaves through the outbox,
+  whichever path that space runs.
+
+This document says nothing on how a validation run compares the two
+paths, beyond that the comparison is between two spaces, one on each
+path, since no space runs both (section 11, question 74).
 
 ## 10. Worked example: a FabriChat send
 
@@ -3812,7 +4190,20 @@ about size that this document owns (4.10); an event is routed to an
 instance that is not loaded through a stream index (4.7); a read of a cell
 whose writer is in an instance that is not loaded returns the stored
 value where the basis rows show it current, and loads the instance only
-where they show it stale (1.3, 1.4, 2.4, 3.4). The ruling on the keep set
+where they show it stale (1.3, 1.4, 2.4, 3.4); a state cell in an element
+body over plain values that does not use the index is refused, and a
+handler bound there is accepted, with one stream for equal elements (2.5,
+4.7, 5.3); what is stored once per element key carries the join over the
+positions that hold the key, which is the third deliberate exception to
+"equal to or tighter" and is marked to be revisited (2.5, 6); an instance
+a `lift` or a `computed` makes is identified by the enclosing instance,
+the body, the site and an ordinal or an explicit cause, and such a body
+requests no effect directly (2.8, 5.5); the position joins the element
+key where a body over plain values instantiates a child (2.5, 5.3); an
+explicit cause in a handler names the same thing on every event, with the
+existence label fixed at first creation (5.4); the scheduler is switched
+per space, so a space is migrated as a whole and holds no instances of
+both kinds (9). The ruling on the keep set
 answers what was question 1 of this list, the size of a result document.
 
 ### 11.1 For the project owner
@@ -3830,14 +4221,15 @@ answers what was question 1 of this list, the size of a result document.
    requests again otherwise.
 3. **Retiring documents.** Section 9.6 deletes retired documents after a
    retention period in which nothing read them, and section 9.7 has a
-   migrated space refuse builds that predate the compiled layout.
-   *Assumed:* thirty days, and refusal from the first migrated instance in
-   the space.
+   switched space refuse builds that predate the compiled layout.
+   *Assumed:* thirty days, and refusal from the commit that marks the
+   space.
 4. **Instances whose stored source the compiler refuses.** Such an
-   instance cannot be migrated and runs on the builder path. *Assumed:*
-   when the builder path is retired it stops running, its stored state and
-   last result stay readable, and it runs again when its source is
-   updated.
+   instance cannot be given a compiled setup, and a space that holds one
+   is not switched (question 70). *Assumed:* when the builder path is
+   retired, the space is switched without the instance: it stops
+   running, its stored state and last result stay readable, and it runs
+   again when its source is updated.
 
 Added by the rulings on several documents, on batches and on instances a
 computation makes:
@@ -3853,8 +4245,11 @@ computation makes:
     with the node and are not a part of their own, although the renderer
     subscribes to them separately today.
 33. **An instance made again under the identity of one that was torn down**
-    (section 2.8). With an ordinal as the identity, a list that shrinks and
-    grows makes instance number 2 again for another item. *Assumed:* the
+    (section 2.8). The identity is ruled. With an ordinal as the identity,
+    a list that shrinks and grows makes instance number 2 again for
+    another item, and a child of an element body over plain values is
+    made again when its value returns to its position (section 2.5).
+    *Assumed:* the
     new instance finds the state cells and operation state stored under
     that identity where they were not deleted yet, as an element whose key
     returns does, and an author who needs otherwise writes `.for(cause)`.
@@ -3895,6 +4290,70 @@ computation makes:
     that scope. The assumption computes and stores such an output once
     where today it is stored per user or per session. No label depends on
     the choice.
+
+<!-- The list restarts so that the numbers stay as cited. -->
+
+64. **A state cell in an element body that instantiates a child** (section
+    2.5). Where a body over plain values instantiates a child, the
+    position joins the key by ruling, so a state cell the body itself
+    declares has a key that holds the position, which is what the
+    standing rule for state asks. The ruling that refuses a state cell
+    names a body that does not use the index, and such a body does not
+    use it. *Assumed:* the state cell is accepted, and is stored per
+    position like the child. It is then lost with the child when the
+    element moves. The alternative refuses it unless the body uses the
+    index, which keeps "uses the index" as the one condition an author
+    has to know.
+67. **The cost of a child per position** (section 2.5). An insertion or a
+    removal ahead of `n` plain values tears down and sets up up to `n`
+    children, and each new child requests its effects again and starts
+    with empty state. Today the child of an inline value belongs to the
+    position and receives the new value as its argument. *Assumed:*
+    accepted as what the ruling means, with the advice to make the
+    elements cells. The alternative keys such a position by the
+    position alone, which keeps the child across an edit in place and
+    gives a moved value's child to the value that takes its position.
+
+Added by the ruling that the scheduler is switched per space (section 9):
+
+69. **When a space is switched** (section 9.4). The ruling does not say
+    what starts a switch. *Assumed:* the deployment names the spaces that
+    run the compiled path, and the serving runtime switches a named space
+    at an activation, before its first cycle. The switch writes each
+    instance's compiled setup and evaluates nothing, and an instance has
+    its first compiled evaluation when it is first loaded afterward. The
+    alternative evaluates every instance at the switch, which makes the
+    switch cost as much as loading the whole space and leaves no instance
+    in the stored layout of the builder path.
+70. **A space that holds an instance whose source the compiler refuses**
+    (section 9.4). *Assumed:* the space is not switched and stays on the
+    builder path as a whole, because a switched space runs no builder
+    path for the one instance. One such instance then keeps every other
+    instance of its space from the compiled path until its source is
+    updated or the builder path is retired (question 4).
+71. **Reversing a switch** (section 9.4). *Assumed:* a switch is not
+    reversed during the validation period. A space is validated on a
+    copy, or is switched for good. The alternative keeps what the builder
+    path needs to resume, the node documents and per-element state under
+    its identifiers, current or restorable for the length of the period.
+72. **A link between a switched space and one that is not** (section
+    9.9). *Assumed:* the reading side reads the stored value and the
+    stored label as the other path wrote them, so the tighter labels of
+    the compiled path hold only where every space in the chain of links
+    is switched. The alternative refuses to switch a space until the
+    spaces it reads are switched.
+73. **Events across the switch** (section 9.4). A stream declared
+    directly in a pattern body keeps its identifier, and every other
+    stream has a new one (section 5.7). *Assumed:* the switch starts only
+    when the builder path has handled the events queued before it. An
+    event that a client appends afterward to a stream whose identifier
+    the compiled layout does not keep, from a tree rendered before the
+    instance's first compiled evaluation, has no row in the stream index
+    and is deferred and then dropped as an event on a stream with no row
+    is (`scheduler-and-serving-loop.md` §5.1).
+74. **How a validation run compares the two paths.** Nothing is designed
+    here. *Assumed:* the comparison is between two spaces, one on each
+    path, since no space runs both.
 
 ### 11.2 For another document or the prototype
 
@@ -4060,8 +4519,8 @@ label is concerned:
     changes no label, and in a document that held several keys the key set
     would carry the collection's membership label. This document chooses
     one state document per key (section 6 here). What is stored once per
-    key where positions differ in label is its open question 27 (section
-    2.5 here).
+    key where positions differ in label carries the join, by ruling
+    (section 2.5 here).
 25. **The back-link of a state cell.** Met: a state cell document keeps the
     `result` back-link, which its §3.16 has `resultOwnerOf` read, and
     carries no pattern reference, manifest or setup record.
@@ -4123,14 +4582,15 @@ label is concerned:
     instantiate it again, and a label the body stages afterward does not
     enter it.
 51. **What is stored once per key** (section 2.5). Met by its §2.6 and
-    its open question 27, which list everything an element cone stores
+    by ruling, which list everything an element cone stores
     once per key: the state of an operation, the stored request and the
     result of an effect, a path of the argument of a child or of an
     instance the cone makes, a side-write, a copied path of a binding or
     of an inline pattern's parameters, an entry of the cache document,
     and the record in the instances document. Each carries the join over
-    the positions that hold the key. The join is an assumption there, for
-    the project owner (its open question 27).
+    the positions that hold the key. The join is ruled, as the third
+    deliberate exception to "equal to or tighter", and is to be revisited
+    (section 2.5).
 
 <!-- The list restarts so that the numbers stay as cited. -->
 
@@ -4164,6 +4624,23 @@ label is concerned:
     slot is bound at one address per child the path reaches, each with a
     chain of its own. The memo's fingerprint of the slot is over all of
     them.
+65. **Which element bodies instantiate a child** (sections 2.5 and 5.3).
+    Met in part by its §1.1 and §1.3: `Collection.bodyUses.child` says
+    that a body applied to the collection instantiates a child, for a
+    factory value called in the body's reactive tier and for a pattern a
+    `lift` or a `computed` in the body instantiates. Two things remain.
+    That document does not say whether a call of a sub-pattern that the
+    compiler compiles into the body sets the member, which this document
+    assumes. And this document lists the children of an element body in
+    the instances document per element key, which that document's §2.6
+    has to cover with the label it gives the record of the instances a
+    computation made.
+66. **The label of a database declaration's state document** (section
+    6.8). This document stores the handle once, under the `of:` scheme,
+    and gives it no label rule. Its §2.6 gives the label of an
+    operation's bookkeeping state from `Operation.input`, which is
+    `const` for a database. *Assumed:* the handle carries no label
+    beyond what the table declarations in it declare, as today.
 
 To `language-subset.md`:
 
@@ -4171,10 +4648,16 @@ To `language-subset.md`:
     that document has no form by which an author writes it (its open
     question 10), so a compiled plan leaves `Cone.cache` absent and the
     runtime decides.
+68. **Two diagnostics this document refers to without a name** (sections
+    2.5 and 2.8): the error for a state cell in an element body over
+    plain values that does not use the index, and the warning for an
+    instantiation inside a loop or a callback of a function body that has
+    no `.for(cause)`. That document's catalog names them.
 27. **Stored source.** Section 9.4 compiles an instance's stored source.
     That document's open question 7 asks with which severities. *Assumed:*
     the interim acceptance of the removed forms applies, and any other
-    refusal leaves the instance unmigrated.
+    refusal leaves the space of the instance on the builder path
+    (question 70).
 
 To `footprint-analysis.md`:
 
