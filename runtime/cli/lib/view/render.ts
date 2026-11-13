@@ -425,6 +425,10 @@ export interface DialogState {
    * rather than being centered. */
   readonly output?: boolean;
 
+  /** The indexes of the body's rows that are drawn emphasized, brighter
+   * than the rest. */
+  readonly emphasized?: readonly number[];
+
   /** The width the box gives the body, in columns, when that is fixed rather
    * than fitted to the body's lines. */
   readonly width?: number;
@@ -475,8 +479,29 @@ export interface DialogInputLine {
   readonly selected: boolean;
 }
 
+/** One of a set of radio buttons: a label whose first letter matching
+ * {@link hotkey} is drawn highlighted. */
+export interface DialogRadioButton {
+  readonly label: string;
+  readonly hotkey: string;
+}
+
+/** A set of radio buttons, drawn as Turbo Vision draws them: under a label
+ * whose first letter matching {@link hotkey} is drawn highlighted, a row for
+ * each button, with `(•)` before the selected button and `( )` before each
+ * other. */
+export interface DialogRadioButtons {
+  readonly kind: "radioButtons";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly buttons: readonly DialogRadioButton[];
+
+  /** The index in {@link buttons} of the selected button. */
+  readonly selected: number;
+}
+
 /** A control in a dialog other than a button. */
-export type DialogField = DialogCheckBox | DialogInputLine;
+export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
 
 interface Cell {
   ch: string;
@@ -1192,7 +1217,7 @@ function renderStatus(
       label: b.label,
     }));
   } else if (view.message) {
-    text = view.message;
+    text = showControls(view.message);
   } else if (view.editHint) {
     hints = view.editHint;
   } else if (view.selected) {
@@ -1231,7 +1256,7 @@ function renderStatus(
   }
   const leftAnsi = leftHints
     ? hintsAnsi(leftHints)
-    : paint(leftPlain, ui.statusBar);
+    : linkAddresses(text, leftPlain, (part) => paint(part, ui.statusBar));
   const rightAnsi =
     (file ? paint(file, ui.statusFile) + paint("  ", ui.statusBar) : "") +
     paint(pos, ui.statusBar);
@@ -1240,6 +1265,29 @@ function renderStatus(
   const line = leftAnsi + paint(" ".repeat(space), ui.statusBar) + rightAnsi;
   const pad = view.width - (leftW + space + rightW);
   return pad > 0 ? line + paint(" ".repeat(pad), ui.statusBar) : line;
+}
+
+/**
+ * Returns `shown`, the start of `text` that fits, painted with `paintText`,
+ * with each web address in it made a link to the whole address in `text`.
+ */
+function linkAddresses(
+  text: string,
+  shown: string,
+  paintText: (part: string) => string,
+): string {
+  const kept = shown === text ? text.length : shown.length - 1;
+  let out = "";
+  let at = 0;
+  // An address ends before punctuation that ends a clause or a sentence.
+  for (const match of text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g)) {
+    if (match.index >= kept) break;
+    const end = Math.min(match.index + match[0].length, kept);
+    out += paintText(shown.slice(at, match.index)) +
+      term.hyperlink(match[0], paintText(shown.slice(match.index, end)));
+    at = end;
+  }
+  return out + paintText(shown.slice(at));
 }
 
 /** Keep the leading key hints that fit within `budget` visible columns. */
@@ -1260,7 +1308,7 @@ function fitHints(
  * that reach the terminal outside `displayLine` — the status bar's file name and
  * the dialog body — which can carry a file name a user chose. One code point in
  * gives one code point out, so the callers' width arithmetic is unchanged. */
-function showControls(text: string): string {
+export function showControls(text: string): string {
   let out = "";
   for (const cp of text) out += glyphFor(cp);
   return out;
@@ -1521,7 +1569,7 @@ export function dialogBox(
 ): DialogBox {
   const titleW = cpLen(dialog.title) + 4; // the padding spaces and some fill
   const bodyW = dialog.width ??
-    [...dialog.body, ...(dialog.fields ?? []).map(fieldText)].reduce(
+    [...dialog.body, ...(dialog.fields ?? []).flatMap(fieldTexts)].reduce(
       (m, l) => Math.max(m, cpLen(l)),
       0,
     );
@@ -1585,16 +1633,22 @@ function buttonRowOf(dialog: DialogState, innerH: number): number {
   return row > contentRows(dialog) ? row : -1;
 }
 
-/** The text of a field's widest row: a check box's mark and label, or an
- * input line's label. */
-function fieldText(field: DialogField): string {
-  return field.kind === "checkBox" ? `[X] ${field.label}` : field.label;
+/** The text of the rows of a field that set how wide it is: a check box's
+ * mark and label, an input line's label, or the label of a set of radio
+ * buttons and each button's mark and label. */
+function fieldTexts(field: DialogField): string[] {
+  if (field.kind === "checkBox") return [`[X] ${field.label}`];
+  if (field.kind === "inputLine") return [field.label];
+  return [field.label, ...field.buttons.map((b) => `(•) ${b.label}`)];
 }
 
-/** The rows a field takes: a check box's one, or an input line's label and
- * the line under it. */
+/** The rows a field takes: a check box's one, an input line's label and the
+ * line under it, or the label of a set of radio buttons and a row for each
+ * button. */
 function fieldHeight(field: DialogField): number {
-  return field.kind === "checkBox" ? 1 : 2;
+  if (field.kind === "checkBox") return 1;
+  if (field.kind === "inputLine") return 2;
+  return 1 + field.buttons.length;
 }
 
 /**
@@ -1738,6 +1792,35 @@ export function inputLineIndexAt(
     Math.max(0, Math.min(column, columns - 1));
 }
 
+/**
+ * Returns the index of the radio button of field `index` of `dialog` drawn at
+ * the zero-based screen cell `x`, `y`, or null when none is drawn there, as on
+ * the row of the buttons' label. Throws when field `index` is not a set of
+ * radio buttons.
+ */
+export function radioButtonAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "radioButtons") {
+    throw new Error(
+      `field ${index} of the dialog is not a set of radio buttons`,
+    );
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  const button = row == null ? -1 : y - box.y - 1 - row - 1;
+  const col = x - box.x - 1;
+  return button >= 0 && button < field.buttons.length && col >= 0 &&
+      col < box.innerW
+    ? button
+    : null;
+}
+
 /** The index in `label` of the highlighted shortcut letter, its first that
  * matches `hotkey` in either case, or -1 when none does. */
 function hotkeyIndex(label: string, hotkey: string): number {
@@ -1765,6 +1848,9 @@ function applyDialog(
     : EMPTY_STYLE;
   const panelBg: Style = { bg: ui.overlayBg };
   const textStyle = view.color ? mergeBg(ui.dialogText, panelBg) : panelBg;
+  const emphasisStyle = view.color
+    ? mergeBg(ui.dialogEmphasis, panelBg)
+    : panelBg;
 
   const top = `╔${titleBar(dialog.title, boxW - 2)}╗`;
   const bottom = `╚${"═".repeat(Math.max(0, boxW - 2))}╝`;
@@ -1793,7 +1879,12 @@ function applyDialog(
     const field = dialog.fields?.[fieldIdx];
     const fieldRow = i - (starts[fieldIdx] ?? 0);
     if (bodyIdx >= 0 && bodyIdx < dialog.body.length) {
-      placeText(cells, dialog.body[bodyIdx], textStyle, dialog.output);
+      placeText(
+        cells,
+        dialog.body[bodyIdx],
+        dialog.emphasized?.includes(bodyIdx) ? emphasisStyle : textStyle,
+        dialog.output,
+      );
     } else if (field && fieldRow < fieldHeight(field)) {
       placeField(
         cells,
@@ -1837,9 +1928,11 @@ function placeText(
 
 /**
  * Draws row `row` of `field` in `cells`, after the dialog's margin: a check
- * box's mark and label, or an input line's label and then its line. The
- * focused check box is drawn highlighted, as is the label of the focused
- * input line.
+ * box's mark and label, an input line's label and then its line, or the label
+ * of a set of radio buttons and then each button's mark and label. The
+ * focused check box is drawn highlighted, as are the label of the focused
+ * input line and the label and selected button of the focused set of radio
+ * buttons.
  */
 function placeField(
   cells: Cell[],
@@ -1854,23 +1947,42 @@ function placeField(
     const col = DIALOG_HMARGIN + at;
     if (at < width) cells[col] = { ch, style: color ? style : EMPTY_STYLE };
   };
-  const labelStyle = focused ? ui.fieldFocus : textStyle;
-  const keyStyle = { ...ui.fieldKey, bg: labelStyle.bg ?? textStyle.bg };
-  const label = (from: number) => {
-    const key = hotkeyIndex(field.label, field.hotkey);
-    [...field.label].forEach((ch, j) =>
-      put(from + j, ch, j === key ? keyStyle : labelStyle)
+  const label = (
+    from: number,
+    text: string,
+    hotkey: string,
+    highlighted = focused,
+  ) => {
+    const style = highlighted ? ui.fieldFocus : textStyle;
+    const keyStyle = { ...ui.fieldKey, bg: style.bg ?? textStyle.bg };
+    const key = hotkeyIndex(text, hotkey);
+    [...text].forEach((ch, j) =>
+      put(from + j, ch, j === key ? keyStyle : style)
     );
   };
-  if (field.kind === "checkBox") {
-    [..."[", field.checked ? "X" : " ", ..."] "].forEach((ch, j) =>
-      put(j, ch, labelStyle)
+  const mark = (
+    open: string,
+    on: string,
+    close: string,
+    highlighted: boolean,
+  ) =>
+    [open, on, close, " "].forEach((ch, j) =>
+      put(j, ch, highlighted ? ui.fieldFocus : textStyle)
     );
-    label(4);
+  if (field.kind === "checkBox") {
+    mark("[", field.checked ? "X" : " ", "]", focused);
+    label(4, field.label, field.hotkey);
     return;
   }
   if (row === 0) {
-    label(0);
+    label(0, field.label, field.hotkey);
+    return;
+  }
+  if (field.kind === "radioButtons") {
+    const button = field.buttons[row - 1];
+    const selected = row - 1 === field.selected;
+    mark("(", selected ? "•" : " ", ")", focused && selected);
+    label(4, button.label, button.hotkey, focused && selected);
     return;
   }
   const chars = [...field.value];

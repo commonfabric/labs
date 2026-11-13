@@ -35,6 +35,7 @@
     "@cliffy/table": "jsr:@cliffy/table@1.0.0-rc.8",
     "@node/child_process": "node:child_process",
     "@node/http": "node:http",
+    "@node/tls": "node:tls",
     "@std/fmt/colors": "jsr:@std/fmt@~1.0.2/colors",
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "entities": "npm:entities@^8.0.0",

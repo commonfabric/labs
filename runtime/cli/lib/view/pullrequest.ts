@@ -29,7 +29,8 @@ export interface PullRequestHead {
 }
 
 /** What a pull request's address on GitHub looks like. */
-const PULL_REQUEST_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
+export const PULL_REQUEST_URL =
+  /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
 /**
  * Returns the head that the checked-out commit, pushed to `branch` of
