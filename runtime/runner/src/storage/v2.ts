@@ -1963,6 +1963,12 @@ export class StorageManager implements IStorageManager {
 
   #nextPendingCommitId = 1;
 
+  /**
+   * Multi-space commits still handing their later spaces' writes to those
+   * spaces' replicas (`IStorageManager.trackMultiSpaceCommitApplying()`).
+   */
+  #multiSpaceCommitsApplying = new Set<Promise<void>>();
+
   #pendingCommitsSubscribers = new Set<(pending: boolean) => void>();
   #sessionFactory: SessionFactory;
 
@@ -3463,6 +3469,20 @@ export class StorageManager implements IStorageManager {
         this.#notifyPendingCommits(false);
       }
     });
+  }
+
+  /** @inheritDoc */
+  trackMultiSpaceCommitApplying(applied: Promise<void>): void {
+    this.#multiSpaceCommitsApplying.add(applied);
+    void applied.finally(() => {
+      this.#multiSpaceCommitsApplying.delete(applied);
+    });
+  }
+
+  /** @inheritDoc */
+  multiSpaceCommitsApplied(): Promise<void> | undefined {
+    if (this.#multiSpaceCommitsApplying.size === 0) return undefined;
+    return Promise.all(this.#multiSpaceCommitsApplying).then(() => {});
   }
 
   /** @inheritDoc */

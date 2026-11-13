@@ -527,6 +527,15 @@ export type QueuedEvent = {
   presyncPending?: boolean;
 
   /**
+   * The FIFO slot is held while a multi-space commit issued before the head
+   * dispatched still has writes to hand to a later space's replica
+   * (`IStorageManager.multiSpaceCommitsApplied()`), so that the handler reads
+   * every write an earlier event committed. The hand-over clears the flag and
+   * queues an execution.
+   */
+  multiSpaceCommitPending?: boolean;
+
+  /**
    * The implementation and payload the head's presync covered. A head whose
    * selected implementation or payload differs is presynced again before it
    * dispatches.

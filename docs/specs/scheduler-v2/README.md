@@ -770,6 +770,13 @@ each ready event behind it in turn, the handlers running back to back ahead
 of the pass's one settle, so that derivations several events invalidate run
 once; an event the gate below holds ends that run, and the settle serves it):
 
+0. **Earlier commits.** A transaction that writes several spaces commits them
+   one at a time, and hands a space its writes only once the server has
+   answered for the spaces before it (an `.inSpace()` create closes the new
+   space first and its own space last). While such a commit still has a space
+   to hand over, the head holds its lane slot and the pass ends there, so the
+   handler reads every write an event before it committed. A commit to one
+   space holds nothing: its writes are in the replica as it is issued.
 1. **Presync.** Bring the handler's input documents into the local replica
    (`presyncInputs`). The head holds its lane slot while the presync's I/O
    runs, as it does while its handler's piece loads, and the pass ends there:
