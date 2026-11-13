@@ -1792,7 +1792,9 @@ impl<'a> Assignments<'_, '_, 'a> {
             return;
         };
         let place = resolver.place_at(self.module, element.span.start);
-        let by_reference = place == Place::Reactive;
+        // In a function body the tag instantiates the pattern, and its
+        // attributes are the argument of §7.5.3.
+        let by_reference = matches!(place, Place::Reactive | Place::Function);
         let site = format!(
             "attribute of a pattern tag, {}",
             match place {
@@ -1849,8 +1851,16 @@ impl<'a> Assignments<'_, '_, 'a> {
         // The arguments of a pattern, of a handler, and of a `lift` result
         // are bound by reference where the call is written in tier R
         // (§7.5.2).
-        let by_reference = place == Place::Reactive
-            && matches!(callee, Callee::Pattern | Callee::Handler | Callee::Lift);
+        // The argument of a pattern instantiated in a function body is
+        // accepted under the same conditions (§7.5.3). The state of a
+        // handler binding made there is checked by §7.5 alone.
+        let by_reference = match place {
+            Place::Reactive => {
+                matches!(callee, Callee::Pattern | Callee::Handler | Callee::Lift)
+            }
+            Place::Function => callee == Callee::Pattern,
+            Place::Module => false,
+        };
         // A factory is called with one argument, and what it is called
         // with when the argument is left out is not this rule's question.
         let counted = !matches!(callee, Callee::Pattern | Callee::Handler);

@@ -270,3 +270,67 @@ fn write_through_a_handle_of_unknown_is_counted() {
         ]
     );
 }
+
+// §7.5.3: the argument of a pattern instantiated in a function body.
+
+const NOTE: &str = "import { type Default } from \"commonfabric\";\n\
+const Note = pattern<{ title?: Writable<string | Default<\"\">>; body: string; tags: Writable<string[]> }, { n: number }>(\n\
+  ({ body }) => ({ n: 1 }));\n";
+
+#[test]
+fn value_is_accepted_where_a_pattern_instantiated_in_a_handler_declares_a_cell() {
+    assert_accepted(&format!(
+        "{NOTE}const add = handler<unknown, {{ notes: Writable<{{ n: number }}[]>; text: Writable<string>; tags: string[] }}>((_, state) => {{\n\
+           state.notes.push(Note({{ title: \"New note\", body: state.text, tags: state.tags }}));\n\
+         }});\n"
+    ));
+}
+
+#[test]
+fn value_is_accepted_where_a_pattern_instantiated_in_a_computed_declares_a_cell() {
+    assert_accepted(&format!(
+        "{NOTE}const P = pattern<{{ text: string }}, {{ note: {{ n: number }} }}>(({{ text }}) => ({{\n\
+           note: computed(() => Note({{ title: text, body: text, tags: [\"a\"] }})),\n\
+         }}));\n"
+    ));
+}
+
+#[test]
+fn instantiation_in_a_function_body_keeps_the_conditions_on_undefined_and_on_the_type() {
+    assert_refused(
+        &format!(
+            "{NOTE}const add = handler<unknown, {{ tag: string | undefined; text: string }}>((_, state) => {{\n\
+               Note({{ body: state.text, tags: [state.tag] }});\n\
+             }});\n"
+        ),
+        "",
+    );
+    assert_refused(
+        &format!(
+            "{NOTE}const add = handler<unknown, {{ count: number; text: string }}>((_, state) => {{\n\
+               Note({{ body: state.text, tags: state.count }});\n\
+             }});\n"
+        ),
+        "a cell of the value's type would not be assignable",
+    );
+}
+
+#[test]
+fn state_of_a_handler_bound_in_a_function_body_stays_strict() {
+    assert_refused(
+        &format!(
+            "{ROW}const outer = handler<unknown, {{ donuts: Donut[]; shop: string }}>((_, state) => {{\n\
+               const stream = save({{ donuts: state.donuts, shop: state.shop }});\n\
+             }});\n"
+        ),
+        "a value where a cell is declared",
+    );
+    assert_refused(
+        &format!(
+            "{ROW}const outer = handler<unknown, {{ donuts: Writable<Donut[]>; shop: Writable<string> }}>((_, state) => {{\n\
+               const stream = save({{ donuts: state.donuts, shop: state.shop }});\n\
+             }});\n"
+        ),
+        "a cell where a value is declared",
+    );
+}
