@@ -122,3 +122,43 @@ export const threadExcerpt = (text: string): string => {
   const kept = atBreak || space <= 0 ? room : room.slice(0, space);
   return `${kept.join("").trimEnd()}…`;
 };
+
+/** How many of a principal's last characters tell two same-named people apart. */
+export const SAME_NAME_MARK_LENGTH = 6;
+
+/** A person a list of people shows: their principal, and the name they show. */
+export interface NamedPerson {
+  /** The principal their profile attests. */
+  principal: string;
+
+  /** Their profile's name, `undefined` where it has none. */
+  name: string | undefined;
+}
+
+/**
+ * What tells each of `people` apart from another showing the same name, by
+ * principal: an ellipsis and the last `SAME_NAME_MARK_LENGTH` characters of
+ * their principal where another of `people` shows the same name, and the
+ * empty string where none does. Names are the same when they match once each
+ * is trimmed and case is ignored. A person showing no name is told apart from
+ * no one here, since no name is anyone's name.
+ */
+export const sameNameMarks = (
+  people: readonly NamedPerson[],
+): Record<string, string> => {
+  const keyOf = (person: NamedPerson): string =>
+    (person.name ?? "").trim().toLowerCase();
+  const counts = new Map<string, number>();
+  for (const person of people) {
+    const key = keyOf(person);
+    if (key !== "") counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Object.fromEntries(
+    people.map((person): [string, string] => [
+      person.principal,
+      (counts.get(keyOf(person)) ?? 0) > 1
+        ? `…${person.principal.slice(-SAME_NAME_MARK_LENGTH)}`
+        : "",
+    ]),
+  );
+};
