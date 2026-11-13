@@ -478,6 +478,16 @@ describe("github", () => {
       ).rejects.toThrow("early");
     });
 
+    it("listens to a signal that has already aborted for nothing, and leaves the promise's rejection handled", async () => {
+      const signal = AbortSignal.abort(new Error("early"));
+      let listened = 0;
+      signal.addEventListener = () => listened++;
+
+      await expect(abortable(Promise.reject(new Error("late")), signal))
+        .rejects.toThrow("early");
+      expect(listened).toBe(0);
+    });
+
     it("lets GitHub's API stop waiting for the token, asking GitHub nothing", async () => {
       const { send, requests } = fakeFetch(200, "[]");
       const controller = new AbortController();

@@ -230,7 +230,12 @@ export function abortable<T>(
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
-    if (signal.aborted) abort();
+    if (signal.aborted) {
+      abort();
+      // What the promise settles to no longer matters.
+      promise.catch(() => {});
+      return;
+    }
     signal.addEventListener("abort", abort, { once: true });
     promise.then(resolve, reject).finally(() =>
       signal.removeEventListener("abort", abort)
