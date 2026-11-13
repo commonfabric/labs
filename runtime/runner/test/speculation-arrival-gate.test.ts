@@ -183,6 +183,98 @@ const supersedeHarness = () => {
   };
 };
 
+/** A confirmed cover the {@link unstoredCidHarness} replica double reports. */
+type ScriptedCover = {
+  confirmedSeq: number;
+  coverClass?: CommitClass;
+  envelopeDocuments?: string[];
+};
+
+/**
+ * The overlay destination over a replica double whose retirement view reports
+ * the covers in `covers`, for the cases on a `cid:` document the store has not
+ * served.
+ *
+ * `seal` registers one entry, at floor 46, that sets each of `ids`. `cover`
+ * moves the watermark to `seq`; the destination sweeps on it synchronously, so
+ * the entry count right after it is the sweep's verdict.
+ */
+const unstoredCidHarness = (covers: Map<string, ScriptedCover>) => {
+  let nextLocalSeq = 10;
+  const replica = {
+    sealNative: (
+      native: { operations: Array<Record<string, unknown>> },
+      _source: unknown,
+      verdict: Promise<unknown>,
+    ) => {
+      const localSeq = nextLocalSeq++;
+      return {
+        localSeq,
+        commit: {
+          localSeq,
+          reads: { confirmed: [{ id: "of:input", seq: 46 }], pending: [] },
+          operations: native.operations,
+        },
+        settled: verdict.then(() => undefined, () => undefined),
+      };
+    },
+    speculationRetirementView: (id: string) => ({
+      confirmedSeq: covers.get(id)?.confirmedSeq ?? 0,
+      coverClass: covers.get(id)?.coverClass,
+      pendingLocalSeqs: [] as number[],
+      envelopeDocuments: covers.get(id)?.envelopeDocuments,
+    }),
+    ackedSeqOf: () => undefined,
+    speculationAckObserver: undefined as (() => void) | undefined,
+    speculationArrivalObserver: undefined as (() => void) | undefined,
+  };
+  const watermarkSinks: Array<(value: unknown) => void> = [];
+  const runtime = {
+    storageManager: { open: () => ({ replica }) },
+    getCellFromLink: (link: { id: string }) => ({
+      sink: (cb: (value: unknown) => void) => {
+        if (link.id === SERVER_EXECUTION_WATERMARK_DOC_ID) {
+          watermarkSinks.push(cb);
+        }
+        return () => {};
+      },
+    }),
+  } as unknown as Runtime;
+  const destination = new SpeculationOverlayDestination(runtime);
+  const seal = (ids: readonly string[]) => {
+    const operations = ids.map((id) => ({
+      op: "set",
+      id,
+      scope: "space",
+      value: { value: 1 },
+    }));
+    const tx = {
+      tx: {
+        sourceAction: { name: "node" },
+        markWholeDocumentWrites: () => {},
+        sealInto: (collector: {
+          sealSpaceCommit: (
+            space: MemorySpace,
+            native: unknown,
+            source: unknown,
+          ) => Promise<unknown>;
+        }) =>
+          collector.sealSpaceCommit(
+            space,
+            { operations, preconditions: [] },
+            { sourceAction: { name: "node" } },
+          ).then(() => ({ ok: {} })),
+      },
+    } as unknown as IExtendedStorageTransaction;
+    stampSpeculationRunContext(tx, { actionId: "node", kind: "derivation" });
+    return destination.seal(tx).settled;
+  };
+  const cover = (seq: number) => {
+    for (const sink of watermarkSinks) sink({ seq });
+  };
+  return { destination, seal, cover };
+};
+
 describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () => {
   let server: MemoryV2Server.Server;
   let managers: EmulatedStorageManager[];
@@ -1600,5 +1692,73 @@ describe("speculation arrival gate (speculation.md §4, RULED 2026-08-16)", () =
     // read to nothing.
     expect(cellFor(alice, unstoredId).get()?.v).toBe("speculative");
     destination.close();
+  });
+
+  describe("an unstored `cid:` document", () => {
+    // A `cid:` document the entry wrote and the store has not served. The
+    // entry's other document arrives above the floor; whether the entry
+    // retires turns on what the arrived document's envelope names, as the
+    // store has it, and on whether the entry wrote any other document.
+
+    const cidDoc = "cid:speculative-schema";
+    const stateDoc = "of:node-state";
+
+    it("retires the entry once its other documents have arrived and none of their envelopes names the `cid:` document", async () => {
+      const covers = new Map<string, ScriptedCover>([
+        [stateDoc, {
+          confirmedSeq: 50,
+          coverClass: "derived",
+          envelopeDocuments: ["cid:served-schema"],
+        }],
+      ]);
+      const { destination, seal, cover } = unstoredCidHarness(covers);
+      expect((await seal([stateDoc, cidDoc])).ok).toBeDefined();
+      cover(45);
+      expect(destination.entryCount(space)).toBe(1);
+      cover(46);
+      expect(destination.entryCount(space)).toBe(0);
+      destination.close();
+    });
+
+    it("keeps the entry while an arrived document's envelope names the `cid:` document, and retires it once the store serves that document", async () => {
+      const covers = new Map<string, ScriptedCover>([
+        [stateDoc, {
+          confirmedSeq: 50,
+          coverClass: "derived",
+          envelopeDocuments: [cidDoc],
+        }],
+      ]);
+      const { destination, seal, cover } = unstoredCidHarness(covers);
+      expect((await seal([stateDoc, cidDoc])).ok).toBeDefined();
+      cover(46);
+      expect(destination.entryCount(space)).toBe(1);
+      covers.set(cidDoc, { confirmedSeq: 22, coverClass: "derived" });
+      cover(46);
+      expect(destination.entryCount(space)).toBe(0);
+      destination.close();
+    });
+
+    it("keeps an entry that wrote only the `cid:` document, and retires it once the store serves that document", async () => {
+      const covers = new Map<string, ScriptedCover>();
+      const { destination, seal, cover } = unstoredCidHarness(covers);
+      expect((await seal([cidDoc])).ok).toBeDefined();
+      cover(46);
+      expect(destination.entryCount(space)).toBe(1);
+      covers.set(cidDoc, { confirmedSeq: 22, coverClass: "derived" });
+      cover(46);
+      expect(destination.entryCount(space)).toBe(0);
+      destination.close();
+    });
+
+    it("keeps the entry while an arrived document's names are unknown", async () => {
+      const covers = new Map<string, ScriptedCover>([
+        [stateDoc, { confirmedSeq: 50, coverClass: "derived" }],
+      ]);
+      const { destination, seal, cover } = unstoredCidHarness(covers);
+      expect((await seal([stateDoc, cidDoc])).ok).toBeDefined();
+      cover(46);
+      expect(destination.entryCount(space)).toBe(1);
+      destination.close();
+    });
   });
 });

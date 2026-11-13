@@ -933,6 +933,31 @@ const confirmedVersion = (
   ...(coverClass === undefined ? {} : { coverClass }),
 });
 
+/**
+ * The schema document hash a CFC envelope names, or `undefined` for a value
+ * that is no envelope or names none.
+ */
+const envelopeSchemaHash = (cfc: unknown): string | undefined => {
+  if (!isObjectNotArray(cfc)) return undefined;
+  const schemaHash = cfc.schemaHash;
+  return typeof schemaHash === "string" && schemaHash.length > 0
+    ? schemaHash
+    : undefined;
+};
+
+/**
+ * The `cid:` ids of the documents `document`'s CFC envelope names: its schema
+ * document and, on a version-2 envelope, its label documents.
+ */
+const envelopeDocumentIds = (document: EntityDocument | undefined): URI[] => {
+  const cfc = isObjectNotArray(document) ? document.cfc : undefined;
+  const schemaHash = envelopeSchemaHash(cfc);
+  return [
+    ...(schemaHash === undefined ? [] : [`cid:${schemaHash}` as URI]),
+    ...cfcEnvelopeLabelDocumentHashes(cfc).map((hash) => `cid:${hash}` as URI),
+  ];
+};
+
 const transactionValueForVersion = (
   version: MaterializedVersion,
 ): FabricValue | undefined => {
@@ -4347,10 +4372,9 @@ export class StorageManager implements IStorageManager {
     }
     const cfc = isObjectNotArray(document?.cfc) ? document.cfc : undefined;
     const ids: URI[] = [];
-    const schemaHash = cfc?.schemaHash;
+    const schemaHash = envelopeSchemaHash(cfc);
     if (
-      typeof schemaHash === "string" && schemaHash.length > 0 &&
-      !isSchemaDocumentClosureComplete(schemaHash)
+      schemaHash !== undefined && !isSchemaDocumentClosureComplete(schemaHash)
     ) {
       ids.push(`cid:${schemaHash}` as URI);
     }
@@ -7826,8 +7850,9 @@ export class SpaceReplica
   /** ISpaceReplica.speculationRetirementView (server-execution v2
    * Phase 2, speculation.md §4): the doc's confirmed seq — with the
    * covering commit's class where known (the arrival-witness predicate,
-   * RULED 2026-08-22) — plus every pending layer's localSeq: the
-   * overlay destination's retirement inputs. */
+   * RULED 2026-08-22) — every pending layer's localSeq, and the `cid:`
+   * documents the confirmed version's CFC envelope names: the overlay
+   * destination's retirement inputs. */
   speculationRetirementView(
     id: URI,
     scope?: CellScope,
@@ -7835,10 +7860,11 @@ export class SpaceReplica
     confirmedSeq: number;
     coverClass?: CommitClass;
     pendingLocalSeqs: number[];
+    envelopeDocuments: readonly URI[];
   } {
     const record = this.#docs.get(this.#docKeyOf({ id, scope }));
     if (record === undefined) {
-      return { confirmedSeq: 0, pendingLocalSeqs: [] };
+      return { confirmedSeq: 0, pendingLocalSeqs: [], envelopeDocuments: [] };
     }
     return {
       confirmedSeq: record.confirmed.seq,
@@ -7848,6 +7874,7 @@ export class SpaceReplica
       pendingLocalSeqs: [
         ...new Set(record.pending.map((entry) => entry.localSeq)),
       ],
+      envelopeDocuments: envelopeDocumentIds(record.confirmed.value),
     };
   }
 
@@ -12001,8 +12028,8 @@ export class SpaceReplica
       if (!isObjectNotArray(doc)) continue;
       const cfc = (doc as { cfc?: unknown }).cfc;
       if (!isObjectNotArray(cfc)) continue;
-      const schemaHash = (cfc as { schemaHash?: unknown }).schemaHash;
-      if (typeof schemaHash === "string" && schemaHash.length > 0) {
+      const schemaHash = envelopeSchemaHash(cfc);
+      if (schemaHash !== undefined) {
         this.#kickCfcDocumentPull(schemaHash, lookupSchemaDocument);
       }
       // A version-2 envelope is owed its label documents on the same

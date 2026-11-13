@@ -4111,6 +4111,13 @@ export interface ISpaceReplica extends ISpace {
    * entry's floor witnesses arrival only when derived-class). Undefined
    * — an OFF-arm or pre-predicate frame, or a fake in tests — reads as
    * "class unknown", which never witnesses arrival at the floor.
+   *
+   * `envelopeDocuments` is the `cid:` ids of the documents the confirmed
+   * version's CFC envelope names: its schema document and, on a version-2
+   * envelope, its label documents. An entry that wrote a `cid:` document the
+   * store has not served is held while an arrived document it wrote names
+   * that document (speculation.md §4). Undefined — a fake in tests — reads
+   * as "names unknown", which holds the entry as a name would.
    */
   speculationRetirementView?(
     id: URI,
@@ -4119,6 +4126,7 @@ export interface ISpaceReplica extends ISpace {
     confirmedSeq: number;
     coverClass?: CommitClass;
     pendingLocalSeqs: number[];
+    envelopeDocuments?: readonly URI[];
   };
 
   /**
