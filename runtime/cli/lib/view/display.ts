@@ -99,9 +99,10 @@ export type SpanStyler = (span: Line["spans"][number]) => Style;
 /**
  * The display column a source column lands on for horizontal scrolling. In
  * "pictures" mode this is the source column unchanged (the mapping is 1:1). In
- * the compacting modes it is the display index of the first visible cell at or
- * after `col` — so a column inside a hidden sequence or a collapsed run resolves
- * to the next thing actually drawn — or the display width when nothing follows.
+ * the compacting modes it is the display index of the first cell whose source
+ * range ends after `col`: the cell that draws `col`, such as an overstrike or a
+ * collapsed run, or for a column inside a hidden sequence the next thing drawn,
+ * or the display width when nothing follows.
  */
 export function displayColumnOf(
   line: Line,
@@ -110,10 +111,8 @@ export function displayColumnOf(
 ): number {
   if (mode === "pictures") return col;
   const cells = displayLine(line, mode);
-  for (let d = 0; d < cells.length; d++) {
-    if (cells[d].col >= col) return d;
-  }
-  return cells.length;
+  const d = cells.findIndex((cell) => cell.sourceEnd > col);
+  return d === -1 ? cells.length : d;
 }
 
 /** The source column represented at a display-column offset. */
@@ -308,34 +307,29 @@ function matchOverstrike(text: string, start: number): OverstrikeMatch | null {
   let end = start + (first > 0xffff ? 2 : 1);
   if (text.charCodeAt(end) !== 0x08 || isNonPrintableCode(first)) return null;
   let ch = String.fromCodePoint(first);
+  const struck = [ch];
   let chOffset = 0;
-  let strikes = 1;
-  let underscore = false;
   let len = 1;
   while (text.charCodeAt(end) === 0x08) {
     const code = text.codePointAt(end + 1);
     if (code === undefined || isNonPrintableCode(code)) break;
     const next = String.fromCodePoint(code);
-    if (next === ch) {
-      strikes++;
-    } else if (next === "_") {
-      underscore = true;
-    } else {
-      underscore ||= ch === "_";
+    struck.push(next);
+    if (next !== "_") {
       ch = next;
       chOffset = len + 1;
-      strikes = 1;
     }
     end += 1 + next.length;
     len += 2;
   }
-  return len === 1 ? null : {
+  if (len === 1) return null;
+  return {
     end,
     len,
     ch,
     chOffset,
-    bold: strikes > 1,
-    underline: underscore,
+    bold: struck.filter((c) => c === ch).length > 1,
+    underline: ch !== "_" && struck.includes("_"),
   };
 }
 

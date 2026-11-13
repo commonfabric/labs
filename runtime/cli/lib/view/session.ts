@@ -2387,7 +2387,7 @@ export class Session {
     if (!columns) {
       columns = Uint32Array.from(
         displayLine(l, this.#displayMode),
-        (cell) => cell.col,
+        (cell) => cell.sourceEnd,
       );
       this.#displayColumnCache.columns.set(line, columns);
     }
@@ -2395,7 +2395,7 @@ export class Session {
     let hi = columns.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (columns[mid] < sourceCol) lo = mid + 1;
+      if (columns[mid] <= sourceCol) lo = mid + 1;
       else hi = mid;
     }
     return lo;

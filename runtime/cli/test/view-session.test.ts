@@ -944,6 +944,23 @@ Deno.test("session: ANSI-mode tabs widen how far a line can scroll", () => {
   );
 });
 
+Deno.test("session: a search inside an overstrike scrolls as the drawn text would", () => {
+  // `man` prints an underlined `q` as `_\bq`, so the match starts inside the
+  // cell that draws it.
+  const searched = (text: string) => {
+    const s = new Session(
+      parseDocument(`${"x".repeat(60)}${text}${"y".repeat(60)}\n`),
+      { color: false, showLineNumbers: false },
+      { width: 20, height: 6 },
+    );
+    press(s, "/", "q", "enter");
+    return s.view().left;
+  };
+
+  assertEquals(searched("_\bq"), searched("q"));
+  assertEquals(searched("q"), 56);
+});
+
 Deno.test("session: hidden escape sequences do not widen how far a line can scroll", () => {
   // Ten color sequences are 160 source code points but draw nothing in
   // hidden mode, so panning stops at the three drawn cells.

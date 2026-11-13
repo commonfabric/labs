@@ -207,6 +207,12 @@ Deno.test("ansi: repeated overstrikes combine into one cell", () => {
     [true, true],
     "an underscore between two strikes",
   );
+  const [restruck] = displayLine(ln("X\bY\bX"), "ansi");
+  assertEquals(
+    [restruck.ch, restruck.ansi?.bold],
+    ["X", true],
+    "another character between two strikes",
+  );
   const [underscore] = displayLine(ln("_\b_"), "ansi");
   assertEquals(
     [underscore.ch, underscore.ansi?.bold, underscore.ansi?.underline],
@@ -293,7 +299,9 @@ Deno.test("ansi: a backspace that does not overstrike shows as its glyph", () =>
 
 Deno.test("displayColumnOf and sourceColumnOf: an overstrike is one column", () => {
   const line = ln("aN\bNb");
-  assertEquals(displayColumnOf(line, "ansi", 1), 1);
+  for (const col of [1, 2, 3]) {
+    assertEquals(displayColumnOf(line, "ansi", col), 1, `column ${col}`);
+  }
   assertEquals(displayColumnOf(line, "ansi", 4), 2);
   assertEquals(sourceColumnOf(line, "ansi", 1), 1);
   assertEquals(sourceColumnOf(line, "ansi", 2), 4);
@@ -376,8 +384,8 @@ Deno.test("displayColumnOf: hidden maps a source column to the compacted column"
   assertEquals(displayColumnOf(line, "hidden", 1), 1, "the ellipsis");
   assertEquals(
     displayColumnOf(line, "hidden", 2),
-    2,
-    "inside the run → next cell",
+    1,
+    "inside the run → the ellipsis that draws it",
   );
   assertEquals(displayColumnOf(line, "hidden", 4), 2, "b");
   assertEquals(
