@@ -66,6 +66,7 @@ import {
   LLMToolSchema,
 } from "./llm-schemas.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
+import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   LLM_DERIVED_RESULT_STAMP_SCHEMA,
   withLlmDerivedStamp,
@@ -414,6 +415,15 @@ async function executeWithToolsLoop(params: {
   );
 }
 
+/** Which request an abandoned LLM request's ending belongs to. */
+type AbandonedLLMRequest = {
+  builtinId: "llm" | "generateText" | "generateObject";
+  effectKey: string;
+
+  /** The scope-key identity of the run that staged the request. */
+  identity: ScopeKeyIdentity | undefined;
+};
+
 /**
  * Common error handler for LLM requests.
  * Resets state and allows retry on next invocation.
@@ -441,6 +451,12 @@ async function handleLLMError<T, P>(
   requestGuard?: ServedLLMRequestGuard,
   /** Whether this refusal can replace the instance's request fields. */
   ownsRefusal?: () => boolean,
+  /**
+   * Present when the error is the ending of a request whose staging
+   * transaction was abandoned, which commits through
+   * `settleAbandonedRequest()` rather than as a completion of the request.
+   */
+  abandoned?: AbandonedLLMRequest,
 ): Promise<void> {
   if (thisRun !== getCurrentRun() && announce === undefined) return;
 
@@ -453,8 +469,7 @@ async function handleLLMError<T, P>(
   await runtime.idle();
 
   let wrote = false;
-  const { error: writeError } = await runtime.editWithRetry((tx) => {
-    if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
+  const write = (tx: IExtendedStorageTransaction) => {
     if (requestGuard) {
       // Refusal rolls back the selected-request marker with its transaction.
       // Its announcement and generation guard still belong to this identity.
@@ -475,15 +490,29 @@ async function handleLLMError<T, P>(
     resultCell.withTx(tx).set(undefined as T);
     partialCell.withTx(tx).set(undefined as P);
     requestHashCell.withTx(tx).set(requestHash);
-  });
-  if (writeError) {
-    // The error had nowhere to land, so a reader of this result cell sees
-    // something other than this failure. Report it here, since nothing
-    // downstream can.
-    console.error(
-      "[LLM] Writing the request's error to its result cell was rejected.",
-      { requestHash, cause: message, rejection: writeError.message },
+  };
+  if (abandoned !== undefined) {
+    await settleAbandonedRequest(
+      runtime,
+      abandoned.builtinId,
+      abandoned.effectKey,
+      abandoned.identity,
+      write,
     );
+  } else {
+    const { error: writeError } = await runtime.editWithRetry((tx) => {
+      if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
+      write(tx);
+    });
+    if (writeError) {
+      // The error had nowhere to land, so a reader of this result cell sees
+      // something other than this failure. Report it here, since nothing
+      // downstream can.
+      console.error(
+        "[LLM] Writing the request's error to its result cell was rejected.",
+        { requestHash, cause: message, rejection: writeError.message },
+      );
+    }
   }
 
   if (!wrote) return;
@@ -1179,6 +1208,7 @@ export function llm(
         announceResult,
         requestGuard,
         lifecycle?.owns,
+        { builtinId: "llm", effectKey, identity },
       );
 
     // The ending for a request refused before it started.
@@ -1668,6 +1698,7 @@ export function generateText(
         announceResult,
         requestGuard,
         lifecycle?.owns,
+        { builtinId: "generateText", effectKey, identity },
       );
 
     // The ending for a request refused before it started.
@@ -2213,6 +2244,7 @@ export function generateObject<T extends Record<string, unknown>>(
           announceResult,
           requestGuard,
           lifecycle?.owns,
+          { builtinId: "generateObject", effectKey, identity },
         );
 
       // The ending for a request refused before it started.
@@ -2627,6 +2659,7 @@ export function generateObject<T extends Record<string, unknown>>(
           announceResult,
           requestGuard,
           lifecycle?.owns,
+          { builtinId: "generateObject", effectKey, identity },
         );
 
       logGenerateObject("enqueue", directRequestSummary);

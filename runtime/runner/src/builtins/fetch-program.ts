@@ -514,10 +514,8 @@ export function fetchProgram(
                 runtime,
                 "fetchProgram",
                 effectKey,
+                identity,
                 (settleTx) => {
-                  if (identity !== undefined) {
-                    settleTx.tx.scopeKeyIdentity = identity;
-                  }
                   const entry = cache.withTx(settleTx).get()?.[inputHash];
                   const ownsFields = entry === undefined ||
                     entry.state.type === "idle";

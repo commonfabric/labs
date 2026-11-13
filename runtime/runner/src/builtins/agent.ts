@@ -49,6 +49,7 @@ import {
 } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   AGENT_INPUT_NAME_PATTERN,
   AGENT_RUN_TERMINAL_STATES,
@@ -842,23 +843,20 @@ export function agent(
      */
     const settleAbandoned = async (error: Error): Promise<void> => {
       await runtime.idle();
-      const { error: writeError } = await runtime.editWithRetry((tx) => {
-        markEffectCompletion(tx, effectKey);
-        tx.tx.scopeKeyIdentity = identity;
-        // Read at write time: a newer request can stage while this one
-        // waits for the scheduler, and from then on the cell is its.
-        if (state.currentHash !== hash) return;
-        sendResult(tx, resultCell);
-        settleWithoutRun(resultFields(resultCell, tx), error.message, hash);
-      });
+      await settleAbandonedRequest(
+        runtime,
+        AGENT_SINK,
+        effectKey,
+        identity,
+        (tx) => {
+          // Read at write time: a newer request can stage while this one
+          // waits for the scheduler, and from then on the cell is its.
+          if (state.currentHash !== hash) return;
+          sendResult(tx, resultCell);
+          settleWithoutRun(resultFields(resultCell, tx), error.message, hash);
+        },
+      );
       if (state.previousCallHash === hash) state.previousCallHash = undefined;
-      if (writeError) {
-        reportRejection(
-          "Writing the request's refusal was rejected.",
-          hash,
-          writeError,
-        );
-      }
     };
 
     enqueueSinkRequestPostCommitEffect(

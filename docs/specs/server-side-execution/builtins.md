@@ -71,6 +71,23 @@ transaction, so an assistant error message would answer a turn no reader can
 see. It takes the pending flag down and re-announces, and the refusal is
 reported rather than written into the conversation.
 
+Every one of these endings, and `agent`'s, goes through
+`settleAbandonedRequest()`, which also decides how the ending commits. Under the
+serving posture it is not a completion of the request, since the request never
+left. It is stamped as a `bookkeeping` run carrying the scope-key identity of
+the run that staged the request, and it seals into the open wave
+(serving-loop.md §3d). The cells it overwrites can still hold an earlier run's
+writes, pending in that wave, and the wave orders the ending after them. Were it
+to commit on its own, ahead of the wave, the serving runtime would go on reading
+those older writes over it, see the request as unanswered and stage it again.
+The identity puts the ending in the requesting principal's instance of a scoped
+node's cells. A completion takes its instance from the carriage the staging
+run's seal recorded, and a request refused before that seal has none. Under the
+serving posture, a request whose run carried no identity gets no ending, since
+the wave would resolve its cells against the service's own session; the cells
+keep what the refused run left, and the omission is logged. Off the serving
+posture, the ending commits on its own, marked as a completion of the request.
+
 | built-in | request inputs (memo key basis) | result cell | authority | notes |
 | --- | --- | --- | --- | --- |
 | `fetch` (`fetchData`) | url, method, headers (allowlisted), body, response schema | `{ result?, error?, pending }`; the memo hash is committed in the internal cell `{requestId, lastActivity, inputHash}` (`fetch.ts`) | capability handle bound at wiring (README §3.8) | redirects/deadlines per existing `fetch-request-deadlines` doc; the memo base is `` `${kind.name}:${inputHash}` ``; the served outbox key also names the target document and its resolved user or session instance |

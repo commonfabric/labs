@@ -269,6 +269,9 @@ export function streamData(
               runtime,
               "streamData",
               effectKey,
+              // Never served: the builtin refuses to run under server
+              // execution, so its runs carry no scope-key identity.
+              undefined,
               (settleTx) => {
                 // The announcement rode the abandoned transaction, so it is
                 // made again whoever owns the answer now.

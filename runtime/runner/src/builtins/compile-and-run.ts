@@ -564,8 +564,8 @@ function compileAndRunServed(
             runtime,
             "compileAndRun",
             effectKey,
+            identity,
             (settleTx) => {
-              settleTx.tx.scopeKeyIdentity = identity;
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),

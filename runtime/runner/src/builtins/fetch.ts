@@ -851,10 +851,8 @@ function fetchBuiltin(kind: FetchKind) {
                     runtime,
                     kind.name,
                     effectKey,
+                    identity,
                     (settleTx) => {
-                      if (identity !== undefined) {
-                        settleTx.tx.scopeKeyIdentity = identity;
-                      }
                       const ownsBinding = identity === undefined ||
                         (instances.get(instanceKey) === instance &&
                           stagings.get(bindingKey) === staging);

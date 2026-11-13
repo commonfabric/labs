@@ -4170,11 +4170,8 @@ export function llmDialog(
                     runtime,
                     "llmDialog",
                     `llmDialog:${nextRequestId}`,
+                    capturedRequest.scopeKeyIdentity,
                     (settleTx) => {
-                      if (capturedRequest.scopeKeyIdentity) {
-                        settleTx.tx.scopeKeyIdentity =
-                          capturedRequest.scopeKeyIdentity;
-                      }
                       // An accepted publication owns the physical binding.
                       // Legacy callers without that coordinate can only check
                       // whether their input scope still selects this target.

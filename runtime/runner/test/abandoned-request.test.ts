@@ -1,6 +1,7 @@
 /**
- * What a builtin's abandoned-request ending reports when its own write cannot
- * commit.
+ * What a builtin's abandoned-request ending reports when it cannot land: when
+ * its own write cannot commit, and, under the serving posture, when the run
+ * that staged the request carried no identity to write under.
  *
  * The ending is the last thing that happens for a request that was staged and
  * never sent. When its writeback is refused, a reader of the result cells sees
@@ -106,6 +107,7 @@ describe("settleAbandonedRequest", () => {
       runtime,
       "fetchJson",
       "fetchJson:refused-writeback",
+      undefined,
       (settleTx) => {
         wrote = true;
         result.withTx(settleTx).set({ error: "refused" });
@@ -120,5 +122,41 @@ describe("settleAbandonedRequest", () => {
     expect(String(message)).toContain("[fetchJson]");
     expect(String(message)).toContain("was rejected");
     expect(detail).toEqual({ rejection: REFUSAL.message });
+  });
+
+  it("writes nothing and names the builtin under the serving posture without an identity", async () => {
+    // Under the serving posture the ending seals into the open wave, which
+    // would resolve the result cells against the service's own session when
+    // the staging run carried no identity: the service's instance, not the
+    // requester's. The ending is skipped instead, and reported.
+
+    const servingManager = StorageManager.emulate({ as: signer });
+    const serving = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: servingManager,
+      servingPosture: true,
+      experimental: { serverExecution: true },
+    });
+    try {
+      let wrote = false;
+      await settleAbandonedRequest(
+        serving,
+        "fetchJson",
+        "fetchJson:no-identity",
+        undefined,
+        () => {
+          wrote = true;
+        },
+      );
+
+      expect(wrote).toBe(false);
+      const [message, detail] = reported[0] ?? [];
+      expect(String(message)).toContain("[fetchJson]");
+      expect(String(message)).toContain("carried no scope-key identity");
+      expect(detail).toEqual({ effectKey: "fetchJson:no-identity" });
+    } finally {
+      await serving.dispose({ closeStorage: false });
+      await servingManager.close();
+    }
   });
 });
