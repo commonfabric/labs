@@ -4,10 +4,10 @@
  * a loom daemon's, and its profile points at that inbox through a pointer the
  * fixture declares confidential to the owner, so Home's holder, written by a
  * run that read that pointer, and every run that reads it or the profile,
- * carries the owner's label too. Ensuring the Home's inbox creates one of its own in that one's place,
- * in a step that reads neither, retains that one, and points the profile at
- * its own, with nothing refused by the CFC write gate and no event dropped. The fixture is
- * `private-inbox-multi-runtime.test.ts`'s.
+ * carries the owner's label too. Ensuring the Home's inbox creates one of its
+ * own in that one's place, in a step that reads neither, retains that one, and
+ * points the profile at its own, with nothing refused by the CFC write gate
+ * and no event dropped. The fixture is `private-inbox-multi-runtime.test.ts`'s.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -34,6 +34,14 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
  * space the harness's space is.
  */
 const OWNER = "private-inbox-owner";
+
+/**
+ * The DID the fixture's `OWNER_LABEL` names as the owner, which has to be the
+ * DID the harness derives for {@link OWNER}: a label naming any other space's
+ * owner would leave the write gate nothing to refuse.
+ */
+const LABELED_OWNER =
+  "did:key:z6MkksB58J3VAuKbsxLKa5WoUxcUfcVfU1JdeaX3x2QfVeja";
 
 /** One runtime's logger counts, by logger and then by key. */
 type LoggerCounts = Record<
@@ -102,6 +110,7 @@ describe("private inbox through a labeled pointer across runtimes", () => {
   });
 
   it("creates its own inbox in place of the one it holds, retains that one, and points the profile at its own", async () => {
+    expect(harness.spaceDid).toBe(LABELED_OWNER);
     await owner.send("createLabeledHoldingProfile");
     await owner.send("createLabeledHoldingInbox");
     await harness.settle();

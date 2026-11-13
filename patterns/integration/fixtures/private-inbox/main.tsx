@@ -61,6 +61,7 @@ import PrivateInbox, {
   createOwnPrivateInboxOnly,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   type Offer,
   type OfferEvent,
   pointProfilesAtPrivateInbox,
@@ -649,7 +650,7 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
       pointProfiles,
       createOwn: createOwnPrivateInbox({
         ownPrivateInbox,
-        ensure: ensurePrivateInbox({
+        ensure: ensurePrivateInboxOnly({
           privateInbox,
           ownPrivateInbox,
           retainedPrivateInboxes,
@@ -1266,7 +1267,7 @@ export default pattern<MainInput, MainOutput>((
       pointProfiles: mainPointProfiles,
       createOwn: createOwnPrivateInbox({
         ownPrivateInbox,
-        ensure: ensurePrivateInbox({
+        ensure: ensurePrivateInboxOnly({
           privateInbox,
           ownPrivateInbox,
           retainedPrivateInboxes,

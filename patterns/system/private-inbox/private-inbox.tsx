@@ -26,6 +26,7 @@ import {
   equals,
   getEntityId,
   handler,
+  type HandlerState,
   isWellFormedDID,
   type JSONValue,
   NAME,
@@ -488,9 +489,9 @@ function inboxLinkOf(inbox: unknown): unknown {
 /**
  * Creates Home's own private inbox, in the space named
  * {@link PRIVATE_INBOX_SPACE_NAME} in Home's space, and returns the link Home
- * holds it by. {@link createOwnPrivateInbox} is its one caller. The space grants
- * every principal `WRITE`, so a sender's write is admitted whether the sender's
- * own runtime makes it or the space's server does.
+ * holds it by. `createOwnIfNone()` is its one caller. The space grants every
+ * principal `WRITE`, so a sender's write is admitted whether the sender's own
+ * runtime makes it or the space's server does.
  */
 function createPrivateInbox(): Cell<PrivateInboxPiece> {
   return inboxLinkOf(
@@ -643,10 +644,9 @@ export type EnsurePrivateInboxEvent = {
  * has no inbox of its own, the event names none to adopt, and either the event
  * names inboxes to replace or Home holds none, this handler does nothing but
  * send the event to `createOwn`. That step creates Home's inbox and hands the
- * event on to an ensure bound without `createOwn`, which decides as above. Whether to send depends only on the host's event,
- * `ownPrivateInbox` and whether Home holds an inbox, never on which inbox Home
- * or a profile names. An ensure bound without `createOwn`, while Home has no
- * inbox of its own, neither replaces an inbox nor takes one.
+ * event on to {@link ensurePrivateInboxOnly}, which decides as above. Whether
+ * to send depends only on the host's event, `ownPrivateInbox` and whether Home
+ * holds an inbox, never on which inbox Home or a profile names.
  *
  * `privateInboxRefusal` holds the host's refusal of the deciding profile's
  * inbox. A refusal the event names is recorded, in place of a different one
@@ -678,21 +678,51 @@ export type EnsurePrivateInboxEvent = {
  */
 export const ensurePrivateInbox = handler<
   EnsurePrivateInboxEvent,
-  {
-    privateInbox: Writable<PrivateInboxHolder>;
-    ownPrivateInbox: PrivateInboxHolder;
-    retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
-    privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
-    profiles: PointTarget[];
-    pointProfiles: Stream<void>;
-    /**
-     * Absent from the ensure {@link createOwnPrivateInbox} hands its event to,
-     * which never asks for an inbox.
-     */
-    createOwn?: Stream<EnsurePrivateInboxEvent>;
+  EnsurePrivateInboxState & {
+    /** Home's creating step, which hands the event on once it has run. */
+    createOwn: Stream<EnsurePrivateInboxEvent>;
   }
->((
-  event,
+>((event, state) => {
+  if (
+    state.ownPrivateInbox?.piece === undefined && event?.adopt === undefined &&
+    ((event?.replace ?? []).length > 0 ||
+      state.privateInbox.get()?.piece === undefined)
+  ) {
+    state.createOwn.send(event ?? {});
+    return;
+  }
+  decidePrivateInbox(event, state);
+});
+
+/**
+ * Decides what Home holds, as {@link ensurePrivateInbox} does once Home has an
+ * inbox of its own, and never has one created: while Home has no inbox of its
+ * own, it neither replaces an inbox nor takes one.
+ * {@link createOwnPrivateInbox} hands its event on to it. It binds no stream
+ * to send to, since a `Stream` a binding leaves out is still a stream inside
+ * the handler, and a send through it is dropped.
+ */
+export const ensurePrivateInboxOnly = handler<
+  EnsurePrivateInboxEvent,
+  EnsurePrivateInboxState
+>((event, state) => decidePrivateInbox(event, state));
+
+/** What {@link ensurePrivateInbox} and {@link ensurePrivateInboxOnly} bind. */
+type EnsurePrivateInboxState = {
+  privateInbox: Writable<PrivateInboxHolder>;
+  ownPrivateInbox: PrivateInboxHolder;
+  retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
+  privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
+  profiles: PointTarget[];
+  pointProfiles: Stream<void>;
+};
+
+/**
+ * Decides what Home holds, records or clears the host's refusal, and has the
+ * profiles pointed, as {@link ensurePrivateInbox} says.
+ */
+function decidePrivateInbox(
+  event: EnsurePrivateInboxEvent | undefined,
   {
     privateInbox,
     ownPrivateInbox,
@@ -700,19 +730,11 @@ export const ensurePrivateInbox = handler<
     privateInboxRefusal,
     profiles,
     pointProfiles,
-    createOwn,
-  },
-) => {
+  }: HandlerState<EnsurePrivateInboxState>,
+): void {
   const held = privateInbox.get()?.piece;
   const own = ownPrivateInbox?.piece;
   const adopt = event?.adopt;
-  if (
-    createOwn !== undefined && own === undefined && adopt === undefined &&
-    ((event?.replace ?? []).length > 0 || held === undefined)
-  ) {
-    createOwn.send(event ?? {});
-    return;
-  }
   const advertised = advertisedInbox(profiles);
   // The deciding profile's pointer, when the event names a profile in the
   // list. Comparisons of links, which read only link shape in the inbox's
@@ -804,7 +826,7 @@ export const ensurePrivateInbox = handler<
     privateInboxRefusal.set({});
   }
   pointProfiles.send();
-});
+}
 
 /**
  * Creates Home's own private inbox when `ownPrivateInbox` holds none, and
@@ -837,11 +859,12 @@ function createOwnIfNone(ownPrivateInbox: Writable<PrivateInboxHolder>): void {
 
 /**
  * Creates Home's own private inbox, as `createOwnIfNone()` says, and hands
- * `event` on to `ensure`, which decides what Home holds now that it has an
- * inbox of its own. {@link ensurePrivateInbox} sends it its event when Home may
- * need an inbox and has none of its own, for a sender of the ensure that has
- * not had one created first, such as `requestPrivateInbox`. Nothing waits for
- * it: a sender of the ensure learns of the ensure's own run, not of this one.
+ * `event` on to `ensure`, Home's {@link ensurePrivateInboxOnly}, which decides
+ * what Home holds now that it has an inbox of its own.
+ * {@link ensurePrivateInbox} sends it its event when Home may need an inbox
+ * and has none of its own, for a sender of the ensure that has not had one
+ * created first, such as `requestPrivateInbox`. Nothing waits for it: a sender
+ * of the ensure learns of the ensure's own run, not of this one.
  */
 export const createOwnPrivateInbox = handler<
   EnsurePrivateInboxEvent,

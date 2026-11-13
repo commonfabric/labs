@@ -147,13 +147,12 @@ const pointerSchema = {
  * committed, on the server that runs it under server execution, so that a
  * caller waiting on the ensure waits for Home's handling of it too. Rejects
  * when that handling fails, or when the creation it waited for first failed,
- * having then sent no event.
- * Rejects, sending nothing, when a profile ordered ahead of the deciding one
- * cannot be loaded, since which profile decides is then unknown. Sends
- * nothing more, and returns `abandoned`, when `signal` has aborted or
- * `runtime` has begun disposal by the time the reads are done, or by the time
- * the creation it waited for has committed, so that an ensure its caller has
- * stopped waiting for sends no event after teardown.
+ * having then sent no event. Rejects, sending nothing, when a profile ordered
+ * ahead of the deciding one cannot be loaded, since which profile decides is
+ * then unknown. Sends nothing more, and returns `abandoned`, when `signal` has
+ * aborted or `runtime` has begun disposal by the time the reads are done, or
+ * by the time the creation it waited for has committed, so that an ensure its
+ * caller has stopped waiting for sends no event after teardown.
  */
 export async function ensurePrivateInboxOf(
   runtime: Runtime,
@@ -261,8 +260,9 @@ const answerSchema = {
  * arrives only once `profile` points at the inbox Home holds. `home` is a Home
  * result, and `profile` the profile the caller finds the owner by, the one
  * `#profile` answers with. Home ensures its inbox as an event naming nothing
- * has its `ensurePrivateInbox` do, so it creates one only when it holds none
- * and no profile advertises one, and adopts none.
+ * has its `ensurePrivateInbox` do, so it has an inbox of its own created
+ * whenever it holds none and has none of its own, takes that inbox only when
+ * no profile advertises one, and adopts none.
  *
  * Home answers in the handling's receipt, whose address the send's completion
  * carries: a final answer, or a link to Home's answer for the profile, which

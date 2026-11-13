@@ -21,6 +21,7 @@ import PrivateInbox, {
   createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   isNonListAppendRefusal,
   type Offer,
   OFFER_ADDRESS_MAX_LENGTH,
@@ -180,7 +181,7 @@ const EnsuringHome = pattern<
       pointProfiles,
       createOwn: createOwnPrivateInbox({
         ownPrivateInbox: own,
-        ensure: ensurePrivateInbox({
+        ensure: ensurePrivateInboxOnly({
           privateInbox,
           ownPrivateInbox: own,
           retainedPrivateInboxes,
@@ -220,7 +221,7 @@ const SeededEnsuringHome = pattern<
       pointProfiles,
       createOwn: createOwnPrivateInbox({
         ownPrivateInbox: own,
-        ensure: ensurePrivateInbox({
+        ensure: ensurePrivateInboxOnly({
           privateInbox,
           ownPrivateInbox: own,
           retainedPrivateInboxes,
@@ -247,7 +248,7 @@ const OwnedEnsuringHome = pattern<
   },
   { ensure: Stream<EnsurePrivateInboxEvent> }
 >(({ privateInbox, ownPrivateInbox, retainedPrivateInboxes, profiles }) => ({
-  ensure: ensurePrivateInbox({
+  ensure: ensurePrivateInboxOnly({
     privateInbox,
     ownPrivateInbox,
     retainedPrivateInboxes,

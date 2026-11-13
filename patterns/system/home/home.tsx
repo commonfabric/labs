@@ -76,6 +76,7 @@ import {
   createOwnPrivateInboxOnly,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   pointProfilesAtPrivateInbox,
   PrivateInboxAnswering,
   type PrivateInboxHolder,
@@ -175,10 +176,10 @@ export type HomeOutput = {
   // have Home adopt another, through `ensurePrivateInbox`. Home keeps the
   // inbox it holds while the deciding profile, the first in the order
   // `#profile` answers in that points at an inbox, points at it, and while no
-  // profile points at an inbox. Each of their profiles that points at no inbox, or at
-  // one Home gave up or replaced, is pointed here; one that points at any
-  // other inbox keeps it. Absent until `ensurePrivateInbox` runs, and while
-  // Home holds none and the advertised inbox failed vetting.
+  // profile points at an inbox. Each of their profiles that points at no
+  // inbox, or at one Home gave up or replaced, is pointed here; one that points
+  // at any other inbox keeps it. Absent until `ensurePrivateInbox` runs, and
+  // while Home holds none and the advertised inbox failed vetting.
   privateInbox: Writable<PrivateInboxHolder>;
   // The private inbox Home created for itself, which it takes in place of one
   // it replaces, or when it holds none. Only `createOwnPrivateInbox` and
@@ -568,7 +569,7 @@ const Home = pattern(
     });
     // The ensure the creating step hands its event on to, once Home has an
     // inbox of its own; it never asks for one.
-    const ensureOnceOwned = ensurePrivateInbox({
+    const ensureOnceOwned = ensurePrivateInboxOnly({
       privateInbox,
       ownPrivateInbox,
       retainedPrivateInboxes,

@@ -347,10 +347,10 @@ Home creates an inbox in one place only, `createOwnIfNone()` in
 `private-inbox.tsx`, which records the inbox in Home's `ownPrivateInbox` and
 creates one only while that field is empty. Two steps call it:
 `createOwnPrivateInboxOnly`, which does nothing more, and
-`createOwnPrivateInbox`, which then hands its event on to the ensure. The ensure
-and the replacement of a
-refused inbox create none: they take the inbox that field holds, and the ensure
-has the step create it first when Home may need it.
+`createOwnPrivateInbox`, which then hands its event on to
+`ensurePrivateInboxOnly`. The ensure and the replacement of a refused inbox
+create none: they take the inbox that field holds, and the ensure has the step
+create it first when Home may need it.
 
 The reason is the inbox's confidentiality. A document a run writes takes on
 the confidentiality of what the run has read, and the CFC write gate's
@@ -374,20 +374,26 @@ the next bring-up tries again. For a sender of the ensure that has not had the
 step taken first, such as `requestPrivateInbox`, or a host sending a Home
 without that stream, the ensure takes it itself: in the same case it does
 nothing but send its event to `createOwnPrivateInbox`, which creates Home's
-inbox, records it, and hands the event on to a second binding of the ensure, one
-with
-no creating step to send to, which decides as the list above says. Nothing waits
-for those two runs: the sender learns only of the first ensure's. Whether the
-ensure sends depends only on the host's event, `ownPrivateInbox` and whether
-Home holds an inbox, never on which inbox Home's holder or a profile names. So
-Home creates its own at most once, and sometimes takes it nowhere yet: when the
-host names an inbox to replace that Home keeps, as when Home holds one it made
-and the deciding profile advertises another, and when Home holds none while a
-profile advertises an inbox the host refused or did not vet. The last is what
-the replacement of a refused inbox relies on. A Home that adopts an inbox it
-made, or keeps the one it holds while the host names nothing to replace,
-creates none, and a Home that has held an inbox it made since before
-`ownPrivateInbox` may never need one.
+inbox, records it, and hands the event on to `ensurePrivateInboxOnly`. That
+handler decides as the list above says and binds no creating step to send to,
+since a stream a binding leaves out is still a stream inside the handler, and a
+send through it is dropped. Nothing waits for those two runs: the sender learns
+only of the first ensure's. Whether the ensure sends depends only on the host's
+event, `ownPrivateInbox` and whether Home holds an inbox, never on which inbox
+Home's holder or a profile names. So Home creates its own at most once, and
+sometimes takes it nowhere yet: when the host names an inbox to replace that
+Home keeps, as when Home holds one it made and the deciding profile advertises
+another, and when Home holds none while a profile advertises an inbox the host
+refused or did not vet. The last is what the replacement of a refused inbox
+relies on. A Home that adopts an inbox it made, or keeps the one it holds while
+the host names nothing to replace, creates none, and a Home that has held an
+inbox it made since before `ownPrivateInbox` may never need one.
+
+The hand-off rests on an event carrying no label. The ensure decides to send
+after reading Home's holder, so the event exists because of labeled state, and a
+creating step whose event carried the label of the run that sent it would be
+refused. The host's step does not rest on that, since the host reads and decides
+outside any run.
 
 Two runtimes ensuring at once both find `ownPrivateInbox` empty, and the one
 whose commit lands second finds it stale, runs again and creates nothing. What

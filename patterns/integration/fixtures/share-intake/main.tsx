@@ -51,6 +51,7 @@ import {
   createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   type OfferEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
@@ -439,7 +440,7 @@ export default pattern<MainInput, MainOutput>((
       pointProfiles,
       createOwn: createOwnPrivateInbox({
         ownPrivateInbox,
-        ensure: ensurePrivateInbox({
+        ensure: ensurePrivateInboxOnly({
           privateInbox,
           ownPrivateInbox,
           retainedPrivateInboxes,
