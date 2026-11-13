@@ -13,6 +13,7 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  addMockObjectResponse,
   addMockResponse,
   enableMockMode,
   resetMockMode,
@@ -125,6 +126,12 @@ type Fixture = {
   /** How many requests and refusals the last `settle()` waited through. */
   runsSinceTrigger: () => number;
 
+  /**
+   * Counts a request the case answers itself, outside the `fetch` the fixture
+   * stubs, as one of the node's requests.
+   */
+  countRequest: () => void;
+
   /** Resolves at the node's first request or refusal, waiting for no more. */
   firstRun: Promise<void>;
 
@@ -172,9 +179,10 @@ const ownerUserClause = [{
 }];
 
 /**
- * Writes the owner's source document, whose `url` field the node reads, with
- * that field labeled when `labeled`, by `confidentiality` (`medical` unless
- * given), and returns a link to it.
+ * Writes the owner's source document, whose `url` field the node reads, in
+ * `sourceSpace` (the owner's space unless given), with that field labeled when
+ * `labeled`, by `confidentiality` (`medical` unless given), and returns a link
+ * to it.
  */
 async function seedSource(
   ownerRuntime: Runtime,
@@ -183,15 +191,16 @@ async function seedSource(
   confidentiality: readonly (string | { type: string; subject: string })[] = [
     "medical",
   ],
+  sourceSpace: MemorySpace = ownerSpace,
 ): Promise<NormalizedFullLink> {
   const source = ownerRuntime.getCell<{ url: string }>(
-    ownerSpace,
+    sourceSpace,
     "served-effect-rerun-source",
   );
   const seed = ownerRuntime.edit();
-  writeSeedEnvelopeDoc(seed, ownerSpace);
+  writeSeedEnvelopeDoc(seed, sourceSpace);
   seedStoredEnvelope(seed, {
-    space: ownerSpace,
+    space: sourceSpace,
     scope: "space",
     id: source.getAsNormalizedFullLink().id,
     path: [],
@@ -403,6 +412,10 @@ export default pattern<
         ]);
       },
       runsSinceTrigger: () => refusals + requests - base,
+      countRequest: () => {
+        requests += 1;
+        counted();
+      },
       firstRun,
       servingSettled: () =>
         Promise.all(servingRuntimes.map((runtime) => runtime.settled())),
@@ -493,6 +506,37 @@ function storedValue(
     (value, key) => (value as Record<string, unknown> | undefined)?.[key],
     document?.value,
   );
+}
+
+/**
+ * Answers `builtin`'s request for `prompt` once, through the LLM client's mock
+ * mode, calling `onAsked` when the request reaches it, and returns the result
+ * the node shows for that answer.
+ */
+function mockAnswer(
+  builtin: Builtin,
+  prompt: string,
+  onAsked: () => void,
+): unknown {
+  const asks = (messages: readonly { content: unknown }[]): boolean => {
+    const hit = messages.some((message) =>
+      typeof message.content === "string" && message.content.includes(prompt)
+    );
+    if (hit) onAsked();
+    return hit;
+  };
+  if (builtin.name === "generateObject") {
+    addMockObjectResponse(
+      (request) => asks(request.messages),
+      { object: { answer: "the answer" }, id: "mock-answer" },
+    );
+    return { answer: "the answer" };
+  }
+  addMockResponse(
+    (request) => asks(request.messages),
+    { role: "assistant", content: "the answer", id: "mock-answer" },
+  );
+  return "the answer";
 }
 
 describe("served-effect-refusal-rerun", () => {
@@ -633,6 +677,64 @@ describe("served-effect-refusal-rerun", () => {
       resetMockMode();
     }
   });
+
+  for (const name of ["generateText", "generateObject"] as const) {
+    it(`answers a refused served ${name} once a prompt read from its own space changes to one the ceiling admits`, async () => {
+      // The labeled prompt comes from a document in the node's own space, so
+      // the served-run holder rule (§8.12.5.1) admits its label everywhere
+      // the node writes, and only the sink ceiling refuses the request. What
+      // the refused request's ending leaves in the node's fields carries none
+      // of that prompt's label into the node's next run, whose request is
+      // over the new prompt alone, and the ceiling admits it.
+
+      const builtin = refusable.find((candidate) => candidate.name === name)!;
+      const prompt = "served effect rerun admitted prompt";
+      let fixture: Fixture | undefined;
+      enableMockMode();
+      const answer = mockAnswer(builtin, prompt, () => fixture?.countRequest());
+      try {
+        await withFixture({
+          builtin,
+          scope: "space",
+          input: (ownerRuntime) =>
+            seedSource(
+              ownerRuntime,
+              `${url}?labeled`,
+              true,
+              ["medical"],
+              space,
+            ),
+        }, async (f) => {
+          fixture = f;
+          await f.settle();
+          const refused = f.refusals();
+          expect(refused).toBeGreaterThan(0);
+          expect(f.requests()).toBe(0);
+
+          await f.settle(async () => {
+            const change = f.client.edit();
+            f.argument.withTx(change).key("url").set(prompt);
+            expect((await change.commit().settled).error).toBeUndefined();
+          });
+
+          expect(f.refusals()).toBe(refused);
+          expect(f.requests()).toBe(1);
+          const answered = { pending: false, result: answer };
+          const servingView = f.servingView(
+            f.fetched.getAsNormalizedFullLink(),
+            undefined,
+          );
+          expect(servingView).toMatchObject(answered);
+          expect(servingView?.error).toBeUndefined();
+          const freshView = await f.freshView();
+          expect(freshView).toMatchObject(answered);
+          expect(freshView?.error).toBeUndefined();
+        });
+      } finally {
+        resetMockMode();
+      }
+    });
+  }
 
   it("ends a served fetchText whose state write the holder rule refuses, without running it again", async () => {
     // Alice's node reads its URL through a link to another space's document
