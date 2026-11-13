@@ -1698,10 +1698,13 @@ in the place of the walk.
    key, and each resolves to the join over those positions. The value is
    the same at each of them, because they hold equal values or link to
    one cell, and the label is the join of the labels the positions give.
-   The join is ruled, with everything else that is stored or bound once
-   per element key (`execution-and-storage.md` §2.5). It is the third
-   deliberate exception to "equal to or tighter", and is marked to be
-   revisited. By the same ruling, positions that hold equal plain values
+   The join is ruled for what is stored once per element key
+   (`execution-and-storage.md` §2.5). It is the third deliberate
+   exception to "equal to or tighter", and is marked to be revisited.
+   *Assumed,* as `plan-and-label-templates.md` §2.6 assumes it (its open
+   question 35): the ruling covers these slots as well, although it
+   lists what is stored, and a slot resolved when an event arrives is
+   not stored. By ruling, positions that hold equal plain values
    in a body that binds a handler, declares no state cell, does not use
    the index and instantiates no child share one stream, so this step is
    what an event on such a stream runs through.
@@ -2443,9 +2446,13 @@ check at the request alone is not sufficient.
   cause of the third kind like any completion (section 6.5). No event is
   rejected: the event that requested the effect committed before.
 - **What a refused send leaves.** What the effect did before the refusal
-  stays: the instances its tool calls made, the events they sent, and
-  the messages a dialog appended to its transcript. A refusal does not
-  withdraw them, because each was committed by a transaction of its own.
+  stays: what the instances its tool calls made wrote into cells they
+  were given, the events they sent, and the messages a dialog appended
+  to its transcript. A refusal does not withdraw them, because each was
+  committed by a transaction of its own. The instances themselves are
+  torn down when the request or the turn settles, a refused send
+  included, which `builtin-inventory.md` assumes ("The instance of a
+  tool call"; its open question 6).
 - **No retry.** The refusal is stored with the request hash, as a failed
   request is (section 6.4). The effect is requested again when its
   request changes, and a dialog's next turn starts with the next event
@@ -4043,9 +4050,12 @@ space, and no space runs the builder path beside the compiled path
     question 45 of the continuation plan. The principal of a completion
     transaction and of a materializer's run is not decided.
 37. **The element slots of a handler whose key two positions hold.**
-    Ruled: they are bound at every position that holds the key, and each
-    resolves to the join over those positions (section 5.1). The ruling
-    is marked to be revisited.
+    *Assumed:* they are bound at every position that holds the key, and
+    each resolves to the join over those positions (section 5.1), under
+    the ruling on what is stored once per element key, which is marked
+    to be revisited. That ruling lists what is stored, and these slots
+    are resolved when an event arrives. It is question 35 of
+    `plan-and-label-templates.md`.
 38. **The recovery of a pending effect that a handler requested.** Ruled:
     activation reads the pending-effect rows and runs a request
     transaction for each, which follows the references of the stored

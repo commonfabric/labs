@@ -452,9 +452,11 @@ the element is keyed by the identity of that cell.
   show the same plain value would therefore share it: two rows showing
   `"glazed"` would open together. That sharing is not allowed. A body over
   plain-value elements that declares a state cell without using the index
-  is a compile error. The author either uses the index, which puts it in
-  the key, or makes the elements cells, which a list of records written by
-  a handler already is. Sharing a cone for pure computation is unaffected.
+  is a compile error (`collection:shared-element-state` in
+  `language-subset.md` §10.3). The author either uses the index, which
+  puts it in the key, or makes the elements cells, which a list of
+  records written by a handler already is. Sharing a cone for pure
+  computation is unaffected.
   Whether an element is a plain value is a fact of storage that a type such
   as `Donut[]` does not state; see open question 5.
 - *A handler bound over plain values is shared.* A body over plain-value
@@ -473,12 +475,17 @@ the element is keyed by the identity of that cell.
   index. Two equal plain elements then have two children, and a factory
   element in `factories.map((F) => F({ ... }))` has a child per position.
   The plan records it in `Collection.bodyUses.child`
-  (`plan-and-label-templates.md` §1.1 and §1.3). An element that is a
-  link is keyed by its cell alone, so two positions that link to one cell
-  share the child. The cost is the one of using the index: an entry that
-  moves is a new element for that body. *Assumed:* a state cell that such
-  a body declares is accepted, because the position is in the key and no
-  two positions share the cell (open question 14).
+  (`plan-and-label-templates.md` §1.1 and §1.3). A statically resolved
+  pattern called in the body is compiled into the body and is no child,
+  so it does not put the position in the key, and a state cell it
+  declares is a state cell of the body. Under nested bodies the position
+  joins the key at every enclosing level whose elements are plain
+  values, which that document assumes (its §8, question 37). An element
+  that is a link is keyed by its cell alone, so two positions that link
+  to one cell share the child. The cost is the one of using the index:
+  an entry that moves is a new element for that body. *Assumed:* a state
+  cell that such a body declares is accepted, because the position is in
+  the key and no two positions share the cell (open question 14).
 - *The same cell twice shares one cone.* The occurrence count is dropped,
   for the same reason: two positions that hold the same cell are the same
   element.
@@ -1289,7 +1296,10 @@ counterpart in this inventory.
     the tool catalog are those of the request and are not rendered again.
 
   The egress ceiling is checked on the request, and again on each later
-  model call, on the content of that call, in a send transaction. A call
+  model call, on the content of that call, in a send transaction. The
+  content of each later send is what its send transaction read: the
+  built-in does not read a tool result or a cell again between the
+  check and the send (`scheduler-and-serving-loop.md` §6.3). A call
   that fails the check is not made, and no further call is made for the
   request. The result is the one result of the request,
   `{ pending, result, error, partial, requestHash }`: `pending` becomes
@@ -1340,7 +1350,10 @@ counterpart in this inventory.
 
   The egress ceiling is checked on each of them. A system prompt that is
   rendered again is checked as it is rendered for that send, so the
-  content that leaves is the content that was checked. A send that fails
+  content that leaves is the content that was checked. The content of
+  each later send is what its send transaction read, and the built-in
+  reads neither the context nor a tool result again between the check
+  and the send (`scheduler-and-serving-loop.md` §6.3). A send that fails
   the check is not made, and no further send is made for the request. The
   result is the one result of the request, as for `generateText`: `error`
   holds the refusal and `result` stays unset, at every path of the result
@@ -1416,7 +1429,11 @@ counterpart in this inventory.
   - a system prompt rendered from the live context and the pinned cells.
 
   The egress ceiling is checked on each model call, on the transcript and
-  the prompt as they are at that call, in a send transaction. A dialog
+  the prompt as they are at that call, in a send transaction. The
+  content of each send after the first is what its send transaction
+  read: the dialog does not read the transcript, the context or the
+  pinned cells again between the check and the send
+  (`scheduler-and-serving-loop.md` §6.3). A dialog
   has a result per turn, and the result that takes the error state is the
   one of the turn the refused call belongs to. The call is not made, no
   further call is made for that turn, the turn's claim is released, and
@@ -1753,7 +1770,12 @@ counterpart in this inventory.
   a change to the table declarations does not name a different database:
   it derives from the name of the variable the declaration is assigned to
   and the `within` steps of the declaration, as a state cell's does (open
-  question 8).
+  question 8). The handle's `id` is that identifier without its scheme
+  where the compiled path first writes the handle. For an instance of a
+  space switched from the builder path, the switch copies the stored
+  handle, so its `id` names the database the instance had and is not
+  the identifier of the document that holds the handle
+  (`execution-and-storage.md` §6.8, where the copy is an assumption).
 - **Where it is legal.** In the reactive tier only, as the initializer of
   a `const` of a pattern body, like a cell declaration. It is not legal
   at module scope, where no instance exists to name it, and not in a
@@ -1772,7 +1794,10 @@ counterpart in this inventory.
   `db.exec(...)` is a write to it.
 - **Label rule:** none of its own. The table declarations are constants of
   the plan. The `owner` is state written once, from the acting principal
-  of the transaction that first writes the handle. *Assumed:* where that
+  of the transaction that first writes the handle. The state document
+  that holds the handle carries no label beyond what the table
+  declarations declare, which `plan-and-label-templates.md` assumes (its
+  §3.14 and §8, question 40). *Assumed:* where that
   transaction has no principal, which is the case for a declaration of
   space scope first written in a derivation transaction, the handle has
   no owner and stays without one, as today
@@ -1889,8 +1914,8 @@ export it and the pattern corpus does not call it.
     handling of the event, which its receipt identifies, and a
     per-invocation counter is sufficient. A cell it creates under an
     explicit cause, `X.for(cause)`, is the same cell on every event: its
-    identifier derives from the handler's instance and the cause, and not
-    from the event
+    identifier derives from the enclosing instance, the handler's name
+    and `within` steps, and the cause, and not from the event
     ([What the plan records](#what-the-plan-records-for-calls-in-bodies)).
   - A pattern body and a lift are re-evaluated, so their cells need
     identifiers that are the same on every evaluation: the variable name in
@@ -2558,11 +2583,17 @@ name, or a generated ordinal (`factoryFromPattern`).
   cause; the resolved target space.
 - **Identity.** Without an explicit cause the identifier derives from the
   handling and the order of the request, so it derives from the event, as
-  today. With `.for(tag)` it derives from the handler's instance and the
-  tag, and not from the handling: the tag names the same instance on
-  every event (`plan-and-label-templates.md` §1.3). An event that names
+  today. With `.for(tag)` it derives from the enclosing instance, the
+  handler's name and `within` steps, the site, and the tag, and not from
+  the handling: the tag names the same instance on every event, and two
+  handlers that pass equal tags name two instances
+  (`plan-and-label-templates.md` §1.3). Such a request counts toward the
+  order of the handler's later requests. An event that names
   an instance an earlier event made creates nothing, and the existence
-  label of the instance is fixed when it is first created. Today the
+  label of the instance is fixed when it is first created. *Assumed,*
+  with that document (its §8, question 39): such an event does not write
+  the argument again, so the instance keeps the argument of the event
+  that created it. Today the
   identifier of a `.for(tag)` site derives from the event as well
   ([Pattern instantiation in bodies](#pattern-instantiation-in-bodies)).
 - **Links to instances not yet created.** A request returns a link whose
@@ -2668,8 +2699,13 @@ synthesized pattern.
     `.for(cause)` with a cause taken from the item.
   - The compiler warns on an instantiation inside a loop or a callback
     in a function body that has no `.for(cause)`, because of the case
-    above. It is a warning and not an error, and `language-subset.md`
-    has its entry in the diagnostic catalog.
+    above (`function-body:instantiation-without-cause`). It is a warning
+    and not an error, and `language-subset.md` §10.3 has its entry in
+    the diagnostic catalog. *Assumed,* with that document (its §13,
+    question 26): the warning is reported in a `lift`, a `computed`, an
+    `assert`, and an authored function that one of them or the reactive
+    tier calls, and not in a `handler`, an `action`, or an inline event
+    handler.
   - The ordinal is per site, where today's generated ordinal counts every
     anonymous cell of the frame. A branch that makes an instance on some
     evaluations only therefore does not rename the instances of the other
@@ -2746,8 +2782,10 @@ initial value is stored as the schema's default.
   the body's template, as any path the handler writes does.
 - **An explicit cause.** A cell that a handler creates with
   `X.for(cause)` is the same cell on every event. Its identifier derives
-  from the handler's instance and the cause, and not from the handling
-  (`plan-and-label-templates.md` §1.3). An event that names a cell an
+  from the enclosing instance, the handler's name and `within` steps,
+  and the cause, and not from the handling
+  (`plan-and-label-templates.md` §1.3). Two handlers of one instance
+  that pass equal causes name two cells. An event that names a cell an
   earlier event created creates nothing and finds the cell as it is
   stored. The existence label of the cell is fixed when it is first
   created: it is the template of the cause as the creating event

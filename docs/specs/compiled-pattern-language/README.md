@@ -251,7 +251,9 @@ observation class (value, shape, enumeration, identity, or label metadata).
   which a `findIndex`, `some`, `every`, or `find` stopped, and the child that
   a dynamic key, a `minBy`, a `maxBy`, or a keyed lookup chose
   ([plan format and label templates](plan-and-label-templates.md), §3.13 and
-  §3.18).
+  §3.18). Where several elements have equal keys, `minBy`, `maxBy`, and a
+  keyed lookup choose the first in the source order of the collection
+  (§3.8 and §3.18 there).
 - **Sandboxed calls:** the output's template is the union of the slots in the
   body's footprint, of the templates of the computed values the body
   observes, and of what the body read dynamically through the cell handles
@@ -259,7 +261,7 @@ observation class (value, shape, enumeration, identity, or label metadata).
   ([plan format and label templates](plan-and-label-templates.md), §3.9).
 
 A template label is equal to the label the runtime computes today or tighter,
-with two deliberate exceptions
+with three deliberate exceptions
 ([plan format and label templates](plan-and-label-templates.md), §3.1).
 
 - The membership label of a collection index bucket is wider, because it
@@ -268,12 +270,12 @@ with two deliberate exceptions
   that returns normally makes it. A run that throws before the read carries
   the read's label all the same, where today its transaction does not (§3.9
   there).
-
-A third difference in that direction is assumed and not ruled on. What is
-stored once per element key, such as an effect's request, a side-write, or a
-child's argument, carries the join over the positions that hold equal plain
-values, where today each occurrence has a run of its own
-([continuation plan](../../plans/compiled-pattern-language.md), question 40).
+- What an element body stores once per element key carries the join over
+  the positions that hold the key, where those positions resolve to
+  different labels: an effect's request and result, the state of an
+  operation, a child's argument, a side-write, and the copied state of a
+  binding. Today each occurrence of an element has a run of its own. This
+  exception is accepted by ruling and is to be revisited (§2.6 there).
 
 Instantiating a template means substituting actual labels for slots and
 combining them. The runtime does this only for what it stores or checks:
@@ -380,16 +382,21 @@ and, inside the body of an element construct, one element key.
   key is the element's value when the element is a plain value, and the
   identity of the element's cell when it is not. An element that moves keeps
   what was evaluated for its key, so reordering a list does not recompute
-  it. The element's index is part of the key only when the callback uses the
+  it. The element's index is part of the key when the callback uses the
   index, and a body that uses it is evaluated again for an element that
-  moves. A key derived from a value is salted with a secret of the space
-  before it enters a document identifier, so that an identifier does not
-  reveal the value.
+  moves. Where a body over plain values instantiates a child, the position
+  joins the key of each plain element as well, so two equal plain elements
+  have a child each. A key derived from a value is salted with a secret of
+  the space before it enters a document identifier, so that an identifier
+  does not reveal the value
+  ([plan format and label templates](plan-and-label-templates.md), §1.3).
 - Equal plain values have one key and so share one evaluation. They share
   the value and not the label: each position has the label of the address
   its element was read from. A body over plain values that declares a state
-  cell or binds a handler without using the index is refused, because the
-  two rows would share that state.
+  cell without using the index is a compile error, because the two rows
+  would share the cell. A body that binds a handler and declares no state
+  cell is accepted: equal elements bind equal state and share one stream
+  ([language subset](language-subset.md), §4.4.1).
 - A change to one element dirties that element's cones. A membership change
   dirties the container.
 
@@ -399,7 +406,8 @@ remains for link hops through data, whose targets are not known statically,
 and for some of the reads a function body makes through a cell handle it was
 given. Such a read is static when it goes through one handle whose position
 in the body's inputs is known, at a static path, and every run of the body
-that returns normally makes it. It is dynamic otherwise
+that returns normally makes it. It is dynamic otherwise: a read that only
+some runs make, such as one under a condition, stays dynamic
 ([footprint analysis](footprint-analysis.md), §7.2). Where footprint analysis
 gives up on a value or on a key it widens a static slot, and no dynamic
 tracking is involved. A cell handle the analysis loses track of is
@@ -499,14 +507,21 @@ A state cell declared directly in the pattern body, under a variable's name
 that no other declaration of the body has, keeps the identifier it has today.
 One declared inside a sub-pattern that is compiled into the surrounding
 instance has a new identifier, and its stored value is found through a
-carry-over record. The record is an assumption with a limit: writing it
-needs the builder form, so an instance migrated after stage 6 loses that
-state ([continuation plan](../../plans/compiled-pattern-language.md),
+carry-over record. The record is an assumption with a limit: computing it
+needs the builder path, so the instances of a space switched after stage 6
+start that state empty
+([continuation plan](../../plans/compiled-pattern-language.md),
 question 27). One declared inside a `map` body is not carried over: its
 identifier includes the element key, which this design redefines
-([execution and storage](execution-and-storage.md), §5.7 and §9). Migrating an
-instance is a procedure that document proposes: one setup transaction that
-replaces the stored layout with the compiled one.
+([execution and storage](execution-and-storage.md), §5.7 and §9).
+
+Migration is by space. The scheduler is switched per space: a space runs
+the builder path or the compiled path, and never both. That document
+proposes the procedure (§9.4). A switch gives every instance of the space
+its compiled setup and marks the space, and it evaluates nothing. The
+first compiled evaluation of an instance, one setup transaction when the
+instance is first loaded after the switch, replaces its stored layout with
+the compiled one.
 
 ### Provenance
 
@@ -571,6 +586,29 @@ classes hold what remains an operation at run time.
   `cellFromUrl` splits: parsing an address is structural, and resolving a
   space name or host is effectful.
 
+The egress ceiling of an effect is checked on its request and on the
+content the request holds by reference. A language-model built-in also
+sends content after its request: a tool-loop result sent back to the
+model, a system prompt rendered again from live context, and each send of
+a dialog's live transcript. The ceiling is checked again on each such
+send. A send that fails the check is not made, and the built-in's result
+takes the error state
+([plan format and label templates](plan-and-label-templates.md), §3.14;
+[scheduler and serving loop](scheduler-and-serving-loop.md), §6.3). A
+request a handler made that is still pending when a process activates the
+space is made again at activation, with the references followed and the
+ceiling checked on the content as it is then (§2.3 there).
+
+A pattern closure can be given to a language-model built-in as a tool.
+The argument the model supplies carries the label of the model's output,
+which is the label of the generation that produced the tool call. The
+result of the call carries the label of the instance's own result, by the
+ordinary rules for an instance's outputs
+([plan format and label templates](plan-and-label-templates.md), §3.15).
+How the instance of a tool call is identified, in which space and scope
+it is made, and when it is torn down are assumptions
+([built-in inventory](builtin-inventory.md), open question 6).
+
 The other two classes are the authoring markers (class C), such as `pattern`,
 `handler`, and `computed`, which stay in the language as syntax the compiler
 recognizes, and the removed forms (class D), which have no counterpart, among
@@ -583,13 +621,11 @@ Inside a function body, five kinds of runtime call remain:
   `computed` the cell needs an explicit cause;
 - requesting an effectful built-in, which behaves like instantiating a
   built-in pattern. Only a `handler` or an `action` requests one directly. A
-  `lift` or a `computed` has an indirect way: a pattern it instantiates may
-  request effects in its own body. That a `lift` or a `computed` does not
-  request an effect itself is an assumption, which the
-  [continuation plan](../../plans/compiled-pattern-language.md) lists as
-  question 38. An effect that depends on computed data is written in a
-  pattern the computation instantiates, or in the reactive tier with the
-  computed value as its input;
+  `lift` or a `computed` does not request one itself. It has an indirect
+  way: a pattern it instantiates may request effects in its own body. An
+  effect that depends on computed data is written in a pattern the
+  computation instantiates, or in the reactive tier with the computed
+  value as its input;
 - reading context that is not a cell: the event's key and acting principal,
   a space's identity and access list, and the principals a label attests;
 - binding a handler to its state, which yields a stream. An inline event
@@ -607,11 +643,13 @@ Each handler invocation is a new frame, so the cells and instances it creates
 are new on every call. They are identified by the handling and their order
 within the invocation. A handling is one event on one stream, and it is
 identified by its receipt, which leaves the acting principal out
-([plan format and label templates](plan-and-label-templates.md), §1.3). One
-exception is assumed: what a handler creates with `.for(tag)` is identified
-by the handler's instance and the tag, so that different events name the
-same thing
-([continuation plan](../../plans/compiled-pattern-language.md), question 19).
+([plan format and label templates](plan-and-label-templates.md), §1.3). What
+a handler creates under an explicit cause is the exception: a cell created
+with `X.for(cause)`, or an instance requested with `.for(tag)`, is
+identified without the handling, so different events name the same thing,
+and its existence label is fixed when it is first created (§1.3 and §3.14
+there). Without an explicit cause an identifier minted in a handler
+derives from the event, as today.
 Pattern bodies, lifts, and computeds are re-evaluated, so what they create
 needs an identifier that is the same on every evaluation.
 
@@ -687,14 +725,17 @@ computation
   again when its request changes, as any effect is whose input changed. What
   the computation read reaches the request through the argument the
   computation writes, and its label reaches the request with it.
-- Two things are assumed, as question 38 of the
-  [continuation plan](../../plans/compiled-pattern-language.md) states them.
-  The instance is identified by the enclosing instance, the body's `name`
+- The instance is identified by the enclosing instance, the body's `name`
   and `within`, the site of the call, and the ordinal of the
   instantiation among those the evaluation makes at that site. Where the
   author writes `.for(cause)`, that cause takes the place of the ordinal
   ([plan format and label templates](plan-and-label-templates.md), §1.3).
-  And the computation does not request an effect directly.
+- A site in a loop or a callback of the function body names its instances
+  by the order in which an evaluation makes them. The compiler warns, and
+  does not refuse, where such a site has no `.for(cause)`
+  (`function-body:instantiation-without-cause`;
+  [language subset](language-subset.md), §5.2).
+- The computation does not request an effect directly.
 
 In the reactive tier the same call, with a callee the compiler can resolve
 statically, denotes an anonymous sub-pattern, compiled into the surrounding
@@ -702,6 +743,9 @@ instance like the body of a `map`. A callee that is a factory value is known
 only at run time, so the call creates a child instance with its own plan and
 result cell
 ([plan format and label templates](plan-and-label-templates.md), §3.15).
+Such a child is what puts the position in the element key of a
+per-element body over plain values. A statically resolved callee does
+not, because it is compiled into the body (§1.3 there).
 
 ## The scheduler
 
@@ -753,6 +797,12 @@ the rows the scheduler stores of what is current. Where they show the stored
 value current, the read returns it and does not load the instance
 ([scheduler and serving loop](scheduler-and-serving-loop.md), §5.3 and
 §10.4).
+
+The scheduler is switched per space. A space runs either the builder path
+with [Scheduler v2](../scheduler-v2/README.md) or the compiled path with
+the scheduler described here, and never both, so no loop hosts two
+schedulers for one space. The two paths exist side by side only for
+validation (§10.8 there).
 
 ## Server execution and client speculation
 
@@ -860,14 +910,14 @@ Each stage can be checked before the next begins.
    much of the pattern corpus they accept and how often the analysis gives up.
 3. Emit the plan alongside the transformer's existing output, and compare
    template labels with the labels the runtime computes for the whole corpus.
-   Template labels must be equal or tighter, with the two deliberate
+   Template labels must be equal or tighter, with the three deliberate
    exceptions listed under [Label templates](#label-templates): the
-   membership label of a collection index bucket, and a static read through
-   a cell handle on a run that throws before the read
+   membership label of a collection index bucket, a static read through
+   a cell handle on a run that throws before the read, and what an element
+   body stores once per element key
    ([plan format and label templates](plan-and-label-templates.md), §3.1).
-   The comparison expects these two differences and no other in that
-   direction, apart from the assumed one that question 40 of the
-   [continuation plan](../../plans/compiled-pattern-language.md) describes.
+   The comparison expects these three differences and no other in that
+   direction.
 4. Run one pattern with one transaction per cause and with only its keep set
    stored. Then do the same for `map`. FabriChat is the reference pattern for
    this stage and the previous one, because it exercises event integrity,
@@ -876,8 +926,15 @@ Each stage can be checked before the next begins.
    [execution and storage](execution-and-storage.md): the sizes at which a
    kept subtree becomes a part document (§4.10), and the constants of cache
    promotion (§8).
-5. Move the remaining scheduler into the serving loop.
-6. Retire the builder form the transformer emits.
+5. Move the remaining scheduler into the serving loop. The scheduler is
+   switched per space: a space runs the builder path or the compiled path,
+   and never both. A space is migrated as a whole, by a switch that gives
+   every instance its compiled setup and marks the space
+   ([execution and storage](execution-and-storage.md), §9). The two paths
+   exist side by side only for validation.
+6. Retire the builder path, and with it the builder form the transformer
+   emits, soon after the validation. A space switched after this stage
+   has no carry-over record computed for its instances (§9.3 there).
 
 ## Detailed specifications
 
@@ -942,28 +999,55 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   fails ([execution and storage](execution-and-storage.md), §2.7;
   [scheduler and serving loop](scheduler-and-serving-loop.md), §8.1). The
   compiler warns of a cycle it can see in the plan and does not refuse it.
-  Open are the number, which needs measurement on the corpus, and whether a
-  cycle that spans several transactions is bounded at all: an effect whose
-  completion changes its own request, and a cycle across two spaces
+  Open is the number, which needs measurement on the corpus. A cycle that
+  spans several transactions has no bound in this design, by ruling: an
+  effect whose completion changes its own request, and a cycle across two
+  spaces, fall under rate limits in general, which this design does not
+  specify. The ruling is to be revisited
   ([scheduler and serving loop](scheduler-and-serving-loop.md), §8.4).
-- **Instances a computation makes.** A `lift` or a `computed` may
-  instantiate a pattern. How such an instance is identified, and that the
-  computation does not request an effect directly, are assumptions
-  ([continuation plan](../../plans/compiled-pattern-language.md), question
-  38).
+- **Instances a computation makes.** How such an instance is identified,
+  and that the computation does not request an effect directly, are
+  ruled. Open is which bodies the warning for an instantiation without a
+  cause covers. *Assumed:* a `lift`, a `computed`, an `assert`, and an
+  authored function one of them or the reactive tier calls, and not a
+  `handler`, an `action`, or an inline event handler
+  ([language subset](language-subset.md), §13, question 26).
+- **Element bodies over plain values.** The rulings leave three things
+  open ([plan format and label templates](plan-and-label-templates.md),
+  §8, questions 34, 35, and 37). Whether a state cell is accepted in a
+  body that instantiates a child, where the key holds the position
+  without the body using the index: assumed accepted. Whether a pattern
+  that a `lift` or a `computed` written in the body instantiates puts the
+  position in the key as a child does, and whether nested bodies do so at
+  every level: assumed for both. And whether the element slots of a
+  handler whose stream several positions share resolve to the join over
+  those positions: assumed.
+- **An explicit cause in a handler.** A later event that instantiates
+  under a cause an earlier event gave creates nothing. Whether it writes
+  the argument it passes is open. *Assumed:* it does not
+  ([plan format and label templates](plan-and-label-templates.md), §8,
+  question 39).
+- **The instance of a tool call.** How the instance a language model's
+  tool call makes is identified, in which space and scope it is made, and
+  when it is torn down are assumptions
+  ([built-in inventory](builtin-inventory.md), open question 6).
 - **Cache promotion.** The cost model for promoting a cone to a durable cache,
   and where that cache lives. A model and a cache document per instance and
   scope key are proposed ([execution and storage](execution-and-storage.md),
   §8). The model's constants are placeholders until stage 4 measures them.
 - **Migration.** Whether anything besides state cells in existing stored
   instances has to keep its identifier, and when per-node documents already
-  stored can be deleted. A procedure is proposed
-  ([execution and storage](execution-and-storage.md), §9). Open with it are
-  what happens to settled effect results, how long retired documents are
-  kept, what becomes of an instance whose stored source the compiler
-  refuses, and whether one serving runtime runs compiled instances and
-  instances that are not migrated in one space
-  ([scheduler and serving loop](scheduler-and-serving-loop.md), §10.8).
+  stored can be deleted. That a space is switched as a whole is ruled, and
+  a procedure is proposed
+  ([execution and storage](execution-and-storage.md), §9). Open with it,
+  each with an assumption in that document's §11.1, are what happens to
+  settled effect results, how long retired documents are kept, what
+  starts a switch, what becomes of a space that holds an instance whose
+  stored source the compiler refuses (assumed: the space is not switched,
+  questions 4 and 70 there), whether a switch can be reversed, what
+  happens to events across a switch, and what a link between a switched
+  space and one that is not carries (§9.9 there;
+  [scheduler and serving loop](scheduler-and-serving-loop.md), §10.8).
 - **Logs.** `console` is in the standard-library surface, and a function
   body can pass it labeled data. Footprint analysis counts the arguments as
   read ([footprint analysis](footprint-analysis.md), §3.4). Whether the

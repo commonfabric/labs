@@ -192,7 +192,7 @@ reads that input in full. That is the widening cause W3 of
    into a static entry ([§7.2](#72-static-and-dynamic-reads)).
 
    A run that throws is outside the requirement. That is the second of the
-   two deliberate exceptions to the ruling
+   three deliberate exceptions to the ruling
    (`plan-and-label-templates.md` §3.1). A failed body's error state, and a
    failed handler's outcome, are labeled with the body's template over the
    whole footprint (`plan-and-label-templates.md` §5.2). So a failed run
@@ -1690,6 +1690,9 @@ and has no static entry. There are three kinds of such site.
   `action`. An explicit cause in a handler names the same thing across
   events, so a later event that gives the same tag names the same instance
   and creates nothing (`plan-and-label-templates.md` §1.3 and §3.14).
+  That document assumes that the later event does not write the argument
+  again (its §8, question 39). The site's write edges with target
+  `argument` are recorded either way.
 - A `createCell` site that is `identifiedBy: "cause"`, in a `handler` or
   an `action` as in a `lift` or a `computed`
   ([§8.2](#82-creating-a-cell)). A later run under the same cause names
@@ -1802,8 +1805,13 @@ evaluated again.
   in place of the ordinal, which is `identifiedBy: "tag"`. A site inside
   a loop or a callback is one site, and its instances are told apart by
   the ordinal alone, so the compiler warns on such a site that has no
-  `.for(cause)`. It is a warning and not an error, and
-  `language-subset.md` has its entry in the diagnostic catalog.
+  `.for(cause)` (`function-body:instantiation-without-cause`). It is a
+  warning and not an error, and `language-subset.md` §10.3 has its entry
+  in the diagnostic catalog. *Assumed,* with that document (its §13,
+  question 26): the warning is reported for a site in a `lift`, a
+  `computed`, an `assert`, and an authored function that one of them or
+  the reactive tier calls, and not for a site in a `handler` or an
+  `action`.
 - **A read through the returned link is dynamic.** The instance outlives
   the evaluation that made it, so a later evaluation that reads through
   the link finds the child's result. That result is no input of the body
@@ -1845,13 +1853,17 @@ two sources.
 
 - The compiler of the reactive tier sets it for a factory value called
   in the reactive tier of the element body. The analysis has no part in
-  that.
+  that. A statically resolved pattern called there does not set it: the
+  call is compiled into the body and is no child
+  (`plan-and-label-templates.md` §1.3).
 - The analysis determines it for a function body. Where the record of a
   `lift`, a `computed`, or an authored function called from the reactive
   tier has an `instantiate` site in `Body.calls`, a site that the summary
   of an authored function it calls contributes included, and the body's
   `within` has an `element` step, `bodyUses.child` is set on the
-  collection of each such step. A site in a `handler` or an `action`
+  collection of each such step, the steps of enclosing element bodies
+  included, as `plan-and-label-templates.md` §1.3 has it for nested
+  bodies. A site in a `handler` or an `action`
   does not set it: its instance is identified by the handling or by a
   tag, and by no element key.
 
@@ -1894,9 +1906,10 @@ records nothing.
 
 **A cell a handler creates under an explicit cause.** An explicit cause in
 a handler names the same thing across events. The cell is identified by
-the handler's instance and the cause, and not by the handling
-(`plan-and-label-templates.md` §1.3), so it is the same cell on every
-event. Three things follow for the record.
+the enclosing instance, the handler's `name` and `within`, and the
+cause, and not by the handling (`plan-and-label-templates.md` §1.3), so
+it is the same cell on every event, and two handlers that pass equal
+causes name two cells. Three things follow for the record.
 
 - The cause is an observation of the body, by the reference rule: `value`
   for a scalar and `identity` for a cell, as the table has it. Which
@@ -1918,8 +1931,9 @@ identifier derives from the event, as it does today.
 element key declares a `StateCell` whose `within` has the `element` step.
 Over plain values, equal elements have one key, so they would share that
 cell. A per-element body over plain values that declares a state cell
-without using the index is a compile error (`builtin-inventory.md`,
-"Element keys"). *Assumed:* the error covers a cell that a computation
+without using the index is a compile error
+(`collection:shared-element-state`; `builtin-inventory.md`, "Element
+keys"). *Assumed:* the error covers a cell that a computation
 in the body creates under the element key, since it is a state cell of
 the plan named by that key ([§13](#13-open-questions), question 4).
 

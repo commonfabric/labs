@@ -1092,7 +1092,8 @@ stored once for two positions, and no join is formed.
 
 **State, handlers and children over plain values.** Three rules decide
 what an element body may hold where a position can hold a plain value.
-`language-subset.md` has the diagnostic of the first.
+`language-subset.md` §4.4.1 has the diagnostic of the first,
+`collection:shared-element-state`.
 
 - **A state cell.** A body that declares a state cell without using the
   index is a compile error, by ruling. Two rows that show equal values
@@ -1103,7 +1104,8 @@ what an element body may hold where a position can hold a plain value.
   for the key, the stream's identifier holds the key (section 5.2), and
   an event sent from either row is an event on that one stream. The
   handler's element slots then resolve to the join over the positions
-  that hold the key (`scheduler-and-serving-loop.md` §5.1).
+  that hold the key (`scheduler-and-serving-loop.md` §5.1), which is an
+  assumption (`plan-and-label-templates.md` §8, question 35).
 - **A child.** Where the body instantiates a child, the position joins
   the key of every position that holds a plain value, by ruling, as it
   does where the body uses the index. Two equal plain elements then have
@@ -1163,18 +1165,22 @@ the derived collection is kept.
 Nested element bodies nest tables: the cone instances of an inner body are
 keyed by the outer element's key and then the inner one's, outermost first.
 
-**Children of a body over plain values.** A body instantiates a child
-where a pattern is called in it in the reactive tier: a `Child` of the
+**Children of a body over plain values.**
 `plan-and-label-templates.md` §1.3 says where a body instantiates a
 child, and records it as `Collection.bodyUses.child`: a factory value
 called in the reactive tier of the body, or a pattern that a `lift` or a
 `computed` written in the body instantiates, whose instances are named
 through the body's `within` (section 5.5). The second kind is an
-assumption there (its open question 37). An instance that only a handler
-requests does not count. Whether a sub-pattern the compiler compiles into
-the body counts is not stated there. *Assumed:* it does, because whether
-a callee is compiled in is the compiler's choice and not the author's
-(section 11, request 65).
+assumption there (its open question 37). Two things do not count. An
+instance that only a handler requests is identified by no element key.
+And a statically resolved pattern called in the body is compiled into
+the body: the call is no `Child`, the position does not join the key
+because of it, and a state cell it declares is a state cell of the body,
+which `collection:shared-element-state` reports where the body does not
+use the index (`language-subset.md` §4.4.1). Where element bodies nest,
+the member is set on the collection of every `element` step of the
+child's `within`, so the position joins the key at each level at which
+the position holds a plain value.
 
 - **The key.** For a position `i` that holds a plain value, the key is
   the pair of the salted hash of the value and `i`, the form the key has
@@ -1357,7 +1363,12 @@ at a `BodyCall` site of kind `instantiate`.
   item keeps the instance with the item. For that reason the compiler
   warns, and does not refuse, where an instantiation inside a loop or a
   callback of a function body has no `.for(cause)`
-  (`language-subset.md` has the catalog entry).
+  (`function-body:instantiation-without-cause`, in the catalog of
+  `language-subset.md` §10.3). *Assumed,* with that document (its open
+  question 26): the warning is reported in a `lift`, a `computed`, an
+  `assert`, and an authored function that one of them or the reactive
+  tier calls, and not in a `handler`, an `action`, or an inline event
+  handler.
 - **A re-evaluation names the same instances.** An evaluation that
   instantiates at the same site with the same ordinal or cause names the
   same result cell. The request returns a link to it at once.
@@ -2754,7 +2765,8 @@ createRef({ request: <ordinal> }, { handling: <receipt identifier> })
   run of one handling therefore name the same event.
 - **A request under an explicit cause**, which is a cell created with
   `X.for(cause)` or an instantiation with `.for(tag)`, is identified by
-  the handler's instance and the cause, without the handling, by ruling
+  the enclosing instance, the handler and the cause, without the
+  handling, by ruling
   (`plan-and-label-templates.md` §1.3). Its preimage is the one section
   5.5 gives a cell or an instance, with the handler's name in the plan as
   `<body name>`, the handler's `within`, and, for an instance, the cause
@@ -2774,7 +2786,10 @@ createRef({ request: <ordinal> }, { handling: <receipt identifier> })
     document, does not write the initial value again, and does not
     change the existence label. A read through the handle or the link is
     journaled, as a read through any handle of `Body.handles` is
-    (section 1.4).
+    (section 1.4). *Assumed,* with `plan-and-label-templates.md` (its
+    open question 39): a later event that instantiates under an equal
+    cause does not write the argument it passes, so the instance keeps
+    the argument the creating event wrote.
   - **An identifier a client can derive.** The cause enters the
     identifier unsalted (`plan-and-label-templates.md` §1.3), so the
     speculative run names the same cell or instance as the served run.
@@ -3334,8 +3349,10 @@ of its own and no cone. Its state is the database's handle.
 - **Label.** The declaration has no label rule of its own
   (`plan-and-label-templates.md` §3.14), and the table declarations the
   handle holds carry the rules that queries and writes enforce. This
-  section adds none. Which label the state document itself carries is
-  that document's to state (section 11, request 66).
+  section adds none. *Assumed* there (its open question 40): the state
+  document itself carries the label of an operation's bookkeeping state,
+  which is empty for a database, so the handle carries no label beyond
+  what the table declarations declare (section 11, request 66).
 
 ## 7. Provenance
 
@@ -4625,22 +4642,23 @@ label is concerned:
     chain of its own. The memo's fingerprint of the slot is over all of
     them.
 65. **Which element bodies instantiate a child** (sections 2.5 and 5.3).
-    Met in part by its §1.1 and §1.3: `Collection.bodyUses.child` says
+    Met by its §1.1, §1.3 and §2.6. `Collection.bodyUses.child` says
     that a body applied to the collection instantiates a child, for a
     factory value called in the body's reactive tier and for a pattern a
-    `lift` or a `computed` in the body instantiates. Two things remain.
-    That document does not say whether a call of a sub-pattern that the
-    compiler compiles into the body sets the member, which this document
-    assumes. And this document lists the children of an element body in
-    the instances document per element key, which that document's §2.6
-    has to cover with the label it gives the record of the instances a
-    computation made.
+    `lift` or a `computed` in the body instantiates. A statically
+    resolved pattern that the compiler compiles into the body does not
+    set the member. Under nested element bodies the member is set on the
+    collection of every `element` step. And its §2.6 gives the record of
+    the children of an element body, which this document lists in the
+    instances document per element key, the collection's membership
+    label.
 66. **The label of a database declaration's state document** (section
     6.8). This document stores the handle once, under the `of:` scheme,
-    and gives it no label rule. Its §2.6 gives the label of an
+    and gives it no label rule. Met by its §3.14, as an assumption (its
+    open question 40): the document carries the label its §2.6 gives an
     operation's bookkeeping state from `Operation.input`, which is
-    `const` for a database. *Assumed:* the handle carries no label
-    beyond what the table declarations in it declare, as today.
+    `const` for a database, so the handle carries no label beyond what
+    the table declarations in it declare, as today.
 
 To `language-subset.md`:
 
@@ -4648,11 +4666,12 @@ To `language-subset.md`:
     that document has no form by which an author writes it (its open
     question 10), so a compiled plan leaves `Cone.cache` absent and the
     runtime decides.
-68. **Two diagnostics this document refers to without a name** (sections
-    2.5 and 2.8): the error for a state cell in an element body over
-    plain values that does not use the index, and the warning for an
+68. **The names of two diagnostics** (sections 2.5 and 2.8). Met by its
+    §10.3: the error for a state cell in an element body over
+    plain values that does not use the index is
+    `collection:shared-element-state`, and the warning for an
     instantiation inside a loop or a callback of a function body that has
-    no `.for(cause)`. That document's catalog names them.
+    no `.for(cause)` is `function-body:instantiation-without-cause`.
 27. **Stored source.** Section 9.4 compiles an instance's stored source.
     That document's open question 7 asks with which severities. *Assumed:*
     the interim acceptance of the removed forms applies, and any other

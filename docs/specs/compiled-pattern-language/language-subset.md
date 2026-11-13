@@ -654,7 +654,11 @@ The plan records it as `Collection.bodyUses.child`, beside
 `Collection.bodyUses.index` (`plan-and-label-templates.md`, §1.1 and
 §1.3, which owns the key). The author pays what the index costs: the cone
 instances of such a body do not move with their elements, and an insertion
-at the front evaluates the body again for every position after it.
+at the front evaluates the body again for every position after it. Where
+per-element constructs nest, the position joins the key at every
+enclosing level whose elements are plain values, so that equal elements
+of the outer collection do not share the inner body's child. *Assumed*
+there with the second way below (its §8, question 37).
 
 A body instantiates a child, for this rule, in two ways. The first is the
 ruled one: it calls a pattern factory value in tier R
@@ -1293,7 +1297,14 @@ handler creates with `Writable.for<number>(cause)` is the same cell each
 time an event is handled with an equal cause, and its existence label is
 fixed when it is first created. The same holds for `.for(cause)` on an
 instantiation ([§4.7](#47-cell-and-handle-methods)).
-`plan-and-label-templates.md` (§1.3) owns the identifier.
+`plan-and-label-templates.md` (§1.3) owns the identifier. It holds the
+handler's name and the calls and callbacks the handler is written in,
+beside the cause, so two handlers of one instance that pass equal causes
+name two cells. *Assumed* there (its §8, question 39): a later event
+that instantiates under an equal cause creates nothing and does not
+write the argument it passes, so the instance keeps the argument of the
+event that created it. A handler that has to change what such an
+instance reads passes a cell in the argument and writes the cell.
 
 **Instantiating a pattern in a `lift` or a `computed`.** The callee is one
 of the three that §4.4.2 and §5.1 allow in a function body: a pattern
