@@ -391,6 +391,9 @@ impl<'a> Resolver<'_, 'a> {
                 _ => self.unresolved(Why::TypeofValue),
             },
             TSType::TSTypeReference(reference) => self.reference(module, reference, env, next),
+            // A type predicate is the result type of a function that
+            // returns a boolean (§7.1).
+            TSType::TSTypePredicate(predicate) if !predicate.asserts => self.add(Shape::Boolean),
             TSType::TSConditionalType(_)
             | TSType::TSMappedType(_)
             | TSType::TSTemplateLiteralType(_)
@@ -702,8 +705,41 @@ impl<'a> Resolver<'_, 'a> {
         env: &Env,
         depth: u32,
     ) -> TypeId {
-        let TSTypeName::IdentifierReference(name) = &reference.type_name else {
-            return self.unresolved(Why::NotEvaluated);
+        let name = match &reference.type_name {
+            TSTypeName::IdentifierReference(name) => name,
+            // `ns.Donut`, with `ns` bound by `import * as ns`, is the type
+            // the module exports under that name (§7.10).
+            TSTypeName::QualifiedName(qualified) => {
+                let target = (|| {
+                    let TSTypeName::IdentifierReference(namespace) = &qualified.left else {
+                        return None;
+                    };
+                    let parsed = self.parsed(module)?;
+                    let symbol = symbol_of(parsed.semantic.scoping(), namespace)?;
+                    let model = self.model(module)?;
+                    let Some(Binding::Import(import, binding)) = model.binding(symbol) else {
+                        return None;
+                    };
+                    let import = &model.imports[import];
+                    if import.bindings[binding].imported != crate::module::ImportedName::Namespace {
+                        return None;
+                    }
+                    let def = self.resolve_import(
+                        module,
+                        import,
+                        &crate::module::ImportedName::Named(qualified.right.name.to_string()),
+                    )?;
+                    Some((def.module, self.model(def.module)?.defs[def.def].symbol?))
+                })();
+                return match target {
+                    Some((home, symbol)) => {
+                        let arguments = self.arguments(module, reference, env, depth);
+                        self.declaration(home, symbol, arguments, depth)
+                    }
+                    None => self.unresolved(Why::External),
+                };
+            }
+            TSTypeName::ThisExpression(_) => return self.unresolved(Why::RefusedForm),
         };
         let Some(parsed) = self.parsed(module) else {
             return self.unresolved(Why::External);

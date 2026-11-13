@@ -315,3 +315,29 @@ fn function_declaration_used_as_a_value_has_a_function_type() {
          function show() { const f = label; return f(1).trim(); }\n",
     );
 }
+
+#[test]
+fn qualified_name_through_a_namespace_import_and_a_type_predicate_are_evaluated() {
+    let analysis = analyze(&[
+        SourceFile {
+            path: "schemas.ts".to_string(),
+            text: "export interface Donut { name: string }\n".to_string(),
+        },
+        SourceFile {
+            path: "case.tsx".to_string(),
+            text: "import * as schemas from \"./schemas.ts\";\n\
+                   function isDonut(value: unknown): value is schemas.Donut { return typeof value === \"object\"; }\n\
+                   function show(donut: schemas.Donut) { return donut.name.trim() + isDonut(donut); }\n"
+                .to_string(),
+        },
+    ]);
+    let counts = &analysis.modules[1].counts;
+    let other: Vec<&String> = counts
+        .keys()
+        .filter(|key| {
+            (key.starts_with("types:written:") && *key != "types:written:evaluated")
+                || (key.starts_with("types:receiver:") && *key != "types:receiver:typed")
+        })
+        .collect();
+    assert!(other.is_empty(), "{other:?}");
+}
