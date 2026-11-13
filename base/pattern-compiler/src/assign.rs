@@ -44,6 +44,8 @@ pub enum Class {
     /// In an argument bound by reference: a value whose type a cell of the
     /// declared handle does not hold.
     ValueForCellOfAnotherType,
+    /// A cell of `T` where a cell of a view of `T` is declared (§7.5.1).
+    CellOfView,
     /// An opaque named type against any other type (§7.2).
     Opaque,
     /// A value that may be absent only because it is read from an optional
@@ -74,6 +76,7 @@ impl Class {
                 | Class::UnreadableCellForValue
                 | Class::UndefinedInCell
                 | Class::ValueForCellOfAnotherType
+                | Class::CellOfView
                 | Class::Opaque
                 | Class::OptionalProperty
         )
@@ -92,6 +95,7 @@ impl Class {
             Class::UnreadableCellForValue => "a cell that cannot be read where a value is declared",
             Class::UndefinedInCell => "a value and a cell that differ by `undefined`",
             Class::ValueForCellOfAnotherType => "a value where a cell of another type is declared",
+            Class::CellOfView => "a cell where a cell of a view of its type is declared",
             Class::Opaque => "an opaque type against another type",
             Class::OptionalProperty => {
                 "a value read from an optional property where the type declares it required"
@@ -316,6 +320,19 @@ impl<'a> Resolver<'_, 'a> {
                     .any(|member| matches!(self.shape(*member), Shape::Handle(..)));
                 if !handles {
                     return self.value_for_handle(from, to, *kind, *wanted, next);
+                }
+            }
+        }
+        if by_reference {
+            if let (Shape::Handle(kind, value), Shape::Union(members)) = (&source, &target) {
+                // A handle that can be read stands for the value it holds
+                // (§7.5.2, the third row), and that value is compared
+                // whole with a declared union that names no handle.
+                let handles = members
+                    .iter()
+                    .any(|member| matches!(self.shape(*member), Shape::Handle(..)));
+                if !handles && kind.is_readable() {
+                    return rel(*value, to);
                 }
             }
         }
@@ -883,8 +900,8 @@ impl<'a> Resolver<'_, 'a> {
                     && forward() == Verdict::Yes
                     && matches!(reverse(), Verdict::No(..)) =>
             {
-                self.mismatch(
-                    Class::Handle,
+                self.refusal(
+                    Class::CellOfView,
                     from,
                     to,
                     &format!(

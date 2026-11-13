@@ -702,3 +702,14 @@ fn optional_property_counts_by_its_declared_type_against_a_record_of_json_values
         "expected JSONValue",
     );
 }
+
+#[test]
+fn cell_given_where_an_optional_cell_of_a_view_is_declared_is_told_the_same_correction() {
+    assert_refused(
+        &format!(
+            "{MESSAGE}function write(cell: Cell<{{ body: string }}> | undefined) {{ return cell; }}\n\
+             function run(message: Cell<Message>) {{ return write(message); }}\n"
+        ),
+        "declare the position `ReadonlyCell<{ body: string }>`",
+    );
+}

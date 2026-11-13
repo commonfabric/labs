@@ -334,3 +334,14 @@ fn state_of_a_handler_bound_in_a_function_body_stays_strict() {
         "a cell where a value is declared",
     );
 }
+
+#[test]
+fn readable_cell_stands_for_its_value_where_a_union_of_values_is_declared() {
+    // §7.5.2, the third row: the value type of the cell is compared whole
+    // with the declared type.
+    assert_accepted(
+        "const face = lift((input: { profile: { name?: string } | null | undefined }) => input.profile?.name ?? \"\");\n\
+         const P = pattern<{ profile?: Writable<{ name?: string } | undefined> }, { name: string }>(\n\
+           ({ profile }) => ({ name: face({ profile }) }));\n",
+    );
+}
