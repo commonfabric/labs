@@ -4545,10 +4545,11 @@ export class Runner {
    * root. A slot holding content is read as content. A slot holding a
    * reference is read as reference-identity probes under `machineryRead`, a
    * wiring read (CFC §18.6.2): the setup's only use of that reference is to
-   * write it again, to the same slot of the argument it stages or, for a slot
-   * the candidate schema refuses, to the piece's refused-slot store, and the
-   * link write carries the reference's restriction to the slot that receives
-   * it. What it reaches is not read here at all.
+   * write it again, to the same slot of the argument it stages, where the
+   * reference's restriction stays. A slot the candidate schema refuses is
+   * read again as an ordinary read before its value moves to the piece's
+   * refused-slot store (`#restageOverStoredSlots`), since that write carries
+   * no link's restriction. What a reference reaches is not read here at all.
    */
   #readStoredArgument(
     tx: IExtendedStorageTransaction,
@@ -4564,14 +4565,14 @@ export class Runner {
       meta: ignoreReadForScheduling,
       nonRecursive: true,
     });
-    if (!isObjectNotArray(top) || isCellLink(top)) {
+    if (!isFabricPlainObject(top as FabricValue) || isCellLink(top)) {
       return top === undefined
         ? undefined
         : cell.getRaw({ meta: ignoreReadForScheduling });
     }
     const document = cell.getAsNormalizedFullLink();
     const stored: Record<string, unknown> = {};
-    for (const slot of Object.keys(top)) {
+    for (const slot of Object.keys(top as object)) {
       if (skip.has(slot)) continue;
       const position = { ...document, path: [...document.path, slot] };
       const reference = readStoredReference(tx, position, {
@@ -4627,6 +4628,15 @@ export class Runner {
     );
     let staged = projection;
     const stage = (leaveOut: ReadonlySet<string>): string | undefined => {
+      // A slot left out moves to the refused-slot store by a plain write,
+      // which carries none of the restriction a link's write would, so what
+      // the slot holds is read here as an ordinary read, its label joining
+      // what the setup writes, the store among it.
+      for (const slot of leaveOut) {
+        if (dropped.has(slot)) {
+          argumentCell.key(slot).getRaw({ meta: ignoreReadForScheduling });
+        }
+      }
       staged = mergeSchemaDefaults<T>(
         this.#argumentOverStoredSlots(
           tx,
@@ -4675,7 +4685,9 @@ export class Runner {
       defaults,
       tx,
       carried,
-      this.#stagedArgument(tx, stored),
+      // The slots the caller names are judged as it supplies them; only the
+      // carried ones are asked about.
+      this.#stagedArgument(tx, foldStoredArgumentSlots(argument, stored)),
     );
     const issue = stage(new Set(dropped.keys()));
     if (issue !== undefined && dropped.size < carried.length) {

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -26,6 +27,8 @@ import {
 import { Runtime } from "../src/runtime.ts";
 import {
   acceptsOpaqueCellOrUnresolvedLink,
+  materializeStagedArgumentForValidation,
+  materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
   storedArgumentValidationIssue,
 } from "../src/stored-argument-validation.ts";
@@ -908,6 +911,38 @@ describe("stored-argument-validation", () => {
         tx.abort();
       }
     });
+
+    it("judges a staged query result over a labeled document as a link and reads none of its value", async () => {
+      // A caller may hand the setup a query result over a cell rather than
+      // the cell; the staged view takes the reference from it all the same.
+
+      const sealed = await seedDocument(
+        "sealed-query-source",
+        { count: "many" },
+        ["sealed"],
+      );
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ source: sealed });
+        const staged = { source: sealed.withTx(tx).getAsQueryResult() };
+        const sealedId = sealed.getAsNormalizedFullLink().id;
+        using reads = spyReads(tx);
+        expect(
+          storedArgumentValidationIssue(argument, schema, undefined, tx, {
+            value: staged,
+            cellAt: (link) => runtime.getCellFromLink(link, undefined, tx),
+          }),
+        ).toBeUndefined();
+        expect(
+          reads.addresses().filter((address) =>
+            address.id === sealedId && address.path[0] === "value"
+          ),
+        ).toEqual([]);
+      } finally {
+        tx.abort();
+      }
+    });
   });
 
   describe("an argument a setup has just staged", () => {
@@ -995,6 +1030,154 @@ describe("stored-argument-validation", () => {
       expect(argumentReads(readBack.reads).length).toBeGreaterThan(
         argumentReads(fromStaged.reads).length,
       );
+    });
+
+    describe("judged both ways", () => {
+      // The staged view and reading the argument back see the same slots and
+      // return the same issue, whatever the staged value leaves out or adds.
+
+      /**
+       * Writes `stored` as the argument document, in a transaction of its
+       * own, and returns, for `staged` judged under `argumentSchema`, the
+       * slots each view holds and the issue each returns.
+       */
+      const judgeBothWays = (
+        stored: (tx: IExtendedStorageTransaction) => unknown,
+        staged: (tx: IExtendedStorageTransaction) => unknown,
+        argumentSchema: JSONSchema,
+      ) => {
+        const tx = runtime.edit();
+        try {
+          const argument = runtime.getCell<unknown>(
+            space,
+            "both-ways",
+            undefined,
+            tx,
+          );
+          argument.set(stored(tx));
+          const stagedArgument = {
+            value: staged(tx),
+            cellAt: (link: Parameters<typeof runtime.getCellFromLink>[0]) =>
+              runtime.getCellFromLink(link, undefined, tx),
+          };
+          // The view's slots, and whether it is a record or an instance.
+          const keys = (view: unknown) => {
+            if (view === null || typeof view !== "object") return view;
+            const prototype = Object.getPrototypeOf(view);
+            return [
+              prototype === Object.prototype || prototype === null
+                ? "record"
+                : view.constructor.name,
+              ...Object.keys(view).sort(),
+            ];
+          };
+          return {
+            readBack: {
+              slots: keys(
+                materializeStoredValueForValidation(
+                  argument,
+                  argumentSchema,
+                  tx,
+                )
+                  .value,
+              ),
+              issue: storedArgumentValidationIssue(
+                argument,
+                argumentSchema,
+                undefined,
+                tx,
+              ),
+            },
+            fromStaged: {
+              slots: keys(
+                materializeStagedArgumentForValidation(
+                  argument,
+                  stagedArgument,
+                  argumentSchema,
+                  tx,
+                ).value,
+              ),
+              issue: storedArgumentValidationIssue(
+                argument,
+                argumentSchema,
+                undefined,
+                tx,
+                stagedArgument,
+              ),
+            },
+          };
+        } finally {
+          tx.abort();
+        }
+      };
+
+      it("agrees on a slot the document holds and the staged value does not", () => {
+        // A setup's write fills a scoped slot it is not given with a link to
+        // the instance that holds it; a link to another space stands in here.
+
+        const { readBack, fromStaged } = judgeBothWays(
+          (tx) => ({
+            a: "x",
+            elsewhere: runtime.getCell(otherSpace, "elsewhere", undefined, tx),
+          }),
+          () => ({ a: "x" }),
+          {
+            type: "object",
+            properties: { a: { type: "string" }, elsewhere: {} },
+            required: ["elsewhere"],
+          },
+        );
+
+        expect(fromStaged).toEqual(readBack);
+        expect(readBack).toEqual({
+          slots: ["record", "a", "elsewhere"],
+          issue: undefined,
+        });
+      });
+
+      it("agrees on a slot the staged value holds and the document does not", () => {
+        const { readBack, fromStaged } = judgeBothWays(
+          () => ({ a: "x" }),
+          () => ({ a: "x", extra: 3 }),
+          {
+            type: "object",
+            properties: { a: { type: "string" }, extra: { type: "string" } },
+          },
+        );
+
+        expect(fromStaged).toEqual(readBack);
+        expect(readBack).toEqual({ slots: ["record", "a"], issue: undefined });
+      });
+
+      it("agrees on a cell the caller passes", () => {
+        const counter = (tx: IExtendedStorageTransaction) =>
+          runtime.getCell<unknown>(space, "counter", undefined, tx);
+        const { readBack, fromStaged } = judgeBothWays(
+          (tx) => {
+            counter(tx).set({ count: "many" });
+            return { source: counter(tx) };
+          },
+          (tx) => ({ source: counter(tx) }),
+          schema,
+        );
+
+        expect(fromStaged).toEqual(readBack);
+        expect(readBack.issue).toContain(
+          "count: value does not match type number",
+        );
+      });
+
+      it("agrees on an argument that is a class instance", () => {
+        const stamp = new FabricEpochNsec(5n);
+        const { readBack, fromStaged } = judgeBothWays(
+          () => stamp,
+          () => stamp,
+          { type: "object" },
+        );
+
+        expect(fromStaged).toEqual(readBack);
+        expect(readBack.slots).toEqual(["FabricEpochNsec"]);
+      });
     });
 
     it("returns the issue reading it back returns for what a reference reaches", async () => {
