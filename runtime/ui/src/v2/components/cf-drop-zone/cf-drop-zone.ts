@@ -1,3 +1,4 @@
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
@@ -26,6 +27,10 @@ import type { DragState } from "../../core/drag-state.ts";
  * `src/main/events.ts`). A handler that declares `sourceCell` a `Writable<T>`
  * receives the link as that cell. `sourceCellRef` names the same cell as plain
  * id, space and path, leaving out the main thread's display copy of its label.
+ *
+ * A drop delivers the drag's `droppedCell` where it has one, once that has
+ * resolved, so `cf-drop` follows the release by a round trip to the worker;
+ * it delivers nothing where that resolution fails.
  *
  * @slot - Default slot for wrapped content
  *
@@ -180,20 +185,29 @@ export class CFDropZone extends BaseElement {
       const dropZoneRect = this.getBoundingClientRect();
 
       // Emit drop event with pointer coordinates and drop zone rect
-      const { id, space, path } = dragState.cell.ref();
-      this.emit("cf-drop", {
-        sourceCell: dragState.cell.toSigilLink(),
-        sourceCellRef: { id, space, path },
-        type: dragState.type,
-        pointerX: dragState.pointerX,
-        pointerY: dragState.pointerY,
-        dropZoneRect: {
-          left: dropZoneRect.left,
-          top: dropZoneRect.top,
-          width: dropZoneRect.width,
-          height: dropZoneRect.height,
-        },
-      });
+      const drop = (cell: CellHandle) => {
+        const { id, space, path } = cell.ref();
+        this.emit("cf-drop", {
+          sourceCell: cell.toSigilLink(),
+          sourceCellRef: { id, space, path },
+          type: dragState.type,
+          pointerX: dragState.pointerX,
+          pointerY: dragState.pointerY,
+          dropZoneRect: {
+            left: dropZoneRect.left,
+            top: dropZoneRect.top,
+            width: dropZoneRect.width,
+            height: dropZoneRect.height,
+          },
+        });
+      };
+      if (dragState.droppedCell) {
+        dragState.droppedCell.then(drop, (error) => {
+          console.error("Failed to resolve the dropped cell:", error);
+        });
+      } else {
+        drop(dragState.cell);
+      }
     }
   }
 

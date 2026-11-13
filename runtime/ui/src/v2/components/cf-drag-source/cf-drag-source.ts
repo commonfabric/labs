@@ -24,15 +24,16 @@ import {
  * @fires cf-drag-start - Fired when drag starts with { cell: SigilLink }
  * @fires cf-drag-end - Fired when drag ends with { cell: SigilLink }
  *
+ * What a drop delivers is the cell that `cell` resolves to when the press
+ * begins, which a drop zone waits for. `cell` itself is what the preview
+ * shows and what `cf-drag-start` and `cf-drag-end` name. Resolving at any
+ * other time would drop a stale row: a `.map()` row keeps its `cell` while
+ * the list moves another entry into that row, and a resolution through an
+ * inline list entry names that entry's content as it was.
+ *
  * Each detail carries the dragged cell's link rather than its `CellHandle`,
  * so that the detail is a `FabricValue` and can cross to a handler in the
  * worker; `cf-drop-zone` says the same of its events.
- *
- * The cell dragged is the one `cell` resolves to when the press begins, and a
- * drag starts only once that resolution has landed. Resolving earlier and
- * keeping the answer would drag a stale row: a `.map()` row keeps its `cell`
- * while the list moves another entry into that row, and a resolution through
- * an inline list entry names that entry's content as it was.
  *
  * @slot - Default slot for draggable content
  *
@@ -76,15 +77,8 @@ export class CFDragSource extends BaseElement {
 
   /** The cell being dragged, from the start of a drag until it ends. */
   #draggedCell: CellHandle | undefined;
-  /**
-   * The cell the press under way drags, once `cell` has resolved: the cell
-   * `cell` resolves to, or `cell` itself where resolving it failed.
-   */
-  #pressedCell: CellHandle | undefined;
-  /** The press under way's resolution of `cell`, settled once it has landed. */
-  #press: Promise<void> | undefined;
-  /** The press's last pointer event past the threshold, while it waits. */
-  #pendingStart: PointerEvent | undefined;
+  /** What `cell` resolved to when the press under way began. */
+  #pressedCell: Promise<CellHandle> | undefined;
   private _isTracking = false;
   private _startX = 0;
   private _startY = 0;
@@ -101,22 +95,12 @@ export class CFDragSource extends BaseElement {
     if (!this.#draggedCell) this.#stopTracking();
   }
 
-  /** The press under way's resolution of `cell`, to await before a drag. */
-  get accessForTestingOnly(): { readonly press: Promise<void> | undefined } {
-    // deno-lint-ignore no-this-alias
-    const outerThis = this;
-    return {
-      get press() {
-        return outerThis.#press;
-      },
-    };
-  }
-
   protected override willUpdate(changedProperties: PropertyValues) {
     super.willUpdate(changedProperties);
-    // A press under way drags what the cell bound now resolves to.
+    // A press that has not yet become a drag drops what the cell bound now
+    // resolves to.
     if (
-      changedProperties.has("cell") && this.cell && this.#press &&
+      changedProperties.has("cell") && this.cell && this._isTracking &&
       !this.#draggedCell
     ) {
       this.#resolvePress(this.cell);
@@ -161,10 +145,10 @@ export class CFDragSource extends BaseElement {
     const deltaY = e.clientY - this._startY;
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 
-    // Start drag after threshold (~5px), once the press has resolved
+    // Start drag after threshold (~5px)
     if (!this.#draggedCell && distance > 5) {
-      this.#pendingStart = e;
-      this.#startPendingDrag();
+      this.#draggedCell = this.cell;
+      this._startDrag(e, this.#draggedCell, this.#pressedCell);
     }
 
     // Update preview position and notify drop zones if dragging
@@ -198,60 +182,17 @@ export class CFDragSource extends BaseElement {
 
     this.#draggedCell = undefined;
     this.#pressedCell = undefined;
-    this.#press = undefined;
-    this.#pendingStart = undefined;
     this._isTracking = false;
     this._pointerId = undefined;
   }
 
-  /**
-   * Resolves `cell` for the press just begun, and starts the drag waiting on
-   * it once it lands.
-   */
+  /** Starts resolving `cell` for the press under way. */
   #resolvePress(cell: CellHandle): void {
-    this.#pressedCell = undefined;
-    const press: Promise<void> = this.#landPress(
-      cell,
-      () => this.#press !== press,
-    );
-    this.#press = press;
-  }
-
-  /**
-   * Helper for `#resolvePress()`, which resolves `cell` and, unless
-   * `superseded()` says a later press or a release has replaced this one,
-   * installs the result and starts the drag waiting on it.
-   */
-  async #landPress(
-    cell: CellHandle,
-    superseded: () => boolean,
-  ): Promise<void> {
-    let pressed: CellHandle;
-    try {
-      pressed = await cell.resolveAsCell();
-    } catch (error) {
-      if (superseded()) return;
-      // The bound cell reads what it holds now, which is the next best thing
-      // to drag.
-      console.error("Failed to resolve the cell to drag:", error);
-      pressed = cell;
-    }
-    if (superseded()) return;
+    const pressed = cell.resolveAsCell();
+    // A drop zone reports a failure, where a drop waits for it; a press that
+    // drops nowhere has nothing to report.
+    pressed.catch(() => {});
     this.#pressedCell = pressed;
-    this.#startPendingDrag();
-  }
-
-  /**
-   * Starts the drag the press is waiting on, once the pointer has passed the
-   * threshold and the press has resolved, and while its cell is still bound.
-   */
-  #startPendingDrag(): void {
-    const e = this.#pendingStart;
-    const pressed = this.#pressedCell;
-    if (!e || !pressed || !this.cell || this.#draggedCell) return;
-    this.#pendingStart = undefined;
-    this.#draggedCell = pressed;
-    this._startDrag(e, pressed);
   }
 
   private _isInteractiveElement(element: HTMLElement): boolean {
@@ -263,7 +204,11 @@ export class CFDragSource extends BaseElement {
     return interactive !== null && this.contains(interactive);
   }
 
-  private _startDrag(e: PointerEvent, cell: CellHandle) {
+  private _startDrag(
+    e: PointerEvent,
+    cell: CellHandle,
+    droppedCell: Promise<CellHandle> | undefined,
+  ) {
     // Now that we're actually dragging, capture the pointer and add dragging class
     const body = this.shadowRoot?.querySelector(".drag-body") as HTMLElement;
     if (body) {
@@ -285,6 +230,7 @@ export class CFDragSource extends BaseElement {
     // Start drag in drag state
     startDrag({
       cell,
+      droppedCell,
       type: this.type,
       sourceElement: this,
       preview: this._preview,

@@ -17,13 +17,10 @@ import { boundHandler } from "../../test-utils/template.ts";
 
 /** A cell whose value renders a piece, with the log its render writes to. */
 function pieceCell(id = "of:piece") {
-  const piece = createRenderableCellHandle<unknown>(
+  return createRenderableCellHandle<unknown>(
     { $UI: { type: "vnode", name: "div", props: {}, children: [] } },
     { id: id as `${string}:${string}` },
   );
-  // The piece holds no link, so it resolves to itself.
-  piece.cell.resolveAsCell = () => Promise.resolve(piece.cell);
-  return piece;
 }
 
 /**
@@ -52,24 +49,11 @@ async function mountSource(
 
 /**
  * Presses pointer `pointerId` at (`x`, `y`) on `target`, content slotted into
- * `source`, and returns once the press has resolved the cell it drags.
- * happy-dom does not route an event from slotted content through the slot into
- * the shadow tree, so this hands the shadow tree's `pointerdown` listener the
- * event a browser would deliver to it.
+ * `source`. happy-dom does not route an event from slotted content through the
+ * slot into the shadow tree, so this hands the shadow tree's `pointerdown`
+ * listener the event a browser would deliver to it.
  */
-async function press(
-  source: CFDragSource,
-  target: Element,
-  x: number,
-  y: number,
-  pointerId = 1,
-): Promise<void> {
-  pressWithoutWaiting(source, target, x, y, pointerId);
-  await source.accessForTestingOnly.press;
-}
-
-/** Presses as `press()` does, returning before the press has resolved. */
-function pressWithoutWaiting(
+function press(
   source: CFDragSource,
   target: Element,
   x: number,
@@ -118,7 +102,7 @@ describe("CFDragSource", () => {
     it("starts a drag of its cell once the pointer moves more than five pixels", async () => {
       const { cell } = pieceCell();
       const { source, events } = await mountSource({ cell, type: "card" });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
 
       pointer("pointermove", 13, 14);
       expect(isDragging()).toBe(false);
@@ -139,7 +123,7 @@ describe("CFDragSource", () => {
     it("shows a preview of its cell beside the pointer", async () => {
       const { cell } = pieceCell();
       const { source } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
 
       pointer("pointermove", 40, 60);
 
@@ -151,7 +135,7 @@ describe("CFDragSource", () => {
     it("captures the pointer and marks its body as dragging", async () => {
       const { cell } = pieceCell();
       const { source } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10, 7);
+      press(source, source.querySelector("span")!, 10, 10, 7);
       expect(dragBody(source).hasPointerCapture(7)).toBe(false);
 
       pointer("pointermove", 30, 30, 7);
@@ -172,7 +156,7 @@ describe("CFDragSource", () => {
           source.lastElementChild!,
         ]
       ) {
-        await press(source, target, 10, 10);
+        press(source, target, 10, 10);
         pointer("pointermove", 50, 50);
       }
 
@@ -184,7 +168,7 @@ describe("CFDragSource", () => {
       const { cell } = pieceCell();
       const { source, events } = await mountSource({ cell, disabled: true });
 
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 50, 50);
 
       expect(isDragging()).toBe(false);
@@ -194,7 +178,7 @@ describe("CFDragSource", () => {
     it("does not start a drag without a cell", async () => {
       const { source, events } = await mountSource({});
 
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 50, 50);
 
       expect(isDragging()).toBe(false);
@@ -204,7 +188,7 @@ describe("CFDragSource", () => {
     it("does not start a drag once its cell is taken away mid-press", async () => {
       const { cell } = pieceCell();
       const { source } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
 
       source.cell = undefined;
       pointer("pointermove", 50, 50);
@@ -215,7 +199,7 @@ describe("CFDragSource", () => {
     it("does not start a drag for the movement of another pointer", async () => {
       const { cell } = pieceCell();
       const { source } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10, 1);
+      press(source, source.querySelector("span")!, 10, 10, 1);
 
       pointer("pointermove", 50, 50, 2);
 
@@ -227,7 +211,7 @@ describe("CFDragSource", () => {
     it("moves the preview and the drag's pointer with the pointer", async () => {
       const { cell } = pieceCell();
       const { source } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 20, 20);
 
       pointer("pointermove", 80, 90);
@@ -240,7 +224,7 @@ describe("CFDragSource", () => {
     it("ignores the movement and release of another pointer", async () => {
       const { cell } = pieceCell();
       const { source, events } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10, 1);
+      press(source, source.querySelector("span")!, 10, 10, 1);
       pointer("pointermove", 20, 20, 1);
 
       pointer("pointermove", 80, 90, 2);
@@ -257,7 +241,7 @@ describe("CFDragSource", () => {
       it(`ends the drag and dispatches \`cf-drag-end\` on \`${type}\``, async () => {
         const { cell } = pieceCell();
         const { source, events } = await mountSource({ cell });
-        await press(source, source.querySelector("span")!, 10, 10);
+        press(source, source.querySelector("span")!, 10, 10);
         pointer("pointermove", 20, 20);
         const { preview } = getCurrentDrag()!;
 
@@ -276,7 +260,7 @@ describe("CFDragSource", () => {
     it("ends the drag of the cell it started with once its cell is taken away mid-drag", async () => {
       const { cell } = pieceCell();
       const { source, events } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 20, 20);
       const { preview } = getCurrentDrag()!;
 
@@ -295,7 +279,7 @@ describe("CFDragSource", () => {
     it("stops the render filling the preview", async () => {
       const { cell, log } = pieceCell();
       const { source } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 20, 20);
       expect(log.detached).toBe(false);
 
@@ -307,7 +291,7 @@ describe("CFDragSource", () => {
     it("dispatches no `cf-drag-end` for a press released without a drag", async () => {
       const { cell } = pieceCell();
       const { source, events } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
 
       pointer("pointerup", 12, 12);
       // Released, the pointer no longer drags it.
@@ -322,7 +306,7 @@ describe("CFDragSource", () => {
     it("starts no drag from a press made before it was removed", async () => {
       const { cell } = pieceCell();
       const { source, events } = await mountSource({ cell });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
 
       source.remove();
       pointer("pointermove", 50, 50);
@@ -340,7 +324,7 @@ describe("CFDragSource", () => {
       let endings = 0;
       const unsubscribe = subscribeToEndDrag(() => endings++);
       try {
-        await press(source, source.querySelector("span")!, 10, 10);
+        press(source, source.querySelector("span")!, 10, 10);
         pointer("pointermove", 20, 20);
 
         source.remove();
@@ -368,15 +352,15 @@ describe("CFDragSource", () => {
     });
   });
 
-  describe("the cell it drags", () => {
-    // A bound cell may hold a link. What a drag carries is the cell the link
-    // leads to when the press begins: a `.map()` row keeps its bound cell
-    // while the list moves another entry into that row.
+  describe("the cell a drop delivers", () => {
+    // A bound cell may hold a link. A drop delivers the cell the link leads
+    // to when the press begins: a `.map()` row keeps its bound cell while the
+    // list moves another entry into that row.
 
     /**
      * A cell holding a link to `target`, whose target the test moves with
      * `moveTo()`. Each resolution waits for `resolution` and lands on the
-     * target as it then stands.
+     * target as it stood when the resolution was asked for.
      */
     function linkCell(
       target: CellHandle,
@@ -384,20 +368,23 @@ describe("CFDragSource", () => {
     ) {
       const { cell: link } = pieceCell("of:link");
       let current = target;
-      link.resolveAsCell = () => resolution.then(() => current);
+      link.resolveAsCell = () => {
+        const landed = current;
+        return resolution.then(() => landed);
+      };
       const moveTo = (next: CellHandle) => {
         current = next;
       };
       return { link, moveTo };
     }
 
-    /** Drags `source`, ends the drag, and returns the cell it carried. */
-    async function draggedCell(source: CFDragSource): Promise<CellHandle> {
-      await press(source, source.querySelector("span")!, 10, 10);
+    /** Drags `source` and returns the drag it starts, before releasing it. */
+    function drag(source: CFDragSource) {
+      press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 50, 50);
-      const { cell } = getCurrentDrag()!;
+      const started = getCurrentDrag()!;
       pointer("pointerup", 50, 50);
-      return cell;
+      return started;
     }
 
     it("is the cell its bound cell resolves to", async () => {
@@ -405,32 +392,36 @@ describe("CFDragSource", () => {
       const { link } = linkCell(target);
       const { source } = await mountSource({ cell: link });
 
-      expect(await draggedCell(source)).toBe(target);
+      expect(await drag(source).droppedCell).toBe(target);
     });
 
-    it("is the cell its bound cell resolves to when the press begins", async () => {
+    it("is what the bound cell resolves to when each press begins", async () => {
       const { cell: first } = pieceCell("of:first");
       const { cell: second } = pieceCell("of:second");
       const { link, moveTo } = linkCell(first);
       const { source } = await mountSource({ cell: link });
-      const before = await draggedCell(source);
+      const before = drag(source).droppedCell;
 
       moveTo(second);
 
-      expect([before, await draggedCell(source)]).toEqual([first, second]);
+      expect([await before, await drag(source).droppedCell]).toEqual([
+        first,
+        second,
+      ]);
     });
 
-    it("is the bound cell where resolving it fails", async () => {
-      const { cell: link } = pieceCell("of:link");
-      link.resolveAsCell = () => Promise.reject(new Error("refused"));
-      const { source } = await mountSource({ cell: link });
-      const error = console.error;
-      console.error = () => {};
-      try {
-        expect(await draggedCell(source)).toBe(link);
-      } finally {
-        console.error = error;
-      }
+    it("leaves the drag starting at once, with the bound cell, while it resolves", async () => {
+      const { link } = linkCell(
+        pieceCell("of:target").cell,
+        Promise.withResolvers<void>().promise,
+      );
+      const { source, events } = await mountSource({ cell: link });
+
+      expect(drag(source).cell).toBe(link);
+      expect(events.map(({ type }) => type)).toEqual([
+        "cf-drag-start",
+        "cf-drag-end",
+      ]);
     });
 
     it("is what the cell bound mid-press resolves to", async () => {
@@ -438,55 +429,13 @@ describe("CFDragSource", () => {
       const { cell: target } = pieceCell("of:target");
       const { link: next } = linkCell(target);
       const { source } = await mountSource({ cell: link });
-      await press(source, source.querySelector("span")!, 10, 10);
+      press(source, source.querySelector("span")!, 10, 10);
 
       source.cell = next;
       await source.updateComplete;
-      await source.accessForTestingOnly.press;
       pointer("pointermove", 50, 50);
 
-      expect(getCurrentDrag()!.cell).toBe(target);
-    });
-
-    it("starts no drag until the press has resolved, then starts one where the pointer is", async () => {
-      const resolution = Promise.withResolvers<void>();
-      const { cell: target } = pieceCell("of:target");
-      const { link } = linkCell(target, resolution.promise);
-      const { source, events } = await mountSource({ cell: link });
-      pressWithoutWaiting(source, source.querySelector("span")!, 10, 10);
-      pointer("pointermove", 30, 30);
-      pointer("pointermove", 40, 60);
-      expect(isDragging()).toBe(false);
-
-      resolution.resolve();
-      await source.accessForTestingOnly.press;
-
-      const drag = getCurrentDrag()!;
-      expect(drag.cell).toBe(target);
-      expect([drag.pointerX, drag.pointerY]).toEqual([40, 60]);
-      expect(events).toEqual([{
-        type: "cf-drag-start",
-        detail: { cell: target.toSigilLink() },
-      }]);
-    });
-
-    it("starts no drag from a press released before it resolved", async () => {
-      const resolution = Promise.withResolvers<void>();
-      const { link } = linkCell(
-        pieceCell("of:target").cell,
-        resolution.promise,
-      );
-      const { source, events } = await mountSource({ cell: link });
-      pressWithoutWaiting(source, source.querySelector("span")!, 10, 10);
-      const press = source.accessForTestingOnly.press;
-      pointer("pointermove", 40, 60);
-      pointer("pointerup", 40, 60);
-
-      resolution.resolve();
-      await press;
-
-      expect(isDragging()).toBe(false);
-      expect(events).toEqual([]);
+      expect(await getCurrentDrag()!.droppedCell).toBe(target);
     });
   });
 });

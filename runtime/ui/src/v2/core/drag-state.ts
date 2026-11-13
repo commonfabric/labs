@@ -10,6 +10,13 @@ export interface DragState {
   /** The CellHandle being dragged */
   cell: CellHandle;
 
+  /**
+   * The cell a drop delivers, where that is not `cell` and is still being
+   * worked out when the drag starts. A drop waits for it, and delivers
+   * nothing where it fails. Without it, a drop delivers `cell`.
+   */
+  droppedCell?: Promise<CellHandle>;
+
   /** Optional type identifier for filtering drop zones */
   type?: string;
 
