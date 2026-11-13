@@ -207,10 +207,18 @@ describe("run_command: components a host names", () => {
       notes: {
         [`pattern:${own}/${instanceId}`]: "held",
         [`pattern:${foreign}/${instanceId}`]: "foreign",
+        [`pattern:${foreign}/${plainId}`]: "foreign too",
+        // a member already named as a rename would be keeps its value
+        "unheld:foreign-space": "kept",
       },
     });
     expect(seen).not.toContain(instanceId);
-    expect(seen).toContain("unheld:foreign-space:0");
+    expect(seen).not.toContain(plainId);
+    for (const value of ["foreign", "foreign too", "kept"]) {
+      expect(seen).toContain(`\\"${value}\\"`);
+    }
+    expect(seen).toContain("unheld:foreign-space#1");
+    expect(seen).toContain("unheld:foreign-space#2");
     const token = seen.match(/cfh:a:[A-Za-z0-9]+/)?.[0];
     expect(resolveHandleToken(engine.handleTable!, token!)?.ref)
       .toContain(`of:${instanceId}`);

@@ -151,23 +151,37 @@ const withHeldMembers = (
   held: ReadonlyMap<string, HeldAddress>,
 ): JSONObject => {
   const result: { [key: string]: JSONValue } = {};
-  let unheldKeys = 0;
+  /**
+   * A renamed member's key: `key`, or `key#n` for the first `n` that neither
+   * an original key of `value` nor one already written uses, so a rename
+   * never displaces another member. An unrenamed key is an original, unique
+   * among the originals and avoided by every rename.
+   */
+  const freeKey = (key: string): string => {
+    let candidate = key;
+    for (
+      let n = 1;
+      Object.hasOwn(value, candidate) || Object.hasOwn(result, candidate);
+      n++
+    ) {
+      candidate = `${key}#${n}`;
+    }
+    return candidate;
+  };
   for (const [stored, item] of Object.entries(value)) {
     // A key that spells an address is renamed like a value: to the run's
     // reference, which the outbound swap mints in keys too, or to a reason.
     const heldKey = held.get(stored);
     const key = heldKey === undefined
       ? stored
-      : "ref" in heldKey
-      ? heldKey.ref
-      : `unheld:${heldKey.unheld}:${unheldKeys++}`;
+      : freeKey("ref" in heldKey ? heldKey.ref : `unheld:${heldKey.unheld}`);
     const replaced = typeof item === "string" ? held.get(item) : undefined;
     if (replaced === undefined) {
       defineOwnEntry(result, key, withHeldAddresses(item, held));
     } else if ("ref" in replaced) {
       defineOwnEntry(result, key, replaced.ref);
     } else {
-      defineOwnEntry(result, `${key}_unheld`, replaced.unheld);
+      defineOwnEntry(result, freeKey(`${key}_unheld`), replaced.unheld);
     }
   }
   return result;
@@ -181,8 +195,11 @@ const withHeldMembers = (
  * pieces in it without ever holding an address. One the run cannot hold
  * (another space, no whole Pattern Instance, a failed read, past the limit)
  * is dropped: an object member gives way to `<key>_unheld` naming why, an
- * array item to `{unheld}`. Matched by the value's shape, not its key, so a
- * Loom's `inbox` or any other field is covered; a host spelling an address
+ * array item to `{unheld}`, and a key that spells one is renamed to
+ * `unheld:<reason>` (a held one to the run's reference). Matched by shape in
+ * every value and every key, so a Loom's `inbox` or any other field is
+ * covered, and a renamed key takes a `#n` suffix rather than displace another
+ * member; a host spelling an address
  * some other way (a pane url) is the host's to keep from a model. Admission
  * is {@link heldPatternInstance}'s check alone: whatever text named the id,
  * the run gets only an own-space whole Pattern Instance, which the generic
