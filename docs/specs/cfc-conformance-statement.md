@@ -425,10 +425,9 @@ dials.
   and so is a `data:` link of a media type other than the Fabric codec's,
   which is written as a reference whose content rides in its URI (the codec's
   own `data:` links and native snapshots are expanded and written as values,
-  `data-updating.ts`). A SQLite write is recorded as a SQLite operation
-  rather than a document value write, so writer-fit, and with it the rule,
-  does not see it; the column write ceiling and per-row rules gate it, and
-  are inert until a column declares `ifc` or a table declares a rule.
+  `data-updating.ts`). A SQLite write commits beside a value write of its
+  database document's revision, which writer-fit measures, so a served run's
+  cross-holder clause in it is refused there, as any other write's is.
 - Writer-fit does not measure a reference or structure write. §8.2.6
   requires "writer-fit for the reference and structure actually persisted,
   including replica audiences", and §8.12.8 that writer-fit and upgrade
