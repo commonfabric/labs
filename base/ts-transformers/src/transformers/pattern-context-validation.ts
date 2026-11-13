@@ -20,6 +20,9 @@
  *   values until a nested computed()/lift() consumes them.
  *
  * - Function creation is NOT allowed in pattern context (must be at module scope)
+ * - An async or generator callback passed to an ordinary Array method in
+ *   pattern context cannot use reactive values: its body does not run to
+ *   completion while the pattern is being built
  * - lift() and handler() must be defined at module scope, not inside patterns
  * - `let` and `var` are NOT allowed at module scope: module state is `const`
  *
@@ -35,6 +38,9 @@
  *   read: ERROR (must wrap in computed()); a read at a lowerable site is
  *   auto-wrapped into a lift instead
  * - Function creation in pattern context: ERROR (move to module scope)
+ * - Async or generator Array-method callback that uses a reactive value in
+ *   pattern context: ERROR (make it synchronous, or move the whole expression
+ *   into computed())
  * - lift()/handler() inside pattern: ERROR (move to module scope)
  * - `let`/`var` statement at module scope: ERROR, or a warning when recompiling
  *   stored source (declare it `const`)
@@ -58,10 +64,14 @@ import {
   classifyArrayMethodCallSite,
   detectCallKind,
   detectDirectBuilderCall,
+  getCallArgumentPosition,
+  getDeferredFunctionKind,
   getNodeText,
   isInRestrictedReactiveContext,
   isInsideRestrictedContext,
   isInsideSafeCallbackWrapper,
+  isReactiveOriginExpression,
+  isReactiveOriginTaggedTemplate,
   isStandaloneFunctionDefinition,
 } from "../ast/mod.ts";
 import { getCallbackBoundarySemantics } from "../policy/callback-boundary.ts";
@@ -205,6 +215,36 @@ function reportModuleScopeMutableBindings(
   }
 }
 
+type DataFlowAnalyzer = ReturnType<
+  TransformationContext["getDataFlowAnalyzer"]
+>;
+
+/**
+ * Reports whether any expression under `root` is, creates, or reads a reactive
+ * value. The walk enters nested functions, because a function created inside
+ * `root` runs no earlier than `root` does.
+ */
+function containsReactiveValue(
+  root: ts.Node,
+  checker: ts.TypeChecker,
+  analyze: DataFlowAnalyzer,
+): boolean {
+  const visit = (node: ts.Node): boolean => {
+    if (
+      ts.isExpression(node) &&
+      (isReactiveOriginExpression(node, checker) ||
+        (ts.isTaggedTemplateExpression(node) &&
+          isReactiveOriginTaggedTemplate(node, checker)) ||
+        analyze(node).containsReactive)
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, visit) ?? false;
+  };
+
+  return visit(root);
+}
+
 export class PatternContextValidationTransformer
   extends HelpersOnlyTransformer {
   transform(context: TransformationContext): ts.SourceFile {
@@ -238,6 +278,18 @@ export class PatternContextValidationTransformer
             checker,
             context,
           );
+          if (
+            this.#validateDeferredArrayCallback(
+              node,
+              boundarySemantics,
+              context,
+              checker,
+              analyze,
+            )
+          ) {
+            return node;
+          }
+
           if (boundarySemantics.establishesLocalReactiveAliasScope) {
             this.#validateLocalReactiveAliasUsage(node, context);
           }
@@ -940,6 +992,60 @@ export class PatternContextValidationTransformer
         `since they run later, outside the reactive graph. ` +
         `Note: classes inside computed(), action(), lift(), and handler() are allowed.`,
       node,
+    });
+    return true;
+  }
+
+  /**
+   * Validates an async or generator callback passed to an ordinary Array method
+   * in pattern context. Pattern construction is synchronous: a reactive value
+   * is created and wired while the pattern body runs. An async callback can
+   * resume after that has finished, and the method never runs the body of a
+   * generator callback, so reactive work inside either one happens outside
+   * construction or not at all. A callback that uses no reactive value is
+   * ordinary JavaScript and is allowed, and so is one inside `computed()`,
+   * `action()`, `lift()`, or `handler()`, where it runs over resolved values.
+   *
+   * Returns true when the callback was rejected, so the caller can stop
+   * descending into its body and avoid cascading per-expression diagnostics.
+   */
+  #validateDeferredArrayCallback(
+    callback: ts.ArrowFunction | ts.FunctionExpression,
+    boundarySemantics: CallbackBoundarySemantics,
+    context: TransformationContext,
+    checker: ts.TypeChecker,
+    analyze: DataFlowAnalyzer,
+  ): boolean {
+    if (!boundarySemantics.isPlainArrayValueCallback) return false;
+
+    const deferredKind = getDeferredFunctionKind(callback);
+    if (!deferredKind) return false;
+
+    // The body inherits the context of the call that owns the callback, so
+    // this asks where the reactive work would run, not where the callback is
+    // written.
+    if (!isInsideRestrictedContext(callback.body, checker, context)) {
+      return false;
+    }
+
+    if (!containsReactiveValue(callback.body, checker, analyze)) return false;
+
+    const callee = getCallArgumentPosition(callback)?.call.expression;
+    const method = callee && ts.isPropertyAccessExpression(callee)
+      ? `\`${callee.name.text}()\``
+      : undefined;
+    const remedy = `move the whole expression into \`computed(() => ...)\`.`;
+    context.reportDiagnostic({
+      severity: "error",
+      type: "pattern-context:deferred-callback",
+      message: deferredKind === "generator"
+        ? `${method ?? "This array method"} does not run the body of a ` +
+          `generator callback, so a generator callback cannot use reactive ` +
+          `values. Make the callback an ordinary function, or ${remedy}`
+        : `An async ${method ?? "array-method"} callback can resume after ` +
+          `pattern construction has finished, so it cannot use reactive ` +
+          `values. Make the callback synchronous, or ${remedy}`,
+      node: callback,
     });
     return true;
   }

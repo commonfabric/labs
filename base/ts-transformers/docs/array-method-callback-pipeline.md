@@ -63,10 +63,13 @@ rewrites. An ordinary eager `Array.map()` or `ReadonlyArray.map()` call remains
 plain JavaScript, but a callback in a pattern body can still carry pattern-owned
 value sites that stage 13 lowers. That permission is narrower than the
 `plain-array-value` callback boundary: `isCollectingPlainArrayMethodCallback`
-admits only argument zero of a `map` whose owner symbol includes the configured
-TypeScript default-library `Array`/`ReadonlyArray` declaration. Same-named
-source and ambient types do not qualify, and neither do result-interpreting
-methods such as `filter`, `find`, `sort`, `flatMap`, or `reduce`.
+admits only a synchronous callback at argument zero of a `map` whose owner
+symbol includes the configured TypeScript default-library
+`Array`/`ReadonlyArray` declaration. Same-named source and ambient types do not
+qualify, and neither do result-interpreting methods such as `filter`, `find`,
+`sort`, `flatMap`, or `reduce`. An async or generator callback does not qualify
+either: its body does not run to completion during pattern build, and one that
+uses a reactive value is reported as `pattern-context:deferred-callback`.
 
 ## What `ClosureTransformer` does for `.map`s
 

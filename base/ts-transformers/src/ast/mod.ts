@@ -65,6 +65,8 @@ export {
   isSafeEventHandlerCall,
 } from "./event-handlers.ts";
 export {
+  type DeferredFunctionKind,
+  getDeferredFunctionKind,
   getEnclosingFunctionLikeDeclaration,
   isFunctionLikeExpression,
 } from "./function-predicates.ts";

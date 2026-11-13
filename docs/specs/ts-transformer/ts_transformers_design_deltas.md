@@ -127,6 +127,33 @@ landed after the snapshot above:
     `builder-call-hoisting.ts`; no transformer emits it and no fixture expects
     it. See `base/ts-transformers/docs/derive-to-lift-design.md`.
 
+### Addendum 5 (a deferred plain-array callback cannot use reactive values)
+
+An async function, a generator, or an async generator passed to a
+value-returning method of an ordinary array in pattern context is reported as
+`pattern-context:deferred-callback` when its body uses a reactive value. The
+same callback carries no pattern-owned expression site:
+`isCollectingPlainArrayMethodCallback` (`ast/call-kind.ts`) admits a `map`
+callback only when it runs synchronously.
+
+Addendum 4 rests on the callback running during pattern build. An async
+callback can resume after the build has finished, and `map` never runs the body
+of a generator callback. A lift emitted into either one was therefore created
+outside pattern construction or never created:
+`["a", "b"].map(async (value) => { await ready; const hit = value === target; return hit; })`
+compiled without a diagnostic and rejected at runtime once the callback
+resumed.
+
+The diagnostic covers the whole `plain-array-value` boundary rather than `map`
+alone, because the callback's timing does not depend on which method received
+it: an async `filter` callback that renders JSX or calls `computed()` has the
+same defect. It counts a captured reactive value that the callback only
+returns, and it reads nested functions, which run no earlier than the callback
+that creates them.
+
+This narrows the accepted language. No pattern in the corpus passes an async or
+generator callback to an array method.
+
 ### Addendum 4 (a plain-array `map` callback carries pattern-owned sites)
 
 A `map` callback on an ordinary JavaScript array inside a pattern body now

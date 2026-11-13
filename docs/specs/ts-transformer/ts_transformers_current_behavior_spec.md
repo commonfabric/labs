@@ -895,6 +895,36 @@ Diagnostics emitted in all modes:
     imperative container roots" unsupported bucket. Guidance: use a supported
     array-method/value call, an event handler, or move the work into
     `computed(() => ...)`, module-scope `lift()`, or a helper.
+- **Error** `pattern-context:deferred-callback`
+  - enforces the target-language matrix row "An async or generator callback
+    that uses a reactive value, passed to a value-returning method of an
+    ordinary array in pattern-facing code" (Unsupported)
+  - an async function, a generator, or an async generator passed as a callback
+    at the `plain-array-value` boundary (`map`, `filter`, `find`, and the other
+    value-returning methods of an ordinary array) in pattern context, when
+    anything in its body is, creates, or reads a reactive value. Nested
+    functions count, and so does a captured reactive value that is only
+    returned: `["a", "b"].map(async () => target)` is reported for `target`
+    alone
+  - pattern construction is synchronous. An async callback can resume after
+    construction has finished, and the method never runs the body of a
+    generator callback, so reactive work inside either one happens outside
+    construction or not at all. `isCollectingPlainArrayMethodCallback` refuses
+    both for the same reason (§6.7), so neither carries a pattern-owned wrapper
+    site
+  - reported once, on the callback. Validation does not descend into a
+    reported callback, so the expressions inside it draw no further diagnostic
+  - not reported: a callback that uses no reactive value, which stays ordinary
+    JavaScript; a callback inside `computed(...)`, `action(...)`, `lift(...)`,
+    a handler, or an event handler, where it runs over resolved values; and a
+    callback whose array-method call a terminal read consumes
+    (`["a", "b"].map(async (v) => v === target).length`), which is compute
+    context because the whole expression lowers into one lift
+  - the message names the method when the callee is a property access, says
+    which of the two the callback is, and instructs the author to make the
+    callback synchronous or an ordinary function, or to move the whole
+    expression into `computed(() => ...)`
+  - `test/validation.test.ts` "deferred array callbacks"
 - **Error** `pattern-context:patterntool-requires-pattern`
   - `patternTool(fn, ...)` where the first argument is a bare callback (arrow /
     function expression, read through transparent parentheses) rather than a
@@ -1038,7 +1068,11 @@ decides. It admits a callback that is argument zero of the configured
 default-library `Array`/`ReadonlyArray` type and names a method in
 `COLLECTING_ARRAY_METHOD_NAMES` — today `map` alone — over a plain receiver no
 reactive lowering owns. A source or ambient type merely named `Array` or
-`ReadonlyArray` is not a standard array. `map` stores each result without
+`ReadonlyArray` is not a standard array. The callback must also run
+synchronously (`getDeferredFunctionKind`, `ast/function-predicates.ts`): an
+async callback can resume after pattern construction has finished, and `map`
+never runs the body of a generator callback, so a site in either one would not
+be lowered during construction. `map` stores each result without
 reading it, so a result that is a cell stays a cell. Every other callback-taking
 array method reads the result as it runs:
 `filter`, `find`, `some`, and `every` as a boolean, `sort` as a number,

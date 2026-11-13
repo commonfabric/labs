@@ -38,7 +38,10 @@ import { TwoLevelWeakCache } from "@commonfabric/collections/two-level-weak-cach
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
 import { isTransparentWrapper, unwrapExpression } from "../utils/expression.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";
-import { getEnclosingFunctionLikeDeclaration } from "./function-predicates.ts";
+import {
+  getDeferredFunctionKind,
+  getEnclosingFunctionLikeDeclaration,
+} from "./function-predicates.ts";
 import {
   builderNameForExportName,
   COMMONFABRIC_BUILDER_EXPORT_NAMES,
@@ -969,10 +972,12 @@ const COLLECTING_ARRAY_METHOD_NAMES = new Set(["map"]);
  * carry pattern-owned wrapper sites, because a lifted callback-local can be
  * returned from it without changing what the method does.
  *
- * Three things must hold, and each rules out a shape that would otherwise slip
+ * Four things must hold, and each rules out a shape that would otherwise slip
  * through method-name matching alone: the callback is argument zero, so a
  * comparator or an `initialValue` in another position does not qualify; the
- * resolved owner symbol includes the configured default-library
+ * callback runs synchronously, so an async callback that can resume after
+ * pattern construction and a generator whose body the method never runs do not
+ * qualify; the resolved owner symbol includes the configured default-library
  * `Array`/`ReadonlyArray` declaration, so a same-named source or ambient type
  * and a `map` of some other type do not qualify; and the receiver is a plain
  * array that no reactive lowering owns, so the reactive collection operators
@@ -985,6 +990,10 @@ export function isCollectingPlainArrayMethodCallback(
 ): boolean {
   const position = getCallArgumentPosition(callback);
   if (!position || position.index !== 0) {
+    return false;
+  }
+
+  if (getDeferredFunctionKind(callback)) {
     return false;
   }
 
