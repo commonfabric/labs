@@ -68,7 +68,11 @@ export interface CallVerbToolSuccessOutput {
    */
   resultRef?: string;
 
-  /** Why {@link result} is absent although the verb returned one. */
+  /**
+   * Why {@link result} is absent: the verb returned one the release boundary
+   * withheld, or the handling's outcome is withheld, so whether it returned
+   * one is not told.
+   */
   message?: string;
 }
 
