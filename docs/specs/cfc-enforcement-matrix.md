@@ -330,11 +330,13 @@ The strict-only delta is:
   `cfc` logger's `writer-fit-cross-holder` key. Every other clause is measured
   as for any writer, so a same-holder misfit keeps §8.12.5's options, and a
   cross-holder clause residency covers is never offending there. A run in the
-  acting principal's own runtime is measured as before. A reference write is
-  outside the rule as it is outside writer-fit, per the scope note above: a
-  served run that carries a cross-holder clause into a store by reference,
-  rather than by value, is not refused, and its link label carries the
-  reference's own restriction. Residency's owner case still admits a
+  acting principal's own runtime is measured as before. The rule inherits the
+  scope note above: a served run that carries a cross-holder clause into a
+  store by reference, rather than by value, is not refused, although the
+  slot stamp it persists, the creating attempt's join, holds the clause.
+  §8.2.6 and §8.12.8 put reference and structure writes under writer-fit,
+  so this is a gap the conformance statement records, and measuring them
+  would bring such writes under the rule. Residency's owner case still admits a
   cross-holder `PersonalSpace(P)` clause into a store bound to `P`, which the
   rule's text leaves out pending
   [specs#68](https://github.com/commonfabric/specs/pull/68) and

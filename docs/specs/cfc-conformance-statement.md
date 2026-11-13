@@ -420,13 +420,25 @@ dials.
   the ruling would need to adopt. Residency's owner case admits a cross-holder `PersonalSpace(P)` clause
   into a store bound to `P`, which the proposal leaves out pending specs#68
   and specs#71: an under-taint against the proposal's text, whose holders,
-  `P` alone, are inside that clause's audience. And two channels stay
-  unmeasured, as they are for every writer: a link write's slot label, and a
-  read declared onward, whose membership lands as a stamp the measurement
-  does not reach. So a served run that carries a cross-holder clause into a
-  store by reference, rather than by value, is not refused: an under-taint
-  against the proposal wherever the reference's own label does not carry the
-  clause.
+  `P` alone, are inside that clause's audience. And it inherits the
+  reference-write gap below: a served run that carries a cross-holder clause
+  into a store by reference, rather than by value, is not refused, although
+  the clause is in the slot stamp it persists. A read declared onward, whose
+  membership lands as a stamp the measurement does not reach, is the same.
+- Writer-fit does not measure a reference or structure write. §8.2.6
+  requires "writer-fit for the reference and structure actually persisted,
+  including replica audiences", and §8.12.8 that writer-fit and upgrade
+  rules "govern the declared component, including reference
+  identity/structure writes". The measurement in `prepareBoundaryCommit`
+  takes only a target's value-write paths: a recorded link write, and a
+  value made entirely of references, are skipped
+  (`cfc-enforcement-matrix.md` §4, the writer-fit entry's scope note). What
+  such a write persists is the reference's own label, §3 above: the link
+  schema's declarations, the handle's carried restriction, and the creating
+  attempt's flow join as a pointer-class stamp at the slot. None of it is
+  measured against the target's ceiling: an under-taint. A served run's
+  cross-holder clause (§8.12.5.1, above) is in that stamp, so a measurement
+  of reference writes would bring those writes under the holder rule.
 
 ## 6. Idempotent persistence (§4.6.4)
 
