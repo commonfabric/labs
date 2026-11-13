@@ -63,7 +63,7 @@ const SvgDiagram = pattern<SvgDiagramInput, SvgDiagramOutput>(
             {ifElse(
               response.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating diagram...
+                <cf-loader showElapsed /> Generating diagram...
               </div>,
               <cf-svg content={response.result} />,
             )}

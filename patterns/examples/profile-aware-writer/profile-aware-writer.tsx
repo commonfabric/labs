@@ -81,7 +81,7 @@ Write content personalized to the user when appropriate.`;
         {result.pending
           ? (
             <div style="margin-top: 16px;">
-              <cf-loader show-elapsed /> Generating personalized content...
+              <cf-loader showElapsed /> Generating personalized content...
             </div>
           )
           : result.result

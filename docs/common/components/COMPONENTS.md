@@ -38,17 +38,23 @@ nothing live to hand over for it.
 **Native HTML inputs are one-way only.** Always use the Common Fabric form
 components for inputs.
 
-Use camelCase for component properties — kebab-case JSX attributes don't map
-correctly:
+A JSX prop sets the element's JavaScript property, so write the property's
+name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
+are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
+as attributes, and an event prop, which starts with `on` and is spelled with the
+event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
+nothing, since no property has that name, and the compiler warns of it, naming
+the property to write. Because the property name is the only spelling, TypeScript checks every
+prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-// ❌ Kebab-case won't work
-<cf-autocomplete allow-custom={true} />  // Sets element["allow-custom"], not allowCustom
-
-// ✅ CamelCase works
-<cf-autocomplete allowCustom={true} />  // Sets element.allowCustom correctly
+<cf-autocomplete allow-custom={true} />  // warning: write `allowCustom`
+<cf-autocomplete allowCustom={true} />
 ```
+
+A component's HTML attribute names, such as `allow-custom` in a component's own
+documentation, are for markup written as HTML, not for pattern JSX.
 
 When a control is already bound to a cell via `$value`, treat that binding as
 the primary value path. Avoid `oncf-change` handlers that simply write the same

@@ -5,6 +5,7 @@ export { CfcPolicyAuthoringTransformer } from "./cfc-policy-authoring.ts";
 export { CfcPolicyOfValidationTransformer } from "./cfc-policy-of-validation.ts";
 export { PatternCallbackLoweringTransformer } from "./pattern-callback-lowering.ts";
 export { EmptyArrayOfValidationTransformer } from "./empty-array-of-validation.ts";
+export { JsxPropNameValidationTransformer } from "./jsx-prop-name-validation.ts";
 export { HelperOwnedExpressionSiteLoweringTransformer } from "./helper-owned-expression-site-lowering.ts";
 export { JsxExpressionSiteRouterTransformer } from "./jsx-expression-site-router.ts";
 export { MergeablePushValidationTransformer } from "./mergeable-push-validation.ts";

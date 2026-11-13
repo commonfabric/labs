@@ -82,7 +82,7 @@ export default pattern<FactoryInput, FactoryOutput>((_) => {
     [UI]: (
       <div>
         <cf-message-input
-          button-text="Add"
+          buttonText="Add"
           placeholder="New counter"
           appearance="rounded"
           oncf-send={newCounter({})}

@@ -97,7 +97,7 @@ export default pattern<PickerStoryInput, PickerStoryOutput>(() => {
           $items={items}
           $selectedIndex={selectedIndex}
           disabled={disabled}
-          min-height="180px"
+          minHeight="180px"
         />
         <div style={{ fontSize: "13px", color: "#64748b", marginTop: "10px" }}>
           Selected: {selectedLabel} (index {selectedIndex})

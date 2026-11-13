@@ -104,7 +104,7 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
             {ifElse(
               response.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating budget...
+                <cf-loader showElapsed /> Generating budget...
               </div>,
               <cf-vstack gap="3">
                 {items.map((item) => (
