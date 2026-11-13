@@ -502,7 +502,15 @@ impl<'a> Resolver<'_, 'a> {
             }
             AstKind::FormalParameter(parameter) => {
                 let base = match &parameter.type_annotation {
-                    Some(annotation) => Ok(self.resolve_type(module, &annotation.type_annotation)),
+                    Some(annotation) => {
+                        let written = self.resolve_type(module, &annotation.type_annotation);
+                        // The input of a `pattern` is read as §7.6.1 has it.
+                        Ok(if self.is_pattern_input(module, parameter) {
+                            self.pattern_body_view(written)
+                        } else {
+                            written
+                        })
+                    }
                     None => self.parameter_type(module, parameter, depth + 1),
                 };
                 (&parameter.pattern, base)
@@ -680,6 +688,53 @@ impl<'a> Resolver<'_, 'a> {
         Err(Origin::UntypedParameter)
     }
 
+    /// Whether `parameter` is the first parameter of the callback of a
+    /// `pattern` call: the input of the pattern (§4.1).
+    fn is_pattern_input(&self, module: usize, parameter: &FormalParameter<'a>) -> bool {
+        let (Some(parsed), Some(model)) = (self.parsed(module), self.model(module)) else {
+            return false;
+        };
+        let nodes = parsed.semantic.nodes();
+        let mut function_span = None;
+        let mut first = false;
+        for kind in nodes.ancestor_kinds(parameter.node_id.get()) {
+            match kind {
+                AstKind::FormalParameters(parameters) => {
+                    first = parameters
+                        .items
+                        .first()
+                        .is_some_and(|item| item.span == parameter.span);
+                }
+                AstKind::ArrowFunctionExpression(arrow) if function_span.is_none() => {
+                    function_span = Some(arrow.span);
+                }
+                AstKind::Function(function) if function_span.is_none() => {
+                    function_span = Some(function.span);
+                }
+                AstKind::CallExpression(call) => {
+                    let Some(function_span) = function_span else {
+                        return false;
+                    };
+                    let is_callback = call.arguments.first().is_some_and(|argument| {
+                        argument.as_expression().is_some_and(|argument| {
+                            FunctionLike::of(argument).is_some_and(|f| f.span() == function_span)
+                        })
+                    });
+                    let builder = model
+                        .api_ref_of_callee(parsed.semantic.scoping(), &call.callee)
+                        .map(|api| api.value());
+                    return first
+                        && is_callback
+                        && matches!(builder, Some(ApiValue::Builder(Builder::Pattern)));
+                }
+                AstKind::ParenthesizedExpression(_) | AstKind::TSAsExpression(_) => {}
+                _ if function_span.is_some() => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn callback_parameter(
         &self,
         module: usize,
@@ -703,7 +758,15 @@ impl<'a> Resolver<'_, 'a> {
                 .type_arguments
                 .as_ref()
                 .and_then(|arguments| arguments.params.get(slot))
-                .map(|written| self.resolve_type(module, written))
+                .map(|written| {
+                    let written = self.resolve_type(module, written);
+                    // The input of a `pattern` is read as §7.6.1 has it.
+                    if builder == Builder::Pattern {
+                        self.pattern_body_view(written)
+                    } else {
+                        written
+                    }
+                })
                 .ok_or(Origin::UntypedParameter);
         }
         self.contextual_parameter(module, call, position, index, depth)

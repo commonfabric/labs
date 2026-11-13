@@ -307,6 +307,40 @@ impl<'a> Resolver<'_, 'a> {
         annotated
     }
 
+    /// Whether `ty` declares a default (§7.6.1): `Default<T, V>` or
+    /// `T | Default<V>`, written as the type itself or as the value type
+    /// of the handle the type is.
+    pub(crate) fn declares_default(&self, ty: TypeId) -> bool {
+        match self.shape(ty) {
+            Shape::Handle(_, value) => self.has_annotation(value, "default"),
+            _ => self.has_annotation(ty, "default"),
+        }
+    }
+
+    /// The type the body of a `pattern` sees for its input (§7.6.1): each
+    /// optional property whose type declares a default is read without
+    /// `undefined`, so it is required in this view. A property of a nested
+    /// type is left as it is declared.
+    pub(crate) fn pattern_body_view(&self, input: TypeId) -> TypeId {
+        let Shape::Object(properties, index) = self.shape(input) else {
+            return input;
+        };
+        if !properties
+            .iter()
+            .any(|property| property.optional && self.declares_default(property.ty))
+        {
+            return input;
+        }
+        let properties = properties
+            .into_iter()
+            .map(|property| Property {
+                optional: property.optional && !self.declares_default(property.ty),
+                ..property
+            })
+            .collect();
+        self.add(Shape::Object(properties, index))
+    }
+
     fn has_annotation(&self, ty: TypeId, key: &str) -> bool {
         self.types
             .borrow()
@@ -402,7 +436,27 @@ impl<'a> Resolver<'_, 'a> {
                     .map(|member| self.resolve(module, member, env, next))
                     .collect();
                 self.scope_in_union(module, union.span, &members);
-                self.union(members)
+                // `T | Default<V>`: the member is dropped from the union,
+                // and the union keeps the default it declares (§8.8), so
+                // that §7.6.1 can ask whether a type declares one.
+                let default = members.iter().find_map(|member| {
+                    if self.shape(*member) != Shape::Never {
+                        return None;
+                    }
+                    self.types
+                        .borrow()
+                        .annotations(*member)
+                        .iter()
+                        .find(|annotation| annotation.key == "default")
+                        .map(|annotation| annotation.argument.clone())
+                });
+                let union = self.union(members);
+                match default {
+                    Some(argument) if self.shape(union) != Shape::Never => {
+                        self.annotate(union, "default", argument)
+                    }
+                    _ => union,
+                }
             }
             TSType::TSIntersectionType(intersection) => {
                 let mut members = intersection
