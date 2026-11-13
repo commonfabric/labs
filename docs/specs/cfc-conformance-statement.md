@@ -404,8 +404,8 @@ dials.
   document stays a read floor and stops being a write ceiling, as the same
   section states. A served run's cross-holder misfit, below, is measured on
   those documents all the same.
-- Under strict, a served run, a wave run context of kind `event-handler` or
-  `derivation` (`isServedRunUnderHolderRule` in `cfc/prepare.ts`), admits a
+- Under strict, a served run, any wave run context
+  (`isServedRunUnderHolderRule` in `cfc/prepare.ts`), admits a
   clause it read from a store whose holders don't include every holder of the
   target only by the target's residency. This implements §8.12.5.1 as proposed
   in [specs#95](https://github.com/commonfabric/specs/pull/95), which the pin
@@ -413,19 +413,20 @@ dials.
   it; `check-cfc-correspondence` exempts the citation. It refuses writes the
   pinned §8.12.5 admits, by an authored, upgraded or minted declaration or by
   the runtime-owned routes above, and persists nothing new: an over-taint
-  against the pin. Against the proposal it differs three ways. It holds a
-  served derivation to the rule as well as a served event handling, since a
-  derivation the serving posture runs copies another space's private data
-  into a runtime-owned store otherwise: an over-taint the ruling would need to
-  adopt. Residency's owner case admits a cross-holder `PersonalSpace(P)` clause
+  against the pin. Against the proposal it differs three ways. It holds every
+  served run to the rule, a derivation and bookkeeping as well as an event
+  handling, since a derivation the serving posture runs copies another
+  space's private data into a runtime-owned store otherwise: an over-taint
+  the ruling would need to adopt. Residency's owner case admits a cross-holder `PersonalSpace(P)` clause
   into a store bound to `P`, which the proposal leaves out pending specs#68
   and specs#71: an under-taint against the proposal's text, whose holders,
   `P` alone, are inside that clause's audience. And two channels stay
   unmeasured, as they are for every writer: a link write's slot label, and a
   read declared onward, whose membership lands as a stamp the measurement
-  does not reach. A bookkeeping run, such as a piece's deferred start, is
-  measured as before; a served handler's copy into the piece it starts lands
-  in the handler's own transaction, which the rule covers.
+  does not reach. So a served run that carries a cross-holder clause into a
+  store by reference, rather than by value, is not refused: an under-taint
+  against the proposal wherever the reference's own label does not carry the
+  clause.
 
 ## 6. Idempotent persistence (§4.6.4)
 

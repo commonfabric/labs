@@ -305,10 +305,10 @@ The strict-only delta is:
   ladder ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)).
 
   **A served run's cross-holder clauses.** A run the serving posture executes
-  for an acting principal, an event handler or a derivation, can read what
-  that principal's own runtime could not, and code that principal controls
-  chooses where it writes. For such a run (`isServedRunUnderHolderRule` in
-  `prepare.ts`: a wave run context of kind `event-handler` or `derivation`),
+  for an acting principal, an event handler, a derivation or bookkeeping, can
+  read what that principal's own runtime could not, and code that principal
+  controls chooses where it writes. For such a run
+  (`isServedRunUnderHolderRule` in `prepare.ts`: any wave run context),
   the flow join names the reads that carried each clause (its `sources`, the
   provenance a writer-fit refusal names its inputs from) and the clauses an
   observation of no store carried in (`withoutStore`), and a clause read from
@@ -330,14 +330,17 @@ The strict-only delta is:
   `cfc` logger's `writer-fit-cross-holder` key. Every other clause is measured
   as for any writer, so a same-holder misfit keeps §8.12.5's options, and a
   cross-holder clause residency covers is never offending there. A run in the
-  acting principal's own runtime, and a bookkeeping run such as a deferred
-  piece start, are measured as before. Residency's owner case still admits a
+  acting principal's own runtime is measured as before. A reference write is
+  outside the rule as it is outside writer-fit, per the scope note above: a
+  served run that carries a cross-holder clause into a store by reference,
+  rather than by value, is not refused, and its link label carries the
+  reference's own restriction. Residency's owner case still admits a
   cross-holder `PersonalSpace(P)` clause into a store bound to `P`, which the
   rule's text leaves out pending
   [specs#68](https://github.com/commonfabric/specs/pull/68) and
   [specs#71](https://github.com/commonfabric/specs/pull/71). This implements
   [specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
-  ruling, widened from a served event handling to a served derivation, and
+  ruling, widened from a served event handling to every served run, and
   its two deciding sites carry its `SPEC-PENDING` marker; the conformance
   statement records the gap.
 
