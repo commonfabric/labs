@@ -56,6 +56,32 @@ const pieceProgram: RuntimeProgram = {
   ],
 };
 
+const sourceProgram: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [
+    {
+      name: "/main.tsx",
+      contents: [
+        "import { pattern } from 'commonfabric';",
+        "export default pattern<{ value: number }>(({ value }) => ({ output: value }));",
+      ].join("\n"),
+    },
+  ],
+};
+
+const targetProgram: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [
+    {
+      name: "/main.tsx",
+      contents: [
+        "import { pattern } from 'commonfabric';",
+        "export default pattern<{ input: number }>(({ input }) => ({ seen: input }));",
+      ].join("\n"),
+    },
+  ],
+};
+
 describe("pieces-controller", () => {
   // Two sessions over one server, each with a replica of its own: the creator
   // registers a piece, and the reader has loaded nothing of that space when it
@@ -133,5 +159,63 @@ describe("pieces-controller", () => {
     const patternRef = await new PieceController(reader, opened)
       .getPatternRef();
     expect(patternRef?.identity).toBe(expected!.identity);
+  });
+
+  describe("a piece whose argument links to another piece", () => {
+    // The reader has loaded none of the pieces' documents, which is also where
+    // a replica stands after a release pass drops a stopped piece's argument
+    // (`docs/features/document-release.md`).
+
+    let sourceId: string;
+    let targetId: string;
+
+    beforeEach(async () => {
+      const root = await creator.runPersistent(
+        await creatorRuntime.patternManager.compilePattern(rootProgram, {
+          space,
+        }),
+        { pieceRegistry: [] },
+        "fresh-replica-root",
+      );
+      await creator.linkDefaultPattern(root);
+      const source = await creator.runPersistent(
+        await creatorRuntime.patternManager.compilePattern(sourceProgram, {
+          space,
+        }),
+        { value: 2 },
+        "fresh-replica-source",
+      );
+      const target = await creator.runPersistent(
+        await creatorRuntime.patternManager.compilePattern(targetProgram, {
+          space,
+        }),
+        { input: 1 },
+        "fresh-replica-target",
+      );
+      await creator.add([source, target]);
+      sourceId = pieceId(source)!;
+      targetId = pieceId(target)!;
+      await creator.link(sourceId, ["output"], targetId, ["input"]);
+      await creatorRuntime.idle();
+      await creator.synced();
+    });
+
+    it("is listed by `getReadingFrom()` as reading from the other", async () => {
+      // The registry's entry, unlike `get()`, does not load the argument.
+      const target = (await reader.getRegisteredPieces())
+        .find((piece) => piece.id === targetId)!;
+
+      expect(
+        (await reader.getReadingFrom(target.getCell())).map(pieceId),
+      ).toEqual([sourceId]);
+    });
+
+    it("is listed by `getReadByPieces()` as reading the other", async () => {
+      const source = await reader.get(sourceId, false);
+
+      expect(
+        (await reader.getReadByPieces(source.getCell())).map(pieceId),
+      ).toEqual([targetId]);
+    });
   });
 });

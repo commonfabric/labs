@@ -1187,7 +1187,7 @@ export class PiecesController<T = unknown> {
 
     try {
       // Get the argument data - this is where references to other pieces are stored
-      const argumentCell = await this.getArgument(piece);
+      const argumentCell = await this.#syncedArgument(piece);
       if (!argumentCell) return result;
 
       // Get the raw argument value
@@ -1486,7 +1486,7 @@ export class PiecesController<T = unknown> {
 
       // Also specifically check the argument data where references are commonly found
       try {
-        const argumentCell = await this.getArgument(otherPiece);
+        const argumentCell = await this.#syncedArgument(otherPiece);
         if (argumentCell) {
           const argumentValue = argumentCell.getRaw();
 
@@ -3514,6 +3514,19 @@ export class PiecesController<T = unknown> {
       );
     }
     return root;
+  }
+
+  /**
+   * Helper for `getReadingFrom()` and `getReadByPieces()`, which read
+   * `piece`'s argument raw: its argument cell, synced, since the replica need
+   * not hold that document, whether because nothing here loaded it or because
+   * a release pass dropped it once the piece stopped
+   * (`docs/features/document-release.md`).
+   */
+  async #syncedArgument(piece: Cell<unknown>): Promise<Cell<unknown>> {
+    const argument = this.getArgument(piece);
+    await argument.sync();
+    return argument;
   }
 }
 
