@@ -1165,6 +1165,19 @@ from a computed input the resolution is journaled (§7.2), so the target or
 the envelope names the plain entry of `Body.computed`, with the flag. On
 an envelope that has `found`, the flag applies to the found handle.
 
+**A write through a handle that `key` flattened.** For `h` of type
+`Cell<{ a: Cell<T> }>`, a write through `h.key("a")` lands in the cell the
+inner handle links to ([§7.1](#71-what-a-body-may-do-with-a-handle), "A
+handle that holds a handle"). The target is the one a write through
+`h.get().a` has: a `handle` target that names the `identity` entry at
+`h->a`, with the path below the inner cell. The write makes the hop
+through `h` itself, so the target is static where `h` is anchored, the
+path has no `*`, and the write is unconditional, and the entry at `h->a`
+is then a static entry of the footprint. A conditional write of this
+form has a `handle` envelope whose slot is at the position `h->a`, as for
+a handle the body found by reading through another handle, and the link
+at `h->a` is read through the entry of `h` in `Body.handles`.
+
 ### 6.3 Computations: static side-write or materializer
 
 A `lift` or a `computed` that writes through a handle is a computation with
@@ -1347,7 +1360,7 @@ The methods are those of `language-subset.md` §4.7. For a handle `h`:
 | Method | Abstract result | Recorded |
 | --- | --- | --- |
 | `h.get()`, `h.sample()` | The projection `h->`, the root of the cell `h` links to | `identity` at `h`. What is done with the result is recorded below the hop |
-| `h.key("k")` | The handle `h` with `k` added to the path below its hop | Nothing |
+| `h.key("k")` | The handle `h` with `k` added to the path below its hop. Where the path passes through a position of handle type, the result is the handle at that position (below, "A handle that holds a handle") | Nothing |
 | `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
 | `h.resolveAsCell()` | `h`, resolved: reads through it are reads at `h->`, and a write through it lands where the resolution ends ([§6.2](#62-targets)) | A resolution of `h` (below) |
 | `h.for(cause)` | `h` | The cause, by the reference rule of [§3.8](#38-what-leaves-the-body) |
@@ -1366,6 +1379,51 @@ records `identity` at the handle.
 
 A method on a collection handle (`map`, `filter`, and the others) is refused
 in a body (`cell:collection-method-in-function`).
+
+**A handle that holds a handle.** A handle type inside a handle type is
+valid, `Cell<Cell<T>>` and `Cell<{ a: Cell<T> }>` among them.
+
+- `get()` on the outer handle returns the inner handle. For `outer` of
+  type `Cell<Cell<T>>`, `outer.get()` is the projection `outer->`, whose
+  type is a handle type, so it is the handle at the root of the cell
+  `outer` links to. The call records `identity` at `outer`, as every
+  `get()` does, and reads nothing of the inner cell. `outer.get().get()`
+  is the projection `outer->->` and records `identity` at `outer->` as
+  well.
+- `key` flattens every handle it passes through. For `h` of type
+  `Cell<{ a: Cell<T> }>`, `h.key("a")` has type `Cell<T>`: it is the
+  handle at the position `h->a`, the abstract value that `h.get().a` is.
+  A chain flattens at each step, so `h.key("a").key("b")` is the handle
+  with `b` below the second hop, `h->a->b`, and the handle at that
+  position where it has a handle type. On `Cell<Cell<{ x: U }>>`,
+  `outer.key("x")` is `outer->->x`.
+
+The footprint of `key` through a handle that holds a handle is this. The
+call records nothing, as `key` records nothing on any handle: it extends a
+path and reads no cell. The link at each position of handle type that the
+path passes through is crossed when the flattened handle is used, and
+each crossing is an `identity` observation at that position. So
+`h.key("a")` is analyzed as `h.get().a` is, with one difference: the
+`identity` entries at `h` and at `h->a` are recorded where the flattened
+handle is read, written through, passed on, or bound, and under the
+conditions of that use, since no `get()` stands before it.
+
+| Use of `h.key("a")` | Recorded |
+| --- | --- |
+| `h.key("a").get()`, `h.key("a").sample()` | `identity` at `h` and at `h->a`. The result is the projection `h->a->` |
+| A write through it | `identity` at `h` and at `h->a`. The write lands in the cell the inner handle links to, at `h->a->`, and does not replace the link stored at `h->a` ([§6.2](#62-targets)) |
+| Passed on, or bound in a handler binding | `identity` at `h` and at `h->a`. What is passed on is a reference to the inner cell |
+| A further `key` | Nothing |
+
+The handle at `h->a` is anchored when `h` is anchored and the path has no
+`*`. A read through it is static under the three conditions of
+[§7.2](#72-static-and-dynamic-reads), applied to the one `get()` that
+makes both hops: both are static, or the read is a dynamic read through
+the entry of `h` in `Body.handles`, whose envelope admits the position
+`a` as a handle and, below it, what the body reads through the inner
+handle ([§7.5](#75-link-hops-through-data)). With a key that is not
+static, `h.key(k)` flattens in the same way and the result is not
+anchored.
 
 **Resolutions.** A resolution follows the links below a reference to the
 cell that holds its value. `resolveAsCell()` is one, and so are `equals`,
@@ -1479,6 +1537,13 @@ normally.
   through one handle and a static entry would name both.
 - With `*`, a body that looks up one element of a list of handles and reads
   it would get an entry for every element.
+
+A conditional read through a handle stays dynamic. That is the rule, by
+ruling of the project owner, and not a provisional choice: a read at a
+statically known place that some run that returns normally skips is
+journaled on the runs that make it, and its label is on those runs alone.
+The exception for a run that throws (below) does not extend to a run that
+returns normally.
 
 A read of a data-typed input is different: today the argument schema
 materializes it before the body runs, on every run, so a static entry for a
@@ -1615,14 +1680,14 @@ and has no static entry. There are three kinds of such site.
 - An `instantiate` site in a `lift` or a `computed`. The instance outlives
   the evaluation that made it ([§8.1](#81-instantiating-a-pattern)).
 - An `instantiate` site that is `identifiedBy: "tag"` in a `handler` or an
-  `action`. A later event that gives the same tag names the same instance
-  and creates nothing (`plan-and-label-templates.md` §1.3 and §3.14, where
-  it is an assumption: question 19 of the continuation plan).
+  `action`. An explicit cause in a handler names the same thing across
+  events, so a later event that gives the same tag names the same instance
+  and creates nothing (`plan-and-label-templates.md` §1.3 and §3.14).
 - A `createCell` site that is `identifiedBy: "cause"`, in a `handler` or
   an `action` as in a `lift` or a `computed`
   ([§8.2](#82-creating-a-cell)). A later run under the same cause names
-  the same cell. For a handler that rests on the same assumption as the
-  tag.
+  the same cell: a cell a handler creates under an explicit cause is the
+  same cell on every event.
 
 A read through the link or the cell such a site returns is dynamic, in a
 handler as in a computation. The site is an entry of `Body.handles` whose
@@ -1727,8 +1792,11 @@ evaluated again.
   enclosing instance, the body's `name` and `within`, the site, and its
   ordinal among the instantiations the evaluation makes at that site,
   which is `identifiedBy: "order"`, or, with `.for(cause)`, by that cause
-  in place of the ordinal, which is `identifiedBy: "tag"`. The rule is an
-  assumption there (open question 26 there).
+  in place of the ordinal, which is `identifiedBy: "tag"`. A site inside
+  a loop or a callback is one site, and its instances are told apart by
+  the ordinal alone, so the compiler warns on such a site that has no
+  `.for(cause)`. It is a warning and not an error, and
+  `language-subset.md` has its entry in the diagnostic catalog.
 - **A read through the returned link is dynamic.** The instance outlives
   the evaluation that made it, so a later evaluation that reads through
   the link finds the child's result. That result is no input of the body
@@ -1739,7 +1807,7 @@ evaluated again.
   whose `handle` is `{ call }`, and its envelope admits what the body
   reads of the results of the instances the site makes
   (`plan-and-label-templates.md` §3.9, "Handles").
-- **The computation requests no effect itself** (assumed, §8.3). The
+- **The computation requests no effect itself** (§8.3). The
   pattern it instantiates may. What the computation read reaches such a
   request through the argument: each argument path carries the body's
   template, or is a reference the body passed on
@@ -1755,6 +1823,20 @@ only when it differs from the one the evaluation before built, and it
 releases the child when the node is cancelled. So today too, what a
 computation instantiates belongs to the node that ran it and is kept from
 one evaluation to the next.
+
+**In a per-element body over plain values.** Where a per-element body of
+the reactive tier over plain values instantiates a child, the position
+joins the element key, as it does when the callback uses the index, so
+two equal plain elements have two children
+(`builtin-inventory.md`, "Element keys"). That rule is about the reactive
+tier, where the analysis does not run. It reaches this analysis through
+`within`: a `lift` or a `computed` written in such an element body has an
+`element` step, and the instances it makes are identified under that
+step's key. *Assumed:* an `instantiate` site in a `lift` or a `computed`
+written in a per-element body over plain values puts the position in the
+key as a child written in the element body itself does, so two equal
+plain elements do not share the instances such a computation makes
+([§13](#13-open-questions), question 3).
 
 ### 8.2 Creating a cell
 
@@ -1784,10 +1866,41 @@ handle wrote. The site is an entry of `Body.handles`
 `identifiedBy: "order"` is new on every invocation, and reading it back
 records nothing.
 
+**A cell a handler creates under an explicit cause.** An explicit cause in
+a handler names the same thing across events. The cell is identified by
+the handler's instance and the cause, and not by the handling
+(`plan-and-label-templates.md` §1.3), so it is the same cell on every
+event. Three things follow for the record.
+
+- The cause is an observation of the body, by the reference rule: `value`
+  for a scalar and `identity` for a cell, as the table has it. Which
+  document exists reveals the cause, so the template of the cause is the
+  label of the cell's existence. That label is fixed at first creation:
+  an event that names a cell an earlier event created creates nothing and
+  does not change it.
+- The initial value is a `WriteEdge` with target `created`, as at a site
+  with no cause. It is written by the event that creates the cell. A
+  later event that names the cell finds what is stored.
+- A read through the handle is dynamic, by the paragraph above, and the
+  site is an entry of `Body.handles` whose `handle` is `{ call }`.
+
+Without an explicit cause the site is `identifiedBy: "order"`: the
+identifier derives from the event, as it does today.
+
+**A cell created under the element key over plain values.** A `lift` or a
+`computed` written in a per-element body that creates a cell under the
+element key declares a `StateCell` whose `within` has the `element` step.
+Over plain values, equal elements have one key, so they would share that
+cell. A per-element body over plain values that declares a state cell
+without using the index is a compile error (`builtin-inventory.md`,
+"Element keys"). *Assumed:* the error covers a cell that a computation
+in the body creates under the element key, since it is a state cell of
+the plan named by that key ([§13](#13-open-questions), question 4).
+
 ### 8.3 Requesting an effect
 
-Legal in a `handler` and an `action`. *Assumed:* a `lift` or a `computed`
-does not request an effect itself, as `language-subset.md` §10.3 has it
+Legal in a `handler` and an `action`. A `lift` or a `computed` does not
+request an effect itself, as `language-subset.md` §10.3 has it
 (`function-body:effect-in-computation`), and instantiates a pattern that
 does (§8.1). The site records the built-in's name.
 Each path of the request is a `WriteEdge` with target `request`. Each
@@ -2009,6 +2122,12 @@ compiled in it, the body of a per-element callback included. There every
 path of the handler's state resolves to a slot or an output of the
 instance, and `Binding.state` has no copied path. The analysis runs on the
 hoisted or named handler, whose state paths are slots with root `binding`.
+A per-element body over plain values that binds a handler and declares no
+state cell is accepted without the index. Its binding is named by where
+it is declared, the element key included, so equal elements bind equal
+state and share one stream (`builtin-inventory.md`, "Element keys"). The
+handler's record is the same for every element, and S1 is not affected:
+the state paths of the shared binding resolve to the same slots.
 
 **Against today.** In each case the rule is equal to today or tighter. It
 is within requirement 2 of §1.4 and is not an exception to it.
@@ -2526,8 +2645,8 @@ dynamic.
 
 The second row is the cost of requirement 2 of §1.4. A third of the reads
 through handles are at a known place and happen only on some runs, usually
-after an early `return`. They stay dynamic so that the label is no wider
-than today's ([§13](#13-open-questions), question 1).
+after an early `return`. They stay dynamic, by ruling, so that the label
+is no wider than today's ([§7.2](#72-static-and-dynamic-reads)).
 
 Separately, 153 sites in 111 bodies call `key(k)` or `elementById` with a
 key that is not static. A read under one is dynamic, and a write under one
@@ -2921,18 +3040,38 @@ Ruled by the project owner, and written into §6.3 and §8.1: a `lift` or a
 `computed` may instantiate a pattern, and that pattern may request
 effects. An evaluation that instantiates the same pattern at the same
 place names the same instance and updates its argument, and an instance an
-evaluation no longer makes is torn down.
+evaluation no longer makes is torn down. Such an instance is identified
+by the enclosing instance, the body's name and the calls and callbacks it
+is written in, the site, and the ordinal of the instantiation among those
+the evaluation makes at that site, or by an explicit cause where the
+author writes `.for(cause)`. A `lift` or a `computed` does not request an
+effect directly (§8.3). The compiler warns on an instantiation inside a
+loop or a callback in a function body that has no `.for(cause)`.
+
+Ruled by the project owner, and written into §7.2 and §11.4: a conditional
+read through a handle stays dynamic.
+
+Ruled by the project owner, and written into §6.2 and §7.1: a handle type
+inside a handle type is valid, `get()` on the outer handle returns the
+inner handle, and `key` flattens every handle it passes through.
+
+Ruled by the project owner, and written into §7.5 and §8.2: an explicit
+cause in a handler names the same thing across events. A cell a handler
+creates under an explicit cause is the same cell on every event, and its
+existence label is fixed at first creation. Without an explicit cause an
+identifier minted in a handler derives from the event.
+
+Ruled by the project owner, and written into §8.1, §8.2 and §8.5: a
+per-element body over plain values that declares a state cell without using the
+index is a compile error; one that binds a handler and declares no state
+cell is accepted, and equal elements share one stream; and where such a
+body instantiates a child, the position joins the element key.
 
 ### Needing the project owner
 
-1. **Conditional reads through handles.** A third of the reads through
-   handles in the corpus are at a statically known place and happen on some
-   runs only (§11.4). The ruling that template labels are never wider than
-   today's keeps them dynamic. Making them static would remove the
-   `dynamic` node from the templates of many more bodies, at the price of a
-   label that includes a cell on runs that did not read it. *Assumed:* they
-   stay dynamic. The exception for a run that throws (§7.2) does not extend
-   to a run that returns normally.
+1. **Conditional reads through handles.** Not open. They stay dynamic
+   (§7.2). The entry keeps its number because other documents cite the
+   entry after it by number.
 2. **A value passed on unchanged is a reference.** §3.8 records `identity`,
    and not `value`, for a record a body reads from an input and returns or
    writes whole. That is how the current analysis treats it
@@ -2942,6 +3081,19 @@ evaluation no longer makes is torn down.
    later change to the original shows through it. *Assumed:* the rule
    stands as today. The alternative, a copy, reads the record in full and
    is wider than today.
+3. **An instantiation by a computation in a per-element body over plain
+   values.** The position joins the element key where a per-element body
+   over plain values instantiates a child. The ruling is stated for the
+   body. A `lift` or a `computed` written in the body can instantiate a
+   pattern too (§8.1). *Assumed:* the position joins the key then as
+   well, so two equal plain elements do not share the instances the
+   computation makes. The other reading leaves the key as it is, and
+   equal elements share one computation and its instances.
+4. **A cell a computation creates under the element key over plain
+   values.** Such a cell is a `StateCell` named by the element key
+   (§8.2). *Assumed:* the compile error for a state cell over plain
+   values covers it where the body does not use the index. The other
+   reading accepts it, and equal elements share the cell.
 
 ### For another document or the prototype
 
@@ -3091,8 +3243,7 @@ asked.
     ordinal of the instantiation among those the evaluation makes at that
     site, or, with `.for(cause)`, that cause in place of the ordinal
     (§8.1). `BodyCall` records the first as `identifiedBy: "order"` and
-    the second as `identifiedBy: "tag"`. The rule is an assumption there,
-    pending the owner (open question 26 there).
+    the second as `identifiedBy: "tag"`. The rule is decided.
 19. **Four further forms of the record** (to
     `plan-and-label-templates.md`). Met by §1.1 there, form by form.
     - **A handle or a container that reached the body in a value the

@@ -447,26 +447,35 @@ the element is keyed by the identity of that cell.
   positions receive the same result. That is sound because the body is a
   function of the element, its captures, and the index only when it uses
   the index.
-- *State and handlers over plain values need the index.* A state cell
-  declared in the body has the cause instance, element key, and name. The
-  stream of a handler bound in the body is named the same way, because a
-  binding made in the reactive tier copies nothing and is named by where it
-  is declared ([A handler binding](#a-handler-binding-made-in-a-body)). Rows
-  that show the same plain value would therefore share both: two rows
-  showing `"glazed"` would open together, and an event from either could
-  not be told apart.
-  That sharing is not allowed. A body over plain-value elements that
-  declares a state cell or binds a handler without using the index is a
-  compile error. The author either uses the index, which puts it in the
-  key, or makes the elements cells, which a list of records written by a
-  handler already is. Sharing a cone for pure computation is unaffected.
+- *A state cell over plain values needs the index.* A state cell declared
+  in the body has the cause instance, element key, and name. Rows that
+  show the same plain value would therefore share it: two rows showing
+  `"glazed"` would open together. That sharing is not allowed. A body over
+  plain-value elements that declares a state cell without using the index
+  is a compile error. The author either uses the index, which puts it in
+  the key, or makes the elements cells, which a list of records written by
+  a handler already is. Sharing a cone for pure computation is unaffected.
   Whether an element is a plain value is a fact of storage that a type such
-  as `Donut[]` does not state; see open question 5. *Assumed:* the error
-  covers a body that declares a state cell or binds a handler, as ruled,
-  and not a body that instantiates a child. The child's result cell is
-  named by the element key, so two equal plain elements share one child
-  and its state. The question is with the project owner (the continuation
-  plan, question 31).
+  as `Donut[]` does not state; see open question 5.
+- *A handler bound over plain values is shared.* A body over plain-value
+  elements that binds a handler and declares no state cell is accepted
+  without the index. The stream of the binding is named by where it is
+  declared, the element key included, because a binding made in the
+  reactive tier copies nothing
+  ([A handler binding](#a-handler-binding-made-in-a-body)). Equal elements
+  therefore bind equal state and share one stream: an event from either
+  of two rows that show `"glazed"` is handled with the same state. The
+  compile error above, and its entry in the diagnostic catalog, cover the
+  state cell only.
+- *A child instantiated over plain values has the position in its key.*
+  Where a body over plain-value elements instantiates a child, the
+  position joins the element key, as it does when the callback uses the
+  index. Two equal plain elements then have two children, and a factory
+  element in `factories.map((F) => F({ ... }))` has a child per position.
+  The cost is the one of using the index: an entry that moves is a new
+  element for that body. *Assumed:* a state cell that such a body declares
+  is accepted, because the position is in the key and no two positions
+  share the cell (open question 14).
 - *The same cell twice shares one cone.* The occurrence count is dropped,
   for the same reason: two positions that hold the same cell are the same
   element.
@@ -490,9 +499,10 @@ the element is keyed by the identity of that cell.
   (`SQLITE_ROW_SALT`, `resultRowKeys`).
 - *A client cannot read the salt.* A client therefore cannot derive an
   identifier that holds a value-derived key. It cannot name per-element
-  state over plain values, which exists only where the index is also in the
-  key, or a handler binding with a copied path, before the server stores a
-  link to it. Until that link arrives, what reads such state on a client is
+  state over plain values, which exists only where the position is also in
+  the key, the stream of a handler bound in a body over plain values, or a
+  handler binding with a copied path, before the server stores a link to
+  it. Until that link arrives, what reads such state on a client is
   pending. `scheduler-and-serving-loop.md` owns what a client shows
   meanwhile.
 - *Keying by value is a `value` observation by the runtime, not by the
@@ -509,20 +519,26 @@ the element is keyed by the identity of that cell.
   callback computes (`count(pred)`, `minBy`, `maxBy`), and the fold counts
   multiplicity: a key that occurs three times contributes three times.
   Today the tree's leaves list each occurrence separately
-  (`aggregateNode`'s leaf key). For `minBy` and `maxBy`, a tie between two
-  occurrences of one key is a tie between indistinguishable elements.
+  (`aggregateNode`'s leaf key).
 - The collection-index family uses the same rule for key extraction, and
   keeps input order and multiplicity for the contents of a bucket: a
   `group` bucket lists an element once per occurrence, in input order,
-  which the key alone does not give. In `key` mode the winner among
-  elements with equal index keys is the one with the smallest element key
-  (`firstMember` uses the occurrence identity today). That tie rule, and
-  the same one for `minBy` and `maxBy`, is an assumption: for an element
-  that is a plain value the element key is a hash of the whole value, so
-  the choice then depends on element values that the label of the choice
-  does not hold. The question is with the project owner (the continuation
-  plan, question 6), and the correction proposed there is the first
-  position in source order.
+  which the key alone does not give.
+- *Ties.* `minBy`, `maxBy`, and a lookup in an index in `key` mode break a
+  tie by position. Among the elements whose keys are equal (the values of
+  the key function for `minBy` and `maxBy`, the index keys for a lookup),
+  the winner is the one at the first position in the source order of the
+  collection. The element key does not decide a tie. For an element that
+  is a plain value the element key is a salted hash of the whole value,
+  so a choice by element key would depend on element values that the
+  label of the choice does not hold. A choice by position depends on the
+  order of the collection and on the keys that tie, and on no other
+  element value. Two occurrences of one element key are the same element,
+  and the first of them counts. Today a tie goes to the smallest identity
+  key in an aggregate (`chooseAggregateCandidate` in
+  `builtins/aggregate-extremum.ts`) and to the smallest occurrence
+  identity in an index (`firstMember`). The fold and the index therefore
+  keep, as part of their state, the first position of each element key.
 - `reduce` has no per-element cone, because the callback's result depends
   on the accumulator. Its entry says what it stores instead.
 - `findIndex`, `some`, `every`, and `find` use the same rule for their
@@ -602,8 +618,10 @@ the element to the cause.
     content slots are the winning element's own.
   - State to store: the fold. `plan-and-label-templates.md` §3.8 keeps the
     shape of that state private to the runtime and fixes the exact-sum
-    semantics. The plan must fix the tie rules (`chooseAggregateCandidate`),
-    because value code on the client and the server must agree.
+    semantics. A tie in `minBy` or `maxBy` goes to the first position in
+    the source order ([Element keys](#element-keys), "The other
+    operations"), on the client as on the server. Which element wins
+    therefore depends on the order of the input as well.
 
 ### `collectionIndex`, `collectionIndexMember`, `collectionIndexKeys`
 
@@ -665,11 +683,12 @@ the element to the cause.
     depends on the same two things.
   - `keys()` and `keyEntries()` depend on the enumeration of the occupied
     keys, which depends on the key of every element.
-  - In `key` mode the winner among equal keys is decided by the element
-    key. For elements keyed by the identity of their cells, no element
-    value beyond the index key flows into the choice. For plain-value
-    elements that does not hold, and the tie rule is an assumption
-    ([Element keys](#element-keys), "The other operations").
+  - In `key` mode the winner among elements with equal index keys is the
+    one at the first position in the source order
+    ([Element keys](#element-keys), "The other operations"). The choice
+    depends on the order of the input and on the index keys. No other
+    element value flows into it, for plain-value elements as for elements
+    keyed by the identity of their cells.
   - State to store: the index and the membership bookkeeping.
 
 ### `reduce`
@@ -908,11 +927,37 @@ uses these facts in two places.
   was computed from (`plan-and-label-templates.md` §3.14, "What is hashed
   is followed too").
 
-These paragraphs have two limits. They state what is read when the request
-is made. A language-model built-in also sends content during a tool loop
-that no request held, which its entry names and which the boundary's own
-transactions have to label. And the `streamData` and `llm` entries have no
-such paragraph, because both are removed.
+These paragraphs state what is read when the request is made. The
+`streamData` and `llm` entries have no such paragraph, because both are
+removed.
+
+**What a language-model built-in sends after its request.** A
+language-model built-in sends content that no request held: the result of
+a tool call, sent back to the model by the next model call of the tool
+loop; a system prompt rendered again from the live context; and, for a
+dialog, the live transcript on each model call. The check at the request
+alone is therefore not sufficient. The egress ceiling is checked again on
+each send, on the content of that send as it is then, with references
+followed as the **Request operands** paragraph of the entry says. A send
+that fails the check is not made, and the built-in's result takes the
+error state. The entries [`generateText`](#llm-generatetext),
+[`generateObject`](#generateobject), and [`llmDialog`](#llmdialog) each
+have a **Sends** paragraph that lists the sends of the built-in. These
+checks are made in the boundary's own transactions and are not part of a
+template, because what a tool returns depends on data.
+
+**A pattern closure given to a language model as a tool.** A model's call
+of a tool that is a pattern closure instantiates the pattern. The
+argument the model supplies carries the label of the model's output: the
+label of the generation that produced the tool call. The captures of the
+closure are private parameters, bound where the closure is written, and
+the model does not supply them (`language-subset.md` §4.4.2). The result
+of the call carries the label of the instance's own result, by the
+ordinary rules for the outputs of an instance. What the built-in sends
+back to the model of that result is a send, checked as the paragraph
+above says. `plan-and-label-templates.md` states the rule, and each of
+the three entries says under **Tools** what the label of a generation is
+for that built-in.
 
 The staged changes are effect requests too, and their operands are under
 [Staged changes](#staged-changes).
@@ -927,7 +972,13 @@ pattern reads, and is demanded whenever its instance is. A request that a
 handler makes waits for no demand: every request a handler makes is sent
 when its event's transaction commits, a `fetchJson` or a `generateText` as
 much as a `navigateTo`, and it is made once
-(`scheduler-and-serving-loop.md` §6.2). The staged changes are requests of
+(`scheduler-and-serving-loop.md` §6.2). A request of a handler that is
+still pending when the serving runtime restarts is made again at
+activation: the references of the stored request are followed again, and
+the egress ceiling is checked on the content as it is then (its §10.6).
+Such a request can therefore be refused at activation although it passed
+when the event committed, and the event's other writes stay stored. The
+staged changes are requests of
 a handler and differ from the others in what the commit does with them.
 A staged access change is a step of the commit of the event's
 transaction. `nameBlob` stages a document in the event's transaction: it
@@ -1171,14 +1222,34 @@ counterpart in this inventory.
   the input schema of each tool in full. It follows nothing else.
 - **New design:** class B. `llm` is class D, replaced by `generateText` and
   `generateObject`, which its deprecation already says.
+- **Tools:** a tool that is a pattern closure is instantiated when the
+  model calls it ([Effectful built-ins](#effectful-built-ins), "A pattern
+  closure given to a language model as a tool"). The label of a
+  generation is the join of the request slots and of everything sent back
+  to the model before that generation. The argument the model supplies
+  carries the label of the generation that produced the tool call. The
+  result of the call carries the label of the instance's own result. What
+  is sent back to the model of that result joins the label of every later
+  generation, and so the label of the settled result.
+- **Sends:** two kinds.
+  - The request: the first model call, which sends the recorded request.
+  - Each later model call of a tool loop. It sends the messages of the
+    request, the model's output so far, and the result of every tool call
+    so far, with what a `read` or an `invoke` call serialized
+    (`executeWithToolsLoop` in `builtins/llm.ts`). The system prompt and
+    the tool catalog are those of the request and are not rendered again.
+
+  The egress ceiling is checked on the request, and again on each later
+  model call, on the content of that call. A call that fails the check is
+  not made, and the result takes the error state.
 - **Label rule:** the request slots are every parameter read by value, the
   value of every context cell, and the tool catalog. The result's
   confidentiality is the join of the request slots; its integrity is the
-  declared `LlmDerived`. The rule for results after a tool loop must add
-  what the tools returned, which is data-dependent: it belongs to the
-  boundary's own transactions, not to a template. State to store: the
-  request hash, the settled result or error, and, if a tool loop is to
-  survive a restart, the conversation.
+  declared `LlmDerived`. After a tool loop the result's confidentiality
+  also joins what the tools returned, which depends on data: it is
+  computed in the boundary's own transactions, not from a template. State
+  to store: the request hash, the settled result or error, and, if a tool
+  loop is to survive a restart, the conversation.
 
 ### `generateObject`
 
@@ -1202,10 +1273,21 @@ counterpart in this inventory.
   after commit, the content of a context entry that leaves can differ from
   the content the recorded request holds.
 - **New design:** class B.
+- **Tools:** as `generateText`. The injected `presentResult` tool is not a
+  pattern closure. Its input is the result, and it carries the label of
+  the generation that produced it.
+- **Sends:**
+  - The first model call. Today it sends a system prompt rendered again
+    from the live `context` after the commit, on both paths, in place of
+    the one the recorded request holds.
+  - On the tool-loop path, each later model call, as for `generateText`.
+
+  The egress ceiling is checked on each of them. A system prompt that is
+  rendered again is checked as it is rendered for that send, so the
+  content that leaves is the content that was checked. A send that fails
+  the check is not made, and the result takes the error state.
 - **Label rule:** as `generateText`. The result has per-path labels declared
   by the result schema, so the boundary's declared rule is per output path.
-  The request that leaves must be the snapshot that was checked; the rebuild
-  after commit is a defect the boundary's contract should exclude.
 
 ### `llmDialog`
 
@@ -1234,6 +1316,13 @@ counterpart in this inventory.
   built-in tools `read`, `invoke`, `schema`, `pin`, `unpin`, and
   `updateArgument` let the model read any cell, invoke any handler or stored
   pattern, and write any pattern's argument cell that it can name by link.
+  In the compiled design a tool that is a pattern closure follows the rule
+  under [Effectful built-ins](#effectful-built-ins) ("A pattern closure
+  given to a language model as a tool"). The label of a generation is the
+  label of the model message that holds the tool call: the join of
+  everything the model had observed when it produced the message. The
+  argument the model supplies carries that label, and the result of the
+  call carries the label of the instance's own result.
 - **CFC:** sink `llmDialog`, ungated as above. Model messages are stamped
   `LlmDerived`; user messages and error literals are not. Before a tool call
   two gates run: the tool's declared maximum confidentiality against what
@@ -1259,6 +1348,15 @@ counterpart in this inventory.
   system prompt rendered from the live context and pins (`startRequest`),
   so a cell pinned during the turn is serialized by a later call that no
   request recorded.
+- **Sends:** every model call of a turn is a send, and no call after the
+  first is in a recorded request. Each call sends
+  - the live transcript, which holds the messages added since the turn
+    started, the results of the turn's tool calls among them;
+  - a system prompt rendered from the live context and the pinned cells.
+
+  The egress ceiling is checked on each model call, on the transcript and
+  the prompt as they are at that call. A call that fails the check is not
+  made, and the dialog's result takes the error state.
 - **New design:** class B. It is the clearest case of a built-in pattern:
   it has handlers, state cells, and effects, and its write surface is the
   caller's `messages` cell plus whatever its tools write. It splits three
@@ -1302,7 +1400,10 @@ counterpart in this inventory.
   (`AgentRunRecordSchema`). `task` is a string, `tools` is an array of
   tool names, and `progress` is a boolean. `resultSchema` and
   `maxConfidentiality` are read in full. No entry of `inputs` is
-  followed.
+  followed. `tools` names tools of the runner and holds no pattern
+  closure, so the rule for a closure given to a model as a tool does not
+  apply here. The built-in has one send, the record it queues, and it is
+  the request. What the runner sends to a model is outside this boundary.
 - **New design:** class B. The operation has user scope, because the
   request needs a requester
   ([Effectful built-ins](#effectful-built-ins), "The requester of a
@@ -1700,7 +1801,9 @@ export it and the pattern corpus does not call it.
   - *In a handler* a cell with no cause takes `{ count: n }` from a counter
     on the frame, combined with the frame's cause, which includes the event
     identifier. The identifier is stable across retries of one event only
-    while the order of creation is stable.
+    while the order of creation is stable. A cell with `.for(cause)` takes
+    that cause in place of the counter and is combined with the frame's
+    cause in the same way, so it too derives from the event (`#ensureLink`).
   - *In a lift* a cell with no cause throws when it needs a link. With
     `.for(cause)` its identifier derives from that cause and the lift's
     `{ inputs, outputs, fn }` record.
@@ -1712,10 +1815,13 @@ export it and the pattern corpus does not call it.
   cell of the plan with the identifier the overview specifies. Creating a
   cell in a function body is one of the calls that remain legal, and the two
   regimes stay:
-  - A handler invocation is a new frame for each event, so every cell it
-    creates is new. An identifier from the handling of the event, which
-    its receipt identifies, and a per-invocation counter is sufficient,
-    and a handler needs no explicit cause
+  - A handler invocation is a new frame for each event. A cell it creates
+    with no explicit cause is new on every event: an identifier from the
+    handling of the event, which its receipt identifies, and a
+    per-invocation counter is sufficient. A cell it creates under an
+    explicit cause, `X.for(cause)`, is the same cell on every event: its
+    identifier derives from the handler's instance and the cause, and not
+    from the event
     ([What the plan records](#what-the-plan-records-for-calls-in-bodies)).
   - A pattern body and a lift are re-evaluated, so their cells need
     identifiers that are the same on every evaluation: the variable name in
@@ -1976,9 +2082,9 @@ has the same table for the two kinds of function body.
 
 | Call | `handler`, `action` | `lift`, `computed` | Pattern body | Status |
 | --- | --- | --- | --- | --- |
-| Instantiate a pattern | Yes | Yes. The instance belongs to the computation | Yes | Decided. How an instance a computation makes is identified is assumed (the continuation plan, question 38) |
-| Create a cell | Yes, with no explicit cause | Only with an explicit cause, `X.for(cause)` | Yes, as a state cell of the plan | Recommended for function bodies; decided for the pattern body |
-| Request an effect | Yes | Not directly. A pattern the computation instantiates may request effects in its own body | Yes, except the staged changes, which only a handler requests | Decided for a handler, an action, and the pattern body. For a `lift` or a `computed` the refusal of a direct request is assumed (the continuation plan, question 38) |
+| Instantiate a pattern | Yes | Yes. The instance belongs to the computation | Yes | Decided |
+| Create a cell | Yes. With no explicit cause the cell is new on every event; with `X.for(cause)` it is the same cell on every event | Only with an explicit cause, `X.for(cause)` | Yes, as a state cell of the plan | Recommended for function bodies; decided for the pattern body, and for what an explicit cause in a handler names |
+| Request an effect | Yes | Not directly. A pattern the computation instantiates may request effects in its own body | Yes, except the staged changes, which only a handler requests | Decided |
 | Read context | Yes, all of them | All except `eventKey` and `currentPrincipal` | All except `eventKey` and `currentPrincipal`; see the table below | Recommended; the implementation's rule for function bodies. For the pattern body, partly assumed (open question 10) |
 | Bind a handler | Yes | Yes | Yes | Decided |
 
@@ -1996,7 +2102,8 @@ Context reads in the pattern body, read by read:
 The reasons, from the implementation:
 
 - **Instantiation.** A handler's instance is identified by the handling
-  of its event and is written into state. A computation is evaluated
+  of its event, or by an explicit cause where the site has `.for(tag)`,
+  and is written into state. A computation is evaluated
   again, so an instance it makes has to be named the same on every
   evaluation. The instance belongs to the computation: an evaluation that
   instantiates the same pattern at the same place names the same instance
@@ -2006,8 +2113,11 @@ The reasons, from the implementation:
   has the record, the identity, and what the runtime does today, which
   also keeps such an instance from one evaluation to the next
   (`#writeJavaScriptActionResult`).
-- **Cell creation.** A handler frame numbers the cells it creates
-  (`#ensureLink` uses the frame's counter when `inHandler` is set). In a
+- **Cell creation.** A handler frame numbers the cells it creates with no
+  cause (`#ensureLink` uses the frame's counter when `inHandler` is set).
+  In the compiled design a cell that a handler creates under an explicit
+  cause is the same cell on every event
+  ([A cell created in a handler](#a-cell-created-in-a-handler)). In a
   lift the same code throws unless the cell has a cause, because a
   re-evaluation has to name the same cell. The 10 corpus sites in lifts all
   pass a cause and write the cell at once. A cell so created is a
@@ -2021,7 +2131,7 @@ The reasons, from the implementation:
   consequences of an event is a runtime error
   ([built-in contracts](../server-side-execution/builtins.md), §4). And the
   staged changes check for a handler frame and throw elsewhere. No
-  computation in the corpus requests an effect. *Assumed:* a `lift` or a
+  computation in the corpus requests an effect. A `lift` or a
   `computed` does not request an effect directly
   (`function-body:effect-in-computation`). It has an indirect route: a
   pattern it instantiates may request effects in its own body, as a
@@ -2160,13 +2270,13 @@ The rewrites, by case:
   identify an instance. The handling is identified by its receipt, which
   is also what an instance derives from today
   ([An instantiation request from a handler](#an-instantiation-request-from-a-handler)).
-  The four `.for(tag)` sites show the explicit form. *Assumed:* the tag
-  names the same instance from different events, as
-  `plan-and-label-templates.md` §1.3 has it. Today it does not: the
-  instance of a `.for(tag)` site is minted under the receipt cell of the
-  event like any other, so it derives from the event. Which of the two the
-  form means is with the project owner (the continuation plan, question
-  19).
+  The four `.for(tag)` sites show the explicit form. An explicit cause in
+  a handler names the same thing across events: the tag names the same
+  instance from different events (`plan-and-label-templates.md` §1.3).
+  Today it does not: the instance of a `.for(tag)` site is minted under
+  the receipt cell of the event like any other, so it derives from the
+  event. The four sites therefore change meaning: an event that gives a
+  tag an earlier event gave finds the instance the earlier event made.
 - **Modifiers.** `P.asScope(scope)` and `P.inSpace(space, options)` are
   legal callees. `inSpace` makes the request a cross-space one: the new
   instance, and often its space, are created by a commit to another space.
@@ -2198,7 +2308,9 @@ The rewrites, by case:
   ([An instantiation request from a `lift` or a `computed`](#an-instantiation-request-from-a-lift-or-a-computed)).
   No rewrite is required. Each site makes at most one instance per
   evaluation, so the ordinal among the instantiations of the site
-  identifies it, and none needs an explicit cause. In the computed that
+  identifies it, and none needs an explicit cause. No site is in a loop
+  or a callback of its body, so none gets the warning for an
+  instantiation there that has no `.for(cause)`. In the computed that
   selects among 64 patterns each `case` is a site of its own: an
   evaluation that takes another `case` tears down the instance of the
   `case` it took before and makes one at the new site. An author may still
@@ -2245,7 +2357,8 @@ binding holds, with no synthesized pattern.
   and through helpers `patterns/apps/shared-note/main.tsx` and `sendInto` in
   `patterns/system/fabrichat/room-records.tsx`. Their identifiers come from
   the frame's counter, which is sufficient because each invocation is a new
-  frame.
+  frame. The measurement found no handler that creates a cell under an
+  explicit cause.
 - Lifts create cells with an explicit cause and write them at once,
   `Cell.for(input.id).set(...)`:
   `patterns/examples/cfc-spec-gallery/main.tsx`,
@@ -2371,8 +2484,18 @@ name, or a generated ordinal (`factoryFromPattern`).
   path bound to a scalar, or to a value the body computed, is written as a
   value with the body's template. A reference inside a computed container
   stays a reference.
-- **Run time:** the handling, and the order of the request within the
-  invocation or the value of the explicit cause; the resolved target space.
+- **Run time:** the handling and the order of the request within the
+  invocation, or, for a site with an explicit cause, the value of the
+  cause; the resolved target space.
+- **Identity.** Without an explicit cause the identifier derives from the
+  handling and the order of the request, so it derives from the event, as
+  today. With `.for(tag)` it derives from the handler's instance and the
+  tag, and not from the handling: the tag names the same instance on
+  every event (`plan-and-label-templates.md` §1.3). An event that names
+  an instance an earlier event made creates nothing, and the existence
+  label of the instance is fixed when it is first created. Today the
+  identifier of a `.for(tag)` site derives from the event as well
+  ([Pattern instantiation in bodies](#pattern-instantiation-in-bodies)).
 - **Links to instances not yet created.** A request returns a link whose
   identifier is derived from the facts above before anything is created. An
   argument of a later request in the same invocation may hold that link, so
@@ -2461,13 +2584,12 @@ synthesized pattern.
   explicit cause, `.for(cause)`, with the template of the cause.
 - **Run time:** the occurrences the evaluation made at each site, in
   order, or the value of each explicit cause, and the argument of each.
-- **Identity.** *Assumed:* the instance is identified by the enclosing
-  instance, the body's name and `within` steps, the site, and the ordinal
-  of the instantiation among those the evaluation makes at that site.
-  Where the author writes `.for(cause)`, the cause takes the place of the
-  ordinal. The ruling leaves this to assume, and the question is with the
-  project owner (the continuation plan, question 38;
-  `plan-and-label-templates.md` §1.3 and §3.14). Three things follow.
+- **Identity.** The instance is identified by the enclosing instance,
+  the body's name and the calls and callbacks the site is written in
+  (the body's `within` steps), the site, and the ordinal of the
+  instantiation among those the evaluation makes at that site. Where the
+  author writes `.for(cause)`, the cause takes the place of the ordinal
+  (`plan-and-label-templates.md` §1.3 and §3.14). Four things follow.
   - A site that an evaluation runs once needs no cause. An evaluation that
     reaches the site again names the same instance.
   - A site in a loop names its instances by the order in which the loop
@@ -2475,6 +2597,10 @@ synthesized pattern.
     takes the argument of the next item, and the last instance is torn
     down. An author who wants each instance to stay with its item writes
     `.for(cause)` with a cause taken from the item.
+  - The compiler warns on an instantiation inside a loop or a callback
+    in a function body that has no `.for(cause)`, because of the case
+    above. It is a warning and not an error, and `language-subset.md`
+    has its entry in the diagnostic catalog.
   - The ordinal is per site, where today's generated ordinal counts every
     anonymous cell of the frame. A branch that makes an instance on some
     evaluations only therefore does not rename the instances of the other
@@ -2506,7 +2632,7 @@ synthesized pattern.
   evaluation, the instance at that place is torn down and a new one is
   started under the same name, as for a child of the reactive tier
   ([A pattern factory value in the reactive tier](#a-pattern-factory-value-in-the-reactive-tier)).
-- **Effects.** *Assumed:* the computation requests no effect itself
+- **Effects.** The computation requests no effect itself
   ([Which body may make which call](#which-body-may-make-which-call)). A
   pattern it instantiates may. Such an effect is an operation of the
   child's plan. A cone of the child computes its request from the child's
@@ -2545,9 +2671,25 @@ initial value is stored as the schema's default.
   constructors; the template of the initial value. The initial value is a
   `WriteEdge` whose target has the kind `created` and names the
   `createCell` site (`plan-and-label-templates.md` §1.1 and §3.14).
-- **Run time:** the handling and the cell's order within the invocation.
+- **Run time:** the handling and the cell's order within the invocation,
+  or, for a cell created under an explicit cause, the value of the cause.
 - **Label:** the initial value is a write by the handler body and carries
   the body's template, as any path the handler writes does.
+- **An explicit cause.** A cell that a handler creates with
+  `X.for(cause)` is the same cell on every event. Its identifier derives
+  from the handler's instance and the cause, and not from the handling
+  (`plan-and-label-templates.md` §1.3). An event that names a cell an
+  earlier event created creates nothing and finds the cell as it is
+  stored. The existence label of the cell is fixed when it is first
+  created: it is the template of the cause as the creating event
+  instantiated it, since which document exists reveals the cause's value,
+  and a later event does not change it. A read through the handle of such
+  a cell is dynamic, because the cell can hold what an earlier event
+  wrote (`footprint-analysis.md` §8.2). Without an explicit cause an
+  identifier minted in a handler derives from the event, as today. Today
+  an explicit cause in a handler is combined with the frame's cause,
+  which holds the event identifier, so each event names a cell of its
+  own (`#ensureLink`).
 
 ### A cell created with an explicit cause in a lift
 
@@ -3058,10 +3200,14 @@ above already reflect them.
   request effects. An evaluation that instantiates the same pattern at
   the same place names the same instance and updates its argument, an
   instance that an evaluation no longer makes is torn down, and an effect
-  in the instance is requested again when its request changes. How such
-  an instance is identified, and that a `lift` or a `computed` does not
-  request an effect directly, are assumptions and not rulings (open
-  question 11).
+  in the instance is requested again when its request changes. Such an
+  instance is identified by the enclosing instance, the body's name and
+  the calls and callbacks it is written in, the site, and the ordinal of
+  the instantiation among those the evaluation makes at that site, or by
+  an explicit cause where the author writes `.for(cause)`. A `lift` or a
+  `computed` does not request an effect directly. The compiler warns on
+  an instantiation inside a loop or a callback in a function body that
+  has no `.for(cause)`.
 - **Factory values.** A function body may instantiate a pattern factory
   value and bind a handler factory value. Module factories are not callable
   as values.
@@ -3098,9 +3244,15 @@ above already reflect them.
 - **Element keys.** A plain value is keyed by its value, anything else by
   the identity of its cell, and the index joins the key only when the
   callback uses it. Stored per-element state need not stay compatible.
-  Equal plain values share a cone for pure computation only: a body over
-  plain values that declares a state cell or binds a handler without using
-  the index is an error.
+  A body over plain values that declares a state cell without using the
+  index is an error. A body over plain values that binds a handler and
+  declares no state cell is accepted: equal elements bind equal state and
+  share one stream. Where a body over plain values instantiates a child,
+  the position joins the element key, so two equal plain elements have
+  two children.
+- **Ties among equal keys.** `minBy`, `maxBy`, and a keyed lookup break a
+  tie by the first position in the source order of the collection, and
+  not by the smallest element key.
 - **Value-derived identifiers are salted** with a secret of the space. A
   client cannot read the salt. It cannot name per-element state whose key
   holds a value, or a binding with a copied path, before the server stores
@@ -3120,11 +3272,29 @@ above already reflect them.
 - **`navigateTo` is the one effect a client enacts.** A client enacts it
   from its speculative run, reconciled with the server's result as it is
   today. A client requests no other effect.
-- **Identifiers.** Cells and instances created in a handler need no stable
-  identifier beyond the invocation, since each invocation is a new frame.
-  They derive from the handling, which is identified by its receipt, and
-  the receipt leaves the acting principal out. Patterns and lifts need
-  identifiers that are the same on every evaluation.
+- **Identifiers.** Cells and instances created in a handler with no
+  explicit cause need no stable identifier beyond the invocation, since
+  each invocation is a new frame. They derive from the handling, which is
+  identified by its receipt, and the receipt leaves the acting principal
+  out. Patterns and lifts need identifiers that are the same on every
+  evaluation.
+- **An explicit cause in a handler** names the same thing across events.
+  A cell that a handler creates under an explicit cause is the same cell
+  on every event, an instance requested with `.for(tag)` is the same
+  instance on every event, and the existence label of each is fixed at
+  first creation.
+- **A pattern closure given to a language model as a tool.** The argument
+  the model supplies carries the label of the generation that produced
+  the tool call. The result of the call carries the label of the
+  instance's own result.
+- **What a language-model built-in sends after its request.** The egress
+  ceiling is checked again on each send: a tool-loop result sent back to
+  the model, a system prompt rendered again from live context, and each
+  send of a dialog's live transcript. A send that fails the check is not
+  made, and the built-in's result takes the error state.
+- **A handler's pending effect after a restart.** The request is made
+  again at activation, with the references followed and the egress
+  ceiling checked on the content as it is then.
 - **A failed constraint.** One on what a handler itself writes, the egress
   ceiling of a request the handler makes included, rejects the event's
   whole transaction. One on a derived write, such as the argument a
@@ -3183,7 +3353,7 @@ with the project owner names its entry in the
    listed under [Decisions](#decisions). The entry keeps its number
    because other documents cite the entries after it by number.
 5. **Knowing statically that elements are plain values.** The error for
-   state or handlers over plain values needs the compiler to know whether a
+   a state cell over plain values needs the compiler to know whether a
    collection's elements are stored inline or as links. A primitive element
    type is always inline. A record element type is a link when a handler
    wrote the list, or when a computation passed the records on unchanged,
@@ -3202,17 +3372,14 @@ with the project owner names its entry in the
 6. **Tool calls as instantiation.** A model tool call instantiates a
    pattern with a result cell whose cause is an identifier the model
    supplies, and the dialog's built-in tools let a model read, invoke, and
-   write whatever it can name by link. What such a call serializes was in
-   no recorded request ([Effectful built-ins](#effectful-built-ins)).
-   *Assumed:* out of scope for the language, and specified with the model
-   boundary's declared rule: the boundary's own transactions label what a
-   language-model built-in sends that no checked request held, which is
-   the results of a tool loop, a system prompt rendered again from live
-   context after the commit, and the live transcript of a dialog
-   (question 51 of the plan). The identifier should derive from the turn
-   and the call's position. No rule gives the label of the argument a
-   model supplies to a pattern closure it was given as a tool, or of the
-   result (question 8 of the plan).
+   write whatever it can name by link. The labels of the argument and of
+   the result of a pattern closure, and the check of each send, are
+   decided ([Effectful built-ins](#effectful-built-ins)). Two things are
+   left. *Assumed:* the identifier of the instance derives from the turn
+   and the call's position, and not from the identifier the model
+   supplies. *Assumed:* what the dialog's built-in tools may read, invoke,
+   and write is out of scope for the language and is specified with the
+   model boundary's declared rule.
 7. **Value checkpoints for `reduce`.** *Assumed:* none in the baseline; the
    fold is recomputed, and only its label is maintained incrementally.
 8. **`sqliteDatabase` identity.** Its handle is keyed on the whole cause,
@@ -3252,29 +3419,29 @@ with the project owner names its entry in the
     `spaceAccess` or `spaceMembers` is scoped to the user. What is left is
     the legality itself, which is with the project owner (question 32 of
     the plan).
-11. **An instance made in a `lift` or a `computed`.** The ruling allows
-    the instantiation and leaves three things to assume
+11. **An instance made in a `lift` or a `computed`.** How the instance
+    is identified, and that a `lift` or a `computed` does not request an
+    effect directly, are decided
     ([An instantiation request from a `lift` or a `computed`](#an-instantiation-request-from-a-lift-or-a-computed)).
-    *Assumed:* the instance is identified by the enclosing instance, the
-    body, the site, and the ordinal of the instantiation among those the
-    evaluation makes at that site, or by an explicit cause where the
-    author writes `.for(cause)`. *Assumed:* a `lift` or a `computed` does
-    not request an effect directly, so an effect that depends on computed
-    data is written in a pattern the computation instantiates, or in the
-    reactive tier. Both are question 38 of the plan. *Assumed:* `inSpace`
-    and `asScope` are legal on the callee of such an instantiation, as
-    they are today and as in a handler, which is question 50 of the
-    plan.
-12. **`.for(tag)` on an instantiation in a handler.** *Assumed:* the tag
-    names the same instance from different events, as
-    `plan-and-label-templates.md` §1.3 has it. Today the instance of such
-    a site is minted under the receipt cell of its event, so it derives
-    from the event
-    ([Pattern instantiation in bodies](#pattern-instantiation-in-bodies)).
-    The question is with the project owner (question 19 of the plan).
-13. **Ties among equal keys.** *Assumed:* `minBy`, `maxBy`, and an index in
-    `key` mode break a tie by the smallest element key. For a plain-value
-    element that key is a hash of the whole value, so the choice depends
-    on element values its label does not hold
-    ([Element keys](#element-keys)). The question is with the project
-    owner (question 6 of the plan).
+    One thing is left. *Assumed:* `inSpace` and `asScope` are legal on
+    the callee of such an instantiation, as they are today and as in a
+    handler, which is question 50 of the plan.
+12. **`.for(tag)` on an instantiation in a handler.** Not open. The tag
+    names the same instance on every event
+    ([An instantiation request from a handler](#an-instantiation-request-from-a-handler)),
+    and the rule is listed under [Decisions](#decisions). The entry keeps
+    its number so that the entries after it keep theirs.
+13. **Ties among equal keys.** Not open. A tie goes to the first position
+    in the source order ([Element keys](#element-keys)), and the rule is
+    listed under [Decisions](#decisions). The entry keeps its number so
+    that the entry after it keeps its own.
+14. **A state cell in a body whose key holds the position because the
+    body instantiates a child.** Where a body over plain values
+    instantiates a child, the position joins the element key
+    ([Element keys](#element-keys)). The error for a state cell over
+    plain values is stated for a body that does not use the index, and
+    such a body can instantiate a child without using the index.
+    *Assumed:* its state cell is accepted, because the position is in the
+    key and no two positions share the cell. The other reading keeps the
+    error wherever the source does not use the index. The question is
+    with the project owner.
