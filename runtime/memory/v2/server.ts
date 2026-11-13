@@ -10112,7 +10112,10 @@ export class Server {
         : { principal: session.principal }),
       sessionId: session.id,
     };
-    // The session's watch ROOT keys (instance-keyed like trackedIds).
+    // The session's watch ROOT keys (instance-keyed like trackedIds): the
+    // instance a root names, or else the session's own. A session the read
+    // row admits to name an instance may be a client, of a toolshed that
+    // signs with its operator's key, so a named instance is demand too.
     const rootKeys = new Set<string>();
     for (const watch of [...session.watches, ...viewWatches(session.views)]) {
       if (watch.kind === "operation") continue;
@@ -10120,6 +10123,10 @@ export class Server {
         const scope = root.scope ?? "space";
         if (scope === "space") {
           rootKeys.add(toDirtyKey(root.id, "space"));
+          continue;
+        }
+        if (root.entityScopeKey !== undefined) {
+          rootKeys.add(toDirtyKey(root.id, root.entityScopeKey));
           continue;
         }
         try {
@@ -11418,12 +11425,10 @@ export class Server {
    * loop's own principal, and every serving session of that principal is
    * EXCLUDED here (the serving loop's own reads are not client demand,
    * from this process or routed from another). A client signed with the
-   * service's key survives the exclusion, but clients name no instances,
-   * so no root that survives it carries an explicit key. If a later phase
-   * admits explicit-instance CLIENT demand (Phase 2's per-instance
-   * demand mapping), the record must grow the key WITH the SpaceServer
-   * side that consumes it; silently dropping it here would serve the
-   * service's own instance in place of the named one.
+   * service's key survives the exclusion and may name an instance; this
+   * roots-only projection then lists the root without it, which no
+   * production caller reads. `demandForSpace` keys every row, roots
+   * included, by the instance the root names.
    */
   watchedRootsForSpace(
     space: string,

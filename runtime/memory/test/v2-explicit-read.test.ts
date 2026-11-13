@@ -8,6 +8,8 @@
 // key is refused; a read naming none resolves from the session as today.
 
 import { assertEquals, assertExists } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { Server } from "../v2/server.ts";
 import {
   encodeMemoryBoundary,
@@ -1617,4 +1619,63 @@ Deno.test("a serving session's UNNAMED scoped read of a space it does not serve 
     resetServerExecutionConfig();
     await server.close();
   }
+});
+
+describe("Server", () => {
+  describe("demandForSpace()", () => {
+    it("demands the instance a client session of the service identity names on a root, not its own", async () => {
+      // A local toolshed signs with the key its operator's client uses, so
+      // that client's sessions are admitted to name another actor's
+      // instance, and are demand.
+
+      const server = newServer("memory://explicit-read-client-demand");
+      setServerExecutionConfig(true);
+      try {
+        const alice = await connect(server);
+        const { sessionId: aliceSession } = await openSession(alice, ALICE);
+        await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
+        await server.writeDocument(SPACE, `of:${SPACE}`, { [ALICE]: "OWNER" });
+        const aliceKey = resolveScopeKey("user", { principal: ALICE });
+        const serviceKey = resolveScopeKey("user", { principal: SERVICE });
+        const client = await connect(server);
+        const { sessionId } = await openSession(client, SERVICE);
+
+        const watched = await server.watchSet({
+          type: "session.watch.set",
+          requestId: nextRequestId("client-watch"),
+          space: SPACE,
+          sessionId,
+          watches: [{
+            id: "w1",
+            kind: "graph",
+            query: {
+              roots: [{
+                id: "of:profile",
+                scope: "user",
+                entityScopeKey: aliceKey,
+                selector: { path: [], schema: false },
+              }],
+            },
+          }],
+        }) as ResponseMessage<WatchSetResult>;
+        expect(watched.error).toBeUndefined();
+
+        const share = server.demandForSpace(SPACE, {
+          excludePrincipal: SERVICE,
+        }).find((candidate) => candidate.sessionId === sessionId);
+        const roots = [...share?.rows.values() ?? []]
+          .filter((row) => row.root)
+          .map((row) => ({ id: row.id, scopeKey: row.scopeKey }));
+
+        expect(roots).toContainEqual({ id: "of:profile", scopeKey: aliceKey });
+        expect(roots).not.toContainEqual({
+          id: "of:profile",
+          scopeKey: serviceKey,
+        });
+      } finally {
+        resetServerExecutionConfig();
+        await server.close();
+      }
+    });
+  });
 });
