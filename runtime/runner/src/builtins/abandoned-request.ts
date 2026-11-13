@@ -44,10 +44,7 @@ export type AbandonedRequest = {
 /**
  * Write the ending of a request that will never be sent: its staging
  * transaction was abandoned, or the request was dropped after that transaction
- * committed. Resolves to whether the ending's transaction committed: `false`
- * where it was rejected, which is reported, or not written at all. Under the
- * serving posture a commit here is the seal into the open wave, which the
- * wave can still withdraw.
+ * committed.
  *
  * Nothing else will say that the request is not going out. `write` puts that
  * on the builtin's own result cells — the pending flag down, the refusal as the
@@ -93,7 +90,7 @@ export async function settleAbandonedRequest(
   runtime: Runtime,
   request: AbandonedRequest,
   write: (tx: IExtendedStorageTransaction) => void,
-): Promise<boolean> {
+): Promise<void> {
   const { builtinId, effectKey, identity } = request;
   // A serving loop runs only with server execution on; a serving runtime
   // without it commits every transaction to the store, as a client does.
@@ -138,7 +135,7 @@ export async function settleAbandonedRequest(
       builtinId,
       effectKey,
     });
-    return false;
+    return;
   }
   if (error) {
     // The ending had nowhere to land, so a reader of these cells sees
@@ -146,7 +143,7 @@ export async function settleAbandonedRequest(
     // downstream can.
     if (request.reportRejection !== undefined) {
       request.reportRejection(error);
-      return false;
+      return;
     }
     console.error(
       `[${builtinId}] Writing the abandoned request's error to its result ` +
@@ -154,7 +151,5 @@ export async function settleAbandonedRequest(
       { rejection: error.message },
     );
     logger.warn("builtins", "abandoned-request writeback rejected", { error });
-    return false;
   }
-  return true;
 }
