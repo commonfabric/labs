@@ -213,7 +213,11 @@ through a cell made after the stop, syncs or pulls that cell first
 (`Cell.sync()`, `Cell.pull()`). A read inside `Runtime.editWithRetry()` needs
 neither: before the transaction commits, the runtime waits for the loads its
 reads of absent documents started, and runs the attempt again if any of those
-documents exists.
+documents exists. An attempt that throws gets the same wait before its throw is
+reported, so a check inside the transaction that refuses when it finds a
+document absent runs again once that document has loaded. A transaction made
+with `Runtime.edit()` and committed directly gets no such wait, nor does a read
+by address alone, which starts no load.
 
 ## Measuring
 
