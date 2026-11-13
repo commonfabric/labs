@@ -273,6 +273,31 @@ describe("cfc-processed-claim", () => {
     tx.abort();
   });
 
+  it("measures a value the handler writes over the processed claim's own path", () => {
+    // The claim's path takes nothing of the join only while it holds what the
+    // serving loop wrote there. A handler that writes something else at that
+    // path, after the claim, is measured as any write is.
+    const tx = handlerRun("overwriting-handler");
+    writeProcessedClaim(
+      runtime,
+      tx,
+      space,
+      { sidecarId: entriesId, index: 0 },
+      { clearDeferral: false },
+    );
+    runtime.getCellFromLink<string>({
+      space,
+      scope: "space",
+      id: entriesId as never,
+      path: ["entries", "0", "consequenced"],
+    }).withTx(tx).set("s3cr3t");
+
+    const reasons = preparedWriterFitReasons(tx);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain(FOREIGN_ATOM);
+    tx.abort();
+  });
+
   it("measures a field the handler writes beside the processed claim", () => {
     // Only the claim takes nothing of the join. A value computed from what the
     // handler read, written on the same entry, is measured as any write is.

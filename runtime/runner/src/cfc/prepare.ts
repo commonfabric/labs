@@ -1537,7 +1537,10 @@ const structuralProvenanceForPath = (
 /**
  * Whether `path` of `target` is a served event's processed claim, as an
  * authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM` marker on `tx` names
- * it. Only a stream's entries document holds one.
+ * it, holding `value`, the value the transaction wrote there. Only a stream's
+ * entries document holds one, and only while the path holds what the claim
+ * writes: `true` for the mark and for `withheld`, nothing for a cleared
+ * delivery deferral. Anything else written there is measured as any write is.
  */
 const isProcessedClaimPath = (
   tx: IExtendedStorageTransaction,
@@ -1547,8 +1550,10 @@ const isProcessedClaimPath = (
     scope: ReturnType<typeof normalizeCellScope>;
   },
   path: readonly string[],
+  value: unknown,
 ): boolean =>
   target.id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  value === (path.at(-1) === "deliveryDeferral" ? undefined : true) &&
   structuralProvenanceForPath(
       tx,
       target,
@@ -13208,7 +13213,12 @@ export function* prepareBoundaryCommitSteps(
     // (§6.2.2; `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`), so its path is
     // neither stamped with the join nor measured against the store.
     const flowWrittenPaths = (flowTarget?.paths ?? []).filter((path) =>
-      !isProcessedClaimPath(tx, target, path)
+      !isProcessedClaimPath(
+        tx,
+        target,
+        path,
+        flowTarget?.valuesByPath.get(pathKey(path)),
+      )
     );
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
