@@ -3,6 +3,8 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
+import { transportClosedError } from "@commonfabric/memory/v2/client";
 import { Server, SessionRegistry } from "@commonfabric/memory/v2/server";
 import { ServerTransport } from "../../../memory/test/support/server-transport.ts";
 import { LoopbackStorageManager } from "../../src/executor/loopback-storage.ts";
@@ -140,7 +142,82 @@ describe("LoopbackStorageManager", () => {
     return { manager, transport, reading, settle };
   };
 
+  /**
+   * A manager whose first read of a routed space is still mounting, with its
+   * open answered: the owner answered the open, the connection dropped before
+   * the open's send had settled, and the owner has stayed down since. The
+   * client has tried it twice, so the mount has found its answer and waits
+   * for the restore of its session. `settle` ends the transport for good and
+   * waits for the read: a mount left waiting after its route was cancelled
+   * fails every restore, so bringing the owner back would not end it.
+   */
+  const answeredMountWhileOwnerIsDown = async () => {
+    const server = new Server(TEST_MEMORY_SERVER_AUTH);
+    const answered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let ended = false;
+    /**
+     * Holds the send of the first `session.open` once it is answered, and
+     * refuses every frame for good once `ended`.
+     */
+    class HoldingOpen extends ServerTransport {
+      #held = false;
+
+      override async send(payload: string): Promise<void> {
+        if (ended) throw transportClosedError("test transport ended");
+        await super.send(payload);
+        const { type } = decodeMemoryBoundary(payload) as { type?: string };
+        if (this.#held || type !== "session.open") return;
+        this.#held = true;
+        answered.resolve();
+        await release.promise;
+      }
+    }
+    const transport = new HoldingOpen(server);
+    const manager = LoopbackStorageManager.connect(server, {
+      as: service,
+      servingHomeSpace: "did:key:z6Mk-loopback-answered-home" as MemorySpace,
+      route: { createTransport: () => transport },
+    });
+    const reading = manager.open(
+      "did:key:z6Mk-loopback-answered" as MemorySpace,
+    ).serverHeadSeq!().then(() => "read", () => "failed");
+    await answered.promise;
+    const refused = transport.whenRefused();
+    transport.hostDown();
+    release.resolve();
+    await refused;
+    // The next dial comes after the client's backoff.
+    await transport.whenRefused();
+    const settle = async () => {
+      ended = true;
+      await reading;
+      await manager.closeNow();
+      await server.close();
+    };
+    return { manager, transport, reading, settle };
+  };
+
   describe("close()", () => {
+    it("resolves while a routed space's answered mount waits for its session's restore with the owner down, without dialing the owner again", async () => {
+      const t = await answeredMountWhileOwnerIsDown();
+      let closing: Promise<void> | undefined;
+      try {
+        const dialedAgain = t.transport.whenRefused();
+        closing = t.manager.close();
+        const outcome = await Promise.race([
+          closing.then(() => "closed"),
+          dialedAgain.then(() => "dialed again"),
+        ]);
+
+        expect(outcome).toBe("closed");
+        expect(await t.reading).toBe("failed");
+      } finally {
+        await t.settle();
+        await closing;
+      }
+    });
+
     it("resolves while a routed space's mount waits for an owner that stays down, without dialing the owner again", async () => {
       const t = await mountingWhileOwnerIsDown();
       let closing: Promise<void> | undefined;
@@ -162,6 +239,17 @@ describe("LoopbackStorageManager", () => {
   });
 
   describe("closeNow()", () => {
+    it("closes the connection to a routed space whose answered mount waits for its session's restore with the owner down", async () => {
+      const t = await answeredMountWhileOwnerIsDown();
+      try {
+        await t.manager.closeNow();
+
+        expect(t.transport.closes).toBeGreaterThan(0);
+      } finally {
+        await t.settle();
+      }
+    });
+
     it("closes the connection to a routed space whose mount waits for an owner that stays down", async () => {
       const t = await mountingWhileOwnerIsDown();
       try {

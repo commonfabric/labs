@@ -209,8 +209,7 @@ class LoopbackSessionFactory implements SessionFactory {
   ) {
     // A routed session dials the owner over the network, with the handshake
     // attempts the routed plane gives its own sessions. `signal` aborts once
-    // the provider has no more use for the session, which ends the dial, and
-    // ends a mount that is waiting for an owner that cannot be reached.
+    // the provider has no more use for the session, which ends the dial.
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
       signal,
@@ -221,7 +220,17 @@ class LoopbackSessionFactory implements SessionFactory {
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
+    // Until this returns, nothing else holds the client, so an abort closes
+    // it here. That ends whatever the mount is waiting on while its owner
+    // cannot be reached: its turn to be sent, or, once the owner answered it
+    // on a connection that then dropped, the restore of its session.
+    const closeForAbort = (): void => {
+      void client.close().catch(() => {});
+    };
+    signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
+      // A signal that has aborted by now is refused by the mount as it
+      // starts, and the failure below closes the client.
       const session = await client.mount(
         space,
         mountOptions,
@@ -245,6 +254,8 @@ class LoopbackSessionFactory implements SessionFactory {
       // the same close-before-rethrow RemoteSessionFactory.create does.
       await client.close().catch(() => {});
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", closeForAbort);
     }
   }
 }
