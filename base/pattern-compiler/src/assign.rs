@@ -994,6 +994,11 @@ impl<'a> Resolver<'_, 'a> {
                     return verdict;
                 }
             }
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+                if let Some(verdict) = self.function_against(module, expression, to) {
+                    return verdict;
+                }
+            }
             Expression::CallExpression(call) => {
                 if let Some(verdict) = self.callback_against(module, call, to) {
                     return verdict;
@@ -1033,6 +1038,56 @@ impl<'a> Resolver<'_, 'a> {
             }
         }
         verdict
+    }
+
+    /// A function written where a function type is expected: its body is
+    /// checked against the result type of the expected type (§7.5). `None`
+    /// where the function annotates its parameters or its result, so that
+    /// it is checked by its own type.
+    fn function_against(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        to: TypeId,
+    ) -> Option<Verdict> {
+        let function = FunctionLike::of(expression)?;
+        let annotated = match function {
+            FunctionLike::Arrow(arrow) => arrow.return_type.is_some(),
+            FunctionLike::Function(function) => function.return_type.is_some(),
+        } || function
+            .params()
+            .items
+            .iter()
+            .any(|parameter| parameter.type_annotation.is_some());
+        if annotated || function.is_async() || function.is_generator() {
+            return None;
+        }
+        let functions: Vec<TypeId> = match self.shape(to) {
+            Shape::Function => vec![to],
+            Shape::Union(members) => members
+                .into_iter()
+                .filter(|member| self.shape(*member) == Shape::Function)
+                .collect(),
+            _ => return None,
+        };
+        let [expected] = functions.as_slice() else {
+            return None;
+        };
+        let signature = self.signature(*expected);
+        let result = signature.result?;
+        if function.params().items.len() > signature.parameters?.len() {
+            return None;
+        }
+        if self.shape(result) == Shape::Void {
+            return Some(Verdict::Yes);
+        }
+        let returns = crate::infer::returned_expressions(function);
+        if returns.is_empty() {
+            return None;
+        }
+        Some(all(returns.into_iter().map(|returned| {
+            self.check_against(module, returned, result)
+        })))
     }
 
     /// A generic call whose result type only its callback determines,

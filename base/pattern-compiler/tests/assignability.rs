@@ -587,3 +587,31 @@ fn element_of_an_array_literal_is_widened() {
          function run() { return glaze([\"plain\", \"sugar\"]); }\n",
     );
 }
+
+#[test]
+fn result_declared_with_a_union_of_literals_is_not_widened() {
+    assert_accepted(
+        "type Kind = \"plain\" | \"sugar\";\n\
+         function glaze(kind: Kind) { return kind; }\n\
+         function run(kinds: Kind[], first: Kind) {\n\
+           const pick = () => \"plain\" as Kind;\n\
+           const same = () => first;\n\
+           return glaze(pick()) + glaze(same()) + kinds.map((kind) => kind).map(glaze).length;\n\
+         }\n",
+    );
+}
+
+#[test]
+fn expected_type_reaches_a_function_written_where_a_function_type_is_expected() {
+    assert_accepted(
+        "interface Judge { standing: (name: string) => \"live\" | \"retired\" }\n\
+         function ask(judge: Judge) { return judge.standing(\"a\"); }\n\
+         function run() { return ask({ standing: (name) => { if (name) return \"live\"; return \"retired\"; } }); }\n",
+    );
+    assert_refused(
+        "interface Judge { standing: (name: string) => \"live\" | \"retired\" }\n\
+         function ask(judge: Judge) { return judge.standing(\"a\"); }\n\
+         function run() { return ask({ standing: () => \"gone\" }); }\n",
+        "expected \"live\" | \"retired\", found \"gone\"",
+    );
+}

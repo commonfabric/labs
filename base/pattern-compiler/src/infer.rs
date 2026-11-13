@@ -326,7 +326,7 @@ impl<'a> Resolver<'_, 'a> {
             return Err(Origin::UninferredReturn);
         }
         let result = if let Some(body) = function.expression_body() {
-            self.typed_at(module, body, depth + 1)
+            self.returned_type(module, body, depth + 1)
         } else {
             let mut returns = Vec::new();
             for statement in function.block_body().unwrap_or(&[]) {
@@ -335,36 +335,47 @@ impl<'a> Resolver<'_, 'a> {
             match returns.as_slice() {
                 [] => self.of(Shape::Void),
                 [one] => match &one.argument {
-                    Some(argument) => self.typed_at(module, argument, depth + 1),
+                    Some(argument) => self.returned_type(module, argument, depth + 1),
                     None => self.of(Shape::Void),
                 },
-                several => {
-                    let mut members = Vec::new();
-                    for statement in several {
-                        members.push(match &statement.argument {
-                            Some(argument) => self.typed_at(module, argument, depth + 1)?,
-                            None => self.intern(Shape::Undefined),
-                        });
-                    }
-                    Ok(self.union_distinct(members))
-                }
+                several => several
+                    .iter()
+                    .map(|statement| match &statement.argument {
+                        Some(argument) => self.returned_type(module, argument, depth + 1),
+                        None => Ok(self.intern(Shape::Undefined)),
+                    })
+                    .collect::<Result<Vec<TypeId>, Origin>>()
+                    .map(|members| self.union_distinct(members)),
             }
         };
         self.leave(key);
-        // The inferred result type of a function is widened (§7.5), unless
-        // the function returns under `as const`.
-        let constant = function.expression_body().is_some_and(is_as_const)
-            || function.block_body().is_some_and(|body| {
-                let mut returns = Vec::new();
-                for statement in body {
-                    returned(statement, &mut returns);
-                }
-                !returns.is_empty()
-                    && returns
-                        .iter()
-                        .all(|statement| statement.argument.as_ref().is_some_and(is_as_const))
-            });
-        result.map(|ty| if constant { ty } else { self.widened(ty) })
+        result
+    }
+
+    /// The type a returned expression gives the inferred result type of its
+    /// function. A literal written there is widened (§7.5), in each branch
+    /// of a conditional too. A literal under `as const` and a value of a
+    /// declared type keep their types.
+    fn returned_type(&self, module: usize, expression: &Expression<'a>, depth: u32) -> Declared {
+        match expression {
+            Expression::ParenthesizedExpression(inner) => {
+                self.returned_type(module, &inner.expression, depth)
+            }
+            Expression::ConditionalExpression(conditional) if depth < MAX_DEPTH => {
+                let consequent = self.returned_type(module, &conditional.consequent, depth + 1)?;
+                let alternate = self.returned_type(module, &conditional.alternate, depth + 1)?;
+                Ok(self.union_distinct(vec![consequent, alternate]))
+            }
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::TemplateLiteral(_)
+            | Expression::UnaryExpression(_) => self
+                .typed_at(module, expression, depth)
+                .map(|ty| self.widened(ty)),
+            _ => self.typed_at(module, expression, depth),
+        }
     }
 
     /// Binds the type parameters of a function for one call: from the
@@ -1273,17 +1284,6 @@ fn handle_kind_of(shape: &Shape) -> HandleKind {
 
 fn is_number_literal(shape: &Shape) -> bool {
     matches!(shape, Shape::Literal(text) if text.starts_with(|c: char| c.is_ascii_digit() || c == '-'))
-}
-
-fn is_as_const(expression: &Expression<'_>) -> bool {
-    match expression {
-        Expression::ParenthesizedExpression(inner) => is_as_const(&inner.expression),
-        Expression::TSAsExpression(cast) => {
-            matches!(&cast.type_annotation, TSType::TSTypeReference(reference)
-                if matches!(&reference.type_name, TSTypeName::IdentifierReference(name) if name.name == "const"))
-        }
-        _ => false,
-    }
 }
 
 /// The expressions a function written in place returns: its expression
