@@ -219,6 +219,7 @@ import type {
   IStorageManager,
   IStorageProvider,
   MemorySpace,
+  ReleaseOptions,
   TransactionSealDestination,
   UnexaminedAbsence,
   URI,
@@ -1483,6 +1484,13 @@ export class Runtime {
    * way to finish, or for the scheduler to go idle.
    */
   #documentRelease: Promise<void> | undefined;
+
+  /**
+   * Whether something other than a hold token's collection has asked for the
+   * release pass not yet under way, which then follows up on the tokens it
+   * finds live (`ReleaseOptions.followUpOnCollection`).
+   */
+  #documentReleaseFollowsUp = false;
 
   /** The release pass under way, if any, settled whether or not it failed. */
   #documentReleaseRunning: Promise<void> | undefined;
@@ -3408,13 +3416,13 @@ export class Runtime {
    * `releaseUnreadDocuments()`): it asks the scheduler whether an action
    * reads a document, forgets a load kicked for a document it drops, so
    * that a later read of it kicks the load again, and asks for a pass when a
-   * document's hold token has been collected.
+   * hold token a pass followed up on has been collected.
    */
   #installDocumentRelease(): void {
     const manager = this.storageManager;
     const cancels = [
       manager.subscribeHoldsCollected?.(() => {
-        void this.releaseUnreadDocuments();
+        void this.#requestDocumentRelease();
       }),
       manager.addDocumentReader?.((address) =>
         this.scheduler.readsEntity(
@@ -3445,10 +3453,14 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. The storage manager asks for one
-   * when the hold token of a document it has loaded has been collected
-   * (`IStorageManager.subscribeHoldsCollected()`), which is when the cells
-   * holding that document have gone. Calls made before a pass begins
+   * client whose subscriptions it cancelled. A pass these ask for keeps a
+   * document a cell still holds, and follows up on that cell's hold token
+   * (`ReleaseOptions.followUpOnCollection`): once the token has been
+   * collected, which is when the cells holding the document have gone, the
+   * storage manager says so (`IStorageManager.subscribeHoldsCollected()`)
+   * and a pass of its own follows, which follows up on nothing. So a
+   * collection completes a release something asked for, and never begins
+   * one. Calls made before a pass begins
    * share it. A call made while a pass is under way is answered by the next
    * one, which waits for that one to finish and then for the scheduler. So at
    * most one pass waits at a time, however many calls are made.
@@ -3461,7 +3473,18 @@ export class Runtime {
    * else may ever ask for. The second pass asks for no third.
    */
   releaseUnreadDocuments(): Promise<void> {
+    this.#documentReleaseFollowsUp = true;
+    return this.#requestDocumentRelease();
+  }
+
+  /**
+   * Helper for `releaseUnreadDocuments()`, and for a hold token's
+   * collection, which asks for a pass without following up on the tokens it
+   * finds live.
+   */
+  #requestDocumentRelease(): Promise<void> {
     this.#documentRelease ??= (async () => {
+      let options: ReleaseOptions;
       try {
         // The pass under way may have begun before what this call is about
         // let go of its documents, so it cannot answer the call.
@@ -3470,12 +3493,16 @@ export class Runtime {
       } finally {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
+        options = { followUpOnCollection: this.#documentReleaseFollowsUp };
+        this.#documentReleaseFollowsUp = false;
       }
       const running = (async () => {
-        const deferred = await this.storageManager.releaseUnreadDocuments?.();
+        const deferred = await this.storageManager.releaseUnreadDocuments?.(
+          options,
+        );
         if (deferred !== true) return;
         await this.scheduler.idle();
-        await this.storageManager.releaseUnreadDocuments?.();
+        await this.storageManager.releaseUnreadDocuments?.(options);
       })();
       const settled = running.catch(() => {});
       this.#documentReleaseRunning = settled;

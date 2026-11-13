@@ -30,8 +30,9 @@ A replica keeps a document while any of these holds:
   takes the document's hold token (`IStorageManager.holdDocument()`) when it
   loads, or, for a cell made from a loaded one, when it is first read; the
   storage manager keeps the token only weakly, so the hold ends when every cell
-  holding it has been garbage collected, and that collection asks for a pass
-  (see "When documents are released"). Code that keeps a cell and reads or
+  holding it has been garbage collected, and that collection completes a
+  release a pass was asked for earlier (see "When documents are released").
+  Code that keeps a cell and reads or
   writes its document through it later therefore finds the document still
   loaded. The hold covers that document alone: a document the cell's value
   links to is kept only on its own account, and a read through the link that
@@ -71,12 +72,10 @@ at that moment (`#releaseServedHandlerResult` in
 [`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
 when a host's client cancels a cell subscription
 (`RuntimeProcessor.handleCellUnsubscribe()` in `runtime/runtime-client`),
-when a host's client departs (`RuntimeProcessor.disposeClient()`), and when
-the hold token of a document the storage manager has loaded is garbage
-collected, which is when the last cell holding that document has gone
-(`IStorageManager.subscribeHoldsCollected()`). A host may also call
-`Runtime.releaseUnreadDocuments()` itself. The pass waits until the
-scheduler is idle. Passes run one after another, never two at once. Requests
+and when a host's client departs (`RuntimeProcessor.disposeClient()`). A host
+may also call `Runtime.releaseUnreadDocuments()` itself. A pass any of these
+asks for is followed by another once the cells holding what it kept have been
+garbage collected, as below. The pass waits until the scheduler is idle. Passes run one after another, never two at once. Requests
 made before a pass begins share it, and a request made while a pass is under
 way is answered by the next one, which waits for that one to finish. So at most
 one pass waits at a time, and the requests that arrive while one is under way,
@@ -93,13 +92,21 @@ that pass can release.
 
 The rest goes once the cells holding it have been collected. The storage
 manager registers each hold token it hands out with a `FinalizationRegistry`,
-and when a token that is still its document's current one is collected while
-its space is open, it tells the runtime, which asks for a pass. That pass
-decides as any other does, so a document held again under a new token since,
-or held by something else, stays. A collection that takes many tokens reports
-each one, and the requests share one pass, as requests made before a pass
-begins always do. A pass hands out no tokens, so the passes collections ask
-for end when the tokens readers took have all been collected.
+and a pass that something other than a collection asked for marks each token
+live as it begins (`ReleaseOptions.followUpOnCollection`). When a marked token
+that is still its document's current one is collected while its space is
+open, the storage manager tells the runtime
+(`IStorageManager.subscribeHoldsCollected()`), which asks for a pass. That
+pass marks nothing, so a collection completes a release something already
+asked for and never begins one: a runtime that stops nothing and loses no
+client sees no pass on any collection's account, and the passes collections
+ask for end once the tokens marked have been collected. The pass decides as
+any other does, so a document held again under a new token since, read by a
+scheduler action, or held some other way, stays; a marked token whose
+document an action reads costs a pass that releases nothing. A collection
+that takes many marked tokens reports each one, and the requests share one
+pass, as requests made before a pass begins always do; a pass shared by such
+a request and any other marks as the other would.
 
 A pass keeps the watches rooted at a document loaded or read since the
 previous pass began, and removes only those rooted at one neither loaded nor

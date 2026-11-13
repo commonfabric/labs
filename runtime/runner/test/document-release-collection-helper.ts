@@ -4,10 +4,11 @@
  * boundary, which a `WeakRef` needs before it can report its target
  * collected; the package's fake-clock preload would freeze that boundary.
  *
- * It loads two documents through cells, lets go of both cells, has them
- * collected, and at once holds the second document again, all without asking
- * for a release pass. It then waits for the storage manager to drop the
- * first document, and prints one line of JSON saying whether that happened
+ * It loads two documents through cells and asks for a release pass, as a
+ * stop does, which keeps both for their cells. It then lets go of both cells,
+ * has them collected, and at once holds the second document again, asking
+ * for no further pass. It waits for the storage manager to drop the first
+ * document, and prints one line of JSON saying whether that happened
  * (`droppedOnceCollected`) and whether the second document was still loaded
  * then (`keptOnceHeldAgain`).
  */
@@ -30,9 +31,39 @@ const schema = {
   properties: { n: { type: "number" } },
 } as const;
 
+// Deno can end a process with nothing left to do before its pending
+// finalizers run, so an open port keeps this one going until the reader's
+// hold registry has reported every token registered before the collection.
+// What the storage manager does with those reports needs nothing to keep the
+// process going, so a report that asks for no pass ends it unresolved.
+const keepAlive = new MessageChannel();
+keepAlive.port1.onmessage = () => {};
+let registered = 0;
+let reported = 0;
+let awaited: number | undefined;
+
 const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
 const writerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
-const readerStorage = EmulatedStorageManager.connectTo(server, { as: signer });
+const readerStorage = EmulatedStorageManager.connectTo(server, {
+  as: signer,
+  // A `FinalizationRegistry`, as the manager's own is, which also counts the
+  // tokens it registers and reports.
+  createHoldRegistry: <T>(cleanup: (held: T) => void) => {
+    const registry = new FinalizationRegistry<T>((held) => {
+      reported++;
+      cleanup(held);
+      if (awaited !== undefined && reported >= awaited) {
+        keepAlive.port1.close();
+      }
+    });
+    return {
+      register: (token: object, held: T) => {
+        registered++;
+        registry.register(token, held);
+      },
+    };
+  },
+});
 const writer = new Runtime({
   apiUrl: new URL(import.meta.url),
   storageManager: writerStorage,
@@ -41,7 +72,6 @@ const reader = new Runtime({
   apiUrl: new URL(import.meta.url),
   storageManager: readerStorage,
 });
-const keepAlive = new MessageChannel();
 
 try {
   const tx = writer.edit();
@@ -55,16 +85,22 @@ try {
   // The cells live only in `holder`, filled by a function that has returned:
   // a suspended async frame can keep the temporaries it used.
   const holder: { cells?: Cell<unknown>[] } = {};
+  const tokens: WeakRef<object>[] = [];
   const [released, heldAgain] = await (async () => {
     const cells = ["released", "held-again"].map((cause) =>
       reader.getCell(space, cause, schema)
     );
     await Promise.all(cells.map((cell) => cell.sync()));
     holder.cells = cells;
-    return cells.map((cell) => cell.getAsNormalizedFullLink().id as URI);
+    const ids = cells.map((cell) => cell.getAsNormalizedFullLink().id as URI);
+    for (const id of ids) {
+      tokens.push(new WeakRef(readerStorage.holdDocument({ space, id })));
+    }
+    return ids;
   })();
   const loaded = (id: URI) =>
     readerStorage.open(space).replica.hasLocalDocumentCoverage?.(id) === true;
+  await reader.releaseUnreadDocuments();
 
   const dropped = defer();
   readerStorage.subscribeDocumentsDropped((_space, addresses) => {
@@ -72,14 +108,6 @@ try {
       dropped.resolve();
     }
   });
-  // Deno can end a process with nothing left to do before its pending
-  // finalizers run, so an open port keeps this one going until the storage
-  // manager reports a token collected. What follows from the report needs
-  // nothing to keep it going, so a report that asks for no pass ends the
-  // process unresolved; a manager that never reports leaves it running.
-  keepAlive.port1.onmessage = () => {};
-  readerStorage.subscribeHoldsCollected(() => keepAlive.port1.close());
-
   delete holder.cells;
   // A `WeakRef` target reached in a turn survives that turn whatever holds
   // it, so cross one task boundary before collecting. This is an event-loop
@@ -87,6 +115,11 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 0));
   gc();
   gc();
+  awaited = registered;
+  if (tokens.some((token) => token.deref() !== undefined)) {
+    // Nothing would report the collection this waits for.
+    throw new Error("a hold token outlived its cells");
+  }
   // In the same turn as the collection, so before any report of it arrives:
   // the second document gets a new token, which this keeps.
   const token = readerStorage.holdDocument({ space, id: heldAgain });

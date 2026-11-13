@@ -201,6 +201,7 @@ import {
   NativeTextEdit,
   PullError,
   PushError,
+  ReleaseOptions,
   ReplicaLoadFailureError,
   Result,
   type ScopedReadStanding,
@@ -1257,6 +1258,19 @@ export interface HoldRegistry<T> {
   register(token: object, held: T): void;
 }
 
+/** A manager's record of the hold token it handed out for a document. */
+type DocumentHold = {
+  /** The token, held weakly. */
+  ref: WeakRef<object>;
+
+  /**
+   * Whether the token was live at a pass asked to follow up
+   * (`ReleaseOptions.followUpOnCollection`), so that its collection asks for
+   * a pass of its own.
+   */
+  followsUp: boolean;
+};
+
 /** What a manager's hold registry holds for each token it registers. */
 type RegisteredHold = {
   space: MemorySpace;
@@ -1265,7 +1279,7 @@ type RegisteredHold = {
   key: string;
 
   /** The entry for the token in that map. */
-  ref: WeakRef<object>;
+  hold: DocumentHold;
 };
 
 /**
@@ -1845,13 +1859,14 @@ export class StorageManager implements IStorageManager {
    * The token `holdDocument()` handed out for each document, by the
    * document's pull-kick key, held weakly: a document whose token has been
    * collected is held by nothing. Each release pass forgets the collected
-   * ones, and the collection of a document's current token asks for a pass
+   * ones, and the collection of a document's current token, once a pass
+   * asked to follow up has found it live, asks for a pass
    * (`#holdCollected()`).
    */
-  readonly #documentHolds = new Map<string, WeakRef<object>>();
+  readonly #documentHolds = new Map<string, DocumentHold>();
 
   /** Where each token `holdDocument()` hands out is registered, so that its
-   * collection asks for a release pass (`subscribeHoldsCollected()`). */
+   * collection can ask for a release pass (`subscribeHoldsCollected()`). */
   readonly #holdRegistry: HoldRegistry<RegisteredHold>;
 
   /** See `subscribeHoldsCollected()`. */
@@ -2134,10 +2149,11 @@ export class StorageManager implements IStorageManager {
   /**
    * The CFC schema document syncer a test may supply, the pending-load
    * registration step, and the linked-cell sync collector, which a test
-   * drives directly.
+   * drives directly, and the observers of `subscribeHoldsCollected()`.
    */
   get accessForTestingOnly(): {
     cfcSchemaDocumentSyncer: CfcSchemaDocumentSyncer | undefined;
+    readonly holdsCollectedObservers: Set<() => void>;
     registerPendingLoad(address: {
       space: MemorySpace;
       scope: CellScope;
@@ -2161,6 +2177,7 @@ export class StorageManager implements IStorageManager {
       set cfcSchemaDocumentSyncer(value) {
         outerThis.#cfcSchemaDocumentSyncer = value;
       },
+      holdsCollectedObservers: this.#holdsCollectedObservers,
       registerPendingLoad: (address) => this.#registerPendingLoad(address),
       collectLinkedCellSyncs: (value, base, schema, promises, seen) =>
         this.#collectLinkedCellSyncs(
@@ -2849,7 +2866,7 @@ export class StorageManager implements IStorageManager {
                 address.scope,
                 address.scopeKey,
               ),
-            )?.deref() !== undefined
+            )?.ref.deref() !== undefined
           ) {
             return true;
           }
@@ -3559,14 +3576,14 @@ export class StorageManager implements IStorageManager {
       address.scope,
       address.scopeKey ?? this.#foreignInstanceKey(address.scope, identity),
     );
-    let hold = this.#documentHolds.get(key)?.deref();
-    if (hold === undefined) {
-      hold = {};
-      const ref = new WeakRef(hold);
-      this.#documentHolds.set(key, ref);
-      this.#holdRegistry.register(hold, { space: address.space, key, ref });
+    let token = this.#documentHolds.get(key)?.ref.deref();
+    if (token === undefined) {
+      token = {};
+      const hold = { ref: new WeakRef(token), followsUp: false };
+      this.#documentHolds.set(key, hold);
+      this.#holdRegistry.register(token, { space: address.space, key, hold });
     }
-    return hold;
+    return token;
   }
 
   /** @inheritDoc */
@@ -3584,10 +3601,11 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
-  releaseUnreadDocuments(): Promise<boolean> {
+  releaseUnreadDocuments(options: ReleaseOptions = {}): Promise<boolean> {
     const pass = this.#releasePass.catch(() => false).then(async () => {
       for (const [key, hold] of this.#documentHolds) {
-        if (hold.deref() === undefined) this.#documentHolds.delete(key);
+        if (hold.ref.deref() === undefined) this.#documentHolds.delete(key);
+        else if (options.followUpOnCollection === true) hold.followsUp = true;
       }
       const results = await Promise.all(
         [...this.#providers.values()].map((provider) =>
@@ -3602,14 +3620,17 @@ export class StorageManager implements IStorageManager {
 
   /**
    * Helper for the hold registry, which tells the observers of
-   * `subscribeHoldsCollected()` that a hold token has been collected, unless
-   * a pass has forgotten the token since, a new token for its document has
-   * replaced it, or its space's provider is gone. It leaves the token's entry
-   * for a pass to forget, so what a pass consults is only ever the
-   * document's current token.
+   * `subscribeHoldsCollected()` that a hold token a pass asked to follow up
+   * found live has been collected, unless a pass has forgotten the token
+   * since, a new token for its document has replaced it, or its space's
+   * provider is gone. It leaves the token's entry for a pass to forget, so
+   * what a pass consults is only ever the document's current token.
    */
-  #holdCollected({ space, key, ref }: RegisteredHold): void {
-    if (this.#documentHolds.get(key) !== ref || !this.#providers.has(space)) {
+  #holdCollected({ space, key, hold }: RegisteredHold): void {
+    if (
+      !hold.followsUp || this.#documentHolds.get(key) !== hold ||
+      !this.#providers.has(space)
+    ) {
       return;
     }
     for (const observer of [...this.#holdsCollectedObservers]) {

@@ -291,6 +291,18 @@ export type StoredDocumentAddress = {
   scopeKey?: ScopeKey;
 };
 
+/** How a release pass (`IStorageManager.releaseUnreadDocuments()`) runs. */
+export type ReleaseOptions = {
+  /**
+   * Whether the pass completes a release something asked for, such as a
+   * stop: each hold token live at the pass, once collected, then asks for a
+   * pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
+   * releases what the token alone kept. Absent, a token's collection asks
+   * for nothing on this pass's account.
+   */
+  followUpOnCollection?: boolean;
+};
+
 export interface IStorageManager extends IStorageSubscriptionCapability {
   id: string;
 
@@ -872,10 +884,12 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
 
   /**
    * Calls `observer` when a document's hold token (`holdDocument()`) has been
-   * collected while it was still that document's token and its space was
-   * open, so that the next `releaseUnreadDocuments()` can release a document
-   * nothing holds any more. One collection can call it once for each of many
-   * tokens. Returns a cancel that removes it.
+   * collected that a pass asked to follow up found live
+   * (`ReleaseOptions.followUpOnCollection`), while it was still that
+   * document's token and its space was open, so that the next
+   * `releaseUnreadDocuments()` can release a document nothing holds any
+   * more. One collection can call it once for each of many tokens. Returns a
+   * cancel that removes it.
    */
   subscribeHoldsCollected?(observer: () => void): Cancel;
 
@@ -902,7 +916,7 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * loaded or read since the previous call began, which a later call may
    * release.
    */
-  releaseUnreadDocuments?(): Promise<boolean>;
+  releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
