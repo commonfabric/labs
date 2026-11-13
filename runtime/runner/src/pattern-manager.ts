@@ -126,6 +126,14 @@ type SourceUpdatePreparation = {
   entryIdentity: string;
   runtimeVersion: string | undefined;
   delegations: ModuleDelegationMap;
+
+  /**
+   * The hold tokens (`IStorageManager.holdDocument()`) of the candidate's
+   * source documents, which `stageSourceUpdate()` reads, kept for as long as
+   * the preparation is, so that a release pass between preparing and staging
+   * leaves them loaded.
+   */
+  documentHolds: readonly object[];
 };
 
 const logger = getLogger("pattern-manager");
@@ -2291,6 +2299,24 @@ export class PatternManager {
           "cannot authorize source update without verified source closures",
         );
       }
+      // Staging reads each candidate module's source document inside the
+      // transition's commit, and throws when one is missing rather than
+      // loading it. Nothing else keeps what the load above read: the cells
+      // that read it go with this call, so a release pass before staging would
+      // drop those documents. The preparation holds them for as long as it
+      // lives, taken here, while they are loaded.
+      const documentHolds: object[] = [];
+      for (const identity of candidate.keys()) {
+        const { id, scope } = this.#runtime
+          .getCell(space, sourceDocKey(identity))
+          .getAsNormalizedFullLink();
+        const hold = this.#runtime.storageManager.holdDocument?.({
+          space,
+          id,
+          scope,
+        });
+        if (hold !== undefined) documentHolds.push(hold);
+      }
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
@@ -2300,6 +2326,7 @@ export class PatternManager {
         previousEntryIdentity,
         entryIdentity,
         runtimeVersion,
+        documentHolds,
         delegations: deriveModuleDelegations(
           previous,
           [...candidate].map(([identity, doc]) => ({
