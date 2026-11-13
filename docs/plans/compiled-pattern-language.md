@@ -203,6 +203,10 @@ is relitigated.
   result is bound by reference: a value stands for a handle of it and a
   readable handle for its value. An authored function called there is
   not, so its argument is `count.get()` and not `count`.
+- A default belongs to the stored place. A callee bound by reference to
+  a property that declares a default gets a link, not a copy, and the
+  link holds the schema with the default, so the callee reads the
+  default where nothing is stored, whether or not it declares one.
 - `typeof NAME` in a label argument, outside a writer or rule-set
   position, stands for the value of a module-scope constant with a
   static initializer.
