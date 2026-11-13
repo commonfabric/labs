@@ -54,8 +54,7 @@ A request reaches the outbox only if the commit that staged it succeeds. A
 rejected commit clears the outbox, so nothing is sent and no receipt stands for
 a request that never ran, and the action is attempted again. When the scheduler
 stops attempting it, the transaction is abandoned and the builtin settles its
-result with the refusal as its error, recording the request hash so the same
-request is not staged afresh. `enqueueSinkRequestPostCommitEffect` carries that
+result with the refusal as its error. `enqueueSinkRequestPostCommitEffect` carries that
 as its `onRejected` hook, and every builtin on this table settles through it:
 `llm` and its two siblings, `fetch`, `fetch-program`, `llm-dialog` and
 `stream-data`. `sqlite*` reaches the same ending without the seam, giving its
@@ -125,29 +124,28 @@ before its staging run sealed, that run's writes, its pending flag among them,
 never committed. A request refused at its release check did commit them, so its
 dropped ending leaves that pending flag up until the node runs again.
 
-How often a refused node runs differs by builtin. An `llm` builtin's ending
-records the request hash, so the node's next run finds the request answered and
-stages nothing. A `fetch*` ending records no input hash, since the refused run's
-update of it was abandoned with the run: the next run stages the request again,
-is refused again, and stops there only because its ending writes what the first
-one wrote and so changes nothing. Each later wake of such a node stages and is
-refused once more.
+How often a refused node runs differs by builtin. A served `llm` builtin's
+ending and a `fetch*` ending both record no request hash: the `fetch*` refused
+run's update of its input hash was abandoned with the run, and an `llm` ending
+leaves its hash out, as the next paragraph says. So the next run stages the
+request again, is refused again, and stops there only because its ending writes
+what the first one wrote and so changes nothing. Each later wake of such a node
+stages and is refused once more, and a wake under a ceiling that admits the
+request, such as a new serving runtime's, sends it.
 
-A served `llm` builtin's ending is written in two transactions. Of what it
-writes, only the request hash derives from the request's inputs, and the
-writeback's binding to those inputs reads them, which puts their labels in the
-transaction's join. So the ending itself (the pending flag down, the refusal as
-the error, the result and partial output cleared) is written without reading
-them, and the hash follows in a transaction of its own that binds to them and
-carries their labels. Where the target's store doesn't admit those labels, the
-served-run holder rule (§8.12.5.1 of the CFC specification) refuses the hash
-alone: the ending is still shown, the refusal of the hash is reported, and the
-node, with no hash to find, stages its request again once on each wake, as a
-`fetch*` node does. Elsewhere both land, and the hash is recorded as before.
+A served `llm` builtin's ending (the pending flag down, the refusal as the
+error, the result and partial output cleared) reads none of the request's inputs
+and records no request hash. Of what it would write, only the hash derives from
+those inputs, so it would carry their labels, and the node's next run reads it
+to tell whether its request was answered: a hash recorded over a refused
+request's labels would carry them into every later request of the node, one over
+inputs the ceiling admits included, and that request would be refused as well.
 Without the binding, nothing conflicts the ending with a later change to the
 inputs; the node's own run on the new inputs counts as newer in the serving
 runtime, so the ending's ownership check stops a late one there, and the new
-run's request, staged afresh, replaces whatever an earlier one wrote.
+run's request, staged afresh, replaces whatever an earlier one wrote. A request
+that went out and then failed records its hash beside its error, under the
+inputs' labels, as a result does.
 
 `llm-dialog`'s ending reads its inputs only to find the scope they select,
 which only a caller with no publication binding needs, so an ending with one
@@ -156,10 +154,17 @@ reads none, and the holder rule has no label of theirs to refuse it by.
 `compileAndRun`'s ending is not yet written that way. It decides whether a
 refused request is still its target's by reading the program, so where the
 holder rule refuses the request over the program's label, it refuses the ending
-too, and the node shows no error. Deciding from an in-memory record of the
-latest run's program would end it, but would let an abandoned request's ending
+too, and the node shows no error. Where the store does admit the label, the
+read stamps it on everything the ending writes, the memo's request hash
+included, so the node's next run takes it into its request, and a program the
+ceiling admits is refused as well. Deciding from an in-memory record of the
+latest run's program would end both, but would let an abandoned request's ending
 land over a program another transaction put in its place before the node ran
-again, which the ending is held not to do. `agent`'s ending reads no input, but
+again, which the ending is held not to do. `fetch-program`'s ending reads the
+inputs and the cache to decide whether the request is still the node's, so it
+too stamps the URL's label on everything it writes, the cache entry included,
+and the node's next run, which reads the whole cache, takes the label into a
+request over a URL the ceiling admits and is refused. `agent`'s ending reads no input, but
 writes the request hash, which derives from the request, from what the staging
 run left in memory, so the hash is stored without the request's labels.
 
@@ -167,7 +172,7 @@ run left in memory, so the hash is stored without the request's labels.
 | --- | --- | --- | --- | --- |
 | `fetch` (`fetchData`) | url, method, headers (allowlisted), body, response schema | `{ result?, error?, pending }`; the memo hash is committed in the internal cell `{requestId, lastActivity, inputHash}` (`fetch.ts`) | capability handle bound at wiring (README §3.8) | redirects/deadlines per existing `fetch-request-deadlines` doc; the memo base is `` `${kind.name}:${inputHash}` ``; the served outbox key also names the target document and its resolved user or session instance |
 | `fetch-program` | URL | `{ pending, result?, error? }`; successful `result` contains source `files` and `main` | same | the durable cache is keyed by input hash; served outbox keys also name the cache document and resolved user or session instance |
-| `llm` (`generateText` / `generateObject`) | model, messages/prompt, schema, params | settled result only (protocol.md §6 — no partial commits in v2); `requestHash` on the result cell selects the pending request and accompanies its settled result or error | broker-held provider keys; grant from handle | temperature etc. are inputs, so nondeterminism is memo-stable by construction |
+| `llm` (`generateText` / `generateObject`) | model, messages/prompt, schema, params | settled result only (protocol.md §6 — no partial commits in v2); `requestHash` on the result cell selects the pending request and accompanies its settled result, or the error of a request that went out; a request refused before it went out records none | broker-held provider keys; grant from handle | temperature etc. are inputs, so nondeterminism is memo-stable by construction |
 | `llm-dialog` | dialog state + params | settled turns | same | multi-turn = new key per turn |
 | `sqlite*` | database link, statement, params, `reactOn`, optional `requestKey`, declared ceiling, `onExceed`, `readClearance`, reader principal and applicable session, the run's effective read ceiling (the serving runtime's option met with the ceiling of the session the run acts as — `WaveRunContext.readCeiling`, serving-loop.md §3c) | one cleared result cell per (query, reader) | read served under the reader's clearance and the run's ceiling | clearance = per-reader materialization (RULED 2026-08-02) — see below; runtime ceilings filter session-scoped results, giving different sessions distinct cells and hashes; shared results retain their complete labels and each cell read enforces the observing run’s ceiling |
 | `agent` | task text, input links, result schema, `maxConfidentiality`, tool names | `{ pending, result?, error?, requestHash?, run?, host? }`; `result` and `run` are links, to the result document the run's harness wrote and to the `AgentRun` record | the requester's, held by the runner that claims the record | the outbox effect creates the `AgentRun` record (per user, in the requesting space) and indexes it in the requester's home space; the result cell derives from the record, so the memo is the record's existence, and a node that finds a `queued` record it did not stage indexes it again; behind the `agentBuiltin` flag |

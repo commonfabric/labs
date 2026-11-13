@@ -479,71 +479,46 @@ async function handleLLMError<T, P>(
       "[LLM] Writing the request's error to its result cell was rejected.",
       { requestHash, cause: message, rejection: rejection.message },
     );
-  // A served request's ending, where a request guard binds writebacks to the
-  // request's live inputs, is written in two transactions. Of what it writes,
-  // only the request hash derives from those inputs, and binding to them puts
-  // their labels in the transaction's join, where a clause the target's store
-  // doesn't admit refuses every field the transaction writes. So the ending
-  // itself reads no input, and the hash follows in a transaction of its own
-  // that binds to them, carrying their labels to the one field that derives
-  // from them (`docs/specs/server-side-execution/builtins.md` §2).
-  const splitsHash = abandoned !== undefined && requestGuard !== undefined;
-  // Read at write time rather than from a decision taken before the wait
-  // above: a newer request can start while this one waits for the
-  // scheduler, and from then on the answer is that request's to give.
-  const ownsAnswer = () =>
-    (!ownsRefusal || ownsRefusal()) && thisRun === getCurrentRun();
+  // A served request that will never be sent, where a request guard binds
+  // writebacks to the request's live inputs, ends without reading those
+  // inputs and without recording its hash. The hash is the one field of the
+  // ending that derives from the inputs, so it would carry their labels, and
+  // the node's next run reads it to tell whether its request was answered: a
+  // hash recorded over a refused request's labels would carry them into
+  // every later request the node makes, a request over other inputs included,
+  // and the ceiling that refused the first would refuse those as well. With
+  // no hash to find, the node's next run stages its request again
+  // (`docs/specs/server-side-execution/builtins.md` §2).
+  const servedEnding = abandoned !== undefined && requestGuard !== undefined;
   let wrote = false;
   const write = (tx: IExtendedStorageTransaction) => {
-    if (requestGuard) {
-      // Refusal rolls back the selected-request marker with its transaction.
-      // Its announcement and generation guard still belong to this identity,
-      // which `settleAbandonedRequest()` sets where the ending reads no input.
-      if (announce) {
-        if (!splitsHash) requestGuard.bind(tx);
-      } else if (!requestGuard.accept(tx, requestHash)) return;
-    }
+    // Refusal rolls back the selected-request marker with its transaction. A
+    // served ending's announcement and generation guard still belong to the
+    // staging run's identity, which `settleAbandonedRequest()` sets.
+    if (
+      requestGuard && !servedEnding && !requestGuard.accept(tx, requestHash)
+    ) return;
     // The announcement has its own binding guard: another actor can still
     // need a link to a shared result that this request no longer owns.
     announce?.(tx);
-    if (!ownsAnswer()) return;
+    // Read at write time rather than from a decision taken before the wait
+    // above: a newer request can start while this one waits for the
+    // scheduler, and from then on the answer is that request's to give.
+    if (ownsRefusal && !ownsRefusal()) return;
+    if (thisRun !== getCurrentRun()) return;
     wrote = true;
     pendingCell.withTx(tx).set(false);
     errorCell.withTx(tx).set(message);
     resultCell.withTx(tx).set(undefined as T);
     partialCell.withTx(tx).set(undefined as P);
-    if (!splitsHash) requestHashCell.withTx(tx).set(requestHash);
+    if (!servedEnding) requestHashCell.withTx(tx).set(requestHash);
   };
   if (abandoned !== undefined) {
-    const endingCommitted = await settleAbandonedRequest(
+    await settleAbandonedRequest(
       runtime,
       { ...abandoned, attributeToBuiltin: false, reportRejection },
       write,
     );
-    // Only behind an ending that committed: a node that holds the hash takes
-    // its request as answered, so a hash without its ending would leave the
-    // node showing no error.
-    if (splitsHash && wrote && endingCommitted) {
-      await settleAbandonedRequest(
-        runtime,
-        {
-          ...abandoned,
-          attributeToBuiltin: false,
-          reportRejection: (rejection) =>
-            console.error(
-              "[LLM] Writing the refused request's hash to its result cell " +
-                "was rejected; the request is staged again on the node's " +
-                "next run.",
-              { requestHash, rejection: rejection.message },
-            ),
-        },
-        (tx) => {
-          requestGuard.bind(tx);
-          if (!ownsAnswer()) return;
-          requestHashCell.withTx(tx).set(requestHash);
-        },
-      );
-    }
   } else {
     const { error: writeError } = await runtime.editWithRetry((tx) => {
       if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
@@ -783,9 +758,6 @@ function trackLLMRequestLifecycle<T>(
 
 /** Identity-bound acceptance of one served LLM result target. */
 type ServedLLMRequestGuard = {
-  /** Binds a writeback to its issuing identity and live input basis. */
-  bind: (tx: IExtendedStorageTransaction) => void;
-
   /** Reads whether the selected request still matches. */
   isCurrent: (hash: string) => boolean;
 
@@ -801,12 +773,7 @@ function servedLLMRequestGuard(
   identity: ScopeKeyIdentity,
   queued: boolean,
 ): ServedLLMRequestGuard {
-  const bind = (tx: IExtendedStorageTransaction) => {
-    tx.tx.scopeKeyIdentity = identity;
-    snapshotQueryResult(inputs.withTx(tx).get());
-  };
   return {
-    bind,
     isCurrent: (hash) => {
       const tx = runtime.readTx();
       tx.tx.scopeKeyIdentity = identity;
