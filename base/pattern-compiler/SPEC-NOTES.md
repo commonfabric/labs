@@ -40,6 +40,55 @@ one that accepts less. The crate implements the document as it stands at commit
    syntactic criterion, so `computed:redundant` can be reported for a body the
    type checker's criterion would not promote.
 
+## The type system (§7, §8)
+
+13. **`Default<T, typeof NAME>`** (§8.8, §11.4). §8.8 requires a literal-like
+    type, and §11.4 lists `Default<typeof EMPTY>` as a common accepted form. The
+    type of an annotated constant, `const EMPTY: Viewer = {}`, is `Viewer`,
+    which is not literal-like. Chosen: `typeof NAME` in a default takes the
+    value from the initializer of `NAME`, whatever its annotation, and a
+    primitive literal there has its literal type. It is static when the
+    initializer is a literal expression, refused (`default:not-static`) when the
+    initializer is a call or a `new`, and not decided when the initializer
+    refers to other values. One corpus site is refused:
+    `INITIAL_SHOTS = createInitialShots()` in
+    `patterns/showcase/battleship/multiplayer/schemas.tsx`.
+14. **An intersection with a handle, a function, or an opaque API type** (§7.4).
+    "Any other combination is `never`" would refuse `Cell<A> & { ... }` and
+    `VNode & { ... }`. The document does not give the structure of the opaque
+    API types. Chosen: such an intersection is left unevaluated and is not
+    reported. This is the one place the crate does not take the reading that
+    accepts less.
+15. **A function type inside a data type that describes a cell-like value**
+    (§7.9, §11.4). `MentionablePiece` in
+    `patterns/system/backlinks-index/backlinks-index.tsx` declares
+    `mentionable?: MentionablePiece[] | { get?: () => MentionablePiece[] }`, and
+    the type is a pattern input, a cell value, and a handler state in ten
+    modules. §11.4 accepts function types "as code types". Chosen: as §7.9 says,
+    so each use is `subset-type:function-in-data`, 35 reports from the one
+    declaration.
+16. **`.get()` on a value whose type declares a `get` of its own** (§4.4). A
+    helper's parameter typed `{ get(): T }` is not a `Cell`, and
+    `opaque-get:invalid-call` names the three cell types only. Chosen: not
+    reported, since the call is an ordinary method call of that object type.
+17. **`key` on a handle whose property is itself a handle** (§4.7, §12.4). §4.7
+    says `key(k)` "yields a handle of the same kind for the property". For a
+    property of type `Cell<T>` that is `Cell<Cell<T>>`. `aboutRecordOf` in
+    `patterns/system/fabrichat/manager.tsx` returns
+    `room.key("about").key("record")` under the result type `Cell<AboutRecord>`,
+    where the declared type gives `Cell<Cell<AboutRecord>>`. Neither rewrite of
+    §12.4 covers it: the function does not return its argument. Chosen: the
+    crate reports the declared type and proposes no replacement.
+18. **Label arguments** (§8.5). A label list written as a reference to an alias,
+    and the arguments of `PolicyOf` and of the trusted-action aliases, are not
+    evaluated, so `cfc-label:not-a-list` and `cfc-label:not-static` are decided
+    for a list written in place.
+19. **What this slice does not evaluate.** `Exclude`, `Extract`, an optional or
+    rest element of a named tuple member, a qualified name, the type arguments
+    of a generic function at a call, and a type from a module outside the
+    program resolve to an unevaluated type. No rule refuses a program because of
+    one.
+
 ## The corpus (§11)
 
 8. **The corpus has moved.** §11 was measured at commit `47776e6c9c`, with 425
@@ -53,8 +102,10 @@ one that accepts less. The crate implements the document as it stands at commit
 10. **`map` callbacks in the pattern body** (§11.4): 326 against 325. The one
     the crate does not count is `.map(toMentionable)`, which has no callback
     body.
-11. **Per-element bodies over plain values** (§11.3): 7 in 7 files against 8
-    callbacks in 6 files. The crate reports per callback, and three are in
+11. **Per-element bodies over plain values** (§11.3): 7 in 7 files against 9
+    callbacks in 7 files. With declared types the crate also finds a stored list
+    of strings in `patterns/dev/map-captured-object-spread/main.tsx`. The crate
+    reports per callback, and three are in
     `patterns/apps/weekly-calendar/weekly-calendar.tsx`. The document counts a
     collection that is a call result, and the crate decides those only for
     `Object.keys`, `Object.entries`, and `split`; the plainness of any other

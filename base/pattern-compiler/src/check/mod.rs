@@ -35,6 +35,7 @@ use crate::parse::Parsed;
 use crate::program::{DefRef, Resolver};
 use crate::syntax::{binding_name, offsets, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind, CallKind, CallSite, Capture, Promotion, Site, Tier};
+use crate::types::Shape;
 
 /// Something a body does that some kinds of body may not do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -154,7 +155,7 @@ pub struct Checker<'p, 'a> {
     parsed: &'p Parsed<'a>,
     model: &'p ModuleModel,
     module: usize,
-    resolver: &'p Resolver<'p>,
+    resolver: &'p Resolver<'p, 'a>,
     scoping: &'p Scoping,
     out: ModuleCheck,
     ctx: Vec<Ctx>,
@@ -186,11 +187,11 @@ pub struct Checker<'p, 'a> {
 }
 
 /// Walks one module.
-pub fn check_module(
-    parsed: &Parsed<'_>,
+pub fn check_module<'a>(
+    parsed: &Parsed<'a>,
     model: &ModuleModel,
     module: usize,
-    resolver: &Resolver<'_>,
+    resolver: &Resolver<'_, 'a>,
 ) -> ModuleCheck {
     let mut checker = Checker {
         parsed,
@@ -315,7 +316,7 @@ impl<'p, 'a> Checker<'p, 'a> {
                 }
                 let import = &self.model.imports[import];
                 let name = &import.bindings[binding].imported;
-                match self.resolver.resolve(self.module, import, name) {
+                match self.resolver.resolve_import(self.module, import, name) {
                     Some(def) => match self.resolver.kind(def) {
                         Some((kind, form)) => Thing::Def(def, kind, form),
                         None => Thing::Import,
@@ -1065,9 +1066,9 @@ impl<'p, 'a> Checker<'p, 'a> {
                     continue;
                 }
                 let span = Span::new(binding.span.0, binding.span.1);
-                let Some(def) = self
-                    .resolver
-                    .resolve(self.module, import, &binding.imported)
+                let Some(def) =
+                    self.resolver
+                        .resolve_import(self.module, import, &binding.imported)
                 else {
                     continue;
                 };
@@ -1681,6 +1682,12 @@ impl<'p, 'a> Checker<'p, 'a> {
         if depth > 3 {
             return false;
         }
+        if self
+            .declared(expression)
+            .is_ok_and(|collection| self.resolver.has_plain_elements(collection))
+        {
+            return true;
+        }
         match unwrap(expression) {
             Expression::ArrayExpression(array) => {
                 !array.elements.is_empty()
@@ -2103,6 +2110,36 @@ impl<'p, 'a> Checker<'p, 'a> {
         }
         self.statement_call = None;
 
+        let receiver = self.declared(object);
+        let label = self.resolver.outcome_label(&receiver);
+        self.count(&format!("types:receiver:{label}"));
+        if name == "get" && call.arguments.is_empty() {
+            let readable = match self.declared_shape(object) {
+                Some(Shape::Handle(kind, _)) => kind.is_readable(),
+                Some(Shape::Union(members)) => members.iter().any(|member| {
+                    let member = self.resolver.shape(*member);
+                    !is_value_shape(&member)
+                        || matches!(&member, Shape::Object(properties, _)
+                            if properties.iter().any(|property| property.name == "get"))
+                }),
+                // A value that declares a `get` of its own is read through it.
+                Some(Shape::Object(properties, _))
+                    if properties.iter().any(|property| property.name == "get") =>
+                {
+                    true
+                }
+                Some(shape) => !is_value_shape(&shape),
+                None => true,
+            };
+            if !readable {
+                self.report(
+                    "opaque-get:invalid-call",
+                    call.span,
+                    "`.get()` on a value whose type is not `Cell`, `Writable`, or `ReadonlyCell`",
+                );
+            }
+        }
+
         // A cell constructor: `X.of(value)`, `X.for(cause)`, and the two
         // under a scope.
         if self.is_cell_constructor(object) {
@@ -2287,7 +2324,16 @@ impl<'p, 'a> Checker<'p, 'a> {
                     call.span,
                     format!("`{name}` on a cell handle in the reactive tier"),
                 );
-            } else if class != MethodName::Reactive && !self.may_be_factory_call(call) {
+            } else if let Some(kind) = self.factory_callee(call) {
+                // A value of a factory type held in a property (§4.4.2).
+                if kind == CallKind::BindHandler {
+                    self.mark_state(call.span);
+                }
+                self.record_call(kind, name, call.span);
+            } else if class != MethodName::Reactive
+                && (self.declared_shape(&member.object).is_some()
+                    || !self.may_be_factory_call(call))
+            {
                 self.report(
                     "reactive:unsupported-call",
                     call.span,
@@ -2296,6 +2342,16 @@ impl<'p, 'a> Checker<'p, 'a> {
             }
         }
         self.arguments(call, false);
+    }
+
+    /// The kind of call a callee of a factory type makes, when a declaration
+    /// gives the callee such a type.
+    fn factory_callee(&self, call: &CallExpression<'a>) -> Option<CallKind> {
+        match self.declared_shape(&call.callee)? {
+            Shape::PatternFactory(..) => Some(CallKind::Instantiate),
+            Shape::HandlerFactory(..) => Some(CallKind::BindHandler),
+            _ => None,
+        }
     }
 
     /// Whether a method call could be a call of a pattern or handler factory
@@ -2325,6 +2381,9 @@ impl<'p, 'a> Checker<'p, 'a> {
     fn collection_call(&mut self, call: &CallExpression<'a>, member: &StaticMemberExpression<'a>) {
         let name = member.property.name.as_str();
         self.record_call(CallKind::Collection, name, call.span);
+        let collection = self.declared(&member.object);
+        let label = self.resolver.outcome_label(&collection);
+        self.count(&format!("types:collection:{label}"));
         self.nested_scan(call, member);
         self.visit_expression(&member.object);
         if let Some(arguments) = &call.type_arguments {
@@ -2666,6 +2725,26 @@ impl<'p, 'a> Checker<'p, 'a> {
     fn is_self_key(&self, key: &Expression<'a>) -> bool {
         self.is_api(key, "SELF")
     }
+}
+
+/// Whether a shape is a value that is certainly not a cell handle: data the
+/// checker evaluated, which `.get()` does not read.
+fn is_value_shape(shape: &Shape) -> bool {
+    matches!(
+        shape,
+        Shape::String
+            | Shape::Number
+            | Shape::Boolean
+            | Shape::BigInt
+            | Shape::Null
+            | Shape::Undefined
+            | Shape::Literal(_)
+            | Shape::Object(..)
+            | Shape::Array(_)
+            | Shape::Tuple(_)
+            | Shape::PatternFactory(..)
+            | Shape::HandlerFactory(..)
+    )
 }
 
 /// Whether a binding pattern has a default value or a rest element at any

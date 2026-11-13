@@ -175,10 +175,10 @@ pub const CATALOG: &[Entry] = &[
          argument of a factory value needs the receiver's type",
     ),
     done("reactive:unsupported-expression", Error),
-    types(
+    part(
         "opaque-get:invalid-call",
         Error,
-        "whether the receiver's type is `Cell`, `Writable`, or `ReadonlyCell`",
+        "reported where the receiver's type comes from a declaration; a receiver whose type needs expression inference is not decided",
     ),
     done("pattern-context:self-access", Error),
     part(
@@ -309,28 +309,19 @@ pub const CATALOG: &[Entry] = &[
     done("subset-syntax:namespace", Error),
     done("subset-syntax:ambient-declaration", Error),
     done("subset-syntax:decorator", Error),
-    types(
-        "subset-type:function-in-data",
-        Error,
-        "the evaluated type of a pattern input or result, a cell value, or a \
-         handler's state or event",
-    ),
+    done("subset-type:function-in-data", Error),
     part(
         "subset-type:non-regular-recursion",
         Error,
         "reported for a declaration that refers to itself directly; recursion \
          through other declarations needs alias instantiation",
     ),
-    types(
+    part(
         "subset-type:empty-intersection",
         Error,
-        "the evaluated intersection",
+        "reported for primitive, literal, and object operands; an intersection with a handle, a function, or an opaque API type is not evaluated",
     ),
-    types(
-        "subset-type:operator-operand",
-        Error,
-        "the evaluated operand type",
-    ),
+    done("subset-type:operator-operand", Error),
     types(
         "subset-type:cannot-infer-type-argument",
         Error,
@@ -408,11 +399,15 @@ pub const CATALOG: &[Entry] = &[
     ),
     done("import:commonfabric-value", Error),
     // §10.5 Labels, defaults, and scopes
-    types("cfc-label:not-a-list", Error, LABEL_TYPES),
-    types("cfc-label:not-static", Error, LABEL_TYPES),
+    done("cfc-label:not-a-list", Error),
+    done("cfc-label:not-static", Error),
     types("cfc-label:conflict", Error, LABEL_TYPES),
     types("cfc-label:cast-ignored", Warning, LABEL_TYPES),
-    types("cfc-write-authorized-by", Error, LABEL_TYPES),
+    part(
+        "cfc-write-authorized-by",
+        Error,
+        "reported for `WriteAuthorizedBy`; the trusted-action aliases and `PolicyOf` are not read",
+    ),
     types("cfc-policy-of", Error, LABEL_TYPES),
     types("cfc-policy-authoring", Error, LABEL_TYPES),
     retired("cfc-write-authorized-by:unread"),
@@ -425,16 +420,12 @@ pub const CATALOG: &[Entry] = &[
     footprint("cfc-flow:write-floor", Error, LABEL_TEMPLATES),
     footprint("cfc-flow:writer-fit", Error, LABEL_TEMPLATES),
     footprint("cfc-flow:ui-contract", Warning, LABEL_TEMPLATES),
-    types(
+    part(
         "default:not-static",
         Error,
-        "the evaluated default value and its assignability",
+        "reported for a value that is not literal-like; whether the value is assignable to the type is not checked",
     ),
-    types(
-        "scope:union-member",
-        Error,
-        "the evaluated members of the union",
-    ),
+    done("scope:union-member", Error),
 ];
 
 /// The entry for `id`, if the catalog has one.

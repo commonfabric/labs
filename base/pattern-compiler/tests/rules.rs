@@ -10,7 +10,7 @@ use pattern_compiler::program::{analyze, SourceFile};
 
 const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, \
 handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
-type Reactive } from \"commonfabric\";\n";
+type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy } from \"commonfabric\";\n";
 const MARKER: &str = "/*!*/";
 
 struct Case {
@@ -429,6 +429,51 @@ const CASES: &[Case] = &[
         "function boxOf(box: Writable<number>) { return box; }",
     ),
     case(
+        "subset-type:function-in-data",
+        "const Box = pattern</*!*/{ format: (name: string) => string }>(({ format }) => ({ format }));",
+        "const Box = pattern<{ format: PatternFactory<{ name: string }, string> }>(({ format }) => ({ format }));",
+    ),
+    case(
+        "subset-type:empty-intersection",
+        "type Both = /*!*/string & number;",
+        "type Both = { name: string } & { price: number };",
+    ),
+    case(
+        "subset-type:operator-operand",
+        "type Part = /*!*/Partial<string>;",
+        "type Part = Partial<{ name: string }>;",
+    ),
+    case(
+        "default:not-static",
+        "interface Input { glaze: /*!*/Default<string, string> }",
+        "interface Input { glaze: Default<string, \"plain\"> }",
+    ),
+    case(
+        "scope:union-member",
+        "interface Input { draft: /*!*/PerUser<string> | number }",
+        "interface Input { draft: PerUser<string> | undefined }",
+    ),
+    case(
+        "cfc-label:not-a-list",
+        "type Secret = /*!*/Confidential<string, string[]>;",
+        "type Secret = Confidential<string, readonly [\"recipe-secret\"]>;",
+    ),
+    case(
+        "cfc-label:not-static",
+        "type Secret = /*!*/Confidential<string, readonly [\"a\" | \"b\"]>;",
+        "type Secret = Confidential<string, readonly [\"a\", \"b\"]>;",
+    ),
+    case(
+        "cfc-write-authorized-by",
+        "const RULES = [\"plain\"];\ntype Guarded = /*!*/WriteAuthorizedBy<string, typeof RULES>;",
+        "const save = handler<unknown, { name: Writable<string> }>((_, { name }) => name.set(\"plain\"));\ntype Guarded = WriteAuthorizedBy<string, typeof save>;",
+    ),
+    case(
+        "opaque-get:invalid-call",
+        "const Box = pattern<{ donut: { name: string } }>(({ donut }) => ({ name: /*!*/donut.get().name }));",
+        "const Box = pattern<{ donut: Writable<{ name: string }> }>(({ donut }) => ({ name: donut.get().name }));",
+    ),
+    case(
         "schema-type:symbol",
         "type Key = /*!*/symbol;",
         "type Key = string;",
@@ -751,4 +796,92 @@ fn computed_that_calls_an_aggregate_or_takes_the_whole_array_is_not_promoted() {
 fn fabric_value_class_is_constructed_in_a_function_body() {
     let module = "import { FabricBytes } from \"commonfabric\";\nfunction bytes() { return new FabricBytes(new Uint8Array(2)); }\n";
     assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}
+
+#[test]
+fn handle_declared_through_an_interface_of_another_module_is_recognized() {
+    let types = "import type { Writable } from \"commonfabric\";\nexport interface Tray { donuts: Writable<string[]> }\nexport type Trays = { main: Tray };\n";
+    let user = "import { handler } from \"commonfabric\";\nimport type { Trays } from \"./types.ts\";\nexport const list = handler<unknown, Trays>((_, state) => { const names = state.main.donuts.map((donut) => donut); console.log(names); });\n";
+    assert_eq!(
+        ids(&check_program(&[("types.ts", types), ("user.ts", user)])),
+        ["cell:collection-method-in-function"]
+    );
+}
+
+#[test]
+fn call_of_a_property_in_the_reactive_tier_is_decided_by_its_declared_type() {
+    let factory = "const Box = pattern<{ card: PatternFactory<{ name: string }, string>; name: string }>(({ card, name }) => ({ shown: card({ name }) }));\n";
+    assert_eq!(ids(&check(factory)), Vec::<&str>::new());
+    let member = "const Box = pattern<{ tray: { card: PatternFactory<{ name: string }, string> }; name: string }>(({ tray, name }) => ({ shown: tray.card({ name }) }));\n";
+    assert_eq!(ids(&check(member)), Vec::<&str>::new());
+    let method = "const Box = pattern<{ names: string[]; name: string }>(({ names, name }) => ({ at: names.push(name) }));\n";
+    assert_eq!(ids(&check(method)), ["reactive:unsupported-call"]);
+}
+
+#[test]
+fn stored_list_of_primitives_is_a_collection_of_plain_values() {
+    let primitive = "const pick = handler<unknown, { name: string }>(() => {});\nconst Box = pattern<{ names: string[] }>(({ names }) => ({ rows: names.map((name) => <button onClick={pick({ name })}>{name}</button>) }));\n";
+    assert_eq!(ids(&check(primitive)), ["collection:shared-element-state"]);
+    let records = "const pick = handler<unknown, { donut: { name: string } }>(() => {});\nconst Box = pattern<{ donuts: { name: string }[] }>(({ donuts }) => ({ rows: donuts.map((donut) => <button onClick={pick({ donut })}>{donut.name}</button>) }));\n";
+    assert_eq!(ids(&check(records)), Vec::<&str>::new());
+}
+
+#[test]
+fn write_through_a_handle_in_the_reactive_tier_is_refused_for_an_annotated_input() {
+    let module = "interface Input { count: Writable<number> }\nconst Box = pattern<Input>(({ count }) => ({ next: count.set(1) }));\n";
+    assert_eq!(ids(&check(module)), ["cell:method-tier"]);
+}
+
+#[test]
+fn intersection_of_object_types_is_computed_and_keeps_both_properties() {
+    let module = "type Named = { name: string };\ntype Priced = Named & { price: Writable<number> };\nconst bump = handler<unknown, Priced>((_, state) => { const prices = state.price.map((price: number) => price); console.log(prices); });\n";
+    assert_eq!(ids(&check(module)), ["cell:collection-method-in-function"]);
+}
+
+#[test]
+fn default_given_as_the_type_of_a_literal_constant_is_static() {
+    let module = "const EMPTY = { name: \"\", toppings: [] };\ninterface Input { donut: Default<{ name: string; toppings: string[] }, typeof EMPTY> }\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}
+
+#[test]
+fn default_given_as_the_type_of_an_annotated_literal_constant_is_static() {
+    let module = "interface Viewer { name?: string }\nconst EMPTY: Viewer = {};\ninterface Input { viewer: Writable<Viewer | Default<typeof EMPTY>> }\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
+    let computed = "function build() { return { name: \"plain\" }; }\nconst BUILT = build();\ninterface Input { viewer: Default<{ name: string }, typeof BUILT> }\n";
+    assert_eq!(ids(&check(computed)), ["default:not-static"]);
+}
+
+#[test]
+fn get_on_a_value_that_declares_its_own_get_is_not_reported() {
+    let module = "interface Source { get(): string[] }\nfunction names(source: Source) { return source.get(); }\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}
+
+#[test]
+fn optional_get_on_a_union_with_a_value_that_declares_get_is_not_reported() {
+    let module =
+        "function read(source: { get?: () => unknown } | undefined) { return source?.get?.(); }\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}
+
+#[test]
+fn overload_that_retypes_a_link_is_described_with_the_type_that_replaces_it() {
+    let module = "interface Link { id: string }\n\
+        function addOf(box: Cell<Link>): Cell<{ add: number }>;\n\
+        function addOf(box: Cell<Link>): unknown { return box; }\n";
+    let analysis = analyze(&[SourceFile {
+        path: "case.ts".to_string(),
+        text: format!("{PRELUDE}{module}"),
+    }]);
+    let overloads = &analysis.modules[0].overloads;
+    assert_eq!(overloads.len(), 1);
+    assert_eq!(overloads[0].name, "addOf");
+    assert_eq!(overloads[0].parameters, ["Cell<{ id: string }>"]);
+    assert_eq!(overloads[0].result, "Cell<{ add: number }>");
+    assert_eq!(overloads[0].returns, "the parameter `box`");
+    assert_eq!(
+        overloads[0].declared_instead.as_deref(),
+        Some("Cell<{ id: string; add: number }>")
+    );
 }

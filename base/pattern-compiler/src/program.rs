@@ -7,6 +7,7 @@ use oxc_allocator::Allocator;
 use serde::Serialize;
 
 use crate::check::{self, ActKind, Facts, ModuleCheck, Pending};
+use crate::declared::OverloadNote;
 use crate::diagnostics::Diagnostic;
 use crate::messages;
 use crate::module::{
@@ -14,6 +15,7 @@ use crate::module::{
 };
 use crate::parse::{self, ParseFailure, Parsed};
 use crate::tiers::Body;
+use crate::types::Types;
 
 /// One module's text, with the path it is known under.
 #[derive(Debug, Clone)]
@@ -33,6 +35,8 @@ pub struct ModuleAnalysis {
     /// Counts of constructs the corpus report compares with
     /// `language-subset.md` §11, by name.
     pub counts: BTreeMap<String, usize>,
+    /// The overload signatures of the module, with what replaces each.
+    pub overloads: Vec<OverloadNote>,
 }
 
 impl ModuleAnalysis {
@@ -58,14 +62,21 @@ pub struct DefRef {
 }
 
 /// Resolves an import of one module to a definition of another.
-pub struct Resolver<'m> {
+pub struct Resolver<'m, 'a> {
     paths: HashMap<String, usize>,
     models: &'m [Option<ModuleModel>],
     files: &'m [SourceFile],
+    parsed: &'m [Option<Parsed<'a>>],
+    /// The types resolved so far (`crate::types`).
+    pub(crate) types: Types,
 }
 
-impl<'m> Resolver<'m> {
-    fn new(files: &'m [SourceFile], models: &'m [Option<ModuleModel>]) -> Self {
+impl<'m, 'a> Resolver<'m, 'a> {
+    fn new(
+        files: &'m [SourceFile],
+        models: &'m [Option<ModuleModel>],
+        parsed: &'m [Option<Parsed<'a>>],
+    ) -> Self {
         let paths = files
             .iter()
             .enumerate()
@@ -75,7 +86,14 @@ impl<'m> Resolver<'m> {
             paths,
             models,
             files,
+            parsed,
+            types: Types::default(),
         }
+    }
+
+    /// The parsed module at index `module`, if it parsed.
+    pub fn parsed(&self, module: usize) -> Option<&'m Parsed<'a>> {
+        self.parsed[module].as_ref()
     }
 
     /// The module a relative specifier written in module `from` names, if
@@ -90,7 +108,12 @@ impl<'m> Resolver<'m> {
 
     /// The definition that the name `name` imported by `import` in module
     /// `from` denotes, following re-exports.
-    pub fn resolve(&self, from: usize, import: &Import, name: &ImportedName) -> Option<DefRef> {
+    pub fn resolve_import(
+        &self,
+        from: usize,
+        import: &Import,
+        name: &ImportedName,
+    ) -> Option<DefRef> {
         let module = self.module_of(from, &import.specifier)?;
         self.resolve_export(module, name, 0)
     }
@@ -204,7 +227,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         .iter()
         .map(|parsed| parsed.as_ref().map(ModuleModel::build))
         .collect();
-    let resolver = Resolver::new(files, &models);
+    let resolver = Resolver::new(files, &models, &parsed);
 
     let mut checks: Vec<Option<ModuleCheck>> = parsed
         .iter()
@@ -218,6 +241,27 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
 
     link(files, &parsed, &mut checks);
 
+    // The rules that resolving a written type decides.
+    for module in 0..files.len() {
+        resolver.check_written_types(module);
+    }
+    let reports = std::mem::take(&mut resolver.types.borrow_mut().reports);
+    for report in reports {
+        let (Some(check), Some(parsed)) = (&mut checks[report.module], &parsed[report.module])
+        else {
+            continue;
+        };
+        let position = parsed.lines.position(parsed.source, report.span.start);
+        check.diagnostics.push(Diagnostic::new(
+            report.id,
+            &parsed.path,
+            (report.span.start, report.span.end),
+            position,
+            format!("{}. {}", report.found, messages::rewrite(report.id)),
+        ));
+    }
+
+    let written = std::mem::take(&mut resolver.types.borrow_mut().written);
     let mut modules = Vec::new();
     for (index, check) in checks.into_iter().enumerate() {
         let (Some(check), Some(model)) = (check, models[index].clone()) else {
@@ -231,7 +275,16 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
             model,
             bodies: check.bodies,
             diagnostics,
-            counts: check.counts,
+            counts: {
+                let mut counts = check.counts;
+                for ((module, label), count) in &written {
+                    if *module == index {
+                        counts.insert(format!("types:written:{label}"), *count);
+                    }
+                }
+                counts
+            },
+            overloads: resolver.overloads(index),
         });
     }
     ProgramAnalysis { modules, failures }

@@ -21,6 +21,12 @@ commands:
       report as JSON. With --files, print the corpus's file list instead.
   bodies <file>...
       Print the bodies of the given modules as JSON.
+  types <file>...
+      Print, for the given modules, how many written types were evaluated,
+      how many receivers and collections have a declared type, and each
+      overload signature with the declared type that replaces it. With
+      --only=<text>, print for the modules whose path contains the text; the
+      other modules are still read, so that imports between them resolve.
 ";
 
 fn main() -> ExitCode {
@@ -37,6 +43,7 @@ fn main() -> ExitCode {
         }
         Some("check") if !operands.is_empty() => check(&operands, flags.contains(&"--hints")),
         Some("bodies") if !operands.is_empty() => bodies(&operands),
+        Some("types") if !operands.is_empty() => types(&operands, &flags),
         Some("corpus") if operands.len() == 1 => corpus_report(operands[0], &flags),
         _ => {
             eprint!("{USAGE}");
@@ -101,6 +108,38 @@ fn bodies(paths: &[&str]) -> std::io::Result<bool> {
         "{}",
         serde_json::to_string_pretty(&modules).map_err(std::io::Error::other)?
     );
+    Ok(parsed(&analysis))
+}
+
+fn types(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
+    let mut analysis = analyze(&read(paths)?);
+    if let Some(only) = flags.iter().find_map(|flag| flag.strip_prefix("--only=")) {
+        analysis.modules.retain(|module| module.path.contains(only));
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for module in &analysis.modules {
+        for (key, count) in &module.counts {
+            if key.starts_with("types:") {
+                *counts.entry(key.as_str()).or_insert(0) += count;
+            }
+        }
+    }
+    for (key, count) in counts {
+        println!("{count:6}  {key}");
+    }
+    for module in &analysis.modules {
+        for overload in &module.overloads {
+            println!();
+            println!("{}:{}: {}", module.path, overload.line, overload.name);
+            println!("  parameters: {}", overload.parameters.join(", "));
+            println!("  result:     {}", overload.result);
+            println!("  returns:    {}", overload.returns);
+            match &overload.declared_instead {
+                Some(ty) => println!("  declared instead: {ty}"),
+                None => println!("  declared instead: none"),
+            }
+        }
+    }
     Ok(parsed(&analysis))
 }
 
