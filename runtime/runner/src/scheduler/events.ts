@@ -16,6 +16,7 @@ import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
   type OwningRootAddress,
+  type RefusedUpdate,
 } from "../ensure-piece-running.ts";
 import {
   isAclDocumentWriteRefusal,
@@ -910,6 +911,36 @@ function chainOnCommit(
 }
 
 /**
+ * What a drop for want of a handler adds when the started piece refused its
+ * latest pattern update (`EnsurePieceVerdict.refusedUpdate`): the piece runs
+ * its previous program, which can lack a stream the offered one has. The note
+ * names the offered program and the reason code, and leaves the refusal's own
+ * words in the piece's reconciliation record, to which it points. Those words
+ * are whatever error the refusal raised, and a served drop's reason is
+ * written into the dropped-event notice on the stream (events.md §5).
+ *
+ * The note only explains the drop, so a probe that throws adds nothing and is
+ * logged, and the drop goes ahead as it would without one.
+ */
+function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
+  let refused: RefusedUpdate | undefined;
+  try {
+    refused = verdict.refusedUpdate?.();
+  } catch (error) {
+    logger.warn(
+      "scheduler",
+      "Reading a piece's refused update failed: " + describeFailure(error),
+    );
+    return "";
+  }
+  if (refused === undefined) return "";
+  const reason = refused.reason === undefined ? "" : ` (\`${refused.reason}\`)`;
+  return `, which still runs its previous program because its update to ` +
+    `\`${refused.offered.identity}\` was refused${reason}; the piece's ` +
+    `\`pieceReconciliation\` record has the detail`;
+}
+
+/**
  * Starts the piece an event's stream belongs to. A runtime whose run of the
  * handler is the one that counts, a serving runtime or any runtime with server
  * execution off, starts first the pieces its inputs come from
@@ -1155,7 +1186,8 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
             // graph probe reads as installed: only a start walk mints
             // one, and its absence says nothing about the piece.
             const reason = `Event dropped: no handler registered for ` +
-              `${args.eventLink.id} after starting its piece`;
+              `${args.eventLink.id} after starting its piece` +
+              refusedUpdateNote(verdict);
             if (queuedEvent.served !== undefined) {
               dropQueuedEvent(state, queuedEvent, reason);
             } else {
