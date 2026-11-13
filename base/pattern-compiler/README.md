@@ -78,7 +78,27 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 
 cargo run --release -- catalog
-cargo run --release -- check path/to/module.tsx
+cargo run --release -- check path/to/module.tsx path/to/other.ts
+cargo run --release -- check --hints path/to/module.tsx
+cargo run --release -- bodies path/to/module.tsx
 cargo run --release -- corpus ../../patterns
 cargo run --release -- corpus ../../patterns --json
+cargo run --release -- corpus ../../patterns --files
 ```
+
+`check` takes the modules of one program: an import between two of them is
+resolved, and an import of a module that is not given is left unresolved.
+`bodies` prints the body records as JSON. `corpus` takes the path of the
+`patterns` directory, prints the report, and exits with a failure when a module
+does not parse. The corpus is the set of files the corpus measurement beside the
+specification uses: the files `deno task cfcheck` compiles, with what they
+import by relative path, without the files that share no program with pattern
+code.
+
+## The specification it implements
+
+The crate follows `language-subset.md` as it stands at commit `a118e85a78`.
+`catalog-ids.txt` holds the identifiers of that document's catalog, and
+`cargo test` fails when the document's catalog and the copy differ. To follow a
+change of the catalog, edit `catalog-ids.txt` and the table in `src/catalog.rs`
+together.

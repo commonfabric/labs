@@ -72,8 +72,7 @@ const FORMS: [&str; 11] = [
 ];
 
 impl Report {
-    /// Builds the report. `texts` gives the number of lines of each module,
-    /// in the order of `analysis.modules`.
+    /// Builds the report. `lines` is the number of lines of the modules.
     pub fn build(analysis: &ProgramAnalysis, lines: usize) -> Self {
         let mut by_id: BTreeMap<&str, (Severity, usize, usize)> = BTreeMap::new();
         let mut errors_by_note = BTreeMap::new();
@@ -134,17 +133,13 @@ impl Report {
                     && in_pattern
                     && body.method.as_deref() == Some("map")
                 {
-                    {
+                    *constructs
+                        .entry("map callback in the reactive tier".into())
+                        .or_insert(0) += 1;
+                    if body.uses_index {
                         *constructs
-                            .entry("map callback in the reactive tier".into())
+                            .entry("map callback in the reactive tier that uses its index".into())
                             .or_insert(0) += 1;
-                        if body.uses_index {
-                            *constructs
-                                .entry(
-                                    "map callback in the reactive tier that uses its index".into(),
-                                )
-                                .or_insert(0) += 1;
-                        }
                     }
                 }
                 if body.kind == BodyKind::Computed {

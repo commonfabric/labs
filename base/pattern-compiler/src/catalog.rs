@@ -207,8 +207,8 @@ pub const CATALOG: &[Entry] = &[
         "sqlite:tables-not-static",
         Error,
         "reported when the `tables` option is not an object literal with static keys \
-         whose values are `table(...)` calls or names; whether a name is bound to a \
-         `table(...)` call and whether its arguments are constant is not followed",
+         whose values are calls or names; whether each is a `table(...)` call with \
+         constant arguments, and what a row-label rule refers to, is not followed",
     ),
     part(
         "collection:nested-scan",

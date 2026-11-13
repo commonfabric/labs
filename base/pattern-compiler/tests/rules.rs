@@ -623,3 +623,19 @@ fn builder_reached_through_an_alias_and_a_namespace_is_recognized() {
         ["pattern-context:builder-placement"]
     );
 }
+
+#[test]
+fn removed_helper_passed_as_a_value_is_refused() {
+    let module = "const choose = [ifElse];\n";
+    assert_eq!(ids(&check(module)), ["removed-form:helper-unsupported"]);
+}
+
+#[test]
+fn row_label_rule_of_table_is_accepted_in_the_reactive_tier() {
+    let module = "import { cfSqlite } from \"commonfabric\";\n\
+        const Box = pattern(() => {\n\
+          const db = sqliteDatabase({ tables: { notes: cfSqlite.table({ id: \"text\" }, (row) => ({ owner: row.id })) } });\n\
+          return { db };\n\
+        });\n";
+    assert_eq!(ids(&check(module)), Vec::<&str>::new());
+}

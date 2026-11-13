@@ -168,6 +168,9 @@ pub struct Checker<'p, 'a> {
     /// The start of an initializer and the name of the `const` it is
     /// assigned to.
     name_hint: Option<(u32, String)>,
+    /// The starts of the references to a removed helper that are the callee
+    /// of a call or the tag of a template.
+    helper_callees: HashSet<u32>,
 }
 
 /// Walks one module.
@@ -194,6 +197,7 @@ pub fn check_module(
         statement_call: None,
         cause_given: HashSet::new(),
         name_hint: None,
+        helper_callees: HashSet::new(),
     };
     if model.tier == ModuleTier::Imported {
         checker.imported_module();
@@ -1662,6 +1666,10 @@ impl<'p, 'a> Checker<'p, 'a> {
                 );
                 self.refused(|checker| checker.function_in_place(function));
             }
+            // A function the callee does take is code of the function tier.
+            Some(function) if self.in_reactive() => {
+                self.refused(|checker| checker.function_in_place(function));
+            }
             _ => self.visit_argument(argument),
         }
     }
@@ -1698,7 +1706,8 @@ impl<'p, 'a> Checker<'p, 'a> {
             Thing::Local(_) => {
                 self.statement_call = None;
                 self.visit_identifier_reference(identifier);
-                self.arguments(call, false);
+                let table = self.is_cf_table(&call.callee);
+                self.arguments(call, table);
             }
             Thing::Global => {
                 self.statement_call = None;
@@ -1730,6 +1739,10 @@ impl<'p, 'a> Checker<'p, 'a> {
             return;
         }
         self.statement_call = None;
+        if value == ApiValue::RemovedHelper {
+            self.helper_callees
+                .insert(unwrap(&call.callee).span().start);
+        }
         self.visit_expression(&call.callee);
         let mut functions = false;
         match value {
@@ -1871,13 +1884,10 @@ impl<'p, 'a> Checker<'p, 'a> {
                     ObjectPropertyKind::ObjectProperty(table) => {
                         let value = unwrap(&table.value);
                         !table.computed
-                            && match value {
-                                Expression::Identifier(_) => true,
-                                Expression::CallExpression(inner) => {
-                                    self.is_cf_table(&inner.callee)
-                                }
-                                _ => false,
-                            }
+                            && matches!(
+                                value,
+                                Expression::Identifier(_) | Expression::CallExpression(_)
+                            )
                     }
                 };
                 if !fixed {
@@ -1891,10 +1901,31 @@ impl<'p, 'a> Checker<'p, 'a> {
         }
     }
 
+    /// Whether a callee is `table` of `commonfabric`: the import, a member
+    /// of `cfSqlite`, or a name destructured from `cfSqlite`.
     fn is_cf_table(&self, callee: &Expression<'a>) -> bool {
-        self.api_of(callee).is_some_and(|api| api.name == "table")
-            || matches!(unwrap(callee), Expression::StaticMemberExpression(member)
-                if member.property.name == "table")
+        let is_sqlite = |expression: &Expression<'a>| self.is_api(expression, "cfSqlite");
+        match unwrap(callee) {
+            Expression::StaticMemberExpression(member) => {
+                member.property.name == "table" && is_sqlite(&member.object)
+            }
+            Expression::Identifier(identifier) => match self.thing(identifier) {
+                Thing::Api(api) => api.name == "table",
+                Thing::Local(symbol) => {
+                    let nodes = self.parsed.semantic.nodes();
+                    match nodes.kind(self.scoping.symbol_declaration(symbol)) {
+                        AstKind::VariableDeclarator(declarator) => {
+                            self.scoping.symbol_name(symbol) == "table"
+                                && matches!(declarator.id, BindingPattern::ObjectPattern(_))
+                                && declarator.init.as_ref().is_some_and(is_sqlite)
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     fn call_of_member(&mut self, call: &CallExpression<'a>, member: &StaticMemberExpression<'a>) {
@@ -2107,6 +2138,10 @@ impl<'p, 'a> Checker<'p, 'a> {
             return;
         }
         self.visit_expression(&call.callee);
+        if self.is_cf_table(&call.callee) {
+            self.arguments(call, true);
+            return;
+        }
         let function_argument = call
             .arguments
             .iter()
@@ -2653,7 +2688,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                         "`instanceof` in the reactive tier",
                     ))
                 }
-                Expression::ConditionalExpression(_) | Expression::LogicalExpression(_) => {
+                Expression::ConditionalExpression(_) => {
                     self.count("reactive:conditional");
                     None
                 }
@@ -2709,6 +2744,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_tagged_template_expression(&mut self, it: &TaggedTemplateExpression<'a>) {
         match self.api_of(&it.tag) {
             Some(api) if api.name == "str" && api.subpath.is_none() => {
+                self.helper_callees.insert(unwrap(&it.tag).span().start);
                 self.count("form:str");
                 if self.in_reactive() && api.direct {
                     self.report(
@@ -2855,6 +2891,17 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         match reference.symbol_id() {
             Some(symbol) => {
                 self.reference(symbol);
+                let helper = self
+                    .model
+                    .api_ref(symbol)
+                    .is_some_and(|api| api.value() == ApiValue::RemovedHelper);
+                if helper && !self.helper_callees.contains(&it.span.start) {
+                    self.report(
+                        "removed-form:helper-unsupported",
+                        it.span,
+                        format!("`{}` passed as a value", it.name),
+                    );
+                }
                 if flags.is_write() && !self.in_reactive() {
                     let module_scope = match self.thing_of_symbol(symbol) {
                         Thing::Def(_, kind, _) => kind != DefKind::Mutable,
