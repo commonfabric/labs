@@ -386,7 +386,10 @@ session-scoped client act. The wiring:
   load-bearing enforcement; commit-level
   identity is not. Anticipated: per-user server-generated keys with
   user-delegated authority graduate attribution to acting-key
-  signatures, envelope model unchanged.
+  signatures, envelope model unchanged. Whether an executor serves a
+  space at all is the space owner's consent in
+  [`../server-execution-consent.md`](../server-execution-consent.md), a design
+  sketch.
 - **Multi-tenancy**: one executor host serves many spaces. Per-space
   budgets (CPU time per wave, outstanding LLM calls, egress rate) are part
   of the executor contract from day one — a runaway pattern (an LLM
