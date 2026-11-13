@@ -5,6 +5,15 @@ import { BaseElement } from "../../core/base-element.ts";
 import { subscribeToDrag, subscribeToEndDrag } from "../../core/drag-state.ts";
 import type { DragState } from "../../core/drag-state.ts";
 
+/** How many released drops have yet to dispatch or fail. */
+let pendingDrops = 0;
+
+/**
+ * Settles once every drop released so far has dispatched or failed. Each
+ * waiting drop chains onto it, so that drops dispatch in release order.
+ */
+let earlierDrops: Promise<void> = Promise.resolve();
+
 /**
  * CFDropZone - Marks a region as droppable and emits events when valid drops occur
  *
@@ -41,15 +50,6 @@ import type { DragState } from "../../core/drag-state.ts";
  *   <div>Drop items here</div>
  * </cf-drop-zone>
  */
-/** How many released drops have yet to dispatch or fail. */
-let pendingDrops = 0;
-
-/**
- * Settles once every drop released so far has dispatched or failed. Each
- * waiting drop chains onto it, so that drops dispatch in release order.
- */
-let earlierDrops: Promise<void> = Promise.resolve();
-
 export class CFDropZone extends BaseElement {
   static override styles = [
     BaseElement.baseStyles,
