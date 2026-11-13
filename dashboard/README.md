@@ -762,7 +762,7 @@ installation with the same permissions; see [Credentials](#credentials).
 | performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
 | model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The vertical scale uses the highlighted days, so older extremes can extend outside the chart. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
-| dau | distinct identities active per UTC day on one named service, counted from the `user.did` attribute on the `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has no such spans — which is the resting state until a deployment's tracing is switched on. It counts keypairs rather than people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `DAU_EXCLUDE_DIDS`, `SIGNOZ_UI_URL` |
+| dau | distinct people active per UTC day on one named service, counted from the `enduser.id` attribute the memory server sets on the `memory.session.open`, `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is yesterday, the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has sent no spans at all — which is the resting state until a deployment's tracing is switched on — and gray, naming the last day it sent any, when it sent none yesterday, so a deployment that stopped exporting does not show an old count as current. A day the service exported with nobody in it is a zero. Keys that nobody linked by delegation count as separate people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` |
 | github users | organization members plus outside collaborators, with each roster's size charted over about two months. The headline counts unique users across both rosters | `GH_TOKEN` (with org Members read) |
 
 The **production** tile starts gray and says `waiting for connectivity` until
@@ -1460,34 +1460,32 @@ it.
 | `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. The first time a process takes the lock on the CI run index, a run-list file, the GitHub rate-limit ledger, the test-records history, or the runtime benchmark history, it removes the temporary files beside that file that interrupted writes left behind. |
 | `SIGNOZ_UI_URL` | prod errors, dau | browser-facing SigNoz URL for the explorer pop-outs: **prod errors** links to `/logs/logs-explorer` and **dau** to `/traces-explorer` under it. Defaults to `SIGNOZ_URL` when that is a public `https://` URL. An in-cluster `http://` URL, which a browser cannot reach, leaves both tiles with no pop-out at all, so set this whenever the server reaches SigNoz over one. |
 | `PROD_SERVICE` | prod errors, dau | the `service.name` production reports under in SigNoz, which both trace-reading tiles scope to. Defaults to `toolshed-production`. A name outside `[A-Za-z0-9._-]` is ignored, since it lands inside a query expression. |
-| `DAU_EXCLUDE_DIDS` | dau | comma-separated identity DIDs to leave out of the count — the server's own identity, `MEMORY_SERVICE_DIDS`, background services. Until it is set the count is an upper bound. See [dau](#dau) below. |
 
 <a id="dau"></a>
-**What the dau tile counts.** Distinct `user.did` values per UTC day, over the
-`memory.transact` and `memory.subscriber.sync` spans of one named service, read from
-the same SigNoz the prod errors tile uses. `user.did` is the memory session principal,
-which is the signature-checked `session.open` issuer, so no new instrumentation is
-involved. `docs/features/active-user-counting.md` records what the number means.
-Four things bound it, and they are worth knowing before quoting it:
+**What the dau tile counts.** Distinct `enduser.id` values per UTC day, over the
+`memory.session.open`, `memory.transact` and `memory.subscriber.sync` spans of one
+named service, read from the same SigNoz the prod errors tile uses. `enduser.id` is
+the person the memory server decided the session stands for: the first person's
+identity on the session's delegation chain, or else the signature-checked session
+principal, and nothing at all for a serving loop's own sessions, for service and
+delegating principals, and for a new space's own key.
+`docs/features/active-user-counting.md` records the rules and what the number
+means. Three things bound it, and they are worth knowing before quoting it:
 
-- **It counts identities, not people.** An identity is a keypair. One person with a
-  browser mnemonic and a `cf id derive` passphrase is two; one key shared across a team
-  is one. The tile says "active identities" for that reason.
-- **Some identities are not people at all.** The server's own identity and the DIDs in
-  `MEMORY_SERVICE_DIDS` are principals in the same way a user is. Name them in
-  `DAU_EXCLUDE_DIDS`; until then the count is an upper bound.
-- **Read-only sessions are invisible.** `session.open` emits no span, so someone who
-  connects and only reads is never attributed, and a day of purely read-only traffic
-  reports zero.
+- **Unlinked keys are separate people.** One person with a browser mnemonic and an
+  unrelated `cf id derive` passphrase is two, unless one delegates to the other; one
+  key shared across a team is one.
+- **Keys the server is not told about count as people.** An automation key that is
+  not in `MEMORY_SERVICE_DIDS` looks like anyone else's.
 - **The history is as long as trace retention**, roughly a fortnight, and that retention
   is a live setting on the SigNoz database rather than anything this repository holds.
 
-Head sampling below 1.0 would not scale this number down, it would drop identities out
-of it, and no arithmetic afterwards would put them back.
+Head sampling below 1.0 would not scale this number down, it would drop people out of
+it, and no arithmetic afterwards would put them back.
 
-The tile is gray whenever the named service has no identity-bearing spans in the
-retained window, which is the resting state for a deployment whose tracing is switched
-off. It needs no second change to light up once that deployment starts exporting.
+The tile is gray whenever the named service sent no spans in the retained window, which
+is the resting state for a deployment whose tracing is switched off. It needs no second
+change to light up once that deployment starts exporting.
 
 Notes:
 
