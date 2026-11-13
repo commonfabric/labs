@@ -13,6 +13,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import type { Cell } from "../src/cell.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -948,7 +949,7 @@ describe("stored-argument-validation", () => {
      * its own.
      */
     const judgeOnce = (
-      argument: ReturnType<typeof runtime.getCell<unknown>>,
+      argument: Cell<unknown>,
       staged?: unknown,
     ) => {
       const tx = runtime.edit();

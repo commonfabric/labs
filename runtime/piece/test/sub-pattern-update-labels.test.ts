@@ -154,8 +154,9 @@ export default pattern<Record<string, never>, any>(() => {
 const documentEntries = (runtime: Runtime, cell: Cell<unknown>): unknown[] => {
   const tx = runtime.edit();
   try {
-    const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
-    return readStoredCfcMetadata(tx, { ...link, path: [] })?.labelMap
+    const { space, id, scope } = cell.withTx(tx).resolveAsCell()
+      .getAsNormalizedFullLink();
+    return readStoredCfcMetadata(tx, { space, id, scope })?.labelMap
       .entries ?? [];
   } finally {
     tx.abort("label read");
