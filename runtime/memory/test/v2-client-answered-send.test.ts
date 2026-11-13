@@ -363,4 +363,63 @@ describe("client", () => {
       await server.close();
     }
   });
+
+  it("rejects a mount whose `session.open` was answered before its connection dropped with its caller's reason, when the caller cancels it while the host stays down", async () => {
+    // The answered open's session is restored on the next connection before
+    // the mount hands it out. A host that stays down keeps that wait open,
+    // and the mount's caller must still be able to end it.
+
+    const server = serverFor("cancelled");
+    let down = false;
+    let onRefused = () => {};
+    /** Resolves the next time the client dials the host and finds it down. */
+    const nextRefusal = () =>
+      new Promise<void>((resolve) => {
+        onRefused = resolve;
+      });
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "session.open",
+      (lose) => {
+        down = true;
+        return Promise.reject(lose());
+      },
+    );
+    const host: Transport = {
+      ...transport,
+      send(payload) {
+        if (!down) return transport.send(payload);
+        const notify = onRefused;
+        onRefused = () => {};
+        notify();
+        return Promise.reject(connectionError("test host is down"));
+      },
+    };
+    const client = await connect({ transport: host });
+    const cancel = new AbortController();
+    const reason = new Error("test cancels the mount");
+    try {
+      // The first dial follows the loss at once, before the open's send has
+      // failed.
+      const dialed = nextRefusal();
+      const mounting = client.mount(
+        spaceFor("cancelled"),
+        {},
+        testSessionOpenAuthFactory,
+        cancel.signal,
+      ).then(() => "mounted", (error) => error);
+      await dialed;
+      // The next dial comes after the client's backoff. By then the mount
+      // has found its open answered, and waits for the connection that
+      // restores its session.
+      await nextRefusal();
+      const dialedAgain = nextRefusal().then(() => "dialed again");
+      cancel.abort(reason);
+
+      expect(await Promise.race([mounting, dialedAgain])).toBe(reason);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
