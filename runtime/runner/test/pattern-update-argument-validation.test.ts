@@ -169,6 +169,41 @@ const tallyHandleOrUndefinedAlias = (marker: string): RuntimeProgram =>
   ].join("\n"));
 
 /**
+ * A candidate that types `tally` as a plain counter, whose linked content is
+ * the argument's to judge.
+ */
+const tallyPlain = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { pattern } from 'commonfabric';",
+    "interface Counter { count?: number }",
+    "interface Args { tally?: Counter; [key: string]: any }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/**
+ * `typedRow` with the row's `name` read: `name` is what the version reads
+ * there, and `kind` its `typeof`.
+ */
+const typedRowReader = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { computed, pattern } from 'commonfabric';",
+    "interface Row { name: string; other?: string; [key: string]: any }",
+    "interface Args { row?: Row; [key: string]: any }",
+    "export default pattern<",
+    "  Args,",
+    "  { marker: string; name: unknown; kind: string }",
+    ">(({ row }) => {",
+    "  const name = computed(() => row?.name);",
+    "  const kind = computed(() => typeof row?.name);",
+    `  return { marker: ${JSON.stringify(marker)}, name, kind };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/**
  * A version whose `stamp` is a `Date`, which generates `{ type: "object" }`
  * and is stored as a `FabricEpochNsec`.
  */
@@ -1627,6 +1662,98 @@ describe("pattern update validates the stored argument", () => {
       );
       expect(error).toContain("tally: value does not match anyOf");
       expect(isStoredArgumentSchemaRefusal(thrown)).toBe(true);
+    });
+  });
+
+  describe("a stored link to a document that stores a confidentiality label", () => {
+    // What a labeled document holds is read under its labels, and a read in
+    // the update's transaction would join them to everything it writes: the
+    // piece's root here, a nested piece's result in a source update. So the
+    // update judges such a link as a link, whatever the slot's type, and
+    // leaves what it reaches to the reads that follow it, as it does a link
+    // to another space.
+
+    /**
+     * Commits a document holding `value` at `cause`, labeled at its root with
+     * the space's `PersonalSpace` atom, and returns its cell.
+     */
+    const seedLabeled = async (cause: string, value: unknown) => {
+      const cell = rt.getCell<Record<string, unknown>>(space, cause);
+      const seed = rt.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: cell.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: [personalSpaceOf(space)] },
+            }],
+          },
+        },
+      } as never);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+
+    it("leaves the linked document's confidentiality off what the update writes when the slot is typed plain", async () => {
+      const counter = await seedLabeled("plain-slot-labeled-counter", {
+        count: 3,
+      });
+      const { cell } = await setupVintage(
+        openArgument("v1"),
+        { tally: counter },
+        "plain-slot-labeled-link",
+      );
+
+      const { error } = await rollForward(cell, tallyPlain("v2"));
+
+      expect(error).toBeUndefined();
+      await cell.pull();
+      expect(cell.getRaw()).toEqual({ marker: "v2" });
+      expect(
+        await confidentialityOf(cell.getAsNormalizedFullLink().id),
+        "the update read the labeled counter through the plain slot, and its " +
+          "transaction carried the counter's label onto the piece's root",
+      ).not.toContainEqual(personalSpaceOf(space));
+    });
+
+    it("rolls forward over a wrong-typed value behind the link, which the new version reads as `undefined`", async () => {
+      // The trade the deferral makes: the same value in a document that
+      // stores no label refuses the update ("still refuses a READABLE
+      // wrong-typed value behind the same hop", above).
+      //
+      // TODO(danfuzz): The mismatch is caught nowhere here: the update
+      // commits and the new version's reads of the row come back
+      // `undefined`, with no refusal or diagnostic. A link that leaves the
+      // argument's space is deferred the same way. The expected outcome is
+      // that the deferred check surfaces where the new version reads the
+      // value. See the matching `TODO` at `reachesBeyondOwnData()` in
+      // `stored-argument-validation.ts`.
+
+      const row = await seedLabeled("labeled-wrong-type-row", {
+        name: 7,
+        other: "fine",
+      });
+      const { cell } = await setupVintage(
+        openArgument("v1"),
+        { row },
+        "labeled-wrong-type-link",
+      );
+
+      const { error } = await rollForward(cell, typedRowReader("v2"));
+
+      expect(error).toBeUndefined();
+      expect(await cell.key("name").pull()).toBeUndefined();
+      expect(await cell.key("kind").pull()).toBeUndefined();
     });
   });
 

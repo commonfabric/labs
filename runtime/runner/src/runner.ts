@@ -42,6 +42,7 @@ import {
 } from "./stored-setup-build.ts";
 import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "./stored-argument-refusal.ts";
 import {
+  type StagedArgument,
   storedArgumentSlotIssues,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
@@ -4118,26 +4119,46 @@ export class Runner {
       argumentLink,
       argumentSchema,
       defaults,
+      argument,
     );
   }
 
+  /**
+   * Refuses the transaction unless the argument at `argumentLink` satisfies
+   * `argumentSchema`. Given `staged`, the value this setup just wrote there,
+   * validation takes the argument's slots and references from it rather than
+   * reading them back (`materializeStagedArgumentForValidation()`).
+   */
   #validateArgument(
     tx: IExtendedStorageTransaction,
     argumentLink: NormalizedFullLink,
     argumentSchema: JSONSchema,
     defaults: FabricValue,
+    staged?: unknown,
   ): void {
     const validationFailure = storedArgumentValidationIssue(
       this.#runtime.getCellFromLink(argumentLink, undefined, tx),
       argumentSchema,
       defaults,
       tx,
+      staged === undefined ? undefined : this.#stagedArgument(tx, staged),
     );
     if (validationFailure !== undefined) {
       throw new Error(
         `${STORED_ARGUMENT_SCHEMA_REFUSAL}: ${validationFailure}`,
       );
     }
+  }
+
+  /** `value`, an argument this setup staged, as validation is handed it. */
+  #stagedArgument(
+    tx: IExtendedStorageTransaction,
+    value: unknown,
+  ): StagedArgument {
+    return {
+      value,
+      cellAt: (link) => this.#runtime.getCellFromLink(link, undefined, tx),
+    };
   }
 
   #updateResultSchemaMeta<R>(
@@ -4638,6 +4659,7 @@ export class Runner {
         pattern.argumentSchema,
         defaults,
         tx,
+        this.#stagedArgument(tx, staged),
       );
     };
 
@@ -4653,6 +4675,7 @@ export class Runner {
       defaults,
       tx,
       carried,
+      this.#stagedArgument(tx, stored),
     );
     const issue = stage(new Set(dropped.keys()));
     if (issue !== undefined && dropped.size < carried.length) {

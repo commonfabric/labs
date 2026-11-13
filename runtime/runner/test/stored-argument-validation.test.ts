@@ -28,6 +28,11 @@ import {
   overlayUnreadableLinkPlaceholders,
   storedArgumentValidationIssue,
 } from "../src/stored-argument-validation.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 /** Materialized snapshot whose cycle remains observable by identity. */
 interface MaterializedNode {
@@ -820,6 +825,186 @@ describe("stored-argument-validation", () => {
       const present: JSONSchema = { $ref: "#/$defs/text", asCell: ["cell"] };
       expect(linkedSlotIssue(present, "red")).toBeUndefined();
       expect(linkedSlotIssue(present, 7)).toContain("slot:");
+    });
+  });
+
+  describe("a stored link to a document that stores a confidentiality label", () => {
+    // What a labeled document holds is read under its labels, which a read
+    // here would join to the transaction doing the judging, and so to what it
+    // writes, such as a nested piece's result. The judgement leaves it to the
+    // reads that follow the link, as it does a link to another space.
+
+    /** The schema of an argument whose `source` holds a counter. */
+    const schema: JSONSchema = {
+      type: "object",
+      properties: {
+        source: { type: "object", properties: { count: { type: "number" } } },
+      },
+    };
+
+    /**
+     * Commits a document holding `value` at `cause`, labeled at its root with
+     * `confidentiality` where that holds any atom, and returns its cell.
+     */
+    const seedDocument = async (
+      cause: string,
+      value: unknown,
+      confidentiality: readonly string[],
+    ) => {
+      const tx = runtime.edit();
+      const cell = runtime.getCell<unknown>(space, cause, undefined, tx);
+      const id = cell.getAsNormalizedFullLink().id;
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, { space, scope: "space", id, path: [] }, {
+        value,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: confidentiality.length === 0 ? [] : [{
+              path: [],
+              label: { confidentiality: [...confidentiality] },
+            }],
+          },
+        },
+      } as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+
+    it("judges the slot as holding a link and reads none of the labeled document's value", async () => {
+      // TODO(danfuzz): Which way the link goes turns on whether the document
+      // stores a label entry, which label metadata keeps observable. If that
+      // ever becomes hidden, this outcome reveals it. See the matching `TODO`
+      // at `reachesBeyondOwnData()` in `stored-argument-validation.ts`.
+
+      const sealed = await seedDocument(
+        "sealed-source",
+        { count: "many" },
+        ["sealed"],
+      );
+      const plain = await seedDocument("plain-source", { count: "many" }, []);
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ source: sealed });
+        const sealedId = sealed.getAsNormalizedFullLink().id;
+        using reads = spyReads(tx);
+        expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+          .toBeUndefined();
+        expect(
+          reads.addresses().filter((address) =>
+            address.id === sealedId && address.path[0] === "value"
+          ),
+        ).toEqual([]);
+
+        // The same value in a document that stores no label is judged.
+        argument.set({ source: plain });
+        expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+          .toContain("count: value does not match type number");
+      } finally {
+        tx.abort();
+      }
+    });
+  });
+
+  describe("an argument a setup has just staged", () => {
+    // Validation given the staged value takes the argument's slots, and which
+    // reference sits at each, from it, so it reads none of them back; what a
+    // reference reaches it judges as reading the argument back does.
+
+    /** The schema of an argument whose `source` holds a counter. */
+    const schema: JSONSchema = {
+      type: "object",
+      properties: {
+        source: { type: "object", properties: { count: { type: "number" } } },
+        note: { type: "string" },
+      },
+    };
+
+    /**
+     * Commits an argument of a `source` link to a counter holding `count`, in
+     * a document that stores no label, and a `note`; returns the two cells.
+     */
+    const commitArgument = async (count: unknown) => {
+      const tx = runtime.edit();
+      const source = runtime.getCell<unknown>(space, "source", undefined, tx);
+      source.set({ count });
+      const argument = runtime.getCell<unknown>(
+        space,
+        "argument",
+        undefined,
+        tx,
+      );
+      argument.set({ source, note: "plain" });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return { source, argument };
+    };
+
+    /**
+     * Returns the issue one validation of `argument` finds, read back or from
+     * `staged`, and the address of each read it makes, in a transaction of
+     * its own.
+     */
+    const judgeOnce = (
+      argument: ReturnType<typeof runtime.getCell<unknown>>,
+      staged?: unknown,
+    ) => {
+      const tx = runtime.edit();
+      try {
+        const cell = argument.withTx(tx);
+        using reads = spyReads(tx);
+        const issue = storedArgumentValidationIssue(
+          cell,
+          schema,
+          undefined,
+          tx,
+          staged === undefined ? undefined : {
+            value: staged,
+            cellAt: (link) => runtime.getCellFromLink(link, undefined, tx),
+          },
+        );
+        return {
+          issue,
+          reads: reads.addresses().map((address) =>
+            JSON.stringify([address.id, address.scope, address.path])
+          ),
+        };
+      } finally {
+        tx.abort();
+      }
+    };
+
+    it("reads nothing of an unlabeled argument that reading it back does not", async () => {
+      const { source, argument } = await commitArgument(3);
+      const readBack = judgeOnce(argument);
+      const fromStaged = judgeOnce(argument, { source, note: "plain" });
+
+      expect(fromStaged.issue).toBeUndefined();
+      expect(readBack.issue).toBeUndefined();
+      const readBackSet = new Set(readBack.reads);
+      expect(fromStaged.reads.filter((read) => !readBackSet.has(read)))
+        .toEqual([]);
+      // Reading back reads the argument document's own slots, which the
+      // staged view takes from what was staged.
+      const argumentId = argument.getAsNormalizedFullLink().id;
+      const argumentReads = (reads: readonly string[]) =>
+        reads.filter((read) => JSON.parse(read)[0] === argumentId);
+      expect(argumentReads(readBack.reads).length).toBeGreaterThan(
+        argumentReads(fromStaged.reads).length,
+      );
+    });
+
+    it("returns the issue reading it back returns for what a reference reaches", async () => {
+      const { source, argument } = await commitArgument("many");
+      const readBack = judgeOnce(argument);
+      const fromStaged = judgeOnce(argument, { source, note: "plain" });
+
+      expect(readBack.issue).toContain(
+        "count: value does not match type number",
+      );
+      expect(fromStaged.issue).toBe(readBack.issue);
     });
   });
 });
