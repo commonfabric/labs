@@ -295,10 +295,11 @@ export type StoredDocumentAddress = {
 export type ReleaseOptions = {
   /**
    * Whether the pass completes a release something asked for, such as a
-   * stop: each hold token live at the pass, once collected, then asks for a
-   * pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
+   * stop: each hold token live as the pass begins, once collected, then asks
+   * for a pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
    * releases what the token alone kept. Absent, a token's collection asks
-   * for nothing on this pass's account.
+   * for nothing on this pass's account. Closing the manager forgets every
+   * follow-up.
    */
   followUpOnCollection?: boolean;
 };

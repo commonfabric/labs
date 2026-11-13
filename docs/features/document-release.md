@@ -83,17 +83,20 @@ as a closing pane's cancellations of each of its subscriptions do, cost one
 more pass between them.
 
 A cell holds its document until it is collected, and a pass keeps every watch
-rooted at a document it keeps. So the document a cancelled subscription's own
-cell loaded, or a stopped piece's cells loaded, stays, with what its watch
-reaches, through the pass the cancellation or the stop asks for, which runs
-before any collection can have taken those cells. What the subscription or the
+rooted at a document it keeps. The pass a cancellation or a stop asks for runs
+once the scheduler is next idle, which is seldom long enough for a collection
+to have taken the cells the subscription or the piece held. So the documents
+those cells loaded usually stay, with what their watches reach, through that
+pass and the second one the window below can add. What the subscription or the
 piece read only through its links, in documents watched on their own, is what
-that pass can release.
+those passes can release.
 
 The rest goes once the cells holding it have been collected. The storage
 manager registers each hold token it hands out with a `FinalizationRegistry`,
-and a pass that something other than a collection asked for marks each token
-live as it begins (`ReleaseOptions.followUpOnCollection`). When a marked token
+and the first pass of a request something other than a collection made marks
+each token live as it begins (`ReleaseOptions.followUpOnCollection`); the
+second pass the window below can add marks nothing, and closing the storage
+manager unmarks every token. When a marked token
 that is still its document's current one is collected while its space is
 open, the storage manager tells the runtime
 (`IStorageManager.subscribeHoldsCollected()`), which asks for a pass. That

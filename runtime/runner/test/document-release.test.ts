@@ -919,6 +919,42 @@ describe("document-release", () => {
       expect(reports()).toBe(1);
     });
 
+    it("reports nothing for a token first held between the two passes one request runs", async () => {
+      await write("recent", 1);
+      await releaseTwice();
+      // Loaded since the previous pass, so the request's first pass keeps it
+      // and the runtime runs a second.
+      await load(idOf("recent"));
+      const release = readerStorage.releaseUnreadDocuments.bind(readerStorage);
+      let passes = 0;
+      let token: object | undefined;
+      readerStorage.releaseUnreadDocuments = async (options) => {
+        const deferred = await release(options);
+        passes++;
+        if (passes === 1) token = tokenOf(idOf("later"));
+        return deferred;
+      };
+
+      await reader.releaseUnreadDocuments();
+      expect(passes).toBe(2);
+      const reports = countReports();
+      collect(token!);
+      expect(reports()).toBe(0);
+    });
+
+    it("reports nothing for a token marked before the storage manager closed, once its space has opened again", async () => {
+      await write("counter", 1);
+      await loadCell("counter");
+      const token = tokenOf(idOf("counter"));
+      await reader.releaseUnreadDocuments();
+
+      await readerStorage.close();
+      readerStorage.open(space);
+      const reports = countReports();
+      collect(token);
+      expect(reports()).toBe(0);
+    });
+
     it("stops listening for reports once the runtime has been disposed", async () => {
       const observers = readerStorage.accessForTestingOnly
         .holdsCollectedObservers;

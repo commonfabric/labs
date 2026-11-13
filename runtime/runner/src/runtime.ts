@@ -3470,7 +3470,9 @@ export class Runtime {
    * reason alone, a second pass runs once the scheduler is next idle, and the
    * call resolves when that has run too: the documents a stopped piece read
    * are released by the pass after the one its stop asked for, which nothing
-   * else may ever ask for. The second pass asks for no third.
+   * else may ever ask for. The second pass asks for no third, and follows up
+   * on no token, so what a request follows up on is what its first pass
+   * found live.
    */
   releaseUnreadDocuments(): Promise<void> {
     this.#documentReleaseFollowsUp = true;
@@ -3502,7 +3504,7 @@ export class Runtime {
         );
         if (deferred !== true) return;
         await this.scheduler.idle();
-        await this.storageManager.releaseUnreadDocuments?.(options);
+        await this.storageManager.releaseUnreadDocuments?.();
       })();
       const settled = running.catch(() => {});
       this.#documentReleaseRunning = settled;

@@ -3164,6 +3164,7 @@ export class StorageManager implements IStorageManager {
   }
 
   async close(): Promise<void> {
+    this.#forgetFollowUps();
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
@@ -3199,6 +3200,7 @@ export class StorageManager implements IStorageManager {
   }
 
   async closeNow(): Promise<void> {
+    this.#forgetFollowUps();
     this.#detachedSessionResumes.clear();
     try {
       if (this.#providers.size === 0) {
@@ -3640,6 +3642,15 @@ export class StorageManager implements IStorageManager {
         console.error("holds-collected subscriber threw:", error);
       }
     }
+  }
+
+  /**
+   * Helper for `close()` and `closeNow()`, which unmarks every hold token, so
+   * that a token marked before the close asks for nothing once collected,
+   * even after its space has opened again.
+   */
+  #forgetFollowUps(): void {
+    for (const hold of this.#documentHolds.values()) hold.followsUp = false;
   }
 
   /** @inheritDoc */
