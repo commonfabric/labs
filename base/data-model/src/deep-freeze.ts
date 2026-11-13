@@ -3,8 +3,18 @@
  *
  * Both walks are memoized in a weak identity cache, which is what makes the
  * ordinary case cheap: a value frozen once takes constant time for as long as
- * the cache remembers it, and a primitive never needs asking at all. Both fast paths run before any per-walk
- * state is allocated, so the cheap path costs nothing.
+ * the cache remembers it, and a primitive never needs asking at all. Both fast
+ * paths run before any per-walk state is allocated, so the cheap path costs
+ * nothing.
+ *
+ * Both walks recurse on the call stack, so either throws a `RangeError` for a
+ * value nested deeper than the stack allows, some thousands of levels. The
+ * cache can hide that limit without lifting it. A value built and frozen one
+ * level at a time never walks more than a level while the cache remembers the
+ * levels below; once the cache has forgotten them, the next check or freeze
+ * walks the whole depth and can throw where every earlier call succeeded.
+ * Walking with a stack of its own rather than the call stack is what would
+ * lift the limit.
  *
  * A `FabricInstance` keeps its contents private, so neither walk can descend
  * into one directly. Each calls the instance's own protocol member and passes
@@ -72,6 +82,18 @@ function isInDeepFrozenCache(obj: object): boolean {
 }
 
 /**
+ * Makes `deepFrozenCache` forget every object it holds, as the dropping of
+ * its generations eventually does. Safe at any time, since forgetting costs a
+ * cache only the walks it saved.
+ *
+ * @internal Not in the package's barrel; `for-testing-only.ts` offers it to
+ * tests.
+ */
+export function forgetDeepFrozenCache(): void {
+  deepFrozenCache.clear();
+}
+
+/**
  * Indicates whether the given value is "necessarily frozen" -- immutable by its
  * very nature, without any `Object.freeze()` having been applied. Reports
  * `true` for every primitive (`null`, `undefined`, booleans, numbers, strings,
@@ -118,7 +140,8 @@ function isNecessarilyOrKnownDeepFrozen(value: unknown): boolean {
  * frozen object/array whose every nested value is also deeply frozen
  * (recursively). Caches results for fast repeat checks.
  *
- * Handles circular references and sparse arrays.
+ * Handles circular references and sparse arrays. Throws a `RangeError` for a
+ * value nested deeper than the call stack allows; the file header says when.
  */
 export function isDeepFrozen(value: unknown): boolean {
   return isDeepFrozenWithCache(value);
@@ -234,7 +257,8 @@ function isDeepFrozenWithCache(
  * all recursive calls -- including into participating `FabricInstance`s'
  * `[DEEP_FREEZE]` impls via the `subFreeze` callback closure -- so a cycle
  * back to a value currently being deep-frozen short-circuits rather than
- * recursing infinitely.
+ * recursing infinitely. Throws a `RangeError` for a value nested deeper than
+ * the call stack allows; the file header says when.
  */
 export function deepFreeze<T>(value: T): T {
   // Arm 1: necessarily- or already-known-deep-frozen (primitives,

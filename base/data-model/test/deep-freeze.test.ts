@@ -22,6 +22,7 @@ import { expect } from "@std/expect";
 import { deepFreeze, isDeepFrozen, isValidDeepFrozenFabricValue } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
+import { forgetDeepFrozenCacheForTestingOnly } from "@/for-testing-only.ts";
 
 describe("deep-freeze", () => {
   describe("isDeepFrozen()", () => {
@@ -593,6 +594,79 @@ describe("deep-freeze", () => {
         expect(() => isValidDeepFrozenFabricValue(a)).not.toThrow();
         expect(isValidDeepFrozenFabricValue(a)).toBe(true);
       });
+    });
+  });
+
+  describe("after the cache forgets a value", () => {
+    // The cache forgets an object once its generation is dropped, and both
+    // walks then prove the value again from the top. Each case freezes a value,
+    // makes the cache forget everything, and asks again: the answers must be
+    // the ones given before, the walk now going the whole way down.
+
+    it("walks to the bottom of a value again once the cache has forgotten it", () => {
+      // The bottom object's getter counts the walks that reach it. A walk
+      // reads it; a value the cache remembers is answered without one.
+      let reads = 0;
+      const bottom = Object.freeze(
+        Object.defineProperty({}, "counted", {
+          enumerable: true,
+          get: () => {
+            reads++;
+            return 1;
+          },
+        }),
+      );
+      let chain: unknown = bottom;
+      for (let i = 0; i < 10; i++) chain = deepFreeze({ next: chain });
+      const readsWhileRemembered = reads;
+      expect(isDeepFrozen(chain)).toBe(true);
+      expect(reads).toBe(readsWhileRemembered);
+
+      forgetDeepFrozenCacheForTestingOnly();
+      expect(isDeepFrozen(chain)).toBe(true);
+      expect(reads).toBe(readsWhileRemembered + 1);
+    });
+
+    it("returns `true` from `isDeepFrozen()` for a chain frozen one level at a time", () => {
+      // Each freeze walked one level, the levels below being remembered. Once
+      // they are forgotten the check walks all thousand, well inside the stack.
+      let chain: unknown = null;
+      for (let i = 0; i < 1_000; i++) chain = deepFreeze({ next: chain });
+      forgetDeepFrozenCacheForTestingOnly();
+      expect(isDeepFrozen(chain)).toBe(true);
+    });
+
+    it("returns the same frozen chain from `deepFreeze()` for a chain frozen one level at a time", () => {
+      let chain: unknown = null;
+      for (let i = 0; i < 1_000; i++) chain = deepFreeze({ next: chain });
+      forgetDeepFrozenCacheForTestingOnly();
+      expect(deepFreeze(chain)).toBe(chain);
+      expect(isDeepFrozen(chain)).toBe(true);
+    });
+
+    it("returns `true` from `isDeepFrozen()` for a frozen self-referential object", () => {
+      const a: Record<string, unknown> = { x: 1 };
+      a.self = a;
+      deepFreeze(a);
+      forgetDeepFrozenCacheForTestingOnly();
+      expect(isDeepFrozen(a)).toBe(true);
+      expect(deepFreeze(a)).toBe(a);
+    });
+
+    it("returns `true` from `isDeepFrozen()` for a frozen tree holding a `FabricInstance`", () => {
+      const tree = deepFreeze({
+        error: FabricError.fromNativeError(new Error("boom")),
+      });
+      forgetDeepFrozenCacheForTestingOnly();
+      expect(isDeepFrozen(tree)).toBe(true);
+      expect(deepFreeze(tree)).toBe(tree);
+    });
+
+    it("returns `false` from `isDeepFrozen()` for a frozen object holding a mutable one", () => {
+      const tree = Object.freeze({ inner: {} });
+      expect(isDeepFrozen(tree)).toBe(false);
+      forgetDeepFrozenCacheForTestingOnly();
+      expect(isDeepFrozen(tree)).toBe(false);
     });
   });
 });

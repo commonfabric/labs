@@ -75,6 +75,13 @@ export class GenerationalWeakSet<T extends WeakKey> {
     return false;
   }
 
+  /** Forgets every key, as though no generation had ever taken one. */
+  clear(): void {
+    this.#newest = new WeakSet<T>();
+    this.#older = [];
+    this.#taken = 0;
+  }
+
   static {
     Object.freeze(this);
     Object.freeze(this.prototype);

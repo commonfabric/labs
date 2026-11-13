@@ -92,6 +92,7 @@ import {
   type HashOutcome,
   hashOutcomeOf,
 } from "./hash-conformance.ts";
+import { forgetDeepFrozenCache } from "./deep-freeze.ts";
 import { getFrozenObjectHashCacheHits } from "./value-hash/caching.ts";
 import { float64BytesOf } from "./value-hash/float64BytesOf.ts";
 import { getContainersHashed } from "./value-hash/ValueHasher.ts";
@@ -461,6 +462,18 @@ export const hashOutcomeOfForTestingOnly: (value: FabricValue) => HashOutcome =
  */
 export const float64BytesOfForTestingOnly: (value: number) => Uint8Array =
   float64BytesOf;
+
+/**
+ * `forgetDeepFrozenCache()` from `deep-freeze.ts`, which makes the deep-frozen
+ * cache forget every object it holds.
+ *
+ * It is here because the cache forgets an object only once its generation is
+ * dropped, after millions of later additions, and a test cannot make that
+ * many. A test of what `isDeepFrozen()` and `deepFreeze()` do for a value the
+ * cache has forgotten forgets it this way instead.
+ */
+export const forgetDeepFrozenCacheForTestingOnly: () => void =
+  forgetDeepFrozenCache;
 
 /**
  * `getFrozenObjectHashCacheHits()` from `value-hash/caching.ts`, which counts

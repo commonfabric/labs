@@ -67,6 +67,29 @@ describe("GenerationalWeakSet", () => {
     });
   });
 
+  describe("clear()", () => {
+    it("forgets the values of every generation", () => {
+      const set = new GenerationalWeakSet<object>(1, 2);
+      const [a, b] = [{}, {}];
+      set.add(a);
+      set.add(b);
+      set.clear();
+      expect([set.has(a), set.has(b)]).toEqual([false, false]);
+    });
+
+    it("leaves the newest generation its whole limit", () => {
+      const set = new GenerationalWeakSet<object>(2, 1);
+      const [a, b, c] = [{}, {}, {}];
+      set.add(a);
+      set.clear();
+      set.add(b);
+      set.add(c);
+      // Had `clear()` kept the count of `a`, `c` would have started a new
+      // generation and the single kept generation would hold `c` alone.
+      expect([set.has(b), set.has(c)]).toEqual([true, true]);
+    });
+  });
+
   describe("constructor", () => {
     it("throws a `RangeError` for a limit or generation count that is not a positive integer", () => {
       const cases: [number, number][] = [[0, 1], [1, 0], [1.5, 1], [1, -2]];
