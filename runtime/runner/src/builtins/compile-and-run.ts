@@ -466,7 +466,9 @@ function compileAndRunServed(
     return;
   }
 
-  const identity = tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity;
+  // The identity the run carries, if any, and the one it acts as.
+  const runIdentity = tx.tx.scopeKeyIdentity;
+  const identity = runIdentity ?? runtime.scopeKeyIdentity;
   const targetKey = effectTargetKey("compileAndRun", result, identity);
   // A recovered marker must first issue this instance's target-space compile
   // request, which registers closure replication before the cache is consumed.
@@ -562,9 +564,13 @@ function compileAndRunServed(
         runtime.trackAsyncWork(
           settleAbandonedRequest(
             runtime,
-            "compileAndRun",
-            effectKey,
-            identity,
+            {
+              builtinId: "compileAndRun",
+              effectKey,
+              identity: runIdentity,
+              scope: pending.getAsNormalizedFullLink().scope ?? "space",
+              attributeToBuiltin: true,
+            },
             (settleTx) => {
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)

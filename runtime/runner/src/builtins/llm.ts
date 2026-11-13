@@ -66,7 +66,10 @@ import {
   LLMToolSchema,
 } from "./llm-schemas.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
-import { settleAbandonedRequest } from "./abandoned-request.ts";
+import {
+  type AbandonedRequest,
+  settleAbandonedRequest,
+} from "./abandoned-request.ts";
 import {
   LLM_DERIVED_RESULT_STAMP_SCHEMA,
   withLlmDerivedStamp,
@@ -416,13 +419,12 @@ async function executeWithToolsLoop(params: {
 }
 
 /** Which request an abandoned LLM request's ending belongs to. */
-type AbandonedLLMRequest = {
-  builtinId: "llm" | "generateText" | "generateObject";
-  effectKey: string;
-
-  /** The scope-key identity of the run that staged the request. */
-  identity: ScopeKeyIdentity | undefined;
-};
+type AbandonedLLMRequest =
+  & Pick<
+    AbandonedRequest,
+    "effectKey" | "identity" | "scope"
+  >
+  & { builtinId: "llm" | "generateText" | "generateObject" };
 
 /**
  * Common error handler for LLM requests.
@@ -468,6 +470,14 @@ async function handleLLMError<T, P>(
 
   await runtime.idle();
 
+  // The error had nowhere to land, so a reader of this result cell sees
+  // something other than this failure. Report it here, since nothing
+  // downstream can.
+  const reportRejection = (rejection: Error) =>
+    console.error(
+      "[LLM] Writing the request's error to its result cell was rejected.",
+      { requestHash, cause: message, rejection: rejection.message },
+    );
   let wrote = false;
   const write = (tx: IExtendedStorageTransaction) => {
     if (requestGuard) {
@@ -494,9 +504,7 @@ async function handleLLMError<T, P>(
   if (abandoned !== undefined) {
     await settleAbandonedRequest(
       runtime,
-      abandoned.builtinId,
-      abandoned.effectKey,
-      abandoned.identity,
+      { ...abandoned, attributeToBuiltin: false, reportRejection },
       write,
     );
   } else {
@@ -504,15 +512,7 @@ async function handleLLMError<T, P>(
       if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
       write(tx);
     });
-    if (writeError) {
-      // The error had nowhere to land, so a reader of this result cell sees
-      // something other than this failure. Report it here, since nothing
-      // downstream can.
-      console.error(
-        "[LLM] Writing the request's error to its result cell was rejected.",
-        { requestHash, cause: message, rejection: writeError.message },
-      );
-    }
+    if (writeError) reportRejection(writeError);
   }
 
   if (!wrote) return;
@@ -959,6 +959,9 @@ export function llm(
     const identity = served
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
+    // The identity a served run carries, when it carries one; `identity`
+    // falls back to the runtime's own.
+    const runIdentity = served ? tx.tx.scopeKeyIdentity : undefined;
     const stateKey = identity
       ? resolveScopeKey(outputScope ?? "space", identity)
       : "local";
@@ -1208,7 +1211,12 @@ export function llm(
         announceResult,
         requestGuard,
         lifecycle?.owns,
-        { builtinId: "llm", effectKey, identity },
+        {
+          builtinId: "llm",
+          effectKey,
+          identity: runIdentity,
+          scope: outputScope ?? "space",
+        },
       );
 
     // The ending for a request refused before it started.
@@ -1446,6 +1454,9 @@ export function generateText(
     const identity = served
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
+    // The identity a served run carries, when it carries one; `identity`
+    // falls back to the runtime's own.
+    const runIdentity = served ? tx.tx.scopeKeyIdentity : undefined;
     const stateKey = identity
       ? resolveScopeKey(outputScope ?? "space", identity)
       : "local";
@@ -1698,7 +1709,12 @@ export function generateText(
         announceResult,
         requestGuard,
         lifecycle?.owns,
-        { builtinId: "generateText", effectKey, identity },
+        {
+          builtinId: "generateText",
+          effectKey,
+          identity: runIdentity,
+          scope: outputScope ?? "space",
+        },
       );
 
     // The ending for a request refused before it started.
@@ -1883,6 +1899,9 @@ export function generateObject<T extends Record<string, unknown>>(
     const identity = served
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
+    // The identity a served run carries, when it carries one; `identity`
+    // falls back to the runtime's own.
+    const runIdentity = served ? tx.tx.scopeKeyIdentity : undefined;
     const stateKey = identity
       ? resolveScopeKey(outputScope ?? "space", identity)
       : "local";
@@ -2244,7 +2263,12 @@ export function generateObject<T extends Record<string, unknown>>(
           announceResult,
           requestGuard,
           lifecycle?.owns,
-          { builtinId: "generateObject", effectKey, identity },
+          {
+            builtinId: "generateObject",
+            effectKey,
+            identity: runIdentity,
+            scope: outputScope ?? "space",
+          },
         );
 
       // The ending for a request refused before it started.
@@ -2659,7 +2683,12 @@ export function generateObject<T extends Record<string, unknown>>(
           announceResult,
           requestGuard,
           lifecycle?.owns,
-          { builtinId: "generateObject", effectKey, identity },
+          {
+            builtinId: "generateObject",
+            effectKey,
+            identity: runIdentity,
+            scope: outputScope ?? "space",
+          },
         );
 
       logGenerateObject("enqueue", directRequestSummary);

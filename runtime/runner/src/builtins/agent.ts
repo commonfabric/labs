@@ -375,6 +375,8 @@ export function agent(
     // instance the staging run addressed.
     const identity: ScopeKeyIdentity = tx.tx.scopeKeyIdentity ??
       runtime.scopeKeyIdentity;
+    // The identity the run carries, when it carries one.
+    const runIdentity = tx.tx.scopeKeyIdentity;
 
     if (!state.resultCell || state.cellScope !== outputScope) {
       state.resultCell = ownedCell(
@@ -845,9 +847,19 @@ export function agent(
       await runtime.idle();
       await settleAbandonedRequest(
         runtime,
-        AGENT_SINK,
-        effectKey,
-        identity,
+        {
+          builtinId: AGENT_SINK,
+          effectKey,
+          identity: runIdentity,
+          scope: outputScope,
+          attributeToBuiltin: false,
+          reportRejection: (rejection) =>
+            reportRejection(
+              "Writing the request's refusal was rejected.",
+              hash,
+              rejection,
+            ),
+        },
         (tx) => {
           // Read at write time: a newer request can stage while this one
           // waits for the scheduler, and from then on the cell is its.

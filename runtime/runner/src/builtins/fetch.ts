@@ -849,9 +849,13 @@ function fetchBuiltin(kind: FetchKind) {
                 trackWork(
                   settleAbandonedRequest(
                     runtime,
-                    kind.name,
-                    effectKey,
-                    identity,
+                    {
+                      builtinId: kind.name,
+                      effectKey,
+                      identity,
+                      scope: outputScope,
+                      attributeToBuiltin: true,
+                    },
                     (settleTx) => {
                       const ownsBinding = identity === undefined ||
                         (instances.get(instanceKey) === instance &&

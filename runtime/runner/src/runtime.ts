@@ -1627,6 +1627,12 @@ export class Runtime {
     | undefined;
 
   /**
+   * Whether the serving loop holds the identity carriage for an effect key
+   * (installed _with_ the destination).
+   */
+  #servedEffectCarriage: ((effectKey: string) => boolean) | undefined;
+
+  /**
    * The client speculation overlay (`speculation.md`): the _default_ seal
    * destination of every runtime under the flag that has no wave destination
    * installed. Created lazily on the first `edit()`; derivation-kind runs
@@ -3234,6 +3240,11 @@ export class Runtime {
        * the run identity). Absent (or returning nothing) the run keeps
        * the wave-level fallback — the Phase-1 cardinality-1 posture. */
       runDemanderResolver?: ServerRunDemanderResolver;
+
+      /** Whether the serving loop's outbox holds the identity carriage for
+       * an effect key, captured when the run that staged the effect sealed
+       * (serving-loop.md §4). */
+      effectCarriage?: (effectKey: string) => boolean;
     } = {},
   ): void {
     if (this.experimental.serverExecution !== true) {
@@ -3252,6 +3263,7 @@ export class Runtime {
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;
+    this.#servedEffectCarriage = options.effectCarriage;
   }
 
   /** The installed seal destination (the serving loop), if any —
@@ -3274,6 +3286,17 @@ export class Runtime {
     this.#transactionSealDestination = undefined;
     this.#serverRunStamper = undefined;
     this.#serverRunDemanderResolver = undefined;
+    this.#servedEffectCarriage = undefined;
+  }
+
+  /**
+   * Whether the serving loop holds the identity carriage for `effectKey`:
+   * true once the run that staged the effect has sealed, until the effect
+   * retires. An effect completion commits under that carriage
+   * (serving-loop.md §4). False everywhere a serving loop installed none.
+   */
+  hasServedEffectCarriage(effectKey: string): boolean {
+    return this.#servedEffectCarriage?.(effectKey) ?? false;
   }
 
   /**

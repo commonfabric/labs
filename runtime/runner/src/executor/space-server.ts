@@ -2121,6 +2121,8 @@ export class SpaceServer implements TransactionSealDestination {
     runtime.installSealDestination(this, {
       runStamper: (tx, info) => this.#stampRun(tx, info),
       runDemanderResolver: (pieceRootIds) => this.#demandersFor(pieceRootIds),
+      effectCarriage: (effectKey) =>
+        this.#outbox?.carriageFor(effectKey) !== undefined,
     });
 
     this.#active = true;

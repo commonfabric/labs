@@ -512,9 +512,13 @@ export function fetchProgram(
             runtime.trackAsyncWork(
               settleAbandonedRequest(
                 runtime,
-                "fetchProgram",
-                effectKey,
-                identity,
+                {
+                  builtinId: "fetchProgram",
+                  effectKey,
+                  identity,
+                  scope: outputScope,
+                  attributeToBuiltin: true,
+                },
                 (settleTx) => {
                   const entry = cache.withTx(settleTx).get()?.[inputHash];
                   const ownsFields = entry === undefined ||

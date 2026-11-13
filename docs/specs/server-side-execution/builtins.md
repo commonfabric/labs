@@ -73,20 +73,48 @@ reported rather than written into the conversation.
 
 Every one of these endings, and `agent`'s, goes through
 `settleAbandonedRequest()`, which also decides how the ending commits. Under the
-serving posture it is not a completion of the request, since the request never
-left. It is stamped as a `bookkeeping` run carrying the scope-key identity of
-the run that staged the request, and it seals into the open wave
-(serving-loop.md §3d). The cells it overwrites can still hold an earlier run's
-writes, pending in that wave, and the wave orders the ending after them. Were it
-to commit on its own, ahead of the wave, the serving runtime would go on reading
-those older writes over it, see the request as unanswered and stage it again.
-The identity puts the ending in the requesting principal's instance of a scoped
-node's cells. A completion takes its instance from the carriage the staging
-run's seal recorded, and a request refused before that seal has none. Under the
-serving posture, a request whose run carried no identity gets no ending, since
-the wave would resolve its cells against the service's own session; the cells
-keep what the refused run left, and the omission is logged. Off the serving
-posture, the ending commits on its own, marked as a completion of the request.
+serving posture that turns on whether the run that staged the request sealed.
+
+* **The staging run sealed.** The request was dropped after its transaction
+  committed: its release check refused it, or a post-commit step of the builtin
+  failed. The serving loop holds the identity carriage that seal recorded, and
+  the ending commits as a completion of the request under it, as any other
+  completion does (serving-loop.md §4).
+* **The staging run never sealed.** The request was refused at prepare, so
+  there is no carriage. The ending is stamped as a `bookkeeping` run carrying
+  the scope-key identity of the run that staged the request, and seals into the
+  open wave (serving-loop.md §3d). The cells it overwrites can still hold an
+  earlier run's writes, pending in that wave, and the wave orders the ending
+  after them. Committed on its own, ahead of the wave, it would sit under those
+  older writes in the serving runtime's view, which would read the request as
+  unanswered and stage it again. The identity puts the ending in the requesting
+  principal's instance of a scoped node's cells. A served run nobody demands
+  carries no identity: its ending is written for a space-scoped node, whose one
+  instance is the service session's, and not written for a user- or
+  session-scoped one, where that session would name the service's instance; the
+  cells then keep what the refused run left, and the omission is logged.
+
+Off the serving posture, the ending commits on its own, marked as a completion
+of the request.
+
+An ending sealed into the wave can be dropped with its wave contribution, when
+it cannot be rebased onto a commit made to the same cells after the wave opened
+or when it read a write the wave withdrew. Nothing in the serving loop lands a
+dropped ending again. It is written again when the node runs again: a derivation
+that read the dropped write is withdrawn and re-armed with it, and a commit to
+cells the node reads reaches it through those reads. A node that reads its own
+result cells only as a write destination, as `sqlite*` does, is not reached by
+a commit to them, so its dropped ending waits for a change to something else it
+reads. Until then the cells keep what the last committed run left; the refused
+run's own writes, its pending flag among them, never committed.
+
+How often a refused node runs differs by builtin. An `llm` builtin's ending
+records the request hash, so the node's next run finds the request answered and
+stages nothing. A `fetch*` ending records no input hash, since the refused run's
+update of it was abandoned with the run: the next run stages the request again,
+is refused again, and stops there only because its ending writes what the first
+one wrote and so changes nothing. Each later wake of such a node stages and is
+refused once more.
 
 | built-in | request inputs (memo key basis) | result cell | authority | notes |
 | --- | --- | --- | --- | --- |
