@@ -462,9 +462,10 @@ describe("module identity delegation", () => {
       "./source-update-release-gc-helper.ts",
       import.meta.url,
     );
-    // Spawned by name so the launch matches the task's `--allow-run=deno`
-    // grant, which resolves the name through PATH the same way.
-    const output = await new Deno.Command("deno", {
+    // The Deno running this test, which the task's `--allow-run` names, and
+    // not whichever copy comes first on PATH (docs/development/TESTING.md,
+    // "Tests that start Deno").
+    const output = await new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
       stdout: "piped",
       stderr: "piped",
