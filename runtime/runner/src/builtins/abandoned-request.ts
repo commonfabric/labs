@@ -60,6 +60,9 @@ export async function settleAbandonedRequest(
     if (runtime.cfcEnforcementMode !== "disabled") {
       setCfcImplementationIdentity(tx, { kind: "builtin", builtinId });
     }
+    // Set here as well as by the stamp, which leaves it unset where no serving
+    // loop has installed a stamper.
+    if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
     // Under the serving posture `identity` is always present here, since the
     // case without one returned above.
     if (runtime.servingPosture && identity !== undefined) {
@@ -69,7 +72,6 @@ export async function settleAbandonedRequest(
         scopeKeyIdentity: identity,
       });
     } else {
-      if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
       markEffectCompletion(tx, effectKey);
     }
     write(tx);
