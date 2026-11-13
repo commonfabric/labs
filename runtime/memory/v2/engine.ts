@@ -3352,7 +3352,7 @@ const validateEventAppends = (
 
     // The sidecar-doc write guard (the stamping claim's other half —
     // events.md §1's "a forged actor is UNREPRESENTABLE"): processing
-    // fields (`consequenced`/`error`/`status`/`reason` plus OW54's delivery
+    // fields (`consequenced`/`error`/`withheld`/`status`/`reason` plus OW54's delivery
     // checkpoint, attention, resolution, and retry provenance), the per-stream
     // `eventWatermark`, and stored entries are SERVER-written state.
     // Authored traffic (delegated included) may reach a sidecar doc ONLY
@@ -3562,7 +3562,7 @@ const validateEventAppends = (
       unmatched.delete(key);
       // Processing-side and engine-stamped fields must arrive ABSENT on
       // authored traffic: a pre-supplied seq forges ordering, a
-      // pre-supplied consequenced/error/status forges the processing
+      // pre-supplied consequenced/error/withheld/status forges the processing
       // outcome. DERIVED new appends are exempt from the processing-field
       // half: a same-wave-processed emitted event legitimately commits
       // its entry together with its consequences — already
@@ -3577,6 +3577,7 @@ const validateEventAppends = (
       if (
         commitClass === "authored" &&
         (entry.consequenced !== undefined || entry.error !== undefined ||
+          entry.withheld !== undefined ||
           entry.status !== undefined || entry.reason !== undefined ||
           entry.deliveryDeferral !== undefined ||
           entry.attention !== undefined || entry.resolution !== undefined ||

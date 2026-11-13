@@ -194,6 +194,10 @@ import {
   updateDeliveryCheckpointStats,
 } from "./stats.ts";
 import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
+import {
+  writeProcessedClaim,
+  writeWithheldOutcome,
+} from "./processed-claim.ts";
 import { abandonRunnerAcceptanceEffects } from "./runner-acceptance.ts";
 import { effectCompletionKeyOf } from "./effect-completion.ts";
 import { markRendererTrustedEvent } from "../cfc/ui-contract.ts";
@@ -3034,32 +3038,13 @@ export class SpaceServer implements TransactionSealDestination {
       // inside the wave commit's own transaction (applyCommitTransaction
       // — a requeued entry holds it back, matching the model).
       try {
-        this.#runtime!.getCellFromLink<boolean>({
-          space: this.space,
-          id: info.streamEntry.sidecarId as never,
-          scope: "space",
-          path: [
-            "entries",
-            String(info.streamEntry.index),
-            "consequenced",
-          ],
-        }).withTx(tx).set(true);
-        if (
-          info.eventId !== undefined &&
-          (this.#deliveryCheckpoints.has(info.eventId) ||
-            this.#pendingDeliveryCheckpointWrites.has(info.eventId))
-        ) {
-          this.#runtime!.getCellFromLink<DeliveryDeferral | undefined>({
-            space: this.space,
-            id: info.streamEntry.sidecarId as never,
-            scope: "space",
-            path: [
-              "entries",
-              String(info.streamEntry.index),
-              "deliveryDeferral",
-            ],
-          }).withTx(tx).set(undefined);
-        }
+        // The mark, and the cleared deferral beside it, are the event's
+        // processed claim, which takes nothing of what the handler reads.
+        writeProcessedClaim(this.#runtime!, tx, this.space, info.streamEntry, {
+          clearDeferral: info.eventId !== undefined &&
+            (this.#deliveryCheckpoints.has(info.eventId) ||
+              this.#pendingDeliveryCheckpointWrites.has(info.eventId)),
+        });
       } catch (error) {
         // The mark IS the exactly-once record (events.md §4: no window
         // where an event is both consumed and replayable). Letting the
@@ -5414,7 +5399,9 @@ export class SpaceServer implements TransactionSealDestination {
                     runtime,
                     entry,
                     streamEntry,
-                    { kind: outcome.kind, message: outcome.message },
+                    outcome.kind === "error" && outcome.withheld === true
+                      ? { kind: "withheld" }
+                      : { kind: outcome.kind, message: outcome.message },
                   );
                 },
               },
@@ -5476,6 +5463,7 @@ export class SpaceServer implements TransactionSealDestination {
     streamEntry: { sidecarId: string; index: number; seq: number },
     outcome?:
       | { kind: "error" | "dropped"; message: string }
+      | { kind: "withheld" }
       | {
         kind: "needs-attention";
         message: string;
@@ -5496,7 +5484,12 @@ export class SpaceServer implements TransactionSealDestination {
           id: streamEntry.sidecarId as never,
           scope: "space" as const,
         };
-        if (outcome.kind === "error") {
+        if (outcome.kind === "withheld") {
+          // The run's join was foreign to this space: the entry records the
+          // outcome withheld, as a committed run's does, and nothing of how
+          // it ended.
+          writeWithheldOutcome(runtime, tx, this.#options.space, streamEntry);
+        } else if (outcome.kind === "error") {
           runtime.getCellFromLink<string>({
             ...base,
             path: ["entries", String(streamEntry.index), "error"],
@@ -5584,6 +5577,7 @@ export class SpaceServer implements TransactionSealDestination {
     entry: StreamEventEntry,
     outcome:
       | { kind: "error" | "dropped"; message: string }
+      | { kind: "withheld" }
       | {
         kind: "needs-attention";
         message: string;

@@ -494,7 +494,7 @@ function fetchBuiltin(kind: FetchKind) {
 
       /** Keeps the instance alive through its authoritative writeback. */
       function trackWork(
-        work: Promise<void>,
+        work: Promise<unknown>,
         staging: FetchStaging,
         sharedCompletion = false,
       ): void {

@@ -133,6 +133,36 @@ is refused again, and stops there only because its ending writes what the first
 one wrote and so changes nothing. Each later wake of such a node stages and is
 refused once more.
 
+A served `llm` builtin's ending is written in two transactions. Of what it
+writes, only the request hash derives from the request's inputs, and the
+writeback's binding to those inputs reads them, which puts their labels in the
+transaction's join. So the ending itself (the pending flag down, the refusal as
+the error, the result and partial output cleared) is written without reading
+them, and the hash follows in a transaction of its own that binds to them and
+carries their labels. Where the target's store doesn't admit those labels, the
+served-run holder rule (§8.12.5.1 of the CFC specification) refuses the hash
+alone: the ending is still shown, the refusal of the hash is reported, and the
+node, with no hash to find, stages its request again once on each wake, as a
+`fetch*` node does. Elsewhere both land, and the hash is recorded as before.
+Without the binding, nothing conflicts the ending with a later change to the
+inputs; the node's own run on the new inputs counts as newer in the serving
+runtime, so the ending's ownership check stops a late one there, and the new
+run's request, staged afresh, replaces whatever an earlier one wrote.
+
+`llm-dialog`'s ending reads its inputs only to find the scope they select,
+which only a caller with no publication binding needs, so an ending with one
+reads none, and the holder rule has no label of theirs to refuse it by.
+
+`compileAndRun`'s ending is not yet written that way. It decides whether a
+refused request is still its target's by reading the program, so where the
+holder rule refuses the request over the program's label, it refuses the ending
+too, and the node shows no error. Deciding from an in-memory record of the
+latest run's program would end it, but would let an abandoned request's ending
+land over a program another transaction put in its place before the node ran
+again, which the ending is held not to do. `agent`'s ending reads no input, but
+writes the request hash, which derives from the request, from what the staging
+run left in memory, so the hash is stored without the request's labels.
+
 | built-in | request inputs (memo key basis) | result cell | authority | notes |
 | --- | --- | --- | --- | --- |
 | `fetch` (`fetchData`) | url, method, headers (allowlisted), body, response schema | `{ result?, error?, pending }`; the memo hash is committed in the internal cell `{requestId, lastActivity, inputHash}` (`fetch.ts`) | capability handle bound at wiring (README §3.8) | redirects/deadlines per existing `fetch-request-deadlines` doc; the memo base is `` `${kind.name}:${inputHash}` ``; the served outbox key also names the target document and its resolved user or session instance |

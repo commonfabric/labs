@@ -231,8 +231,8 @@ The strict-only delta is:
   [specs#71](https://github.com/commonfabric/specs/pull/71): §4.9.4 reads both
   spellings against that space's ACL. It uses the target's space, not the
   acting principal or an ownership lookup, and adds no clause for another
-  space. The proposal is closed without merging; this implementation follows
-  its proposed rule ahead of a ruling and a reconciled pin. The existing
+  space. The proposal is open and unruled; this implementation follows its
+  proposed rule ahead of a ruling and a reconciled pin. The existing
   residency marker names specs#68; this addition has no separate marker.
   The conformance statement records the semantic gap at the strict default.
   A `user` or `session` document is one principal's instance: its scope key is
@@ -263,7 +263,8 @@ The strict-only delta is:
   bit-for-bit on stored metadata. The reason string is stable and names the
   rule id, target, path, and offending clause(s) (SC-18c):
   `writer-fit confidentiality misfit for <doc> at /<path> (canWrite, §8.12.4):
-  <clauses>`. Scope note (v1): link-covered writes carry per-slot link labels
+  <clauses>`, or `(cross-holder, §8.12.5.1)` in place of the rule id for a
+  served run's cross-holder clause, below. Scope note (v1): link-covered writes carry per-slot link labels
   instead of the join and are outside the check, as is the pure-link-structure
   shape channel; grown existence atoms (SC-4) are historical and deliberately
   never measured — only the current join is. `User` and the bare DID-string
@@ -302,6 +303,52 @@ The strict-only delta is:
   transaction with recorded reasons CFC-relevant (`prepare-reasons`), so a
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
   ladder ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)).
+
+  **A served run's cross-holder clauses.** A run the serving posture executes
+  for an acting principal, an event handler, a derivation or bookkeeping, can
+  read what that principal's own runtime could not, and code that principal
+  controls chooses where it writes. For such a run
+  (`isServedRunUnderHolderRule` in `prepare.ts`: any wave run context),
+  the flow join names the reads that carried each clause (its `sources`, the
+  provenance a writer-fit refusal names its inputs from) and the clauses an
+  observation of no store carried in (`withoutStore`), and a clause read from
+  a store whose holders don't include every holder of the target is
+  cross-holder (`crossHolderClausesOf`).
+  Same holders means one space, and a source bound to no one, or source and
+  target both `user` or `session` documents of the one principal the run's
+  scoped reads and writes resolve under; where the storage transaction's
+  scope-key identity and the wave context's differ, or either is absent, no
+  two bound documents share holders. A clause carried by an observation of no
+  store, external content or label metadata, is cross-holder, and so is one
+  also carried from another store. A cross-holder clause fits a write only by
+  the target's residency, above. No declaration admits one, whether authored,
+  upgraded, or minted for a document the transaction creates, and neither
+  runtime-owned route below records one. Its misfit is refused at every
+  measured path of every document the run writes, the computed and
+  entries-document id classes and marked-undeclarable documents included,
+  with the `(cross-holder, §8.12.5.1)` reason, and each one counts under the
+  `cfc` logger's `writer-fit-cross-holder` key. Every other clause is measured
+  as for any writer, so a same-holder misfit keeps §8.12.5's options, and a
+  cross-holder clause residency covers is never offending there. A run in the
+  acting principal's own runtime is measured as any writer is. An effect's
+  completion commits unstamped, so the rule does not govern it; the served
+  run that starts the effect is stamped and writes the node's pending state
+  from the same inputs, so a cross-holder clause in those inputs is refused
+  there, before the request is issued
+  (`served-effect-cross-holder.test.ts`). The rule inherits the
+  scope note above: a served run that carries a cross-holder clause into a
+  store by reference, rather than by value, is not refused, although the
+  slot stamp it persists, the creating attempt's join, holds the clause.
+  §8.2.6 and §8.12.8 put reference and structure writes under writer-fit,
+  so this is a gap the conformance statement records, and measuring them
+  would bring such writes under the rule. Residency's owner case still admits a
+  cross-holder `PersonalSpace(P)` clause into a store bound to `P`, which the
+  rule's text leaves out pending
+  [specs#68](https://github.com/commonfabric/specs/pull/68) and
+  [specs#71](https://github.com/commonfabric/specs/pull/71). This implements
+  [specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
+  ruling, and its two deciding sites carry its `SPEC-PENDING` marker; the
+  conformance statement records where it differs from the proposal.
 
   The DECLARED half of the ceiling also admits an owner case, in one
   direction. A `PersonalSpace(owner)` LABEL clause answers a
@@ -475,6 +522,24 @@ The strict-only delta is:
   piece in that space running the module it holds, so in each case the value
   reaches no reader it had not reached already, and what follows it is the
   stamp.
+
+  One write to an entries document is outside both the measurement and the
+  stamp whatever space the join came from: a served event's processed claim,
+  the `consequenced` mark (and the cleared delivery deferral beside it) the
+  serving loop writes on the event's own entry in the transaction that runs
+  the handler. §6.2.2 claims an event's processed cell apart from its
+  handler, so the claim reads nothing the handler reads and carries none of
+  its labels; writing it in the handler's transaction, so that it commits with
+  the consequences, leaves it that way
+  ([specs#94](https://github.com/commonfabric/specs/pull/94) states this).
+  The serving loop names each such path as it writes it
+  (`writeProcessedClaim()` in `runtime/runner/src/executor/processed-claim.ts`)
+  under the runtime-authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`
+  marker, which the gate takes only on a stream's entries document. Every
+  other write the transaction makes, an entry it appends or a field it writes
+  beside the mark included, is measured and stamped as above, so a handler
+  over another space's labeled value still cannot carry it into the stream's
+  space.
 
   A declared entry can still reach one of these documents, from a
   schema-carrying write to it, and the skip is unconditional over that route.
@@ -778,6 +843,11 @@ The strict-only delta is:
     commitment answer one the same way. A person-audience clause is
     not a container clause: `User(alice)` is honored by the reader check
     whoever holds the bytes.
+  - **No cross-holder clause of a served run.** Neither route admits a
+    clause a served run read from a store whose holders don't include every
+    holder of the target, nor writes one into a declaration (§8.12.5.1,
+    "A served run's cross-holder clauses" above). The route admits and
+    declares the same-holder misfit alone.
   - **Independent components.** The flow-stamp pass retains existing
     declarations and frozen existence entries while replacing the value
     stamps on overwritten paths. An unlabeled overwrite does not erase a
