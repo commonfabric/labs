@@ -3245,14 +3245,14 @@ export class RuntimeProcessor {
         return undefined;
       },
     );
-    // The adoption reads the rooms it adopts, a few at a time, releasing what
-    // it read after each few, and reads no room once every room the catalog
-    // lists has a membership. A failure is reported unless the processor has
-    // been disposed, and the next bring-up of Home in this worker starts it
-    // again.
+    // The adoption reads the rooms it adopts, a few at a time, stopping the
+    // room pieces it started and releasing what it read after each few, and
+    // reads no room once every room the catalog lists has a membership. A
+    // failure is reported unless the processor has been disposed, and the
+    // next bring-up of Home in this worker starts it again.
     this.#catalogRoomsAdopted ??= homeCC.adoptCatalogRooms(
       this.#disposal.signal,
-    ).catch((error) => {
+    ).then(() => {}, (error) => {
       this.#catalogRoomsAdopted = undefined;
       if (this.#isDisposed) return;
       console.warn("[RuntimeProcessor] Adopting the catalog's rooms:", error);

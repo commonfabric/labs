@@ -2560,18 +2560,20 @@ export class PiecesController<T = unknown> {
   /**
    * Has the identity's chat manager adopt each room Home's catalog lists with
    * no membership, a few rooms at a time, as `adoptCatalogRoomsOf()` says, so
-   * that the manager, which lists a room by its membership alone, lists it.
-   * This controller must be over the identity's Home space.
+   * that the manager, which lists a room by its membership alone, lists it,
+   * stopping the room pieces the adoption started. This controller must be
+   * over the identity's Home space.
    *
    * Resolves once every entry has been tried, or once `signal` aborts or the
-   * runtime begins disposal, after the batch under way; an entry that fails
-   * to adopt is logged and tried again later. Rejects when Home cannot be
-   * brought up, or when reading its records fails.
+   * runtime begins disposal, after the batch under way, with how many pieces
+   * the adoption stopped; an entry that fails to adopt is logged and tried
+   * again later. Rejects when Home cannot be brought up, or when reading its
+   * records fails.
    */
-  async adoptCatalogRooms(signal?: AbortSignal): Promise<void> {
+  async adoptCatalogRooms(signal?: AbortSignal): Promise<number> {
     this.#assertHomeSpace("adopt its catalog's rooms");
     const home = (await this.ensureDefaultPattern()).getCell();
-    await adoptCatalogRoomsOf(
+    return await adoptCatalogRoomsOf(
       this.runtime,
       home,
       this.runtime.userIdentityDID,

@@ -1390,6 +1390,29 @@ export class Scheduler {
   }
 
   /**
+   * Whether the event queue holds an event that a handler of the piece whose
+   * result document is `id` in `space` is to handle, or one still waiting for
+   * its handler to load, which may be any piece's. A handler that carries no
+   * observation identity counts as the piece's, since nothing says it isn't.
+   */
+  hasQueuedEventFor(space: MemorySpace, id: string): boolean {
+    for (const queued of this.#eventQueue) {
+      if (queued.handlerLoadPending === true) return true;
+      const identity = (queued.handler as Partial<TelemetryAnnotations>)
+        .schedulerObservationIdentity;
+      if (identity === undefined) return true;
+      if ((identity.ownerSpace ?? queued.eventLink.space) !== space) continue;
+      if (
+        identity.pieceId === id || identity.pieceRootId === id ||
+        identity.demandRootIds?.includes(id) === true
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * The event actor as a TRANSIENT demander (server-execution v2 fan-out
    * stage B, RULED 2026-08-16 — design §B5/§I.5): the `firedAt` pairs of
    * the SERVED events currently queued whose handler's demand roots

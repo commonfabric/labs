@@ -117,6 +117,7 @@ async function startInputSources(
           { admitStart: options.admitStart }),
         ...(options?.originFollowed !== undefined &&
           { originFollowed: options.originFollowed }),
+        ...(options?.forEvent !== undefined && { forEvent: options.forEvent }),
       },
       visited,
     );
@@ -376,6 +377,13 @@ export type EnsurePieceOptions = {
    * the runtime derives.
    */
   startInputSources?: boolean;
+
+  /**
+   * The walk delivers an event, so each piece it starts, the pieces its
+   * inputs come from included, is started as one
+   * (`RunnerStartOptions.forEvent`).
+   */
+  forEvent?: boolean;
 };
 
 /**
@@ -568,7 +576,7 @@ async function ensureVerdict(
 
       // Start the existing piece - this registers event handlers without
       // re-running setup and potentially allocating different metadata cells.
-      await runtime.start(resultCell);
+      await runtime.start(resultCell, { forEvent: options?.forEvent });
 
       logger.debug("ensure-piece", () => [
         `Piece started successfully`,

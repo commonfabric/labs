@@ -966,6 +966,7 @@ function startEventPiece(
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
     originFollowed: runtime.pieceOriginFollowed,
+    forEvent: true,
   });
 }
 
