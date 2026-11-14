@@ -441,9 +441,9 @@ export const EnvSchema = z.object({
 
   // EXPERIMENTAL_* feature flags are no longer declared here: the runtime
   // construction site reads them through the canonical mapping
-  // (`experimentalOptionsFromEnv` / EXPERIMENTAL_ENV_VARS in
+  // (`experimentalOptionsWithFollowedPosture` / EXPERIMENTAL_ENV_VARS in
   // @commonfabric/runner runtime-presets), shared with the CLI so the wirings
-  // cannot drift (CT-1814).
+  // cannot drift (CT-1814), over EXPERIMENTAL_FOLLOWED_POSTURE when set.
 
   // Git SHA of the deployed commit. Set at deploy time; takes priority over
   // the build-baked SHA (see lib/build-info.ts).
