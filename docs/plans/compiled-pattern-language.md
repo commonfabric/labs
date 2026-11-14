@@ -72,22 +72,28 @@ next.
   never decided, because the template holds the handle's `identity`
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
-  targets. A first comparison of template labels with the labels the
-  runtime computes exists at prototype commit `3fb804de12`, under
+  targets. A comparison of template labels with the labels the runtime
+  computes exists at prototype commit `4baaee9be1`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
-  no browser. On one small fixture and on FabriChat's `isEdited` the
-  templates are equal or tighter, except in two places. A conditional
-  inside a `computed` is looser in integrity: the runtime mints
-  `TransformedBy` for it as for any lift, and a `select` carries the
-  integrity of the selected branch alone. And `items.length` is looser
-  through a gap of the crate, which emits an `identity` slot where the
-  document has the collection's membership. The comparison also found
-  that the runtime joins the labels of a module's argument schema onto
-  its result document, which `plan-and-label-templates.md` §3.1 does
-  not describe. The crate's `SPEC-NOTES.md` lists the places where it
-  found the documents ambiguous; notes 177 to 186 are not yet written
-  into the documents.
+  no browser. It covers three fixtures and FabriChat's `isEdited`. The
+  templates are equal or tighter, with these differences. A read of a
+  defaulted property has no integrity where the runtime gives it the
+  object's, which is the fourth exception. A promoted conditional has
+  no `TransformedBy`. The container of a `map` is tighter than the
+  runtime with the static part the runtime joins from a module's
+  argument schema, and equal without it. The result of `ifElse` is
+  equal or tighter with the static part, and wider without it, because
+  the runtime stores no other label on that result document: the
+  static part is the only place the condition's label appears there.
+  Writes through a bound handle are classified per plan: 24 through a
+  reference, 26 through a path that may hold a reference, and none
+  into a value the instance produces, so `binding:write-to-computed`
+  reports nothing. The crate does not follow a literal through a
+  compiled-in pattern, so it misses three `Counter({ value: N })`
+  sites whose `increment` writes `value`. The crate's `SPEC-NOTES.md`
+  lists the places where it found the documents ambiguous; notes 187
+  to 196 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -778,13 +784,25 @@ as an assumption.
     confidentiality of the condition and the chosen branch and the
     integrity of the chosen branch. *Assumed:* that stands, and the
     comparison expects the difference. The alternative mints the atom
-    for a promoted expression. The corpus sites that require
-    `TransformedBy` of a promotable `computed` are not counted yet.
+    for a promoted expression. The corpus has five declared labels
+    that match `TransformedBy` of named code, all exchange-rule
+    preconditions in `patterns/examples/cfc-exchange-rules/`, and each
+    names a `lift`, so none is affected.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
     module's argument schema is separated by its origin and expected
     as a difference, by ruling.
+
+119. **What the label of an `ifElse` result is compared with.** The
+    runtime's result document holds only the static part joined from
+    the argument schema, and no label derived from the condition. The
+    template joins the condition and the chosen branch. *Assumed:* the
+    template is right, since which branch is chosen reveals the
+    condition, and the comparison is made with the runtime's static
+    part included for a conditional. Whether the runtime labels the
+    condition anywhere else, such as on the link it writes, is not
+    verified.
 
 ## Open, and not needing the owner
 
