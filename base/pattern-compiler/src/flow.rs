@@ -62,7 +62,9 @@ pub fn clause_subsumes(ceiling: &Value, label: &Value) -> bool {
     // `User(owner)`.
     let restated: Vec<Value> = had
         .iter()
-        .filter(|atom| type_name(atom) == Some("PersonalSpace") && has_exactly(atom, &["type", "owner"]))
+        .filter(|atom| {
+            type_name(atom) == Some("PersonalSpace") && has_exactly(atom, &["type", "owner"])
+        })
         .filter_map(|atom| {
             let personal = atom["type"].as_str()?;
             let user = match personal.rsplit_once('/') {
@@ -84,7 +86,11 @@ pub fn clause_subsumes(ceiling: &Value, label: &Value) -> bool {
 pub fn misfit(label: &[Value], ceiling: &[Value]) -> Option<Value> {
     label
         .iter()
-        .find(|clause| !ceiling.iter().any(|allowed| clause_subsumes(allowed, clause)))
+        .find(|clause| {
+            !ceiling
+                .iter()
+                .any(|allowed| clause_subsumes(allowed, clause))
+        })
         .cloned()
 }
 
@@ -98,7 +104,11 @@ fn variable(pattern: &Value) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
-fn matches<'v>(pattern: &'v Value, value: &'v Value, bound: &mut Vec<(&'v str, &'v Value)>) -> bool {
+fn matches<'v>(
+    pattern: &'v Value,
+    value: &'v Value,
+    bound: &mut Vec<(&'v str, &'v Value)>,
+) -> bool {
     if let Some(name) = variable(pattern) {
         return match bound.iter().find(|(other, _)| *other == name) {
             Some((_, had)) => *had == value,
@@ -163,9 +173,9 @@ pub fn coherent_failure(labels: &[Vec<Value>], patterns: &[Value]) -> Option<Val
         .find(|pattern| {
             !first.iter().any(|atom| {
                 atom_satisfies(atom, pattern)
-                    && rest.iter().all(|label| {
-                        label.iter().any(|other| witness(other) == witness(atom))
-                    })
+                    && rest
+                        .iter()
+                        .all(|label| label.iter().any(|other| witness(other) == witness(atom)))
             })
         })
         .cloned()

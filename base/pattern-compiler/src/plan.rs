@@ -82,7 +82,10 @@ fn name_schemas(
             .iter()
             .position(|(_, other)| other == document)
             .unwrap_or_else(|| {
-                schemas.push((format!("unhashed:schema/{}", schemas.len()), document.clone()));
+                schemas.push((
+                    format!("unhashed:schema/{}", schemas.len()),
+                    document.clone(),
+                ));
                 schemas.len() - 1
             });
         json!(schemas[position].0)
@@ -279,7 +282,10 @@ fn entry_at(entries: &Entries, path: &[String]) -> Option<Value> {
         .iter()
         .filter(|(at, _)| path.starts_with(at))
         .max_by_key(|(at, _)| at.len())
-        .map_or_else(|| Some(json!({ "op": "const" })), |(_, template)| template.clone())
+        .map_or_else(
+            || Some(json!({ "op": "const" })),
+            |(_, template)| template.clone(),
+        )
 }
 
 /// A constructed value observed whole: the join of the templates of its
@@ -425,7 +431,12 @@ fn satisfies_contract(chain: &[UiElement], contract: &Value) -> bool {
     }
     let names: Vec<&str> = chain
         .iter()
-        .filter_map(|element| element.attributes.get("data-ui-event-integrity")?.as_deref())
+        .filter_map(|element| {
+            element
+                .attributes
+                .get("data-ui-event-integrity")?
+                .as_deref()
+        })
         .flat_map(|value| value.split(|ch: char| ch.is_whitespace() || ch == ','))
         .collect();
     let required = contract["requiredEventIntegrity"].as_array();
@@ -443,7 +454,13 @@ fn satisfies_contract(chain: &[UiElement], contract: &Value) -> bool {
     });
     match contract["action"].as_str() {
         Some(action) => attributes.is_some_and(|element| {
-            element.attributes.get("data-ui-action").cloned().flatten().as_deref() == Some(action)
+            element
+                .attributes
+                .get("data-ui-action")
+                .cloned()
+                .flatten()
+                .as_deref()
+                == Some(action)
         }),
         None => true,
     }
@@ -998,7 +1015,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                 constructed.push((emitter.entries_of(&place), template.clone()));
                 templates.push(template);
             }
-            emitter.per_path(&constructed, |at| select_node(selector, condition.clone(), at));
+            emitter.per_path(&constructed, |at| {
+                select_node(selector, condition.clone(), at)
+            });
             select_node(selector, condition, templates)
         })
     }
@@ -1026,7 +1045,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 branches.push(Some(json!({ "op": "const" })));
                 constructed.push((None, Some(json!({ "op": "const" }))));
-                emitter.per_path(&constructed, |at| select_node(selector, condition.clone(), at));
+                emitter.per_path(&constructed, |at| {
+                    select_node(selector, condition.clone(), at)
+                });
                 select_node(selector, condition, branches)
             });
         }
@@ -1212,7 +1233,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         if path.is_empty() && class == "value" {
             return self.values[value].template.clone();
         }
-        let below = entries.iter().any(|(at, _)| at.len() > path.len() && at.starts_with(path));
+        let below = entries
+            .iter()
+            .any(|(at, _)| at.len() > path.len() && at.starts_with(path));
         if !below {
             return entry_at(entries, path);
         }
@@ -1279,7 +1302,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Place::Value(value, path) => {
                 let entries = self.values[*value].entries.as_ref()?;
-                if !entries.iter().any(|(at, _)| at.len() > path.len() && at.starts_with(path)) {
+                if !entries
+                    .iter()
+                    .any(|(at, _)| at.len() > path.len() && at.starts_with(path))
+                {
                     return None;
                 }
                 let mut found: Entries = entries
@@ -2153,7 +2179,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut below: Vec<(String, TypeId)> = Vec::new();
         match self.resolver.shape(present) {
             Shape::Object(properties, index) => {
-                below.extend(properties.iter().map(|property| (property.name.clone(), property.ty)));
+                below.extend(
+                    properties
+                        .iter()
+                        .map(|property| (property.name.clone(), property.ty)),
+                );
                 below.extend(index.map(|index| ("*".to_string(), index)));
             }
             Shape::Array(element) => below.push(("*".to_string(), element)),
@@ -2164,10 +2194,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         for (segment, ty) in below {
             at.push(segment);
-            let input = self
-                .node_annotations(ty)
-                .iter()
-                .any(|annotation| matches!(annotation.key, "requiredIntegrity" | "maxConfidentiality"));
+            let input = self.node_annotations(ty).iter().any(|annotation| {
+                matches!(annotation.key, "requiredIntegrity" | "maxConfidentiality")
+            });
             if input {
                 found.push((at.clone(), ty));
             }
@@ -2201,7 +2230,10 @@ impl<'a> Emitter<'_, '_, 'a> {
         // to.
         let way = |input: &str, path: &[Seg]| -> Option<(String, Vec<(Vec<String>, TypeId)>)> {
             if let Some(ty) = self.formal_types.get(input) {
-                return Some((input.to_string(), self.typed_way(*ty, &slot_path(&[], path))?));
+                return Some((
+                    input.to_string(),
+                    self.typed_way(*ty, &slot_path(&[], path))?,
+                ));
             }
             match self.bound(inputs, input, path) {
                 Place::Slot(root, full) => {
@@ -2211,28 +2243,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                 _ => None,
             }
         };
-        let mut list = |anchor: (String, Vec<String>),
-                        node: TypeId,
-                        add: &dyn Fn(&mut Listed, &[String])| {
-            for annotation in self.node_annotations(node) {
-                let key = match annotation.key {
-                    "requiredIntegrity" => "requiredIntegrity",
-                    "maxConfidentiality" => "maxConfidentiality",
-                    _ => continue,
-                };
-                let Some(value) = crate::schema::label_list(&annotation) else {
-                    continue;
-                };
-                let position = guards
-                    .iter()
-                    .position(|(at, other, list, _)| *at == anchor && *other == key && *list == value);
-                let position = position.unwrap_or_else(|| {
-                    guards.push((anchor.clone(), key, value, Listed::default()));
-                    guards.len() - 1
-                });
-                add(&mut guards[position].3, &anchor.1);
-            }
-        };
+        let mut list =
+            |anchor: (String, Vec<String>), node: TypeId, add: &dyn Fn(&mut Listed, &[String])| {
+                for annotation in self.node_annotations(node) {
+                    let key = match annotation.key {
+                        "requiredIntegrity" => "requiredIntegrity",
+                        "maxConfidentiality" => "maxConfidentiality",
+                        _ => continue,
+                    };
+                    let Some(value) = crate::schema::label_list(&annotation) else {
+                        continue;
+                    };
+                    let position = guards.iter().position(|(at, other, list, _)| {
+                        *at == anchor && *other == key && *list == value
+                    });
+                    let position = position.unwrap_or_else(|| {
+                        guards.push((anchor.clone(), key, value, Listed::default()));
+                        guards.len() - 1
+                    });
+                    add(&mut guards[position].3, &anchor.1);
+                }
+            };
         for (entry, at) in placed {
             let Some((base, nodes)) = way(&entry.input, &entry.path) else {
                 continue;
@@ -2852,11 +2883,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             (true, None) => "value",
             (false, _) => "identity",
         };
-        let (result, body) = self.one(class, |emitter| {
-            match returned {
-                Some(expression) => emitter.eval(expression, name),
-                None => Place::Const,
-            }
+        let (result, body) = self.one(class, |emitter| match returned {
+            Some(expression) => emitter.eval(expression, name),
+            None => Place::Const,
         });
         let element_entries = self.entries_of(&result);
         // The element as the source has it, passed through.
@@ -3435,9 +3464,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         // "A `wish` whose `query`, or whose `path` with the key `#now` or
         // `#profile`, is not a constant" (LS §10.2).
         let decided_by_path = extra.is_none()
-            && query.as_deref().is_some_and(|query| {
-                matches!(query.strip_prefix('#'), Some("now" | "profile"))
-            });
+            && query
+                .as_deref()
+                .is_some_and(|query| matches!(query.strip_prefix('#'), Some("now" | "profile")));
         if decided_by_path {
             self.hints.push((
                 "a `wish` whose path decides the target and is not a constant".to_string(),
@@ -3735,12 +3764,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.pass(&place);
                     let listed = matches!(&place, Place::Value(value, path)
                         if path.is_empty() && self.values[*value].collection.is_some() && !self.values[*value].scan)
-                        || self.resolver.typed_at(self.module, expression, 0).is_ok_and(|ty| {
-                            matches!(
-                                self.resolver.shape(self.resolver.present(ty)),
-                                Shape::Array(_) | Shape::Tuple(_)
-                            )
-                        });
+                        || self
+                            .resolver
+                            .typed_at(self.module, expression, 0)
+                            .is_ok_and(|ty| {
+                                matches!(
+                                    self.resolver.shape(self.resolver.present(ty)),
+                                    Shape::Array(_) | Shape::Tuple(_)
+                                )
+                            });
                     (place, listed)
                 }
                 JSXChild::Spread(spread) => {
@@ -3777,8 +3809,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                             let mut element = path.clone();
                             element.push("*".to_string());
                             let (root, path) = (root.clone(), path.clone());
-                            templates.push(self.template_of(&Place::Slot(root.clone(), element), "identity"));
-                            templates.push(self.template_of(&Place::Slot(root, path), "enumeration"));
+                            templates.push(
+                                self.template_of(&Place::Slot(root.clone(), element), "identity"),
+                            );
+                            templates
+                                .push(self.template_of(&Place::Slot(root, path), "enumeration"));
                         }
                         other => {
                             let other = other.clone();
@@ -3907,7 +3942,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                                             (&place, name.starts_with("on"))
                                         {
                                             let chain = self.decided_chain();
-                                            self.ui_bound.push((*binding, chain, attribute.span.start));
+                                            self.ui_bound.push((
+                                                *binding,
+                                                chain,
+                                                attribute.span.start,
+                                            ));
                                         }
                                         place
                                     }
@@ -4764,7 +4803,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if computed.chosen.is_some() {
                     return Origin::Reference;
                 }
-                match computed.template.as_ref().and_then(|template| template["op"].as_str()) {
+                match computed
+                    .template
+                    .as_ref()
+                    .and_then(|template| template["op"].as_str())
+                {
                     Some("derive" | "fold" | "const") => Origin::Produced,
                     _ => Origin::Other,
                 }
@@ -4882,7 +4925,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut locals = HashMap::new();
         match function.expression_body() {
             Some(expression) => returned.push(expression),
-            None => gather(function.block_body().unwrap_or(&[]), &mut returned, &mut locals),
+            None => gather(
+                function.block_body().unwrap_or(&[]),
+                &mut returned,
+                &mut locals,
+            ),
         }
         let found: Vec<Option<Declared>> = returned
             .iter()
@@ -5014,11 +5061,16 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// handle that can write is declared (`assign.rs`, `note_bindings`).
     fn declared_writable(&self, written: &Expression<'a>) -> bool {
         let span = written.span();
-        self.resolver.types.borrow().notes.iter().any(|(module, category, at)| {
-            *module == self.module
-                && category.starts_with("a writable handle bound to")
-                && *at == span
-        })
+        self.resolver
+            .types
+            .borrow()
+            .notes
+            .iter()
+            .any(|(module, category, at)| {
+                *module == self.module
+                    && category.starts_with("a writable handle bound to")
+                    && *at == span
+            })
     }
 
     /// Whether the body writes through a handle at or below `path` of its
@@ -5086,7 +5138,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             _ => return,
         };
         if origin == Origin::Reference {
-            for entry in state.iter_mut().filter(|entry| entry["path"] == json!(path)) {
+            for entry in state
+                .iter_mut()
+                .filter(|entry| entry["path"] == json!(path))
+            {
                 entry["through"] = json!("reference");
             }
         }
@@ -5102,7 +5157,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let parsed = self.resolver.parsed(self.module)?;
                 let text = written.span().source_text(parsed.source);
                 let line = parsed.lines.position(parsed.source, written.span().start).0;
-                Some(format!("`{}` at {}:{line}", text.split_whitespace().collect::<Vec<_>>().join(" "), parsed.path))
+                Some(format!(
+                    "`{}` at {}:{line}",
+                    text.split_whitespace().collect::<Vec<_>>().join(" "),
+                    parsed.path
+                ))
             })
             .unwrap_or_default();
         let what = format!(
@@ -5223,11 +5282,17 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cone = None;
                 }
             }
-            Place::Stream(_)
-            | Place::Index(_)
-            | Place::Accumulator(..)
-            | Place::Const
-            | Place::Unknown => {}
+            // Where the result holds the stream of a binding, the binding
+            // names the path. No record of PL §1.1 has it: the comparison
+            // of stage 3 finds the stream of a run by it.
+            Place::Stream(binding) => {
+                if let Some(record) = self.bindings.get_mut(*binding) {
+                    if record.get("result").is_none() {
+                        record["result"] = json!(path);
+                    }
+                }
+            }
+            Place::Index(_) | Place::Accumulator(..) | Place::Const | Place::Unknown => {}
         }
     }
 
@@ -5752,7 +5817,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let ty = match target["kind"].as_str()? {
             "handle" => return self.annotations_at(target["slot"].as_u64()? as usize, &below),
             "state" => *self.state_types.get(&(target["cell"].as_u64()? as usize))?,
-            "argument" => *self.child_types.get(&(target["child"].as_u64()? as usize))?,
+            "argument" => *self
+                .child_types
+                .get(&(target["child"].as_u64()? as usize))?,
             _ => return None,
         };
         Some(
@@ -5791,7 +5858,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             at: u32,
             found: String,
         ) {
-            if !flows.iter().any(|(other, start, _)| *other == id && *start == at) {
+            if !flows
+                .iter()
+                .any(|(other, start, _)| *other == id && *start == at)
+            {
                 flows.push((id, at, found));
             }
         }
@@ -5880,7 +5950,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                     "confidentiality" => fit = true,
                     "requiredIntegrity" => {
-                        if let Some(Value::Array(patterns)) = crate::schema::label_list(annotation) {
+                        if let Some(Value::Array(patterns)) = crate::schema::label_list(annotation)
+                        {
                             found.listed.push(index_of(
                                 constraints,
                                 json!({ "kind": "writeFloor", "patterns": patterns }),
@@ -5893,7 +5964,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
             if fit {
-                found.listed.push(index_of(constraints, json!({ "kind": "writerFit" })));
+                found
+                    .listed
+                    .push(index_of(constraints, json!({ "kind": "writerFit" })));
                 found.declared = crate::schema::declared_label(nodes)
                     .and_then(|declared| declared.get("confidentiality")?.as_array().cloned());
             }
@@ -6002,7 +6075,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
                 let what = format!("What the {kind} `{name}` writes to `{}`", below.join("/"));
-                write_checks(&mut flows, &found, write, &what, site.unwrap_or_else(|| body_at(number)));
+                write_checks(
+                    &mut flows,
+                    &found,
+                    write,
+                    &what,
+                    site.unwrap_or_else(|| body_at(number)),
+                );
                 listed.sort();
                 listed.dedup();
                 plan["bodies"][number]["writes"][position]["constraints"] = json!(listed);
@@ -6015,7 +6094,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             let at = cone["at"]["start"].as_u64().unwrap_or(0) as u32;
             let writes = cone["writes"].as_array().cloned().unwrap_or_default();
             for (position, write) in writes.iter().enumerate() {
-                let nodes = self.target_annotations(&write["target"]).unwrap_or_default();
+                let nodes = self
+                    .target_annotations(&write["target"])
+                    .unwrap_or_default();
                 let mut found = at_target(&mut constraints, &nodes);
                 let what = format!(
                     "What the cone `{}` writes to the {} path `{}`",
@@ -6112,7 +6193,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let (Some(decided), Some((_, _, at))) = (decided, bound.first()) else {
                     continue;
                 };
-                if decided.iter().any(|chain| satisfies_contract(chain, contract)) {
+                if decided
+                    .iter()
+                    .any(|chain| satisfies_contract(chain, contract))
+                {
                     continue;
                 }
                 report(
@@ -6137,7 +6221,9 @@ fn derived_by(template: &Value, by: &mut Vec<usize>) {
         Value::Object(node) => {
             if let (Some("derive"), Some(body)) = (
                 node.get("op").and_then(Value::as_str),
-                node.get("by").and_then(|by| by.get("body")).and_then(Value::as_u64),
+                node.get("by")
+                    .and_then(|by| by.get("body"))
+                    .and_then(Value::as_u64),
             ) {
                 if !by.contains(&(body as usize)) {
                     by.push(body as usize);
@@ -6220,7 +6306,10 @@ fn input_failure(
     slots: &[Value],
     bodies: &[Value],
 ) -> Option<(&'static str, String)> {
-    if constraint["handles"].as_array().is_some_and(|handles| !handles.is_empty()) {
+    if constraint["handles"]
+        .as_array()
+        .is_some_and(|handles| !handles.is_empty())
+    {
         return None;
     }
     let listed = constraint["slots"].as_array()?;
@@ -6235,7 +6324,12 @@ fn input_failure(
         .collect();
     let name = |slot: &Value| {
         let slot = &slots[slot.as_u64().unwrap_or(0) as usize];
-        let path: Vec<&str> = slot["path"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let path: Vec<&str> = slot["path"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
         format!("the slot `{}`", path.join("/"))
     };
     match constraint["kind"].as_str()? {
@@ -6713,7 +6807,9 @@ pub fn emit_module<'a>(
                 })
         });
         if embedded {
-            plans[index].flows.retain(|(id, ..)| *id != "cfc-flow:ui-contract");
+            plans[index]
+                .flows
+                .retain(|(id, ..)| *id != "cfc-flow:ui-contract");
         }
     }
     plans

@@ -20,7 +20,10 @@ fn an_atom_entails_an_equal_atom_and_an_earlier_expiry_a_later_one() {
     // `type` and `timestamp`, the timestamps are finite numbers, and the
     // timestamp of `a` is at most that of `b`."
     assert!(atom_entails(&json!("a"), &json!("a")));
-    assert!(atom_entails(&json!({ "k": 1, "l": [2] }), &json!({ "l": [2], "k": 1 })));
+    assert!(atom_entails(
+        &json!({ "k": 1, "l": [2] }),
+        &json!({ "l": [2], "k": 1 })
+    ));
     assert!(!atom_entails(&json!("a"), &json!("b")));
     let at = |timestamp: i64| json!({ "type": EXPIRES, "timestamp": timestamp });
     assert!(atom_entails(&at(5), &at(9)));
@@ -37,8 +40,14 @@ fn a_ceiling_clause_subsumes_a_label_clause_by_every_alternative() {
     // has at least one alternative, and every alternative of it entails
     // some alternative of the label clause."
     assert!(clause_subsumes(&json!("a"), &json!("a")));
-    assert!(clause_subsumes(&json!("a"), &json!({ "anyOf": ["a", "b"] })));
-    assert!(!clause_subsumes(&json!({ "anyOf": ["a", "b"] }), &json!("a")));
+    assert!(clause_subsumes(
+        &json!("a"),
+        &json!({ "anyOf": ["a", "b"] })
+    ));
+    assert!(!clause_subsumes(
+        &json!({ "anyOf": ["a", "b"] }),
+        &json!("a")
+    ));
     assert!(clause_subsumes(
         &json!({ "anyOf": ["a", "b"] }),
         &json!({ "anyOf": ["b", "a", "c"] })
@@ -81,8 +90,14 @@ fn a_pattern_matches_structurally_with_variables() {
     assert!(!pattern_matches(&json!("a"), &json!("b")));
     assert!(pattern_matches(&json!([1, 2]), &json!([1, 2])));
     assert!(!pattern_matches(&json!([1, 2]), &json!([1, 2, 3])));
-    assert!(pattern_matches(&json!({ "k": 1 }), &json!({ "k": 1, "l": 2 })));
-    assert!(!pattern_matches(&json!({ "k": 1, "m": 3 }), &json!({ "k": 1, "l": 2 })));
+    assert!(pattern_matches(
+        &json!({ "k": 1 }),
+        &json!({ "k": 1, "l": 2 })
+    ));
+    assert!(!pattern_matches(
+        &json!({ "k": 1, "m": 3 }),
+        &json!({ "k": 1, "l": 2 })
+    ));
     let pattern = json!({ "a": { "var": "x" }, "b": { "var": "x" } });
     assert!(pattern_matches(&pattern, &json!({ "a": 1, "b": 1 })));
     assert!(!pattern_matches(&pattern, &json!({ "a": 1, "b": 2 })));
@@ -92,7 +107,10 @@ fn a_pattern_matches_structurally_with_variables() {
 fn an_atom_satisfies_a_pattern_it_matches_or_entails() {
     // "An atom satisfies a required pattern where the pattern matches it
     // or the atom entails the pattern."
-    assert!(atom_satisfies(&json!({ "k": 1, "l": 2 }), &json!({ "k": 1 })));
+    assert!(atom_satisfies(
+        &json!({ "k": 1, "l": 2 }),
+        &json!({ "k": 1 })
+    ));
     let at = |timestamp: i64| json!({ "type": EXPIRES, "timestamp": timestamp });
     assert!(atom_satisfies(&at(5), &at(9)));
     assert!(!atom_satisfies(&at(9), &at(5)));
@@ -107,7 +125,10 @@ fn several_labels_satisfy_a_requirement_with_one_witness_across_them() {
     let by = |who: &str| json!({ "kind": "reviewed", "by": who });
     assert_eq!(coherent_failure(&[], &patterns), None);
     assert_eq!(coherent_failure(&[vec![by("a")]], &patterns), None);
-    assert_eq!(coherent_failure(&[vec![by("a")], vec![by("a"), by("b")]], &patterns), None);
+    assert_eq!(
+        coherent_failure(&[vec![by("a")], vec![by("a"), by("b")]], &patterns),
+        None
+    );
     // Each label satisfies the pattern, by a different atom.
     assert_eq!(
         coherent_failure(&[vec![by("a")], vec![by("b")]], &patterns),
@@ -119,9 +140,7 @@ fn several_labels_satisfy_a_requirement_with_one_witness_across_them() {
     );
     // "An atom whose `scope` has a `valueRef` is compared without its
     // `scope.projection`."
-    let scoped = |projection: &str| {
-        json!({ "kind": "reviewed", "scope": { "valueRef": "v", "projection": projection } })
-    };
+    let scoped = |projection: &str| json!({ "kind": "reviewed", "scope": { "valueRef": "v", "projection": projection } });
     assert_eq!(
         coherent_failure(&[vec![scoped("/a")], vec![scoped("/b")]], &patterns),
         None
@@ -132,11 +151,19 @@ fn several_labels_satisfy_a_requirement_with_one_witness_across_them() {
 fn the_terms_bound_at_run_time() {
     // "The terms are the `CurrentPrincipal` marker, the atom of a
     // `PolicyOf` term, and a `Concept` pattern."
-    assert!(run_time_term(&json!({ "kind": "user", "subject": { "__ctCurrentPrincipal": true } })));
-    assert!(run_time_term(&json!({ "policyOf": { "module": "m", "binding": "rules" } })));
+    assert!(run_time_term(
+        &json!({ "kind": "user", "subject": { "__ctCurrentPrincipal": true } })
+    ));
+    assert!(run_time_term(
+        &json!({ "policyOf": { "module": "m", "binding": "rules" } })
+    ));
     assert!(run_time_term(&json!({ "type": CONCEPT, "uri": "x" })));
-    assert!(run_time_term(&json!({ "anyOf": ["a", { "type": CONCEPT, "uri": "x" }] })));
-    assert!(!run_time_term(&json!({ "kind": "user", "subject": "did:a" })));
+    assert!(run_time_term(
+        &json!({ "anyOf": ["a", { "type": CONCEPT, "uri": "x" }] })
+    ));
+    assert!(!run_time_term(
+        &json!({ "kind": "user", "subject": "did:a" })
+    ));
 }
 
 fn slots() -> Vec<Value> {
@@ -157,7 +184,10 @@ fn the_lower_bound_of_the_confidentiality_of_a_template() {
     // union of its inputs, and a `select` is the union of its condition
     // with the clauses that every branch has."
     let slots = slots();
-    assert_eq!(confidentiality_bound(&json!({ "op": "const" }), &slots), Some(vec![]));
+    assert_eq!(
+        confidentiality_bound(&json!({ "op": "const" }), &slots),
+        Some(vec![])
+    );
     assert_eq!(
         confidentiality_bound(&slot(0), &slots),
         Some(vec![json!("a"), json!("b")])
@@ -168,7 +198,10 @@ fn the_lower_bound_of_the_confidentiality_of_a_template() {
         Some(vec![json!("a"), json!("b"), json!("c")])
     );
     let select = json!({ "op": "select", "selector": 0, "condition": { "op": "const" }, "branches": [slot(0), slot(1)] });
-    assert_eq!(confidentiality_bound(&select, &slots), Some(vec![json!("b")]));
+    assert_eq!(
+        confidentiality_bound(&select, &slots),
+        Some(vec![json!("b")])
+    );
     // "A template is evaluated only where every `slot` node it reaches,
     // on every selection, has the `declared` member of the dimension
     // tested, and it has no `dynamic`, `fold` or `pick` node."
@@ -187,17 +220,26 @@ fn the_integrity_of_a_template() {
     let slots = slots();
     assert_eq!(
         integrity_of(&slot(0), &slots),
-        Some(Integrity { atoms: vec![json!("i"), json!("j")], minted: false })
+        Some(Integrity {
+            atoms: vec![json!("i"), json!("j")],
+            minted: false
+        })
     );
     let derive = json!({ "op": "derive", "by": { "body": 0 }, "inputs": [slot(0), slot(1), { "op": "const" }] });
     assert_eq!(
         integrity_of(&derive, &slots),
-        Some(Integrity { atoms: vec![json!("j")], minted: true })
+        Some(Integrity {
+            atoms: vec![json!("j")],
+            minted: true
+        })
     );
     let same = json!({ "op": "select", "selector": 0, "condition": slot(1), "branches": [slot(0), slot(0)] });
     assert_eq!(
         integrity_of(&same, &slots),
-        Some(Integrity { atoms: vec![json!("i"), json!("j")], minted: false })
+        Some(Integrity {
+            atoms: vec![json!("i"), json!("j")],
+            minted: false
+        })
     );
     let differ = json!({ "op": "select", "selector": 0, "condition": slot(1), "branches": [slot(0), slot(1)] });
     assert_eq!(integrity_of(&differ, &slots), None);

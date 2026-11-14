@@ -5,6 +5,7 @@ import {
   compareDefaulted,
   compareIsEdited,
   compareSmall,
+  runHandler,
 } from "../scenarios.ts";
 
 // The comparison of stage 3
@@ -173,5 +174,40 @@ describe("the runtime's labels read by origin (ruling T2)", () => {
     // label, is the wider one.
     expect((await overall(true)).direct).toBe("equal, looser");
     expect((await overall(false)).direct).toBe("tighter, looser");
+  });
+});
+
+describe("the write edges of a handler against the labels its event's run stored", () => {
+  it("compares the cell the handler sets and the element it pushes", async () => {
+    const { writes, skipped } = await runHandler();
+    const clauses = (atoms: unknown[]) => [...new Set(atoms)].sort();
+
+    expect(skipped).toEqual([]);
+    expect(writes.map((row) => [row.handler, row.write, row.path])).toEqual([
+      ["record", 0, []],
+      ["record", 1, ["0"]],
+    ]);
+    for (const row of writes) {
+      // The run's join has the label of the input the handler read. The
+      // template also has the clause the event's schema declares for
+      // `text`, which the runtime's join does not hold (note 198).
+      expect(clauses(row.runtime.confidentiality)).toEqual(["alice"]);
+      expect(clauses(row.template.label.confidentiality)).toEqual([
+        "alice",
+        "erin",
+      ]);
+      expect(row.comparison.confidentiality).toBe("looser");
+      expect(row.comparison.integrity).toBe("equal");
+    }
+  });
+
+  it("reads the state cells the handler writes as outputs with no label before the event", async () => {
+    const { rows } = await runHandler();
+
+    expect(
+      Object.fromEntries(
+        rows.map((row) => [row.path.join("/"), row.comparison.overall]),
+      ),
+    ).toEqual({ last: "equal", log: "equal", note: "equal" });
   });
 });

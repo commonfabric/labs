@@ -5,7 +5,13 @@
  * Regenerate one from `base/pattern-compiler` with
  * `cargo run --release -- plan compare/fixtures/<name>.tsx > compare/fixtures/<name>.plan.json`.
  */
-import { compareScenario, type Plan, type Row } from "./harness.ts";
+import {
+  compareScenario,
+  type Plan,
+  type Row,
+  type Run,
+  runScenario,
+} from "./harness.ts";
 import { atomKey, type Label } from "./template.ts";
 
 const read = (name: string) =>
@@ -72,6 +78,24 @@ export const compareDefaulted = (given: boolean): Promise<Row[]> =>
     { profile: { name: "ada", ...(given ? { nick: "a" } : {}) } },
     {},
   );
+
+/**
+ * Runs `fixtures/handler.tsx` and sends one event to its handler, which
+ * sets a cell to a value derived from the event and a labeled input, and
+ * pushes onto a list. The event's `text` has a label its schema declares.
+ */
+export const runHandler = async (): Promise<Run> => {
+  const [{ patterns }] = JSON.parse(await read("handler.plan.json"));
+  return runScenario({
+    program: {
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: await read("handler.tsx") }],
+    },
+    plan: patterns[0].plan as Plan,
+    argument: { secret: "s3cret", note: "n" },
+    events: [{ binding: 0, event: { text: "hello", extra: "x" } }],
+  });
+};
 
 /**
  * A label on one line: its clauses, then its integrity atoms by type, with

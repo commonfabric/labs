@@ -102,7 +102,10 @@ fn a_write_through_a_value_the_instance_produces_is_an_error_and_a_read_is_count
 });
 "#;
     let analysis = program(text);
-    assert_eq!(cases(&analysis), ["computed: written", "computed: written", "computed: read"]);
+    assert_eq!(
+        cases(&analysis),
+        ["computed: written", "computed: written", "computed: read"]
+    );
     assert_eq!(
         reports(&analysis, text),
         [

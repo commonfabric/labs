@@ -444,7 +444,10 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
             for write in &plan.handle_writes {
                 *check
                     .counts
-                    .entry(format!("plan:handle bound to a computed value:{}", write.case))
+                    .entry(format!(
+                        "plan:handle bound to a computed value:{}",
+                        write.case
+                    ))
                     .or_insert(0) += 1;
             }
             for (kind, start) in &plan.hints {

@@ -416,7 +416,10 @@ fn argument_of_a_pattern_a_function_body_instantiates_is_an_initial_value() {
         []
     );
     assert_eq!(
-        counts(snippet, "types:by-reference:an initial value of a child's argument:"),
+        counts(
+            snippet,
+            "types:by-reference:an initial value of a child's argument:"
+        ),
         [("a computed value: the result of an operator".to_string(), 1)]
     );
 }

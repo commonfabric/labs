@@ -2008,15 +2008,16 @@ impl<'p, 'a> Checker<'p, 'a> {
                 // not assignable to it.
                 if name == "wish" && api.subpath.is_none() {
                     if let Some(first) = call.arguments.first().and_then(Argument::as_expression) {
-                        let string = self
-                            .resolver
-                            .typed_at(self.module, first, 0)
-                            .is_ok_and(|ty| {
-                                matches!(
-                                    self.resolver.shape(ty),
-                                    crate::types::Shape::String | crate::types::Shape::Literal(_)
-                                )
-                            });
+                        let string =
+                            self.resolver
+                                .typed_at(self.module, first, 0)
+                                .is_ok_and(|ty| {
+                                    matches!(
+                                        self.resolver.shape(ty),
+                                        crate::types::Shape::String
+                                            | crate::types::Shape::Literal(_)
+                                    )
+                                });
                         if string {
                             self.report(
                                 "subset-type:mismatch",

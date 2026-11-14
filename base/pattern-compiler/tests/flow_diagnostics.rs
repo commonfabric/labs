@@ -27,7 +27,11 @@ fn analysis(snippet: &str) -> ProgramAnalysis {
 /// The `cfc-flow:*` reports of a module, and every other error.
 fn flows(snippet: &str) -> Vec<&'static str> {
     let analysis = analysis(snippet);
-    let diagnostics: Vec<_> = analysis.modules.iter().flat_map(|module| &module.diagnostics).collect();
+    let diagnostics: Vec<_> = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.diagnostics)
+        .collect();
     let other: Vec<_> = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.is_error() && !diagnostic.id.starts_with("cfc-flow:"))
@@ -58,7 +62,9 @@ fn max_confidentiality_is_reported_for_a_declared_clause_the_ceiling_does_not_ad
     // "A clause of the declared confidentiality of a listed slot ... is
     // subsumed by no clause of `ceiling`."
     assert_eq!(
-        flows(&gate("v: MaxConfidentiality<Sec<string>, readonly [\"public\"]>")),
+        flows(&gate(
+            "v: MaxConfidentiality<Sec<string>, readonly [\"public\"]>"
+        )),
         ["cfc-flow:max-confidentiality"]
     );
 }
@@ -67,7 +73,10 @@ fn max_confidentiality_is_reported_for_a_declared_clause_the_ceiling_does_not_ad
 fn max_confidentiality_is_silent_where_the_declared_clauses_fit() {
     // "A check that does not fail this way is not decided: it is never a
     // pass."
-    assert!(flows(&gate("v: MaxConfidentiality<Sec<string>, readonly [\"secret\", \"public\"]>")).is_empty());
+    assert!(flows(&gate(
+        "v: MaxConfidentiality<Sec<string>, readonly [\"secret\", \"public\"]>"
+    ))
+    .is_empty());
 }
 
 #[test]
@@ -75,7 +84,10 @@ fn max_confidentiality_is_silent_on_a_run_time_term_a_policy_atom_and_an_undecla
     // "An input has no declared confidentiality; ... a run-time term is
     // involved; ... any clause of the inputs or of the ceiling holds a
     // `Policy` atom."
-    assert!(flows(&gate("v: MaxConfidentiality<Mine<string>, readonly [\"public\"]>")).is_empty());
+    assert!(flows(&gate(
+        "v: MaxConfidentiality<Mine<string>, readonly [\"public\"]>"
+    ))
+    .is_empty());
     assert!(flows(&gate(
         "v: MaxConfidentiality<Sec<string>, readonly [{ kind: \"user\"; subject: CurrentPrincipal }]>"
     ))
@@ -84,7 +96,10 @@ fn max_confidentiality_is_silent_on_a_run_time_term_a_policy_atom_and_an_undecla
         "v: MaxConfidentiality<Sec<string>, readonly [{ type: \"https://commonfabric.org/cfc/atom/Policy\"; name: \"p\" }]>"
     ))
     .is_empty());
-    assert!(flows(&gate("v: MaxConfidentiality<string, readonly [\"public\"]>")).is_empty());
+    assert!(flows(&gate(
+        "v: MaxConfidentiality<string, readonly [\"public\"]>"
+    ))
+    .is_empty());
 }
 
 #[test]
@@ -146,22 +161,33 @@ fn required_integrity_is_reported_where_no_declared_atom_satisfies_a_pattern() {
     // "Every listed input has a declared integrity ... and for some
     // pattern no one atom satisfies it in all of them."
     assert_eq!(
-        flows(&gate("v: RequiresIntegrity<Draft<string>, readonly [\"reviewed\"]>")),
+        flows(&gate(
+            "v: RequiresIntegrity<Draft<string>, readonly [\"reviewed\"]>"
+        )),
         ["cfc-flow:required-integrity"]
     );
 }
 
 #[test]
 fn required_integrity_passes_where_a_declared_atom_satisfies_each_pattern() {
-    assert!(flows(&gate("v: RequiresIntegrity<Reviewed<string>, readonly [\"reviewed\"]>")).is_empty());
+    assert!(flows(&gate(
+        "v: RequiresIntegrity<Reviewed<string>, readonly [\"reviewed\"]>"
+    ))
+    .is_empty());
 }
 
 #[test]
 fn required_integrity_is_silent_on_a_concept_pattern_and_an_undeclared_input() {
     // "An input has no declared integrity; ... a pattern is a `Concept`
     // pattern or holds another run-time term."
-    assert!(flows(&gate("v: RequiresIntegrity<Draft<string>, readonly [Concept]>")).is_empty());
-    assert!(flows(&gate("v: RequiresIntegrity<string, readonly [\"reviewed\"]>")).is_empty());
+    assert!(flows(&gate(
+        "v: RequiresIntegrity<Draft<string>, readonly [Concept]>"
+    ))
+    .is_empty());
+    assert!(flows(&gate(
+        "v: RequiresIntegrity<string, readonly [\"reviewed\"]>"
+    ))
+    .is_empty());
 }
 
 // ----- cfc-flow:write-floor -----
@@ -178,24 +204,44 @@ fn write_floor_is_reported_where_the_integrity_of_the_template_lacks_a_pattern()
     // "`I(template)` evaluates and does not satisfy `patterns`": the
     // atoms every input of the `derive` has.
     assert_eq!(
-        flows(&floored("a: Reviewed<string>; b: Draft<string>", "\"reviewed\"", "a + b")),
+        flows(&floored(
+            "a: Reviewed<string>; b: Draft<string>",
+            "\"reviewed\"",
+            "a + b"
+        )),
         ["cfc-flow:write-floor"]
     );
 }
 
 #[test]
 fn write_floor_passes_where_every_input_declares_the_atom() {
-    assert!(flows(&floored("a: Reviewed<string>; b: Reviewed<string>", "\"reviewed\"", "a + b")).is_empty());
+    assert!(flows(&floored(
+        "a: Reviewed<string>; b: Reviewed<string>",
+        "\"reviewed\"",
+        "a + b"
+    ))
+    .is_empty());
 }
 
 #[test]
-fn write_floor_is_silent_on_a_concept_pattern_an_undeclared_input_and_a_pattern_the_minted_atom_can_match() {
+fn write_floor_is_silent_on_a_concept_pattern_an_undeclared_input_and_a_pattern_the_minted_atom_can_match(
+) {
     // "The template does not evaluate; ... a run-time term is involved",
     // and "where a pattern can match a `TransformedBy` atom and the
     // compiler has no `Body.code` or `Cone.code` to form the atom from,
     // the check is not decided."
-    assert!(flows(&floored("a: Reviewed<string>; b: Draft<string>", "Concept", "a + b")).is_empty());
-    assert!(flows(&floored("a: Reviewed<string>; b: string", "\"reviewed\"", "a + b")).is_empty());
+    assert!(flows(&floored(
+        "a: Reviewed<string>; b: Draft<string>",
+        "Concept",
+        "a + b"
+    ))
+    .is_empty());
+    assert!(flows(&floored(
+        "a: Reviewed<string>; b: string",
+        "\"reviewed\"",
+        "a + b"
+    ))
+    .is_empty());
     assert!(flows(&floored(
         "a: Reviewed<string>; b: Draft<string>",
         "{ type: \"https://commonfabric.org/cfc/atom/TransformedBy\" }",
@@ -218,7 +264,10 @@ fn writer_fit_is_reported_for_a_clause_the_target_does_not_declare() {
     // "A clause of the lower bound of `C(template)` is subsumed by no
     // clause declared at the target, and no alternative of that clause
     // is an atom of type `Space`, `PersonalSpace` or `User`."
-    assert_eq!(flows(&kept("Sec<string>", "Pub<string>")), ["cfc-flow:writer-fit"]);
+    assert_eq!(
+        flows(&kept("Sec<string>", "Pub<string>")),
+        ["cfc-flow:writer-fit"]
+    );
 }
 
 #[test]

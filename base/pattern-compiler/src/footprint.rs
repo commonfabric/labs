@@ -3016,8 +3016,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     .arguments
                     .iter()
                     .map(|argument| match argument.as_expression().map(unwrap) {
-                        Some(Expression::StringLiteral(key)) => Some(Seg::Key(key.value.to_string())),
-                        Some(Expression::NumericLiteral(key)) => Some(Seg::Key(key.value.to_string())),
+                        Some(Expression::StringLiteral(key)) => {
+                            Some(Seg::Key(key.value.to_string()))
+                        }
+                        Some(Expression::NumericLiteral(key)) => {
+                            Some(Seg::Key(key.value.to_string()))
+                        }
                         _ => None,
                     })
                     .collect();

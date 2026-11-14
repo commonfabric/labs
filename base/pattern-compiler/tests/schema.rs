@@ -73,14 +73,29 @@ fn the_plan_names_each_schema_and_the_documents_are_beside_it() {
             named.push(schema.as_str().expect("an identifier, not a document"));
         }
     }
-    named.push(emitted.plan["argumentSchema"].as_str().expect("the argument schema"));
+    named.push(
+        emitted.plan["argumentSchema"]
+            .as_str()
+            .expect("the argument schema"),
+    );
     assert!(!named.is_empty());
     for id in &named {
         assert!(id.starts_with("unhashed:schema/"), "{id}");
-        assert_eq!(emitted.schemas.iter().filter(|(other, _)| other == id).count(), 1);
+        assert_eq!(
+            emitted
+                .schemas
+                .iter()
+                .filter(|(other, _)| other == id)
+                .count(),
+            1
+        );
     }
     // Equal documents are one document.
-    let mut documents: Vec<&Value> = emitted.schemas.iter().map(|(_, document)| document).collect();
+    let mut documents: Vec<&Value> = emitted
+        .schemas
+        .iter()
+        .map(|(_, document)| document)
+        .collect();
     let all = documents.len();
     documents.dedup();
     assert_eq!(documents.len(), all);
@@ -219,7 +234,9 @@ export const P = pattern<{ n: number }, { label: Confidential<string, ["secret"]
         json!({ "type": "string", "ifc": { "confidentiality": ["secret"] } })
     );
     // `Plan.resultSchema` names that document.
-    let id = plan.plan["resultSchema"].as_str().expect("the result schema");
+    let id = plan.plan["resultSchema"]
+        .as_str()
+        .expect("the result schema");
     let (_, document) = plan
         .schemas
         .iter()

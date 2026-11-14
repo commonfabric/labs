@@ -2825,7 +2825,10 @@ export const Read = pattern<{ n: number }>(({ n }) => {
 });
 "#,
     );
-    assert_eq!(edge_lines(&plan_of(&analysis, "Quiet")), Vec::<String>::new());
+    assert_eq!(
+        edge_lines(&plan_of(&analysis, "Quiet")),
+        Vec::<String>::new()
+    );
     assert_eq!(edge_lines(&plan_of(&analysis, "Read")), ["noted -> shown"]);
     assert!(!analysis.modules[0]
         .diagnostics

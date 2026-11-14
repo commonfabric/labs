@@ -990,7 +990,12 @@ impl<'a> Resolver<'_, 'a> {
 
     /// The label arguments of the alias being resolved.
     fn label_scope(&self) -> Vec<(String, Option<serde_json::Value>)> {
-        self.types.borrow().label_env.last().cloned().unwrap_or_default()
+        self.types
+            .borrow()
+            .label_env
+            .last()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The type a declaration of module `module` denotes with `arguments`
@@ -1410,7 +1415,11 @@ impl<'a> Resolver<'_, 'a> {
                 let scope = self.label_scope();
                 let value = written(1)
                     .and_then(|list| self.label_value(module, list, &scope, 0))
-                    .or_else(|| arguments.get(1).and_then(|list| self.label_value_of_type(*list, 0)))
+                    .or_else(|| {
+                        arguments
+                            .get(1)
+                            .and_then(|list| self.label_value_of_type(*list, 0))
+                    })
                     .filter(serde_json::Value::is_array);
                 let annotated =
                     self.annotate_once(module, reference.span, first(), key, argument_text(1));

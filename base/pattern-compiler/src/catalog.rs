@@ -76,7 +76,6 @@ const fn part(id: &'static str, severity: Severity, rest: &'static str) -> Entry
     }
 }
 
-
 const fn retired(id: &'static str) -> Entry {
     Entry {
         id,
@@ -87,7 +86,8 @@ const fn retired(id: &'static str) -> Entry {
 
 use Severity::{Error, Hint, Warning};
 
-const FLOW_REST: &str = "decided on declared labels by the rules of `plan-and-label-templates.md` §4.4; a \
+const FLOW_REST: &str =
+    "decided on declared labels by the rules of `plan-and-label-templates.md` §4.4; a \
          template with an `identity` slot is not evaluated, so a write through a handle is \
          left to the runtime, and a `created` and a `request` target have no constraint";
 const PROMOTION_REST: &str = "decided by syntax and by method names, as the measurement of \

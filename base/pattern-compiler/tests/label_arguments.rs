@@ -70,7 +70,10 @@ fn an_alias_a_constant_reference_and_a_marker_type_are_replaced_in_a_label_list(
     let plan = &analysis.modules[0].plans[0].plan;
     // "`Confidential<string, RecipeSecret>` with `type RecipeSecret =
     // readonly ["recipe-secret"]` is the list written in place."
-    assert_eq!(declared(plan, "a"), json!({ "confidentiality": ["secret"] }));
+    assert_eq!(
+        declared(plan, "a"),
+        json!({ "confidentiality": ["secret"] })
+    );
     // "With `const LOBBY_ADMIN = "lobby-admin"`, the list `readonly
     // [typeof LOBBY_ADMIN]` is `readonly ["lobby-admin"]`", and the
     // value may be "an object whose property values are atoms".
@@ -86,7 +89,10 @@ fn an_alias_a_constant_reference_and_a_marker_type_are_replaced_in_a_label_list(
     );
     // "With the type arguments substituted", and "a spread of another
     // label list".
-    assert_eq!(declared(plan, "d"), json!({ "confidentiality": ["x", "secret"] }));
+    assert_eq!(
+        declared(plan, "d"),
+        json!({ "confidentiality": ["x", "secret"] })
+    );
     assert_eq!(
         declared(plan, "e"),
         json!({ "confidentiality": [{ "anyOf": ["p", "q"] }] })

@@ -35,8 +35,16 @@ export type Template =
   | { op: "fold"; collection: number; body: Template }
   | { op: "dynamic"; reads: unknown };
 
-/** One element of a collection: the collection, and the element's key. */
-export type ElementBinding = { collection: number; key: string };
+/**
+ * One element of a collection: the collection, and the element's key. For
+ * the child a `pick` chose in a container, `container` is the slot the
+ * node's `from` names and `collection` is -1.
+ */
+export type ElementBinding = {
+  collection: number;
+  key: string;
+  container?: number;
+};
 
 /** What a template is evaluated against. */
 export type TemplateInputs = {
