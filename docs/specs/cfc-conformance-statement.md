@@ -760,6 +760,12 @@ reference the stored document's membership guards, so the setup's read of it
 joins the stamp it re-mints. A container reached only through the restatement
 mints no existence entry.
 
+This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
+ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It
+narrows what is stored and so does not satisfy the correspondence procedure's
+step 4, which asks for a default-off dial; the two deciding sites carry its
+`SPEC-PENDING` marker.
+
 A recorded wiring whose document holds data beside its references is taken
 too, at its root, but its root is not treated as written: only an asking setup
 restates a wiring it finds unchanged, and the persist region's
@@ -774,12 +780,6 @@ stamp and can raise one from the restating setup's decision reads, so it does
 not satisfy step 4 either, and its three deciding sites carry that pull
 request's `SPEC-PENDING` marker.
 
-This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
-ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It
-narrows what is stored and so does not satisfy the correspondence procedure's
-step 4, which asks for a default-off dial; the two deciding sites carry its
-`SPEC-PENDING` marker.
-
 **Residuals.**
 
 - A wiring whose stored name is carried over is stamped from the attempt's
@@ -789,7 +789,10 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   hands `run`, `setup`, `runSynced` or `runInTransaction`, or the one `setup`
   or `runSynced` makes for that call; a setup nested in another, such as a
   pattern node its parent instantiates, takes that transaction's standing).
-  A `run` given no transaction is not one. A transaction the runner makes
+  A `run` given no transaction is not one, and neither is a setup the runtime
+  starts on its own and marks `runtimeStarted`: the piece controller's
+  re-stage of a stale root setup, its cold-start setup repair and its
+  roll-forward, and `wish.ts`'s sidecar run in a continuation's transaction. A transaction the runner makes
   later for a deferred start or a swap takes the standing of the transaction
   whose reads it carries (§7) while that transaction is committing or has
   committed, and not while it is open or once it is aborted or refused, so a
@@ -826,12 +829,18 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   re-derived at a restatement and none of its membership, so a setup that
   leaves it unchanged keeps the stored membership: an over-taint where an
   earlier attempt's stamp is wider than the setup's own.
-- A setup of the pattern a result was set up with reads the name it would
-  carry over from the stored result, whether or not one is stored, and that
-  read consumes the root's value entry. Its restatement re-derives the entry
+- A setup of the pattern a result was set up with, other than one that
+  rebuilds the stored setup state (`reapplyStoredSetup`), reads the name it
+  would carry over from the stored result, whether or not one is stored, and
+  that read consumes the root's value entry. Its restatement re-derives the entry
   from a join that carries the stored entry's clauses again, so a stale value
   stamp comes off only at an asking setup of another pattern, such as an
   update that changes the sub-pattern's module.
+- A restated data root's value entry is re-derived at the root alone. A
+  derived entry stored below the root, which a reader of that path takes in
+  place of the root's, keeps what it holds, so a clause the re-derived root
+  entry gains does not reach a reader of that path: an under-taint, where a
+  write below a result root left an entry there.
 
 ## 10. Write-policy alternatives across a release (§8.15.6, §8.15.13)
 

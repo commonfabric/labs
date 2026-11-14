@@ -2072,6 +2072,9 @@ export interface RunSyncedOptions {
 
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
+
+  /** See `RunnerRunOptions.runtimeStarted`. */
+  runtimeStarted?: boolean;
 }
 
 /** Options for a pattern setup whose fresh source revision proves a commit. */
@@ -2133,6 +2136,9 @@ type SetupValidationOptions = {
 
   /** Keep the next start on the persisted-result dependency-sync path. */
   prepareForResume?: boolean;
+
+  /** See `RunnerRunOptions.runtimeStarted`. */
+  runtimeStarted?: boolean;
 };
 
 export type PieceSourceRevisionOperation =
@@ -2459,6 +2465,11 @@ const LIST_OP_INPUT_SCHEMAS = {
 // `#startAfterSuccessfulCommit()`.
 export type RunnerRunOptions = {
   doNotUpdateOnPatternChange?: boolean;
+  // The runtime starts this setup on its own, to repair a piece or to carry
+  // on with a pattern an earlier transaction chose, so the transaction it is
+  // given holds none of the reads that chose the pattern and is not an asking
+  // one (`#askingSetupTransactions`).
+  runtimeStarted?: boolean;
   // Resumed-from-synced-state: hold each action's initial rehydration/run until
   // the space has finished syncing, so consumers don't race the data.
   awaitSyncBeforeInitialRun?: boolean;
@@ -2852,8 +2863,10 @@ export class Runner {
    * transaction or a swap, has that standing too when it carries the reads
    * that decided it from an asking one that is committing or committed
    * (`#carriedStanding`).
-   * Every other setup transaction, a repair's or a swap's that no setup here
-   * staged, holds none of those reads, so re-minting the stored membership
+   * A setup the runtime starts on its own is not added even when handed a
+   * transaction (`runtimeStarted`). Every other setup transaction, a repair's
+   * or a swap's that no setup here staged, holds none of those reads, so
+   * re-minting the stored membership, or the value of a result holding data,
    * there would drop a clause they carried.
    */
   readonly #askingSetupTransactions = new WeakSet<
@@ -3810,7 +3823,9 @@ export class Runner {
   ): Promise<Cell<R>> {
     if (providedTx) {
       this.#callerOwnedSetupTransactions.add(providedTx);
-      this.#askingSetupTransactions.add(providedTx);
+      if (!options.runtimeStarted) {
+        this.#askingSetupTransactions.add(providedTx);
+      }
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -3829,7 +3844,7 @@ export class Runner {
       // setup.
       return this.#runtime.editWithRetry((tx) => {
         this.#callerOwnedSetupTransactions.add(tx);
-        this.#askingSetupTransactions.add(tx);
+        if (!options.runtimeStarted) this.#askingSetupTransactions.add(tx);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -10096,7 +10111,7 @@ export class Runner {
   ): Cell<R> {
     // A run given no transaction starts in one the runner makes, which holds
     // none of the reads that chose the pattern, so it is not an asking one.
-    if (providedTx !== undefined) {
+    if (providedTx !== undefined && !options.runtimeStarted) {
       this.#askingSetupTransactions.add(providedTx);
     }
     return this.#runWithStartOwnership(
@@ -10566,7 +10581,9 @@ export class Runner {
     };
     if (givenTx) {
       this.#callerOwnedSetupTransactions.add(givenTx);
-      this.#askingSetupTransactions.add(givenTx);
+      if (!options?.runtimeStarted) {
+        this.#askingSetupTransactions.add(givenTx);
+      }
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -10631,7 +10648,7 @@ export class Runner {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
-          this.#askingSetupTransactions.add(tx);
+          if (!options?.runtimeStarted) this.#askingSetupTransactions.add(tx);
           return this.#setupInternal(
             tx,
             pattern,

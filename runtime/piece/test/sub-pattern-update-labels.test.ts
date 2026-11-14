@@ -500,7 +500,10 @@ describe("sub-pattern-update-labels", () => {
       it("keeps the view hidden across a restart", async () => {
         // A restart sets the sub-pattern up in a transaction no caller asked
         // it in (`#isAsking` in `runner.ts`), which holds none of the reads
-        // that chose the pattern, so it restates nothing.
+        // that chose the pattern, so it restates nothing. Its setup, of the
+        // same pattern, also reads the name it would carry over, which
+        // takes the stamp again, so a restatement there would keep it too:
+        // the runner's tests pin the asking gate itself.
 
         const piece = await stamped(
           program({ ...options, version: "v1", editView: false }),

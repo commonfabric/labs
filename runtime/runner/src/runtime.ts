@@ -1328,6 +1328,7 @@ type RuntimeSetupOptions = {
   initialPieceSourceOrigin?: string;
   reapplyStoredSetup?: boolean;
   prepareForResume?: boolean;
+  runtimeStarted?: boolean;
 };
 
 /**

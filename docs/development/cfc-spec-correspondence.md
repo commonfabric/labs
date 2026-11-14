@@ -383,14 +383,16 @@ A result document's value entry at a restatement (§8.9.1.3) implements
 [specs#88](https://github.com/commonfabric/specs/pull/88), ahead of its
 ruling. An asking setup that finds a result holding data beside its
 references unchanged re-derives the root's value entry from its transaction's
-flow join, as its write of the root would; a setup that is not asking
-restates no unchanged result, so it leaves the entry as stored; and the
-restatement mints no existence entry and leaves the existence entry and the
+flow join, as its write of the root would. A setup that is not asking, among
+them one the runtime starts on its own to repair a piece or to carry on with a
+pattern an earlier transaction chose (`runtimeStarted` in `runner.ts`),
+restates no unchanged result, so it leaves the entry as stored. The
+restatement mints no existence entry, and leaves the existence entry and the
 entries below the root as they are. It changes what is stored at strict, with
 no default-off dial, so it does not satisfy step 4 above: it lowers a stale
 value stamp, and it can raise one from a restating setup's decision reads.
-Its three deciding sites carry the `SPEC-PENDING` marker. @danfuzz ruled that it
-lands at the strict default with no default-off dial, recorded here as a
+Its three deciding sites carry the `SPEC-PENDING` marker. @danfuzz ruled that
+it lands at the strict default with no default-off dial, recorded here as a
 nonconforming semantic gap, pending
 [specs#98](https://github.com/commonfabric/specs/pull/98). His reason, in his
 words: "we should define the spec change and still accept doing the change in
