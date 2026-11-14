@@ -82,6 +82,13 @@ export const comparePassed = (): Promise<Row[]> =>
   compare("passed", { secret: "s3cret", items: ["a", "b"] });
 
 /**
+ * Runs `fixtures/state-declared.tsx`: a state cell whose own type declares
+ * a clause, returned by reference.
+ */
+export const compareStateDeclared = (): Promise<Row[]> =>
+  compare("state-declared", { note: "n" });
+
+/**
  * Runs `fixtures/handler.tsx` and sends one event to its handler, which
  * sets a cell to a value derived from the event and a labeled input, and
  * pushes onto a list. The event's `text` has a label its schema declares.

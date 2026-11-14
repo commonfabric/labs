@@ -167,10 +167,12 @@ export type Row = {
    * The runtime's label read by origin (ruling T2; PL §3.1, "Which entries
    * are the static part"): the entries of each document on the way from the
    * output to its value, without the static part. The static part is the
-   * entries of origin `declared` outside the argument's document, and no
-   * entry of another origin: an entry of origin `structure` is the stamp of
-   * a run, as a `derived` one is, and is compared. The argument's own
-   * document keeps its declared entries: they are the labels of the inputs.
+   * entries of origin `declared` in a document that holds the result of a
+   * node, and no entry of another origin: an entry of origin `structure` is
+   * the stamp of a run, as a `derived` one is, and is compared. A document
+   * a slot is bound in keeps its declared entries, which are the labels of
+   * the places a template reads: the argument's own document, a cell the
+   * argument links to, and the document of a state cell.
    */
   runtimeByOrigin: { all: Label; withoutStatic: Label };
   /** `reached` against `runtimeByOrigin.withoutStatic`. */
@@ -749,13 +751,25 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         }
         return found;
       };
-      // The documents whose declared entries are the labels of inputs: the
-      // argument's own, and the cell of each input given through a link.
+      // The documents a slot of a template is bound in, whose declared
+      // entries are the labels of those places and are compared (PL §3.1,
+      // "Which entries are the static part"): the argument's own, the cell
+      // of each input given through a link, and each state cell the
+      // manifest names. Every other document on the way from an output to
+      // its value holds the result of a node.
       const inputIds = new Set([
         argument.getAsNormalizedFullLink().id,
         ...Object.keys(scenario.inputs ?? {}).flatMap((name) =>
           hops(at(argument, [name])).map((link) => link.id)
         ),
+        ...(plan.stateCells ?? []).flatMap((_, cell) => {
+          try {
+            return [stateCell(cell).getAsNormalizedFullLink().id];
+          } catch {
+            // A state cell of a per-element body has no address here.
+            return [];
+          }
+        }),
       ]);
       const byOrigin = (
         cell: AnyCell,

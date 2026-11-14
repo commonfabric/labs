@@ -6,6 +6,7 @@ import {
   compareIsEdited,
   comparePassed,
   compareSmall,
+  compareStateDeclared,
   runHandler,
   runSmall,
 } from "../scenarios.ts";
@@ -200,6 +201,22 @@ describe("the runtime's labels read by origin (ruling T2)", () => {
     // with the static part included (PL §3.5; section 8, question 69).
     expect((await overall(true)).direct).toBe("equal, looser");
     expect((await overall(false)).direct).toBe("tighter, looser");
+  });
+});
+
+describe("the static part, by the document an entry is in", () => {
+  it("keeps the clause the type of a state cell declares, which the template reads through its slot", async () => {
+    // PL §3.1, "Which entries are the static part": a `declared` entry in
+    // the document of a state cell is the label of the place a slot of
+    // the template is bound in, and is compared. The one stored entry
+    // that holds the clause of `pinned` is that entry.
+    const [row] = await compareStateDeclared();
+
+    expect(row.path).toEqual(["pinned"]);
+    expect([...new Set(row.reached.label.confidentiality)]).toEqual(["alice"]);
+    expect([...new Set(row.runtimeByOrigin.withoutStatic.confidentiality)])
+      .toEqual(["alice"]);
+    expect(row.comparisonWithoutStatic.confidentiality).toBe("equal");
   });
 });
 
