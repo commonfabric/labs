@@ -14,6 +14,7 @@ import {
 } from "commonfabric";
 import {
   type ChatMessageWindow,
+  FABRICHAT_POLICY,
   type MessageRecord,
   type MessagesValue,
 } from "./room-records.tsx";
@@ -63,6 +64,20 @@ const shown = (
     window.hasNewer ? "newer" : "-",
   ].join(" ");
 };
+
+/**
+ * Opens of further windows, which with the two the test holds open by then
+ * fill a session's `maxOpenWindows`.
+ */
+const FILL_EVENTS = Array.from(
+  { length: FABRICHAT_POLICY.maxOpenWindows - 2 },
+  (_, index) => ({
+    requestId: `fill-${index}`,
+    windowId: `fill-${index}`,
+    from: { before: "end" as const },
+    count: 1,
+  }),
+);
 
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
@@ -179,7 +194,8 @@ export default pattern(() => {
       },
 
       // Closing a window removes it alone, and another instance of the room,
-      // Bob's here, holds windows of its own.
+      // Bob's here, holds windows of its own (`window-sessions.test.tsx` holds
+      // two sessions of one room to theirs).
       {
         action: alice.messages.closeWindow,
         event: { requestId: "r7", windowId: "oldest" },
@@ -189,6 +205,43 @@ export default pattern(() => {
           shown(alice.messages.windows.get(), "oldest") === "none" &&
           shown(alice.messages.windows.get(), "newest") === "C older -" &&
           shown(bob.messages.windows.get(), "newest") === "none"
+        ),
+      },
+
+      // A session holds at most `maxOpenWindows` windows: with that many open,
+      // an open of another opens none, and moving one still sets it.
+      ...FILL_EVENTS.map((event) => ({
+        action: alice.messages.openWindow,
+        event,
+      })),
+      {
+        assertion: assert(() =>
+          Object.keys(alice.messages.windows.get() ?? {}).length ===
+            FABRICHAT_POLICY.maxOpenWindows
+        ),
+      },
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "r8",
+          windowId: "one-too-many",
+          from: { before: "end" },
+          count: 1,
+        },
+      },
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "r9",
+          windowId: "newest",
+          from: { after: "start" },
+          count: 1,
+        },
+      },
+      {
+        assertion: assert(() =>
+          shown(alice.messages.windows.get(), "one-too-many") === "none" &&
+          shown(alice.messages.windows.get(), "newest") === "A - newer"
         ),
       },
     ],
