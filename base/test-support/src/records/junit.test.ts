@@ -198,6 +198,33 @@ describe("junit", () => {
       expect(() => parseJUnit("< >")).toThrow(JUnitParseError);
     });
 
+    it("decodes `&apos;` and keeps an entity naming no code point as written", () => {
+      const cases = parseJUnit(
+        `<testsuite name="s"><testcase name="it&apos;s &#x110000;"/>` +
+          "</testsuite>",
+      );
+      expect(cases[0]?.name).toBe("it's &#x110000;");
+    });
+
+    it("reads attributes with whitespace around the equals sign", () => {
+      const cases = parseJUnit(
+        `<testsuite name = "s"><testcase name =\n'a'/></testsuite>`,
+      );
+      expect(cases).toEqual([{ suite: "s", name: "a", outcome: "pass" }]);
+    });
+
+    it("throws for an attribute with no value", () => {
+      expect(() => parseJUnit("<testcase name>")).toThrow(
+        new JUnitParseError("attribute name of testcase has no value"),
+      );
+    });
+
+    it("throws for a testcase with no name", () => {
+      expect(() => parseJUnit('<testcase classname="c"/>')).toThrow(
+        new JUnitParseError("testcase with no name"),
+      );
+    });
+
     it("ignores markers outside any open testcase", () => {
       const cases = parseJUnit(
         '<testsuite name="s"><failure message="stray"/><skipped/>' +

@@ -28,12 +28,8 @@ export function verifyEd25519SignatureSync(
   payload: Uint8Array,
   signature: Uint8Array,
 ): boolean {
+  // The library throws only for an argument of the wrong length, which the
+  // checks here rule out; a malformed point or encoding verifies as `false`.
   if (!isCanonicalEd25519DID(signer) || signature.length !== 64) return false;
-  try {
-    return ed25519.verify(signature, payload, didToBytes(signer));
-  } catch {
-    // The library throws on a malformed point or encoding, which is a
-    // signature that does not verify.
-    return false;
-  }
+  return ed25519.verify(signature, payload, didToBytes(signer));
 }

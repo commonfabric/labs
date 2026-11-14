@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
@@ -53,6 +54,19 @@ describe("fragment", () => {
       expect(FragmentWriter.open(join(dir, "occupied"))).toBeUndefined();
     });
 
+    it("warns once however many opens fail", async () => {
+      await Deno.writeTextFile(join(dir, "occupied"), "a file in the way");
+      using warn = stub(console, "warn");
+
+      expect(FragmentWriter.open(join(dir, "occupied"))).toBeUndefined();
+      expect(FragmentWriter.open(join(dir, "occupied"))).toBeUndefined();
+
+      expect(warn.calls.length).toBe(1);
+      expect(String(warn.calls[0]?.args[0])).toContain(
+        "test records: cannot open a record fragment",
+      );
+    });
+
     it("returns distinct fragment files for two writers", () => {
       const first = FragmentWriter.open(dir);
       const second = FragmentWriter.open(dir);
@@ -94,6 +108,71 @@ describe("fragment", () => {
       writer.append(RECORD);
       const text = await Deno.readTextFile(writer.path);
       expect(text.trimEnd().split("\n").length).toBe(1);
+    });
+
+    it("warns, closes, and stops writing when a write fails", () => {
+      let writes = 0;
+      let closes = 0;
+      const writer = FragmentWriter.accessForTestingOnly.create("/broken", {
+        writeSync: () => {
+          writes++;
+          throw new Deno.errors.BadResource("closed underneath");
+        },
+        close: () => {
+          closes++;
+        },
+      });
+      using warn = stub(console, "warn");
+
+      writer.append(RECORD);
+      writer.append(RECORD);
+      writer.close();
+
+      expect(writes).toBe(1);
+      expect(closes).toBe(1);
+      expect(warn.calls.map((call) => String(call.args[0]))).toEqual([
+        "test records: cannot append to /broken: BadResource: closed underneath",
+      ]);
+    });
+
+    it("stops writing without throwing when the close after a failed write fails too", () => {
+      let writes = 0;
+      const writer = FragmentWriter.accessForTestingOnly.create("/gone", {
+        writeSync: () => {
+          writes++;
+          throw new Deno.errors.BadResource("closed underneath");
+        },
+        close: () => {
+          throw new Deno.errors.BadResource("already closed");
+        },
+      });
+      using _warn = stub(console, "warn");
+
+      expect(() => writer.append(RECORD)).not.toThrow();
+      expect(() => writer.append(RECORD)).not.toThrow();
+      expect(() => writer.close()).not.toThrow();
+      expect(writes).toBe(1);
+    });
+
+    it("writes a line the file takes in pieces whole", () => {
+      // `writeSync()` may write fewer bytes than it was given.
+
+      const chunks: Uint8Array[] = [];
+      const writer = FragmentWriter.accessForTestingOnly.create("/slow", {
+        writeSync: (bytes) => {
+          chunks.push(bytes.slice(0, 5));
+          return Math.min(5, bytes.length);
+        },
+        close: () => {},
+      });
+
+      writer.append(RECORD);
+
+      const text = new TextDecoder().decode(
+        new Uint8Array(chunks.flatMap((chunk) => [...chunk])),
+      );
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(parseRecordLine(text.trimEnd())).toEqual(RECORD);
     });
   });
 });

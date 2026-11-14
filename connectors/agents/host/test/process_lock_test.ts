@@ -1,4 +1,9 @@
-import { assertEquals, assertNotEquals, assertRejects } from "@std/assert";
+import {
+  assertEquals,
+  assertNotEquals,
+  assertRejects,
+  assertThrows,
+} from "@std/assert";
 import { join, resolve } from "@std/path";
 import {
   AgentsHostProcessLock,
@@ -7,29 +12,53 @@ import {
 } from "../src/process-lock.ts";
 
 Deno.test("agent host process-lock directories honor runtime settings", () => {
+  const linux = { os: "linux" as const, uid: () => 501 };
   assertEquals(
-    defaultAgentsHostLockDirectory((key) =>
-      key === "CF_AGENTS_HOST_LOCK_DIR" ? " ./locks " : undefined
+    defaultAgentsHostLockDirectory(
+      (key) => key === "CF_AGENTS_HOST_LOCK_DIR" ? " ./locks " : undefined,
+      linux,
     ),
     resolve("./locks"),
   );
   assertEquals(
-    defaultAgentsHostLockDirectory((key) =>
-      key === "XDG_RUNTIME_DIR" ? "/runtime" : undefined
+    defaultAgentsHostLockDirectory(
+      (key) => key === "XDG_RUNTIME_DIR" ? "/runtime" : undefined,
+      linux,
     ),
     join(resolve("/runtime"), "commonfabric", "agents-host"),
   );
-  if (Deno.build.os !== "windows") {
-    assertEquals(
-      defaultAgentsHostLockDirectory((key) =>
-        key === "TMPDIR" ? "/private/runtime" : undefined
-      ),
-      join(
-        resolve("/private/runtime"),
-        `commonfabric-agents-host-${Deno.uid()}`,
-      ),
-    );
-  }
+  assertEquals(
+    defaultAgentsHostLockDirectory(
+      (key) => key === "TMPDIR" ? "/private/runtime" : undefined,
+      linux,
+    ),
+    join(resolve("/private/runtime"), "commonfabric-agents-host-501"),
+  );
+  assertEquals(
+    defaultAgentsHostLockDirectory(() => undefined, linux),
+    join(resolve("/tmp"), "commonfabric-agents-host-501"),
+  );
+});
+
+Deno.test("agent host process-lock directories on Windows need a base directory", () => {
+  const windows = {
+    os: "windows" as const,
+    uid: () => {
+      throw new Error("the user ID must not be read on Windows");
+    },
+  };
+  assertEquals(
+    defaultAgentsHostLockDirectory(
+      (key) => key === "TEMP" ? "C:\\Temp" : undefined,
+      windows,
+    ),
+    join(resolve("C:\\Temp"), "CommonFabric", "agents-host"),
+  );
+  assertThrows(
+    () => defaultAgentsHostLockDirectory(() => undefined, windows),
+    Error,
+    "CF_AGENTS_HOST_LOCK_DIR is required",
+  );
 });
 
 Deno.test("target process locks use the canonical API and resolved space", async () => {
@@ -172,6 +201,86 @@ Deno.test("AgentsHostProcessLock rejects invalid existing lock files", async () 
       Error,
       "process lock file is not a file",
     );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("AgentsHostProcessLock refuses a lock path another user owns", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "agents.lock");
+  try {
+    await Deno.writeTextFile(path, "held\n", { mode: 0o600 });
+    await Deno.chmod(path, 0o600);
+    const owner = (await Deno.lstat(path)).uid;
+    await assertRejects(
+      () =>
+        AgentsHostProcessLock.accessForTestingOnly.acquire(path, {
+          os: "linux",
+          uid: () => (owner ?? 0) + 1,
+        }),
+      Error,
+      "process lock directory has a different owner",
+    );
+    assertEquals(await Deno.readTextFile(path), "held\n");
+
+    const lock = await AgentsHostProcessLock.accessForTestingOnly.acquire(
+      path,
+      {
+        os: "linux",
+        uid: () => owner,
+      },
+    );
+    await lock.release();
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("AgentsHostProcessLock leaves ownership and mode unchecked on Windows", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "agents.lock");
+  try {
+    await Deno.writeTextFile(path, "", { mode: 0o644 });
+    await Deno.chmod(path, 0o644);
+    await assertRejects(
+      () =>
+        AgentsHostProcessLock.accessForTestingOnly.acquire(path, {
+          os: "linux",
+          uid: () => Deno.uid(),
+        }),
+      Error,
+      "process lock file permits access by other users",
+    );
+
+    const lock = await AgentsHostProcessLock.accessForTestingOnly.acquire(
+      path,
+      {
+        os: "windows",
+        uid: () => {
+          throw new Error("the owner must not be read on Windows");
+        },
+      },
+    );
+    await lock.release();
+    assertEquals(await Deno.readTextFile(path), `${Deno.pid}\n`);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("AgentsHostProcessLock reports a lock path it cannot inspect", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "x".repeat(300));
+  try {
+    const error = await assertRejects(() =>
+      AgentsHostProcessLock.acquire(path)
+    );
+    assertEquals(error instanceof Deno.errors.NotFound, false);
+    const lock = await AgentsHostProcessLock.acquire(
+      join(directory, "agents.lock"),
+    );
+    await lock.release();
   } finally {
     await Deno.remove(directory, { recursive: true });
   }

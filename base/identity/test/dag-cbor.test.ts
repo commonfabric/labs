@@ -109,6 +109,38 @@ Deno.test("decodeDagCbor() throws for truncated input and for trailing bytes", (
   expect(() => decodeDagCbor(bytes(0x00, 0x00))).toThrow(DagCborError);
 });
 
+Deno.test("decodeDagCbor() throws for input that ends inside a head's argument", () => {
+  expect(() => decodeDagCbor(bytes())).toThrow("unexpected end of input");
+  expect(() => decodeDagCbor(bytes(0x19, 0x01))).toThrow(
+    "unexpected end of input",
+  );
+});
+
+Deno.test("decodeDagCbor() throws for reserved additional information", () => {
+  for (const initial of [0x1c, 0x1d, 0x1e]) {
+    expect(() => decodeDagCbor(bytes(initial))).toThrow(
+      `reserved additional information ${initial & 0x1f}`,
+    );
+  }
+});
+
+Deno.test("decodeDagCbor() throws for an integer past the safe range, and returns the largest safe one", () => {
+  expect(() => decodeDagCbor(bytes(0x1b, 0x00, 0x20, 0, 0, 0, 0, 0, 0)))
+    .toThrow("integer argument exceeds safe range");
+  expect(
+    decodeDagCbor(bytes(0x1b, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)),
+  ).toBe(Number.MAX_SAFE_INTEGER);
+});
+
+Deno.test("decodeDagCbor() throws for a value nested too deep, and returns one nested to the limit", () => {
+  // Each 0x81 opens a one-element array around what follows.
+  const nested = (depth: number) =>
+    new Uint8Array([...new Array(depth).fill(0x81), 0x80]);
+
+  expect(() => decodeDagCbor(nested(9))).toThrow("value nests deeper than 8");
+  expect(decodeDagCbor(nested(8))).toEqual([[[[[[[[[]]]]]]]]]);
+});
+
 Deno.test("encodeDagCbor() encodes a plain object with Object.prototype or null as its prototype, and throws for any other object", () => {
   const plain = encodeDagCbor({ a: 1 });
   const bare = Object.create(null) as { [key: string]: number };

@@ -24,6 +24,7 @@ import {
   entityRefFrom,
   entityRefFromString,
   entityRefToString,
+  getModernCellRepConfig,
   isEntityRef,
   isLinkRef,
   LINK_V1_TAG,
@@ -49,6 +50,27 @@ const HASH = new FabricHash(SAMPLE_HASH, "fid1");
 const TAGGED = HASH.taggedHashString; // "fid1:…"
 
 describe("cell-rep", () => {
+  describe("modern cell representation flag", () => {
+    afterEach(() => {
+      resetModernCellRepConfig();
+    });
+
+    it("returns `false` from `getModernCellRepConfig()` after a reset", () => {
+      setModernCellRepConfig(true);
+      resetModernCellRepConfig();
+      expect(getModernCellRepConfig()).toBe(false);
+    });
+
+    it("returns from `getModernCellRepConfig()` what was last set, an unset value changing nothing", () => {
+      setModernCellRepConfig(true);
+      expect(getModernCellRepConfig()).toBe(true);
+      setModernCellRepConfig(undefined);
+      expect(getModernCellRepConfig()).toBe(true);
+      setModernCellRepConfig(false);
+      expect(getModernCellRepConfig()).toBe(false);
+    });
+  });
+
   describe("entity-id reference", () => {
     afterEach(() => {
       resetModernCellRepConfig();

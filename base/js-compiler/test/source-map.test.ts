@@ -4,6 +4,8 @@ import { describe, it } from "@std/testing/bdd";
 import { StaticCache } from "@commonfabric/static";
 import { SourceMapConsumer, SourceMapGenerator } from "source-map-js";
 
+import { getComposeBundleSourceMapCallsForTesting } from "../source-map.ts";
+
 import {
   composeBundleSourceMap,
   getTypeScriptEnvironmentTypes,
@@ -279,6 +281,56 @@ export default errorOnLine6;
     expect(parsed).toContain("main.tsx:6:");
   });
 
+  describe("for a frame in a file it holds a map for", () => {
+    // `main.js` line 1 maps to `/main.tsx` line 1, and line 2 to line 2 with
+    // the name `run`; line 3 maps to nothing.
+
+    function parser(): SourceMapParser {
+      const parser = new SourceMapParser();
+      parser.load("main.js", {
+        version: "3",
+        file: "main.js",
+        sourceRoot: "",
+        sources: ["/main.tsx"],
+        names: ["run"],
+        mappings: "AAAA;AACAA",
+      });
+      return parser;
+    }
+
+    it("maps an eval frame with no function name, naming it from the map", () => {
+      expect(parser().parse("    at main.js, <anonymous>:2:0")).toBe(
+        "    at run (/main.tsx:2:0)",
+      );
+      expect(parser().parse("    at main.js, <anonymous>:1:0")).toBe(
+        "    at <anonymous> (/main.tsx:1:0)",
+      );
+    });
+
+    it("maps the inner position of an eval frame that carries two", () => {
+      expect(
+        parser().parse(
+          "    at main.js, <anonymous>:3:0 (main.js, <anonymous>:2:0)",
+        ),
+      ).toBe("    at main.js, <anonymous>:3:0 (/main.tsx:2:0)");
+    });
+
+    it("returns an internal frame for an unmapped position in an eval or unnamed frame", () => {
+      expect(parser().parse("    at main.js, <anonymous>:3:0")).toBe(
+        "    at <CF_INTERNAL>",
+      );
+      expect(parser().parse("    at eval (main.js, <anonymous>:3:0)")).toBe(
+        "    at <CF_INTERNAL>",
+      );
+    });
+
+    it("returns an unmapped frame for an unmapped position in a named frame", () => {
+      expect(parser().parse("    at helper (main.js, <anonymous>:3:0)")).toBe(
+        "    at <UNMAPPED>",
+      );
+    });
+  });
+
   it("preserves unmapped stack frames from external files", () => {
     const parser = new SourceMapParser();
     // Load a source map for a specific file
@@ -360,6 +412,15 @@ describe("composeBundleSourceMap", () => {
     expect(consumer.originalPositionFor({ line: 2, column: 0 }).line).toBe(10);
   });
 
+  it("counts each composition", () => {
+    const before = getComposeBundleSourceMapCallsForTesting();
+
+    composeBundleSourceMap([{ body: "x" }], "m.js");
+    composeBundleSourceMap([{ body: "y" }], "m.js");
+
+    expect(getComposeBundleSourceMapCallsForTesting()).toBe(before + 2);
+  });
+
   it("returns undefined when no module has a map", () => {
     expect(composeBundleSourceMap([{ body: "x" }], "m.js")).toBe(undefined);
   });
@@ -376,6 +437,29 @@ describe("composeBundleSourceMap", () => {
     const pos = consumer.originalPositionFor({ line: 1, column: 0 });
     expect(pos.source).toBe("/id/dir/main.tsx");
     expect(pos.line).toBe(10);
+  });
+
+  it("keeps each source's content for a map with several sources", () => {
+    const g = new SourceMapGenerator({ file: "a.js" });
+    g.addMapping({
+      generated: { line: 1, column: 0 },
+      original: { line: 1, column: 0 },
+      source: "one.tsx",
+    });
+    g.addMapping({
+      generated: { line: 2, column: 0 },
+      original: { line: 1, column: 0 },
+      source: "two.tsx",
+    });
+    g.setSourceContent("two.tsx", "const two = 2;");
+
+    const composed = composeBundleSourceMap(
+      [{ body: "x\ny", map: JSON.parse(g.toString()) }],
+      "m.js",
+    )!;
+
+    expect(composed.sources).toEqual(["one.tsx", "two.tsx"]);
+    expect(composed.sourcesContent).toEqual([null, "const two = 2;"]);
   });
 
   it("preserves sourcesContent under the overridden source name", () => {

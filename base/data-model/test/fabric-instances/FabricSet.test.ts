@@ -35,6 +35,21 @@ describe("FabricSet", () => {
   });
 
   describe("instance members", () => {
+    describe("set", () => {
+      it("returns the wrapped `Set` itself rather than a copy", () => {
+        const wrapped = new Set<FabricValue>([1]);
+        const other = new Set<FabricValue>([1]);
+        const instance = new FabricSet(wrapped);
+        expect(instance.set).toBe(wrapped);
+        expect(instance.set).not.toBe(other);
+      });
+
+      it("returns a wrapped `FrozenSet` as is", () => {
+        const wrapped = new FrozenSet<FabricValue>([1]);
+        expect(new FabricSet(wrapped).set).toBe(wrapped);
+      });
+    });
+
     describe("toNativeValue()", () => {
       it("returns a `FrozenSet` when `frozen` is `true`", () => {
         const set = new Set<FabricValue>([1, 2]);

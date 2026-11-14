@@ -200,12 +200,10 @@ export class ProcessModuleByteCache implements ModuleByteCache {
   }
 
   #evictToCap(): void {
-    while (this.#totalBytes > this.#maxBytes) {
-      const oldest = this.#entries.keys().next().value;
-      if (oldest === undefined) break;
-      const entry = this.#entries.get(oldest);
-      this.#entries.delete(oldest);
-      if (entry !== undefined) this.#totalBytes -= entry.size;
+    for (const [key, { size }] of this.#entries) {
+      if (this.#totalBytes <= this.#maxBytes) return;
+      this.#entries.delete(key);
+      this.#totalBytes -= size;
     }
   }
 
@@ -432,21 +430,33 @@ export function createCompileByteCache(): ModuleByteCache {
   }
 
   cacheFiles.set(cache, cacheFile);
-  globalThis.addEventListener("unload", () => {
-    try {
-      const written = flushCompileByteCache(cache);
-      console.log(
-        `[compile-byte-cache] wrote ${written} modules to ${cacheFile}`,
-      );
-    } catch (error) {
-      console.error(
-        `[compile-byte-cache] failed to write ${cacheFile}:`,
-        error,
-      );
-    }
-  });
+  globalThis.addEventListener(
+    "unload",
+    () => writeCompileByteCacheAtUnload(cache, cacheFile),
+  );
 
   return cache;
+}
+
+/**
+ * Writes `cache` to `cacheFile` as a process unloads, reporting the outcome
+ * on the console rather than throwing, since nothing remains to catch it.
+ */
+export function writeCompileByteCacheAtUnload(
+  cache: ProcessModuleByteCache,
+  cacheFile: string,
+): void {
+  try {
+    const written = writeCompileByteCache(cache, cacheFile);
+    console.log(
+      `[compile-byte-cache] wrote ${written} modules to ${cacheFile}`,
+    );
+  } catch (error) {
+    console.error(
+      `[compile-byte-cache] failed to write ${cacheFile}:`,
+      error,
+    );
+  }
 }
 
 export function flushCompileByteCache(

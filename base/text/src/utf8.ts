@@ -122,10 +122,6 @@ export function utf8Compare(a: string, b: string): number {
  * Otherwise the result is a new array.
  */
 export function utf8SortedKeysOf(value: object): readonly string[] {
-  if (value === null) {
-    throw new TypeError("Value must not be `null`.");
-  }
-
   const cached = sortedKeyCache.get(value);
   if (cached !== undefined) {
     return cached;

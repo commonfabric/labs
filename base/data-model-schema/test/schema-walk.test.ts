@@ -560,6 +560,35 @@ describe("values that are not schemas", () => {
     expect(element.warnings[0]).toContain("allOf/0");
   });
 
+  it("visits nothing from a root that is not a schema", () => {
+    for (const [, value] of NON_SCHEMAS) {
+      const visited: JSONSchema[] = [];
+      expect(
+        forEachSchema(value as JSONSchema, (schema) => {
+          visited.push(schema);
+        }, { visitBooleans: true }),
+      ).toBe(false);
+      expect(visited).toEqual([]);
+    }
+  });
+
+  it("reads only the keys a record holds, not those it inherits", () => {
+    const inherited = { type: "number" } as const;
+    const own = { type: "string" } as const;
+    const properties = Object.create({ inherited }, {
+      own: { value: own, enumerable: true },
+    });
+    const schema = { properties } as JSONSchemaObj;
+
+    expect(edgesOf(schema).map((edge) => edge.key)).toEqual(["own"]);
+    const mapped: JSONSchema[] = [];
+    mapSubschemas(schema, (child) => {
+      mapped.push(child);
+      return child;
+    });
+    expect(mapped).toEqual([own]);
+  });
+
   it("still reads a record keyword written as an array, by index", () => {
     // Validation enumerates `properties` with `Object.entries`, which names an
     // array's indices, so the walk has to see the same subschemas it does.

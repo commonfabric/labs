@@ -212,4 +212,90 @@ describe("openGithubFabricRuntime", () => {
     // The runtime holds it too, so that no host hint moves Memory off it.
     expect(runtimeMemoryUrls).toEqual(["https://router.example.test/"]);
   });
+
+  it("returns a target in the resolved space, acting as the identity", async () => {
+    globalThis.fetch = (input) =>
+      Promise.resolve(
+        new Response(null, {
+          status: new URL(input instanceof Request ? input.url : String(input))
+              .pathname === "/api/meta"
+            ? 404
+            : 503,
+        }),
+      );
+    using _open = stub(
+      StorageManager,
+      "open",
+      (options) => StorageManager.emulate({ as: options.as }),
+    );
+    using _health = stub(
+      Runtime.prototype,
+      "healthCheck",
+      () => Promise.resolve(true),
+    );
+    const did = (await Identity.fromPkcs8(await Deno.readFile(identityPath)))
+      .did();
+
+    const fabric = await openGithubFabricRuntime({
+      apiUrl: "https://fabric.example.test",
+      identityPath,
+      space: did,
+      githubHost: "github.com",
+      githubAccount: "acme",
+    });
+    try {
+      expect(fabric.spaceDid).toBe(did);
+      expect(fabric.target.source).toEqual({
+        host: "github.com",
+        account: "acme",
+      });
+      expect(fabric.target.conn.runtime).toBe(fabric.runtime);
+      expect(fabric.runtime.trustSnapshotProvider()).toEqual({
+        id: `principal:${did}`,
+        actingPrincipal: did,
+      });
+    } finally {
+      await fabric.runtime.dispose();
+    }
+  });
+
+  it("reports a failed disposal together with the startup failure", async () => {
+    globalThis.fetch = () =>
+      Promise.resolve(new Response(null, { status: 404 }));
+    using _open = stub(
+      StorageManager,
+      "open",
+      (options) => StorageManager.emulate({ as: options.as }),
+    );
+    using _health = stub(
+      Runtime.prototype,
+      "healthCheck",
+      () => Promise.resolve(false),
+    );
+    const disposeError = new Error("dispose rejected");
+    const dispose = Runtime.prototype.dispose;
+    using _dispose = stub(Runtime.prototype, "dispose", async function () {
+      await dispose.call(this);
+      throw disposeError;
+    });
+
+    const failure = await openGithubFabricRuntime({
+      apiUrl: "https://fabric.example.test",
+      identityPath,
+      space: "github-space",
+      githubHost: "github.com",
+      githubAccount: "acme",
+    }).then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) throw failure;
+    expect(failure.message).toBe(
+      "GitHub Fabric runtime startup and cleanup failed",
+    );
+    expect(failure.errors.length).toBe(2);
+    expect(String(failure.errors[0])).toContain(
+      "could not connect to https://fabric.example.test",
+    );
+    expect(failure.errors[1]).toBe(disposeError);
+  });
 });

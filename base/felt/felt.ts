@@ -1,138 +1,106 @@
-import { blue, cyan, dim, green, red, yellow } from "@std/fmt/colors";
+import {
+  blue,
+  cyan,
+  dim,
+  green,
+  red,
+  stripAnsiCode,
+  yellow,
+} from "@std/fmt/colors";
 import { copy } from "@std/fs";
 
 import { Builder } from "./builder.ts";
 import { DevServer } from "./dev-server.ts";
 import { FeltCommand, ResolvedConfig } from "./interface.ts";
 
-export class Felt {
-  constructor(
-    public command: FeltCommand,
-    public config: ResolvedConfig,
-  ) {}
+/** A running `serve` or `dev` server. */
+export interface Serving {
+  server: DevServer;
+  /**
+   * Settles once serving has stopped. For `serve`, that is when the server
+   * shuts down. For `dev`, it is when the changes being watched end, which
+   * shuts the server down.
+   */
+  finished: Promise<void>;
+}
 
-  async process() {
-    const { port, redirectToIndex, hostname, watchDir, publicDir, outDir } =
-      this.config;
-    const isBuild = this.command === "build";
-    const isServe = this.command === "serve";
-    const isDev = this.command === "dev";
-
-    if (isServe || isDev) {
-      // Calculate the maximum width needed for the box
-      const lines = [
-        `  🌐 Server:   http://${hostname}:${port}`,
-        `  📂 Project:  ${this.config.cwd}`,
-        `  📁 Public:   ${this.config.publicDir}`,
-      ];
-      if (isDev) {
-        lines.push(`  👀 Watch:    ${watchDir}`);
-      }
-
-      // Find the longest line to determine box width (minimum 50 for the header)
-      const maxLineLength = lines.reduce(
-        (longest, line) => Math.max(longest, line.length),
-        50,
-      );
-      const boxWidth = maxLineLength + 4; // +4 for padding on both sides
-
-      console.log();
-      console.log(cyan("  ╔" + "═".repeat(boxWidth - 2) + "╗"));
-
-      // Header with colored FELT letters
-      const headerPrefix = " ".repeat(3);
-      const headerSuffix = " ".repeat(3);
-      const headerContent = headerPrefix +
-        yellow("F") + dim("ront") + red("E") + dim("nd ") +
-        green("L") + dim("ightweight ") +
-        blue("T") + dim("ooling") + " 🚀 " + dim("(v0.0.1)") +
-        headerSuffix;
-
-      // Calculate padding for centered header
-      const headerVisualLength = headerPrefix.length +
-        "Frontend Lightweight Tooling 🚀 (v0.0.1)".length + headerSuffix.length;
-      const headerPadding = Math.floor((boxWidth - 2 - headerVisualLength) / 2);
-      const headerRightPad = boxWidth - 2 - headerPadding - headerVisualLength;
-
-      console.log(
-        cyan("  ║") + " ".repeat(headerPadding) + headerContent +
-          " ".repeat(headerRightPad) + cyan("║"),
-      );
-
-      console.log(cyan("  ╠" + "═".repeat(boxWidth - 2) + "╣"));
-      console.log(cyan("  ║" + " ".repeat(boxWidth - 2) + "║"));
-
-      // Server line
-      const serverLine = `  🌐 Server:   ${blue(`http://${hostname}:${port}`)}`;
-      const serverVisualLength =
-        `  🌐 Server:   http://${hostname}:${port}`.length;
-      const serverPadding = boxWidth - 2 - serverVisualLength;
-      console.log(
-        cyan("  ║") + serverLine + " ".repeat(serverPadding) + cyan("║"),
-      );
-
-      // Project line
-      const projectLine = `  📂 Project:  ${this.config.cwd}`;
-      console.log(
-        cyan("  ║") + projectLine +
-          " ".repeat(boxWidth - 2 - projectLine.length) + cyan("║"),
-      );
-
-      // Public line
-      const publicLine = `  📁 Public:   ${this.config.publicDir}`;
-      console.log(
-        cyan("  ║") + publicLine +
-          " ".repeat(boxWidth - 2 - publicLine.length) + cyan("║"),
-      );
-
-      // Watch line (only in dev mode)
-      if (isDev) {
-        const watchLine = `  👀 Watch:    ${watchDir}`;
-        console.log(
-          cyan("  ║") + watchLine +
-            " ".repeat(boxWidth - 2 - watchLine.length) + cyan("║"),
-        );
-      }
-
-      console.log(cyan("  ║" + " ".repeat(boxWidth - 2) + "║"));
-      console.log(cyan("  ╚" + "═".repeat(boxWidth - 2) + "╝"));
-      console.log();
-    }
-
-    await copy(publicDir, outDir, { overwrite: true });
-
-    const builder = new Builder(this.config);
-    await builder.build();
-
-    if (isBuild) {
-      return;
-    }
-
-    let server: DevServer;
-    try {
-      server = new DevServer({
-        useReloadSocket: isDev,
-        hostname,
-        redirectToIndex,
-        port,
-        outDir,
-        staticDirs: this.config.staticDirs,
-      });
-    } catch (error) {
-      if (error instanceof Deno.errors.AddrInUse) {
-        // Reported only when the actual bind fails. Exit code 3 matches the
-        // dev-server scripts so a port collision can be retried elsewhere.
-        console.error(`Port ${port} is already in use`);
-        Deno.exit(3);
-      }
-      throw error;
-    }
-
-    if (isDev) {
-      builder.addEventListener("build", (_) => {
-        server.reload();
-      });
-      await builder.watch(watchDir);
-    }
+/**
+ * Copies the public directory into the output directory and builds the
+ * project. For `serve` and `dev`, then starts serving the output. In `dev`, the
+ * served page reloads after each rebuild, and a rebuild follows each change
+ * that `watch` reports under the watch directory.
+ */
+export async function felt(
+  command: FeltCommand,
+  config: ResolvedConfig,
+  watch: (dir: string) => AsyncIterable<unknown> = Deno.watchFs,
+): Promise<Serving | undefined> {
+  const isDev = command === "dev";
+  if (command !== "build") {
+    for (const line of banner(config, isDev)) console.log(line);
   }
+
+  await copy(config.publicDir, config.outDir, { overwrite: true });
+  const builder = new Builder(config);
+  await builder.build();
+
+  if (command === "build") return undefined;
+
+  const server = new DevServer({
+    useReloadSocket: isDev,
+    hostname: config.hostname,
+    redirectToIndex: config.redirectToIndex,
+    port: config.port,
+    outDir: config.outDir,
+    staticDirs: config.staticDirs,
+  });
+  if (!isDev) return { server, finished: server.finished };
+
+  builder.addEventListener("build", () => server.reload());
+  const finished = (async () => {
+    try {
+      await builder.watch(watch(config.watchDir));
+    } finally {
+      await server.shutdown();
+    }
+  })();
+  return { server, finished };
+}
+
+const STYLED_TITLE = yellow("F") + dim("ront") + red("E") + dim("nd ") +
+  green("L") + dim("ightweight ") + blue("T") + dim("ooling") + " 🚀 " +
+  dim("(v0.0.1)");
+const TITLE = stripAnsiCode(STYLED_TITLE);
+
+/**
+ * The lines of the box `serve` and `dev` print on starting, naming the server
+ * address and the project's directories, and the watch directory when `watch`
+ * is set.
+ */
+export function banner(config: ResolvedConfig, watch: boolean): string[] {
+  const server = "  🌐 Server:   ";
+  const url = `http://${config.hostname}:${config.port}`;
+  const rows = [
+    server + url,
+    `  📂 Project:  ${config.cwd}`,
+    `  📁 Public:   ${config.publicDir}`,
+    ...(watch ? [`  👀 Watch:    ${config.watchDir}`] : []),
+  ];
+  const width = rows.reduce((max, text) => Math.max(max, text.length), 50) + 2;
+  // A row of the box, padded by the length of `text`, printed as `styled`.
+  const row = (text: string, styled = text) =>
+    cyan("  ║") + styled + " ".repeat(width - text.length) + cyan("║");
+  const indent = " ".repeat(Math.floor((width - TITLE.length) / 2));
+  return [
+    "",
+    cyan("  ╔" + "═".repeat(width) + "╗"),
+    row(indent + TITLE, indent + STYLED_TITLE),
+    cyan("  ╠" + "═".repeat(width) + "╣"),
+    row(""),
+    row(rows[0], server + blue(url)),
+    ...rows.slice(1).map((text) => row(text)),
+    row(""),
+    cyan("  ╚" + "═".repeat(width) + "╝"),
+    "",
+  ];
 }

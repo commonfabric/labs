@@ -232,15 +232,13 @@ export function cloneHelper(
   // Identity optimization: when `force` is off, check if the value's frozenness
   // already matches the requested state. Deep mode uses
   // `isValidDeepFrozenFabricValue()`; shallow mode uses `Object.isFrozen(v) ===
-  // frozen`.
+  // frozen`. A deep thaw is always forced, a mixed-frozenness tree having no
+  // state to match.
   function canReturnAsIs(v: FabricValue): boolean {
     if (force) return false;
-    if (deep) {
-      if (frozen && isValidDeepFrozenFabricValue(v)) return true;
-      if (!frozen && !Object.isFrozen(v)) return true;
-      return false;
-    }
-    return Object.isFrozen(v) === frozen;
+    return deep
+      ? frozen && isValidDeepFrozenFabricValue(v)
+      : Object.isFrozen(v) === frozen;
   }
 
   switch (tagOfConvertibleJsValueElseNull(value)) {
@@ -268,22 +266,18 @@ export function cloneHelper(
       // Identity optimization: already-correct frozenness needs no clone.
       if (canReturnAsIs(value)) {
         return value;
-      } else if (deep) {
-        const instance = value as FabricInstance;
-        if (!BaseFabricInstance.isInstance(instance)) {
-          throw new TypeError(
-            "Fabric instances must implement the clone protocol",
-          );
-        }
-        seen = trackForCircularity(instance, seen);
+      } else if (deep && BaseFabricInstance.isInstance(value)) {
+        // `isInstance()` throws for an instance that does not implement the
+        // clone protocol, rather than returning `false`.
+        seen = trackForCircularity(value, seen);
         try {
-          const copy = instance[DEEP_CLONE_CORE](
+          const copy = value[DEEP_CLONE_CORE](
             frozen,
             (child) => cloneHelper(child, frozen, true, force, seen),
           );
           return frozen ? deepFreeze(copy) : copy;
         } finally {
-          seen.delete(instance);
+          seen.delete(value);
         }
       } else {
         return (value as FabricInstance).shallowClone(frozen);

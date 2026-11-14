@@ -120,6 +120,12 @@ interface RunOptions {
   skips?: SkipList | string;
 
   /**
+   * A path to name as the skip list in place of one written from `skips`,
+   * for a run whose skip list is not a file it can read.
+   */
+  skipListPath?: string;
+
+  /**
    * Modules preloaded ahead of the records preload, which is how a
    * module reaches the process before that preload does.
    */
@@ -159,7 +165,7 @@ async function runFixture(
   options: RunOptions = {},
 ): Promise<Deno.CommandOutput> {
   const { before = [], flags, skips, write = true } = options;
-  let skipList: string | undefined;
+  let skipList = options.skipListPath;
   if (skips !== undefined) {
     skipList = join(fixture.dir, "skips.json");
     await Deno.writeTextFile(
@@ -1192,6 +1198,23 @@ Reflect.set(Deno, "test", (...args: unknown[]) => Reflect.apply(real, Deno, args
       // The warning is what tells a reader that the file was read and
       // refused, rather than never reaching the preload at all.
       expect(output(run)).toContain("is malformed");
+      const reported = await outcomes(fixture);
+      expect(reported.get("bare kept")).toEqual("pass");
+      expect(reported.get("bare dropped")).toEqual("pass");
+    } finally {
+      await Deno.remove(fixture.dir, { recursive: true });
+    }
+  });
+
+  it("runs everything when the skip list cannot be read", async () => {
+    const fixture = await makeFixture({ "bare.test.ts": BARE_FILE });
+    try {
+      const missing = join(fixture.dir, "missing.json");
+      const run = await runFixture(fixture, ["bare.test.ts"], {
+        skipListPath: missing,
+      });
+      assert(run.success, output(run));
+      expect(output(run)).toContain(`cannot read the skip list ${missing}`);
       const reported = await outcomes(fixture);
       expect(reported.get("bare kept")).toEqual("pass");
       expect(reported.get("bare dropped")).toEqual("pass");

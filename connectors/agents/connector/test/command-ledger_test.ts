@@ -1,6 +1,9 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { join } from "@std/path";
-import { CommandLedger } from "../src/command-ledger.ts";
+import {
+  CommandLedger,
+  type CommandLedgerSystem,
+} from "../src/command-ledger.ts";
 import { AGENT_CONNECTOR_SCHEMAS } from "../src/protocol.ts";
 import type { AgentSessionCommandReceipt } from "../src/commands.ts";
 
@@ -28,6 +31,12 @@ function ledgerFile(overrides: Record<string, unknown> = {}) {
     pendingPublicationCommandIds: [],
     ...overrides,
   };
+}
+
+const WINDOWS: CommandLedgerSystem = { os: "windows", uid: () => null };
+
+async function readLedger(path: string): Promise<unknown> {
+  return JSON.parse(await Deno.readTextFile(path));
 }
 
 async function writeLedger(path: string, value: unknown): Promise<void> {
@@ -202,4 +211,284 @@ Deno.test("command ledgers reject shared files and symbolic links", async () => 
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test("command ledgers reject a directory owned by another user", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  try {
+    await assertRejects(
+      () =>
+        CommandLedger.accessForTestingOnly.open(path, {
+          os: "linux",
+          uid: () => Deno.uid()! + 1,
+        }),
+      Error,
+      "directory has a different owner",
+    );
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, {
+      os: "linux",
+      uid: () => Deno.uid(),
+    });
+    assertEquals(ledger.pendingPublicationCount(), 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("command ledgers reject a ledger path that is not a file", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  try {
+    await Deno.mkdir(path);
+    await assertRejects(
+      () => CommandLedger.open(path),
+      Error,
+      "file is not a file",
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("command ledgers keep their state and remove the temporary file when a write fails", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  try {
+    const ledger = await CommandLedger.open(path);
+    // A directory at the ledger path refuses the rename over it.
+    await Deno.mkdir(path);
+    await assertRejects(() => ledger.put(receipt("refused")));
+    assertEquals(ledger.pendingPublicationCount(), 0);
+    assertEquals(ledger.get("refused"), undefined);
+    assertEquals(
+      (await Array.fromAsync(Deno.readDir(directory))).map(({ name }) => name),
+      ["ledger.json"],
+    );
+
+    await Deno.remove(path);
+    await ledger.put(receipt("accepted"));
+    assertEquals(ledger.pendingPublicationCount(), 1);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("command ledgers report a failed temporary-file cleanup with the write failure", async () => {
+  const directory = await Deno.makeTempDir();
+  // The ledger name fits the file system's name limit, and the temporary
+  // name beside it does not, so creating and removing it both fail.
+  const path = join(directory, "l".repeat(230));
+  try {
+    const ledger = await CommandLedger.open(path);
+    const error = await assertRejects(
+      () => ledger.put(receipt("refused")),
+      AggregateError,
+      "command ledger write and temporary-file cleanup failed",
+    );
+    assertEquals(error.errors.length, 2);
+    assertEquals(ledger.pendingPublicationCount(), 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Windows command ledgers commit both slots before open returns", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  const previousPath = `${path}.previous`;
+  try {
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
+    const empty = ledgerFile();
+    assertEquals(await readLedger(path), empty);
+    assertEquals(await readLedger(previousPath), empty);
+
+    const first = receipt("first");
+    await ledger.put(first);
+    assertEquals(
+      await readLedger(previousPath),
+      ledgerFile({
+        generation: 2,
+        receipts: { first },
+        pendingPublicationCommandIds: ["first"],
+      }),
+    );
+    assertEquals(await readLedger(path), empty);
+
+    const reopened = await CommandLedger.accessForTestingOnly.open(
+      path,
+      WINDOWS,
+    );
+    assertEquals(reopened.get("first"), first);
+    assertEquals(reopened.pendingPublicationCount(), 1);
+    await reopened.markPublished("first");
+    assertEquals(
+      await readLedger(path),
+      ledgerFile({ generation: 3, receipts: { first } }),
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Windows command ledgers repair a missing or invalid slot from the valid one", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  const previousPath = `${path}.previous`;
+  const stored = receipt("stored");
+  const valid = ledgerFile({ generation: 4, receipts: { stored } });
+  try {
+    await writeLedger(previousPath, valid);
+    const repaired = await CommandLedger.accessForTestingOnly.open(
+      path,
+      WINDOWS,
+    );
+    assertEquals(repaired.get("stored"), stored);
+    assertEquals(await readLedger(path), valid);
+
+    await Deno.writeTextFile(path, "interrupted");
+    await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
+    assertEquals(await readLedger(path), valid);
+
+    await Deno.writeTextFile(previousPath, "interrupted");
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
+    assertEquals(await readLedger(previousPath), valid);
+    await ledger.put(receipt("next"));
+    assertEquals(await readLedger(path), valid);
+    assertEquals(
+      (await readLedger(previousPath) as { generation: number })
+        .generation,
+      5,
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Windows command ledgers open from the newer of two valid slots", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  const older = receipt("older");
+  const newer = receipt("newer");
+  try {
+    await writeLedger(path, ledgerFile({ generation: 7, receipts: { newer } }));
+    await writeLedger(
+      `${path}.previous`,
+      ledgerFile({ generation: 6, receipts: { older } }),
+    );
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
+    assertEquals(ledger.get("newer"), newer);
+    assertEquals(ledger.get("older"), undefined);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Windows command ledgers reject slots that disagree at one generation", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  const one = receipt("one");
+  try {
+    await writeLedger(path, ledgerFile({ generation: 3, receipts: { one } }));
+    await writeLedger(
+      `${path}.previous`,
+      ledgerFile({ generation: 3, receipts: { one } }),
+    );
+    assertEquals(
+      (await CommandLedger.accessForTestingOnly.open(path, WINDOWS)).get("one"),
+      one,
+    );
+
+    await writeLedger(`${path}.previous`, ledgerFile({ generation: 3 }));
+    await assertRejects(
+      () => CommandLedger.accessForTestingOnly.open(path, WINDOWS),
+      Error,
+      "command ledger generations disagree between Windows slots",
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Windows command ledgers reject two invalid slots", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  try {
+    await writeLedger(path, ledgerFile({ generation: -1 }));
+    await writeLedger(`${path}.previous`, null);
+    const error = await assertRejects(
+      () => CommandLedger.accessForTestingOnly.open(path, WINDOWS),
+      AggregateError,
+      "neither Windows command ledger slot is valid",
+    );
+    assertEquals(
+      error.errors.map((reason: Error) => reason.message),
+      [
+        "command ledger generation must be a non-negative safe integer",
+        "command ledger must contain an object",
+      ],
+    );
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Windows command ledgers accept files that Unix permissions would refuse", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "ledger.json");
+  try {
+    await writeLedger(path, ledgerFile());
+    await Deno.chmod(path, 0o644);
+    await assertRejects(
+      () =>
+        CommandLedger.accessForTestingOnly.open(path, {
+          os: "linux",
+          uid: () => Deno.uid(),
+        }),
+      Error,
+      "file permits access by other users",
+    );
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
+    assert(ledger.pendingPublicationCount() === 0);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("writeAndSync writes every byte across short writes and then syncs", async () => {
+  let written = "";
+  const events: string[] = [];
+  await CommandLedger.accessForTestingOnly.writeAndSync({
+    write: (bytes) => {
+      // Each write takes at most two bytes, as a short write would.
+      const taken = Math.min(2, bytes.length);
+      written += new TextDecoder().decode(bytes.subarray(0, taken));
+      events.push(`write ${taken}`);
+      return Promise.resolve(taken);
+    },
+    sync: () => {
+      events.push("sync");
+      return Promise.resolve();
+    },
+  }, "abcde");
+  assertEquals(written, "abcde");
+  assertEquals(events, ["write 2", "write 2", "write 1", "sync"]);
+});
+
+Deno.test("writeAndSync throws, without syncing, when a write makes no progress", async () => {
+  let synced = false;
+  const error = await assertRejects(() =>
+    CommandLedger.accessForTestingOnly.writeAndSync({
+      write: () => Promise.resolve(0),
+      sync: () => {
+        synced = true;
+        return Promise.resolve();
+      },
+    }, "abc")
+  );
+  assertEquals(
+    error instanceof Error ? error.message : error,
+    "command ledger write made no progress",
+  );
+  assertEquals(synced, false);
 });

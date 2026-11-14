@@ -1,4 +1,5 @@
 import {
+  extractTextFromLLMResponse,
   isLLMNativeModelToolResults,
   LLMGenerateObjectRequest,
   LLMGenerateObjectResponse,
@@ -6,7 +7,6 @@ import {
   LLMRequest,
   LLMResponse,
   LLMToolCall,
-  LLMToolResult,
 } from "./types.ts";
 import { assertJsonTransportSafe } from "./schema-transport.ts";
 
@@ -24,14 +24,8 @@ export class LLMStreamError extends Error {
  * Checks CI=true (CI runners) and ENV=test (set by deno task test).
  * Evaluated once at module load — these vars never change mid-process.
  */
-const _isTestEnvironment = (() => {
-  try {
-    return Deno?.env?.get?.("CI") === "true" ||
-      Deno?.env?.get?.("ENV") === "test";
-  } catch {
-    return false;
-  }
-})();
+const _isTestEnvironment = readEnv("CI") === "true" ||
+  readEnv("ENV") === "test";
 
 const TEST_GUARD_MESSAGE =
   "LLMClient: live LLM calls are blocked in test environments. " +
@@ -58,23 +52,36 @@ export function normalizeLLMResponse(data: unknown, id: string): LLMResponse {
   } as LLMResponse;
 }
 
-function getInitialLLMUrl(): string {
-  if (typeof globalThis.location !== "undefined") {
-    return globalThis.location.protocol + "//" + globalThis.location.host +
-      "/api/ai/llm";
+/**
+ * The LLM endpoint a process starts with: the one on the host that served the
+ * page at `location`, else the one on the API at `apiUrl`, else a path on
+ * whatever host the request is made against. An `apiUrl` that is not a URL is
+ * passed over the way a missing one is.
+ */
+export function initialLLMUrl(
+  location: Pick<Location, "protocol" | "host"> | undefined,
+  apiUrl: string | undefined,
+): string {
+  if (location) {
+    return location.protocol + "//" + location.host + "/api/ai/llm";
   }
-  try {
-    const apiUrl = Deno?.env?.get?.("API_URL");
-    if (apiUrl) {
-      return new URL("/api/ai/llm", apiUrl).toString();
-    }
-  } catch {
-    // Permission denied or Deno not available — fall through
+  if (apiUrl && URL.canParse(apiUrl)) {
+    return new URL("/api/ai/llm", apiUrl).toString();
   }
   return "//api/ai/llm";
 }
 
-let llmApiUrl = getInitialLLMUrl();
+/** The environment variable `name`, where there is one to read. */
+function readEnv(name: string): string | undefined {
+  try {
+    return Deno?.env?.get?.(name);
+  } catch {
+    // Permission denied or Deno not available.
+    return undefined;
+  }
+}
+
+let llmApiUrl = initialLLMUrl(globalThis.location, readEnv("API_URL"));
 
 export const setLLMUrl = (toolshedUrl: string) => {
   llmApiUrl = new URL("/api/ai/llm", toolshedUrl).toString();
@@ -337,19 +344,6 @@ export function failureHint(status: number, parameters: string): string {
   return "The LLM service turned the request down.";
 }
 
-function extractMessageText(
-  content: unknown,
-): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((p: any) => p.type === "text")
-      .map((p: any) => p.text ?? "")
-      .join(" ");
-  }
-  return "";
-}
-
 function runAssertions(
   assertions: ConversationFixtureAssertions,
   request: LLMRequest | LLMGenerateObjectRequest,
@@ -371,7 +365,7 @@ function runAssertions(
   if (assertions.messagesContain) {
     for (const needle of assertions.messagesContain) {
       const found = request.messages.some((m) =>
-        extractMessageText(m.content).includes(needle)
+        extractTextFromLLMResponse(m).includes(needle)
       );
       if (!found) {
         throw new Error(
@@ -383,7 +377,7 @@ function runAssertions(
 
   if (assertions.lastMessageContains) {
     const last = request.messages[request.messages.length - 1];
-    const text = last ? extractMessageText(last.content) : "";
+    const text = last ? extractTextFromLLMResponse(last) : "";
     if (!text.includes(assertions.lastMessageContains)) {
       throw new Error(
         `${label}: expected last message to contain "${assertions.lastMessageContains}", got "${text}"`,
@@ -487,6 +481,17 @@ export async function loadConversationFixtureFile(
 }
 
 export class LLMClient {
+  readonly #fetch: typeof fetch | undefined;
+
+  /**
+   * Constructs a client that sends its requests with `fetchFn`. Without one it
+   * sends them with the global `fetch`. A test environment refuses a request
+   * sent with the global `fetch`, however the client was given it.
+   */
+  constructor(fetchFn?: typeof fetch) {
+    this.#fetch = fetchFn;
+  }
+
   async generateObject(
     request: LLMGenerateObjectRequest,
     abortSignal?: AbortSignal,
@@ -522,41 +527,19 @@ export class LLMClient {
       );
     }
 
-    // Guard: block live calls in test environments
-    if (_isTestEnvironment) {
-      throw new Error(TEST_GUARD_MESSAGE);
-    }
-
-    const endpoint = opts?.endpoint?.toString() ?? llmApiUrl;
     // TODO(danfuzz): `assertJsonTransportSafe` above covers the SCHEMA, but
     // the request's `messages` cross unchecked: a `FabricValue` in message
     // content (assembled runner-side from live cell reads) stringifies to
     // `{}` here, silently. The payload wants the same transport-safety
     // check the schema gets.
-    const response = await fetch(endpoint + "/generateObject", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-      signal: abortSignal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        `%c[generateObject Error]%c HTTP ${response.status}\n` +
-          `Response: ${errorText}\n` +
-          `%c${failureHint(response.status, "messages, schema, model, etc.")}`,
-        "color: red; font-weight: bold",
-        "color: inherit",
-        "color: gray; font-style: italic",
-      );
-      throw new Error(
-        `HTTP error! status: ${response.status}, body: ${errorText}`,
-      );
-    }
-
-    const data = await response.json();
-    return data;
+    const response = await this.#post(
+      (opts?.endpoint?.toString() ?? llmApiUrl) + "/generateObject",
+      request,
+      abortSignal,
+      "generateObject",
+      "messages, schema, model, etc.",
+    );
+    return await response.json();
   }
 
   /**
@@ -629,28 +612,49 @@ export class LLMClient {
       );
     }
 
-    // Guard: block live calls in test environments
-    if (_isTestEnvironment) {
-      throw new Error(TEST_GUARD_MESSAGE);
-    }
-
     // TODO(danfuzz): same gap as `generateObject` above — tool input schemas
     // are checked with `assertJsonTransportSafe`, but the request's
     // `messages`/`system` data is not, and a `FabricValue` in it stringifies
     // to `{}` here, silently.
-    const response = await fetch(opts?.endpoint?.toString() ?? llmApiUrl, {
+    const response = await this.#post(
+      opts?.endpoint?.toString() ?? llmApiUrl,
+      request,
+      abortSignal,
+      "generateText",
+      "messages, prompt, model, etc.",
+    );
+    return await readLLMResponse(response, callback);
+  }
+
+  /**
+   * POSTs `request` as JSON to `url`, and returns the response once it has
+   * succeeded. A failed response is logged under `label`, with a hint naming
+   * `parameters` where the request is to blame, and thrown.
+   */
+  async #post(
+    url: string,
+    request: LLMRequest | LLMGenerateObjectRequest,
+    abortSignal: AbortSignal | undefined,
+    label: string,
+    parameters: string,
+  ): Promise<Response> {
+    const send = this.#fetch ?? fetch;
+    // Block live calls in test environments.
+    if (_isTestEnvironment && send === globalThis.fetch) {
+      throw new Error(TEST_GUARD_MESSAGE);
+    }
+    const response = await send(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
       signal: abortSignal,
     });
-
     if (!response.ok) {
       const errorText = await response.text();
       console.error(
-        `%c[generateText Error]%c HTTP ${response.status}\n` +
+        `%c[${label} Error]%c HTTP ${response.status}\n` +
           `Response: ${errorText}\n` +
-          `%c${failureHint(response.status, "messages, prompt, model, etc.")}`,
+          `%c${failureHint(response.status, parameters)}`,
         "color: red; font-weight: bold",
         "color: inherit",
         "color: gray; font-style: italic",
@@ -659,8 +663,7 @@ export class LLMClient {
         `HTTP error! status: ${response.status}, body: ${errorText}`,
       );
     }
-
-    return await readLLMResponse(response, callback);
+    return response;
   }
 }
 
@@ -706,7 +709,6 @@ function assembleLLMReply(id: string, callback?: PartialCallback) {
   let buffer = "";
   let text = "";
   const toolCalls: LLMToolCall[] = [];
-  const toolResults: LLMToolResult[] = [];
   let nativeModelToolResults: LLMNativeModelToolResult[] | undefined;
 
   const takeEvent = (line: string, place: "line" | "final") => {
@@ -725,12 +727,6 @@ function assembleLLMReply(id: string, callback?: PartialCallback) {
           id: event.toolCallId,
           name: event.toolName,
           input: event.args,
-        });
-      } else if (event.type === "tool-result") {
-        toolResults.push({
-          toolCallId: event.toolCallId,
-          result: event.result,
-          error: event.error,
         });
       } else if (event.type === "finish") {
         if (isLLMNativeModelToolResults(event.nativeModelToolResults)) {

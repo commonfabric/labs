@@ -79,11 +79,6 @@ export class GreenBranch {
     });
   }
 
-  /** The branch's name, such as `main-green`. */
-  get branch(): string {
-    return this.#branch;
-  }
-
   /** Returns whether a push to `ref` of `repo` updates the branch. */
   isPushedBy(repo: string, ref: string): boolean {
     return sameRepo(repo, this.#repo) && ref === `refs/heads/${this.#branch}`;

@@ -314,6 +314,28 @@ describe("github-webhooks", () => {
           expect(relay.connections).toBe(2);
         });
 
+        it("logs a connection that fails while it is read, and leaves it closed even when closing it throws", async () => {
+          const closed = Promise.withResolvers<void>();
+          const webhooks = new GitHubWebhooks(() =>
+            Promise.resolve({
+              readable: new ReadableStream<Uint8Array>({
+                start: (controller) =>
+                  controller.error(new Error("connection reset")),
+              }),
+              close: () => {
+                closed.resolve();
+                throw new Error("already closed");
+              },
+            })
+          );
+          await webhooks.connect();
+          await closed.promise;
+          expect(errors).toEqual([
+            "GitHub webhook relay: the connection failed: connection reset",
+          ]);
+          expect(webhooks.stream).toBeUndefined();
+        });
+
         it("never connects without a way to", async () => {
           const webhooks = new GitHubWebhooks();
           await webhooks.connect();
@@ -463,6 +485,11 @@ describe("github-webhooks", () => {
         event: "push",
         payload: { repository: { full_name: REPO, default_branch: "main" } },
       })).toBeUndefined();
+    });
+
+    it("reads nothing from a push whose payload is not an object", () => {
+      expect(pushOf({ event: "push", payload: ["refs/heads/main"] }))
+        .toBeUndefined();
     });
   });
 });

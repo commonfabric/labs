@@ -651,11 +651,75 @@ describe("conformance-fixtures", () => {
           { text: "fvj1:null", patches: [{ at: [], put: { cycle: [] } }] },
           "Not a proper prefix of the path a cycle is put at: []",
         ],
+        [
+          {
+            text:
+              'fvj1:{"/Error@1":{"message":"m","name":null,"type":"Error"}}',
+            patches: [{ at: ["message"], put: { unregisteredSymbol: null } }],
+          },
+          'No `null` to patch at ["message"]',
+        ],
       ];
       for (const [stated, message] of cases) {
         expect(() => fabricValueOfTextWithModsForTestingOnly(stated))
           .toThrow(message);
       }
+    });
+
+    describe("given a text and mods read from a fixture", () => {
+      // A fixture is JSON, so what it holds is parsed rather than typed, and
+      // may be anything JSON can write.
+
+      /** Returns the value the text and mods written as JSON `json` write. */
+      function valueOfJson(json: string): FabricValue {
+        return fabricValueOfTextWithModsForTestingOnly(JSON.parse(json));
+      }
+
+      it("returns the value written, path steps in UTF-16 code units among them", () => {
+        const value = valueOfJson(
+          '{"text":"fvj1:{\\"a\\":null}","patches":[{"at":[{"utf16":[97]}],' +
+            '"put":{"unregisteredSymbol":{"utf16":[115]}}}]}',
+        );
+        expect(value).toEqual({ a: expect.any(Symbol) });
+        const { a } = value as { a: symbol };
+        expect(a.description).toBe("s");
+        expect(Symbol.keyFor(a)).toBeUndefined();
+      });
+
+      it("throws given a patch or a path step that is not as a fixture writes one", () => {
+        const cases: ReadonlyArray<readonly [string, string]> = [
+          ['{"bogus":1}', "Not a patch kind: bogus"],
+          ["[]", "Not an object: []"],
+          ["{}", "Not a single-key object: {}"],
+          [
+            '{"cycle":[],"unregisteredSymbol":null}',
+            'Not a single-key object: {"cycle":[],"unregisteredSymbol":null}',
+          ],
+          ['{"cycle":"a"}', 'Not a list: "a"'],
+        ];
+        for (const [put, message] of cases) {
+          expect(() =>
+            valueOfJson(
+              `{"text":"fvj1:[null]","patches":[{"at":[0],"put":${put}}]}`,
+            )
+          ).toThrow(message);
+        }
+
+        const steps: ReadonlyArray<readonly [string, string]> = [
+          ["true", "Not an object: true"],
+          ['{"utf8":[97]}', 'Not a fixture string: {"utf8":[97]}'],
+          ['{"utf16":[65536]}', "Not a code unit: 65536"],
+          ['{"utf16":[0.5]}', "Not a code unit: 0.5"],
+        ];
+        for (const [step, message] of steps) {
+          expect(() =>
+            valueOfJson(
+              `{"text":"fvj1:[null]","patches":[{"at":[${step}],` +
+                '"put":{"unregisteredSymbol":null}}]}',
+            )
+          ).toThrow(message);
+        }
+      });
     });
 
     it("throws given a patch that runs into what another patch puts", () => {

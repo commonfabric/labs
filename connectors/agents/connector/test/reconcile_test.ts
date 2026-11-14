@@ -177,6 +177,61 @@ Deno.test("collectSource ends an inventory that repeats one session under fresh 
   assertEquals(collected.complete, false);
 });
 
+Deno.test("collectSource stops at a cursor the provider already returned", async () => {
+  const base = fakeDriver();
+  const [one, two] = [
+    (await base.listSessions()).sessions[0],
+    (await base.listSessions("next")).sessions[0],
+  ];
+  const cursors: Array<string | undefined> = [];
+  const driver: AgentDriver = {
+    ...base,
+    listSessions: (cursor?: string): Promise<SessionPage> => {
+      cursors.push(cursor);
+      return Promise.resolve(
+        cursor === "next"
+          ? { sessions: [two], nextCursor: "next" }
+          : { sessions: [one], nextCursor: "next" },
+      );
+    },
+  };
+
+  const collected = await collectSource(driver);
+
+  assertEquals(cursors, [undefined, "next"]);
+  assertEquals(collected.errors, [
+    { message: "Error: repeated session cursor: next" },
+  ]);
+  assertEquals(
+    collected.sessions.map((session) => session.summary.nativeSessionId),
+    ["one", "two"],
+  );
+  assertEquals(collected.complete, false);
+});
+
+Deno.test("collectSource records a session it cannot read and reads the rest", async () => {
+  const base = fakeDriver();
+  const driver: AgentDriver = {
+    ...base,
+    readSession: (id: string) =>
+      id === "one"
+        ? Promise.reject(new Error("session file is unreadable"))
+        : base.readSession(id),
+  };
+
+  const collected = await collectSource(driver);
+
+  assertEquals(collected.errors, [{
+    nativeSessionId: "one",
+    message: "Error: session file is unreadable",
+  }]);
+  assertEquals(
+    collected.sessions.map((session) => session.summary.nativeSessionId),
+    ["two"],
+  );
+  assertEquals(collected.complete, false);
+});
+
 Deno.test("streamSource reads the next session only after publication advances", async () => {
   const calls: string[] = [];
   const driver = fakeDriver();

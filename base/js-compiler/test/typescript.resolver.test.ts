@@ -27,6 +27,40 @@ describe("typescript/resolver.ts", () => {
       );
       expect(program.files.length).toBe(2);
     });
+    it("returns each module once, however many modules import it", async () => {
+      const requested: string[] = [];
+      const program = await resolveProgram(
+        {
+          main: () =>
+            Promise.resolve({
+              name: "/main.ts",
+              contents: "import './a.ts'; import './b.ts';",
+            }),
+          resolveSource: (identifier) => {
+            requested.push(identifier);
+            return Promise.resolve({
+              name: identifier,
+              contents: identifier === "/shared.ts"
+                ? "import './main.ts';"
+                : "import './shared.ts';",
+            });
+          },
+        },
+        {
+          unresolvedModules: { type: "allow-all" },
+          resolveUnresolvedModuleTypes: false,
+          target: TARGET,
+        },
+      );
+
+      expect(program.files.map((file) => file.name)).toEqual([
+        "/main.ts",
+        "/a.ts",
+        "/b.ts",
+        "/shared.ts",
+      ]);
+      expect(requested).toEqual(["/a.ts", "/b.ts", "/shared.ts"]);
+    });
     it("unresolvedModules.type allow", async () => {
       const program = await resolveProgram(
         graph,

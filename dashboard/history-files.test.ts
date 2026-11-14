@@ -176,6 +176,13 @@ describe("history-files", () => {
             .toBeUndefined();
         });
 
+        it("rejects when the file cannot be opened for a reason other than its absence", async () => {
+          await Deno.writeTextFile(path, "text");
+
+          await expect(new CacheFile<string>(join(path, "child")).read(String))
+            .rejects.toThrow(Deno.errors.NotADirectory);
+        });
+
         it("returns the value given to `write()` without decoding, until another instance replaces the file", async () => {
           const file = new CacheFile<string>(path);
           await file.write("text", "given");

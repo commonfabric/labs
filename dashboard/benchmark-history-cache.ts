@@ -285,9 +285,10 @@ const defaultDirectory = (): string =>
   dashboardCacheFile("fabric-wall-benchmark-history");
 
 const isRunIdentity = (
-  value: unknown,
-): value is Omit<CachedBenchmarkRun, "metrics"> => {
-  if (!isObjectNotArray(value)) return false;
+  value: Readonly<Record<string, unknown>>,
+): value is
+  & Readonly<Record<string, unknown>>
+  & Omit<CachedBenchmarkRun, "metrics"> => {
   const { runId, runAttempt, at, cpu } = value;
   return Number.isInteger(runId) && Number(runId) > 0 &&
     Number.isInteger(runAttempt) && Number(runAttempt) > 0 &&
@@ -890,9 +891,8 @@ export class BenchmarkHistoryStore {
         let run: unknown;
         try {
           run = JSON.parse(text);
-        } catch (error) {
-          if (error instanceof SyntaxError) return;
-          throw error;
+        } catch {
+          return;
         }
         if (!isLegacyRun(run)) return;
         runs.push({
@@ -953,8 +953,8 @@ export class BenchmarkHistoryStore {
         try {
           const value: unknown = JSON.parse(decodeText(bytes));
           if (isObjectNotArray(value)) state = value;
-        } catch (error) {
-          if (!(error instanceof SyntaxError)) throw error;
+        } catch {
+          // A state file that does not decode reads as empty.
         }
         continue;
       }

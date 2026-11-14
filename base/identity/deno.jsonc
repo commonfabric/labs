@@ -1,8 +1,14 @@
 {
   "name": "@commonfabric/identity",
   "tasks": {
-    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
-    "deno-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../../runtime/deno-web-test/cli.ts test/*.test.ts"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test browser-test",
+    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
+    // A test file whose name ends in `.browser.test.ts` needs a browser, for
+    // IndexedDB; the `--ignore` pattern leaves it out of the `deno test` run.
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --ignore='**/*.browser.test.ts'",
+    // The browser half runs every test file, so that the native Ed25519 the
+    // browser offers, and its IndexedDB, are exercised as well as Deno's.
+    "browser-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../../runtime/deno-web-test/cli.ts test/*.test.ts"
   },
   "exports": {
     ".": "./src/index.ts",

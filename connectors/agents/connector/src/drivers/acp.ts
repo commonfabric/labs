@@ -273,8 +273,7 @@ export class AcpDriver implements AgentDriver {
     const aborted = signal
       ? new Promise<never>((_resolve, reject) => {
         abortListener = () => reject(signal.reason);
-        if (signal.aborted) abortListener();
-        else signal.addEventListener("abort", abortListener, { once: true });
+        signal.addEventListener("abort", abortListener, { once: true });
       })
       : undefined;
     try {

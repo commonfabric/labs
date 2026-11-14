@@ -21,13 +21,15 @@ export const FRAGMENT_SUFFIX = ".ndjson";
 
 const encoder = new TextEncoder();
 
+/** The part of an open fragment file a writer uses. */
+type FragmentFile = Pick<Deno.FsFile, "writeSync" | "close">;
+
 /** Appends test records to one fragment file, line by line. */
 export class FragmentWriter {
-  #file: Deno.FsFile | undefined;
-  #warned = false;
+  #file: FragmentFile | undefined;
   readonly #path: string;
 
-  private constructor(path: string, file: Deno.FsFile) {
+  private constructor(path: string, file: FragmentFile) {
     this.#path = path;
     this.#file = file;
   }
@@ -35,6 +37,16 @@ export class FragmentWriter {
   /** The fragment file this writer appends to. */
   get path(): string {
     return this.#path;
+  }
+
+  /**
+   * A constructor taking the file to append to, so that a test can supply
+   * one whose writes fail.
+   */
+  static get accessForTestingOnly(): {
+    create(path: string, file: FragmentFile): FragmentWriter;
+  } {
+    return { create: (path, file) => new FragmentWriter(path, file) };
   }
 
   /**
@@ -83,22 +95,22 @@ export class FragmentWriter {
         written += file.writeSync(bytes.subarray(written));
       }
     } catch (error) {
-      if (!this.#warned) {
-        this.#warned = true;
-        warnOnce(`cannot append to ${this.#path}: ${error}`);
-      }
+      warnOnce(`cannot append to ${this.#path}: ${error}`);
       this.close();
     }
   }
 
-  /** Closes the fragment. Appends after close are ignored. */
+  /**
+   * Closes the fragment. Appends after close are ignored. A close that fails
+   * fails nothing: recording never fails a test.
+   */
   close(): void {
     const file = this.#file;
     this.#file = undefined;
     try {
       file?.close();
     } catch {
-      // A double close is not worth failing anything over.
+      // A file that a failed write already closed throws here.
     }
   }
 }
