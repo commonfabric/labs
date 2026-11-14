@@ -3734,7 +3734,7 @@ export class Runtime {
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
    *   throwing, which aborts the transaction, on an attempt that read no
-   *   absent document that exists.
+   *   absent document that exists or that has no retry budget left.
    */
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
