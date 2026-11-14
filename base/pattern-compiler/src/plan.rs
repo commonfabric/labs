@@ -1890,6 +1890,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut record = json!({
             "name": "reduce",
             "within": self.within_json(),
+            "construct": "operation",
             "source": source,
             "bodyUses": { "index": parameters.len() > 2 },
         });
@@ -2078,6 +2079,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.collections.push(json!({
             "name": name,
             "within": self.within_json(),
+            "construct": via,
             "source": source,
             "bodyUses": { "index": uses_index },
         }));
@@ -3708,14 +3710,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 return;
             }
-            // The position of an element: PL has no `place` for it. Its
-            // label is the membership of what the construct iterates.
-            Place::Index(_) | Place::Accumulator(..) => {
+            // "The index of the element in the collection of an
+            // enclosing element body", whose label is "the membership
+            // that collection iterates" (PL §1.1).
+            Place::Index(collection) => {
+                entry.insert("place".to_string(), json!({ "index": collection }));
+                if let Some(template) = self.template_of(place, "value") {
+                    entry.insert("template".to_string(), template);
+                }
+            }
+            Place::Accumulator(..) => {
                 if let Some(template) = self.template_of(place, "value") {
                     entry.insert("template".to_string(), template);
                 }
             }
             Place::Const => {
+                // "A path bound to `undefined` has no entry of `state`."
+                if written.is_some_and(|written| {
+                    matches!(unwrap(written), Expression::Identifier(name) if name.name == "undefined")
+                }) {
+                    return;
+                }
                 let constant = written.and_then(constant_of).unwrap_or(Value::Null);
                 entry.insert("place".to_string(), json!({ "constant": constant }));
                 entry.insert("template".to_string(), json!({ "op": "const" }));

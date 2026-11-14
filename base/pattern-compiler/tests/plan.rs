@@ -2567,3 +2567,40 @@ fn a_tag_that_names_a_factory_value_is_a_child() {
         "[argument tone : identity]"
     );
 }
+
+#[test]
+fn a_collection_names_its_construct_and_a_bound_index_names_the_collection() {
+    // PL §1.1: `Collection.construct` "says what the runtime does with
+    // the per-element results", and `Binding.state.place` is "the index
+    // of the element in the collection of an enclosing element body",
+    // with "for an index the membership that collection iterates" as
+    // its template. "A path bound to `undefined` has no entry of
+    // `state`."
+    let analysis = program(
+        r#"import { Cell, handler, pattern, UI } from "commonfabric";
+const pickRow = handler<unknown, { at: number; chosen: Cell<number>; note?: string }>((_, state) => { state.chosen.set(state.at); });
+export const P = pattern<{ rows: string[]; chosen: Cell<number> }>(({ rows, chosen }) => {
+  const shown = rows.filter((row) => row !== "");
+  const any = rows.some((row) => row === "x");
+  const total = rows.reduce((sum, row) => sum + row.length, 0);
+  return {
+    [UI]: <ul>{rows.map((row, index) => <li onClick={pickRow({ at: index, chosen, note: undefined })}>{row}</li>)}</ul>,
+    shown, any, total,
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let constructs: Vec<&str> = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .map(|collection| collection["construct"].as_str().expect("a construct"))
+        .collect();
+    assert_eq!(constructs, ["filter", "some", "operation", "map"]);
+    let state = plan["bindings"][0]["state"].as_array().expect("state");
+    let paths: Vec<&Value> = state.iter().map(|entry| &entry["path"]).collect();
+    assert_eq!(paths, [&json!(["at"]), &json!(["chosen"])]);
+    assert_eq!(state[0]["place"], json!({ "index": 3 }));
+    assert_eq!(state[0]["template"], plan["collections"][3]["membership"]);
+}
