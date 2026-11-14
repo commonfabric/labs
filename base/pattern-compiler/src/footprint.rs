@@ -1217,16 +1217,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
             None => "createCell:order",
             Some(_) if !self.computation => "createCell:cause",
             Some(cause) => {
-                let constant = match unwrap(cause) {
-                    Expression::StringLiteral(_) | Expression::NumericLiteral(_) => true,
-                    Expression::TemplateLiteral(template) => template.expressions.is_empty(),
-                    Expression::Identifier(_) => {
-                        let val = self.eval(cause);
-                        !val.has_projection() && !matches!(val, Val::Computed | Val::Built(_))
-                    }
-                    _ => false,
-                };
-                if constant {
+                // The cause is evaluated for what it reads, whether or
+                // not it is constant.
+                self.eval(cause);
+                if self.constant(cause, 0) {
                     "createCell:cause (state)"
                 } else {
                     self.store.materializer.insert(site);
@@ -1235,6 +1229,73 @@ impl<'a> Analyzer<'_, '_, 'a> {
             }
         };
         self.store.calls.insert(site, kind.to_string());
+    }
+
+    /// Whether an expression is constant (FA §8.2): a literal, a template
+    /// literal whose substitutions are constant, an operator over
+    /// constants, a module-scope constant, or a local `const` whose
+    /// initializer is constant. A `let` binding, a parameter, a call, and
+    /// a member access are not.
+    fn constant(&self, expression: &Expression<'a>, depth: u32) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        match unwrap(expression) {
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template
+                .expressions
+                .iter()
+                .all(|part| self.constant(part, depth + 1)),
+            Expression::BinaryExpression(binary) => {
+                self.constant(&binary.left, depth + 1) && self.constant(&binary.right, depth + 1)
+            }
+            Expression::LogicalExpression(logical) => {
+                self.constant(&logical.left, depth + 1) && self.constant(&logical.right, depth + 1)
+            }
+            Expression::UnaryExpression(unary) => self.constant(&unary.argument, depth + 1),
+            Expression::ConditionalExpression(conditional) => {
+                self.constant(&conditional.test, depth + 1)
+                    && self.constant(&conditional.consequent, depth + 1)
+                    && self.constant(&conditional.alternate, depth + 1)
+            }
+            Expression::Identifier(identifier) => {
+                if identifier.name == "undefined" {
+                    return true;
+                }
+                let Some(parsed) = self.resolver.parsed(self.module()) else {
+                    return false;
+                };
+                let scoping = parsed.semantic.scoping();
+                let Some(symbol) = symbol_of(scoping, identifier) else {
+                    return false;
+                };
+                let nodes = parsed.semantic.nodes();
+                let declaration = scoping.symbol_declaration(symbol);
+                let AstKind::VariableDeclarator(declarator) = nodes.kind(declaration) else {
+                    return false;
+                };
+                let is_const = nodes
+                    .ancestor_kinds(declaration)
+                    .find_map(|kind| match kind {
+                        AstKind::VariableDeclaration(list) => {
+                            Some(list.kind == VariableDeclarationKind::Const)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                // A name a destructuring binds is a part of a value.
+                let plain = matches!(declarator.id, BindingPattern::BindingIdentifier(_));
+                match &declarator.init {
+                    Some(init) if is_const && plain => self.constant(init, depth + 1),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Whether `expression` has a type the checker cut because it is the
