@@ -4184,8 +4184,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                             let overlaps = path.starts_with(&cell) || cell.starts_with(path);
                             if state {
-                                // No slot is excepted.
-                                return overlaps;
+                                // "One slot is excepted there: the
+                                // `identity` slot at the cell's root,
+                                // with the empty path", the handle a
+                                // body holds in order to write.
+                                return overlaps && !(path.is_empty() && *class == "identity");
                             }
                             if path.len() >= at.len() {
                                 // At or below the handle's position. The

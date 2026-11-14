@@ -2794,3 +2794,37 @@ export const P = pattern<{ t: string; a: string; b: string; rows: { title: strin
         ]
     );
 }
+
+#[test]
+fn the_identity_slot_at_the_root_of_a_state_cell_is_no_reader_of_a_write_to_it() {
+    // PL §3.11: "One slot is excepted there: the `identity` slot at the
+    // cell's root, with the empty path. ... So a cone whose body writes
+    // a state cell and reads nothing of it has no edge to itself. Every
+    // other slot of the root is a reader by the rule".
+    let analysis = program(
+        r#"import { Writable, lift, pattern } from "commonfabric";
+const note = lift((x: { seen: Writable<number>; n: number }) => {
+  x.seen.set(x.n);
+  return x.n;
+});
+const peek = lift((x: { seen: Writable<number> }) => x.seen.get());
+export const Quiet = pattern<{ n: number }>(({ n }) => {
+  const seen = new Writable(0);
+  const noted = note({ seen, n });
+  return { noted };
+});
+export const Read = pattern<{ n: number }>(({ n }) => {
+  const seen = new Writable(0);
+  const noted = note({ seen, n });
+  const shown = peek({ seen });
+  return { noted, shown };
+});
+"#,
+    );
+    assert_eq!(edge_lines(&plan_of(&analysis, "Quiet")), Vec::<String>::new());
+    assert_eq!(edge_lines(&plan_of(&analysis, "Read")), ["noted -> shown"]);
+    assert!(!analysis.modules[0]
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.id == "side-write:cycle"));
+}
