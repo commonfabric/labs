@@ -456,13 +456,13 @@ Deno.test("Windows command ledgers accept files that Unix permissions would refu
 });
 
 Deno.test("writeAndSync writes every byte across short writes and then syncs", async () => {
-  const written: number[] = [];
+  let written = "";
   const events: string[] = [];
   await CommandLedger.accessForTestingOnly.writeAndSync({
     write: (bytes) => {
       // Each write takes at most two bytes, as a short write would.
       const taken = Math.min(2, bytes.length);
-      written.push(...bytes.subarray(0, taken));
+      written += new TextDecoder().decode(bytes.subarray(0, taken));
       events.push(`write ${taken}`);
       return Promise.resolve(taken);
     },
@@ -471,7 +471,7 @@ Deno.test("writeAndSync writes every byte across short writes and then syncs", a
       return Promise.resolve();
     },
   }, "abcde");
-  assertEquals(new TextDecoder().decode(new Uint8Array(written)), "abcde");
+  assertEquals(written, "abcde");
   assertEquals(events, ["write 2", "write 2", "write 1", "sync"]);
 });
 
