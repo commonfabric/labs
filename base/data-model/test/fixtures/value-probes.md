@@ -179,8 +179,8 @@ These are computed from the entry's text, and each is present only where it is
 past the floor section 12 sets for its measure, which every conforming reader
 guarantees.
 
-This package meets every requirement either fixture names. It constructs
-`es2025` patterns, and no entry names a size.
+This package meets every requirement either fixture names: no entry names a
+size.
 
 ## Checking with a codec of known behavior
 
