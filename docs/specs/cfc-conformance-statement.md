@@ -128,8 +128,9 @@ over its read prefix, skips write-destination reads too.
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
 `set()` and the append snapshot of `push` and `pushAll` in `cell.ts`;
 `storedQueryState` and `storedRequestHash` in `builtins/sqlite-builtins.ts`;
-`storedCellsRead` in `builtins/fetch.ts`; and the document-root read in
-`storage/v2-transaction.ts`. [`cfc-write-destination-reads.md`](cfc-write-destination-reads.md)
+`storedCellsRead` in `builtins/fetch.ts`; the setup's comparison of the
+projection it builds with the stored result (`#nextResultProjection` in
+`runner.ts`); and the document-root read in `storage/v2-transaction.ts`. [`cfc-write-destination-reads.md`](cfc-write-destination-reads.md)
 is the design, with the unobservability argument under "Why the exclusion
 carries no label out" and the residual under "What it costs".
 

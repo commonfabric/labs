@@ -20,6 +20,9 @@ import { getMetaLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { resultSchemaMetaSpelling } from "../src/result-schema-meta.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
+import { refusedArgumentSlotsCell } from "../src/refused-argument-slots.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -164,6 +167,41 @@ const tallyHandleOrUndefinedAlias = (marker: string): RuntimeProgram =>
     "interface Args { tally: MaybeTally; spare?: MaybeTally; [key: string]: any }",
     "export default pattern<Args, { marker: string }>(() => {",
     `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/**
+ * A candidate that types `tally` as a plain counter, whose linked content is
+ * the argument's to judge.
+ */
+const tallyPlain = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { pattern } from 'commonfabric';",
+    "interface Counter { count?: number }",
+    "interface Args { tally?: Counter; [key: string]: any }",
+    "export default pattern<Args, { marker: string }>(() => {",
+    `  return { marker: ${JSON.stringify(marker)} };`,
+    "});",
+    "",
+  ].join("\n"));
+
+/**
+ * `typedRow` with the row's `name` read: `name` is what the version reads
+ * there, and `kind` its `typeof`.
+ */
+const typedRowReader = (marker: string): RuntimeProgram =>
+  programOf([
+    "import { computed, pattern } from 'commonfabric';",
+    "interface Row { name: string; other?: string; [key: string]: any }",
+    "interface Args { row?: Row; [key: string]: any }",
+    "export default pattern<",
+    "  Args,",
+    "  { marker: string; name: unknown; kind: string }",
+    ">(({ row }) => {",
+    "  const name = computed(() => row?.name);",
+    "  const kind = computed(() => typeof row?.name);",
+    `  return { marker: ${JSON.stringify(marker)}, name, kind };`,
     "});",
     "",
   ].join("\n"));
@@ -1630,6 +1668,193 @@ describe("pattern update validates the stored argument", () => {
     });
   });
 
+  describe("a stored link to a document that stores a confidentiality label", () => {
+    // What a labeled document holds is read under its labels, and a read in
+    // the update's transaction would join them to everything it writes: the
+    // piece's root here, a nested piece's result in a source update. So the
+    // update judges such a link as a link, whatever the slot's type, and
+    // leaves what it reaches to the reads that follow it, as it does a link
+    // to another space.
+
+    /**
+     * Commits a document holding `value` at `cause`, labeled at its root with
+     * the space's `PersonalSpace` atom, and returns its cell.
+     */
+    const seedLabeled = async (cause: string, value: unknown) => {
+      const cell = rt.getCell<Record<string, unknown>>(space, cause);
+      const seed = rt.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: cell.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: [personalSpaceOf(space)] },
+            }],
+          },
+        },
+      } as never);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+
+    it("leaves the linked document's confidentiality off what the update writes when the slot is typed plain", async () => {
+      const counter = await seedLabeled("plain-slot-labeled-counter", {
+        count: 3,
+      });
+      const { cell } = await setupVintage(
+        openArgument("v1"),
+        { tally: counter },
+        "plain-slot-labeled-link",
+      );
+
+      const { error } = await rollForward(cell, tallyPlain("v2"));
+
+      expect(error).toBeUndefined();
+      await cell.pull();
+      expect(cell.getRaw()).toEqual({ marker: "v2" });
+      expect(
+        await confidentialityOf(cell.getAsNormalizedFullLink().id),
+        "the update read the labeled counter through the plain slot, and its " +
+          "transaction carried the counter's label onto the piece's root",
+      ).not.toContainEqual(personalSpaceOf(space));
+    });
+
+    it("rolls forward over a wrong-typed value behind the link, which the new version reads as `undefined`", async () => {
+      // The trade the deferral makes: the same value in a document that
+      // stores no label refuses the update ("still refuses a READABLE
+      // wrong-typed value behind the same hop", above).
+      //
+      // TODO(danfuzz): The mismatch is caught nowhere here: the update
+      // commits and the new version's reads of the row come back
+      // `undefined`, with no refusal or diagnostic. A link that leaves the
+      // argument's space is deferred the same way. The expected outcome is
+      // that the deferred check surfaces where the new version reads the
+      // value. See the matching `TODO` at `reachesBeyondOwnData()` in
+      // `stored-argument-validation.ts`.
+
+      const row = await seedLabeled("labeled-wrong-type-row", {
+        name: 7,
+        other: "fine",
+      });
+      const { cell } = await setupVintage(
+        openArgument("v1"),
+        { row },
+        "labeled-wrong-type-link",
+      );
+
+      const { error } = await rollForward(cell, typedRowReader("v2"));
+
+      expect(error).toBeUndefined();
+      expect(await cell.key("name").pull()).toBeUndefined();
+      expect(await cell.key("kind").pull()).toBeUndefined();
+    });
+  });
+
+  it("leaves the label stored at a carried link's slot off what the update writes", async () => {
+    // A slot holding a link is read as the link alone, a wiring read: the
+    // update only writes that link again, to the same slot, and the label
+    // stored at the slot stays there.
+
+    const counter = rt.getCell<Record<string, unknown>>(
+      space,
+      "carried-link-counter",
+    );
+    const { error: writeError } = await rt.editWithRetry((tx) => {
+      counter.withTx(tx).set({ count: 3 });
+    });
+    expect(writeError?.message).toBeUndefined();
+    const { cell } = await setupVintage(
+      openArgument("v1"),
+      { tally: counter },
+      "carried-labeled-link",
+    );
+    const argument = getMetaLink(cell, "argument")!;
+    const seed = rt.edit();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, {
+      space,
+      scope: "space",
+      id: argument.id,
+      path: ["cfc"],
+    }, {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        // The slot's own restriction, as a probe of which reference sits
+        // there reads it.
+        entries: [{
+          path: ["tally"],
+          label: { confidentiality: [personalSpaceOf(space)] },
+          origin: "declared",
+          observes: "followRef",
+        }],
+      },
+    } as never);
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const { error } = await rollForward(cell, openArgument("v2"));
+
+    expect(error).toBeUndefined();
+    await cell.pull();
+    expect(cell.getRaw()).toEqual({ marker: "v2" });
+    expect(await confidentialityOf(cell.getAsNormalizedFullLink().id))
+      .not.toContainEqual(personalSpaceOf(space));
+    expect(await confidentialityOf(argument.id)).toContainEqual(
+      personalSpaceOf(space),
+    );
+  });
+
+  it("carries the label of content the update carries over onto what it writes", async () => {
+    // A slot holding content is read as content when the update stages it
+    // again, so its label joins what the update writes; only a slot holding
+    // a link is read as the link alone.
+
+    const { cell } = await setupVintage(
+      openArgument("v1"),
+      { note: "kept" },
+      "carried-labeled-content",
+    );
+    const argument = getMetaLink(cell, "argument")!;
+    const seed = rt.edit();
+    writeSeedEnvelopeDoc(seed, space);
+    seedStoredEnvelope(seed, {
+      space,
+      scope: "space",
+      id: argument.id,
+      path: ["cfc"],
+    }, {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: {
+        version: 1,
+        entries: [{
+          path: ["note"],
+          label: { confidentiality: [personalSpaceOf(space)] },
+        }],
+      },
+    } as never);
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    const { error } = await rollForward(cell, openArgument("v2"));
+
+    expect(error).toBeUndefined();
+    await cell.pull();
+    expect(cell.getRaw()).toEqual({ marker: "v2" });
+    expect(await confidentialityOf(cell.getAsNormalizedFullLink().id))
+      .toContainEqual(personalSpaceOf(space));
+  });
+
   it("leaves a same-version setup alone over an argument its OWN schema rejects", async () => {
     // The blast-radius guard, and the reason this check keys on the setup
     // marker rather than on strictness everywhere.
@@ -1783,5 +2008,193 @@ describe("pattern update validates the stored argument", () => {
       (cell.getAsQueryResult() as { marker: string }).marker,
       "the hot-swap accepted a durable argument the candidate schema rejects",
     ).toBe("v1");
+  });
+
+  describe("a setup over a stored argument", () => {
+    // What a setup that stages a stored argument again keeps of it, beyond
+    // what validation judges.
+
+    /** A pattern whose result is `{ a }` over an argument under `schema`. */
+    const patternOver = (schema: JSONSchema) => {
+      const { pattern } = createTrustedBuilder(rt).commonfabric;
+      return pattern(
+        (argument: { a?: unknown }) => ({ a: argument.a }),
+        schema as never,
+        { type: "object" } as never,
+      );
+    };
+
+    /**
+     * Sets `pattern` up on the result document `cause` over `argument`, and
+     * returns what the setup threw, if anything, and whether its transaction
+     * committed.
+     */
+    const setUp = async (
+      cause: string,
+      pattern: ReturnType<typeof patternOver>,
+      argument: unknown,
+    ): Promise<
+      { cell: Cell<unknown>; thrown?: unknown; committed: boolean }
+    > => {
+      const tx = rt.edit();
+      const cell = rt.getCell(space, cause, undefined, tx);
+      let thrown: unknown;
+      try {
+        await rt.setup(tx, pattern, argument, cell);
+      } catch (error) {
+        thrown = error;
+      }
+      const { error } = await tx.commit().settled;
+      await rt.idle();
+      return { cell, thrown, committed: error === undefined };
+    };
+
+    /** The argument document `cell` stores, read under no schema. */
+    const storedArgument = (cell: Cell<unknown>): unknown =>
+      rt.getCellFromLink({
+        ...getMetaLink(cell, "argument")!,
+        schema: undefined,
+      }).getRaw();
+
+    describe("an update that adds a required scoped slot", () => {
+      // The setup's write fills a scoped slot it is not given with a redirect to
+      // the instance that holds it, so the argument it stages has the slot the
+      // update requires though the value it staged does not.
+
+      const before: JSONSchema = {
+        type: "object",
+        properties: { a: { type: "string" }, keep: { type: "string" } },
+      };
+      const after: JSONSchema = {
+        type: "object",
+        properties: {
+          a: { type: "string" },
+          keep: { type: "string" },
+          pref: { type: "string", scope: "user" },
+        },
+        required: ["pref"],
+      };
+
+      it("commits with no argument supplied", async () => {
+        await setUp("scoped-unsupplied", patternOver(before), {
+          a: "x",
+          keep: "mine",
+        });
+
+        const { cell, thrown, committed } = await setUp(
+          "scoped-unsupplied",
+          patternOver(after),
+          undefined,
+        );
+
+        expect(thrown).toBeUndefined();
+        expect(committed).toBe(true);
+        expect(storedArgument(cell)).toMatchObject({ a: "x", keep: "mine" });
+      });
+
+      it("keeps the slots it carries over in place with an argument supplied", async () => {
+        await setUp("scoped-supplied", patternOver(before), {
+          a: "x",
+          keep: "mine",
+        });
+
+        const { cell, thrown, committed } = await setUp(
+          "scoped-supplied",
+          patternOver(after),
+          { a: "y" },
+        );
+
+        expect(thrown).toBeUndefined();
+        expect(committed).toBe(true);
+        expect(storedArgument(cell)).toMatchObject({ a: "y", keep: "mine" });
+        expect(
+          refusedArgumentSlotsCell(rt, cell.getAsNormalizedFullLink())
+            .getRawUntyped(),
+        ).toBeUndefined();
+      });
+    });
+
+    it("keeps a stored argument that is a class instance whole across an update", async () => {
+      const stamp = new FabricEpochNsec(5n);
+      await setUp("instance-argument", patternOver(true as JSONSchema), stamp);
+
+      const { cell, thrown, committed } = await setUp(
+        "instance-argument",
+        patternOver({} as JSONSchema),
+        undefined,
+      );
+
+      expect(thrown).toBeUndefined();
+      expect(committed).toBe(true);
+      const stored = storedArgument(cell);
+      expect(stored).toBeInstanceOf(FabricEpochNsec);
+      expect(String(stored)).toBe(String(stamp));
+    });
+
+    it("labels the refused-slot store with the restriction stored at the slot of a link the update refuses", async () => {
+      // A refused slot's value moves to the store by a plain write, which
+      // carries no link's restriction, so the setup reads the slot as content
+      // first and its label joins what the setup writes.
+
+      const counter = rt.getCell(space, "refused-link-counter");
+      const { error } = await rt.editWithRetry((tx) => {
+        counter.withTx(tx).set({ count: 3 });
+      });
+      expect(error).toBeUndefined();
+      const { cell } = await setUp(
+        "refused-link",
+        patternOver({ type: "object" }),
+        { a: "x", tally: counter },
+      );
+      const argument = getMetaLink(cell, "argument")!;
+      const seed = rt.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: argument.id,
+        path: ["cfc"],
+      }, {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["tally"],
+            label: { confidentiality: [personalSpaceOf(space)] },
+            origin: "declared",
+            observes: "followRef",
+          }],
+        },
+      } as never);
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const { committed } = await setUp(
+        "refused-link",
+        patternOver({
+          type: "object",
+          properties: { a: { type: "string" }, tally: { type: "number" } },
+        }),
+        { a: "y" },
+      );
+
+      expect(committed).toBe(true);
+      const store = refusedArgumentSlotsCell(
+        rt,
+        cell.getAsNormalizedFullLink(),
+      );
+      expect(store.getRawUntyped()).toBeDefined();
+      const read = rt.edit();
+      try {
+        const entries = readStoredCfcMetadata(read, {
+          space,
+          id: store.getAsNormalizedFullLink().id,
+        })?.labelMap.entries ?? [];
+        expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
+          .toContainEqual(personalSpaceOf(space));
+      } finally {
+        read.abort("label read");
+      }
+    });
   });
 });

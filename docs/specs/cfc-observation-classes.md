@@ -344,6 +344,15 @@ every other path the wiring transaction wrote.
 so such a read consumes nothing; a marked read that materializes content is
 unaffected and keeps consuming its ordinary labels.
 
+A pattern setup that stages a stored argument again is wiring of the same
+kind (`Runner.#readStoredArgument` in `runner.ts`): it reads each carried slot
+that holds a reference as a marked probe, and its only use of that reference
+is to write it again to the same slot of the argument it stages, where the
+slot's restriction stays. A carried slot the new argument schema refuses
+moves to the piece's refused-slot store by a plain write, which carries no
+link's restriction, so the setup reads that slot again as an ordinary read
+first.
+
 A wiring transaction that consumed the `origin: "link"` entry of a
 confidential reference would carry that clause into every result projection
 it rewrote. A derived stamp at a sub-piece result's root covers its `$UI`, so
