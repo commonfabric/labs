@@ -339,14 +339,24 @@ Normative behavior:
    member's gesture never admits another's writer.
 4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
    `writeAuthorizedBy` or `uiContract`, whether one schema declares both or a
-   later schema declares one where the stored schema declares the other, and
-   refuses a later schema that adds, drops, reorders, or changes a stored
-   member. That last refusal is terminal where the stored schema it compared
-   against is one the transaction holds: the commit is refused as
-   `CfcCommitRefusalError` and is not retried. Each member's claim is stamped
-   with its module identity where the list is lowered, by rule 5 for
-   `WriteAuthorizedBy`; a stored member with no stamp admits no writer, as a
-   stored lone claim with none does.
+   later schema declares one where the stored schema declares the other. It
+   holds the stored list as a set: a later schema may list the stored members
+   in any order, each matched by its contract and its writer's binding, and
+   the stored envelope keeps them as stored, in stored order. It refuses a
+   later schema that drops or changes a stored member. It refuses one that
+   adds a member, except in a release of the piece the envelope belongs to
+   (the setup of a piece, a swap of its pattern, or a repair of its start),
+   where it appends a member whose writer is of a module the release installs,
+   when one stored member names the same contract with a writer of that module
+   or of one the space attests the installed module succeeds. That carve-out
+   lands ahead of its ruling, specs#96, as the
+   [conformance statement](../cfc-conformance-statement.md) §10 records. A
+   refusal is terminal where the stored schema it compared against is one the
+   transaction holds: the commit is refused as `CfcCommitRefusalError` and is
+   not retried. Each member's claim is stamped with its module identity where
+   the list is lowered, by rule 5 for `WriteAuthorizedBy`; a stored member with
+   no stamp admits no writer, as a stored lone claim with none does, and admits
+   no appended member either.
 5. An `AuthoredByCurrentUser` label beside it needs nothing more of the list:
    every member names a writer, which is what a claim about the current
    principal requires, and a member naming a contract keeps its gesture.

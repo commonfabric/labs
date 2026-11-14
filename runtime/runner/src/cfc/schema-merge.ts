@@ -420,10 +420,11 @@ const keptWritePolicyAlternative = (
 
 /**
  * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
- * lists. The list is a set: every stored alternative is kept, matched to a
- * candidate's alternative by content rather than by its place in the list,
- * and stays as stored, in stored order. A candidate's alternative matching
- * none of them is appended after them, and only in a release, and only where
+ * lists, as `mergeWritePolicy` in §8.15.13 states it. The list is a set
+ * (§8.15.6.1): every stored alternative is kept, matched to a candidate's
+ * alternative by content rather than by its place in the list, and stays as
+ * stored, in stored order. A candidate's alternative matching none of them is
+ * appended after them, and only in a release, and only where
  * {@link writePolicyAlternativeAdmissible} admits it; anything else refuses
  * the whole merge.
  */
@@ -441,6 +442,15 @@ const mergeWritePolicyAnyOf = (
   if (!Array.isArray(existing) || !Array.isArray(candidate)) {
     throw unstable("one side is not a list of alternatives");
   }
+  // TODO(danfuzz): A schema omitting a stored alternative is refused, in every
+  // write, though the merged envelope could keep it: here as a drop, and
+  // below as an addition outside a release where the stored claims are the
+  // side merged in (the verification overlay in `prepare.ts`). That refuses a
+  // FabriChat room's deleting or obliterating a message whose stored envelope
+  // lists `commitDelete` and `commitObliterate` among its reactions' writers,
+  // which the room's `SentReaction` does not list, and its `openWindow` over
+  // such messages. Keep the stored alternative instead once a ruling lets a
+  // later schema omit one.
   const kept = existing.map((policy) => {
     for (const other of candidate) {
       const merged = keptWritePolicyAlternative(policy, other, adoptsStamp);
@@ -472,7 +482,7 @@ const mergeWritePolicyAnyOf = (
 
 /**
  * Whether a release may append the write-policy alternative `added` to the
- * stored alternatives `stored`. It may when ONE stored alternative pairs the
+ * stored alternatives `stored`, as `admissible` in §8.15.13 states it. It may when ONE stored alternative pairs the
  * contract `added` names (or names none where `added` names none) with a
  * stamped artifact whose lineage includes the one `added` is stamped with,
  * and the release installs that artifact: the same module, or one the space

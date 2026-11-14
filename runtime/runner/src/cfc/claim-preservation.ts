@@ -111,7 +111,8 @@ const keepsWritePolicyAlternative = (
 /**
  * The refusal of a merged write policy holding an alternative that keeps no
  * stored one, or `undefined` where each such alternative is one `release` may
- * append (`writePolicyAlternativeAdmissible()`). Outside a release, none may.
+ * append (`writePolicyAlternativeAdmissible()`, §8.15.13 carve-out (c)).
+ * Outside a release, none may.
  */
 const appendedWritePolicyRefusal = (
   stored: unknown,

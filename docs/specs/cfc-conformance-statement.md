@@ -812,3 +812,59 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   over-taint where an earlier attempt's stamp is wider than the setup's own.
   Restating it would take a value stamp from what the setup read onto data no
   write of the setup made.
+
+## 10. Write-policy alternatives across a release (§8.15.6, §8.15.13)
+
+The specification at the pin has no write policy: nothing in it names
+`writePolicyAnyOf`, a list of alternatives at one position, each pairing a
+writer with an optional UI contract. Its rules for a schema that changes a
+stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the
+IFC contract attached to a path, and §8.15.3 has write authority stable.
+[specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
+[specs#52](https://github.com/commonfabric/specs/pull/52), proposes the
+construct (§8.15.6.1) and a release that may append an alternative to a stored
+policy (carve-out (c) of §8.15.13, `mergeWritePolicy` and `admissible`).
+
+**What the runtime does.** `mergeWritePolicyAnyOf` in `cfc/schema-merge.ts`
+matches each stored alternative to a candidate's by content: the same keys,
+the same contract, and writer claims that reconcile as two lone
+`writeAuthorizedBy` claims do (`reconcileWriterClaimStamp`). It keeps the
+stored alternatives as stored, in stored order, whatever order the candidate
+lists them in, and refuses a candidate that lacks one. It appends a
+candidate's alternative that matches none only in a release, and only where
+`writePolicyAlternativeAdmissible` admits it: its writer carries a module stamp
+the release installs, and one stored alternative names the same keys and the
+same contract with a writer stamped with that module or with one the space
+attests the installed module succeeds. The commit site in
+`prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by the runtime's
+`release-program` input (`transactionReleasesStore`), names the installed
+modules from it (`releaseProgramModules`), and reads succession from the
+delegations the transaction is pinned to (`moduleSucceeds`), which for a
+source update's setup include the ones the update proposes. `droppedStoredClaim`
+in `cfc/claim-preservation.ts` holds the merged envelope to the same rule
+independently: every stored alternative kept, wherever it sits, and every other
+one admitted by the same predicate. `piece setsrc --check` and the
+origin-following review merge in dry run through a transaction pinned to the
+delegations the update would propose
+(`PatternManager.proposedSourceUpdateDelegations`,
+`Runtime.readTxProposingDelegations`), so the check and the commit give one
+verdict.
+
+This implements specs#96 ahead of its ruling, at strict and with no dial, at
+@danfuzz's direction. Against the pin it admits more: an appended writer, and a
+candidate listing the stored alternatives in another order, which the pin's
+general stability rules refuse. So it does not satisfy the correspondence
+procedure's step 4, which asks for a default-off dial for a change admitting
+more. The two deciding sites, the merge's append and the keep rule's, carry
+its `SPEC-PENDING` marker, and the kernel manifest carries no row for
+`mergeWritePolicy` until a regenerated snapshot defines it.
+
+**Residuals.**
+
+- The merge also requires an appended alternative to hold the same keys as the
+  stored one it pairs with, which the proposal does not ask: an over-taint.
+- A drop is refused in every write. A program that retires a writer at a
+  position whose stored envelopes list it can therefore write those documents
+  only through a candidate that still lists the writer's alternative, and an
+  ordinary write of a document that stores fewer alternatives than the program
+  lists is refused as an addition outside a release.

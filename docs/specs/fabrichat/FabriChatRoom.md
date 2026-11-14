@@ -300,13 +300,14 @@ each setting at an initial value:
 | How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
 | How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
-| How many of the newest messages `messages.latest` holds | `maxWindowCount` | 100 |
+| How many of the newest messages `messages.latest`, and a window, hold | `maxWindowCount` | 100 |
 | The most message windows a session can have open | `maxOpenWindows` | 50 |
 | The most attachments a message may have | `maxAttachments` | 10 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. The room reads `ownersMayObliterate`,
-`deletionIsObliteration`, `maxWindowCount`, and `maxAttachments`; the other
+`deletionIsObliteration`, `maxWindowCount`, `maxOpenWindows`, and
+`maxAttachments`; the other
 keys are stated for
 the policy's shape, which a user's Home carries, and read by nothing. `ownersMayObliterate` is there for a group room with many
 OWNERs; a direct room is set up without it, and its two people each obliterate
