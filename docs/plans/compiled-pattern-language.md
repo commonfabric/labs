@@ -49,28 +49,30 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `def495749e`, on 426 corpus modules, it accepts 335
+  prototype commit `16246cceef`, on 426 corpus modules, it accepts 335
   without an error and reports 384 errors: `any` in a type (182), 73
   type mismatches, a function type in data from one declaration (35),
   and `patternTool` (31) are most of them. Footprint analysis covers
   `footprint-analysis.md` §2 to §8, with the record of each use of a
   body, and finds 90 of 1,972 bodies widening (4.6%) where the
   document's script found 83 of 1,962. Its listing for FabriChat's
-  `commitEdit` equals the one in §12.3. Plan emission is started: a
-  `plan` command emits slots, state cells, collections, bodies per use,
-  bindings, operations, selectors, picks, cones, outputs, edges, and
-  dynamic reads as JSON, with no label templates, hashes, or
-  constraints. It emits a plan with no unsupported construct for 183 of
-  the 288 accepted modules that hold a pattern; the most frequent
-  unsupported constructs are a call the emitter does not resolve,
-  `wish`, and an element construct over a constant. Six of the twelve
-  diagnostics that need more than types are emitted; the six
-  `cfc-flow:*` need label templates. The prototype differs from the
-  documents in three known places: it reports `addUnique` under
-  read-then-push, its constant cause is narrower, and it misses
-  destructuring and keyed access for widening by a recursive type. The
-  crate's `SPEC-NOTES.md` lists the places where it found the documents
-  ambiguous; notes 86 to 97 are not yet written into the documents.
+  `commitEdit` equals the one in §12.3. A `plan` command emits slots,
+  state cells, collections, bodies per use, bindings, operations,
+  selectors, picks, cones, outputs, edges, and dynamic reads as JSON,
+  and the first label templates: `const`, `slot`, and `derive` by
+  expression code or by a body. It emits a plan with no unsupported
+  construct for 226 of the 288 accepted modules that hold a pattern.
+  Most of the rest use `wish` (79 sites in 40 modules) or `reduce`, for
+  which the documents define no record, or a spread. Not built: the
+  templates `select`, `pick`, and `fold`, the templates of collections,
+  write edges, operations, and bindings, hashes, constraints, and the
+  six `cfc-flow:*` diagnostics. The prototype differs from
+  `plan-and-label-templates.md` in the places that document's last
+  corrections name, among them the member `Binding.state[].place`, the
+  target of a write through a state cell, and how `inPlace` is decided.
+  The crate's `SPEC-NOTES.md` lists the places where it found the
+  documents ambiguous; notes 98 to 112 are not yet written into the
+  documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -676,6 +678,14 @@ as an assumption.
     question 36). *Assumed:* any read of the list in a body that calls
     `push` or `pushAll` on it, and not `addUnique`. This reports more
     sites than today's classifier.
+101. **How the cones of a plan are partitioned** (PL question 44).
+    *Assumed:* the partition the prototype chose.
+102. **A statically resolved pattern on a cycle of calls** (PL question
+    45; LS question 37). *Assumed:* refused. What the builder does today
+    is not verified.
+103. **How value code reads the child a dynamic key chose** (PL question
+    46). *Assumed:* it is handed every child. `execution-and-storage.md`
+    §2.2 gives `ConeHost.slot` no key, which disagrees with PL §3.18.
 
 ## Open, and not needing the owner
 

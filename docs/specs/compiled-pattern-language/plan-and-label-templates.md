@@ -44,7 +44,10 @@ the plan records for them and what label each record yields.
   survive **both combination and transformation** via intersection across
   inputs.").
 - A **path** is a list of segments. A segment is a property name, or `*` for
-  "each element", as in the stored envelope's entry paths.
+  "each element", as in the stored envelope's entry paths. A well-known
+  key is the segment of its string value: the key `[UI]` of a result is
+  the segment `$UI`, and `[NAME]` is `$NAME` (the constants `UI` and
+  `NAME` in `base/api/index.ts`).
 - An **instance** is one running pattern with a result cell. A **cone** is a
   unit of evaluation. The compiler partitions what an instance computes
   into cones: every value is computed by exactly one cone, and a cone
@@ -343,7 +346,12 @@ export interface Body {
 
 /** One path of a computed value that a body observes in one way. */
 export interface ComputedInput {
-  /** Where the value sits in the body's argument. */
+  /**
+   * Where the value sits in the body's argument. For an authored function
+   * the first segment is the name of the parameter the value is passed
+   * for, and for a `computed` the name of the captured variable. A `lift`
+   * has one parameter, and the path starts below it.
+   */
   readonly at: Path;
   readonly observes: ObservationClass;
   /** The label of what the body observes there. */
@@ -933,8 +941,8 @@ export interface Binding {
     /**
      * `link`: the path is bound by reference. It holds a cell handle, or a
      * container that has a stored address. In the reactive tier every path
-     * is bound this way, and resolves to the slot or the output `template`
-     * names. `copy`: a scalar, or a container the body computed, stored in
+     * is bound this way, and resolves to what `place` names. `copy`: a
+     * scalar, or a container the body computed, stored in
      * the binding's state document. A path that holds a reference on some
      * runs only is `copy`, and the runtime stores a link on the runs on
      * which the value it is handed carries a stored address. No class is
@@ -942,6 +950,20 @@ export interface Binding {
      * slots with root `binding` observe of it (section 3.14).
      */
     readonly capture: "copy" | "link";
+    /**
+     * For a binding of the reactive tier: what the path resolves to. A
+     * slot of the instance; an output of the instance (`Plan.outputs`); the
+     * stream of another binding of the reactive tier (`Plan.bindings`); or
+     * a constant written at the binding, which the plan holds and nothing
+     * stores. `template` is the label of the same place: the `slot` node,
+     * the output's template, or `const`. Absent for a binding made in a
+     * function body, whose state document holds the path (section 3.14).
+     */
+    readonly place?:
+      | { readonly slot: Index }
+      | { readonly output: Index }
+      | { readonly stream: Index }
+      | { readonly constant: unknown };
     /**
      * For a path bound by reference in a function body: the reference the
      * binding holds, or the references it is one of, as
@@ -1014,6 +1036,17 @@ can see. Its slots, bodies and cones are entries of the enclosing plan, with
 see at the call, and any pattern a function body instantiates, is a `Child`
 with a plan of its own (section 3.15).
 
+The argument of a pattern compiled into another is bound place by place.
+Each path of the callee's argument resolves to what the caller wrote
+there: a slot of the caller, an output of the caller, or a constant. So a
+slot the callee reads through its argument is a slot of the enclosing
+plan with the caller's root and path, and no slot with root `argument`
+stands for the callee's own argument. A call of a statically resolved
+pattern that is on a cycle of such calls, a pattern that calls itself in
+its reactive tier included, cannot be compiled in this way, because the
+plan would not end. *Assumed* (section 8, question 45): the compiler
+refuses such a call.
+
 This document defines the footprint *record* (`Body.reads`, `computed`,
 `handles`, `writes`, `envelopes`, `outputs`, `calls`, `widenings`). The
 analysis that fills it in is specified in `footprint-analysis.md`.
@@ -1076,10 +1109,27 @@ adding or removing a declaration does not rename another one's stored state.
   confirm (section 8, question 31): a cause that is data in the reactive
   tier would make the name of a record of the plan a run-time value, and
   the state that differs per element is named by the element key already.
+- A declaration assigned to nothing that has no base name by the second
+  rule takes the name of the place it is written at: the property of the
+  object literal, or the JSX attribute. That is the case for a `computed`,
+  an `action` or a `lift` whose function is an arrow written in place,
+  which has no callee's name. Where it is written at neither, as a JSX
+  child is, its base name is the name of the construct: `computed`,
+  `action`, `lift`.
 - Where two declarations of one pattern body have the same name by these
   rules, each takes the name and its ordinal among them, in source order.
   Adding a declaration with another name moves no ordinal. Adding one with
-  the same name before an existing one moves the ordinals after it.
+  the same name before an existing one moves the ordinals after it. The
+  name with its ordinal is written `name#n`, with `n` counted from 1:
+  two bindings of a handler `save` are `save#1` and `save#2`. A
+  declaration whose name no other declaration of the body has takes no
+  ordinal.
+- A thing a site of a function body makes, where the plan has a record
+  for it, is named from the body. A `Child` that a site of `Body.calls`
+  instantiates has the body's `name`, `/n`, and the index of the site in
+  `Body.calls`: `openRoom/n0`. A `StateCell` a body creates under a
+  constant cause has the body's `name`, `/`, and the cause (section
+  3.14). Both have the `within` of the body.
 
 Names are unique within one pattern body, and the steps of `within` tell two
 bodies apart. The records that hold a name are `StateCell`, `Operation`,
@@ -1301,6 +1351,32 @@ that another cone, a `pick`, or a collection refers to is an entry of
 `kept: false`, and its `path` is below the name in `interim`, which is not
 a path of the result. A value that only the cone computing it uses has no
 entry.
+
+**The partition.** The rules above hold for any partition. *Assumed*
+(section 8, question 44), the compiler makes this one.
+
+- Each declaration of the reactive tier whose initializer computes is one
+  cone. The cone computes the whole initializer: its operators, the uses
+  of bodies written in it, and its `select` and `pick` nodes.
+  `Cone.entry` is the declaration's name (section 1.3). A declaration
+  whose initializer only names a slot, or a path of another declaration's
+  value, computes nothing and has no cone.
+- A JSX tree that is not the initializer of a declaration is one cone.
+- An element construct is not part of the cone of the expression it is
+  written in. Its callback is cones by these same rules: one for each
+  declaration in the callback that computes, and one for the expression
+  the callback returns. The enclosing cone uses the assembled result
+  (below).
+- A pattern compiled into the instance is cones by these same rules, with
+  the `site` step in the `within` of what it declares.
+- One cone, whose `entry` is `result`, computes the paths of the result
+  that no other cone computes: an expression written in the returned
+  object, and a path that passes an input through.
+
+So the result of a body used inside an initializer, and the condition of
+a `select` there, are values of that one cone, and are entries of
+`Plan.outputs` only where another cone, a `pick`, or a collection refers
+to them.
 
 **The assembled result of an element construct.** The runtime assembles
 the result of a `map`, a `filter` or a `flatMap` from per-element results
@@ -2214,6 +2290,17 @@ membership template, and `identity` the template of the reference at the
 position. A slot below the root crosses that reference like any link
 (section 2.5), with the producing template as the pointer's label.
 
+A collection over a module-scope constant, or over an array literal
+written in place, is a collection of this kind: the cone that yields the
+array has an output for it, and `Collection.source` names that output.
+For a constant, the membership template and the template of every
+element are `const`. For a literal written in place, the membership is
+the literal's `enumeration` and each position has the template of the
+expression written there (section 3.4), so the element's root slots
+resolve per position, as labels do (section 1.3). The elements of either
+are plain values unless a position holds a reference, so a state cell in
+the body falls under `collection:shared-element-state` (section 1.3).
+
 Element cones are keyed as section 1.3 defines, and the element slots are
 bound per position. The runtime, not the value code, iterates: it evaluates
 the body's cones once per key with that element's slots, and assembles the
@@ -2381,6 +2468,17 @@ function passes the value, and the runtime copies into the argument the
 paths the entries name, each narrowed to its class, as it
 narrows a slot. The body's label joins the templates of the entries, and
 not the template of the whole value.
+
+An object or an array literal written in the reactive tier, as the
+argument of a call or as a captured value, binds each member on its own.
+What an input path is bound to is found by following the path into the
+literal. Where it reaches a member that is a slot, or a path below one,
+the body's entry there is a slot of `Body.reads`, with the member's root
+and path. Where it reaches a member the instance computed, the entry is
+an entry of `Body.computed` with that member's template. An entry at a
+path of the literal itself, such as `enumeration` at the literal, is an
+entry of `Body.computed` whose template is the literal's own (section
+3.4).
 
 A computed value passed whole would be looser than today. A body that
 reads one member of an object the pattern body constructs reads that
@@ -2677,6 +2775,26 @@ comparable with the slots that read the cell: a slot with the same root whose
 path overlaps the written path, in either prefix direction, reads what the edge
 writes. A handle that reached the body in a value the instance computed is named
 by its entry of `Body.computed` (below).
+
+**Which slots read a `handle` target.** The written path is the path of
+the handle's `identity` slot followed by the target's `path`. A slot with
+the same root reads what the edge writes in two cases.
+
+- Its path is the handle's path followed by a path that overlaps the
+  target's `path`, in either prefix direction. Two slots at the handle's
+  own position are excepted: the handle's `identity` slot, and a `shape`
+  slot with `inPlace` there. Each observes the reference stored at the
+  position and not the cell (section 2.5), and a write through the handle
+  lands in the cell and leaves that reference as it is.
+- Its path is a proper prefix of the handle's path, its class is `value`,
+  and its schema has a data type at the handle's position, so that the
+  read continues through the link stored there. A `value` slot whose
+  schema has a handle type at the position stops there
+  (`footprint-analysis.md` §2.2), and a slot of another class above the
+  position does not reach the cell.
+
+For a target with root `state` the rule is the same with the cell's root
+in the place of the handle's path, and no slot is excepted.
 
 **A write through a handle that `key` flattened.** For `h` of type
 `Cell<{ a: Cell<T> }>`, a write through `h.key("a")` lands in the cell
@@ -3961,6 +4079,19 @@ by the rule that child access is navigation (§4.6.3). The value code
 reports the key, the runtime binds the body's child slots to that path, and
 the label follows. The container's enumeration is not needed, so a dynamic
 key in the reactive tier needs no refusal.
+
+**The child slots of a container slot.** Where `a` is at a slot root, the
+chosen child's slots are slots of the plan whose path is the path of `a`,
+`*` at the position of the key, and the path the surrounding expression
+reads below the child, each with the class of that read. One of them is
+the `shape` slot at the path of `a` followed by `*`, which `choice`
+joins. `from` names that slot as `container`: an index into `Plan.slots`.
+The plan has no slot at the path of `a` itself on account of the pick,
+because the pick observes nothing of the container. For a choice point,
+the label of each child slot is resolved at the address of the chosen
+child and at no other. What the value function is handed for such a slot,
+so that it can read the child at a key it computes, is section 8,
+question 46.
 
 **The choice point.** Every `pick` node has a choice point of its own,
 `Template.pick`, an index into `Plan.picks`, as a `select` has a
@@ -5250,7 +5381,10 @@ value. `m2` to `m5` cross the element's link in the same way (section 2.5).
 
 The listing is a slice. It leaves out the `shape` slots that footprint
 analysis records at optional positions (`footprint-analysis.md` §12.5).
-One is at a data position, `event target`. The others are in place
+Two are at data positions, `event target` and `event attachments`. The
+second is beside `e2`: the body tests whether the list is present and
+asks for its length, and an `enumeration` entry does not remove a `shape`
+entry at its path (`footprint-analysis.md` §2.3). The others are in place
 (`inPlace`), at the positions of the optional handles: among them
 `binding myProfile`, `binding joined`, `event replyTo/thread` and
 `event replyTo/quotes`. Each of those observes whether the position holds
@@ -5260,7 +5394,7 @@ which reference it holds (section 2.5), which that `identity` slot joins
 already. All of them are in the footprint of `B0` and join `T_send`. With
 FabriChat's labels none changes an instantiated label.
 
-The listings of this section leave out four more things that the rules
+The listings of this section leave out three more things that the rules
 of section 3 and of `footprint-analysis.md` give the record of the same
 source (`footprint-analysis.md` §12.5 lists the same). None changes
 an instantiated label with FabriChat's labels.
@@ -5269,16 +5403,14 @@ an instantiated label with FabriChat's labels.
   `e3`, `e5` and `e6`. `attachmentsIn` resolves each attachment link, and
   `checkedReply` resolves the reply's `thread` and `quotes` links, each
   on some runs only, so each resolution is journaled (section 3.16).
-- `B0` has two further reference edges, at `*/replyTo/thread` and
-  `*/replyTo/quotes` of the pushed value. Each holds the handle a
-  journaled resolution returned for `e5` or `e6`.
 - `B2` reads `titles[key]` on a record, so its computed inputs include
   `titles : enumeration` beside `titles/* : value`, and its `widenings`
   has an entry that names both (`Widening.computed`).
 - `m4` is at a position of handle type, so it has `inPlace`, as the
   omitted `shape` slots of `B0` have.
 
-The binding, an entry of `Plan.bindings`:
+The binding, an entry of `Plan.bindings`. The middle column is the
+member `place` of each state path:
 
 ```text
 sendMessage  handler B0
@@ -5307,8 +5439,10 @@ B0  handler   commitSend
                  w1  handle b2  */authorProfile   passes b0
                  w2  handle b2  */attachments/*   one of e3
                  w3  created n0                   T_send
-                 w4  handle b3                    T_send
+                 w4  handle b3  *                 T_send
                  w5  handle b4                    T_send
+                 w6  handle b2  */replyTo/thread  passes e5
+                 w7  handle b2  */replyTo/quotes  passes e6
       envelopes  handle b3  *
 B1  function  threadTitles
       reads      s2
@@ -5346,17 +5480,27 @@ references (`e5`, `e6`), and `shownIn` (`e7`).
 The writes of `B0`:
 
 - `w0` is the push. Its target is the list behind the handle `b2`, and the
-  constraints are those of the stored element type.
-- `w1` and `w2` are paths of the pushed value that hold a reference the
-  handler was given (`WriteEdge.reference`). `authorProfile` is what
-  `myProfile.resolveAsCell()` returned, which is the reference `b0`
-  observes. Each attachment is one of the references at `e3`.
+  constraints are those of the stored element type. A `push`, a `pushAll`
+  and an `addUnique` write the element they add, so the path of the edge
+  is `*` below the list (`footprint-analysis.md` §6.1), and the paths of
+  the edges for parts of the pushed value start with `*`.
+- `w1`, `w2`, `w6` and `w7` are paths of the pushed value that hold a
+  reference the handler was given (`WriteEdge.reference`).
+  `authorProfile` is what `myProfile.resolveAsCell()` returned, which is
+  the reference `b0` observes. Each attachment is one of the references
+  at `e3`. The `thread` and the `quotes` of `replyTo` are the handles
+  that the journaled resolutions of `e5` and `e6` returned, and each edge
+  names the plain slot. The pushed value has `attachments` and `replyTo`
+  on some runs only. The edges are listed all the same, and the
+  existence label of each path, which is `T_send`, covers the runs
+  without it (`footprint-analysis.md` §6.5).
 - `w3` is the initial value of the reactions list, a cell the handler
   creates at `n0`. The message's `reactions` field holds the handle of that
   cell, a reference the body created.
-- `w4` adds a thread title record to `threadInfo`, and the record itself is
-  written through `threadInfo.elementById(key)`, whose target the analysis
-  cannot name: the envelope `handle b3 *` covers it.
+- `w4` adds a thread title record to `threadInfo` with `addUnique`, so
+  its path is `*`, as for `w0`. The record itself is written through
+  `threadInfo.elementById(key)`, whose target the analysis cannot name:
+  the envelope `handle b3 *` covers it.
 - `w5` is the event sent on the `joined` stream.
 
 Every `computed` call of the slice meets the promotion criterion of
@@ -5441,9 +5585,16 @@ constant.
 
 Kept outputs in the slice: the room's `messages` output (from `facts.list`),
 and the rendered tree under `[UI]`, which holds the empty-state branch and
-each row's text, edited mark and thread label. The result of `B1`,
-`facts.entries`, `facts.places`, the row's key, `replies`, and the
-conditions of `T_edited` and `T_label` are interim.
+each row's text, edited mark and thread label. `facts.main`,
+`facts.entries`, `facts.places`, the row's key and `replies` are interim
+outputs: another cone, a `pick` or a collection refers to each.
+
+By the partition of section 1.4, the cones of the slice are `facts`,
+`isEmpty`, the JSX tree, and per row `text`, `isEdited`, the row's key,
+`replies` and `threadLabel`. The result of `B1` is computed and used
+inside the cone `facts`, and the conditions of `T_edited` and `T_label`
+inside the cones `isEdited` and `threadLabel`. None of the three is an
+entry of `Plan.outputs`.
 
 ### 6.3 The gate on the send handler
 
@@ -5909,7 +6060,12 @@ this document made.
     name apart by their order among declarations of that name. Adding one
     before another renames the later ones, and state stored under them is
     not found again. *Assumed:* accepted. The prototype measures how many
-    declarations of the corpus take an ordinal.
+    declarations of the corpus take an ordinal. The written form is
+    `name#n` (section 1.3). A cause the author writes with `.for(...)`
+    takes the place of a name and can be equal to a name so formed.
+    *Assumed:* the compiler refuses a pattern body in which two
+    declarations have one name after the ordinals are given, and
+    `language-subset.md` has no diagnostic for it.
 19. **To `execution-and-storage.md`.** Section 2.3 leaves to it which
     subtrees get a part document, how one is identified, how a storage
     link is told from a reference in what is stored, and what a reader of
@@ -6228,3 +6384,38 @@ this document made.
     template that projects a stored property of the slot keeps that
     property's claims; `footprint-analysis.md` would then have to
     record such a projection as a slot of its own.
+44. **The partition into cones.** Section 1.4 fixes what any partition
+    has to satisfy and then states one: a cone per declaration of the
+    reactive tier that computes, with everything nested in its
+    initializer; one per JSX tree; the callback of an element construct
+    by the same rules; and one cone named `result`. *Assumed:* that
+    partition, which is the one the prototype emits. The partition
+    decides which values are entries of `Plan.outputs`, what an interim
+    output is named, and how much is evaluated again when one input
+    changes: a finer partition, with a cone per use of a body or per
+    `select`, evaluates less and stores more names. It changes no label.
+45. **A statically resolved pattern on a cycle of calls.** A pattern that
+    calls itself in its reactive tier, directly or through other
+    statically resolved patterns, cannot be compiled into the enclosing
+    plan (section 1.1). *Assumed:* the compiler refuses the call. The
+    alternative makes the call that closes the cycle a `Child` with a
+    plan and a result cell of its own, as a call of a factory value is,
+    which a pattern that renders a tree of records needs. The prototype
+    compiles such calls in to a depth of eight and lists a deeper one as
+    not translated. What today's builder does with such a call was not
+    verified against source. `language-subset.md` §4.4.2 has to state
+    the rule and name the diagnostic.
+46. **How value code reads the child a dynamic key chose.** Section 3.18
+    binds the child slots of a `pick` over a container slot to the
+    chosen path, and the value function reports the key in its result
+    (`execution-and-storage.md` §2.2). The function has to read the
+    child before it returns, and `host.slot` takes a slot index and no
+    key. *Assumed,* with the prototype: the function is handed every
+    child of the container at the paths and classes of the child slots,
+    and reads the one at its key. The label is the `pick` node's all the
+    same, instantiated at the chosen child alone, and the cone is stale
+    when the chosen child changed, by the comparison section 3.18 has
+    for a container another cone computed. The cost is that the read
+    loads every child. The alternative gives the host a function that
+    takes the choice point and the key and binds the child slots before
+    it returns. `execution-and-storage.md` owns the host interface.
