@@ -835,7 +835,9 @@ candidate's alternative that matches none only in a release, and only where
 `writePolicyAlternativeAdmissible` admits it: its writer carries a module stamp
 the release installs, and one stored alternative names the same keys and the
 same contract with a writer stamped with that module or with one the space
-attests the installed module succeeds. The commit site in
+attests the installed module succeeds, whose claim the appended one's is but
+for the symbol it binds, a nonempty path of names, and its stamp and file
+spelling. The commit site in
 `prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by the runtime's
 `release-program` input (`transactionReleasesStore`), names the installed
 modules from it (`releaseProgramModules`), and reads succession from the

@@ -347,8 +347,10 @@ Normative behavior:
    adds a member, except in a release of the piece the envelope belongs to
    (the setup of a piece, a swap of its pattern, or a repair of its start),
    where it appends a member whose writer is of a module the release installs,
-   when one stored member names the same contract with a writer of that module
-   or of one the space attests the installed module succeeds. That carve-out
+   when one stored member has the same keys and the same contract (or names
+   none where the appended one names none), and a writer claim that differs
+   from the appended one's only in the symbol it binds, of that module or of
+   one the space attests the installed module succeeds. That carve-out
    lands ahead of its ruling, specs#96, as the
    [conformance statement](../cfc-conformance-statement.md) §10 records. The
    pattern contract check an update runs before its commit compares a declared

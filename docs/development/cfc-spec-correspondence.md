@@ -408,8 +408,10 @@ implements [specs#96](https://github.com/commonfabric/specs/pull/96), stacked
 on [specs#52](https://github.com/commonfabric/specs/pull/52), ahead of its
 ruling. A stored `writePolicyAnyOf` is matched by content rather than by
 position, and a release may append an alternative whose writer's module it
-installs, where one stored alternative pairs the same contract with that
-module or one the space attests it succeeds. It admits more than the pin at
+installs, where one stored alternative has the same keys and contract, a
+writer claim that differs from the appended one's only in the symbol it
+binds, and that module or one the space attests it succeeds. It admits more
+than the pin at
 strict, with no default-off dial, so it does not satisfy step 4 above. Its four
 deciding sites, the merge's matching and its append, and the keep rule's
 matching and its admission, carry the `SPEC-PENDING` marker, and their citations

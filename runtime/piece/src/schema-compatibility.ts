@@ -702,9 +702,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a writer
- * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
- * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * `writeOnly`) are compared for exact equality, with two exceptions, both
+ * made in the reduction `comparableIfc()` applies before the `ifc`
+ * comparison. The members of a `writePolicyAnyOf` are a set, compared in an
+ * order their contents decide, so a candidate listing them in another order
+ * declares the same contract. And a writer claim's volatile identity, in a
+ * `writeAuthorizedBy` or in each member of a `writePolicyAnyOf`, is
+ * normalized out. That
  * identity is the content-addressed module hash (`moduleIdentity`, and the
  * legacy `bundleId`), which rehashes on any edit to the authoring module,
  * together with the source-file spelling (`file`), which changes with the

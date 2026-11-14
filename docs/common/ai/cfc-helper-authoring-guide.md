@@ -254,9 +254,11 @@ names stays in it, so a later version of the pattern cannot drop one or change
 one's action, and a record whose policy names one writer cannot move to a list
 or back. The order of the members does not matter. A later version may add a
 writer only when the update that installs it is a release of the piece, the
-new writer is in the same module as a writer already listed (or its updated
-successor), and it names an action that writer's member already names; a
-writer of any other module, or a new action, cannot join the list. The check
+new writer is in the same module as a writer already listed, or in an updated
+module the space attests succeeds that one, and its member has the same
+contract as that writer's member: the same action, or none where that member
+names none. A writer of any other module, or a new action, cannot join the
+list. The check
 of a pattern's contract that `cf piece setsrc` runs holds an update to the
 contract it replaces, so such an addition reaches a piece by a release of a
 `system:` pattern, which that check does not gate; a reordering it passes. So

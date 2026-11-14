@@ -4651,7 +4651,9 @@ export class Runtime {
    * delegations with `delegations` layered over them, as the setup
    * transaction of a source update proposing them is (see `edit()`), and
    * reading as `scopeKeyIdentity`'s instance where it names one. A review
-   * reads through it to judge a candidate as that update's commit will; being
+   * reads through it to judge a candidate by `delegations`, which judges it as
+   * the update's commit will only as far as they are the update's own
+   * proposal (see `PatternManager.proposedSourceUpdateDelegations()`); being
    * unable to write, it authorizes nothing.
    */
   readTxProposingDelegations(
