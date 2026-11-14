@@ -43,6 +43,10 @@ pub struct ModuleAnalysis {
     /// Sites the measurement lists: the category, the line, and the start
     /// of the source text.
     pub sites: Vec<(String, u32, String)>,
+    /// The plan of each pattern of the module
+    /// (`plan-and-label-templates.md` §1.1).
+    #[serde(skip)]
+    pub plans: Vec<crate::plan::PatternPlan>,
 }
 
 impl ModuleAnalysis {
@@ -314,14 +318,54 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         resolver.check_typed_rules(module);
     }
     // The footprint of each body (`footprint-analysis.md`), as counts.
+    let mut all_records: Vec<Vec<(usize, crate::footprint::Record)>> = Vec::new();
     for (module, check) in checks.iter_mut().enumerate() {
+        let mut found = Vec::new();
         if let Some(check) = check {
             let records = crate::footprint::analyze_module(&resolver, module, &check.bodies);
             footprint_counts(&check.bodies, &records, &mut check.counts);
             if let Some(parsed) = &parsed[module] {
                 footprint_diagnostics(parsed, &check.bodies, &records, &mut check.diagnostics);
             }
+            found = records;
         }
+        all_records.push(found);
+    }
+    // The plan of each pattern (`plan-and-label-templates.md` §1.1), and
+    // the diagnostic that needs the edges of the plan.
+    let all_bodies: Vec<Vec<Body>> = checks
+        .iter()
+        .map(|check| {
+            check
+                .as_ref()
+                .map(|check| check.bodies.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut all_plans: Vec<Vec<crate::plan::PatternPlan>> = Vec::new();
+    for (module, check) in checks.iter_mut().enumerate() {
+        let (Some(check), Some(parsed)) = (check, &parsed[module]) else {
+            all_plans.push(Vec::new());
+            continue;
+        };
+        let plans = crate::plan::emit_module(&resolver, module, &all_bodies, &all_records);
+        for plan in &plans {
+            for (start, cones) in &plan.cycles {
+                let position = parsed.lines.position(parsed.source, *start);
+                check.diagnostics.push(Diagnostic::new(
+                    "side-write:cycle",
+                    &parsed.path,
+                    (*start, *start),
+                    position,
+                    format!(
+                        "A side-write of this computation is on a cycle of the plan's edges, through the cones {}. {}",
+                        cones.join(", "),
+                        messages::rewrite("side-write:cycle")
+                    ),
+                ));
+            }
+        }
+        all_plans.push(plans);
     }
     let reports = std::mem::take(&mut resolver.types.borrow_mut().reports);
     for report in reports {
@@ -352,6 +396,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         diagnostics.dedup();
         modules.push(ModuleAnalysis {
             path: files[index].path.clone(),
+            plans: std::mem::take(&mut all_plans[index]),
             model,
             bodies: check.bodies,
             diagnostics,

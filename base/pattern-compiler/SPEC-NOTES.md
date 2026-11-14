@@ -375,7 +375,8 @@ numbers have gaps.
     computed in the body. The element of an enclosing element body is not
     recognized as the element key, so a cell created under it counts as
     created under data.
-85. **`Body.computed` is not implemented** (FA §1.1). The record is per
+85. **`Body.computed` was not implemented** when this note was written;
+    note 86 has what is. (FA §1.1). The record is per
     body. The split of the entries into `reads` and `computed` needs, for
     each use, what each formal input is bound to, which
     `origin_of_place` in `assign.rs` classifies for an argument of tier R
@@ -383,3 +384,97 @@ numbers have gaps.
     listed under `reads`, and the rules that journal a read, a
     resolution, or an observation "whatever the conditions say" for a
     computed input are not applied.
+
+## Completing the record, and the first slice of plan emission
+
+86. **`Body.computed`** (FA §1.1, §7.2, §8.4). `bind_use` gives the record
+    of one use: the entries on an input bound to a value the instance
+    computed are entries of `computed`, a read through a handle from such
+    an input moves into the envelope of a handle entry that names the
+    handle's `identity` entry of `computed`, a resolved entry becomes a
+    plain one with a dynamic read of kind `link`, and an observation of
+    label metadata is journaled. What an input is bound to is decided by
+    the plan emitter, which follows a place to its root and path.
+    `origin_of_place` in `assign.rs` names the kind of a place and not its
+    path, so the emitter does not use it. A record written in the reactive
+    tier binds each member on its own: an entry below a member that is a
+    slot is a slot. FA does not say this.
+87. **`Body.handles`** (FA §7.2, PL §3.9). A handle found below a hop whose
+    read is dynamic has no entry of its own. It is counted under the
+    listed handle it was found through, and where the analysis has no such
+    handle, under the position before the first hop. A read through what a
+    site returned is `get()`, `sample()`, or a property read, and the site
+    is an entry where it is `instantiate` by tag, `instantiate` in a body
+    that is evaluated again, or `createCell` under a cause.
+88. **Write edges** (FA §6.5). `push`, `pushAll` and `addUnique` write at
+    `*` below the cell. PL §6.2 lists `w0`, a `push`, at `*`, and `w4`, an
+    `addUnique`, with no path; the crate gives both `*`. FA does not say
+    what a path holds where the written record is one of several the body
+    built, or has a record spread into it on some runs. Chosen: the path
+    is an edge that names the references of all alternatives as `oneOf`,
+    since the runtime verifies a reference by identity. `new X(value)` on
+    a cell constructor is a `createCell` site by order, which note 83 said
+    was not recorded, and PL §6.2 lists it as `n0`.
+89. **What a copy holds** (FA §8.5). The crate analyzes the bound handler
+    at the bind site. A member of a record written at the site is a scalar
+    by its type. A value an `action` or an inline handler captures has no
+    expression at the site, and is taken as a scalar where the handler has
+    a `value` or `shape` entry at its root and none below. A handler
+    received as a factory value is not handled. The `Binding` of a `bind`
+    site of a body is not filled in, and the plan lists such a site as
+    unsupported.
+90. **What the first slice of the plan leaves out** (PL §1.1). Every
+    member that holds a `Template`, a `Hash`, or a `Constraint`, and so
+    `Slot.schema`, `Body.code`, `HandleReads.envelope`, `Child.callee` and
+    its schemas, `Cone.code`, `Collection.membership`, `Operation.input`;
+    and `Slot.declared`, `Slot.sampled`, `BodyOutput.required`,
+    `Output.scope`, `Operation.scope`, the records of `Body.widenings`,
+    `Collection.bodyUses.child`, and `Plan.closures`. `constraints` is
+    empty everywhere. `Binding.state` has a member `bound` that PL does
+    not define, in the place of `template`: the slot, the output, the
+    binding whose stream it is, or that it is a constant.
+91. **Cones** (PL §1.4). PL leaves the partition to the compiler. Chosen:
+    one cone for each declaration of the reactive tier that computes, with
+    everything nested in its expression; one for a JSX tree; one for the
+    body of an element construct; and one named `result` for the inputs
+    the result passes through. `Cone.entry` is the name of the
+    declaration. A slot that expression code reads is of class `value`
+    where an operator, a condition, or a method of a scalar consumes it,
+    and `identity` where it is passed on. PL decides the class by the
+    template, which this slice does not build. PL §6.2 says the listing
+    leaves out one `shape` slot at a data position, `event target`. The
+    crate has a second, `event attachments`.
+92. **Names** (PL §1.3). PL does not give the form of a name with its
+    ordinal. Chosen: `name#1`, `name#2`. The key `[UI]` of a result is the
+    segment `$UI`. A value assigned to no `const` takes the name of the
+    property or the attribute it is written at. A child or a state cell a
+    body creates is named by the body's name and the number of the site.
+    `ComputedInput.at` starts with the name of the formal input for a
+    function and for what a `computed` captures, and not for a `lift`,
+    whose argument is its one parameter.
+93. **`Slot.inPlace`** (PL §1.1). The member is for a `shape` slot at a
+    position of handle or reference type. The crate sets it where the same
+    body has an `identity` entry at the same path, and does not ask the
+    type.
+94. **`side-write:cycle`** (LS §10.3, FA §6.3). An edge of a static
+    side-write goes to each cone with a slot of the same root whose path
+    overlaps the written path and that is not the `identity` slot of the
+    handle itself. For a handle that is a state cell the edge is of kind
+    `state`, and the write target stays of kind `handle`, since the body
+    names it by a slot. The warning is reported at the function of the
+    writing body, for each side-write whose target cone reaches its own
+    cone. An edge from a cone to itself is in the plan and is not
+    reported. A write through a handle from a computed input has no edge
+    (FA §6.3), and a handler is no cone.
+95. **A pattern called in the reactive tier** (PL §1.1, §1.3) is compiled
+    into the plan under a `site` step, at most eight deep. Its argument is
+    bound place by place, so a slot of the callee is a slot of the caller.
+96. **A dynamic key in the reactive tier** (PL §3.18) is an entry of
+    `Plan.picks` with `chosenBy: "valueCode"`, and for a container that is
+    a slot the cone has a `value` slot at `*` below it.
+97. **What the emitter does not translate** is listed per plan by kind,
+    and `plan --corpus` counts it: `wish`, the context reads and the
+    remaining built-ins in the reactive tier, a collection method with a
+    callback other than `map`, `filter`, and `flatMap`, an element
+    construct over a constant, a spread in the reactive tier, a dynamic
+    read of kind `space`, and a call of a name it does not resolve.

@@ -22,6 +22,12 @@ commands:
       With --diagnostics, print every error and warning instead, and with
       --diagnostics --hints every hint as well. With
       --sites, print the sites the measurement lists, by category.
+  plan <file>...
+      Print the plan of each pattern of the given modules as JSON
+      (plan-and-label-templates.md §1.1), without label templates, with the
+      constructs the emitter does not translate. With --corpus and a
+      patterns directory, print for how many accepted modules a plan is
+      emitted with no unsupported construct, and those constructs by kind.
   bodies <file>...
       Print the bodies of the given modules as JSON.
   types <file>...
@@ -49,6 +55,7 @@ fn main() -> ExitCode {
         Some("check") if !operands.is_empty() => check(&operands, flags.contains(&"--hints")),
         Some("bodies") if !operands.is_empty() => bodies(&operands),
         Some("footprint") if !operands.is_empty() => footprint(&operands),
+        Some("plan") if !operands.is_empty() => plan(&operands, &flags),
         Some("types") if !operands.is_empty() => types(&operands, &flags),
         Some("corpus") if operands.len() == 1 => corpus_report(operands[0], &flags),
         _ => {
@@ -156,6 +163,56 @@ fn footprint(paths: &[&str]) -> std::io::Result<bool> {
         }
     }
     Ok(true)
+}
+
+/// Prints the plan of each pattern of the given modules as JSON, or, for a
+/// corpus directory with `--corpus`, the count of the modules a plan is
+/// emitted for and the unsupported constructs by kind.
+fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
+    let corpus = flags.contains(&"--corpus");
+    let files = if corpus {
+        let all = corpus::read_tree(Path::new(paths[0]), "")?;
+        corpus::select(all, "")
+    } else {
+        read(paths)?
+    };
+    let analysis = analyze(&files);
+    if !corpus {
+        let modules: Vec<serde_json::Value> = analysis
+            .modules
+            .iter()
+            .map(|module| {
+                let patterns: Vec<serde_json::Value> = module
+                    .plans
+                    .iter()
+                    .map(|plan| {
+                        let unsupported: Vec<serde_json::Value> = plan
+                            .unsupported
+                            .iter()
+                            .map(
+                                |(kind, start)| serde_json::json!({ "kind": kind, "start": start }),
+                            )
+                            .collect();
+                        serde_json::json!({
+                            "name": plan.name,
+                            "line": plan.line,
+                            "plan": plan.plan,
+                            "unsupported": unsupported,
+                        })
+                    })
+                    .collect();
+                serde_json::json!({ "module": module.path, "patterns": patterns })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&modules).unwrap_or_default()
+        );
+        return Ok(parsed(&analysis));
+    }
+    let summary = pattern_compiler::plan::corpus_summary(&analysis);
+    print!("{summary}");
+    Ok(parsed(&analysis))
 }
 
 fn types(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {

@@ -289,10 +289,12 @@ pub const CATALOG: &[Entry] = &[
         "a read of its own target is found by the paths of the body's text; two handles that \
          link to one cell are not seen",
     ),
-    footprint(
+    part(
         "side-write:cycle",
         Warning,
-        "the edges of the plan (`Plan.edges`), which a later stage builds from the write edges",
+        "found over the edges of the plan the first slice of plan emission lists: a write \
+         through a handle from a computed input has no edge, and a cycle through a pattern \
+         called in the reactive tier is not seen",
     ),
     part("computed:not-promoted", Hint, PROMOTION_REST),
     part("computed:redundant", Hint, PROMOTION_REST),

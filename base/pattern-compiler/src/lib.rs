@@ -19,6 +19,7 @@ pub mod messages;
 pub mod module;
 pub mod narrow;
 pub mod parse;
+pub mod plan;
 pub mod program;
 pub mod report;
 pub mod source;

@@ -299,6 +299,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "`set` a value computed from other inputs, or move the update into a `handler` \
              or an `action`."
         }
+        "side-write:cycle" => {
+            "Make the write leave a settled value unchanged, so that the second evaluation \
+             writes what the first did, or move it into a `handler` or an `action`."
+        }
         "mergeable-push:read-then-push" => "Push without reading the collection first.",
         _ => "",
     }

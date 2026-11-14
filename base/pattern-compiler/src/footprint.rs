@@ -4037,7 +4037,7 @@ fn normal_map(
 }
 
 /// The formal-input name of each parameter of a body (FA §1.2).
-fn parameter_names(kind: BodyKind, function: FunctionLike<'_, '_>) -> Vec<String> {
+pub(crate) fn parameter_names(kind: BodyKind, function: FunctionLike<'_, '_>) -> Vec<String> {
     function
         .params()
         .items
@@ -4070,13 +4070,13 @@ pub fn is_analyzed(body: &Body) -> bool {
     }
 }
 
-/// The record of each body of module `module` that the analysis runs on,
-/// with the index of the body in `bodies`.
-pub fn analyze_module<'a>(
+/// The start of the function of each body of module `module`, with the
+/// index of the body in `bodies`.
+pub fn body_functions<'a>(
     resolver: &Resolver<'_, 'a>,
     module: usize,
     bodies: &[Body],
-) -> Vec<(usize, Record)> {
+) -> Vec<(usize, u32)> {
     let Some(parsed) = resolver.parsed(module) else {
         return Vec::new();
     };
@@ -4090,11 +4090,8 @@ pub fn analyze_module<'a>(
             _ => {}
         }
     }
-    let mut records = Vec::new();
+    let mut found = Vec::new();
     for (index, body) in bodies.iter().enumerate() {
-        if !is_analyzed(body) {
-            continue;
-        }
         // The function of the body: the outermost one inside its span.
         let (from, to) = body.span;
         let function = starts
@@ -4102,9 +4099,26 @@ pub fn analyze_module<'a>(
             .filter(|(start, end)| from <= *start && *end <= to)
             .min_by_key(|(start, end)| (*start, u32::MAX - *end))
             .copied();
-        let Some((start, _)) = function else {
+        if let Some((start, _)) = function {
+            found.push((index, start));
+        }
+    }
+    found
+}
+
+/// The record of each body of module `module` that the analysis runs on,
+/// with the index of the body in `bodies`.
+pub fn analyze_module<'a>(
+    resolver: &Resolver<'_, 'a>,
+    module: usize,
+    bodies: &[Body],
+) -> Vec<(usize, Record)> {
+    let mut records = Vec::new();
+    for (index, start) in body_functions(resolver, module, bodies) {
+        let body = &bodies[index];
+        if !is_analyzed(body) {
             continue;
-        };
+        }
         if let Some(record) = analyze_body(resolver, module, body.kind, start, 0) {
             records.push((index, record));
         }

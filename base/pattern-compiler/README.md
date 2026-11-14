@@ -33,12 +33,15 @@ job builds or tests it. It is not a Deno workspace member.
 
 ## What it does not cover
 
-It has no code or plan emission. Its footprint analysis (`src/footprint.rs`)
-computes, for each body, the reads and the writes of
-[`footprint-analysis.md`](../../docs/specs/compiled-pattern-language/footprint-analysis.md)
-§2 to §7 and the widening causes of its §5.2, and stops there: it records no
-label metadata, no resolutions, no context reads, no `Body.outputs`, and none
-of the runtime calls of its §8, and it reports no diagnostic. `SPEC-NOTES.md`
+It has no code emission and no label templates. Its footprint analysis
+(`src/footprint.rs`) fills in the `Body` record of
+[`footprint-analysis.md`](../../docs/specs/compiled-pattern-language/footprint-analysis.md),
+and `src/plan.rs` emits a first slice of the plan of
+[`plan-and-label-templates.md`](../../docs/specs/compiled-pattern-language/plan-and-label-templates.md)
+§1.1 as JSON: the records without their templates, hashes, and constraints.
+`plan path/to/module.tsx` prints the plan of each pattern, and
+`plan --corpus <patterns directory>` counts the modules a plan is emitted for
+with no unsupported construct. `SPEC-NOTES.md`
 lists what it leaves out. Its type checker
 resolves written types and the declared types of bindings, infers the types of
 call results, standard-library members, operators, literals, and callback
@@ -90,6 +93,7 @@ release that builds with the Rust 1.93 toolchain.
 | `assign`                 | Assignability (`language-subset.md` §7.5, §7.5.1, §7.5.2) and the sites it is checked at                              |
 | `typed`                  | The other catalog rules that read the type of an expression: property reads, casts, pattern results, generic calls    |
 | `footprint`              | What a function body reads and writes of its inputs (`footprint-analysis.md` §2 to §7), and where the analysis widens  |
+| `plan`                   | The plan of a pattern as JSON: slots, bodies for each use, bindings, cones, outputs, and edges (`plan-and-label-templates.md` §1.1) |
 | `program`                | A set of modules, the resolution of imports between them, and the rules that follow a call into another function      |
 | `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                     |
 | `corpus`, `report`       | Which files are the corpus, and the report over them                                                                  |

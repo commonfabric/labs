@@ -589,6 +589,11 @@ const CASES: &[Case] = &[
         "const bump = lift((x: { count: Cell<number> }) => { /*!*/x.count.set(x.count.get() + 1); return 1; });",
         "const bump = lift((x: { count: Cell<number>; from: Cell<number> }) => { x.count.set(x.from.get() + 1); return 1; });",
     ),
+    case(
+        "side-write:cycle",
+        "const copy = lift(/*!*/(x: { from: Cell<number>; to: Cell<number> }) => { x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: a }); return { one, two }; });",
+        "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number>; c: Cell<number> }>(({ a, b, c }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: c }); return { one, two }; });",
+    ),
 ];
 
 fn check_program(files: &[(&str, &str)]) -> Vec<Diagnostic> {
