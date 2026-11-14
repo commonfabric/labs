@@ -266,6 +266,9 @@ is relitigated.
   and the write lands there. An argument given to a pattern that a
   function body instantiates is the initial value of the child's stored
   argument, and the child writes it freely.
+- A promoted `computed` mints no `TransformedBy` for the code of its
+  callback. What it computes carries a `TransformedBy` that names the
+  pattern that contains it, because trust is attached to the pattern.
 - A child in the reactive tier does not write an argument given as a
   literal or a computed value. The runtime allows it today. A pattern
   that changes or owns one of its arguments is given a writable cell
@@ -776,17 +779,18 @@ as an assumption.
     declared name; code is hashed as its source for a cone and as the
     module and binding for a body.
 
-116. **A promoted `computed` mints no `TransformedBy`** (PL question
-    64). Today a `computed` is a lift, and its result carries the atom
-    for its code. A promoted one is compiled as an expression of the
-    reactive tier: a conditional in it is a `select`, with the
-    confidentiality of the condition and the chosen branch and the
-    integrity of the chosen branch. *Assumed:* that stands, and the
-    comparison expects the difference. The alternative mints the atom
-    for a promoted expression. The corpus has five declared labels
-    that match `TransformedBy` of named code, all exchange-rule
-    preconditions in `patterns/examples/cfc-exchange-rules/`, and each
-    names a `lift`, so none is affected.
+116. **Whether a path that passes a value on carries the pattern's
+    `TransformedBy`** (PL question 64). By ruling, what a pattern
+    computes carries a `TransformedBy` that names the pattern. A path
+    whose template is a `slot`, a `select`, or a `pick` passes a value
+    on and mints nothing; 42 of the 45 corpus rows where a promoted
+    `computed` has less integrity than today are of this kind.
+    *Assumed:* such a path carries the integrity of what it passes on
+    and no atom of the pattern, as the same expression does when it is
+    written in the pattern body. The alternative gives every kept
+    output of a pattern the pattern's atom. Also assumed: the atom of
+    expression code names the pattern and not the cone, where
+    `plan-and-label-templates.md` §3.2 has the cone's code.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
