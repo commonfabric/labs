@@ -290,6 +290,10 @@ is relitigated.
   that changes or owns one of its arguments is given a writable cell
   for it, and the corpus patterns that rely on today's behavior are
   rewritten that way.
+- A handle that a body passes on without reading through it adds
+  nothing of the label of its cell to what the body writes. The label
+  stays at the cell, as it does for a handle to a cell the body
+  created, and reaches only a reader that follows the handle.
 - `elementById` yields a handle of the element type or `undefined`,
   because the record for a key may never have been written or may have
   been cleared.
