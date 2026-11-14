@@ -776,3 +776,123 @@ numbers have gaps.
     `cfc-flow:*` compares the declared labels of a template's slots
     (`Slot.declared`) with those constraints. The templates are there;
     the declared labels and the constraints need the schemas first.
+
+## The records of `wish`, `reduce`, scans, literals, and tags
+
+130. **PL §6.2 as corrected, against the crate.** This replaces note
+    114. The crate now agrees with the listing on `B1` (`s2` to `s5`, no
+    handle, and `dynamic(link through s4)` in `T_titles`), on
+    `titles/* : value` in `B2`, on `B4` (the resolved `identity` slot
+    alone), on the ordinals of the uses, and on the row being compiled
+    into the room under `{ element }` and `{ site }`. What still
+    differs: (a) of the four `shape` slots the listing gives `B1`, the
+    crate has the one in place at `threadInfo` and the one at the root of
+    the list, and not the ones at `threadInfo/*/root` and at
+    `threadInfo/*`: the type of `record` and of `record.root` decides
+    those tests, and FA §2.2 records nothing for a test the type decides.
+    (b) The source declares the row's key inside the `computed` of
+    `replies`, so the crate has no cone `key` (note 114 f). (c) The crate
+    has more `shape` slots in place than the listing names "among them"
+    (note 114 g). (d) An element body is one cone (note 119). (e)
+    `T_label` has no `const` for the text of the template literal (note
+    128). (f) The tag is compiled in with the tag's name as the `site`
+    step, and what the row declares is in cones of its own inside the
+    cone of the `map` callback's tree; the listing does not show the
+    cones of the row apart from `text`, `isEdited`, the key, `replies`
+    and `threadLabel`.
+131. **Typing `handle?.get()` and `list ?? []`.** The static read of FA
+    §7.2 through `threadInfo?.get() ?? []` needs both typed: the first
+    is the value type of the handle where the handle is present, and the
+    second is the array type of its left operand, since the empty
+    literal has the element type `never`. Three sites whose check was not
+    decided before are decided now and report `subset-type:mismatch`:
+    `product/workbench/sessions.ts:267`, `system/fabrichat/room.tsx:1848`
+    and `system/quick-capture/quick-capture.tsx:113`. One module that was
+    accepted is refused for it.
+132. **The operands of `wish`** (PL §3.19). An operand is one write edge
+    at the path of its name, with the template of the expression as one
+    value: for an array or a record written in place, the join of the
+    templates of its members. PL gives "the template of its expression"
+    and §3.4 gives a literal a template per path. The form
+    `wish("#tag")`, with the query as the one argument, is read as the
+    operand `query`. An operand written with a spread or under a name PL
+    does not list is counted as unsupported.
+133. **The row of a constant query** (PL §3.19). The query is a constant
+    where it is a literal written at the call; a name of a constant is
+    taken as computed, which adds records and removes none. With the key
+    `#now`, a `path` operand that is computed keeps the state cell of
+    the one-shot clock. With the key `#profile`, a `path` that is
+    computed is taken as a home target, not as the refused picture. PL
+    does not give the scope of the clock's `StateCell`; the crate emits
+    `space`. PL names the three sidecars by their `launch` functions and
+    gives no name for the `name` of the `Child`; the crate uses
+    `suggestion`, `profileCreate` and `profilePicker`. The callee is
+    `{ compiled: null }` with the sidecar's name beside it, since the
+    crate has no content address. PL does not say whether "any other
+    string" launches the suggestion sidecar under `headless: true`; the
+    crate emits the `Child`.
+134. **The hint for a computed query** (PL §8 question 48) has no
+    identifier in LS §10. The crate lists it per plan
+    (`PatternPlan::hints`) and counts it in `plan --corpus`, and reports
+    no diagnostic. The corpus has 1 such call.
+135. **The label of a path of a `wish` result** (PL §3.19) is a rule the
+    runtime applies to a slot with root `operation` of an operation of
+    kind `wish`: `Operation.input` joined with the `dynamic` entry of
+    kind `search` that names the operation. `Template` has no node that
+    says so, so a reader's template is the `slot` node alone, as PL
+    states, and the plan holds the two parts.
+136. **`reduce`** (PL §3.13). The operation takes the name §1.3 gives
+    it and the collection is named `reduce`, so the two never share a
+    name. `Operation.input` joins the `fold`, the membership of the
+    receiver, and the template of `init`: "The record" names the `fold`
+    and `init`, and "Template" adds the membership. A `reduce` with no
+    initial value has no edge at `initial`, which PL does not cover. A
+    callback with a statement body is counted as unsupported. The step's
+    output is interim at the path `*` with the operation's name.
+137. **The predicate of a scan** (PL §3.13) has one output at the path
+    of the scan followed by `*`, as a `map` has for its element (note
+    125). A scan with a receiver that is a collection of the plan names
+    that collection's assembled output, as before.
+138. **A spread in an object literal** (PL §3.4). The crate has the
+    rule for an operand whose type is an object type with no index
+    signature, or a union of such types, where a property one
+    alternative lacks counts as optional. An operand of a record type,
+    or one with no type, is counted as unsupported (4 sites). The key
+    set of the result has no template of its own in the crate, since a
+    record written in place has a template per path only (note 126).
+139. **A spread in an array literal** (PL §3.4). The positions from the
+    first spread on are one member at `*`, a value a cone computes. A
+    spread of an array literal written in place is the members written
+    out. A spread operand the instance computed gives its own template
+    as the template at `*` and as its `enumeration`. An element
+    construct over such an array has the template at `*` as the
+    membership of what it iterates.
+140. **A computed key** (PL §3.4, LS §4.3). A key written as a string, a
+    number, or a template literal with no substitution is the name. A key
+    that is an identifier keeps the form `$name` the crate had for
+    `[UI]` and `[NAME]`.
+141. **`db.query(sql, options)`** (PL §3.14) is an operation of kind
+    `effect` with the built-in `sqliteQuery`: the handle at the path
+    `db`, read for `value`, the statement at `sql`, and each member of
+    the options at its own path. The names `db` and `sql` are those of
+    the operands of `sqliteQuery`. `Operation.scope` from a `scope`
+    option or from `readClearance` is not emitted.
+142. **A write through what a site returned** (PL §3.11). A `bind` site
+    and an `effect` site return a value the analysis follows, as an
+    `instantiate` and a `createCell` site did. A write through the
+    stream or the cell is an edge with target `created`, with an empty
+    path whatever the path of the write below the cell. A write through
+    the link of an `instantiate` or an `effect` site is an envelope
+    `{ kind: "created", call }`. The crate does not refuse a write that
+    lands at a path the instance or the effect computes.
+143. **A tag that names a pattern** (PL §1.1). The children of the tag
+    are the path `children` of the argument. The enclosing tree holds
+    the `[UI]` of what the pattern returns. A tag that names a factory
+    value is a `Child` whose callee is `{ factory: { slot } }`, with one
+    write edge of target `argument` per attribute. A factory value the
+    instance computed has `{ factory: {} }`: PL names it by an entry of
+    `computed` of a body, and the reactive tier has no body there.
+144. **Where a helper's widening is reported** (FA §3.6). An authored
+    function is a body where a call in the reactive tier names it, in
+    any module. The call in the reactive tier is the use of that body
+    and reports nothing itself.
