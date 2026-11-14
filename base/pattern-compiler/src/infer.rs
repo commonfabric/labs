@@ -811,6 +811,57 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
+    /// The type the predicate of the first argument of `call` asserts of
+    /// its first parameter: a function written in place, or the name of an
+    /// authored function, whose result type is `x is T`.
+    fn predicate_of(&self, module: usize, call: &CallExpression<'a>) -> Option<TypeId> {
+        use oxc_ast::AstKind;
+        let argument = call.arguments.first()?.as_expression()?;
+        let (home, parameters, result) = match unwrap(argument) {
+            Expression::ArrowFunctionExpression(arrow) => {
+                (module, &arrow.params, arrow.return_type.as_ref()?)
+            }
+            Expression::FunctionExpression(function) => {
+                (module, &function.params, function.return_type.as_ref()?)
+            }
+            Expression::Identifier(name) => {
+                let parsed = self.parsed(module)?;
+                let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+                let (home, symbol) = self.origin(module, symbol)?;
+                let parsed = self.parsed(home)?;
+                let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+                match parsed.semantic.nodes().kind(declaration) {
+                    AstKind::Function(function) => {
+                        (home, &function.params, function.return_type.as_ref()?)
+                    }
+                    AstKind::VariableDeclarator(declarator) => match declarator.init.as_ref()? {
+                        Expression::ArrowFunctionExpression(arrow) => {
+                            (home, &arrow.params, arrow.return_type.as_ref()?)
+                        }
+                        _ => return None,
+                    },
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let TSType::TSTypePredicate(predicate) = &result.type_annotation else {
+            return None;
+        };
+        let (TSTypePredicateName::Identifier(tested), Some(asserted), false) = (
+            &predicate.parameter_name,
+            &predicate.type_annotation,
+            predicate.asserts,
+        ) else {
+            return None;
+        };
+        let first = parameters.items.first()?;
+        let BindingPattern::BindingIdentifier(name) = &first.pattern else {
+            return None;
+        };
+        (name.name == tested.name).then(|| self.resolve_type(home, &asserted.type_annotation))
+    }
+
     /// A method of an array whose elements have type `element` (§9.2).
     fn array_method(
         &self,
@@ -851,6 +902,27 @@ impl<'a> Resolver<'_, 'a> {
                     return self.of(Shape::Array(self.add_unresolved()));
                 }
                 self.of(Shape::Array(self.union_distinct(flat)))
+            }
+            // A `filter` whose callback has a type predicate narrows the
+            // element type as the predicate would in a condition (§7.6).
+            "filter" if self.predicate_of(module, call).is_some() => {
+                let asserted = self.predicate_of(module, call).expect("just found");
+                let narrowed = match self.shape(element) {
+                    Shape::Union(members) => {
+                        let kept: Vec<TypeId> = members
+                            .into_iter()
+                            .filter(|member| self.assignable(*member, asserted) != Some(false))
+                            .collect();
+                        if kept.is_empty() {
+                            asserted
+                        } else {
+                            self.union_of(kept)
+                        }
+                    }
+                    _ if self.assignable(element, asserted) == Some(true) => element,
+                    _ => asserted,
+                };
+                self.of(Shape::Array(narrowed))
             }
             "filter" | "slice" | "concat" | "toReversed" | "toSorted" | "toSpliced" | "reverse"
             | "sort" | "splice" | "fill" | "with" => self.of(Shape::Array(element)),

@@ -729,3 +729,53 @@ fn property_read_after_a_typeof_test_of_a_data_position_stays_refused() {
         ["schema:unknown-type-access", "schema:unknown-type-access"]
     );
 }
+
+#[test]
+fn let_after_an_if_that_assigns_it_has_the_join_of_the_assignments() {
+    assert_eq!(
+        types(
+            "function f(flag: boolean, n: number) {\n\
+               let found: string | number | undefined = undefined;\n\
+               if (flag) { found = \"a\"; }\n\
+               /*?*/found;\n\
+               let label: string | number | undefined = \"\";\n\
+               if (flag) { label = n; } else if (n > 1) { label = \"b\"; }\n\
+               /*?*/label;\n\
+               let count: string | number | undefined = 0;\n\
+               if (flag) { count += 1; }\n\
+               /*?*/count;\n\
+             }\n"
+        ),
+        ["string | undefined", "string | number", "string | number | undefined"]
+    );
+}
+
+#[test]
+fn call_that_returns_never_ends_the_flow() {
+    assert_eq!(
+        types(
+            "function fail(message: string): never { throw new Error(message); }\n\
+             function f(value: string | undefined) {\n\
+               if (value === undefined) { fail(\"none\"); }\n\
+               /*?*/value;\n\
+             }\n"
+        ),
+        ["string"]
+    );
+}
+
+#[test]
+fn filter_with_a_type_predicate_narrows_the_element_type() {
+    assert_eq!(
+        types(
+            "interface Donut { name: string }\n\
+             function isDonut(value: Donut | undefined): value is Donut { return value !== undefined; }\n\
+             function f(rows: (Donut | undefined)[], mixed: (string | number)[]) {\n\
+               /*?*/(rows.filter(isDonut));\n\
+               /*?*/(mixed.filter((value): value is string => typeof value === \"string\"));\n\
+               /*?*/(rows.filter((value) => value !== undefined));\n\
+             }\n"
+        ),
+        ["{ name: string }[]", "string[]", "{ name: string } | undefined[]"]
+    );
+}

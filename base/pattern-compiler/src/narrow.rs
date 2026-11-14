@@ -54,8 +54,11 @@ fn contains(outer: Span, inner: Span) -> bool {
 
 /// Whether control cannot pass from the end of `statement` to the statement
 /// after it.
-fn leaves(statement: &Statement<'_>) -> bool {
+fn leaves<'a>(statement: &Statement<'a>, never: &dyn Fn(&Expression<'a>) -> bool) -> bool {
+    let leaves = |statement: &Statement<'a>| leaves(statement, never);
     match statement {
+        // A call whose result type is `never` does not return (§7.6).
+        Statement::ExpressionStatement(statement) => never(&statement.expression),
         Statement::ReturnStatement(_)
         | Statement::ThrowStatement(_)
         | Statement::BreakStatement(_)
@@ -339,6 +342,12 @@ impl<'a> Resolver<'_, 'a> {
         };
         // The conditions that hold, innermost first, each with whether it
         // is true or false there.
+        let never = |expression: &Expression<'a>| {
+            matches!(unparen(expression), Expression::CallExpression(_))
+                && self
+                    .typed_at(module, expression, 0)
+                    .is_ok_and(|ty| self.shape(ty) == Shape::Never)
+        };
         let mut conditions: Vec<(Condition<'_, 'a>, bool, u32)> = Vec::new();
         let mut child = expression.span();
         for kind in nodes.ancestor_kinds(expression.node_id()) {
@@ -398,10 +407,10 @@ impl<'a> Resolver<'_, 'a> {
                         }
                     }
                 }
-                AstKind::BlockStatement(block) => earlier(&block.body, child, &mut conditions),
-                AstKind::FunctionBody(body) => earlier(&body.statements, child, &mut conditions),
-                AstKind::Program(program) => earlier(&program.body, child, &mut conditions),
-                AstKind::SwitchCase(case) => earlier(&case.consequent, child, &mut conditions),
+                AstKind::BlockStatement(block) => earlier(&block.body, child, &mut conditions, &never),
+                AstKind::FunctionBody(body) => earlier(&body.statements, child, &mut conditions, &never),
+                AstKind::Program(program) => earlier(&program.body, child, &mut conditions, &never),
+                AstKind::SwitchCase(case) => earlier(&case.consequent, child, &mut conditions, &never),
                 AstKind::SwitchStatement(statement) => {
                     let position = statement
                         .cases
@@ -415,7 +424,7 @@ impl<'a> Resolver<'_, 'a> {
                             || statement.cases[position - 1]
                                 .consequent
                                 .last()
-                                .is_some_and(leaves);
+                                .is_some_and(|last| leaves(last, &never));
                         if let (Some(test), true) = (&case.test, entered_alone) {
                             conditions.push((
                                 Condition::Equal(&statement.discriminant, test),
@@ -575,21 +584,28 @@ impl<'a> Resolver<'_, 'a> {
         let Shape::Union(members) = self.shape(declared) else {
             return declared;
         };
-        let Some(last) = writes
+        let before: Vec<&Write<'a>> = writes
             .writes
             .iter()
             .filter(|write| write.span.start < at && !contains(write.span, Span::new(at, at)))
+            .collect();
+        // The last assignment that always runs before the reference: a
+        // statement of a block around it.
+        let Some(last) = before
+            .iter()
+            .copied()
+            .filter(|write| {
+                write.statement.is_some_and(|statement| {
+                    writes
+                        .blocks
+                        .iter()
+                        .any(|block: &Vec<Span>| block.contains(&statement))
+                })
+            })
             .max_by_key(|write| write.span.start)
         else {
             return declared;
         };
-        let (Some(statement), Some(value)) = (last.statement, last.value) else {
-            return declared;
-        };
-        let reaches = writes
-            .blocks
-            .iter()
-            .any(|block: &Vec<Span>| block.contains(&statement));
         let looped = writes.loops.iter().any(|around| {
             !contains(*around, last.span)
                 && writes
@@ -597,16 +613,28 @@ impl<'a> Resolver<'_, 'a> {
                     .iter()
                     .any(|write| contains(*around, write.span))
         });
-        if !reaches || looped {
+        if looped {
             return declared;
         }
-        let Ok(assigned) = self.typed_at(module, value, 0) else {
-            return declared;
-        };
-        let given = match self.shape(assigned) {
-            Shape::Union(given) => given,
-            _ => vec![assigned],
-        };
+        // The join: that assignment, and every assignment written between
+        // it and the reference, each of which may be the last one that ran
+        // (§7.6).
+        let mut given = Vec::new();
+        for write in before
+            .iter()
+            .filter(|write| write.span.start >= last.span.start)
+        {
+            let Some(value) = write.value else {
+                return declared;
+            };
+            let Ok(assigned) = self.typed_at(module, value, 0) else {
+                return declared;
+            };
+            match self.shape(assigned) {
+                Shape::Union(members) => given.extend(members),
+                _ => given.push(assigned),
+            }
+        }
         let mut kept = Vec::new();
         for member in &members {
             let mut fits = false;
@@ -1352,6 +1380,7 @@ fn earlier<'e, 'a>(
     statements: &'e [Statement<'a>],
     child: Span,
     conditions: &mut Vec<(Condition<'e, 'a>, bool, u32)>,
+    never: &dyn Fn(&Expression<'a>) -> bool,
 ) {
     for statement in statements.iter().rev() {
         if statement.span().end > child.start {
@@ -1360,8 +1389,11 @@ fn earlier<'e, 'a>(
         let Statement::IfStatement(statement) = statement else {
             continue;
         };
-        let then_leaves = leaves(&statement.consequent);
-        let else_leaves = statement.alternate.as_ref().is_some_and(leaves);
+        let then_leaves = leaves(&statement.consequent, never);
+        let else_leaves = statement
+            .alternate
+            .as_ref()
+            .is_some_and(|alternate| leaves(alternate, never));
         match (then_leaves, else_leaves) {
             (true, false) => conditions.push((
                 Condition::Test(&statement.test),
