@@ -960,6 +960,11 @@ const mergeSchemaNode = (
   references?: MergeReferences,
   withinUnionBranch = false,
 ): JSONSchema => {
+  // `false` admits no value, so nothing stored beneath it carries a value or
+  // a label. Where both sides declare it (`never[]` compiles to `items:
+  // false`) the position is unchanged; `false` against a schema that admits
+  // values is still refused below.
+  if (existing === false && candidate === false) return false;
   let left = asSchemaObject(existing, path);
   let right = asSchemaObject(candidate, path);
   const originalLeft = left;
