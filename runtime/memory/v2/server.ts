@@ -13,7 +13,7 @@ import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
 import { StagedMap } from "@commonfabric/collections/staged-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
+import { metrics, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
   type ACL,
@@ -4153,6 +4153,59 @@ export class Server {
   }
 
   /**
+   * Whether `space` is a Home space as `engine` stores it: its access list
+   * names the space itself `OWNER`, and it declares no kind.
+   */
+  #isHome(engine: Engine.Engine, space: string): boolean {
+    const state = this.#aclState(engine, space);
+    return state.kind === "valid" && state.acl[space] === "OWNER" &&
+      this.#spaceKindOf(engine) === undefined;
+  }
+
+  /**
+   * Decides the person `session` stands for against `engine`'s copy of its
+   * space, and records it as `session.person`
+   * (`docs/features/active-user-counting.md`). A serving loop's own session,
+   * and a session whose principal is not a person's, stands for nobody. Any
+   * other session stands for the first person's identity among its chain's
+   * issuers, root first, and then its principal. The `*` principal, service
+   * principals, and delegating principals are not people's identities, and
+   * neither is a space's own key unless the space is a Home space or has
+   * history and no access list, which only a space older than access lists
+   * has.
+   */
+  #decidePerson(session: SessionState, engine: Engine.Engine): void {
+    const { principal, space } = session;
+    let ownKeyIsPerson: boolean | undefined;
+    const isPerson = (did: string) =>
+      did !== ANYONE_USER && !this.#isServicePrincipal(did) &&
+      !this.#isDelegatingPrincipal(did) &&
+      (did !== space || (ownKeyIsPerson ??= this.#isHome(engine, space) ||
+        (this.#aclState(engine, space).kind === "missing" &&
+          Engine.serverSeq(engine) > 0)));
+    session.person = session.servingOwn === true || principal === undefined ||
+        !isPerson(principal)
+      ? undefined
+      : [...(session.chainIssuers ?? []), principal].find(isPerson);
+  }
+
+  /**
+   * Sets the attributes that say whom `span`'s work is for, each when
+   * `session` has one: `user.did`, the principal that signed the session's
+   * open, and `enduser.id`, the person the session stands for. Attributes
+   * only accumulate on a span, so one set again after the person is decided
+   * afresh keeps an `enduser.id` it already carried.
+   */
+  #attributeSpan(span: Span, session: SessionState): void {
+    if (session.principal !== undefined && session.principal !== ANYONE_USER) {
+      span.setAttribute("user.did", session.principal);
+    }
+    if (session.person !== undefined) {
+      span.setAttribute("enduser.id", session.person);
+    }
+  }
+
+  /**
    * The space's resolved ACL OWNER, for the executor's server-side
    * space-root ensure (OW45 arm-B server-ensure stage 1, design PR
    * #6209 §4 option (b)): the ensure's creation run carries an
@@ -4634,13 +4687,10 @@ export class Server {
           "else",
       );
     }
-    const state = this.#aclState(engine, space);
-    if (
-      state.kind === "valid" && state.acl[space] === "OWNER" &&
-      this.#spaceKindOf(engine) === undefined
-    ) {
+    if (this.#isHome(engine, space)) {
       return toError("AuthorizationError", "A Home space cannot be deleted");
     }
+    const state = this.#aclState(engine, space);
     const entries = state.kind === "valid" ? Object.entries(state.acl) : [];
     const [member, capability] = entries[0] ?? [];
     if (
@@ -4746,6 +4796,25 @@ export class Server {
         deferred.reason,
       );
     }
+  }
+
+  /**
+   * Brings the sessions on `space` up to date after a change to its access
+   * list: decides again the person each stands for, revokes those the list
+   * no longer admits, and notices the admissions it now allows.
+   * `writerSessionId` names the session whose commit made the change, as
+   * {@link #revokeDeauthorizedSessions} takes it.
+   */
+  #accessListChanged(
+    engine: Engine.Engine,
+    space: string,
+    writerSessionId?: string,
+  ): void {
+    for (const session of this.#sessions.sessionsForSpace(space)) {
+      this.#decidePerson(session, engine);
+    }
+    this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
+    this.#noticeAdmissions(engine, space);
   }
 
   /**
@@ -5359,8 +5428,7 @@ export class Server {
       });
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
-        this.#revokeDeauthorizedSessions(engine, request.space);
-        this.#noticeAdmissions(engine, request.space);
+        this.#accessListChanged(engine, request.space);
         this.markSpaceDirty(request.space, [
           toDirtyKey(aclDocId(request.space)),
         ]);
@@ -6126,8 +6194,7 @@ export class Server {
       const applied = outcome.applied;
       const aclId = aclDocId(request.space);
       this.#invalidateAclCapabilities(request.space);
-      this.#revokeDeauthorizedSessions(engine, request.space);
-      this.#noticeAdmissions(engine, request.space);
+      this.#accessListChanged(engine, request.space);
       this.markSpaceDirty(request.space, [toDirtyKey(aclId)]);
       this.#notifyCommitAdmitted({
         space: request.space,
@@ -6654,6 +6721,7 @@ export class Server {
         (isFabricPlainObject(message.invocation) &&
           message.invocation.prf !== undefined);
       let capabilityPrincipal: string | undefined;
+      let chainIssuers: readonly string[] | undefined;
       let delegationEnd: number | undefined;
       if (presentsChain) {
         if (!this.#admitsDelegations()) {
@@ -6674,6 +6742,7 @@ export class Server {
           nowSeconds: this.nowSeconds(),
         });
         capabilityPrincipal = chain?.rootIssuer;
+        chainIssuers = chain?.issuers;
         delegationEnd = chain?.expiresAt;
       }
       // An invitation the open carries is redeemed as the open's principal
@@ -6788,6 +6857,7 @@ export class Server {
           connection.elidedVerdicts,
           capabilityPrincipal,
           connection.inProcess,
+          chainIssuers,
         );
       } catch (error) {
         // Record the refused resume together with its session and connection.
@@ -6804,6 +6874,13 @@ export class Server {
         }
         throw error;
       }
+      this.#decidePerson(opened.state, engine);
+      const openSpan = tracer.startSpan("memory.session.open");
+      openSpan.setAttribute("space.did", message.space);
+      openSpan.setAttribute("session.id", opened.sessionId);
+      openSpan.setAttribute("session.resumed", opened.resumed === true);
+      this.#attributeSpan(openSpan, opened.state);
+      openSpan.end();
       if (connection.routed) {
         if (priorOwner !== connection.id) {
           this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
@@ -6814,7 +6891,7 @@ export class Server {
           principal,
           delegationEnd,
         );
-        const admitted = this.#sessions.get(message.space, opened.sessionId)!;
+        const admitted = opened.state;
         admitted.routedAuthority = () =>
           connection.allowsRoutedSession(message.space, admitted.id);
       } else {
@@ -7777,12 +7854,7 @@ export class Server {
             toError("SessionError", "Unknown session for space"),
           );
         }
-        if (
-          session.principal !== undefined &&
-          session.principal !== ANYONE_USER
-        ) {
-          span.setAttribute("user.did", session.principal);
-        }
+        this.#attributeSpan(span, session);
         try {
           const engine = await this.#openEngine(message.space);
           // The session may be revoked or replaced while `#openEngine()`
@@ -8065,12 +8137,8 @@ export class Server {
             // the client its marker channel is gone, so its parked accept
             // applies immediately instead of waiting for a marker no
             // detached session will ever be delivered.
-            this.#revokeDeauthorizedSessions(
-              engine,
-              message.space,
-              message.sessionId,
-            );
-            this.#noticeAdmissions(engine, message.space);
+            this.#accessListChanged(engine, message.space, message.sessionId);
+            this.#attributeSpan(span, session);
           }
           span.setAttribute("commit.seq", commit.seq);
           return {
@@ -10559,12 +10627,7 @@ export class Server {
       "memory.subscriber.sync",
       async (span): Promise<SessionEffectMessage | null> => {
         span.setAttribute("space.did", space);
-        if (
-          session.principal !== undefined &&
-          session.principal !== ANYONE_USER
-        ) {
-          span.setAttribute("user.did", session.principal);
-        }
+        this.#attributeSpan(span, session);
         span.setAttribute("watch.count", session.watches.length);
         try {
           const pendingCaughtUpLocalSeq = session.pendingCaughtUpLocalSeq;
@@ -12385,8 +12448,7 @@ export class Server {
               // lands, before any frame of this turn can reach a revoked
               // session.
               const engine = await this.#openEngine(space);
-              this.#revokeDeauthorizedSessions(engine, space);
-              this.#noticeAdmissions(engine, space);
+              this.#accessListChanged(engine, space);
             }
             await tracer.startActiveSpan(
               "memory.fanout",

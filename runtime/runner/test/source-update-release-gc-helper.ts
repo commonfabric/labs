@@ -14,6 +14,11 @@
  * first passes (`keptThroughRelease`), the error staging returned, if any
  * (`stageError`), and whether the document was gone after the second
  * (`releasedOnceDone`).
+ *
+ * Given `--without-holds`, the reader prepares under a storage manager whose
+ * `holdDocument()` hands out tokens it does not record, so neither the
+ * preparation nor the cells its loads made hold anything, and the passes drop
+ * the successor's source documents before staging reads them.
  */
 
 import { Identity } from "@commonfabric/identity";
@@ -82,6 +87,10 @@ try {
   // The preparation lives only in `holder`, filled by a function that has
   // returned: a suspended async frame can keep the temporaries it used.
   const holder: { prepared?: PreparedSourceUpdate } = {};
+  const recordedHold = readerStorage.holdDocument;
+  if (Deno.args.includes("--without-holds")) {
+    readerStorage.holdDocument = () => ({});
+  }
   await (async () => {
     holder.prepared = await reader.patternManager.prepareSourceUpdate(
       space,
@@ -89,6 +98,7 @@ try {
       candidate.identity,
     );
   })();
+  readerStorage.holdDocument = recordedHold;
   const id = reader.getCell(space, sourceDocKey(candidate.identity))
     .getAsNormalizedFullLink().id as URI;
   const loaded = () =>
