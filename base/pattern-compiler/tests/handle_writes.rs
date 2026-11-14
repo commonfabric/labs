@@ -145,3 +145,49 @@ fn a_literal_bound_to_a_writable_handle_is_a_value_the_instance_produces() {
         [(Severity::Error, "\"fixed\" }), read: pe".to_string())]
     );
 }
+
+#[test]
+fn a_literal_argument_of_a_pattern_compiled_in_is_reported_where_its_body_writes_through_it() {
+    // PL §3.15; "A child in the reactive tier does not write an argument
+    // given as a literal or a computed value." The corpus sites are
+    // `Counter({ value: N })` of `cf-picker.tsx` and `drag-drop-demo.tsx`.
+    // An argument the call leaves out is the child's own stored default,
+    // and a parameter the child only reads is not reported.
+    let text = r#"const Child = pattern<{ name: Writable<string>; other: Writable<string> }>(({ name, other }) => {
+  return { change: rename({ name }), keep: peek({ name: other, seen: [] }) };
+});
+export const P = pattern<{ stored: Writable<string> }>(({ stored }) => {
+  const literal = Child({ name: "fixed", other: "also" });
+  const omitted = Child({});
+  const bound = Child({ name: stored, other: stored });
+  return { literal, omitted, bound };
+});
+"#;
+    let analysis = program(text);
+    let plan = analysis.modules[0]
+        .plans
+        .iter()
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan of P");
+    let cases: Vec<&str> = plan
+        .handle_writes
+        .iter()
+        .filter(|write| write.case.starts_with("literal"))
+        .map(|write| write.case)
+        .collect();
+    assert_eq!(cases, ["literal: written", "literal: read"]);
+    let reported: Vec<String> = analysis.modules[0]
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.id == "binding:write-to-computed")
+        .map(|diagnostic| {
+            let source = format!("{PRELUDE}{text}");
+            let line = source[diagnostic.start as usize..]
+                .lines()
+                .next()
+                .unwrap_or("");
+            line.chars().take(14).collect()
+        })
+        .collect();
+    assert_eq!(reported, ["Child({ name: "]);
+}

@@ -13,7 +13,7 @@
 //! [`PatternPlan::unsupported`] by kind, and the plan is emitted without
 //! it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use oxc_ast::ast::*;
 use oxc_ast::AstKind;
@@ -366,6 +366,14 @@ struct Emitter<'r, 'm, 'a> {
     handle_writes: Vec<HandleWrite>,
     /// Where each pattern being compiled in is called, outermost first.
     inline_at: Vec<u32>,
+    /// The parameters of the pattern being compiled in that the call
+    /// gives as a literal, by the name the pattern's
+    /// parameter binds: `value` for `Counter({ value: 5 })`. A property
+    /// the call leaves out is not among them.
+    given_constants: HashSet<String>,
+    /// The properties the call of the pattern about to be compiled in
+    /// writes as a literal.
+    literal_keys: HashSet<String>,
     /// The parameters of the function whose returns are being classified.
     formal_names: Vec<String>,
     /// The patterns compiled in as a tag: the module, and the span of the
@@ -1648,6 +1656,32 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some(argument) => self.eval(argument, name),
             None => Place::Const,
         };
+        // The properties the call writes as a literal. A property bound to
+        // a path the caller's own argument leaves out is a constant here
+        // too, and is not one of them.
+        if let Some(Expression::ObjectExpression(object)) = arguments.first().map(|a| unwrap(a)) {
+            for property in &object.properties {
+                if let ObjectPropertyKind::ObjectProperty(property) = property {
+                    let literal = matches!(
+                        unwrap(&property.value),
+                        Expression::StringLiteral(_)
+                            | Expression::NumericLiteral(_)
+                            | Expression::BooleanLiteral(_)
+                            | Expression::NullLiteral(_)
+                            | Expression::TemplateLiteral(_)
+                            | Expression::UnaryExpression(_)
+                            | Expression::ObjectExpression(_)
+                            | Expression::ArrayExpression(_)
+                    );
+                    if let (true, Some(key)) = (
+                        literal && !property.computed,
+                        static_key_name(&property.key),
+                    ) {
+                        self.literal_keys.insert(key.to_string());
+                    }
+                }
+            }
+        }
         self.inline_argument(home, start, name, argument, at)
     }
 
@@ -1673,15 +1707,40 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_module = std::mem::replace(&mut self.module, home);
         self.within.push(json!({ "site": name }));
         self.inline_at.push(at);
+        let literal_keys = std::mem::take(&mut self.literal_keys);
+        let mut given: HashSet<String> = HashSet::new();
         if let Some(parameter) = function.params().items.first() {
+            // A property of the argument that is written at the call as a
+            // literal or a constant (PL §3.15; LS §10.2).
+            if let (BindingPattern::ObjectPattern(object), Place::Record(fields)) =
+                (&parameter.pattern, &argument)
+            {
+                for property in &object.properties {
+                    let key = static_key_name(&property.key).filter(|_| !property.computed);
+                    let bound = match &property.value {
+                        BindingPattern::AssignmentPattern(assignment) => &assignment.left,
+                        other => other,
+                    };
+                    if let (Some(key), BindingPattern::BindingIdentifier(identifier)) = (key, bound)
+                    {
+                        if matches!(fields.get(key), Some(Place::Const))
+                            && literal_keys.contains(key)
+                        {
+                            given.insert(identifier.name.to_string());
+                        }
+                    }
+                }
+            }
             self.bind_pattern(&parameter.pattern, argument);
         }
+        let saved_given = std::mem::replace(&mut self.given_constants, given);
         let result = match function.expression_body() {
             Some(expression) => Some(self.eval(expression, name)),
             None => function
                 .block_body()
                 .and_then(|statements| self.statements(statements)),
         };
+        self.given_constants = saved_given;
         self.inline_at.pop();
         self.within.pop();
         self.module = saved_module;
@@ -5122,7 +5181,16 @@ impl<'a> Emitter<'_, '_, 'a> {
         let declared = written.is_some_and(|written| self.declared_writable(written));
         // A literal or a constant given where a handle that can write is
         // declared is a value the instance produces.
-        let literal = matches!(place, Place::Const) && declared;
+        // So is a parameter of a pattern compiled in that the call gives
+        // as a literal: the child's handle of it is bound to a constant
+        // (PL §3.15). A property the call leaves out is not one.
+        let given = written.is_some_and(|written| match unwrap(written) {
+            Expression::Identifier(identifier) => {
+                self.given_constants.contains(identifier.name.as_str())
+            }
+            _ => false,
+        });
+        let literal = matches!(place, Place::Const) && (declared || given);
         let origin = if literal {
             Origin::Produced
         } else {
@@ -6737,6 +6805,8 @@ pub fn emit_module<'a>(
             hints: Vec::new(),
             handle_writes: Vec::new(),
             inline_at: Vec::new(),
+            given_constants: HashSet::new(),
+            literal_keys: HashSet::new(),
             formal_names: Vec::new(),
             tags: Vec::new(),
             root_types: HashMap::new(),
