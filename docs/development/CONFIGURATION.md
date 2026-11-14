@@ -518,9 +518,10 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
   - `SANDBOX_SERVICE_URL` → `https://sandbox.stage.commontools.dev`.
   Both fall back gracefully when unreachable, but expect logs warning about
   the failed probes if you're off the corporate network.
-- **`"implicit trust"`** appears as the identity-passphrase default in two
-  places (toolshed `IDENTITY_PASSPHRASE` and the CLI dev recipe). They must
-  match for toolshed and the CLI to share an identity in local dev.
+- **`"implicit trust"`** appears as the development identity passphrase in two
+  places (the identity a toolshed with `ENV=development` signs as when neither
+  `IDENTITY` nor `IDENTITY_PASSPHRASE` is set, and the CLI dev recipe). They
+  must match for toolshed and the CLI to share an identity in local dev.
 
 ---
 

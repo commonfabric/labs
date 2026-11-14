@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
+import { EnvSchema } from "@/env.ts";
 import { loadIdentity } from "@/lib/identity.ts";
 
 describe("identity", () => {
@@ -81,6 +82,19 @@ describe("identity", () => {
       await expect(
         loadIdentity({ IDENTITY: "", IDENTITY_PASSPHRASE: "", ENV: "test" }),
       ).rejects.toThrow("No IDENTITY set.");
+    });
+
+    it("throws for a production environment that sets no identity variable", async () => {
+      await expect(loadIdentity(EnvSchema.parse({ ENV: "production" })))
+        .rejects.toThrow("No IDENTITY set.");
+    });
+
+    it("derives the fixed development identity for a development environment that sets no identity variable", async () => {
+      const identity = await loadIdentity(EnvSchema.parse({}));
+
+      expect(identity.did()).toBe(
+        (await Identity.fromPassphrase("implicit trust")).did(),
+      );
     });
   });
 });

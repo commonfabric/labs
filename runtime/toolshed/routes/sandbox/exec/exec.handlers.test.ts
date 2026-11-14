@@ -1,5 +1,6 @@
 import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FakeTime } from "@std/testing/time";
 import { encodeBase64 } from "@std/encoding/base64";
 import { Identity } from "@commonfabric/identity";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
@@ -127,6 +128,65 @@ describe("exec.handlers", () => {
     expect(calls[1].body).toEqual({
       cmd: ["bash", "-c", "true"],
       env: ["CF_API_URL=http://elsewhere.test"],
+    });
+  });
+
+  it("encodes the sandbox id as one path segment of the service's addresses", async () => {
+    sequence(
+      () => new Response("{}"),
+      () => Response.json({ exitCode: 0 }),
+    );
+
+    const response = await exec({ sandboxId: "../admin", command: "ls" });
+
+    expect(response.status).toBe(200);
+    expect(calls.map((call) => call.path)).toEqual([
+      `${SANDBOX_URL}/v1/sandboxes/..%2Fadmin`,
+      `${SANDBOX_URL}/v1/sandboxes/..%2Fadmin/exec`,
+    ]);
+  });
+
+  it("aborts the service call when the request's timeout passes, and not before", async () => {
+    using time = new FakeTime();
+    let aborted = false;
+    const app = createTestApp(createSandboxExecRouter({
+      fetch: (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("the sandbox call was aborted"));
+          });
+        }),
+      sandboxUrl: SANDBOX_URL,
+      toolshedUrl: TOOLSHED_URL,
+    }));
+    const body = JSON.stringify({
+      sandboxId: "box-slow",
+      command: "sleep 60",
+      timeout: 5000,
+    });
+    const headers = await signFirstPartyHttpRequest({
+      url: new URL("/api/sandbox/exec", "http://localhost"),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signer,
+    });
+
+    const pending = app.request("/api/sandbox/exec", {
+      method: "POST",
+      headers,
+      body,
+    });
+    await time.tickAsync(4999);
+    expect(aborted).toBe(false);
+    await time.tickAsync(1);
+    const response = await pending;
+
+    expect(aborted).toBe(true);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "Exec failed: the sandbox call was aborted",
     });
   });
 

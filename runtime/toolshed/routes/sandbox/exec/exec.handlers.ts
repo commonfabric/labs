@@ -27,7 +27,7 @@ export function createSandboxExecHandlers(deps: SandboxExecHandlerDeps) {
     signal: AbortSignal,
   ): Promise<void> {
     const res = await deps.fetch(
-      `${deps.sandboxUrl}/v1/sandboxes/${sandboxId}`,
+      `${deps.sandboxUrl}/v1/sandboxes/${encodeURIComponent(sandboxId)}`,
       { signal },
     );
     if (res.ok) {
@@ -63,7 +63,7 @@ export function createSandboxExecHandlers(deps: SandboxExecHandlerDeps) {
     signal: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const res = await deps.fetch(
-      `${deps.sandboxUrl}/v1/sandboxes/${sandboxId}/exec`,
+      `${deps.sandboxUrl}/v1/sandboxes/${encodeURIComponent(sandboxId)}/exec`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -114,7 +114,9 @@ export function createSandboxExecHandlers(deps: SandboxExecHandlerDeps) {
       CF_API_URL: deps.toolshedUrl,
       ...environment,
     };
-    const signal = AbortSignal.timeout(timeout);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    const signal = controller.signal;
     const exec = () =>
       execInSandbox(sandboxId, command, workingDirectory, env, signal);
 
@@ -138,6 +140,8 @@ export function createSandboxExecHandlers(deps: SandboxExecHandlerDeps) {
       logger.error({ err: error, sandboxId }, "Sandbox exec failed");
       const message = error instanceof Error ? error.message : String(error);
       return c.json({ error: `Exec failed: ${message}` }, 500);
+    } finally {
+      clearTimeout(timer);
     }
   };
 

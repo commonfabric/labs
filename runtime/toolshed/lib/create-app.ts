@@ -5,7 +5,6 @@ import { pinoLogger } from "@/middlewares/pino-logger.ts";
 import { otelTracing } from "@/middlewares/opentelemetry.ts";
 import env from "@/env.ts";
 import type { AppBindings, AppOpenAPI } from "@/lib/types.ts";
-import { initOpenTelemetry } from "@/lib/otel.ts";
 
 export function createRouter() {
   return new OpenAPIHono<AppBindings>({
@@ -22,9 +21,6 @@ export function createRouter() {
 export default function createApp(
   environment: Pick<typeof env, "OTEL_ENABLED"> = env,
 ) {
-  // Initialize OpenTelemetry before creating the app
-  initOpenTelemetry();
-
   const app = createRouter();
 
   // Add OpenTelemetry tracing if enabled.

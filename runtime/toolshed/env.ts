@@ -320,8 +320,10 @@ export const EnvSchema = z.object({
     return read.origin.origin;
   }),
 
-  // DEPRECATED: Identity signer passphrase for storage authentication
-  IDENTITY_PASSPHRASE: z.string().default("implicit trust"),
+  // DEPRECATED: Identity signer passphrase for storage authentication. Unset,
+  // a development server signs with a fixed development identity and any
+  // other server needs IDENTITY (lib/identity.ts).
+  IDENTITY_PASSPHRASE: z.string().default(""),
 
   // Path to an identity key.
   IDENTITY: z.string().default(""),

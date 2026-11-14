@@ -1,7 +1,6 @@
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import * as FS from "@std/fs";
 
-import type { Identity } from "@commonfabric/identity";
 import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
@@ -67,7 +66,7 @@ export async function closeMemory(
 
 /**
  * Builds this process's memory server over the store at `store`, configured
- * from `environment`, signing as `processIdentity`, with the experimental
+ * from `environment`, as this process's `identity`, with the experimental
  * flags `getEnv` reads, and starts its private Mode A listener when
  * `MEMORY_ROUTER_CONFIG_FILE` names one.
  *
@@ -76,11 +75,10 @@ export async function closeMemory(
  */
 export async function openMemory(
   environment: MemoryEnvironment,
-  processIdentity: Identity,
   getEnv: EnvReader,
   store: URL,
 ): Promise<OpenedMemory> {
-  const memoryAudience = processIdentity.did();
+  const memoryAudience = identity.did();
   const routerPolicy = environment.MEMORY_ROUTER_CONFIG_FILE === ""
     ? undefined
     : new MemoryRouterPolicy(environment.MEMORY_ROUTER_CONFIG_FILE);
@@ -120,17 +118,17 @@ export async function openMemory(
       .split(",")
       .map((did) => did.trim())
       .filter((did) => did.length > 0),
-    processIdentityDid: processIdentity.did(),
+    processIdentityDid: identity.did(),
     serverExecution: serverExecutionOn,
   });
   if (serverExecutionOn) {
     console.log(
-      `Memory: server-execution v2 ON — process identity ${processIdentity.did()} ` +
+      `Memory: server-execution v2 ON — process identity ${identity.did()} ` +
         "is a DELEGATING memory principal (ACL-only service reads; every " +
         "other served read runs under the acting user via the " +
         "actingAs binding; docs/specs/server-side-execution/protocol.md §2b)",
     );
-    if (memoryAclPrincipals.serviceDids.includes(processIdentity.did())) {
+    if (memoryAclPrincipals.serviceDids.includes(identity.did())) {
       console.log(
         "Memory: NOTE — the operator's MEMORY_SERVICE_DIDS also lists the " +
           "process identity, which keeps OWNER-class service semantics by " +
@@ -205,7 +203,12 @@ export async function openMemory(
     documentCacheTotalBudgetBytes:
       environment.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
   });
-  const routedListener = await routerPolicy?.start(server);
+  const routedListener = await routerPolicy?.start(server).catch(
+    async (error) => {
+      await server.close();
+      throw error;
+    },
+  );
   return {
     server,
     memory: { close: () => closeMemory(server, routedListener) },
@@ -216,7 +219,6 @@ export { memoryEngineStoreUrl };
 
 export const { server: memoryServer, memory } = await openMemory(
   env,
-  identity,
   Deno.env.get,
   memoryEngineStoreUrl,
 );

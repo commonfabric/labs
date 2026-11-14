@@ -14,6 +14,7 @@ import {
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { Server } from "@commonfabric/memory/v2/server";
 import env from "@/env.ts";
 import { identity } from "@/lib/identity.ts";
 import {
@@ -176,7 +177,6 @@ describe("memory", () => {
             MEMORY_ROUTER_CONFIG_FILE: config,
             MEMORY_ACL_MODE: "observe",
           }),
-          identity,
           reading({}),
           store,
         ),
@@ -195,13 +195,32 @@ describe("memory", () => {
             MEMORY_ROUTER_CONFIG_FILE: config,
             DB_PATH: `${root}/memory.sqlite`,
           }),
-          identity,
           reading({}),
           store,
         ),
       ).rejects.toThrow(
         "Mode A requires directory storage and enforced explicit ACLs",
       );
+    });
+
+    it("closes the memory server it built when the Mode A listener cannot start", async () => {
+      const config = await routerConfig(freePort());
+      const failure = new Error("the listener could not bind");
+      using _start = stub(
+        MemoryRouterPolicy.prototype,
+        "start",
+        () => Promise.reject(failure),
+      );
+      using close = spy(Server.prototype, "close");
+
+      await expect(
+        openMemory(
+          environment({ MEMORY_ROUTER_CONFIG_FILE: config }),
+          reading({}),
+          store,
+        ),
+      ).rejects.toBe(failure);
+      expect(close.calls).toHaveLength(1);
     });
 
     it("starts the Mode A listener at the configured cell representation, and closes it with the server", async () => {
@@ -211,7 +230,6 @@ describe("memory", () => {
 
       const { server, memory } = await openMemory(
         environment({ MEMORY_ROUTER_CONFIG_FILE: config }),
-        identity,
         reading({ EXPERIMENTAL_MODERN_CELL_REP: "true" }),
         store,
       );
@@ -235,7 +253,6 @@ describe("memory", () => {
 
       const { server, memory } = await openMemory(
         environment(),
-        identity,
         reading({ EXPERIMENTAL_MODERN_CELL_REP: "true" }),
         store,
       );
@@ -249,7 +266,6 @@ describe("memory", () => {
     it("names the process identity a delegating principal under server execution", async () => {
       const { server, memory } = await openMemory(
         environment(),
-        identity,
         reading({ EXPERIMENTAL_SERVER_EXECUTION: "true" }),
         store,
       );
@@ -264,7 +280,6 @@ describe("memory", () => {
     it("notes a process identity the operator also lists as a service principal", async () => {
       const { server, memory } = await openMemory(
         environment({ MEMORY_SERVICE_DIDS: ` ${identity.did()} ,` }),
-        identity,
         reading({ EXPERIMENTAL_SERVER_EXECUTION: "true" }),
         store,
       );
@@ -277,7 +292,6 @@ describe("memory", () => {
     it("logs nothing about server execution with it off", async () => {
       const { server, memory } = await openMemory(
         environment(),
-        identity,
         reading({ EXPERIMENTAL_SERVER_EXECUTION: "false" }),
         store,
       );
@@ -294,14 +308,12 @@ describe("memory", () => {
 
       const single = await openMemory(
         environment({ DB_PATH: dbPath }),
-        identity,
         reading({}),
         store,
       );
       await single.memory.close();
       const directory = await openMemory(
         environment({ MEMORY_DIR: "file:///donuts/" }),
-        identity,
         reading({}),
         store,
       );
