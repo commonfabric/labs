@@ -794,3 +794,144 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
         .count();
     assert_eq!(through_handles, 4);
 }
+
+fn pattern_plan(analysis: &ProgramAnalysis, name: &str) -> Value {
+    analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no pattern named {name}"))
+        .plan
+        .clone()
+}
+
+fn body_named<'p>(plan: &'p Value, name: &str) -> &'p Value {
+    plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .find(|body| body["name"] == name)
+        .unwrap_or_else(|| panic!("no body named {name}"))
+}
+
+fn reads_of(plan: &Value, body: &Value) -> Vec<String> {
+    body["reads"]
+        .as_array()
+        .expect("reads")
+        .iter()
+        .map(|slot| slot_line(plan, slot))
+        .collect()
+}
+
+#[test]
+fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
+    // "`facts` is two calls of authored functions, `B1` and `B2`, bodies
+    // of kind `function`, and the result of `B1` is a computed input of
+    // `B2`."
+    let analysis = fabrichat();
+    let plan = pattern_plan(&analysis, "FabriChatRoomCore");
+    // "B1 function threadTitles reads s2; handles h0 slot s2". The room
+    // calls `threadTitles` twice, so the use has an ordinal (§1.3). The
+    // function reads `threadInfo?.get()`, which FA §7.1 makes static, so
+    // the crate has a `value` slot where the listing has a handle
+    // (SPEC-NOTES 104).
+    let titles = body_named(&plan, "threadTitles#1");
+    assert_eq!(titles["kind"], "function");
+    assert_eq!(
+        reads_of(&plan, titles),
+        [
+            "argument threadInfo : identity",
+            "argument threadInfo : shape, inPlace",
+            "argument threadInfo : value",
+        ]
+    );
+    assert_eq!(titles["handles"], json!([]));
+    // "B2 function messageFacts reads s0; computed titles/* : value
+    // T_titles; handles h0 slot s0". "`B2` reads `titles[key]` on a
+    // record, so its computed inputs include `titles : enumeration`
+    // beside `titles/* : value`".
+    let facts = body_named(&plan, "messageFacts");
+    assert_eq!(facts["kind"], "function");
+    let reads = reads_of(&plan, facts);
+    assert!(
+        reads.contains(&"argument messages : identity".to_string()),
+        "{reads:?}"
+    );
+    let handles: Vec<String> = facts["handles"]
+        .as_array()
+        .expect("handles")
+        .iter()
+        .map(|handle| slot_line(&plan, &handle["handle"]["slot"]))
+        .collect();
+    assert_eq!(handles, ["argument messages : identity"]);
+    // The crate has `identity` at `titles/*`, where the listing has
+    // `value`: the title leaves the body in a record a helper built
+    // (SPEC-NOTES 71, 104).
+    assert_eq!(
+        facts["computed"],
+        json!([
+            { "at": ["titles"], "observes": "enumeration" },
+            { "at": ["titles", "*"], "observes": "identity" },
+        ])
+    );
+    // "c1 = collection source: output facts.main, bodyUses: { index:
+    // false }". The output is interim, at the path `main` below `facts`.
+    let main = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .position(|output| output["interim"] == "facts" && output["path"] == json!(["main"]))
+        .expect("the output facts.main");
+    assert_eq!(plan["outputs"][main]["kept"], json!(false));
+    let c1 = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|collection| collection["source"] == json!({ "output": main }))
+        .expect("c1");
+    assert_eq!(c1["bodyUses"], json!({ "index": false }));
+    assert_eq!(c1["within"], json!([]));
+}
+
+#[test]
+fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
+    // The listing compiles the row into the room, so that its slots have
+    // the root `element`. The crate does not compile in a pattern used as
+    // a JSX tag, and the row has a plan of its own, in which the message
+    // is the argument (SPEC-NOTES 105).
+    let analysis = fabrichat();
+    let plan = pattern_plan(&analysis, "FabriChatMessageRow");
+    // "B3 function bodyText reads m0 m1 m2 m4": the element's `shape`,
+    // `body : value`, and `authorProfile : shape`. `m1`, the reference at
+    // the element, belongs to the element construct and is not in the
+    // row's own plan.
+    let text = body_named(&plan, "bodyText#1");
+    assert_eq!(text["kind"], "function");
+    assert_eq!(
+        reads_of(&plan, text),
+        [
+            "argument message : shape",
+            "argument message/authorProfile : shape",
+            "argument message/body : value",
+        ]
+    );
+    assert_eq!(text["handles"], json!([]));
+    // "B4 function viewKeyOf reads m6": `(root) : identity, resolved`.
+    // The crate lists the unresolved `identity` slot beside it.
+    let key = body_named(&plan, "viewKeyOf#1");
+    assert_eq!(key["kind"], "function");
+    assert_eq!(
+        reads_of(&plan, key),
+        [
+            "argument message : identity",
+            "argument message : identity, resolved",
+        ]
+    );
+    // "`p0` is the pick's choice point, an entry of `Plan.picks` with
+    // `chosenBy: \"valueCode\"`".
+    assert!(plan["picks"]
+        .as_array()
+        .expect("picks")
+        .contains(&json!({ "chosenBy": "valueCode" })));
+}

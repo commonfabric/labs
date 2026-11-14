@@ -91,6 +91,9 @@ struct Computed {
     scan: bool,
     /// Whether a record of the plan refers to the value.
     referred: bool,
+    /// The paths below the value that a collection has as its source: each
+    /// is an interim output of its own (PL §1.1, `Output.path`).
+    below: Vec<Vec<String>>,
     order: usize,
 }
 
@@ -442,6 +445,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             kept: Vec::new(),
             collection: None,
             scan: false,
+            below: Vec::new(),
             referred: false,
             order,
         });
@@ -1191,13 +1195,22 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let slot = self.slot(root, path, "enumeration");
                 json!({ "slot": slot })
             }
-            Place::Value(value, _) => {
+            Place::Value(value, path) => {
                 self.values[*value].referred = true;
                 match self.values[*value].collection {
                     Some(collection) if !scan && !self.values[*value].scan => {
                         json!({ "collection": collection, "via": via })
                     }
-                    _ => json!({ "output": { "$value": value } }),
+                    _ if path.is_empty() => json!({ "output": { "$value": value } }),
+                    _ => {
+                        // A path of a value another expression computed,
+                        // as `facts.main` is: an interim output at that
+                        // path.
+                        if !self.values[*value].below.contains(path) {
+                            self.values[*value].below.push(path.clone());
+                        }
+                        json!({ "output": { "$value": value, "$path": path } })
+                    }
                 }
             }
             Place::Unknown => json!({}),
@@ -2240,11 +2253,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         // The outputs, by cone in the order of the plan, and within a
         // cone in source order.
-        let mut output_of: HashMap<usize, usize> = HashMap::new();
-        let mut listed: Vec<(usize, usize, Option<usize>, Value)> = Vec::new();
+        let mut output_of: HashMap<(usize, Vec<String>), usize> = HashMap::new();
+        let mut listed: Vec<(usize, usize, Option<(usize, Vec<String>)>, Value)> = Vec::new();
         for value in &self.values {
             let cone = position[value.cone];
-            let mut entry = |path: Value, interim: Option<&str>, kept: bool| {
+            let mut entry = |path: Value, interim: Option<&str>, kept: bool, below: &[String]| {
                 let mut output = Map::new();
                 output.insert("path".to_string(), path);
                 if let Some(interim) = interim {
@@ -2256,13 +2269,21 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 output.insert("kept".to_string(), json!(kept));
                 output.insert("constraints".to_string(), json!([]));
-                listed.push((cone, value.order, Some(value.order), Value::Object(output)));
+                listed.push((
+                    cone,
+                    value.order,
+                    Some((value.order, below.to_vec())),
+                    Value::Object(output),
+                ));
             };
             for path in &value.kept {
-                entry(json!(path), None, true);
+                entry(json!(path), None, true, &[]);
             }
             if value.kept.is_empty() && value.referred {
-                entry(json!([]), Some(&value.name), false);
+                entry(json!([]), Some(&value.name), false, &[]);
+            }
+            for path in &value.below {
+                entry(json!(path), Some(&value.name), false, path);
             }
         }
         if let Some(result) = result_cone {
@@ -2290,7 +2311,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         let mut sorted_edges: Vec<(usize, usize, Value)> = Vec::new();
         for (from, to, value) in &output_edges {
-            if let Some(output) = output_of.get(value) {
+            if let Some(output) = output_of.get(&(*value, Vec::new())) {
                 sorted_edges.push((
                     position[*from],
                     position[*to],
@@ -2393,12 +2414,25 @@ fn request_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<Vec<Stri
 }
 
 /// Replaces each `{ "$value": n }` by the index of the output of value `n`.
-fn resolve_values(value: &mut Value, output_of: &HashMap<usize, usize>, missing: &mut bool) {
+fn resolve_values(
+    value: &mut Value,
+    output_of: &HashMap<(usize, Vec<String>), usize>,
+    missing: &mut bool,
+) {
     match value {
         Value::Object(members) => {
             if let Some(Value::Number(number)) = members.get("$value") {
                 let index = number.as_u64().unwrap_or(0) as usize;
-                match output_of.get(&index) {
+                let path: Vec<String> = members
+                    .get("$path")
+                    .and_then(Value::as_array)
+                    .map(|path| {
+                        path.iter()
+                            .filter_map(|segment| segment.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match output_of.get(&(index, path)) {
                     Some(output) => *value = json!(output),
                     None => {
                         *missing = true;
