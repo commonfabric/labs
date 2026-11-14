@@ -1173,9 +1173,24 @@ analysis that fills it in is specified in `footprint-analysis.md`.
 
 - **Canonical form.** A record is canonicalized the way label documents are
   ([content-addressed CFC labels](../content-addressed-cfc-labels.md),
-  "Label documents"): keys sorted, absent members dropped, and hashed with the
-  same tagged hash (`cfcLabelDocumentHash` in
-  `runtime/runner/src/cfc/label-documents.ts` shows the function for labels).
+  "Label documents"): a member that is absent or `undefined` is dropped, and
+  the order of an object's keys does not count.
+- **The hash.** A member of type `Hash` holds the string that
+  `taggedHashStringOf` (`base/data-model/src/value-hash/impl.ts`) returns
+  for the canonical record. That is the SHA-256 digest `ValueHasher`
+  (`base/data-model/src/value-hash/ValueHasher.ts`) computes over the
+  value, with a byte for the type in front of each part and the keys of
+  an object in the order of their UTF-8 bytes, written in base64url after
+  the algorithm tag `fid1:`. The hasher feeds a member whose value is
+  `undefined` as a value, which is why the canonical form drops it. The
+  tag names the algorithm and not the kind of record. A label document, a
+  schema document, a plan and a code record are hashed by the one
+  function, as a label document (`cfcLabelDocumentHash` in
+  `runtime/runner/src/cfc/label-documents.ts`) and a schema document
+  (`internSchema` in `base/data-model-schema/src/schema-intern.ts`, called
+  for the hash) are today. *Assumed* (section 8, question 63): no member
+  and no prefix says which kind of record was hashed. Section 1.5 says
+  which record each member is the hash of.
 - **Plan identity** is the hash of the canonical `Plan`. The identity of a
   compiled pattern is the hash of the canonical `CompiledPattern`, so value
   code and plan cannot be exchanged separately.
@@ -1647,14 +1662,52 @@ of [`ts_to_json_schema_mapping.md`](../schema-generator/ts_to_json_schema_mappin
 with a handle as the marker that mapping gives it, each label annotation
 as the `ifc` metadata of its node (`language-subset.md` §8.2), and the
 default and the scope of a node where it declares one
-(`language-subset.md` §8.8). Its hash is taken over that document in
-canonical form. The plan holds the hash and never the document. The
-compiler emits each schema document a plan names once, beside the plan,
-and the runtime stores it as a schema document under the `cid:`
-identifier the hash gives (`execution-and-storage.md` §4.1), where a
-reader of the plan resolves it. A named type that contains itself is
-hoisted into `$defs` and referred to by `$ref`, as the mapping's §5 has
-it, so the document is finite. The type each member is the schema of:
+(`language-subset.md` §8.8). The plan holds the hash and never the
+document. The compiler emits each schema document a plan names once,
+beside the plan, and the runtime stores it as a schema document under
+the `cid:` identifier the hash gives (`execution-and-storage.md` §4.1),
+where a reader of the plan resolves it.
+
+**A recursive type, and what is hashed.** *Assumed* (section 8, question
+62), in the four points that follow.
+
+- **Which types have a name.** A type is recursive where its declaration
+  reaches itself, through a handle included. Each recursive type is
+  written once, as a member of `$defs`, and every occurrence of it is a
+  `$ref` to that member. What is written around an occurrence, a handle
+  marker, a default, a scope or a label annotation, is written beside
+  the `$ref`. A type that is not recursive is written in place at each
+  occurrence. The mapping's §5.1 gives a definition to every named type;
+  the compiler gives one to the recursive types alone, so that a schema
+  does not depend on which of its types the author named.
+- **The name** is the declared name of the interface or the alias. Where
+  one schema has two recursive types of one declared name, two
+  declarations of two modules or two instantiations of one generic
+  declaration, the first keeps the name and each later one has the name
+  followed by `_2`, `_3` and so on. The order is that of first
+  occurrence in a walk of the schema's root type, depth first, with the
+  properties of an object in the order of their declaration and the
+  members of a union in the order the mapping writes them. So the name
+  of a type can differ between two schemas, and no rule compares names
+  across schemas.
+- **The documents.** The compiler emits a schema split as
+  `decomposeSchema` (`runtime/runner/src/schema-decompose.ts`) splits
+  one. The recursive types that reach each other are one document, of
+  the form `{ "$defs": { ... } }` with those types as its members, which
+  refer to each other by `#/$defs/<Name>`. Every reference to a member
+  from outside that document is
+  `{ "$ref": "cid:<hash>#/$defs/<Name>" }` with the document's hash.
+  What remains of the schema is its root document.
+- **The hash.** Each document is hashed by the rule of section 1.2, which
+  is the hash `decomposeSchema` gives it. A member of the plan that
+  names a schema holds the root reference of the split
+  (`DecomposedSchema.rootRef`) without its `cid:` prefix. That is the
+  hash of the root document. Where the root type is itself recursive
+  and nothing is written beside the reference to it, the split has no
+  root document, and the member holds the hash of the type's document
+  followed by `#/$defs/<Name>`.
+
+The type each member is the schema of:
 
 | Member | The type |
 | --- | --- |
@@ -1715,6 +1768,21 @@ against before code sees it (section 5.2).
   authored function the body can call, because those are in the module
   or in a module it imports.
 
+Each of the three records is hashed by the rule of section 1.2. `source`
+is the text as one string. `module` is the string
+`computeModuleIdentities` returns, which `computeModuleHashes`
+(`runtime/runner/src/harness/module-identity.ts`) forms and which has no
+algorithm tag. `binding` is an array of strings, one per step of the
+path. The runtime has no equivalent of `Cone.code` or of
+`CompiledPattern.valueCode` today, because it has no emitted value code,
+and it holds the pair of `Body.code` without hashing it: `moduleIdentity`
+and `bindingPath` are members of the `ImplementationIdentity` of kind
+`verified` (`runtime/runner/src/cfc/types.ts`) that a `TransformedBy`
+atom carries as its `identity` (`mintTransformedBy` in
+`runtime/runner/src/cfc/input-witness.ts`). *Assumed* (section 8,
+questions 54 and 63): the records as given here, and that a
+`TransformedBy` atom of the compiled path carries the hash.
+
 `Child.callee.compiled` and `Closure.pattern` are the identity of a
 compiled pattern (section 1.2), so a pattern is compiled after the
 patterns it names in this way. `CompiledPattern.compiler` is given by
@@ -1764,11 +1832,34 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   target, of the built-in's request type for a `request` target, and of
   `Plan.resultSchema` for a kept output. The annotations combined at
   that path give a `writerFit` constraint where a `confidentiality` is
-  declared, and a `writer` constraint where a `writeAuthorizedBy` or a
-  `writePolicyAnyOf` is. Each is listed in the `constraints` of that edge
-  or output. An interim output has no declared type and no constraint.
+  declared, a `writer` constraint where a `writeAuthorizedBy` or a
+  `writePolicyAnyOf` is, and a `writeFloor` constraint where a
+  `requiredIntegrity` is (*assumed*, below). Each is listed in the
+  `constraints` of that edge or output, and a kept output has all three
+  kinds as a write edge has. An interim output has no declared type and
+  no constraint.
 
-  Seven points complete the rule.
+  Eight points complete the rule.
+
+  - **The type at each target.** The compiler reads the annotations from
+    the type, and needs no schema hash to form a constraint.
+
+    | Target | The type |
+    | --- | --- |
+    | `state` | The type argument of the cell constructor. A constructor with no type argument has the type the checker infers from the initial value, which has no annotation, so the cell has no constraint |
+    | `created`, naming a `createCell` site | The same, for the constructor at the site |
+    | `created`, naming a `bind` site | The event type of the handler the site binds, the type `Binding.eventSchema` is the schema of |
+    | `handle` | The handle's value type, as the body that holds the edge declares it |
+    | `argument` | The argument type of the callee, the type `Child.argumentSchema` is the schema of: the declared argument type of a callee the compiler resolved, and the argument type of the factory type otherwise. A child a site of a body instantiates has it as a child of the reactive tier has |
+    | `request`, of an effect | The type of the parameter the API declares for the built-in (`base/api/index.ts`), at the path of the request |
+    | `request`, of a `wish` | `WishParams` |
+    | `request`, of a `reduce`, at `initial` | The accumulator type |
+    | A kept output | The result type the pattern declares, or the checker infers |
+
+    A `WriteEnvelope` and an `anchors` target have no declared type and
+    no constraint. No request type the API declares has a label
+    annotation today, so no `request` target has a constraint of this
+    kind.
 
   - **The written path** is the target's `path`, or `Output.path`, read
     in the type named above, with `*` taking the element type of an
@@ -1784,7 +1875,11 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   - **A write floor.** *Assumed* (section 8, question 15): a
     `requiredIntegrity` annotation combined at the written path gives a
     `writeFloor` constraint with the annotation's patterns, listed in
-    the `constraints` of the edge or the output as the two above are.
+    the `constraints` of the edge or the output as the two above are. A
+    kept output is a write to a path of the result, so the floor
+    declared in the result type applies to it as the floor of a cell
+    applies to a write edge. `language-subset.md` §8.6 states the same
+    assumption.
   - **Two writer annotations on one path.** A `writeAuthorizedBy` and a
     `writePolicyAnyOf` are two keys, so a path can combine one of each
     from two nodes, as an element type under `WritePolicyAnyOf` with a
@@ -1840,6 +1935,36 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   entry of `Body.computed` of another body. So the constraint is found
   by walking the template, and an output that passes a body's result on
   through a further cone lists it too.
+
+  Three points complete the rule.
+
+  - **The types read.** The type of a formal input is the one the body
+    declares: the parameter type of an authored function or a `lift`,
+    the event type and the state type of a handler. A capture of a
+    `computed`, of an `action` or of an inline event handler has no
+    declared formal input, and its type is the static type the checker
+    gives the captured expression, the type `Slot.schema` is the schema
+    of.
+  - **An annotation behind a hop.** An annotation written inside the
+    value type of a handle is behind the hop of that handle. An entry at
+    or above the handle overlaps such a path only where the entry reads
+    through the hop: a `value` entry that reads through the handle
+    (section 3.11), an entry whose own path continues below the handle,
+    and an entry of `Body.handles`. An `identity` entry and a `shape`
+    entry in place observe the reference stored at the position and
+    nothing behind it, so they do not overlap the path, and the
+    constraint does not list them. A body that holds a handle and reads
+    nothing through it is therefore not held to a requirement declared
+    on the content of the handle's cell, as it is not today, when it
+    makes no read of that cell. An annotation written around the handle
+    type is in front of the hop, and it lists every entry at an
+    overlapping path, whatever its class.
+  - **A body that writes nothing.** A body with no write edge, and with
+    no output whose template has a `derive` by it, has no constraint
+    from its inputs: none is emitted, and no compile-time check is made.
+    An input constraint guards writes, and today's gate tests the reads
+    before an overlapping write (`verifyInputRequirements`), so it tests
+    nothing where there is none.
 - **At an input of expression code.** *Assumed* (section 8, question
   59): expression code and a promoted `computed` are constrained as a
   body is. A `requiredIntegrity` or a `maxConfidentiality` annotation of
@@ -1871,7 +1996,10 @@ it reaches has the `declared` member of the dimension tested, on every
 selection, and it has no `dynamic` node, no `fold` and no `pick`. An
 input constraint is evaluated only where it lists no entry of
 `Body.handles`. In every other case the diagnostic is not reported and
-the constraint is checked at instantiation.
+the constraint is checked at instantiation. One case is large: an
+`identity` slot has no `declared` member, so `cfc-flow:writer-fit` and
+`cfc-flow:write-floor` are not decided for any write of a body that
+holds a handle (section 4.4, "What the compiler decides").
 
 `cfc-flow:write-policy` needs no hash. Two bodies have one `Body.code`
 exactly where they are one declaration, so the compiler compares the
@@ -3656,6 +3784,16 @@ because a runtime call of the body returned it (`Body.calls`).
 | `bind` | `stream.send(event)` on the stream the site returned is a `WriteEdge` with target `created` that names the `bind` site, with an empty path. The event carries the body's template, as an event sent on a stream the body was given does |
 | `instantiate`, `effect` | *Assumed* (section 8, question 52): a `WriteEnvelope` of kind `created` that names the site. The link leads to the result of an instance, or of an effect, and a write through it lands in a cell that a handle in that result links to, which the plan cannot name. The envelope bounds the write to the cells reached through what the site returned. A write that lands at a path the instance or the effect itself computes is refused, by the rule for a write to a value an instance computes (above) |
 
+The path of a `created` edge is the path of the handle the write is
+made through, below the created cell, wherever the `key(...)` calls are
+written: a handle the body keeps in a variable after `key("a")` writes
+at `a`, as a write through `cell.key("a")` written at the write does.
+An append has the path `*` below the list. A write below a key that is
+not static is too broad to predict, as it is below a handle the body
+was given (`footprint-analysis.md` §6.2). Its record is a
+`WriteEnvelope` of kind `created` that names the site, and no edge: the
+envelope has no path, and the created cell bounds the write.
+
 A handle that a called function returned is the abstract value the
 function's summary returns (`footprint-analysis.md` §3.6), so it is one
 of the cases above or a handle the body was given. No other handle
@@ -5124,14 +5262,18 @@ every row the path could select.
   the refused targets `#profile/picture` and `#profile/avatar`, so a
   computed `path` has the row of the home target.
 
-**What counts as a constant.** The `query`, `scope` and `headless`
-operands are constants where each is a literal written at the call, or a
-name that resolves to a module-scope constant with a static initializer
-(`language-subset.md` §8.8), whose value the compiler reads. `headless`
-is `true` for the table only where it is the constant `true`. An operand
-that is anything else is computed, and the compiler emits the records of
-every row it could select. Treating a constant as computed adds records
-and removes none, so it is sound and costs the records.
+**What counts as a constant.** The `query`, `path`, `scope` and
+`headless` operands are constants where each is a literal written at
+the call, or a name that resolves to a module-scope constant with a
+static initializer (`language-subset.md` §8.8), whose value the compiler
+reads. A constant `path` is an array literal whose members are
+constants. `headless` is `true` for the table only where it is the
+constant `true`. An operand that is anything else is computed, and the
+compiler emits the records of every row it could select. Treating a
+constant as computed adds records and removes none, so it is sound and
+costs the records. `wish:computed-query` is reported at the call, once,
+for a `query` that is computed, and for a `path` that is computed where
+the constant query is exactly `#now` or `#profile`.
 
 **A sidecar** is a `Child` whose callee is one of three system patterns,
 `{ compiled }` with that pattern's content address: the suggestion
@@ -5619,15 +5761,17 @@ a label annotation adds to a type. The plan holds each as follows.
 | --- | --- |
 | `confidentiality` | `Slot.declared.confidentiality` of a slot the annotation covers (`language-subset.md` §8.3), and a declared entry of the stored label (section 2.3). On a path a write edge targets, it is the declared confidentiality a `writerFit` constraint tests the edge's template against |
 | `integrity` | `Slot.declared.integrity` of a slot the annotation covers, and a declared entry of the stored label |
-| `requiredIntegrity` | A `requiredIntegrity` constraint with the annotation's patterns, over the slots that overlap the annotated path |
+| `requiredIntegrity` | A `requiredIntegrity` constraint with the annotation's patterns, over the slots that overlap the annotated path. On a path a write edge targets, *assumed* (section 8, question 15), also a `writeFloor` constraint with the same patterns |
 | `maxConfidentiality` | A `maxConfidentiality` constraint with the annotation's ceiling, over the slots that overlap the annotated path |
 | `writeAuthorizedBy` | A `writer` constraint on each write edge to the annotated path, with one `WriterPolicy` whose `body` is the body the binding names |
 | `writePolicyAnyOf` | A `writer` constraint on each write edge to the annotated path, with one `WriterPolicy` per policy of the list |
 | `uiContract` | `WriterPolicy.uiContract` of the alternative it is declared with |
 | `addIntegrity`, `exactCopyOf`, `projection` | No record and no rule (section 8, question 14) |
 
-No key in this table yields a `writeFloor` constraint. Which one does is
-question 15 of section 8.
+A kept output at the annotated path has each of these constraints as a
+write edge to the path has (section 1.5): `writerFit`, `writer` and
+`writeFloor`. That `requiredIntegrity` is the key of a write floor is
+the assumption of question 15 of section 8.
 
 **When a constraint is checked.**
 
@@ -5668,8 +5812,10 @@ same three attributes from the JSX the pattern writes.
   the handler, an element of a pattern compiled into the plan included.
 - **The chain of an element** is the element and the host elements that
   enclose it in the JSX of the plan, outward through the callbacks of
-  element constructs, the branches of a selection, and the tags of
-  patterns compiled in. The `UiAction`, `UiPromptSlot` and
+  element constructs and the branches of a selection, to the root of
+  the tree the element is written in. Whether it continues from that
+  root depends on how the tree reaches a renderer ("Where a chain
+  continues", below). The `UiAction`, `UiPromptSlot` and
   `UiDisclosure` helpers are host elements with the data attribute each
   one sets (`createUiHelper` in `runtime/runner/src/builder/h.ts`).
 - **The surface of an element** has three parts. Its pattern is the
@@ -5691,17 +5837,62 @@ same three attributes from the JSX the pattern writes.
   `UiDisclosure`, so an alternative with one of those helpers is not
   decided.
 
-The warning is reported for a handler and an alternative with a
-`uiContract` where the plan has at least one element that binds the
-handler, none of them satisfies the contract, and the surface of each is
-decided. A surface is decided where every one of those attributes
-on its chain is a constant, in the sense section 3.19 gives the operands
-of `wish`, and no element of the chain has a spread attribute. Where a
-surface is not decided, and where no element of the plan binds the
-handler, the compiler is silent. The chain ends at the root of the
-pattern's own tree. A pattern that embeds this one can enclose its tree
-in a surface, and an event then satisfies a contract the warning named,
-which is one more reason it is a warning.
+**Where a chain continues.** At run time the surface of an event is read
+from the rendered document (`getEventUiProvenance`), whichever pattern
+wrote each element of it. An element one pattern writes can therefore
+sit under a surface that another pattern writes. The compiler follows a
+chain past the root of a tree in one case.
+
+- **A pattern compiled into the plan by a JSX tag** (a `site` step whose
+  call is a tag). The tag's position in the enclosing tree holds the
+  callee's `[UI]` (section 1.1). The chain of an element of the callee's
+  tree continues at the tag's position, with the elements that enclose
+  the tag, and through every further tag of this kind. In
+  `patterns/product/lobby/main.tsx` the tag `LobbyParticipantRow` is
+  written in the callback of a `map` under the `cf-screen` that carries
+  the surface, so the chain of a button of the row reaches that element.
+- **A pattern compiled into the plan by a call** (a `site` step whose
+  call is `Row({ ... })` in the reactive tier). The callee's tree is the
+  path `$UI` of the call's result, a value of the plan. It reaches a
+  renderer wherever that value is placed: at a child position of the
+  enclosing tree, in the result for another pattern to place, or
+  through a body. In `patterns/system/fabrichat/room.tsx` the trees of
+  the `FabriChatThreadComposer` calls are collected by a `computed` and
+  placed under the element that carries the surface. *Assumed* (section
+  8, question 61): the compiler does not follow the value, and the chain
+  ends at the root of the callee's tree.
+- **A pattern with a plan of its own.** The plan of a pattern holds its
+  own JSX and nothing of a tree that embeds its result: a `Child` is
+  instantiated at run time, and a pattern another module instantiates
+  is compiled without that module. The chain ends at the root of the
+  pattern's tree.
+- **An element that is an argument, or a tree that is no pattern's
+  `[UI]`.** An element written between the tags of a pattern, or in an
+  attribute of one, is a value of the callee's argument, and the callee
+  decides where it is rendered. A tree held in a constant or computed
+  as a value is placed by a reference. The compiler follows neither,
+  and the surface of an element in such a tree is not decided.
+
+**When the warning is reported.** It is reported for a handler and an
+alternative with a `uiContract` where the plan has at least one element
+that binds the handler, none of them satisfies the contract, and the
+surface of each is decided. A surface is decided where all of the
+following hold: every one of those attributes on its chain is a
+constant, in the sense section 3.19 gives the operands of `wish`; no
+element of the chain has a spread attribute; every tag on the chain
+names a host element, one of the three helpers, or a pattern compiled
+in by that tag; and the element is not in a tree of the last case
+above. Where a surface is not decided, and where no element of the plan
+binds the handler, the compiler is silent.
+
+A chain that ends at the root of a pattern's tree is decided on the
+elements it has. So a pattern that binds a trusted action and leaves the
+surface to the pattern that embeds it is reported, whether it has a
+plan of its own or is compiled in by a call, although an event from the
+embedded tree satisfies the contract at run time. *Assumed* (section 8,
+question 61): it is reported, as the warning it is. The check is made
+once per plan. A pattern that has no plan of its own is checked in each
+plan it is compiled into, and nowhere else.
 
 A compile-time check does not replace the run-time one. Declared labels are a
 lower bound on what a slot carries: a derived component can add
@@ -5797,10 +5988,47 @@ table of section 3.2, with these rules.
   every selection, has the `declared` member of the dimension tested,
   and it has no `dynamic`, `fold` or `pick` node. An input constraint is
   evaluated only where it lists no entry of `handles`.
+- **A write of a body that holds a handle is not decided.** The template
+  of every write edge of a body, and of every output it derives, is a
+  `derive` over all of `Body.reads` (section 3.2). A body that writes
+  through a handle has the `identity` slot of that handle among them
+  (`footprint-analysis.md` §6.1), and an `identity` slot has no
+  `declared` member (section 1.5). By the rule above the template is
+  then not evaluated. So `cfc-flow:writer-fit` and
+  `cfc-flow:write-floor` are never decided for a write a handler, an
+  action or a computation makes through a handle, nor for any other
+  write or output of a body whose footprint has an `identity` slot or a
+  `shape` slot in place. The runtime checks each of them at
+  instantiation. The compiler decides the two for an output or an edge
+  whose template reaches only slots that have a declared label:
+  expression code over `value`, `shape` and `enumeration` slots, and a
+  body that reads values and holds no handle. `cfc-flow:write-policy`
+  and `cfc-flow:ui-contract` read no label, and are decided for a write
+  through a handle as for any other. *Assumed* (section 8, question
+  60): this stands.
 - An atom, a clause or a pattern that holds a term bound at run time is
-  not compared, and a check that would compare one is not decided. The
-  terms are the `CurrentPrincipal` marker, the atom of a `PolicyOf`
-  term, and a `Concept` pattern.
+  not compared. The terms are the `CurrentPrincipal` marker, the atom of
+  a `PolicyOf` term, and a `Concept` pattern. How much is left undecided
+  depends on where the term is. A clause of the lower bound, or a
+  required pattern, that holds one is left out, and the check is decided
+  on the other clauses and patterns: each clause has to fit by itself
+  and each pattern has to be satisfied by itself, so the one left out
+  cannot make another pass. A term in the ceiling, in the
+  confidentiality declared at a target, or in an integrity atom of an
+  input leaves the whole constraint undecided, because once the term is
+  bound that clause could admit, or that atom satisfy, any of the
+  others.
+- **Atoms as data.** The `type` of an atom is compared as the string it
+  is. The types the relations name, `Expires`, `User`, `PersonalSpace`,
+  `Space`, `Policy`, `Concept` and `TransformedBy`, are the identifiers
+  of `CFC_ATOM_TYPE` in `base/api/cfc.ts`, each a URL. An atom whose
+  `type` is one of those names without the URL is an atom of another
+  type. A variable is a record whose one member is `var`, a string that
+  is not empty (`isAtomVarPlaceholder` in
+  `runtime/runner/src/cfc/atom-pattern.ts`). The canonical form of a
+  label argument is a JSON value and holds no `undefined`
+  (`language-subset.md` §8.5), so a pattern the compiler reads has no
+  member that requires absence.
 - **Confidentiality.** A declared label is a lower bound: the label at
   run time holds the declared clauses and can hold more. So the
   compiler computes a lower bound of `C(template)`: `const` is empty, a
@@ -5816,13 +6044,27 @@ table of section 3.2, with these rules.
   declared atoms satisfy is therefore a pass, whatever else the slot
   carries. *Assumed* (section 8, question 57): for a failure the
   compiler takes the declared list as the whole integrity of the slot.
-  It computes `I(template)` from the declared lists: a `slot` is its
-  declared list, a `derive` is the atoms that every input has, with
-  `const` inputs left out, plus the `TransformedBy` atom of its `by`,
-  and a `select` is decided only where every branch evaluates to the
-  same list. Where a pattern can match a `TransformedBy` atom and the
-  compiler has no `Body.code` or `Cone.code` to form the atom from, the
-  check is not decided.
+  It computes `I(template)` from the declared lists by the table of
+  section 3.2: a `slot` is its declared list, a `derive` is the meet of
+  its inputs, with `const` inputs left out, plus the `TransformedBy`
+  atom of its `by`, and a `select` is decided only where every branch
+  evaluates to the same list. The meet is the class-aware one of the
+  Notation: it keeps an atom that every input has and whose family is
+  hereditary, and drops every other atom. The class of an atom is a
+  function of its `type` (`atomPropagationClass` in
+  `runtime/runner/src/cfc/atom-classes.ts`, where `PolicyCertified` is
+  the one hereditary family and a type that is not registered is
+  value-bound), so the compiler decides it from the declared atom. A
+  template that is a `const` alone has the neutral integrity and no
+  list, and a floor on it is not decided.
+- **A pattern that can match a `TransformedBy` atom.** That is a pattern
+  that is a variable, a record with no `type` member, a record whose
+  `type` is a variable, and a record whose `type` is `TransformedBy`.
+  Where a required pattern is one of these and the template has a
+  `derive`, the verdict depends on the atom the `derive` mints. A
+  compiler that has `Body.code` or `Cone.code` forms the atom and
+  decides the pattern. One that does not leaves the pattern out, as it
+  leaves out a pattern with a run-time term.
 
 | Diagnostic | Reported where | Not decided where |
 | --- | --- | --- |
@@ -7269,7 +7511,8 @@ this document made.
 15. **Which annotation yields a write floor.** `Constraint` has a
     `writeFloor` kind, and section 4.4 checks it on `I(template)` of a write
     edge. No annotation key of `language-subset.md` §8.1 is named for it.
-    *Assumed:* `requiredIntegrity` on a path a body writes. That is the
+    *Assumed:* `requiredIntegrity` on a path that a write edge targets, or
+    that a kept output is written at (section 1.5). That is the
     specification's rule (§8.12.4.1, `08-12-store-label-monotonicity.md`:
     "on a write target this declaration is a **floor**") and the key
     `verifyWriteFloor` (`runtime/runner/src/cfc/prepare.ts`) reads today.
@@ -7777,7 +8020,8 @@ this document made.
     value at a path and those slots observe the reference stored there.
     *Assumed.* A compile-time check then never fails on such a slot and
     is left to instantiation. The alternative reads the annotation as a
-    declaration about the reference too.
+    declaration about the reference too. Question 60 is what this costs
+    the two write checks.
 56. **A confidentiality check at compile time, and exchange rules.**
     Section 4.4 has the compiler report `cfc-flow:max-confidentiality`
     and `cfc-flow:writer-fit` where a declared clause is subsumed by no
@@ -7838,3 +8082,90 @@ this document made.
     over the reads of the writing transaction
     (`verifyInputRequirements`); which of the two that is closer to was
     not traced.
+60. **The write floor and writer-fit for a write through a handle.**
+    Sections 1.5 and 4.4 evaluate a template on declared labels only
+    where every slot it reaches has a declared label, and question 55
+    gives an `identity` slot none. The template of a write that a body
+    makes through a handle always has the `identity` slot of that
+    handle. So `cfc-flow:writer-fit` and `cfc-flow:write-floor` are
+    never decided for a write of a handler, an action, or a computation
+    with a side-write. They are decided for expression code and for a
+    body that reads values and holds no handle. In the corpus the
+    prototype emits 9 `writerFit` and 2 `writeFloor` records and
+    reports neither diagnostic. *Assumed:* this stands, and the runtime
+    check at instantiation covers the rest. The alternative: an
+    `identity` slot,
+    and a `shape` slot in place, contribute nothing to the lower bound
+    of the label of the written value, and the check is decided on the
+    remaining terms. For writer-fit that is sound as it stands, since a
+    lower bound with fewer clauses is still a lower bound, and a
+    failure it reports is a failure at run time under full enforcement.
+    For the write floor it needs a ruling on what such a slot brings to
+    the meet. Section 2.5 has a pointer contribute confidentiality and
+    no integrity. If that makes the slot an empty operand, the meet
+    keeps no hereditary atom, and the floor of such a write is decided
+    on the `TransformedBy` atom of the body alone. If the slot is left
+    out of the meet, the compiler can pass a floor that the runtime
+    refuses.
+61. **A UI contract whose surface is in the embedding pattern.** Section
+    4.4 follows the chain of enclosing elements through the tag of a
+    pattern compiled into the plan, and ends it at the root of the tree
+    of a pattern that is compiled in by a call or has a plan of its
+    own. A pattern that binds a trusted action and leaves the surface
+    to the pattern that embeds it is then reported, although an event
+    from its tree satisfies the contract once the tree is rendered
+    under the surface. `FabriChatThreadComposer` in
+    `patterns/system/fabrichat/room.tsx` is the case in the corpus: the
+    room calls it, a `computed` collects the trees, and the room places
+    them under the element that carries the surface.
+    `LobbyParticipantRow` in `patterns/product/lobby/main.tsx` is
+    written as a tag under the surface, so by section 4.4 its chain is
+    followed and it is not reported. The prototype emits a plan for
+    each of the two patterns, follows no tag, and reports both.
+    *Assumed:* the report stands, as a warning. There are two
+    alternatives. One suppresses the report for a pattern that is
+    compiled into another, which loses the report for a pattern that
+    no embedding encloses in a surface. The other follows the `$UI`
+    value of a call to the child positions expression code places it
+    at, and leaves the surface not decided where the value passes
+    through a body, which is silent in the FabriChat case.
+62. **How a schema with a recursive type is written and named.** Section
+    1.5 gives a definition in `$defs` to the recursive types alone,
+    names each by its declared name with a number where two share one,
+    emits the schema split into documents as `decomposeSchema` splits
+    one, and has a plan name a schema by the root reference of the
+    split, which for a root type that is itself recursive is a hash
+    followed by `#/$defs/<Name>`. *Assumed,* all four. The schema
+    generator of today gives every named type a definition, stores the
+    first of two types that share a name and refers the second to it,
+    and names an anonymous recursive type `AnonymousType_N`
+    (`ts_to_json_schema_mapping.md` §5.1 and §5.4), so the compiler's
+    schema of a type and the generator's are two documents with two
+    hashes. The alternatives are to follow the generator's policy,
+    which makes a schema depend on which types the author named and
+    needs a rule for two types of one name, or to hash the schema
+    whole, before the split, which gives every schema member a plain
+    hash and makes the runtime store a document it does not store
+    today. The order of the members of a union in the walk that numbers
+    the names was not fixed against the mapping.
+63. **No tag for the kind of record in a hash.** Section 1.2 hashes a
+    plan, a schema document, a label document and the three code
+    records with the one function and the one algorithm tag, `fid1`,
+    and nothing in the hashed value says which kind of record it is.
+    Two records of two kinds with equal content then have one hash.
+    That is the runtime's rule for label documents and schema documents
+    today, which tells them apart by shape where they are read
+    (`isCfcLabelDocumentContent` in
+    `runtime/runner/src/cfc/label-documents.ts`). For code the runtime
+    has no hash to follow: it has no value code, and a `TransformedBy`
+    atom carries the module identity and the binding path unhashed.
+    *Assumed:* no tag, and the records `{ source }` and
+    `{ module, binding }` of section 1.5. The record of `Cone.code` and
+    that of `CompiledPattern.valueCode` have the same member, so a
+    module that holds one function and nothing else gives both one
+    hash. The alternative puts the kind in front of the hashed value,
+    as `computeModuleHashes`
+    (`runtime/runner/src/harness/module-identity.ts`) does for a module
+    identity. Whether a `TransformedBy` atom of the compiled path
+    carries the hash or a record is for `execution-and-storage.md` and
+    the specification change.

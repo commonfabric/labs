@@ -3164,7 +3164,9 @@ pattern.
 No alias of §8.1 is named for a write floor. *Assumed,* with
 `plan-and-label-templates.md` (§8, question 15): the floor of a write
 target is the `requiredIntegrity` annotation, written `RequiresIntegrity`,
-on a path a body writes.
+on the path written. The target is that of a write edge of a body or of
+expression code, or a kept output, where the annotation is in the result
+type the pattern declares (`plan-and-label-templates.md` §1.5).
 
 A cast cannot move a label. In `e as T`, annotations in `T` that differ from
 those of the type of `e` have no effect, and writing them draws a warning
@@ -3619,7 +3621,7 @@ none of the other seven.
 | `cfc-label:unread` | — | — | — | retired: replaced by `cfc-label:not-static` |
 | `cfc-schema:recursion-limit`, `cfc-schema:recursive-alias-of-any` | — | — | — | retired (§8.7) |
 | `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy` | error | A declared constraint that the declared labels of a template's slots cannot satisfy. The conditions are defined in `plan-and-label-templates.md` | The slot whose label violates the constraint, and the declaration to change | new (reserved here, specified there) |
-| `cfc-flow:write-floor` | error | The declared integrity of the value a write edge writes cannot satisfy the write floor of its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared integrity falls short, and the declaration to change: the integrity declared on the source, or the floor declared on the target. *Assumed* (§8.6): the floor is the `RequiresIntegrity` annotation on the path of the target that the body writes | new (reserved here, specified there) |
+| `cfc-flow:write-floor` | error | The declared integrity of the value a write edge or a kept output writes cannot satisfy the write floor of its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared integrity falls short, and the declaration to change: the integrity declared on the source, or the floor declared on the target. *Assumed* (§8.6): the floor is the `RequiresIntegrity` annotation on the written path of the target, a kept output included | new (reserved here, specified there) |
 | `cfc-flow:writer-fit` | error | The declared confidentiality of the value a write edge writes does not fit the confidentiality declared on its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared confidentiality exceeds the target's, and the declaration to change: declare the confidentiality on the target, or write a value that does not derive from that slot | new (reserved here, specified there) |
 | `cfc-flow:ui-contract` | warning | A handler whose write policy requires a UI contract is bound by elements of the pattern, and none of them sits under a surface that carries the pattern and integrity names the contract requires, so no event from this pattern's UI can satisfy the policy (`plan-and-label-templates.md` §4.4) | The handler, the contract, and the elements that bind it. Bind the handler on an element inside the surface the contract names, or name in the policy the handler that the surface's control does bind | new (reserved here, specified there) |
 | `default:not-static` | error | A `Default` value that is neither a literal-like type nor `typeof` of a module-scope constant with a static initializer (§8.8), or that is not assignable to its type. A constant whose initializer is a call or a `new` expression is such a value: `Default<typeof INITIAL>` with `const INITIAL = createInitial()` | Write the value as a literal of the declared type, in the type or as the initializer of the constant | changes (was the warning `schema-default:unresolved`) |
