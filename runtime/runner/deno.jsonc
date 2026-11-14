@@ -29,6 +29,7 @@
     // injected (03.3) source reads what the server attaches.
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@node/v8": "node:v8",
+    "@node/worker_threads": "node:worker_threads",
     "@node/vm": "node:vm",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@types/ws": "npm:@types/ws@^8.18.1",

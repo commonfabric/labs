@@ -198,16 +198,35 @@ about 110 MB before it serves anything
 "Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
 heaps come to together by closing the workers kept only for a parked space's
 runtime; it closes no worker that serves a space, so it does not bound a space
-that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048) does: each
-serving worker runs as a `node:worker_threads` thread whose old generation
-that limit bounds, and the pool ends a worker whose heap reaches it, alone,
-and places its spaces again, where a worker reaching the 16 GiB isolate limit
-would abort the whole process. The limit bounds each worker, not their sum,
-so a host that runs many toolsheds sizes it, with
-`SERVER_EXECUTION_MAX_WORKERS`, against its memory.
+that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
+256) does: each serving worker runs as a `node:worker_threads` thread whose
+old generation that limit bounds, and the pool ends a worker whose heap
+reaches it, alone. The limit bounds each worker, not their sum, so a host that
+runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
+memory. It is not exact. Reaching it stops what grew the heap, and the pool
+ends the worker at its next heartbeat, up to ten seconds later; until then
+the worker can go on allocating. Array buffers are outside the heap and V8
+bounds them nowhere, so the pool ends a worker whose heartbeat reports as
+many megabytes of them as the limit, which the same ten seconds can exceed.
+`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0` sets no limit and starts the
+workers as Deno `Worker`s, as before the limit existed.
 
-A worker that reaches the limit takes its process down. Events still queued
-survive that, and the restarted process handles them.
+A space whose worker was ended at that limit is not served again by itself,
+since its program would grow the next worker's heap the same way. If it was
+the only space on the worker it stays unserved until a commit that would
+start a tenure is admitted for it or a pattern-lifecycle verb names it, which
+is when its program or its input may have changed. The toolshed logs
+`worker-failed` with the space, and `/api/health/stats` counts such workers in
+`servingLoop.workers.heapLimited` and the spaces left unserved in
+`servingLoop.workers.heapStopped`.
+Spaces that shared the worker are each moved to a worker of their own, beyond
+`SERVER_EXECUTION_MAX_WORKERS` if need be, so that the one that grows ends a
+worker nothing else is on ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§1, "Workers").
+
+The main thread and the compile workers are Deno isolates under the 16 GiB
+limit, and one of those that reaches it takes its process down. Events still
+queued survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

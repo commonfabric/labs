@@ -35,6 +35,7 @@ import {
   type PortLike,
   type ServingLoopDiagnostics,
   type ServingWorkerInit,
+  type WorkerHeartbeat,
 } from "./serving-port-protocol.ts";
 import { servedAclChangeOf } from "./served-acl-change.ts";
 import { emptyServingLoopStats, type ServingLoopStats } from "./stats.ts";
@@ -82,8 +83,8 @@ export type ServingPortBridgeOptions = {
   /** Called with what the worker's host holds, each time the host says. */
   onOccupancy?: (occupancy: HostOccupancy) => void;
 
-  /** Called with the worker's heap size, in bytes, at each heartbeat. */
-  onHeartbeat?: (heapUsed: number) => void;
+  /** Called with what the worker says of its memory, at each heartbeat. */
+  onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
 };
 
 /** The observer events a bridge carries to its worker. */
@@ -436,8 +437,8 @@ export class ServingPortBridge {
       this.#workerReady.resolve();
     });
     // The endpoint has already counted it, which is all the watchdog reads.
-    endpoint.onNotice("worker.heartbeat", ({ heapUsed }) => {
-      this.#options.onHeartbeat?.(heapUsed);
+    endpoint.onNotice("worker.heartbeat", (heartbeat) => {
+      this.#options.onHeartbeat?.(heartbeat);
     });
     endpoint.onNotice("host.occupancy", ({ occupancy }) => {
       this.#options.onOccupancy?.(occupancy);

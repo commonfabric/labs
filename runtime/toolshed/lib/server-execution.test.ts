@@ -12,6 +12,7 @@ import {
   DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB,
   DEFAULT_SPARE_SERVING_WORKERS,
   ensureSpaceRootsFromEnv,
+  MIN_SERVING_WORKER_HEAP_LIMIT_MB,
   ownerRoutingFromEnv,
   serverExecutionPolicyFromEnv,
   serverExecutionRoute,
@@ -236,6 +237,30 @@ describe("servingWorkerPoolFromEnv()", () => {
     heapLimitMb: DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB,
   };
 
+  it("returns no heap limit for the literal `0`, and the least limit as it is given", () => {
+    const warnings: string[] = [];
+    expect(
+      servingWorkerPoolFromEnv(
+        envOf({ SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "0" }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({ spareWorkers: DEFAULT_SPARE_SERVING_WORKERS });
+    expect(
+      servingWorkerPoolFromEnv(
+        envOf({
+          SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: String(
+            MIN_SERVING_WORKER_HEAP_LIMIT_MB,
+          ),
+        }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({
+      spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
+      heapLimitMb: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
+    });
+    expect(warnings).toEqual([]);
+  });
+
   it("returns the toolshed's spare count and heap limit alone when no knob is set", () => {
     const warnings: string[] = [];
     for (
@@ -280,7 +305,12 @@ describe("servingWorkerPoolFromEnv()", () => {
         ["SERVER_EXECUTION_MAX_WORKERS", "many"],
         ["SERVER_EXECUTION_SPARE_WORKERS", "-1"],
         ["SERVER_EXECUTION_SPARE_WORKERS", "1.5"],
-        ["SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", "0"],
+        // Below what a worker holds before it serves anything.
+        ["SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", "1"],
+        [
+          "SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB",
+          String(MIN_SERVING_WORKER_HEAP_LIMIT_MB - 1),
+        ],
         ["SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", "1.5"],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "0"],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "2e3"],

@@ -102,6 +102,28 @@ export type ServingWorkerPolicy = {
   ]: SpaceServerPolicy[Key];
 };
 
+/** What a serving worker says of its memory at each heartbeat. */
+export type WorkerHeartbeat = {
+  /**
+   * The worker's JavaScript heap as it stands, in bytes, which the pool's
+   * heap budget adds up.
+   */
+  readonly heapUsed: number;
+
+  /**
+   * The memory outside the heap that V8 accounts to the worker, array
+   * buffers included, in bytes. No heap limit bounds it.
+   */
+  readonly external: number;
+
+  /**
+   * Whether the worker's heap has reached its limit since the worker began
+   * to serve (`watchHeapLimit()`). What it was doing then is gone, and it
+   * may take no further message.
+   */
+  readonly heapLimitReached: boolean;
+};
+
 /** What the worker's entry module needs to build its host. */
 export type ServingWorkerInit = {
   /** The service identity's key pair, encoded for the realm crossing. */
@@ -241,10 +263,8 @@ export type PlaneNotices = {
   /**
    * The worker's thread still runs, which the watchdog on the server's thread
    * reads from any message of the worker's the same way (serving-loop.md §2).
-   * `heapUsed` is the worker's JavaScript heap as it stands, in bytes, which
-   * the pool's heap budget adds up.
    */
-  "worker.heartbeat": { heapUsed: number };
+  "worker.heartbeat": WorkerHeartbeat;
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };

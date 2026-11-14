@@ -2264,8 +2264,8 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop's hosts and serving runtimes run in Web
-  Workers of the toolshed process, one worker per served space, instead of on
+- **Purpose.** The serving loop's hosts and serving runtimes run in worker
+  threads of the toolshed process, one worker per served space, instead of on
   the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
@@ -2283,8 +2283,10 @@ the per-epic implementation notes).
   `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
   of a placement (default 1 in the toolshed; `0` keeps none),
   `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, the largest each worker's heap may
-  grow before that worker alone is ended and its spaces placed again (default
-  2048 in the toolshed), and
+  grow before that worker alone is ended (default 2048 in the toolshed, 256
+  at least, and the literal `0` for none; a worker with a limit is a
+  `node:worker_threads` thread, and one without is a Deno `Worker`, as the
+  serving memory server tests build starts), and
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
   (default none). The serving memory server tests build reads the first.

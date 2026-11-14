@@ -90,15 +90,47 @@ execution observer and decides which worker serves which space:
   that a placement finds a worker whose modules have loaded. Spares do not
   count toward the cap.
 - Given `heapLimitMb` (2048 in the toolshed,
-  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`), the pool starts each worker as a
-  `node:worker_threads` thread whose old generation the limit bounds
-  (`serving-thread.ts`), since a Deno `Worker` takes no limit and one that
-  reaches the isolate's limit aborts the process. Reaching the limit stops
-  what was growing the heap. A thread that reached it while evaluating its
-  modules reports an error; one that reached it in a handler keeps running
-  its timers with that handler gone, so the pool also takes a worker whose
-  heartbeat reports its heap at the limit out as a failed one. Either way
-  its spaces are placed again on a fresh worker and the process goes on.
+  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, whose literal `0` sets none), the
+  pool starts each worker as a `node:worker_threads` thread whose old
+  generation the limit bounds (`serving-thread.ts`), since a Deno `Worker`
+  takes no limit and one that reaches the isolate's limit aborts the process.
+  Reaching the limit stops what was growing the heap, and what happens next
+  depends on where the thread was. While it evaluated its modules, or in a
+  timer's callback, it ends and reports an error. In a message's handler,
+  Deno ends the handler: the thread reports nothing, takes no further
+  message, and keeps running its timers. In a promise's continuation, Deno
+  ends the continuation, whose promise never settles, and the thread goes on
+  serving. In the last two Deno also raises the thread's limit, which is how
+  the thread knows (`watchHeapLimit()`): its heartbeat says that its heap
+  reached the limit, and the pool takes it out as a failed worker. The heap's
+  size is not the signal, since a handler ends with the heap just short of
+  the limit, and the heap shrinks once the handler is gone. The limit does
+  not bound buffers outside the heap, so the pool also takes out a worker
+  whose heartbeat reports as many megabytes of those as the limit. Both
+  checks run at the heartbeat, so a worker can pass the limit for up to one
+  heartbeat interval before it is ended. Either way
+  the process goes on. The worker's spaces are not placed again as a failed
+  worker's are, since a program that grew one heap to the limit grows the
+  next, and the limit is the worker's, so the pool learns which space grew
+  by where it was:
+  - A space that was alone on the worker is left unplaced, whatever session
+    it has and whatever events its store holds. A commit admitted afterwards
+    that would start a tenure places it again, as does a pattern-lifecycle
+    verb that names it: those are what can change its program or its input.
+    The commits the worker had taken or was owed place nothing. Each such
+    placement waits out the failure-park backoff, counted across the workers
+    the space has had ended at the limit; a committed wave does not clear
+    that count.
+  - Spaces that shared the worker are each placed again on a worker of
+    their own, past `maxWorkers` if need be, and no other space joins those
+    workers. The one that grows then ends a worker nothing else is on, and
+    is left unplaced as above. The first kill counts as no failure of
+    theirs, and their placement waits out the base backoff.
+
+  A space stays on workers of its own until one of them closes with nothing
+  left to serve, which also clears its count. Spaces whose heaps reach the
+  limit only taken together are separated the same way and stay separate
+  until then.
 - A host reports what it holds (`ExecutorHost.occupancy`): `busy` while it
   serves, starts, ends or re-evaluates a tenure or holds a notice for a
   tenure to come, `parked` while it holds nothing but runtimes kept from
@@ -2316,8 +2348,9 @@ deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
 budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
-discarded, held}, workers: {serving, spare, parked, heapUsed, started,
-retired, evicted, failed, shared}, push: {prioritizedSessions,
+discarded, held}, workers: {serving, spare, parked, heapUsed, heapStopped,
+started, retired, evicted, failed, shared, heapLimited}, push:
+{prioritizedSessions,
 followerSessions, mixedFlushes} }`
 (where the loop runs in workers, the block is every worker's counters taken
 together with the last counters of each worker that has closed
@@ -2333,7 +2366,9 @@ the workers' heartbeats last reported, in bytes; `started`, `retired`,
 `evicted` and `failed` count workers spawned, closed once vacant, closed
 while parked for the parked-worker cap or the heap budget, and failed or
 killed; `shared` counts placements that joined a worker already serving
-another space at the cap; §1's Workers;
+another space at the cap; `heapLimited` counts the workers, among the
+failed, that reached their heap limit, and `heapStopped` is how many spaces
+are on no worker now because a worker they were alone on did; §1's Workers;
 `parkedRuntimes` counts the runtimes idle parks kept, those a successor
 tenure served with, and those disposed unused — expired, evicted, tainted,
 or turned down at activation because the store head moved — with `held`

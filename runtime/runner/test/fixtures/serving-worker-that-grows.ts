@@ -2,6 +2,8 @@
  * The runner's serving worker entry, whose heap grows without bound in a
  * message handler once the pool first tells its host of a space, so that the
  * worker reaches any heap limit while it serves (`serving-worker.test.ts`).
+ * It grows by small objects, which stop a heap just short of its limit, where
+ * a large array would carry it past.
  * Only the first worker to start does: it creates the file the `marker`
  * parameter of this module's URL names, and a worker that finds the file
  * serves as the runner's entry does.
@@ -20,12 +22,12 @@ try {
   first = false;
 }
 if (first) {
-  const held: number[][] = [];
+  const held: unknown[] = [];
   const port = servingWorkerPort();
   const grow = (event: MessageEvent) => {
     if (!JSON.stringify(event.data).includes("observer.")) return;
     port.removeEventListener("message", grow);
-    for (;;) held.push(new Array(1_000_000).fill(Math.random()));
+    for (;;) held.push({ at: held.length, of: [held.length] });
   };
   port.addEventListener("message", grow);
 }

@@ -437,7 +437,7 @@ describe("serving-worker", () => {
     );
   });
 
-  it("ends a worker whose heap reaches its limit while it serves, alone, and serves its space from a fresh one", async () => {
+  it("ends a worker whose heap reaches its limit while it serves, alone, and leaves its space unplaced until a commit names it", async () => {
     const workerModule = new URL(
       "./fixtures/serving-worker-that-grows.ts",
       import.meta.url,
@@ -447,17 +447,37 @@ describe("serving-worker", () => {
 
     // The first worker's heap grows as soon as it is told of the space, before
     // it derives anything, and stops at its limit with the worker's timers
-    // still posting heartbeats. The total the reader reads is then the fresh
-    // worker's.
+    // still posting heartbeats.
     await startParent(space, 1);
     await closures.matching((entry) =>
       entry.cause === "failed" && entry.spaces.includes(space)
     );
-    await readTotal(space, 2);
 
-    const stats = await worker.requestStats();
-    expect(stats.workers.failed).toBe(1);
-    expect(stats.workers.serving).toBe(1);
+    // A session on the space does not place it again, during the wait that
+    // follows a failed worker or after it.
+    const writer = newClient();
+    const argument = writer.getCell<{ n: number }>(space, "worker-arg");
+    await argument.sync();
+    await worker.accessForTestingOnly.waiting.get(space)?.resumed;
+    expect(worker.stats().workers).toMatchObject({
+      serving: 0,
+      started: 1,
+      failed: 1,
+      heapLimited: 1,
+      heapStopped: 1,
+    });
+
+    // A commit does, and the total the reader reads is the fresh worker's.
+    const tx = writer.edit();
+    argument.withTx(tx).set({ n: 2 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await readTotal(space, 3);
+    expect(worker.stats().workers).toMatchObject({
+      serving: 1,
+      started: 2,
+      failed: 1,
+      heapStopped: 0,
+    });
   });
 
   it("serves two spaces from one worker under `maxWorkers: 1`", async () => {

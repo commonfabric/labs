@@ -306,7 +306,9 @@ heap budget that closes such workers under memory pressure. A heap limit
 per worker (`heapLimitMb`, `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`) bounds a
 space that grows: the worker runs as a `node:worker_threads` thread with that
 limit, and the pool ends it alone, rather than the process, when its heap
-reaches it.
+reaches it. A space that was alone on such a worker is left unplaced until a
+commit or a lifecycle verb names it, and spaces that shared one each get a
+worker of their own (`serving-loop.md` §1, "Workers").
 
 **Failure.** A worker that fails affects its own spaces. The watchdog, the
 lease release and the backoff are the ones above, per worker and per space.
@@ -384,13 +386,18 @@ between the two.
    to the server. The counters and the realm diagnostics of several workers
    are reported as one. `SERVER_EXECUTION_MAX_WORKERS=1` serves every space
    from one worker.
-8. [ ] **A heap limit per worker.** A worker that reaches V8's heap limit
-   takes the whole process down, since the limit is the process's flag
+8. [x] **A heap limit per worker.** A Deno `Worker` that reaches V8's heap
+   limit takes the whole process down, since the limit is the process's flag
    applied to each isolate. A worker started through `node:worker_threads`
-   with `resourceLimits` is terminated alone at its own limit, which the pool
-   would handle as it handles any failed worker. Such a worker has no `self`,
-   so the serving entry modules, which take the port from `self`, need a
-   port that works under both.
+   with `resourceLimits` stops at its own limit (`serving-thread.ts`), and
+   the pool ends it alone, on the thread's own word that it reached the limit
+   (`watchHeapLimit()`), since a thread that reached it in a handler reports
+   no error. Its spaces are not placed again as a failed
+   worker's are, since the program that grew one heap grows the next: a
+   space alone on the worker waits for a commit or a lifecycle verb, and
+   spaces that shared it each get a worker of their own. The serving entry
+   modules take their port from `servingWorkerPort()`, which works in both
+   kinds of thread.
 9. [ ] **Release a placement before its worker closes.** A space stays
    placed on its worker until the worker is gone. A worker that serves
    several spaces and never holds nothing, as the one worker of
