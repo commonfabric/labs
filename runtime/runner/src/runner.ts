@@ -4373,11 +4373,14 @@ export class Runner {
     // whether setup writes the one it builds (`changed`, below), never what it
     // writes, which is the pattern's own result bound to this piece. The name
     // a setup carries over is what it writes, so that one is read again
-    // without the marker, at its own slot.
+    // without the marker, at its own slot. A stored result that is a
+    // reference holds no name of its own, and reading its `NAME` slot through
+    // the cell would follow the reference to the name of what it reaches.
     const previousResult = writableResultCell.getRaw({
       meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
     });
-    const storedName = options.preserveName && isObjectOrArray(previousResult)
+    const storedName = options.preserveName &&
+        isObjectOrArray(previousResult) && !isCellLink(previousResult)
       ? writableResultCell.key(NAME).getRaw({ meta: ignoreReadForScheduling })
       : undefined;
     const nameCarried = Boolean(storedName);

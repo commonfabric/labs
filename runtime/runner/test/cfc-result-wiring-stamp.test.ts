@@ -16,6 +16,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 
 import { NAME } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
+import { isCellLink } from "../src/link-utils.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
@@ -96,7 +97,9 @@ describe("cfc-result-wiring-stamp", () => {
   /**
    * The patterns set up below: `plain` and `wider` differ in their result, so
    * one set up over the other rewrites the wiring; `named` carries a name,
-   * which a setup of the same pattern keeps from the stored result.
+   * which a setup of the same pattern keeps from the stored result;
+   * `forwarding` returns a nested `named` piece as its whole result, so its
+   * result document stores a reference.
    */
   const patterns = () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
@@ -107,6 +110,10 @@ describe("cfc-result-wiring-stamp", () => {
     const triple = lift((x: number) => x * 3);
     const title = lift((x: number) => `Page ${x}`);
     const inner = cf.pattern<{ x: number }>(({ x }) => ({ a: double(x) }));
+    const named = cf.pattern<{ x: number }>(({ x }) => ({
+      [NAME]: title(x),
+      a: double(x),
+    }));
     return {
       outer: cf.pattern<{ x: number }>(({ x }) => ({ child: inner({ x }) })),
       plain: cf.pattern<{ x: number }>(({ x }) => ({ a: double(x) })),
@@ -114,10 +121,8 @@ describe("cfc-result-wiring-stamp", () => {
         a: double(x),
         b: triple(x),
       })),
-      named: cf.pattern<{ x: number }>(({ x }) => ({
-        [NAME]: title(x),
-        a: double(x),
-      })),
+      named,
+      forwarding: cf.pattern<{ x: number }>(({ x }) => named({ x })),
       mixed: cf.pattern<{ x: number }>(({ x }) => ({
         a: double(x),
         note: "fixed",
@@ -821,6 +826,30 @@ describe("cfc-result-wiring-stamp", () => {
 
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
+    });
+  });
+
+  describe("a stored result that is a reference", () => {
+    it("stays a reference alone when the same pattern is set up again", async () => {
+      // The reference holds no name of its own; the name of what it reaches
+      // is no slot of this document to carry over.
+
+      const { forwarding } = patterns();
+      const result = await setUp("forwarding", forwarding);
+
+      await setUp("forwarding", forwarding);
+
+      const tx = runtime.edit();
+      try {
+        const stored = tx.readValueOrThrow({
+          ...result.getAsNormalizedFullLink(),
+          path: [],
+        });
+        expect(isCellLink(stored)).toBe(true);
+        expect(Object.keys(stored as object)).toEqual(["/"]);
+      } finally {
+        tx.abort("stored result read");
+      }
     });
   });
 
