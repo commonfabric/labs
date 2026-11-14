@@ -73,27 +73,26 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `4baaee9be1`, under
+  computes exists at prototype commit `92f71cb071`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
-  no browser. It covers three fixtures and FabriChat's `isEdited`. The
-  templates are equal or tighter, with these differences. A read of a
-  defaulted property has no integrity where the runtime gives it the
-  object's, which is the fourth exception. A promoted conditional has
-  no `TransformedBy`. The container of a `map` is tighter than the
-  runtime with the static part the runtime joins from a module's
-  argument schema, and equal without it. The result of `ifElse` is
-  equal or tighter with the static part, and wider without it, because
-  the runtime stores no other label on that result document: the
-  static part is the only place the condition's label appears there.
-  Writes through a bound handle are classified per plan: 24 through a
-  reference, 26 through a path that may hold a reference, and none
-  into a value the instance produces, so `binding:write-to-computed`
-  reports nothing. The crate does not follow a literal through a
-  compiled-in pattern, so it misses three `Counter({ value: N })`
-  sites whose `increment` writes `value`. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; notes 187
-  to 196 are not yet written into the documents.
+  no browser. It generates a scenario per module, with a distinct atom
+  per input and one event per handler. Of the 270 modules with a full
+  plan, 213 run; 33 need `wish`, 14 request an effect, and the runtime
+  refuses the commit of 10. Of 1,191 outputs compared, 1,120 are
+  equal, 23 tighter, and 48 have less integrity than the runtime; 28
+  write edges are compared and all are equal. In 45 of the 48 a
+  `computed` is promoted to a slot, a `select`, or a constructed
+  value, and the runtime's lift mints `TransformedBy` where the
+  template mints none (question 116). The other 3 are one position in
+  the CFC gallery whose label only a declaration gives. No output is
+  looser in confidentiality. The comparison is partial: 196 outputs
+  have no stored value, 304 selectors and picks were not found, and
+  per-element handlers and handlers bound only in a rendered tree get
+  no event. With the three `Counter({ value: N })` sites reported, the
+  crate accepts 333 modules and reports 389 errors. The crate's
+  `SPEC-NOTES.md` lists the places where it found the documents
+  ambiguous; notes 197 to 207 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
