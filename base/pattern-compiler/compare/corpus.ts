@@ -22,6 +22,7 @@ import {
   type Row,
   type Run,
   runScenario,
+  scenarioAudience,
   type WriteRow,
 } from "./harness.ts";
 import { showLabel } from "./scenarios.ts";
@@ -83,6 +84,8 @@ export type ModuleResult = {
   notCompared?: Record<string, number>;
   decided?: Run["decided"];
   events?: number;
+  /** What became of each event, with the event the generator made. */
+  outcomes?: (Run["events"][number] & { event: string })[];
   /** The kept outputs the run holds no value at. */
   missing?: {
     path: string;
@@ -201,7 +204,7 @@ export const runModule = async (
       },
       plan,
       argument: {},
-      inputs: generateInputs(plan, schemas),
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
       events,
     });
   } catch (error) {
@@ -233,6 +236,10 @@ export const runModule = async (
     notCompared,
     decided: run.decided,
     events: events.length,
+    outcomes: run.events.map((outcome, index) => ({
+      ...outcome,
+      event: JSON.stringify(events[index]?.event)?.slice(0, 300) ?? "",
+    })),
     missing: run.missing.map((entry) => ({
       path: entry.path.join("/"),
       root: entry.root,

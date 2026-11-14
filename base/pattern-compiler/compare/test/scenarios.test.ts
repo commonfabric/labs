@@ -230,6 +230,14 @@ describe("the write edges of a handler against the labels its event's run stored
     }
   });
 
+  it("says for each event whether its transaction was committed", async () => {
+    const { events } = await runHandler();
+
+    expect(events).toEqual([
+      { binding: 0, handler: "record", outcome: "committed" },
+    ]);
+  });
+
   it("reads the state cells the handler writes as outputs with no label before the event", async () => {
     const { rows } = await runHandler();
 

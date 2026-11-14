@@ -5,6 +5,7 @@
  * label each slot of the plan resolves to, and the label a reader of each
  * output path reaches.
  */
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import { atomPropagationClass } from "../../../runtime/runner/src/cfc/atom-classes.ts";
@@ -15,7 +16,7 @@ import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.
 import { resolveLink } from "../../../runtime/runner/src/link-resolution.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
-import type { Cell } from "../../../runtime/runner/src/cell.ts";
+import { type Cell, sendEvent } from "../../../runtime/runner/src/cell.ts";
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.ts";
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
@@ -225,10 +226,46 @@ export type Decided = {
   unobserved: number;
 };
 
+/**
+ * What became of one event the scenario sent: whether the transaction of
+ * the handler's run was committed, and where it was not, the reason the
+ * runtime gives.
+ */
+export type EventOutcome = {
+  binding: number;
+  handler: string;
+  outcome: "committed" | "refused" | "not sent";
+  /** The name of the error the transaction ended with. */
+  error?: string;
+  /** The message of that error, or why the event was not sent. */
+  reason?: string;
+  /** What the transaction was aborted with: the error a handler threw. */
+  aborted?: string;
+  /**
+   * For a commit the runtime's CFC refuses: each reason of the refusal,
+   * and for a reason its gate describes (`cfc/refusal-detail.ts`), the
+   * write it refuses and the reads that carried the clauses it names.
+   */
+  refusals?: Refusal[];
+};
+
+/** One reason of a refused commit. */
+export type Refusal = {
+  reason: string;
+  gate?: string;
+  /** The document of the refused write, as the scenario knows it. */
+  target?: string;
+  path?: string[];
+  offending?: string[];
+  /** The documents the offending clauses were read from. */
+  inputs?: string[];
+};
+
 /** The comparison of one run. */
 export type Run = {
   rows: Row[];
   writes: WriteRow[];
+  events: EventOutcome[];
   skipped: Skipped[];
   decided: Decided;
   missing: Missing[];
@@ -295,12 +332,18 @@ type PickNode = Extract<Template, { op: "pick" }> & {
 /** The value of a place the harness could not read. */
 const NO_VALUE = Symbol("no value");
 
-const sameValue = (a: unknown, b: unknown): boolean => {
+/** `value` as text, and `undefined` for a value that has none. */
+const snapshot = (value: unknown): string | undefined => {
   try {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return JSON.stringify(value);
   } catch {
-    return false;
+    return undefined;
   }
+};
+
+const sameValue = (a: unknown, b: unknown): boolean => {
+  const text = snapshot(a);
+  return text !== undefined && text === snapshot(b);
 };
 
 const isPrefix = (prefix: readonly string[], path: readonly string[]) =>
@@ -340,13 +383,26 @@ const indexNodes = (
   }
 };
 
+const scenarioSigner = () =>
+  Identity.fromPassphrase("pattern-compiler-compare");
+
+/**
+ * The atom of the audience of the space every scenario runs in. Every
+ * store of the space admits a clause that has it as an alternative: the
+ * runtime's writer-fit rule measures a write against the store's declared
+ * clauses and the space's own audience (`prepareBoundaryCommit` in
+ * `runtime/runner/src/cfc/prepare.ts`, `residencyCeiling`).
+ */
+export const scenarioAudience = async (): Promise<unknown> =>
+  cfcAtom.space((await scenarioSigner()).did());
+
 /**
  * Runs `scenario`, compares every kept output of its plan that has a
  * template, then sends each event and compares the write edges of the
  * handler's body with the labels at the paths the event's run wrote.
  */
 export const runScenario = async (scenario: Scenario): Promise<Run> => {
-  const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+  const signer = await scenarioSigner();
   const space = signer.did();
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -370,6 +426,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       { space },
     );
     const start = runtime.edit();
+    // The documents the scenario makes, by identifier.
+    const documents = new Map<string, string>();
     const given: Record<string, unknown> = { ...scenario.argument };
     const givenValue: Record<string, unknown> = { ...scenario.argument };
     for (const [name, input] of Object.entries(scenario.inputs ?? {})) {
@@ -380,6 +438,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         start,
       );
       cell.set(input.value as never);
+      documents.set(cell.getAsNormalizedFullLink().id, `input ${name}`);
       given[name] = cell;
       givenValue[name] = input.value;
     }
@@ -389,6 +448,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       compiled.resultSchema,
       start,
     );
+    documents.set(result.getAsNormalizedFullLink().id, "the result");
     runtime.run(start, compiled, given, result);
     runtime.prepareTxForCommit(start);
     const { error } = await start.commit().settled;
@@ -1151,11 +1211,16 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               );
             }
             const cell = at(base, above);
+            // What the cell holds is read here, as text and as a number
+            // of elements: the value of an array or an object is a view
+            // of the cell, which shows what a later transaction wrote.
+            const value = valueOf(cell);
             return {
               write,
               index,
               cell,
-              value: valueOf(cell),
+              held: snapshot(value),
+              length: Array.isArray(value) ? value.length : undefined,
               below: star < 0 ? undefined : path.slice(star + 1),
             };
           } catch (error) {
@@ -1223,14 +1288,19 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     const rows = await reading((within) => within.outputRows());
 
     const writes: WriteRow[] = [];
+    const events: EventOutcome[] = [];
     for (const { binding, event } of scenario.events ?? []) {
       const record = plan.bindings?.[binding];
       const name = `event of ${record?.name ?? binding}`;
       const [streamPath] = record?.result ?? [];
       if (streamPath === undefined) {
-        skipped.push({
-          what: name,
-          reason: "a binding whose stream the result does not hold",
+        const reason = "a binding whose stream the result does not hold";
+        skipped.push({ what: name, reason });
+        events.push({
+          binding,
+          handler: record?.name ?? "",
+          outcome: "not sent",
+          reason,
         });
         continue;
       }
@@ -1239,7 +1309,69 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         (cell, key) => cell.key(key as never) as AnyCell,
         result as AnyCell,
       );
-      (stream as unknown as { send(event: unknown): void }).send(event);
+      // The runtime calls the callback once with the transaction of the
+      // event's final outcome, also for an event it drops before a
+      // handler runs.
+      const settled = Promise.withResolvers<EventOutcome>();
+      sendEvent(stream, event as never, (tx) => {
+        const status = tx.status();
+        const handler = record?.name ?? "";
+        if (status.status === "error") {
+          const { name, message, reasons, refusals, reason: aborted } = status
+            .error as {
+              name?: string;
+              message?: string;
+              // What `abort` was called with: the error a handler threw.
+              reason?: unknown;
+              reasons?: readonly string[];
+              refusals?: readonly {
+                gate: string;
+                target?: { id: string; path: readonly string[] };
+                offendingAtoms: readonly string[];
+                inputs: readonly { read: { id: string } }[];
+                reason: string;
+              }[];
+            };
+          const known = (id: string) =>
+            documents.get(id) ?? "a document the scenario did not make";
+          settled.resolve({
+            binding,
+            handler,
+            outcome: "refused",
+            error: name,
+            reason: message,
+            ...(aborted === undefined ? {} : {
+              aborted: aborted instanceof Error
+                ? `${aborted.name}: ${aborted.message}`
+                : `${aborted}`,
+            }),
+            ...(reasons === undefined ? {} : {
+              refusals: reasons.map((reason) => {
+                const detail = refusals?.find((entry) =>
+                  entry.reason === reason
+                );
+                return detail === undefined ? { reason } : {
+                  reason,
+                  gate: detail.gate,
+                  ...(detail.target === undefined ? {} : {
+                    target: known(detail.target.id),
+                    path: [...detail.target.path],
+                  }),
+                  offending: [...detail.offendingAtoms],
+                  inputs: [
+                    ...new Set(
+                      detail.inputs.map((input) => known(input.read.id)),
+                    ),
+                  ],
+                };
+              }),
+            }),
+          });
+        } else {
+          settled.resolve({ binding, handler, outcome: "committed" });
+        }
+      });
+      events.push(await settled.promise);
       await runtime.idle();
       await result.pull();
       await runtime.idle();
@@ -1256,10 +1388,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           // and for an element target the elements it added.
           const paths: string[][] = [];
           if (target.below === undefined) {
-            if (!sameValue(earlier.value, target.value)) paths.push([]);
-          } else if (Array.isArray(target.value)) {
-            const had = Array.isArray(earlier.value) ? earlier.value.length : 0;
-            for (let at = had; at < target.value.length; at++) {
+            if (earlier.held === undefined || earlier.held !== target.held) {
+              paths.push([]);
+            }
+          } else if (target.length !== undefined) {
+            for (let at = earlier.length ?? 0; at < target.length; at++) {
               paths.push([`${at}`, ...target.below]);
             }
           }
@@ -1319,7 +1452,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       unobserved: 0,
     };
     for (const by of how.values()) decided[by]++;
-    return { rows, writes, skipped, decided, missing };
+    return { rows, writes, events, skipped, decided, missing };
   } finally {
     await runtime.dispose();
     await storageManager.close();

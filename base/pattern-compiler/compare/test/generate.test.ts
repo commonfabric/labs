@@ -8,7 +8,7 @@ import {
   generateValue,
   type Schema,
 } from "../generate.ts";
-import { type Plan, runScenario } from "../harness.ts";
+import { type Plan, runScenario, scenarioAudience } from "../harness.ts";
 
 const fixture = (name: string) =>
   new URL(`../fixtures/${name}`, import.meta.url);
@@ -145,5 +145,37 @@ describe("a generated scenario for the handler fixture", () => {
     });
     expect(run.writes.map((row) => clauses(row.runtime.confidentiality)))
       .toEqual([["alice", "input:secret"], ["alice", "input:secret"]]);
+  });
+});
+
+describe("a generated scenario for a handler that writes its inputs", () => {
+  // The handler of `fixtures/input-writes.tsx` reads `label` and `count`,
+  // sets `count`, and pushes an object onto `items`. The run's join has the
+  // clause of every input the handler read, and the runtime refuses a write
+  // of it to a store whose ceiling does not admit each clause (writer-fit).
+  // The store of an input admits the input's own clause alone, and the
+  // document of a pushed object admits none, so each generated clause has
+  // to be one every store of the space admits.
+  it("has the runtime commit the event, and compares both writes", async () => {
+    const { plan, schemas } = await planOf("input-writes");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("input-writes.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
+    });
+
+    expect(run.events).toEqual([
+      { binding: 0, handler: "add", outcome: "committed" },
+    ]);
+    expect(run.skipped).toEqual([]);
+    expect(run.writes.map((row) => [row.write, row.path])).toEqual([
+      [0, []],
+      [1, ["2"]],
+    ]);
   });
 });

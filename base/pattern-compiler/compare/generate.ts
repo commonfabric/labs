@@ -128,14 +128,30 @@ export const generateValue = (
 export const inputAtom = (name: string): string => `input:${name}`;
 
 /**
+ * The confidentiality clause the generator gives the input `name`: its
+ * atom, and with `audience`, the clause of the two alternatives. A handler
+ * that reads an input and writes any store has the input's clause in the
+ * join of its run, and the runtime refuses the write where the store's
+ * ceiling does not admit the clause. A clause with the audience of the
+ * scenario's space as an alternative is admitted by every store of the
+ * space, and is still a clause no other input has.
+ */
+export const inputClause = (name: string, audience?: unknown): unknown =>
+  audience === undefined
+    ? inputAtom(name)
+    : { anyOf: [inputAtom(name), audience] };
+
+/**
  * The inputs of a generated scenario: for each property of the plan's
  * argument schema, a value and the schema the harness writes it under. The
  * schema is the property's own, with the labels it declares, and one more
- * confidentiality atom at its root that no other input has.
+ * confidentiality clause at its root that no other input has
+ * (`inputClause`).
  */
 export const generateInputs = (
   plan: Plan & { argumentSchema?: string },
   schemas: Schemas,
+  audience?: unknown,
 ): Record<string, LabeledInput> => {
   const root = schemas.find((entry) => entry.id === plan.argumentSchema)
     ?.schema;
@@ -164,7 +180,7 @@ export const generateInputs = (
           ...own.ifc,
           confidentiality: [
             ...(own.ifc?.confidentiality ?? []),
-            inputAtom(name),
+            inputClause(name, audience),
           ],
         },
       },
