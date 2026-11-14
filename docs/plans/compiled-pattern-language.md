@@ -710,6 +710,16 @@ as an assumption.
     declared label** (PL questions 54 and 55). *Assumed:* the module
     and the binding; and no declared label on an `identity` slot or an
     in-place `shape` slot.
+109. **What the compiler reports about label flow** (PL questions 56
+    and 57). *Assumed:* it reports a confidentiality clause that no
+    ceiling clause subsumes, unless a `Policy` atom is involved, though
+    an exchange rule could make the clause fit at run time; and it
+    takes a declared integrity as complete for a failure, though the
+    runtime joins label components on both axes, so that a declaration
+    is a lower bound.
+110. **A JSX tag that names a factory value the instance computed** (PL
+    question 58). *Assumed:* refused. `language-subset.md` names no
+    diagnostic for it.
 
 ## Open, and not needing the owner
 
