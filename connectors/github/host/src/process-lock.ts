@@ -111,10 +111,30 @@ export class GithubHostProcessLock {
     this.#path = path;
   }
 
+  /**
+   * Acquiring a lock as if on the platform `platform` states, which a test
+   * chooses.
+   */
+  static get accessForTestingOnly(): {
+    acquire(
+      path: string,
+      platform: ProcessLockPlatform,
+    ): Promise<GithubHostProcessLock>;
+  } {
+    return {
+      acquire: (path, platform) =>
+        GithubHostProcessLock.#acquire(path, platform),
+    };
+  }
+
   /** Acquire an exclusive lock or reject when another host owns it. */
-  static async acquire(
+  static acquire(path: string): Promise<GithubHostProcessLock> {
+    return GithubHostProcessLock.#acquire(path, RUNNING_PLATFORM);
+  }
+
+  static async #acquire(
     path: string,
-    platform: ProcessLockPlatform = RUNNING_PLATFORM,
+    platform: ProcessLockPlatform,
   ): Promise<GithubHostProcessLock> {
     const normalizedPath = resolve(path);
     if (heldPaths.has(normalizedPath)) {

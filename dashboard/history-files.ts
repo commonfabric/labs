@@ -182,20 +182,18 @@ export class CacheFile<T = never> {
     // What an earlier version decoded to is let go before the file is read.
     this.#version = undefined;
     this.#value = undefined;
-    let file: Deno.FsFile;
+    let opened: Deno.FsFile;
     try {
-      file = await Deno.open(this.#path);
+      opened = await Deno.open(this.#path);
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return undefined;
       throw error;
     }
-    // The stream closes the file once it has been read, whether or not the
-    // file's version could be read.
-    const [info, text] = await Promise.all([
-      file.stat(),
-      new Response(file.readable).text(),
-    ]);
-    const decoded = decode(text);
+    // The file is closed on the way out however this ends. The stream closes
+    // it once it has read it, and disposing of a closed file does nothing.
+    using file = opened;
+    const info = await file.stat();
+    const decoded = decode(await new Response(file.readable).text());
     this.#version = versionOf(info);
     this.#value = decoded;
     return decoded;

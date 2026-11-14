@@ -223,7 +223,7 @@ const WEB_CRYPTO_ED25519: Ed25519Platform = {
 /**
  * Returns whether `platform` has the Ed25519 that `isNativeEd25519Supported()`
  * describes: it generates a key, signs deterministically with it, and clones
- * it.
+ * it. A step that throws means it does not.
  *
  * Note this does not test whether a cloned key can be rehydrated (that fails
  * in Deno if needed); the clone is checked so that Firefox keys can be saved
@@ -232,20 +232,15 @@ const WEB_CRYPTO_ED25519: Ed25519Platform = {
 export async function hasEd25519Features(
   platform: Ed25519Platform,
 ): Promise<boolean> {
-  let key: CryptoKeyPair;
   try {
-    key = await platform.generateKey();
-  } catch {
-    return false;
-  }
-  const payload = new Uint8Array(32);
-  const first = new Uint8Array(await platform.sign(key.privateKey, payload));
-  const second = new Uint8Array(await platform.sign(key.privateKey, payload));
-  if (!arrayEqual(first, second)) return false;
-  try {
+    const key = await platform.generateKey();
+    const payload = new Uint8Array(32);
+    const first = new Uint8Array(await platform.sign(key.privateKey, payload));
+    const second = new Uint8Array(await platform.sign(key.privateKey, payload));
+    if (!arrayEqual(first, second)) return false;
     platform.clone(key.privateKey);
+    return true;
   } catch {
     return false;
   }
-  return true;
 }

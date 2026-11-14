@@ -90,6 +90,15 @@ Deno.test("hasEd25519Features() returns `false` for a platform that cannot clone
   expect(await hasEd25519Features(uncloneable)).toBe(false);
 });
 
+Deno.test("hasEd25519Features() returns `false` for a platform whose signing fails", async () => {
+  if (!await isNativeEd25519Supported()) return;
+  const unsigning = platform({
+    sign: () => Promise.reject(new DOMException("", "OperationError")),
+  });
+
+  expect(await hasEd25519Features(unsigning)).toBe(false);
+});
+
 Deno.test("canUseNative() follows the requested implementation, and the platform otherwise", async () => {
   const supported = () => Promise.resolve(true);
   const unsupported = () => Promise.resolve(false);

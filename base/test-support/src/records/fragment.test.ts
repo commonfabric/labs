@@ -135,6 +135,25 @@ describe("fragment", () => {
       ]);
     });
 
+    it("stops writing without throwing when the close after a failed write fails too", () => {
+      let writes = 0;
+      const writer = FragmentWriter.accessForTestingOnly.create("/gone", {
+        writeSync: () => {
+          writes++;
+          throw new Deno.errors.BadResource("closed underneath");
+        },
+        close: () => {
+          throw new Deno.errors.BadResource("already closed");
+        },
+      });
+      using _warn = stub(console, "warn");
+
+      expect(() => writer.append(RECORD)).not.toThrow();
+      expect(() => writer.append(RECORD)).not.toThrow();
+      expect(() => writer.close()).not.toThrow();
+      expect(writes).toBe(1);
+    });
+
     it("writes a line the file takes in pieces whole", () => {
       // `writeSync()` may write fewer bytes than it was given.
 

@@ -17,9 +17,9 @@ import { FeltCommand, ResolvedConfig } from "./interface.ts";
 export interface Serving {
   server: DevServer;
   /**
-   * Settles once serving has stopped: when the server shuts down, and in
-   * `dev` also when the changes being watched end, which shuts the server
-   * down.
+   * Settles once serving has stopped. For `serve`, that is when the server
+   * shuts down. For `dev`, it is when the changes being watched end, which
+   * shuts the server down.
    */
   finished: Promise<void>;
 }
