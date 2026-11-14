@@ -686,6 +686,21 @@ as an assumption.
 103. **How value code reads the child a dynamic key chose** (PL question
     46). *Assumed:* it is handed every child. `execution-and-storage.md`
     §2.2 gives `ConeHost.slot` no key, which disagrees with PL §3.18.
+104. **The plan record of `wish`** (PL questions 47 and 48). *Assumed:*
+    one operation of kind `wish`, whose result is read through slots
+    rooted at the operation and labeled with the request joined with
+    one dynamic entry for the search, with no integrity. A query that
+    is not a constant is assumed to take the widest part. `wish` in a
+    function body is assumed refused, and `language-subset.md` does not
+    yet say so.
+105. **The plan record of `reduce` in the reactive tier** (PL question
+    49). *Assumed:* an operation of kind `reduce` over a step cone and a
+    collection of its own, with the label a `fold` joined with the
+    initial value.
+106. **Three smaller records** (PL questions 50 to 52): the source of a
+    scan, the positions after an array spread, and a write through a
+    link that an instantiation or an effect returned. Each is assumed
+    as PL states it.
 
 ## Open, and not needing the owner
 
