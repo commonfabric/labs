@@ -13349,8 +13349,15 @@ export class Runner {
     // Declared inputs can point through their argument-slot redirect and then
     // through an ordinary link to the effective source cell. Resolve the full
     // static chain so the completeness certificate covers the same target the
-    // action transaction will record at runtime.
-    return tx.runWithAmbientReadMeta(machineryRead, () => {
+    // action transaction will record at runtime. What the resolution finds
+    // goes into that certificate and nowhere else: it is dependency discovery
+    // (§8.10.1), so it consumes no label of the transaction it runs in, while
+    // the action's own run reads the same target as an ordinary read.
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/TBD-static-read-targets
+    return tx.runWithAmbientReadMeta({
+      ...machineryRead,
+      ...schedulerDependencyRead,
+    }, () => {
       const targets: NormalizedFullLink[] = [];
       let complete = true;
       for (const input of inputCells) {
