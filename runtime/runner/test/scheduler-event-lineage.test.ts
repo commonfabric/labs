@@ -27,6 +27,7 @@ import {
   InSpaceTargetUnresolved,
   RetryImmediately,
 } from "../src/scheduler/retry-immediately.ts";
+import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 
 const secondSigner = await Identity.fromPassphrase(
   "scheduler event lineage second space",
@@ -1254,6 +1255,59 @@ describe("scheduler event lineage", () => {
     );
 
     expect(payloads.get()).toEqual(["settled origin payload"]);
+  });
+
+  it("dispatches a follow-up run again after its origin settled through a seal destination", async () => {
+    // The origin settles without committing the storage transaction it wraps,
+    // as a commit sealed into a serving wave or the speculation overlay does,
+    // so its status still reads `ready`. It writes nothing in the follow-up's
+    // space, and the follow-up's first run throws `RetryImmediately`, so the
+    // scheduler records the follow-up's lineage again under an origin that
+    // has already settled. Recorded as pending, the follow-up would wait for a
+    // callback that never comes, and `idle()` with it.
+
+    const stream = runtime.getCell<unknown>(
+      secondSpace,
+      "lineage sealed-origin stream",
+      { asCell: ["stream"] },
+      tx,
+    );
+    await tx.commit().settled;
+    tx = runtime.edit();
+    const originTx = new ExtendedStorageTransaction(runtime.edit().tx);
+    originTx.configureSealDestination({
+      seal: () => Promise.resolve({ ok: {} }),
+    });
+
+    let attempts = 0;
+    const delivered: unknown[] = [];
+    const handler: EventHandler = (_handlerTx, event: unknown) => {
+      attempts++;
+      if (attempts === 1) throw new RetryImmediately();
+      delivered.push(event);
+    };
+    runtime.scheduler.addEventHandler(
+      handler,
+      stream.getAsNormalizedFullLink(),
+    );
+    runtime.scheduler.queueEvent(
+      stream.getAsNormalizedFullLink(),
+      "follow-up",
+      true,
+      undefined,
+      false,
+      { originTx },
+    );
+    expect((await originTx.commit().settled).error).toBeUndefined();
+    expect(originTx.status().status).toBe("ready");
+
+    await waitForSignal(
+      runtime.idle(),
+      "the follow-up waited on its settled origin",
+    );
+
+    expect(attempts).toBe(2);
+    expect(delivered).toEqual(["follow-up"]);
   });
 
   it("drops stream events whose origin transaction already failed", async () => {

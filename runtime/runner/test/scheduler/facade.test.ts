@@ -231,6 +231,7 @@ describe("facade", () => {
         const origin = {
           isReadOnly: () => false,
           status: () => ({ status: "ready" }),
+          settledOutcome: () => undefined,
           addCommitCallback: (
             callback: (tx: unknown, result: { error?: Error }) => void,
           ) => settle.push((error) => callback(origin, { error })),
