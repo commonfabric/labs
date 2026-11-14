@@ -3696,10 +3696,15 @@ export class Runtime {
    * After `fn` returns, while retry budget remains, the runtime may load
    * documents read as absent that the replica has not examined. If any exist,
    * it aborts the staged attempt and invokes `fn` with a fresh transaction
-   * before sending a commit. These reconciliation re-runs and retries after
+   * before sending a commit. After `fn` throws, the runtime does the same
+   * before reporting the throw: if a document the attempt read as absent
+   * exists, `fn` runs again with a fresh transaction, and the throw is
+   * reported only when none does, so a check that refuses on a document not
+   * loaded yet sees it loaded. These reconciliation re-runs and retries after
    * commit rejection share one `maxRetries` budget, in addition to the initial
-   * invocation. With no budget left, reconciliation is skipped and the current
-   * transaction proceeds to ordinary commit validation.
+   * invocation. With no budget left, reconciliation is skipped: the current
+   * transaction proceeds to ordinary commit validation, or the throw is
+   * reported.
    *
    * A retryable commit rejection also re-runs `fn` while budget remains.
    * Retryability is decided by the shared rejection vocabulary
@@ -3741,7 +3746,8 @@ export class Runtime {
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
-   *   throwing, which aborts the transaction.
+   *   throwing, which aborts the transaction, on an attempt that read no
+   *   absent document that exists or that has no retry budget left.
    */
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
@@ -3777,14 +3783,41 @@ export class Runtime {
     } catch (error) {
       // fn(tx) threw before commit -- abort the transaction so it isn't
       // orphaned, and surface the error as a Result instead of a rejection.
+      // A throw can follow from a read that found a document absent, as a
+      // check that refuses on the `undefined` does, so the attempt's absences
+      // are reconciled as a returning attempt's are (below): when one of them
+      // turns out to exist, `fn` runs again against it. The absences are
+      // named before the abort, which ends the transaction's reads. Naming
+      // them only decides whether to run again, so a failure to name them, or
+      // to count them, reports the throw as it is, or the owner's cancellation
+      // when that came first.
+      let reconciliation: number | Promise<number> = 0;
+      if (maxRetries > 0) {
+        try {
+          reconciliation = this.#awaitUnexaminedAbsences(tx);
+        } catch {
+          reconciliation = 0;
+        }
+      }
       tx.abort(error);
-      return Promise.resolve({
+      const thrown = {
         error: {
           name: "StorageTransactionAborted" as const,
           message: `editWithRetry action threw: ${error}`,
           reason: error,
         },
-      });
+      };
+      if (typeof reconciliation === "number") return Promise.resolve(thrown);
+      return reconciliation.then(
+        (present) => {
+          if (signal.aborted) return stoppedResult();
+          if (present > 0) {
+            return this.editWithRetry<T>(fn, maxRetries - 1, options);
+          }
+          return thrown;
+        },
+        () => signal.aborted ? stoppedResult() : thrown,
+      );
     }
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }

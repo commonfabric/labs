@@ -1099,4 +1099,59 @@ describe("v2-client-reconnect-recovery", () => {
       await server.close();
     }
   });
+
+  it("rejects `restoreConnection()` as made on a closed client when the client closes while its host stays down", async () => {
+    // The close ends the reconnect that `restoreConnection()` waits on,
+    // without a connection. Resolving then would tell the caller that the
+    // client is connected.
+
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://reconnect-recovery-restore-after-close"),
+    });
+    let inner: Transport | undefined;
+    let receiver = (_payload: string) => {};
+    let closeReceiver = (_error?: Error) => {};
+    let down = false;
+    const transport: Transport = {
+      setReceiver(next) {
+        receiver = next;
+      },
+      setCloseReceiver(next) {
+        closeReceiver = next;
+      },
+      async close() {
+        await inner?.close();
+        inner = undefined;
+      },
+      reset() {
+        void inner?.close();
+        inner = undefined;
+      },
+      async send(payload) {
+        if (down) throw connectionError("test host is down");
+        if (inner === undefined) {
+          inner = loopback(server);
+          inner.setReceiver((frame) => receiver(frame));
+        }
+        await inner.send(payload);
+      },
+    };
+    const client = await connect({ transport });
+    try {
+      down = true;
+      transport.reset!();
+      closeReceiver(connectionError("test connection lost"));
+      const restoring = client.restoreConnection().then(
+        () => "resolved",
+        (error) => error.message,
+      );
+      await client.close();
+
+      expect(await restoring).toBe("memory client is closed");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

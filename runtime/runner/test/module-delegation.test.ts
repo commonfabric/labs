@@ -455,18 +455,25 @@ describe("module identity delegation", () => {
     );
   });
 
-  it("keeps the successor's source documents loaded from preparing an update to staging it, through release passes, and no longer", async () => {
-    // Collection needs `--expose-gc` and the real clock, which this package's
-    // test task does not give, so the helper runs in a process of its own.
+  // Runs `source-update-release-gc-helper.ts` with `args` and returns the
+  // report it prints. Collection needs `--expose-gc` and the real clock,
+  // which this package's test task does not give, so the helper runs in a
+  // process of its own, under the Deno running this test, which the task's
+  // `--allow-run` names, and not whichever copy comes first on PATH
+  // (docs/development/TESTING.md, "Tests that start Deno").
+  const runReleaseHelper = async (args: string[]): Promise<unknown> => {
     const helper = new URL(
       "./source-update-release-gc-helper.ts",
       import.meta.url,
     );
-    // The Deno running this test, which the task's `--allow-run` names, and
-    // not whichever copy comes first on PATH (docs/development/TESTING.md,
-    // "Tests that start Deno").
     const output = await new Deno.Command(Deno.execPath(), {
-      args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
+      args: [
+        "run",
+        "-A",
+        "--v8-flags=--expose-gc",
+        fromFileUrl(helper),
+        ...args,
+      ],
       stdout: "piped",
       stderr: "piped",
     }).output();
@@ -477,8 +484,24 @@ describe("module identity delegation", () => {
     ).toBe(true);
     // Loggers may write above the report; the report is the last line.
     const lines = stdout.trim().split("\n");
-    expect(JSON.parse(lines[lines.length - 1])).toEqual({
+    return JSON.parse(lines[lines.length - 1]);
+  };
+
+  it("keeps the successor's source documents loaded from preparing an update to staging it, through release passes, and no longer", async () => {
+    expect(await runReleaseHelper([])).toEqual({
       keptThroughRelease: true,
+      stageError: null,
+      releasedOnceDone: true,
+    });
+  });
+
+  it("stages a prepared update whose successor's source documents a release dropped, loading them again", async () => {
+    // Staging reads each successor module's source document inside the
+    // commit and throws when it finds one absent; `editWithRetry()` loads
+    // what that attempt found absent and stages again.
+
+    expect(await runReleaseHelper(["--without-holds"])).toEqual({
+      keptThroughRelease: false,
       stageError: null,
       releasedOnceDone: true,
     });

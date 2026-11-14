@@ -334,6 +334,9 @@ export type VerifiedProofChain = {
    */
   rootIssuer: string;
 
+  /** The chain's issuers, root first. */
+  issuers: string[];
+
   /**
    * The unix second the chain stops holding, the earliest `exp` among its
    * proofs; absent when none expires. The session is held to it after
@@ -394,8 +397,6 @@ export const verifySessionOpenProofs = async (
       throw proofError("`prf` does not name one CID per proof");
     }
     cids = prf as string[];
-  } else if (prf !== undefined) {
-    throw proofError("`prf` without a signed invocation");
   }
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const chain: Delegation[] = [];
@@ -458,6 +459,7 @@ export const verifySessionOpenProofs = async (
   }
   return {
     rootIssuer: chain[0].payload.iss,
+    issuers: chain.map(({ payload }) => payload.iss),
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 };

@@ -11,6 +11,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { parseHandleRef, resolveHandleToken } from "../handle-table.ts";
+import { PIECE_ID_PATTERN } from "../input-cells.ts";
 import {
   executeLoomAuthoringCommand,
   type LoomAuthoringCommand,
@@ -200,6 +201,67 @@ const apiBase = (value: unknown): string | undefined => {
 };
 
 /**
+ * Why {@link heldPatternInstance} gave no reference for a piece.
+ * `foreign-space` is read from the address alone. Every other failure is
+ * `unavailable`: an absent piece, a cell that is no whole Pattern Instance and
+ * a failed read answer alike, so a raw address from untrusted text cannot
+ * probe what the space holds (CFC §17.1, §8.13.5).
+ */
+export type UnheldPatternInstance = "foreign-space" | "unavailable";
+
+/**
+ * The model-facing reference for a whole Pattern Instance named by space and
+ * piece id: the token the run already holds for it, or its canonical link,
+ * which the prompt loop's outbound swap turns into a held handle. It is the
+ * inverse of {@link patternReference}, and admits only what that function
+ * would hand back out: a whole Pattern Instance in this run's own space.
+ * `restricted` says the run already held it only through a restricted
+ * handle, whose token `ref` then is; a caller that grants composition must
+ * refuse that, while a reader may use it as the run already could.
+ */
+export const heldPatternInstance = async (
+  context: HarnessToolContext,
+  space: string,
+  id: string,
+): Promise<
+  { ref: string; restricted: boolean } | { unheld: UnheldPatternInstance }
+> => {
+  if (!PIECE_ID_PATTERN.test(id) || context.getFabricSession === undefined) {
+    return { unheld: "unavailable" };
+  }
+  try {
+    const { pieces } = await context.getFabricSession();
+    const own = pieces.getSpace();
+    if (space !== own && space !== context.fabricSessionTarget?.space) {
+      return { unheld: "foreign-space" };
+    }
+    const cell = pieces.runtime.getCellFromLink({
+      ...parseHandleRef(`/of:${id}`),
+      space: own,
+      schema: undefined,
+    });
+    await cell.sync();
+    if (pieceId(cell) !== id || getPatternIdentityRef(cell) === undefined) {
+      return { unheld: "unavailable" };
+    }
+    const held = context.handleTable?.entries.filter((entry) => {
+      const address = parseHandleRef(entry.ref);
+      return address.id === `of:${id}` &&
+        address.path.length === 0 && address.scope === "space" &&
+        (address.space === undefined || address.space === own);
+    }) ?? [];
+    const restricted = held.find((entry) => entry.capability !== undefined);
+    return {
+      ref: restricted?.token ?? held[0]?.token ??
+        createLLMFriendlyLink(cell.getAsNormalizedFullLink(), own),
+      restricted: restricted !== undefined,
+    };
+  } catch {
+    return { unheld: "unavailable" };
+  }
+};
+
+/**
  * Helper for context, which admits at most 32 successful host deployments
  * bound to this Fabric session and verified as whole Pattern Instances.
  * Canonical links enter the prompt loop's persisted handle projection.
@@ -223,35 +285,17 @@ const deployedPatterns = async (
       receipt.schema !== "loom-deployed-pattern-v1" ||
       apiBase(receipt.api_url) !== api ||
       typeof receipt.piece_id !== "string" ||
-      !/^fid1:[A-Za-z0-9_-]{43}$/.test(receipt.piece_id)
+      typeof receipt.space !== "string" ||
+      seen.has(receipt.piece_id)
     ) continue;
-    try {
-      const { pieces } = await context.getFabricSession();
-      const space = pieces.getSpace();
-      if (receipt.space !== target.space && receipt.space !== space) continue;
-      if (seen.has(receipt.piece_id)) continue;
-      seen.add(receipt.piece_id);
-      const cell = pieces.runtime.getCellFromLink({
-        ...parseHandleRef(`/of:${receipt.piece_id}`),
-        space,
-        schema: undefined,
-      });
-      await cell.sync();
-      if (
-        pieceId(cell) !== receipt.piece_id ||
-        getPatternIdentityRef(cell) === undefined
-      ) continue;
-      const link = createLLMFriendlyLink(cell.getAsNormalizedFullLink(), space);
-      const held = context.handleTable?.entries.filter((entry) => {
-        const address = parseHandleRef(entry.ref);
-        return address.id === `of:${receipt.piece_id}` &&
-          address.path.length === 0 && address.scope === "space" &&
-          (address.space === undefined || address.space === space);
-      }) ?? [];
-      if (held.some((entry) => entry.capability !== undefined)) continue;
-      output.push({ pattern_token: held[0]?.token ?? link });
-    } catch {
-      // Unavailable deployment cells do not prevent ordinary Loom recovery.
+    seen.add(receipt.piece_id);
+    const held = await heldPatternInstance(
+      context,
+      receipt.space,
+      receipt.piece_id,
+    );
+    if ("ref" in held && !held.restricted) {
+      output.push({ pattern_token: held.ref });
     }
   }
   return output;
