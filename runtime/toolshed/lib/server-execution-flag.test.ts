@@ -37,6 +37,25 @@ describe("serverExecutionEnabledFromEnv", () => {
     ).toBe(true);
   });
 
+  it("follows the posture another host publishes, unless the flag is set explicitly", () => {
+    for (const followed of [true, false]) {
+      const posture = JSON.stringify({ serverExecution: followed });
+      expect(
+        serverExecutionEnabledFromEnv(
+          envOf({ EXPERIMENTAL_FOLLOWED_POSTURE: posture }),
+        ),
+      ).toBe(followed);
+      expect(
+        serverExecutionEnabledFromEnv(
+          envOf({
+            EXPERIMENTAL_FOLLOWED_POSTURE: posture,
+            EXPERIMENTAL_SERVER_EXECUTION: String(!followed),
+          }),
+        ),
+      ).toBe(!followed);
+    }
+  });
+
   it("garbage reads as unset (the canonical mapping's warn-and-ignore), so it resolves to the default", () => {
     const originalWarn = console.warn;
     console.warn = () => {};

@@ -53,6 +53,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
   MAX_ENFORCEMENT_SINK_GOVERNANCE,

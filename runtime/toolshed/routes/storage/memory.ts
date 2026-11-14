@@ -6,7 +6,7 @@ import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connectio
 import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import type { EnvReader } from "@commonfabric/runner";
-import { experimentalOptionsFromEnv } from "@commonfabric/runner/experimental-posture";
+import { experimentalOptionsWithFollowedPosture } from "@commonfabric/runner/experimental-posture";
 
 import { MemoryRouterPolicy } from "./memory-router.ts";
 import { memoryEngineStoreUrl } from "./memory-store-url.ts";
@@ -97,7 +97,7 @@ export async function openMemory(
     // Runtime startup later reads the same flag; initialize the Memory
     // encoder before the private listener advertises its capabilities.
     setModernCellRepConfig(
-      experimentalOptionsFromEnv(getEnv).modernCellRep === true,
+      experimentalOptionsWithFollowedPosture(getEnv).modernCellRep === true,
     );
   }
 
@@ -151,7 +151,8 @@ export async function openMemory(
   // the flag the server verifies no `connection.auth` and does not advertise
   // the capability, so its clients sign each `session.open`.
   const sharedMemoryConnection =
-    experimentalOptionsFromEnv(getEnv).sharedMemoryConnection === true;
+    experimentalOptionsWithFollowedPosture(getEnv).sharedMemoryConnection ===
+      true;
 
   // The store URL is derived in memory-store-url.ts (DB_PATH single-file mode
   // or MEMORY_DIR directory mode). Log which mode is active for this server.
