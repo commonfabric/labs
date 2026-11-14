@@ -1840,13 +1840,13 @@ fn the_membership_of_a_map_a_filter_and_a_flat_map_are_the_templates_of_pl_secti
     // joined with the source's membership."
     assert_eq!(
         template_line(&plan, &collection_named(&plan, "open")["membership"]),
-        format!("derive(expression) {{ fold(open: derive(expression) {{ [element done : value] }}) {enumeration} }}")
+        "fold(open: derive(expression) { [element done : value] })"
     );
     // §3.7: "`fold` over the source with body the `enumeration` of the
     // segment `body` returns, joined with the source's membership."
     assert_eq!(
         template_line(&plan, &collection_named(&plan, "tags")["membership"]),
-        format!("derive(expression) {{ fold(tags: [element tags : enumeration]) {enumeration} }}")
+        "fold(tags: [element tags : enumeration])"
     );
     // §1.4: the assembled entry's "`template` is the collection's
     // membership template", and a per-element entry's "`path` has `*` at
@@ -1890,18 +1890,17 @@ fn a_scan_is_a_fold_through_the_deciding_element_and_find_is_a_pick() {
     // The choice is the `fold` through the first match, joined with
     // membership; the body is the matching element, passed through".
     let plan = plan_of(&program(FOLDS), "P");
-    let enumeration = "[argument items : enumeration]";
     let any = &output_named(&plan, "any")["template"];
     assert_eq!(
         template_line(&plan, any),
-        format!("derive(expression) {{ fold(any through: [element done : value]) {enumeration} }}")
+        "fold(any through: [element done : value])"
     );
-    let through = any["inputs"][0]["through"].as_u64().expect("through") as usize;
+    let through = any["through"].as_u64().expect("through") as usize;
     assert_eq!(plan["selectors"][through], json!({ "arity": 0 }));
     let first = &output_named(&plan, "first")["template"];
     assert_eq!(
         template_line(&plan, first),
-        format!("pick(collection first, choice derive(expression) {{ fold(first through: [element done : value]) {enumeration} }}, body [element  : identity])")
+        "pick(collection first, choice fold(first through: [element done : value]), body [element  : identity])"
     );
     assert_eq!(
         plan["picks"][first["pick"].as_u64().unwrap() as usize],
@@ -2085,7 +2084,7 @@ export const P = pattern<{ count: Cell<number>; out: Cell<unknown>; url: string 
     assert_eq!(writes, ["mode const", "url [argument url : identity]"]);
     assert_eq!(
         template_line(&plan, &plan["operations"][0]["input"]),
-        "derive(expression) { const [argument url : identity] }"
+        "[argument url : identity]"
     );
 }
 
@@ -2161,7 +2160,7 @@ fn a_wish_is_one_operation_whose_operands_are_request_edges_and_whose_reads_are_
     let (_, local) = operation_named(&plan, "local");
     assert_eq!(
         template_line(&plan, &local["input"]),
-        "derive(expression) { const [argument where : identity] }"
+        "[argument where : identity]"
     );
     // "A reader has slots with root `operation` at the paths it reads,
     // and its template has the `slot` nodes."
@@ -2297,7 +2296,7 @@ fn a_reduce_is_an_operation_whose_step_is_a_cone_over_a_collection_of_its_own() 
     // collection's membership.
     assert_eq!(
         template_line(&plan, &operation["input"]),
-        "derive(expression) { fold(reduce: derive(expression) { const [element amount : value] }) [argument rows : enumeration] [argument start : identity] }"
+        "derive(expression) { fold(reduce: derive(expression) { const [element amount : value] }) [argument start : identity] }"
     );
     // "A cone that uses it reads a slot with root `operation`."
     let total = plan["outputs"]
@@ -2603,4 +2602,35 @@ export const P = pattern<{ rows: string[]; chosen: Cell<number> }>(({ rows, chos
     assert_eq!(paths, [&json!(["at"]), &json!(["chosen"])]);
     assert_eq!(state[0]["place"], json!({ "index": 3 }));
     assert_eq!(state[0]["template"], plan["collections"][3]["membership"]);
+}
+
+#[test]
+fn a_join_with_a_constant_or_with_itself_is_the_other_template_alone() {
+    // PL §3.2, "A join": "A join with `const` is the other template
+    // alone. A join of one template with itself is that template. A
+    // `fold` joins the membership its collection iterates by its own
+    // rule".
+    let analysis = program(
+        r#"import { fetchJson, pattern } from "commonfabric";
+export const P = pattern<{ rows: string[]; url: string }>(({ rows, url }) => {
+  const total = rows.reduce((sum, row) => sum + row.length, 0);
+  const quote = fetchJson({ url, mode: "json" });
+  const twice = fetchJson({ url, again: url });
+  return { total, quote, twice };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        template_line(&plan, &operation_named(&plan, "total").1["input"]),
+        "fold(reduce: derive(expression) { const [element length : value] })"
+    );
+    assert_eq!(
+        template_line(&plan, &operation_named(&plan, "quote").1["input"]),
+        "[argument url : identity]"
+    );
+    assert_eq!(
+        template_line(&plan, &operation_named(&plan, "twice").1["input"]),
+        "[argument url : identity]"
+    );
 }

@@ -678,10 +678,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .iter()
                 .all(|input| input["op"] == "const")
                 .then(|| json!({ "op": "const" }))
-        } else if inputs.len() == 1 {
-            inputs.pop()
         } else {
-            Some(join(inputs))
+            Some(joined(inputs))
         };
         (place, template)
     }
@@ -779,7 +777,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     let value = emitter.slot(root, &child, "value");
                     emitter.cones[cone].slots.insert(shape);
                     emitter.cones[cone].slots.insert(value);
-                    let choice = join(vec![choice?, json!({ "op": "slot", "slot": shape })]);
+                    let choice = joined(vec![choice?, json!({ "op": "slot", "slot": shape })]);
                     Some(json!({
                         "op": "pick",
                         "pick": pick,
@@ -1466,8 +1464,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                         let enumerations: Option<Vec<Value>> = enumerations.into_iter().collect();
                         let mut inputs: Vec<Value> =
                             inputs.into_iter().collect::<Option<Vec<Value>>>()?;
-                        inputs.push(join(enumerations?));
-                        Some(join(inputs))
+                        inputs.push(joined(enumerations?));
+                        Some(joined(inputs))
                     });
                     fields.insert("*".to_string(), star);
                 }
@@ -1959,14 +1957,15 @@ impl<'a> Emitter<'_, '_, 'a> {
         // step's template, joined with the template of `init`", and with
         // the collection's membership (the template of the same section).
         let input = (|| {
-            let mut inputs = vec![
-                json!({ "op": "fold", "collection": collection, "body": template? }),
-                iterated?,
-            ];
+            // The `fold` joins the membership its collection iterates
+            // by its own rule (PL §3.2).
+            let mut inputs =
+                vec![json!({ "op": "fold", "collection": collection, "body": template? })];
+            iterated?;
             if let Some(initial) = initial {
                 inputs.push(initial?);
             }
-            Some(join(inputs))
+            Some(joined(inputs))
         })();
         if let Some(input) = input {
             self.operations[operation]["input"] = input;
@@ -2147,7 +2146,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some(Value::Object(node))
         };
         let joined = |fold: Option<Value>, iterated: &Option<Value>| -> Option<Value> {
-            Some(join(vec![fold?, iterated.clone()?]))
+            // "A `fold` of `t`, joined with membership" is the `fold`
+            // alone (PL §3.2).
+            iterated.as_ref()?;
+            fold
         };
         // The membership of the result, the template of an element of
         // it, and for a scan the template of its value.
@@ -2494,11 +2496,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         // "For an effect, the join of the templates of its request" (PL
         // §1.1, `Operation.input`).
         if let Some(mut request) = request {
-            let input = if request.len() == 1 {
-                request.remove(0)
-            } else {
-                join(request)
-            };
+            let input = joined(std::mem::take(&mut request));
             self.operations[operation]["input"] = input;
         }
         if made {
@@ -2565,12 +2563,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         if opaque {
             return None;
         }
-        Some(match inputs.len() {
-            0 => json!({ "op": "const" }),
-            1 => inputs.remove(0),
-            _ if inputs.iter().all(|input| input["op"] == "const") => json!({ "op": "const" }),
-            _ => join(inputs),
-        })
+        Some(joined(inputs))
     }
 
     /// A `wish` (PL §3.19): one `Operation` of kind `wish`, whose
@@ -2647,13 +2640,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.cones[cone].writes.push(Value::Object(write));
         }
         if let Some(mut templates) = templates {
-            self.operations[operation]["input"] = match templates.len() {
-                1 => templates.remove(0),
-                _ if templates.iter().all(|template| template["op"] == "const") => {
-                    json!({ "op": "const" })
-                }
-                _ => join(templates),
-            };
+            self.operations[operation]["input"] = joined(std::mem::take(&mut templates));
         }
         self.dynamic(json!({ "why": { "kind": "search", "operation": operation } }));
         if made {
@@ -3124,7 +3111,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                             self.cone = saved_cone;
                             let inputs = std::mem::replace(&mut self.operands, saved.0);
                             let opaque = std::mem::replace(&mut self.opaque, saved.1);
-                            (!opaque).then(|| join(inputs))
+                            (!opaque).then(|| joined(inputs))
                         }
                         _ => None,
                     };
@@ -4445,9 +4432,27 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 }
 
-/// The join of several templates: expression code over them (PL §3.2).
+/// Expression code over the templates of its operands (PL §3.2).
 fn join(inputs: Vec<Value>) -> Value {
     json!({ "op": "derive", "inputs": inputs, "by": { "expression": true } })
+}
+
+/// A join of templates (PL §3.2, "A join"): a `derive` by expression
+/// over the joined templates, in the order given. "A join with `const`
+/// is the other template alone", and "a join of one template with
+/// itself is that template".
+fn joined(inputs: Vec<Value>) -> Value {
+    let mut kept: Vec<Value> = Vec::new();
+    for input in inputs {
+        if input["op"] != "const" && !kept.contains(&input) {
+            kept.push(input);
+        }
+    }
+    match kept.len() {
+        0 => json!({ "op": "const" }),
+        1 => kept.remove(0),
+        _ => join(kept),
+    }
 }
 
 /// A `select` node, where the condition and every branch have a template.
