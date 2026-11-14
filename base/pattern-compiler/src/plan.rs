@@ -24,7 +24,8 @@ use crate::footprint::{
     bind_use, body_functions, parameter_names, Class, Entry, HandleAt, Record, RefName, Seg,
     UseRecord, WriteRec, WriteTarget,
 };
-use crate::module::{symbol_of, DefKind};
+use crate::module::{symbol_of, Binding, DefKind};
+use oxc_syntax::symbol::SymbolId;
 use crate::program::Resolver;
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind};
@@ -335,6 +336,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let kind = self.resolver.value_def(self.module, identifier)?;
         let parsed = self.resolver.parsed(self.module)?;
         let symbol = symbol_of(parsed.semantic.scoping(), identifier)?;
+        if let Some(found) = self.default_export(symbol) {
+            return Some((found.0, found.1, kind));
+        }
         let (home, symbol) = self.resolver.origin(self.module, symbol)?;
         let parsed = self.resolver.parsed(home)?;
         let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
@@ -360,6 +364,46 @@ impl<'a> Emitter<'_, '_, 'a> {
             _ => return None,
         };
         Some((home, start, kind))
+    }
+
+    /// The function of a definition that is `export default <call>`, which
+    /// has no name in its module: the module and the start of the last
+    /// function written as an argument of the call.
+    fn default_export(&mut self, symbol: SymbolId) -> Option<(usize, u32)> {
+        let model = self.resolver.model(self.module)?;
+        let Binding::Import(import, binding) = model.binding(symbol)? else {
+            return None;
+        };
+        let import = &model.imports[import];
+        let def =
+            self.resolver
+                .resolve_import(self.module, import, &import.bindings[binding].imported)?;
+        let found = self.resolver.model(def.module)?.defs.get(def.def)?;
+        if found.symbol.is_some() {
+            return None;
+        }
+        let (from, to) = found.span;
+        let parsed = self.resolver.parsed(def.module)?;
+        // The outermost call of the exported expression.
+        let call = parsed
+            .semantic
+            .nodes()
+            .iter()
+            .filter_map(|node| match node.kind() {
+                AstKind::CallExpression(call)
+                    if from <= call.span.start && call.span.end <= to =>
+                {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .max_by_key(|call| call.span.end - call.span.start)?;
+        let function = call
+            .arguments
+            .iter()
+            .rev()
+            .find_map(FunctionLike::of_argument)?;
+        Some((def.module, function.span().start))
     }
 
     // ----- cones and values -----

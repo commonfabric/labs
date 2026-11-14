@@ -210,6 +210,28 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
         );
         return Ok(parsed(&analysis));
     }
+    if flags.contains(&"--sites") {
+        // Each unsupported construct of an accepted module: the kind, the
+        // file and line, and the start of its text.
+        for module in analysis.modules.iter().filter(|module| module.accepted()) {
+            let Some(file) = files.iter().find(|file| file.path == module.path) else {
+                continue;
+            };
+            for plan in &module.plans {
+                for (kind, start) in &plan.unsupported {
+                    let start = (*start as usize).min(file.text.len());
+                    let line = file.text[..start].matches('\n').count() + 1;
+                    let text: String = file.text[start..]
+                        .chars()
+                        .take(70)
+                        .map(|ch| if ch == '\n' { ' ' } else { ch })
+                        .collect();
+                    println!("{kind}\t{}:{line}\t{text}", module.path);
+                }
+            }
+        }
+        return Ok(parsed(&analysis));
+    }
     let summary = pattern_compiler::plan::corpus_summary(&analysis);
     print!("{summary}");
     Ok(parsed(&analysis))

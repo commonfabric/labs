@@ -308,6 +308,40 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
     assert_eq!(plan["children"], json!([]));
 }
 
+#[test]
+fn a_pattern_that_is_the_default_export_of_a_module_is_compiled_in_as_a_named_one_is() {
+    // PL §1.1, as above. The pattern has no name in its module: the site
+    // takes the name of the `const` the call is assigned to (§1.3).
+    let analysis = analyze(&[
+        SourceFile {
+            path: "row.tsx".to_string(),
+            text: r#"import { Writable, pattern } from "commonfabric";
+export default pattern<{ title: string }>(({ title }) => {
+  const open = Writable.of(false);
+  return { title, open };
+});
+"#
+            .to_string(),
+        },
+        SourceFile {
+            path: "outer.tsx".to_string(),
+            text: r#"import { pattern } from "commonfabric";
+import Row from "./row.tsx";
+export const Outer = pattern<{ title: string }>(({ title }) => {
+  const row = Row({ title });
+  return { row };
+});
+"#
+            .to_string(),
+        },
+    ]);
+    let plan = plan_of(&analysis, "Outer");
+    assert_eq!(
+        plan["stateCells"],
+        json!([{ "name": "open", "scope": "space", "within": [{ "site": "row" }] }])
+    );
+}
+
 // ----- PL §6.2: the plan for the slice of FabriChat -----
 
 fn fabrichat() -> ProgramAnalysis {
