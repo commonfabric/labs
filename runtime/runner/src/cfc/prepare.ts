@@ -241,6 +241,7 @@ import {
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
   withoutUndefinedMembers,
+  writerClaimStamp,
 } from "./schema-merge.ts";
 import {
   canonicalizeCfcSchemaDocument,
@@ -10920,26 +10921,6 @@ export type ReleaseMergeOptions = Pick<
   MergeCfcSchemaEnvelopeOptions,
   "beneathStoredLink" | "adoptsStamp" | "writePolicyRelease"
 >;
-
-/** A stamped writer claim's module identity and file, if it is one. */
-const writerClaimStamp = (
-  claim: unknown,
-):
-  | { moduleIdentity: string; file: string | undefined; path: string[] }
-  | undefined => {
-  const binding = isObjectNotArray(claim) &&
-      isObjectNotArray(claim.__ctWriterIdentityOf)
-    ? claim.__ctWriterIdentityOf
-    : {};
-  const { moduleIdentity, file, path } = binding;
-  return typeof moduleIdentity === "string"
-    ? {
-      moduleIdentity,
-      file: typeof file === "string" ? file : undefined,
-      path: Array.isArray(path) ? path.map(String) : [],
-    }
-    : undefined;
-};
 
 /**
  * Whether one of `identities` is the writer a stamp names: a verified identity

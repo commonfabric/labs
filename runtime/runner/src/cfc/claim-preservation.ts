@@ -40,8 +40,8 @@ const CLAIMS: Readonly<
   ownerPrincipal: (stored, merged) => deepEqual(stored, merged),
   writeAuthorizedBy: (stored, merged) => keepsWriterClaim(stored, merged),
   // Every stored alternative, each kept by a merged one wherever it is in the
-  // list. A merged alternative keeping none of them is held to
-  // `appendedWritePolicyRefusal()`.
+  // list, since order carries no meaning (§8.15.6.1). A merged alternative
+  // keeping none of them is held to `appendedWritePolicyRefusal()`.
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   writePolicyAnyOf: (stored, merged) =>
     Array.isArray(stored) && Array.isArray(merged) &&

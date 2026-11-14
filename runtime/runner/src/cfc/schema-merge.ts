@@ -453,7 +453,8 @@ const mergeWritePolicyAnyOf = (
   // later schema omit one.
   //
   // Each stored alternative is matched by content, wherever the candidate
-  // lists it, which accepts a candidate listing them in another order.
+  // lists it, which accepts a candidate listing them in another order: the
+  // list is a set ("Order carries no meaning", §8.15.6.1).
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const kept = existing.map((policy) => {
     for (const other of candidate) {
@@ -513,21 +514,38 @@ export const writePolicyAlternativeAdmissible = (
   });
 };
 
+/** A stamped writer claim's module identity and file, if it is one. */
+export const writerClaimStamp = (
+  claim: unknown,
+):
+  | { moduleIdentity: string; file: string | undefined; path: string[] }
+  | undefined => {
+  const binding = isObjectNotArray(claim) &&
+      isObjectNotArray(claim.__ctWriterIdentityOf)
+    ? claim.__ctWriterIdentityOf
+    : {};
+  const { moduleIdentity, file, path } = binding;
+  return typeof moduleIdentity === "string"
+    ? {
+      moduleIdentity,
+      file: typeof file === "string" ? file : undefined,
+      path: Array.isArray(path) ? path.map(String) : [],
+    }
+    : undefined;
+};
+
 /**
  * Helper for `writePolicyAlternativeAdmissible()`: the module identity an
  * alternative's writer claim is stamped with, or `undefined` for an
- * alternative whose writer is no binding claim or carries no such stamp.
+ * alternative whose writer carries no such stamp.
  */
 const alternativeModuleIdentity = (
   alternative: unknown,
 ): string | undefined => {
-  if (!isObjectNotArray(alternative)) return undefined;
-  const writer = alternative.writeAuthorizedBy;
-  if (!isWriterIdentityClaim(writer)) return undefined;
-  const moduleIdentity = writer.__ctWriterIdentityOf.moduleIdentity;
-  return typeof moduleIdentity === "string" && moduleIdentity.length > 0
-    ? moduleIdentity
+  const moduleIdentity = isObjectNotArray(alternative)
+    ? writerClaimStamp(alternative.writeAuthorizedBy)?.moduleIdentity
     : undefined;
+  return moduleIdentity === "" ? undefined : moduleIdentity;
 };
 
 /** Whether two objects hold the same set of keys. */
