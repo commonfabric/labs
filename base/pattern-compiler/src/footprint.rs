@@ -744,7 +744,8 @@ enum Pending {
     /// A handle, whether the write appends an element, and the site of
     /// the write.
     Handle(Proj, bool, (usize, u32)),
-    Created((usize, u32)),
+    /// The site that made the cell, and the path of the write below it.
+    Created((usize, u32), Vec<Seg>),
     Argument((usize, u32)),
     Request((usize, u32)),
 }
@@ -2592,7 +2593,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
                     if creates {
-                        self.store.pending.push((Pending::Created(site), val, true));
+                        self.store
+                            .pending
+                            .push((Pending::Created(site, Vec::new()), val, true));
                     }
                 }
                 if creates {
@@ -2939,7 +2942,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     self.leaves(argument, &val);
                     if name == "of" {
                         // The initial value (FA §8.2).
-                        self.store.pending.push((Pending::Created(site), val, true));
+                        self.store
+                            .pending
+                            .push((Pending::Created(site, Vec::new()), val, true));
                     }
                 }
                 return Val::Site(site.0, site.1);
@@ -2993,9 +2998,42 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .calls
                 .get(&site)
                 .is_some_and(|kind| kind == "bind" || kind.starts_with("createCell"));
+            // The path of the write below the cell (PL §3.11): the
+            // static keys of the `key` calls the receiver is written
+            // with, and `*` for an append. A key that is not static
+            // leaves the write at the path above it.
+            let mut below: Vec<Seg> = Vec::new();
+            let mut at = unwrap(&member.object);
+            while let Expression::CallExpression(inner) = at {
+                let Some(inner_member) = inner.callee.get_member_expr() else {
+                    break;
+                };
+                if inner_member.static_property_name() != Some("key") {
+                    break;
+                }
+                let keys: Option<Vec<Seg>> = inner
+                    .arguments
+                    .iter()
+                    .map(|argument| match argument.as_expression().map(unwrap) {
+                        Some(Expression::StringLiteral(key)) => Some(Seg::Key(key.value.to_string())),
+                        Some(Expression::NumericLiteral(key)) => Some(Seg::Key(key.value.to_string())),
+                        _ => None,
+                    })
+                    .collect();
+                match keys {
+                    Some(keys) => {
+                        below.splice(0..0, keys);
+                    }
+                    None => below.clear(),
+                }
+                at = unwrap(inner_member.object());
+            }
+            if matches!(name, "push" | "pushAll" | "addUnique") {
+                below.push(Seg::Star);
+            }
             self.store
                 .pending
-                .push((Pending::Created(site), Val::Computed, fixed));
+                .push((Pending::Created(site, below), Val::Computed, fixed));
             return Val::Computed;
         }
         let kinds = self.kinds(&member.object);
@@ -3695,8 +3733,8 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         below,
                     )
                 }
-                Pending::Created(site) => match site_index(site) {
-                    Some(index) => (WriteTarget::Created(index), Vec::new()),
+                Pending::Created(site, below) => match site_index(site) {
+                    Some(index) => (WriteTarget::Created(index), below.clone()),
                     None => continue,
                 },
                 Pending::Argument(site) => match site_index(site) {

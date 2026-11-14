@@ -120,3 +120,32 @@ export const P = pattern<{ count: Cell<number> }>(({ count }) => ({ set: set({ m
     assert_eq!(at("mode"), json!({ "constant": "fast" }));
     assert_eq!(at("limits"), json!({ "constant": { "low": 1, "high": 2 } }));
 }
+
+#[test]
+fn a_write_through_a_created_cell_has_the_path_below_the_cell() {
+    // PL §3.11, `createCell`: "A `WriteEdge` with target `created` ...
+    // The target's `path` is the path of the write below the cell: empty
+    // for a `set` of the whole".
+    let analysis = analysis(
+        "import { Cell, Writable, handler, pattern } from \"commonfabric\";
+const make = handler<{ n: number }, { list: Cell<Cell<{ a: number; tags: string[] }>[]> }>((event, state) => {
+  const made = Writable.of<{ a: number; tags: string[] }>({ a: 0, tags: [] });
+  made.key(\"a\").set(event.n);
+  made.key(\"tags\").push(\"new\");
+  state.list.push(made);
+});
+export const P = pattern<{ list: Cell<Cell<{ a: number; tags: string[] }>[]> }>(({ list }) => ({ make: make({ list }) }));
+",
+    );
+    assert!(ids(&analysis).is_empty(), "{:?}", ids(&analysis));
+    let writes = analysis.modules[0].plans[0].plan["bodies"][0]["writes"].clone();
+    let mut created: Vec<Value> = writes
+        .as_array()
+        .expect("writes")
+        .iter()
+        .filter(|write| write["target"]["kind"] == "created")
+        .map(|write| write["target"]["path"].clone())
+        .collect();
+    created.sort_by_key(|path| path.as_array().map_or(0, Vec::len));
+    assert_eq!(created, [json!([]), json!(["a"]), json!(["tags", "*"])]);
+}
