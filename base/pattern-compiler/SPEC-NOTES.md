@@ -1255,3 +1255,89 @@ numbers have gaps.
     (`product/lobby/main.tsx`, `system/fabrichat/room.tsx`) and the
     four error diagnostics nowhere. The accepted plans have 52 `writer`,
     9 `writerFit` and 2 `writeFloor` records and no input constraint.
+177. **What the stage 3 comparison compares** (PL §3.1; `compare/`). PL names
+    "the label of a written path" on both sides. The two sides do not store the
+    same thing at an output path: today a result path holds a link to a
+    document of the node that computed it, and a node that returns an input
+    copies its value, where a template has the `identity` slot of the input and
+    the plan stores a reference. The comparison therefore takes, for the
+    runtime, what a value read of the output path consumes with every link
+    followed (`cfcLabelViewForResolvedCell`), and for the template the label of
+    §3.2 with each `identity` slot joined with what a value read at the slot's
+    path consumes. The label of §3.2 as written is reported beside it. For an
+    entry that names a collection the runtime's side is what a read of the
+    container's shape consumes. PL does not say which of these the criterion is
+    about.
+178. **Today's label has a declared part that PL §3.1 does not list.** A module
+    joins the labels its argument schema declares onto its result schema
+    (`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` states it), and
+    the document of each `computed`, `ifElse` and `map` result stores that join
+    as an entry of origin `declared` at its root, beside the `derived` entry of
+    the transaction's join. It does not depend on what the run read. Observed:
+    the result of `ifElse` carries the declared labels of both branches and of
+    the condition with either branch selected and has no `derived` entry, where
+    PL §3.5 has "the link consumes the selected branch's label at its own
+    document. **Equal.**"; the template is tighter when the unlabeled branch is
+    selected. `isEdited` over a message without `editedAt` carries the clause
+    of `editedAt` from the declared entry alone. Every template of the
+    comparison is at most as wide as this static join, so a row can read
+    "tighter" where the template equals the `derived` entry. The harness reads
+    label views, which do not keep an entry's origin, and so does not separate
+    the two.
+179. **The container of a `map` result** (PL §3.6: "the container carries
+    membership"). Observed for `items.map(...)` over a list with no label of
+    its own whose elements have a declared clause: the result container's root
+    resolves to that clause on a covering entry and on its `enumerate` and
+    `shape` entries. The template of the container is the source's
+    `enumeration` slot, which has no label. The template is tighter, where PL
+    has **Equal**.
+180. **A conditional written in a `computed`** (PL §3.5). The "Today" paragraph
+    describes `ifElse`, `when` and `unless`. `c ? a : b` in a `computed` is a
+    lift today: its transaction reads the condition and both operands, writes a
+    copy of the selected value, and mints `TransformedBy`. The template is a
+    `select` over the operands' `identity` slots. Its confidentiality is equal
+    with the labeled branch selected and tighter with the other. Its integrity
+    is the selected branch's, which has no `TransformedBy` atom, so by "tighter
+    means ... more integrity atoms" the template is looser on integrity. This
+    is none of the three exceptions of §3.1. The comparison reports it as
+    looser.
+181. **`TransformedBy` beside no label** (PL §3.1, §3.2, §6.4). §3.2 gives a
+    `derive` its atom without a condition. The runtime mints it "when ... the
+    join is not empty" (§3.1; `deriveFlowJoinImpl` mints where the label has a
+    clause or an atom), and the table of §6.4 has "`TransformedBy(commitSend)`
+    when the join is not empty" for a template. The evaluator follows §3.2,
+    with an option for the other reading. A `derive` over inputs with no label
+    is then tighter on integrity than today's unlabeled result.
+182. **Input witnesses** (PL §3.2). A derivation over the result of a derivation
+    stores two atoms today: `TransformedBy` with the identity, and one with the
+    identity and an `inputWitness` (`mintTransformedBy` in
+    `runtime/runner/src/cfc/input-witness.ts`). §3.2 has one atom per `derive`
+    and names no witness. Compared atom by atom the template would be looser.
+    The evaluator leaves witness-bearing atoms out of the relation and counts
+    them.
+183. **`.length` in expression code.** For
+    `computed(() => items.length)` the crate emits the output as the
+    `identity` slot at `items/length`. PL
+    §3.8 has the collection's membership for `.length`, an `enumeration` slot
+    at `items`. This is a gap of the crate. The comparison row is looser by an
+    artifact of it: the dereferenced read at `items/length` matches the `*` of
+    the elements' declared entries.
+184. **A slot at an absent path** (PL §2.2, §6.4). The runtime stores a declared
+    entry where a value is written, so a `shape` slot at an optional field that
+    is absent resolves to no label, by the definition of §2.2. `C(m5)` of §6.4
+    is then empty for a message that was not edited, and the template of
+    `isEdited` has no clause, though its value says that the field is absent.
+    Today's `derived` entry for the same run has the clauses of the fields that
+    are present.
+185. **Selectors and picks.** §3.2 takes `sel(i)` from the value code, and the
+    crate emits none. The fixtures state the branch each selector takes with
+    their argument. Where none is stated the evaluator joins every branch and
+    marks the label as a bound.
+186. **`T_edited`** (PL §6.2) is compared on
+    `compare/fixtures/is-edited.tsx`, which holds the source of `isEdited`
+    over a message with a label per field. The crate emits the same template
+    for it as for `patterns/system/fabrichat/message-row.tsx`. In the row
+    `isEdited` is an interim value with no output path, and the plan holds
+    nothing that names the document today's runtime stores it in. Observed as
+    §6.5 has it: today the whole record, and the template the presence of
+    `editedAt` with the kind of `body`.

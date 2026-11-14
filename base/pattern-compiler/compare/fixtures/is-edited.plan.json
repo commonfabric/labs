@@ -1,0 +1,266 @@
+[
+  {
+    "module": "compare/fixtures/is-edited.tsx",
+    "patterns": [
+      {
+        "line": 17,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/is-edited.tsx",
+                "start": 603
+              },
+              "bodies": [],
+              "entry": "isEdited",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "isEdited"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "by": {
+                      "expression": true
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      }
+                    ],
+                    "op": "derive"
+                  },
+                  {
+                    "by": {
+                      "expression": true
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                ],
+                "condition": {
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 0
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 1
+                    }
+                  ],
+                  "op": "derive"
+                },
+                "op": "select",
+                "selector": 0
+              }
+            }
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "shape",
+              "path": [
+                "message"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "declared": {
+                "confidentiality": [
+                  "edited"
+                ]
+              },
+              "observes": "shape",
+              "path": [
+                "message",
+                "editedAt"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "declared": {
+                "confidentiality": [
+                  "body"
+                ]
+              },
+              "observes": "shape",
+              "path": [
+                "message",
+                "body"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "message": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "properties": {
+                    "body": {
+                      "ifc": {
+                        "confidentiality": [
+                          "body"
+                        ]
+                      },
+                      "type": "string"
+                    },
+                    "editedAt": {
+                      "ifc": {
+                        "confidentiality": [
+                          "edited"
+                        ]
+                      },
+                      "type": "number"
+                    },
+                    "sentAt": {
+                      "ifc": {
+                        "confidentiality": [
+                          "sent"
+                        ]
+                      },
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "body",
+                    "sentAt"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "body": {
+                  "ifc": {
+                    "confidentiality": [
+                      "body"
+                    ]
+                  },
+                  "type": "string"
+                },
+                "editedAt": {
+                  "ifc": {
+                    "confidentiality": [
+                      "edited"
+                    ]
+                  },
+                  "type": "number"
+                },
+                "sentAt": {
+                  "ifc": {
+                    "confidentiality": [
+                      "sent"
+                    ]
+                  },
+                  "type": "number"
+                }
+              },
+              "required": [
+                "body",
+                "sentAt"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "ifc": {
+                "confidentiality": [
+                  "edited"
+                ]
+              },
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "ifc": {
+                "confidentiality": [
+                  "body"
+                ]
+              },
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

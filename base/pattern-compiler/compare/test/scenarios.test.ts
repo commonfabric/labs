@@ -1,13 +1,13 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { compareSmall } from "../small.ts";
+import { compareIsEdited, compareSmall } from "../scenarios.ts";
 
 // The comparison of stage 3
 // (`docs/specs/compiled-pattern-language/README.md`, "Staging") for one
 // fixture: each output's template, evaluated on the labels the run stored
 // for its slots, against the label the run stored for the output. Notes 177
-// to 183 of `SPEC-NOTES.md` explain each row that is not `equal`.
+// to 186 of `SPEC-NOTES.md` explain each row that is not `equal`.
 
 const verdicts = async (flag: boolean) =>
   Object.fromEntries(
@@ -71,5 +71,32 @@ describe("the small fixture's templates against the runtime's labels", () => {
     );
 
     expect(echo?.comparison.runtimeInputWitnesses).toBe(1);
+  });
+});
+
+describe("the template of a message row's isEdited against the runtime's label", () => {
+  const isEdited = async (edited: boolean) => {
+    const [row] = await compareIsEdited(edited);
+    return {
+      runtime: [...new Set(row.runtime.confidentiality)].sort(),
+      template: [...row.reached.label.confidentiality].sort(),
+      overall: row.comparison.overall,
+    };
+  };
+
+  it("leaves out the field the value does not depend on when the message was edited", async () => {
+    expect(await isEdited(true)).toEqual({
+      runtime: ["body", "edited", "sent"],
+      template: ["body", "edited"],
+      overall: "tighter",
+    });
+  });
+
+  it("has no clause when the message was not edited, since no label is stored for an absent field", async () => {
+    expect(await isEdited(false)).toEqual({
+      runtime: ["body", "edited", "sent"],
+      template: [],
+      overall: "tighter",
+    });
   });
 });
