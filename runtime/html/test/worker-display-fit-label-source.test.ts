@@ -9,6 +9,8 @@ import { describe, it } from "@std/testing/bdd";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { readProjected, Runtime } from "@commonfabric/runner";
+import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc";
+import { vnodeSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { readRefusal } from "../src/worker/display-fit.ts";
@@ -62,5 +64,34 @@ describe("worker-display-fit-label-source", () => {
       confidentiality: [cfcAtom.user(space)],
       integrity: [],
     });
+  });
+
+  it("names the labels unreadable for a read whose schema cannot be walked for its labels", async () => {
+    // A schema carrying its own `$defs`, nested under another, refers to its
+    // definitions from a root that does not hold them, so no label can be
+    // read out of it, and nothing it declares refused the read.
+    await using shelf = runtimeOf();
+    const cell = shelf.runtime.getCell(space, "unwalkable-schema").asSchema({
+      type: "object",
+      properties: { view: vnodeSchema },
+    });
+    const read = readProjected(cell, (value) => value);
+
+    expect(readRefusal(cell, [read.consumed], PUBLIC_ONLY, {})).toEqual(
+      expect.objectContaining({ labelSource: "unreadable" }),
+    );
+  });
+
+  it("names the schema for a read whose schema declares the read-failure marker, as a runtime secret's does", async () => {
+    await using shelf = runtimeOf();
+    const cell = shelf.runtime.getCell(space, "secret-schema").asSchema({
+      type: "string",
+      ifc: { confidentiality: [CFC_LABEL_READ_FAILED_ATOM] },
+    });
+    const read = readProjected(cell, (value) => value);
+
+    expect(readRefusal(cell, [read.consumed], PUBLIC_ONLY, {})).toEqual(
+      expect.objectContaining({ labelSource: "schema" }),
+    );
   });
 });

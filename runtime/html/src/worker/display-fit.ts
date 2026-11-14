@@ -148,8 +148,8 @@ export function readRefusal(
     [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
   );
   if (confidentiality.length === 0) {
-    const declared = confidentialityLabelsFromCellSchema(cell);
-    return declared.every((atom) => atomRenderableUnderPolicy(atom, policy))
+    const declared = schemaLabelsOf(cell);
+    return schemaAdmits(declared, policy)
       ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
       : schemaRefusal(declared, integrity);
   }
@@ -186,17 +186,33 @@ export function readRefusal(
     };
 }
 
+/** The information-flow atoms a cell's schema declares, as read from it. */
+type SchemaLabels = {
+  readonly atoms: readonly unknown[];
+
+  /** Whether the schema could not be walked for its labels at all. */
+  readonly readFailed: boolean;
+};
+
+/** Whether `policy` admits what `declared` says the cell's schema declares. */
+function schemaAdmits(declared: SchemaLabels, policy: RenderPolicy): boolean {
+  return !declared.readFailed &&
+    declared.atoms.every((atom) => atomRenderableUnderPolicy(atom, policy));
+}
+
 /**
- * The refusal of a read by `declared`, the information-flow atoms its cell's
- * schema declares.
+ * The refusal of a read by its cell's schema, `declared`, which names the
+ * labels unreadable where the schema could not be walked for them, and the
+ * schema otherwise, even where what it declares is the read-failure marker,
+ * as a runtime secret's schema does.
  */
 function schemaRefusal(
-  declared: readonly unknown[],
+  declared: SchemaLabels,
   integrity: readonly CfcAtom[],
 ): RenderLabelSummary {
-  return {
+  return declared.readFailed ? { ...UNREADABLE_LABELS, integrity } : {
     labelSource: "schema",
-    confidentiality: declared as readonly CfcConfClause[],
+    confidentiality: declared.atoms as readonly CfcConfClause[],
     integrity,
   };
 }
@@ -302,12 +318,10 @@ export function cellLabelRefusal(
     return UNREADABLE_LABELS;
   }
   if (labelSources.every((source) => source.view === undefined)) {
-    const confidentiality = confidentialityLabelsFromCellSchema(cell);
-    return confidentiality.every((atom) =>
-        atomRenderableUnderPolicy(atom, policy)
-      )
+    const declared = schemaLabelsOf(cell);
+    return schemaAdmits(declared, policy)
       ? undefined
-      : schemaRefusal(confidentiality, []);
+      : schemaRefusal(declared, []);
   }
   // A stored label is fitted on the integrity at its root. A label view
   // carries no origin, folds an ancestor's entry in beside a narrower cell's
@@ -420,17 +434,32 @@ export function confidentialityLabels(
 export function confidentialityLabelsFromCellSchema(
   cell: Cell<unknown>,
 ): readonly unknown[] {
+  const declared = schemaLabelsOf(cell);
+  return declared.readFailed ? [CFC_LABEL_READ_FAILED_ATOM] : declared.atoms;
+}
+
+/**
+ * The information-flow atoms `cell`'s schema declares, and whether the schema
+ * could not be walked for them.
+ */
+function schemaLabelsOf(cell: Cell<unknown>): SchemaLabels {
   const schema = (cell as { schema?: JSONSchema }).schema;
   if (schema === undefined) {
-    return [];
+    return { atoms: [], readFailed: false };
   }
   const joined = new Set<unknown>();
   try {
     ContextualFlowControl.joinSchema(joined, schema);
   } catch {
-    return [CFC_LABEL_READ_FAILED_ATOM];
+    // TODO(danfuzz): A subschema carrying its own `$id` and `$defs`, nested in
+    // another, lands here, since `joinSchema` resolves its `$ref` against the
+    // outer root; its labels should be read against its own root instead.
+    return { atoms: [], readFailed: true };
   }
-  return ContextualFlowControl.uniqueAtoms(joined);
+  return {
+    atoms: ContextualFlowControl.uniqueAtoms(joined),
+    readFailed: false,
+  };
 }
 
 /**

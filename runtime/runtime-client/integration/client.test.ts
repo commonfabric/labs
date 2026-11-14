@@ -830,13 +830,18 @@ describe("RuntimeClient", () => {
       const retrieved = await rt.getPiece(piece.id(), session.space, true);
       assertExists(retrieved);
 
+      // `vnodeSchema`'s definitions are hoisted to the root it is read under,
+      // as the shell's own reads of a view do, so that its references
+      // resolve.
+      const { $ref: vnodeRef, $defs: vnodeDefs } = vnodeSchema;
       const cell = VIEW_SCOPED_REQUESTED
         ? retrieved.cell().asSchema({
           type: "object",
           properties: {
             $NAME: { type: "string" },
-            $UI: vnodeSchema,
+            $UI: { $ref: vnodeRef },
           },
+          $defs: vnodeDefs,
         })
         : retrieved.cell();
       await cell.sync();

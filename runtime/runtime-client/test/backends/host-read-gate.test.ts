@@ -20,6 +20,7 @@ import {
   nameSchema,
   rendererVDOMSchema,
   stringSchema,
+  vnodeSchema,
 } from "@commonfabric/runner/schemas";
 import {
   CFC_LABEL_READ_FAILED_ATOM,
@@ -886,6 +887,30 @@ describe("HostReadGate", () => {
       expect(gate.read(value)).toEqual(refusal);
       expect(gate.readMetadata(unknown, "internal")).toEqual(refusal);
       expect(await gate.fields(unknown)).toEqual(refusal);
+      const { updates, cancel } = subscribe(gate, value);
+      cancel();
+      expect(updates).toEqual([expect.objectContaining(refusal)]);
+    });
+
+    it("names the labels unreadable for a read under a schema nesting one that carries its own definitions", async () => {
+      // TODO(danfuzz): This read should be decided on the labels its schema
+      // declares, which are none, so that the owner is shown the value. It is
+      // refused because `ContextualFlowControl.joinSchema` resolves the nested
+      // schema's `$ref` against the outer root rather than its own `$id`, and
+      // cannot walk it. Expect `{ value: ... }` once it does.
+      await using docs = await shelf();
+      const view = await docs.write("nested-definitions", {
+        view: { type: "vnode", name: "h1", props: {}, children: [] },
+      });
+
+      expect(
+        gateFor(docs.runtime, owner).read(view.asSchema({
+          type: "object",
+          properties: { view: vnodeSchema },
+        })),
+      ).toEqual({
+        refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
+      });
     });
 
     it("names a consumed label for a value stored under the read-failure marker, as a runtime secret is", async () => {

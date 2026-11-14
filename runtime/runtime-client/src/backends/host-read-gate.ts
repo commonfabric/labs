@@ -358,7 +358,9 @@ export class HostReadGate {
    *
    * A stream holds no value: its sink delivers the events sent to it, which
    * no read consumed, so an event is decided on the labels of the stream's
-   * own document.
+   * own document. A subscription whose first read reaches a document whose
+   * stored labels this build cannot interpret delivers the refusal of a read
+   * whose labels could not be read, and nothing after it.
    */
   subscribe(
     cell: Cell<unknown>,
@@ -473,14 +475,22 @@ export class HostReadGate {
       addCancel,
       reeval: decide,
     };
-    addCancel(sinkProjected(cell, (value) => {
-      inspect(value);
-      return hostValueOf(value);
-    }, (value, read, cfcLabel) => {
-      last = { value, cfcLabel };
-      consumed = read;
-      decide();
-    }, { includeCfcLabel }));
+    try {
+      addCancel(sinkProjected(cell, (value) => {
+        inspect(value);
+        return hostValueOf(value);
+      }, (value, read, cfcLabel) => {
+        last = { value, cfcLabel };
+        consumed = read;
+        decide();
+      }, { includeCfcLabel }));
+    } catch (error) {
+      // The sink's first read reached a document whose stored labels this
+      // build cannot interpret, and failed closed before it subscribed to
+      // anything, so the refusal is the subscription's one delivery.
+      if (!(error instanceof StoredCfcMetadataError)) throw error;
+      deliver(refusedUpdate(UNREADABLE_LABELS));
+    }
     return cancel;
   }
 
