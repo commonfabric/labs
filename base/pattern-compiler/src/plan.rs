@@ -2287,12 +2287,15 @@ impl<'a> Emitter<'_, '_, 'a> {
     ) -> Vec<Value> {
         // The annotated node, the key and the list, and what is listed.
         type Listed = (Vec<usize>, Vec<usize>, Vec<(usize, Vec<String>)>);
-        let mut guards: Vec<((String, Vec<String>), &'static str, Value, Listed)> = Vec::new();
+        type Guard = ((String, Vec<String>), &'static str, Value, Listed);
+        // A formal input's root, and the type at each path on the way.
+        type Way = (String, Vec<(Vec<String>, TypeId)>);
+        let mut guards: Vec<Guard> = Vec::new();
         // The way to a position of a formal input: under the type the
         // body declares for the input where the emitter has it, and
         // otherwise under the type of the slot root the input is bound
         // to.
-        let way = |input: &str, path: &[Seg]| -> Option<(String, Vec<(Vec<String>, TypeId)>)> {
+        let way = |input: &str, path: &[Seg]| -> Option<Way> {
             if let Some(ty) = self.formal_types.get(input) {
                 return Some((
                     input.to_string(),
@@ -6762,7 +6765,8 @@ pub fn emit_module<'a>(
     let starts = body_functions(resolver, module, &bodies[module]);
     // For each plan, the start of its pattern's function and the patterns
     // it compiles in as a tag.
-    let mut tags: Vec<(u32, Vec<(usize, u32, u32)>)> = Vec::new();
+    type Tags = (u32, Vec<(usize, u32, u32)>);
+    let mut tags: Vec<Tags> = Vec::new();
     for (index, body) in bodies[module].iter().enumerate() {
         // A pattern compiled into another has no plan of its own.
         if body.kind != BodyKind::Pattern || body.parent.is_some() {

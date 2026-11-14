@@ -165,9 +165,7 @@ fn witness(atom: &Value) -> Value {
 /// where, for every pattern, one atom satisfies it in every one of the
 /// labels." The first pattern no one atom satisfies in all of them.
 pub fn coherent_failure(labels: &[Vec<Value>], patterns: &[Value]) -> Option<Value> {
-    let Some((first, rest)) = labels.split_first() else {
-        return None;
-    };
+    let (first, rest) = labels.split_first()?;
     patterns
         .iter()
         .find(|pattern| {

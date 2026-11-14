@@ -2360,7 +2360,7 @@ export const Lit = pattern<{ base: Base; extra: string[]; more: string[]; label:
 );
 "#;
 
-fn kept<'p>(plan: &'p Value, path: Value) -> &'p Value {
+fn kept(plan: &Value, path: Value) -> &Value {
     plan["outputs"]
         .as_array()
         .expect("outputs")
