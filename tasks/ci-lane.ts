@@ -1702,12 +1702,14 @@ export interface Missed {
  * excusal rather than the run, unless what the pass registered shows the
  * tree holds no such test. A manifest is hours old by construction, and it
  * holds every identity the default branch was still recording in a file the
- * tree held then, so it names tests renamed since. No run of this tree can
- * record one of those, and its missing record says nothing about whether an
- * invocation stopped, so it is set apart as absent and an excusal stands
- * beside it. Where the pass's registrations say nothing about a unit, as for
- * a suite whose processes leave no name map or a process that stopped before
- * leaving one, the identity stays unaccounted for.
+ * tree held then, so it can name tests the tree under test does not hold,
+ * such as one renamed since. Only that tree's registrations show which those
+ * are. No run of the tree can record an identity they show absent, and its
+ * missing record says nothing about whether an invocation stopped, so it is
+ * set apart as absent and an excusal stands beside it. Where the pass's
+ * registrations say nothing about a unit, as for a suite whose processes
+ * leave no name map or a process that stopped before leaving one, the
+ * identity stays unaccounted for.
  */
 export function accountFor(
   batch: Batch,
