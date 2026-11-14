@@ -66,7 +66,8 @@ next.
   `cfc-flow:*` diagnostics are built. The five that are errors report
   nothing in the corpus. `cfc-flow:ui-contract` reports twice, in the
   lobby and in FabriChat, each for a sub-pattern whose trusted surface
-  is in the pattern that embeds it. A write-floor or writer-fit
+  is in the pattern that embeds it; by the document's rule for a
+  pattern written as a tag, the lobby's is not a report. A write-floor or writer-fit
   constraint on a write a body makes through a handle is never
   decided, because the template holds the handle's `identity` slot,
   which has no declared label. Not built: hashes of code and schemas,
@@ -736,12 +737,18 @@ as an assumption.
     compiler cannot evaluate, so it decides these two for expression
     code and for bodies that read values alone. *Assumed:* that stands,
     and the runtime check covers the rest.
-114. **A UI contract whose surface is in the embedding pattern.**
-    `plan-and-label-templates.md` ends the chain of enclosing elements
-    at the pattern's own root, so a sub-pattern that binds a trusted
-    action and leaves the surface to its parent is reported. *Assumed:*
-    reported, as a warning. The alternative suppresses the report for a
-    pattern that is compiled into another.
+114. **A UI contract whose surface is in the embedding pattern** (PL
+    question 61). The chain of enclosing elements continues through a
+    pattern written as a tag below the surface, and ends where a
+    pattern is called and its tree is placed through a computed value.
+    The second case occurs once, in FabriChat's thread composer.
+    *Assumed:* it is reported, as a warning. The alternative suppresses
+    the report for a pattern that is compiled into another.
+115. **What is hashed** (PL questions 62 and 63). *Assumed:* every hash
+    is the tagged value hash the runtime uses, with no tag for the kind
+    of record; only a recursive type gets a `$defs` entry, named by its
+    declared name; code is hashed as its source for a cone and as the
+    module and binding for a body.
 
 ## Open, and not needing the owner
 
