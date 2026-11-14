@@ -857,9 +857,13 @@ Six rules hold for an invocation.
   `plan-and-label-templates.md` §2.5, "A default belongs to the place").
   A path that resolves to a slot of the instance without a stored link,
   as a path of a binding of the reactive tier does, takes the default of
-  that slot's schema in the same way. Where there is no default, the slot
-  reads as `undefined` if its schema admits that, and the cone fails
-  otherwise (`plan-and-label-templates.md` §5.2).
+  that slot's schema in the same way. A read of a default carries no
+  integrity: the runtime gives the slot, or the defaulted part of a
+  stored object, the empty integrity when it instantiates the label, and
+  the confidentiality the read consumed (`plan-and-label-templates.md`
+  §2.5). Where there is no default, the slot reads as `undefined` if its
+  schema admits that, and the cone fails otherwise
+  (`plan-and-label-templates.md` §5.2).
 - **Other cones' outputs are pulled.** A cone asks for an upstream output
   when its code reaches the use, so an output used only in the unselected
   branch of a conditional is not evaluated. This is how demand stops at a
@@ -4281,7 +4285,8 @@ existence label fixed at first creation (5.4); the scheduler is switched
 per space, so a space is migrated as a whole and holds no instances of
 both kinds (9); a default belongs to the stored place, and a reader
 bound by reference reads it through the schema the link holds (2.2, 4.4,
-4.7). The ruling on the keep set
+4.7); a read of a default carries no integrity (2.2). The ruling on the
+keep set
 answers what was question 1 of this list, the size of a result document.
 
 ### 11.1 For the project owner

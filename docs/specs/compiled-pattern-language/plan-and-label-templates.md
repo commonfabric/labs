@@ -1620,6 +1620,8 @@ the slot is **bound**.
   what a journaled read through the same links consumes today, so the
   definition of section 2.2 already covers it, and §8.2.4
   (`08-02-pass-through-via-references.md`) requires it of a dereference.
+  One case differs: a slot that reads as a default has the empty
+  integrity ("A default belongs to the place", below).
 - **`identity` stops at its last segment.** The chain of an `identity` slot
   holds the links crossed before the last segment, and the slot observes
   the reference stored there. Every other class resolves through a link at
@@ -1728,23 +1730,45 @@ reader, a reader whose own schema declares no default included.
   `binding` slots have the schema its own state type declares. The
   default reaches a read at run time, from the link or from the slot the
   path resolves to. No record changes.
-- **The label.** A default read through a link has the label of the slot,
-  by the rules above and no further rule: the confidentiality is the join
-  of the `followRef` entries at each address of the chain with what the
-  slot's class consumes at the bound address, where the read found
-  nothing stored, and the integrity is that of the observation at the
-  bound address. This is the case of section 5.2 in which a slot reads as
-  the default its schema declares, and the label is the label of that
-  slot there too. The link that holds the default is on the chain, so the
-  label of which link the reader holds, and with it of which default, is
-  joined. The default is a constant of the source of the pattern that
-  declares the place. It does not enter the reader's templates as a
-  `const`, because the reader's plan does not hold it: it is what the
-  slot read. *Assumed:* the integrity is not changed for such a read. The
-  value comes from the schema a link holds and not from the bound
-  address, and a pointer contributes no integrity, so the alternative
-  gives a default read through a link the empty integrity (section 8,
-  question 41).
+- **The confidentiality.** A default read through a link has the
+  confidentiality of the slot, by the rules above and no further rule:
+  the join of the `followRef` entries at each address of the chain with
+  what the slot's class consumes at the bound address, where the read
+  found nothing stored. This is the case of section 5.2 in which a slot
+  reads as the default its schema declares, and the confidentiality is
+  that of the slot there too. The link that holds the default is on the
+  chain, so the label of which link the reader holds, and with it of
+  which default, is joined. The default is a constant of the source of
+  the pattern that declares the place. It does not enter the reader's
+  templates as a `const`, because the reader's plan does not hold it: it
+  is what the slot read.
+- **The integrity.** By ruling, a read of a default carries no integrity.
+  The rule holds for a default of each of the three origins: the place's
+  declaration, the schema of a link of the chain, and the slot's own
+  schema (section 5.2).
+  - Where nothing is stored at the bound address, the slot has the empty
+    integrity.
+  - Where an object is stored at the bound address and one of its
+    properties is absent and filled by a default, the defaulted part has
+    the empty integrity and not the claims of the stored object. A slot
+    bound at a property that is stored keeps the integrity of the
+    observation there.
+  - *Assumed* (section 8, question 43): a slot that reads the object
+    whole takes the meet over the parts it read, so its integrity is
+    empty where a part was filled by a default.
+
+  The value of a default is not stored at the bound address, and no
+  principal wrote it there. It comes from a schema, and a pointer
+  contributes no integrity. An empty integrity under-claims, which is
+  the fail-safe direction (§8.9 of `08-09-runtime-label-propagation.md`).
+  The specification has no rule for a default that is read and not
+  stored, and needs this one. Its §8.15 (`08-15-write-authority.md`)
+  separates initialization from attribution and mints no principal claim
+  for a default, and its §3.7.2 (`03-core-concepts.md`) gives a link no
+  integrity that was not minted for it; neither says what integrity a
+  reader finds where a schema supplied the value. A rule that requires
+  integrity of a value therefore refuses a default, and a place that has
+  to satisfy such a rule holds a stored value.
 - **A write.** A write through a handle to such a place stores a value at
   the place, under the label of the writing edge. Every reader then reads
   that value, and the default is no longer read.
@@ -1764,7 +1788,10 @@ through `defaultForAbsentValue`), and the read of the path found empty is
 registered in the transaction, so the default carries the join that the
 read contributes. A binding a pattern makes is written as a link with the
 schema of the path it names (`unwrapOneLevelAndBindToDoc` in
-`runtime/runner/src/pattern-binding.ts`). **Equal.**
+`runtime/runner/src/pattern-binding.ts`). The value and the
+confidentiality are **equal**. The integrity is **tighter**: today the
+read has the integrity of the observation at the bound address, and by
+the rule above it has none.
 
 **A handle to a position that holds nothing.** An `identity` slot at a
 position of handle type yields a handle whether or not anything is stored
@@ -4868,8 +4895,11 @@ normally.
   on mismatched data yields `undefined` exactly when the type allows
   `undefined` there, and an error state otherwise. `language-subset.md`
   (§13) relies on this for its strict `null` checks. Either outcome was
-  decided by observing the stored value at that path, and its label is the
-  label of that slot, which the output's template already contains.
+  decided by observing the stored value at that path, and its
+  confidentiality is that of the slot, which the output's template already
+  contains. Where the slot reads as a default, the read has the empty
+  integrity, as every read of a default has (section 2.5, "A default
+  belongs to the place").
 - **The label of an error state** is the label the output would have had: the
   output's template, instantiated with the selections taken up to the failure.
   A failed body contributes its whole footprint: the `reads` slots, the
@@ -5764,7 +5794,8 @@ to an instance that is not loaded through a stream index (2.6); a read of a cell
 whose writer is in an instance that is not loaded returns the stored value where
 the basis rows show it current, and loads the instance only where they show it
 stale (5.4); a default belongs to the stored place, and a reader bound by
-reference reads it through the schema the link holds (2.5).
+reference reads it through the schema the link holds (2.5); a read of a
+default carries no integrity (2.5, 5.2).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -6167,17 +6198,11 @@ this document made.
     runtime attests (section 3.16), and the `rev` counts the writes made
     through the handle. `execution-and-storage.md` §6.8 stores the
     document on this assumption.
-41. **The integrity of a default read through a link.** By ruling, a
-    reader bound by reference reads the default of the place's
-    declaration where nothing is stored (section 2.5). The rules for a
-    slot whose path crosses a link give the read the integrity of the
-    observation at the bound address. *Assumed:* that stands, which is
-    what the runtime computes today. The value read is not stored at the
-    bound address: it comes from the schema that a link of the chain
-    holds, and a pointer contributes no integrity. The alternative gives
-    such a read the empty integrity, which under-claims and is the
-    fail-safe direction. The same holds for a default a slot's own schema
-    declares (section 5.2).
+41. **The integrity of a default.** Not open: ruled, and section 2.5
+    states it. A read of a default carries the empty integrity, whether
+    the default is that of the place's declaration, of a link's schema,
+    or of the slot's own schema. The entry keeps its number because
+    other documents cite the entries around it by number.
 42. **A write through a handle to an output of the instance** (from
     `language-subset.md` §13, question 28). A handler bound in the
     reactive tier, a `lift` result, or a pattern compiled into the
@@ -6193,3 +6218,13 @@ this document made.
     replaced by the node's next run. The prototype has to count the
     arguments that name a computed value where a writable handle is
     declared.
+43. **The integrity of a slot that reads an object with a defaulted
+    part.** By ruling, the defaulted part of a stored object has the
+    empty integrity and not the claims of the object (section 2.5). The
+    ruling does not say what a `value` slot bound at the object has,
+    which reads the stored properties and the defaulted one together.
+    *Assumed:* the meet over the parts read, which is empty. The
+    alternative keeps a label per path below the slot, so that a
+    template that projects a stored property of the slot keeps that
+    property's claims; `footprint-analysis.md` would then have to
+    record such a projection as a slot of its own.
