@@ -57,6 +57,7 @@ import type {
 import { profileKeyOf } from "../private-inbox/private-inbox.tsx";
 import { isSharedSpaceCatalog } from "../shared-space/shared-space-catalog.ts";
 import {
+  attachRequests,
   isInMain,
   isSingleEmoji,
   type ShownIn,
@@ -1642,8 +1643,8 @@ export const prepareAttach = handler<unknown, PrepareAttachState>(
  * store has answered, whose file was sent, taken out or refused since. Moves
  * the composer's files taken out on, as `settleTakenOut()` does.
  *
- * @throws If the space has no store, or the files would make more
- *   attachments than the room's policy allows.
+ * @throws If the space has no store, or the files this run adds would make
+ *   more attachments than the room's policy allows.
  */
 export const commitAttach = handler<UploadEvent, AttachState>(
   (event, { composer, store, hasStore }) => {
@@ -1655,21 +1656,20 @@ export const commitAttach = handler<UploadEvent, AttachState>(
       throw new Error(NOWHERE_FOR_FILES);
     }
     const attaching = composer.get()?.attaching ?? [];
-    const max = FABRICHAT_POLICY.maxAttachments;
-    if (attaching.length + files.length > max) {
-      throw new Error(`A message can have at most ${max} attachments.`);
-    }
-    const key = eventKey();
     const takenOut = composer.get()?.takenOut ?? [];
     const requests = target.key("requests");
     const held = new Set(
       [...attaching, ...takenOut].map((file) => file.requestId),
     );
-    const added = files.flatMap((file, index) => {
-      const requestId = `attach-${key}-${index}`;
-      if (held.has(requestId) || requests.key(requestId).get() !== undefined) {
-        return [];
-      }
+    const adding = attachRequests(
+      eventKey(),
+      files,
+      (requestId) =>
+        held.has(requestId) || requests.key(requestId).get() !== undefined,
+      attaching.length,
+      FABRICHAT_POLICY.maxAttachments,
+    );
+    const added = adding.map(({ requestId, file }) => {
       target.key("add").send({
         requestId,
         name: file.name,
@@ -1678,7 +1678,7 @@ export const commitAttach = handler<UploadEvent, AttachState>(
         size: file.size,
         onConflict: "rename",
       });
-      return [{ requestId, name: file.name }];
+      return { requestId, name: file.name };
     });
     composer.key("attaching").set([...attaching, ...added]);
     if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
