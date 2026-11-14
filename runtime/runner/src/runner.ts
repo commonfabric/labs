@@ -14808,7 +14808,8 @@ export class Runner {
       `${resultDocLink.space}/${resultDocLink.id}` as `${MemorySpace}/${URI}`;
     const previousResultPatternKey = this.#resultPatternCache.get(cacheDocKey)
       ?.get(effectiveOutputScopeKey);
-    const patternUnchanged = previousResultPatternKey === resultPatternKey;
+    const patternUnchanged = previousResultPatternKey === resultPatternKey &&
+      this.isRunning(resultCell);
 
     if (!patternUnchanged) {
       this.#memoizeResultPattern(
