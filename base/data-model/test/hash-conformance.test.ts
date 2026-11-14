@@ -13,12 +13,11 @@ import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 
 import type { FabricValue } from "@/interface.ts";
 import { UnknownValue } from "@/codec-common";
+import { JSON_FORMAT } from "@/codec-json/interface.ts";
+import { codecClassesFor } from "@/codecs.ts";
 import { valueEqual } from "@/comparison";
-import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
-import {
-  FabricKeyPair,
-  fabricPrimitiveClassesByName,
-} from "@/fabric-primitives";
+import { FabricLink } from "@/fabric-instances";
+import { FabricKeyPair } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   fabricValueOfTextWithModsForTestingOnly,
@@ -46,13 +45,6 @@ const FIXTURE_URL = new URL(
  * until hashing one stops being refused.
  */
 const STUB_CODEC_CLASSES = ["FabricMap", "FabricSet"] as const;
-
-/**
- * The classes that bind no codec, and so have no text.
- *
- * TODO(danfuzz): Remove, with its use below, once `FabricRegExp` is deleted.
- */
-const NO_CODEC_CLASSES = ["FabricRegExp"] as const;
 
 /** One entry of the fixture, as `hash-conformance.md` defines it. */
 type FixtureEntry = TextWithMods & {
@@ -231,15 +223,9 @@ describe("hash-conformance", () => {
 
   it("has a case whose value is an instance of each concrete class but those with stub codecs or none", () => {
     const values = HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY.map((c) => c.make());
-    const classes = {
-      ...fabricPrimitiveClassesByName(),
-      ...fabricInstanceClassesByName(),
-    };
-    const uncovered: readonly string[] = [
-      ...STUB_CODEC_CLASSES,
-      ...NO_CODEC_CLASSES,
-    ];
-    for (const [name, cls] of Object.entries(classes)) {
+    const uncovered: readonly string[] = STUB_CODEC_CLASSES;
+    for (const cls of codecClassesFor(JSON_FORMAT)) {
+      const { name } = cls;
       expect({ name, covered: values.some((v) => v instanceof cls) })
         .toEqual({ name, covered: !uncovered.includes(name) });
     }

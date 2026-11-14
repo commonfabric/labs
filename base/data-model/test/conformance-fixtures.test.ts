@@ -760,7 +760,6 @@ describe("conformance-fixtures", () => {
       const texts = [
         `fvj1:{"${long}":1}`,
         `fvj1:{"/Error@1":{"message":"${long}","name":null,"type":"Error"}}`,
-        `fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"${long}"}}`,
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toEqual({

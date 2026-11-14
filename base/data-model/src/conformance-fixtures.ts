@@ -20,6 +20,7 @@ import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
+import type { CODEC, JSON_CODEC } from "@/codec-interface/interface.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
 import { JSON_FORMAT } from "@/codec-json/interface.ts";
 import { deepFreeze } from "@/deep-freeze.ts";
@@ -137,6 +138,21 @@ export type FixtureRequirements =
   & { readonly flavors?: readonly string[] }
   & { readonly [Measure in SizeMeasure]?: number };
 
+/**
+ * The names in `ClassesByName` of the classes that bind a JSON codec, which
+ * are the classes whose values have text. A class binds one under `[CODEC]`
+ * or under the JSON format's own symbol, as `codecClassesFor()` reads it.
+ *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, key the class tables on
+ * `keyof ClassesByName`, and remove this.
+ */
+export type JsonCodecClassName<ClassesByName> = {
+  readonly [Name in keyof ClassesByName]: ClassesByName[Name] extends
+    | { readonly [CODEC]: unknown }
+    | { readonly [JSON_CODEC]: unknown } ? Name
+    : never;
+}[keyof ClassesByName];
+
 /** Makers of examples of each class in one of the class tables. */
 export type ExampleMakers<ClassesByName> = {
   readonly [Name in keyof ClassesByName]: readonly (() => FabricValue)[];
@@ -161,14 +177,6 @@ export type ClassCase = {
 // Cases
 //
 
-/**
- * Why the classes that bind no codec have no cases.
- *
- * TODO(danfuzz): Remove, with the `excluded` entries naming it, once
- * `FabricRegExp` is deleted.
- */
-export const NO_CODEC_EXCLUSION = "It binds no codec.";
-
 /** Why the classes whose codecs are stubs have no cases. */
 export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
   "`FabricInstance` support (1-fabric-values.md sections 1.4.3 and 1.4.4).";
@@ -178,7 +186,7 @@ export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
  * place among that class's makers.
  */
 export function classCasesOf<Name extends string>(
-  makers: { readonly [N in Name]: readonly (() => FabricValue)[] },
+  makers: { readonly [N in NoInfer<Name>]: readonly (() => FabricValue)[] },
   notes: { readonly [N in Name]: ClassCaseNotes },
 ): ClassCase[] {
   const cases: ClassCase[] = [];

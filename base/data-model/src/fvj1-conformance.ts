@@ -50,7 +50,7 @@ import {
   type FixtureJson,
   type FixtureRequirements,
   fixtureTextOf,
-  NO_CODEC_EXCLUSION,
+  type JsonCodecClassName,
   plainJsonTextOf,
   probedPathsOf,
   probesOf,
@@ -160,7 +160,6 @@ const SECTION_TYPES = "3-json-encoding.md section 3";
 const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
 const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
 const SECTION_LINK = "3-json-encoding.md section 3, `Link@1`";
-const SECTION_REGEXP = "3-json-encoding.md section 3, `RegExp@1`";
 const SECTION_UNAVAILABLE = "3-json-encoding.md section 3, `Unavailable@1`";
 const SECTION_HASH_TAG = "1-fabric-values.md section 1.4.9";
 
@@ -622,6 +621,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: 'fvj1:[{"/Abc123@1234":null}]',
   },
   {
+    name: 'unknown tag "RegExp@1"',
+    section: SECTION_UNKNOWN,
+    text: 'fvj1:{"/RegExp@1":{"flags":"g","flavor":"es2025","source":"a"}}',
+  },
+  {
     name: "unknown tag with prefixes",
     section: SECTION_TAG_SYNTAX,
     text: 'fvj1:{"/sys.beep.Boop@1":{"x":1}}',
@@ -1052,11 +1056,6 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
   },
   {
-    name: "regular expression, its type disabled for codecs",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"g","flavor":"es2025","source":"a"}}',
-  },
-  {
     name: "tag with no version",
     section: SECTION_TAG_SYNTAX,
     text: 'fvj1:{"/EpochNsec":"AA"}',
@@ -1070,7 +1069,8 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
-  readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
+  readonly [Name in JsonCodecClassName<FabricPrimitiveClassesByName>]:
+    ClassCaseNotes;
 } = {
   FabricBytes: { section: "3-json-encoding.md section 3, `Bytes@1`" },
   FabricDurationDay: {
@@ -1087,7 +1087,6 @@ const PRIMITIVE_CLASS_NOTES: {
   },
   FabricHash: { section: "3-json-encoding.md section 3, `Hash@1`" },
   FabricKeyPair: { section: "3-json-encoding.md section 3, `KeyPair@1`" },
-  FabricRegExp: { excluded: NO_CODEC_EXCLUSION },
   FabricUnavailable: {
     section: "3-json-encoding.md section 3, `Unavailable@1`",
   },
