@@ -308,9 +308,28 @@ export function inviteCodeVerifier(link: InviteLink): string {
 }
 
 /**
- * Builds a join link whose secret is carried only in its fragment:
- * `/join?host&space&invite[&inviter]#code`. The optional `inviter` is an
- * unverified claim; see {@link InviteLink}.
+ * The custom URL scheme of the invitation link format, shared by every Weaver
+ * from any maker as `mailto:` is shared by mail clients, so a browser can hand
+ * an invitation to whichever Weaver its owner chose without anyone keeping a
+ * list of Weavers. The scheme has two actions, each named by the URL's host:
+ *
+ * - `fbrc://join?host&space&invite[&inviter]#code=…` is an invitation, with
+ *   the query and fragment of the canonical `https` link (see
+ *   {@link buildInviteLink}). On Android the code arrives instead as the
+ *   intent's `S.code` extra, and the URL has no fragment; pass it to
+ *   {@link parseInviteLink} as `options.code`.
+ * - `fbrc://setup?n=<nonce>` is a Weaver's setup reply: the page a Weaver opens
+ *   while making itself the browser's default for the scheme answers on it,
+ *   and the Weaver accepts only a nonce it issued. It is never an invitation,
+ *   and {@link parseInviteLink} returns undefined for it.
+ */
+export const INVITE_LINK_SCHEME = "fbrc";
+
+/**
+ * Builds the canonical join link, `/join?host&space&invite[&inviter]#code`, on
+ * the `shell` origin, with the secret carried only in its fragment. The
+ * optional `inviter` is an unverified claim; see {@link InviteLink}.
+ * {@link parseInviteLink} documents the other forms of the same invitation.
  */
 export function buildInviteLink(shell: string, invite: InviteLink): URL {
   inviteCodeVerifier(invite);
@@ -329,12 +348,34 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
 }
 
 /**
- * Parses a join link; unrelated routes return undefined, malformed joins throw
- * secret-free errors. A returned `inviter` is the link's unverified claim; see
- * {@link InviteLink}.
+ * Parses an invitation link in any of its forms, each carrying the same query
+ * (`host`, `space`, `invite`, and optionally `inviter`) and nothing else:
+ *
+ * - `https://<origin>/join?…#code=…`, the canonical link
+ *   {@link buildInviteLink} makes, on any secure origin or loopback HTTP;
+ * - `https://<origin>/open?…#code=…`, the same link from a person who asked to
+ *   open it in Weaver rather than on the web;
+ * - `fbrc://join?…#code=…`, the {@link INVITE_LINK_SCHEME} form, in which
+ *   `join` is the URL's host and its path is empty;
+ * - `fbrc://join?…` with no fragment, given `options.code`, as Android
+ *   delivers the scheme form: the code travels as the intent's `S.code` extra,
+ *   because Android's `intent:` URL keeps its own fields in the fragment.
+ *
+ * Every form yields the same result, so the result does not say which form it
+ * came from, and it reports no origin of the link itself: `host` is always the
+ * service named in the query, which the code verifier binds, never the link's
+ * origin or the scheme form's `join`.
+ *
+ * Other `https` paths and other {@link INVITE_LINK_SCHEME} actions, the setup
+ * reply among them, return undefined. A malformed invitation throws a
+ * secret-free {@link SpaceInviteError}: `invalid-link` for its shape, including
+ * a code given both in the fragment and in `options.code`, or in
+ * `options.code` beside any form but `fbrc://join`. A returned `inviter` is the
+ * link's unverified claim; see {@link InviteLink}.
  */
 export function parseInviteLink(
   link: string | URL,
+  options: { code?: string } = {},
 ): (InviteLink & { space: DIDKey; inviter?: DIDKey }) | undefined {
   let url: URL;
   try {
@@ -342,15 +383,24 @@ export function parseInviteLink(
   } catch {
     throw new SpaceInviteError("invalid-link");
   }
-  if (url.pathname !== "/join") return undefined;
-  normalizeInviteHost(url.origin);
+  if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
+    if (url.hostname !== "join") return undefined;
+    if (url.port || url.pathname !== "") {
+      throw new SpaceInviteError("invalid-link");
+    }
+  } else {
+    if (url.pathname !== "/join" && url.pathname !== "/open") return undefined;
+    normalizeInviteHost(url.origin);
+    if (options.code !== undefined) throw new SpaceInviteError("invalid-link");
+  }
   const fragment = new URLSearchParams(url.hash.slice(1));
+  const fragmentKeys = [...fragment.keys()].join(",");
   if (
-    url.username || url.password || url.pathname !== "/join" ||
+    url.username || url.password ||
     !["host,invite,space", "host,invite,inviter,space"].includes(
       [...url.searchParams.keys()].sort().join(","),
     ) ||
-    [...fragment.keys()].join(",") !== "code"
+    fragmentKeys !== (options.code === undefined ? "code" : "")
   ) throw new SpaceInviteError("invalid-link");
   const space = url.searchParams.get("space");
   if (!isInviteDIDKey(space)) throw new SpaceInviteError("invalid-link");
@@ -362,7 +412,7 @@ export function parseInviteLink(
     host: normalizeInviteHost(url.searchParams.get("host")!),
     space,
     inviteId: url.searchParams.get("invite")!,
-    code: fragment.get("code")!,
+    code: options.code ?? fragment.get("code")!,
     ...(inviter === null ? {} : { inviter }),
   };
   inviteCodeVerifier(invite);

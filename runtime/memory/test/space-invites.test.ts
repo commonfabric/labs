@@ -4,6 +4,7 @@ import { stub } from "@std/testing/mock";
 import {
   buildInviteLink,
   createInviteCredentials,
+  INVITE_LINK_SCHEME,
   inviteCodeVerifier,
   isInviteId,
   isInviteSecret,
@@ -12,6 +13,20 @@ import {
 } from "../space-invites.ts";
 
 const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
+const inviter = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/**
+ * Returns the message of what `parse` throws, so a test can check both the
+ * refusal code and that nothing else, such as the code, is in it.
+ */
+function refusal(parse: () => unknown): string {
+  try {
+    parse();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error("expected a refusal");
+}
 
 describe("space-invites", () => {
   it("accepts canonical loopback HTTP origins across the loopback address range", () => {
@@ -117,7 +132,6 @@ describe("space-invites", () => {
     ).toThrow("invalid-link");
   });
   it("round trips an optional inviter DID in the query, outside the code verifier", () => {
-    const inviter = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const invite = {
       host: "https://example.com",
       space,
@@ -275,5 +289,106 @@ describe("space-invites", () => {
         code: "A".repeat(42) + "B",
       })
     ).toThrow("invalid-request");
+  });
+  describe("parseInviteLink() forms", () => {
+    const invite = {
+      host: "https://service.example",
+      space,
+      ...createInviteCredentials(),
+    };
+    const link = buildInviteLink("https://links.example", invite);
+    const query = link.search;
+    const scheme = `${INVITE_LINK_SCHEME}://join${query}`;
+
+    it("names the scheme `fbrc`", () => {
+      expect(INVITE_LINK_SCHEME).toBe("fbrc");
+    });
+    it("returns the same invitation for the `/join`, `/open`, and `fbrc://join` forms", () => {
+      const withInviter = buildInviteLink("https://links.example", {
+        ...invite,
+        inviter,
+      });
+      for (
+        const [built, expected] of [[link, invite], [withInviter, {
+          ...invite,
+          inviter,
+        }]] as const
+      ) {
+        expect(parseInviteLink(built)).toEqual(expected);
+        expect(parseInviteLink(built.href.replace("/join?", "/open?")))
+          .toEqual(expected);
+        expect(
+          parseInviteLink(
+            `${INVITE_LINK_SCHEME}://join${built.search}${built.hash}`,
+          ),
+        ).toEqual(expected);
+      }
+    });
+    it("returns the service named in the query as `host`, never the link's own origin", () => {
+      const parsed = parseInviteLink(`${scheme}${link.hash}`)!;
+      expect(parsed.host).toBe("https://service.example");
+      expect(inviteCodeVerifier(parsed)).toBe(inviteCodeVerifier(invite));
+    });
+    it("returns the invitation for a fragmentless `fbrc://join` link given the code apart from it", () => {
+      expect(parseInviteLink(scheme, { code: invite.code })).toEqual(invite);
+      expect(parseInviteLink(`${scheme}#`, { code: invite.code })).toEqual(
+        invite,
+      );
+    });
+    it("returns `undefined` for the setup reply and every other action or path", () => {
+      for (
+        const other of [
+          `${INVITE_LINK_SCHEME}://setup?n=abc123`,
+          // The setup action is never an invitation, whatever it carries.
+          `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}://other${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}:join${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}:///join${query}${link.hash}`,
+          `https://links.example/setup${query}${link.hash}`,
+          `https://links.example/join/${query}${link.hash}`,
+        ]
+      ) {
+        expect(parseInviteLink(other)).toBeUndefined();
+        expect(parseInviteLink(other, { code: invite.code })).toBeUndefined();
+      }
+    });
+    it("throws `invalid-link`, without the code, for a malformed scheme-form or separated-code invitation", () => {
+      const cases: [string, { code?: string }][] = [
+        // No code anywhere.
+        [scheme, {}],
+        [`${scheme}#`, {}],
+        // A code both in the fragment and apart from it.
+        [`${scheme}${link.hash}`, { code: invite.code }],
+        // A fragment other than the code beside a separate code.
+        [`${scheme}#inviter=${inviter}`, { code: invite.code }],
+        // A separate code is defined only for the scheme form.
+        [link.href.replace(link.hash, ""), { code: invite.code }],
+        [link.href.replace(link.hash, "").replace("/join?", "/open?"), {
+          code: invite.code,
+        }],
+        // Anything but the bare `join` host.
+        [`${INVITE_LINK_SCHEME}://join/${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://join/x${query}`, { code: invite.code }],
+        [`${INVITE_LINK_SCHEME}://join:5${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://someone@join${query}${link.hash}`, {}],
+        // Unknown, missing, or misplaced keys.
+        [`${scheme}&note=hello${link.hash}`, {}],
+        [`${scheme}&code=${invite.code}`, {}],
+        [`${scheme}&code=${invite.code}`, { code: invite.code }],
+        [`${scheme.replace(/&invite=[^&]*/, "")}${link.hash}`, {}],
+        [`${scheme}${link.hash}&access=OWNER`, {}],
+      ];
+      for (const [malformed, options] of cases) {
+        expect(refusal(() => parseInviteLink(malformed, options))).toBe(
+          "invalid-link",
+        );
+      }
+    });
+    it("throws `invalid-request` for a separate code that is not an invitation secret", () => {
+      expect(refusal(() => parseInviteLink(scheme, { code: "short" }))).toBe(
+        "invalid-request",
+      );
+    });
   });
 });
