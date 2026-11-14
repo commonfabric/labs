@@ -4719,7 +4719,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         "maxConfidentiality" => "maxConfidentiality",
                         _ => continue,
                     };
-                    let Some(list) = crate::schema::label_term(&annotation.argument) else {
+                    let Some(list) = crate::schema::label_list(annotation) else {
                         continue;
                     };
                     match inputs
@@ -4763,21 +4763,29 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let mut fit = false;
                 for annotation in nodes.iter().flatten().flatten() {
                     match annotation.key {
-                        "writeAuthorizedBy" => {
-                            let binding = annotation
-                                .argument
-                                .trim()
-                                .trim_start_matches("typeof")
-                                .trim()
-                                .to_string();
-                            listed.push(index_of(json!({
-                                "kind": "writer",
-                                "anyOf": [{ "body": binding }],
-                            })));
+                        "writeAuthorizedBy" | "writePolicyAnyOf" => {
+                            // The alternatives: one policy, or the
+                            // members of `WritePolicyAnyOf`. A policy the
+                            // checker did not resolve gives no record.
+                            let policies = match (&annotation.value, annotation.key) {
+                                (Some(Value::Array(policies)), "writePolicyAnyOf") => {
+                                    policies.clone()
+                                }
+                                (Some(policy), "writeAuthorizedBy") => vec![policy.clone()],
+                                _ => continue,
+                            };
                             // "`Body.code` of the writing body is one the
                             // policy names": the handler, or the function,
-                            // the binding denotes.
-                            let named = matches!(kind, "handler" | "function") && name == binding;
+                            // a binding denotes, by the record of its
+                            // module and its name (PL §1.5).
+                            let named = matches!(kind, "handler" | "function")
+                                && policies.iter().any(|policy| {
+                                    policy["body"]["binding"] == json!(name)
+                                        && body["at"]["file"]
+                                            .as_str()
+                                            .is_none_or(|file| policy["body"]["module"] == file)
+                                });
+                            listed.push(index_of(json!({ "kind": "writer", "anyOf": policies })));
                             if !named {
                                 let site = self.body_facts.get(number).and_then(|fact| {
                                     let slot = target["slot"].as_u64()? as usize;
@@ -4789,9 +4797,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                                         .map(|(_, start)| start)
                                 });
                                 let at = site.unwrap_or(0);
+                                let writers: Vec<String> = policies
+                                    .iter()
+                                    .filter_map(|policy| policy["body"]["binding"].as_str())
+                                    .map(|binding| format!("`{binding}`"))
+                                    .collect();
                                 let found = format!(
-                                    "The path `{}` may be written by `{binding}` alone, and this write is in the {kind} `{name}`",
-                                    below.join("/")
+                                    "The path `{}` may be written by {} alone, and this write is in the {kind} `{name}`",
+                                    below.join("/"),
+                                    writers.join(" or ")
                                 );
                                 if !flows.iter().any(|(_, other, _)| *other == at) {
                                     flows.push(("cfc-flow:write-policy", at, found));
@@ -4800,8 +4814,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         "confidentiality" => fit = true,
                         "requiredIntegrity" => {
-                            if let Some(patterns) = crate::schema::label_term(&annotation.argument)
-                            {
+                            if let Some(patterns) = crate::schema::label_list(annotation) {
                                 listed.push(index_of(
                                     json!({ "kind": "writeFloor", "patterns": patterns }),
                                 ));

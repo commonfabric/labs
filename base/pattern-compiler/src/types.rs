@@ -176,6 +176,11 @@ pub struct Annotation {
     pub key: &'static str,
     /// The source text of the alias's argument.
     pub argument: String,
+    /// The argument as data, in the canonical form of §8.5, where the
+    /// checker evaluates it: a label list with each alias, constant
+    /// reference and marker type replaced, and for a writer policy the
+    /// binding it names and its UI contract.
+    pub value: Option<serde_json::Value>,
 }
 
 /// A diagnostic a type rule reports, before it is given a position.
@@ -193,6 +198,10 @@ pub struct TypeReport {
 pub struct TypeStore {
     shapes: Vec<Shape>,
     annotations: HashMap<TypeId, Vec<Annotation>>,
+    /// The label arguments of the aliases being resolved, innermost
+    /// last: for each type parameter of the alias, the value of the
+    /// argument written for it, where it is a term of §8.5.
+    label_env: Vec<Vec<(String, Option<serde_json::Value>)>>,
     /// The resolved declarations without type arguments, by module and
     /// symbol. `None` marks one that is being resolved.
     declarations: HashMap<(usize, SymbolId), Option<TypeId>>,
@@ -291,7 +300,11 @@ impl<'a> Resolver<'_, 'a> {
     fn annotate(&self, ty: TypeId, key: &'static str, argument: String) -> TypeId {
         let shape = self.shape(ty);
         let mut annotations = self.types.borrow().annotations(ty).to_vec();
-        annotations.push(Annotation { key, argument });
+        annotations.push(Annotation {
+            key,
+            argument,
+            value: None,
+        });
         let annotated = self.add(shape);
         let mut types = self.types.borrow_mut();
         types.annotations.insert(annotated, annotations);
@@ -943,7 +956,38 @@ impl<'a> Resolver<'_, 'a> {
             return self.api_type(module, reference, &api.name, env, depth);
         }
         let arguments = self.arguments(module, reference, env, depth);
-        self.named(module, symbol, arguments, depth)
+        // A label argument that is a type parameter of an alias is the
+        // term written for it where the alias is used (§8.5).
+        let labels = match self.label_term(module, reference) {
+            LabelTerm::Body(_, _, parameters) => {
+                let outer = self.label_scope();
+                let bound = parameters
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, parameter)| {
+                        let value = reference
+                            .type_arguments
+                            .as_ref()
+                            .and_then(|arguments| arguments.params.get(index))
+                            .and_then(|argument| self.label_value(module, argument, &outer, 0));
+                        (parameter, value)
+                    })
+                    .collect();
+                self.types.borrow_mut().label_env.push(bound);
+                true
+            }
+            _ => false,
+        };
+        let named = self.named(module, symbol, arguments, depth);
+        if labels {
+            self.types.borrow_mut().label_env.pop();
+        }
+        named
+    }
+
+    /// The label arguments of the alias being resolved.
+    fn label_scope(&self) -> Vec<(String, Option<serde_json::Value>)> {
+        self.types.borrow().label_env.last().cloned().unwrap_or_default()
     }
 
     /// The type a declaration of module `module` denotes with `arguments`
@@ -1228,7 +1272,122 @@ impl<'a> Resolver<'_, 'a> {
                 if let Some(list) = written(next + 2) {
                     self.label_list(module, list, reference.span);
                 }
-                self.annotate(first(), "label", name.to_string())
+                if name == "TrustedActionUiContract" {
+                    let text = |index: usize| {
+                        written(index)
+                            .and_then(|term| self.label_value(module, term, &[], 0))
+                            .filter(serde_json::Value::is_string)
+                    };
+                    let contract = text(1).zip(text(2)).map(|(action, pattern)| {
+                        let mut contract = serde_json::json!({
+                            "helper": "UiAction",
+                            "action": action,
+                            "trustedPattern": pattern,
+                        });
+                        if let Some(integrity) =
+                            written(3).and_then(|list| self.label_value(module, list, &[], 0))
+                        {
+                            contract["requiredEventIntegrity"] = integrity;
+                        }
+                        contract
+                    });
+                    let annotated = self.annotate(first(), "uiContract", name.to_string());
+                    return self.valued(annotated, contract);
+                }
+                // "`writeAuthorizedBy` and `uiContract`, as the contract
+                // defines" (§8.1): one writer policy.
+                let policy = self.policy_of_alias(module, reference, name, 0);
+                let annotated = self.annotate(first(), "writeAuthorizedBy", argument_text(1));
+                self.valued(annotated, policy)
+            }
+            "WritePolicyAnyOf" => {
+                // "The members of `WritePolicyAnyOf<T, [P, ...]>` are not
+                // a label list. The tuple is written in place ... and
+                // each member is a writer policy written directly or
+                // through an alias" (§8.5).
+                let policies = written(1).and_then(|list| {
+                    let mut list = list;
+                    while let TSType::TSTypeOperatorType(operator) = list {
+                        list = &operator.type_annotation;
+                    }
+                    let TSType::TSTupleType(tuple) = list else {
+                        return None;
+                    };
+                    tuple
+                        .element_types
+                        .iter()
+                        .map(|member| match member {
+                            TSTupleElement::TSRestType(_)
+                            | TSTupleElement::TSOptionalType(_)
+                            | TSTupleElement::TSNamedTupleMember(_) => None,
+                            other => self.policy_value(module, other.to_ts_type(), 0),
+                        })
+                        .collect::<Option<Vec<serde_json::Value>>>()
+                        .map(serde_json::Value::Array)
+                });
+                let annotated = self.annotate(first(), "writePolicyAnyOf", argument_text(1));
+                self.valued(annotated, policies)
+            }
+            "Cfc" => {
+                // "Each key of the record `M`" (§8.1). The label keys
+                // are read as lists, and the other keys keep their text.
+                let mut annotated = first();
+                let mut record = written(1);
+                for _ in 0..8 {
+                    match record {
+                        Some(TSType::TSTypeReference(alias)) => {
+                            match self.label_term(module, alias) {
+                                LabelTerm::Body(_, body, _) => record = Some(body),
+                                _ => break,
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(TSType::TSTypeLiteral(literal)) = record {
+                    for member in &literal.members {
+                        let TSSignature::TSPropertySignature(property) = member else {
+                            continue;
+                        };
+                        let key = match static_key_name(&property.key) {
+                            Some("confidentiality") => "confidentiality",
+                            Some("integrity") => "integrity",
+                            Some("addIntegrity") => "addIntegrity",
+                            Some("requiredIntegrity") => "requiredIntegrity",
+                            Some("maxConfidentiality") => "maxConfidentiality",
+                            _ => continue,
+                        };
+                        let Some(term) = &property.type_annotation else {
+                            continue;
+                        };
+                        let value = self
+                            .label_value(module, &term.type_annotation, &[], 0)
+                            .filter(serde_json::Value::is_array);
+                        annotated = self.annotate(
+                            annotated,
+                            key,
+                            self.text(module, term.type_annotation.span()),
+                        );
+                        annotated = self.valued(annotated, value);
+                    }
+                }
+                self.annotate(annotated, "label", name.to_string())
+            }
+            "RepresentsCurrentUser" | "AuthoredByCurrentUser" => {
+                // "`addIntegrity` with the corresponding atom over the
+                // current principal" (§8.1).
+                let kind = if name == "RepresentsCurrentUser" {
+                    "represents-principal"
+                } else {
+                    "authored-by"
+                };
+                let annotated = self.annotate(first(), "addIntegrity", name.to_string());
+                self.valued(
+                    annotated,
+                    Some(serde_json::json!([
+                        { "kind": kind, "subject": { "__ctCurrentPrincipal": true } }
+                    ])),
+                )
             }
             "Confidential" | "Integrity" | "AddIntegrity" | "RequiresIntegrity"
             | "MaxConfidentiality" => {
@@ -1242,24 +1401,411 @@ impl<'a> Resolver<'_, 'a> {
                     "RequiresIntegrity" => "requiredIntegrity",
                     _ => "maxConfidentiality",
                 };
-                self.annotate_once(module, reference.span, first(), key, argument_text(1))
+                // The list as data: as written, with each alias and
+                // constant reference replaced, or, for a type parameter
+                // of an alias, as the type the argument resolved to.
+                let scope = self.label_scope();
+                let value = written(1)
+                    .and_then(|list| self.label_value(module, list, &scope, 0))
+                    .or_else(|| arguments.get(1).and_then(|list| self.label_value_of_type(*list, 0)))
+                    .filter(serde_json::Value::is_array);
+                let annotated =
+                    self.annotate_once(module, reference.span, first(), key, argument_text(1));
+                self.valued(annotated, value)
             }
             "WriteAuthorizedBy" => {
                 if let Some(binding) = written(1) {
                     self.writer_binding(module, binding, reference.span);
                 }
-                self.annotate_once(
+                let policy = self.policy_of_alias(module, reference, name, 0);
+                let annotated = self.annotate_once(
                     module,
                     reference.span,
                     first(),
                     "writeAuthorizedBy",
                     argument_text(1),
-                )
+                );
+                self.valued(annotated, policy)
             }
             _ if api::is_transparent_wrapper(name) => {
                 self.annotate(first(), "label", name.to_string())
             }
             _ => self.add(Shape::Opaque(name.to_string())),
+        }
+    }
+
+    /// The value of a label argument that reached the alias as a type:
+    /// a tuple of literal types, of object types of them, and of `null`.
+    fn label_value_of_type(&self, ty: TypeId, depth: u32) -> Option<serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        if depth > 12 {
+            return None;
+        }
+        match self.shape(ty) {
+            Shape::Tuple(elements) => elements
+                .iter()
+                .map(|element| self.label_value_of_type(*element, depth + 1))
+                .collect::<Option<Vec<Value>>>()
+                .map(Value::Array),
+            Shape::Literal(text) => crate::schema::label_term(&text),
+            Shape::Null => Some(Value::Null),
+            Shape::Object(properties, None) => {
+                if properties.len() == 1 && properties[0].name == "__ctCurrentPrincipal" {
+                    return Some(json!({ "__ctCurrentPrincipal": true }));
+                }
+                let mut members = Map::new();
+                for property in properties {
+                    members.insert(
+                        property.name.clone(),
+                        self.label_value_of_type(property.ty, depth + 1)?,
+                    );
+                }
+                Some(Value::Object(members))
+            }
+            _ => None,
+        }
+    }
+
+    /// Gives the annotation last added at the root of `ty` its value.
+    fn valued(&self, ty: TypeId, value: Option<serde_json::Value>) -> TypeId {
+        if let Some(annotation) = self
+            .types
+            .borrow_mut()
+            .annotations
+            .get_mut(&ty)
+            .and_then(|annotations| annotations.last_mut())
+        {
+            annotation.value = value;
+        }
+        ty
+    }
+
+    /// The value of a term of the label-argument language (§8.5): a list
+    /// is an array and an atom is the value it denotes. A reference to
+    /// an alias is replaced by the alias's body with the type arguments
+    /// substituted, `typeof NAME` by the value of the constant's static
+    /// initializer, `AnyOf<list>` by `{ anyOf: list }`, and
+    /// `CurrentPrincipal` by its marker. `None` where the term is outside
+    /// the language or the program does not hold what it names.
+    pub(crate) fn label_value(
+        &self,
+        module: usize,
+        term: &TSType<'a>,
+        env: &[(String, Option<serde_json::Value>)],
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        if depth > 12 {
+            return None;
+        }
+        match term {
+            TSType::TSParenthesizedType(inner) => {
+                self.label_value(module, &inner.type_annotation, env, depth + 1)
+            }
+            TSType::TSTypeOperatorType(operator)
+                if operator.operator == TSTypeOperatorOperator::Readonly =>
+            {
+                self.label_value(module, &operator.type_annotation, env, depth + 1)
+            }
+            TSType::TSTupleType(tuple) => {
+                let mut members = Vec::new();
+                for element in &tuple.element_types {
+                    match element {
+                        TSTupleElement::TSRestType(rest) => {
+                            match self.label_value(module, &rest.type_annotation, env, depth + 1)? {
+                                Value::Array(spread) => members.extend(spread),
+                                _ => return None,
+                            }
+                        }
+                        TSTupleElement::TSOptionalType(_)
+                        | TSTupleElement::TSNamedTupleMember(_) => return None,
+                        other => members.push(self.label_value(
+                            module,
+                            other.to_ts_type(),
+                            env,
+                            depth + 1,
+                        )?),
+                    }
+                }
+                Some(Value::Array(members))
+            }
+            TSType::TSLiteralType(literal) => match &literal.literal {
+                TSLiteral::StringLiteral(text) => Some(json!(text.value.as_str())),
+                TSLiteral::NumericLiteral(number) => Some(number_value(number.value)),
+                TSLiteral::BooleanLiteral(boolean) => Some(json!(boolean.value)),
+                _ => None,
+            },
+            TSType::TSNullKeyword(_) => Some(Value::Null),
+            TSType::TSTypeLiteral(literal) => {
+                let mut members = Map::new();
+                for member in &literal.members {
+                    let TSSignature::TSPropertySignature(property) = member else {
+                        return None;
+                    };
+                    let name = static_key_name(&property.key)?;
+                    let annotation = property.type_annotation.as_ref()?;
+                    members.insert(
+                        name.to_string(),
+                        self.label_value(module, &annotation.type_annotation, env, depth + 1)?,
+                    );
+                }
+                Some(Value::Object(members))
+            }
+            // A constant reference: the value of the static initializer.
+            TSType::TSTypeQuery(query) => match &query.expr_name {
+                TSTypeQueryExprName::IdentifierReference(name) => {
+                    self.constant_value_of(module, name, depth + 1)
+                }
+                TSTypeQueryExprName::QualifiedName(qualified) => match &qualified.left {
+                    TSTypeName::IdentifierReference(name) => self
+                        .constant_value_of(module, name, depth + 1)?
+                        .get(qualified.right.name.as_str())
+                        .cloned(),
+                    _ => None,
+                },
+                _ => None,
+            },
+            TSType::TSTypeReference(reference) => {
+                let written = |index: usize| {
+                    reference
+                        .type_arguments
+                        .as_ref()
+                        .and_then(|arguments| arguments.params.get(index))
+                };
+                match self.label_term(module, reference) {
+                    LabelTerm::Body(home, body, parameters) => {
+                        // The type arguments, substituted by value.
+                        let bound: Vec<(String, Option<Value>)> = parameters
+                            .iter()
+                            .enumerate()
+                            .map(|(index, name)| {
+                                let value = written(index).and_then(|argument| {
+                                    self.label_value(module, argument, env, depth + 1)
+                                });
+                                (name.clone(), value)
+                            })
+                            .collect();
+                        self.label_value(home, body, &bound, depth + 1)
+                    }
+                    LabelTerm::Api(name) => match name.as_str() {
+                        "AnyOf" => {
+                            let list = self.label_value(module, written(0)?, env, depth + 1)?;
+                            Some(json!({ "anyOf": list }))
+                        }
+                        "CurrentPrincipal" => Some(json!({ "__ctCurrentPrincipal": true })),
+                        "PolicyOf" => {
+                            let TSType::TSTypeQuery(query) = written(0)? else {
+                                return None;
+                            };
+                            let TSTypeQueryExprName::IdentifierReference(rules) = &query.expr_name
+                            else {
+                                return None;
+                            };
+                            Some(json!({ "policyOf": self.binding_value(module, rules)? }))
+                        }
+                        _ => None,
+                    },
+                    LabelTerm::Undecided => {
+                        let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+                            return None;
+                        };
+                        env.iter()
+                            .find(|(parameter, _)| parameter == name.name.as_str())
+                            .and_then(|(_, value)| value.clone())
+                    }
+                    LabelTerm::Other => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The value of a module-scope constant with a static initializer
+    /// (§8.8), as a constant reference `typeof NAME` stands for it.
+    fn constant_value_of(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        let (home, init) = self.constant_initializer(module, name)?;
+        self.constant_value(home, init?, depth)
+    }
+
+    fn constant_value(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        if depth > 12 {
+            return None;
+        }
+        match unwrap(expression) {
+            Expression::StringLiteral(text) => Some(json!(text.value.as_str())),
+            Expression::NumericLiteral(number) => Some(number_value(number.value)),
+            Expression::BooleanLiteral(boolean) => Some(json!(boolean.value)),
+            Expression::NullLiteral(_) => Some(Value::Null),
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+                .quasis
+                .first()
+                .and_then(|quasi| quasi.value.cooked.as_ref())
+                .map(|text| json!(text.as_str())),
+            Expression::UnaryExpression(unary)
+                if unary.operator == oxc_syntax::operator::UnaryOperator::UnaryNegation =>
+            {
+                match unwrap(&unary.argument) {
+                    Expression::NumericLiteral(number) => Some(number_value(-number.value)),
+                    _ => None,
+                }
+            }
+            Expression::ArrayExpression(array) => array
+                .elements
+                .iter()
+                .map(|element| self.constant_value(module, element.as_expression()?, depth + 1))
+                .collect::<Option<Vec<Value>>>()
+                .map(Value::Array),
+            Expression::ObjectExpression(object) => {
+                let mut members = Map::new();
+                for property in &object.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return None;
+                    };
+                    if property.computed || property.method {
+                        return None;
+                    }
+                    members.insert(
+                        static_key_name(&property.key)?.to_string(),
+                        self.constant_value(module, &property.value, depth + 1)?,
+                    );
+                }
+                Some(Value::Object(members))
+            }
+            Expression::Identifier(name) => self.constant_value_of(module, name, depth + 1),
+            _ => None,
+        }
+    }
+
+    /// The declaration a binding reference `typeof name` denotes (§8.5),
+    /// through imports and re-exports: the module that declares it and
+    /// the name it is declared under, which is the record PL §1.5 forms
+    /// `Body.code` from.
+    fn binding_value(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+    ) -> Option<serde_json::Value> {
+        let parsed = self.parsed(module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+        let model = self.model(module)?;
+        let (home, def) = match model.binding(symbol)? {
+            Binding::Def(def) => (module, def),
+            Binding::Import(import, binding) => {
+                let import = &model.imports[import];
+                let def =
+                    self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                (def.module, def.def)
+            }
+        };
+        let declared = &self.model(home)?.defs[def];
+        Some(serde_json::json!({
+            "module": self.parsed(home)?.path,
+            "binding": declared.name,
+        }))
+    }
+
+    /// A writer policy (§8.5; PL §4.4, `WriterPolicy`): the binding a
+    /// `WriteAuthorizedBy` names, and for a trusted-action alias the UI
+    /// contract beside it, written directly or through an alias.
+    pub(crate) fn policy_value(
+        &self,
+        module: usize,
+        policy: &TSType<'a>,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        if depth > 12 {
+            return None;
+        }
+        let TSType::TSTypeReference(reference) = policy else {
+            return match policy {
+                TSType::TSParenthesizedType(inner) => {
+                    self.policy_value(module, &inner.type_annotation, depth + 1)
+                }
+                _ => None,
+            };
+        };
+        match self.label_term(module, reference) {
+            LabelTerm::Body(home, body, _) => self.policy_value(home, body, depth + 1),
+            LabelTerm::Api(name) => self.policy_of_alias(module, reference, &name, depth),
+            _ => None,
+        }
+    }
+
+    /// The policy one of the writer aliases states by its own arguments.
+    fn policy_of_alias(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        name: &str,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        use serde_json::{json, Value};
+        let written = |index: usize| {
+            reference
+                .type_arguments
+                .as_ref()
+                .and_then(|arguments| arguments.params.get(index))
+        };
+        let writer = |index: usize| -> Option<Value> {
+            let mut binding = written(index)?;
+            let mut home = module;
+            for _ in 0..8 {
+                match binding {
+                    TSType::TSTypeQuery(query) => {
+                        let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name
+                        else {
+                            return None;
+                        };
+                        return self.binding_value(home, name);
+                    }
+                    TSType::TSTypeReference(alias) => match self.label_term(home, alias) {
+                        LabelTerm::Body(next, body, _) => {
+                            home = next;
+                            binding = body;
+                        }
+                        _ => return None,
+                    },
+                    _ => return None,
+                }
+            }
+            None
+        };
+        let text = |index: usize| -> Option<Value> {
+            self.label_value(module, written(index)?, &[], depth + 1)
+                .filter(Value::is_string)
+        };
+        match name {
+            "WriteAuthorizedBy" => Some(json!({ "body": writer(1)? })),
+            "TrustedActionWrite" | "TrustedActionWriteWithIntegrity" => {
+                let (action, pattern) = (text(2)?, text(3)?);
+                let integrity = match (name, written(4)) {
+                    ("TrustedActionWriteWithIntegrity", Some(list)) => {
+                        self.label_value(module, list, &[], depth + 1)?
+                    }
+                    _ => json!([pattern]),
+                };
+                Some(json!({
+                    "body": writer(1)?,
+                    "uiContract": {
+                        "helper": "UiAction",
+                        "action": action,
+                        "trustedPattern": pattern,
+                        "requiredEventIntegrity": integrity,
+                    },
+                }))
+            }
+            _ => None,
         }
     }
 
@@ -1525,7 +2071,16 @@ impl<'a> Resolver<'_, 'a> {
         };
         let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
         match parsed.semantic.nodes().kind(declaration) {
-            AstKind::TSTypeAliasDeclaration(alias) => LabelTerm::Body(home, &alias.type_annotation),
+            AstKind::TSTypeAliasDeclaration(alias) => LabelTerm::Body(
+                home,
+                &alias.type_annotation,
+                alias
+                    .type_parameters
+                    .iter()
+                    .flat_map(|parameters| &parameters.params)
+                    .map(|parameter| parameter.name.name.to_string())
+                    .collect(),
+            ),
             // A type parameter stands for a term that is written where the
             // alias is used, and is decided there.
             AstKind::TSTypeParameter(_) => LabelTerm::Undecided,
@@ -1575,7 +2130,7 @@ impl<'a> Resolver<'_, 'a> {
                 }
             }
             TSType::TSTypeReference(reference) => match self.label_term(module, reference) {
-                LabelTerm::Body(home, body) => self.label_list_at(home, body, alias, depth + 1),
+                LabelTerm::Body(home, body, _) => self.label_list_at(home, body, alias, depth + 1),
                 LabelTerm::Undecided => {}
                 LabelTerm::Api(_) | LabelTerm::Other => self.report(
                     module,
@@ -1656,7 +2211,7 @@ impl<'a> Resolver<'_, 'a> {
                 }
             }
             TSType::TSTypeReference(reference) => match self.label_term(module, reference) {
-                LabelTerm::Body(home, body) => self.label_atom(home, body, alias, depth + 1),
+                LabelTerm::Body(home, body, _) => self.label_atom(home, body, alias, depth + 1),
                 LabelTerm::Undecided => {}
                 LabelTerm::Api(name) => match name.as_str() {
                     "AnyOf" => {
@@ -1760,7 +2315,7 @@ impl<'a> Resolver<'_, 'a> {
             }
             TSType::TSTypeReference(reference) if depth < 8 => {
                 match self.label_term(module, reference) {
-                    LabelTerm::Body(home, body) => {
+                    LabelTerm::Body(home, body, _) => {
                         self.is_string_literal_type(home, body, depth + 1)
                     }
                     LabelTerm::Undecided => true,
@@ -2787,7 +3342,7 @@ fn is_plain(shape: &Shape) -> bool {
 /// What a reference in a label argument stands for.
 enum LabelTerm<'a> {
     /// An alias of the program: the module that declares it, and its body.
-    Body(usize, &'a TSType<'a>),
+    Body(usize, &'a TSType<'a>, Vec<String>),
     /// A type `commonfabric` exports.
     Api(String),
     /// A type parameter, or a name the program does not hold.
@@ -2798,3 +3353,12 @@ enum LabelTerm<'a> {
 
 /// The store a [`Resolver`] keeps its types in.
 pub type Types = RefCell<TypeStore>;
+
+/// A number as JSON: an integer where it is one.
+fn number_value(value: f64) -> serde_json::Value {
+    if value.fract() == 0.0 && value.abs() < 9.0e15 {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
+    }
+}

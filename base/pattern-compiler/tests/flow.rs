@@ -70,7 +70,7 @@ fn a_write_to_an_annotated_path_has_the_constraints_of_its_annotations() {
     let plan = &analysis.modules[0].plans[0].plan;
     let body = constraints_of(plan, "save", &["body"]);
     assert!(
-        body.contains(&json!({ "kind": "writer", "anyOf": [{ "body": "save" }] })),
+        body.contains(&json!({ "kind": "writer", "anyOf": [{ "body": { "module": "case.tsx", "binding": "save" } }] })),
         "{body:?}"
     );
     assert!(body.contains(&json!({ "kind": "writerFit" })), "{body:?}");

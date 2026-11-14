@@ -18,7 +18,9 @@ use crate::types::{Annotation, HandleKind, Shape, TypeId};
 const MAX_DEPTH: u32 = 12;
 
 /// The keys of the label annotations a schema node holds under `ifc`.
-const LABEL_KEYS: [&str; 6] = [
+const LABEL_KEYS: [&str; 8] = [
+    "writePolicyAnyOf",
+    "uiContract",
     "confidentiality",
     "integrity",
     "addIntegrity",
@@ -164,6 +166,9 @@ impl Term<'_> {
 /// The value an annotation holds in a schema: the term its text is, or
 /// the text where it is no term this module reads.
 fn annotation_value(annotation: &Annotation) -> Value {
+    if let Some(value) = &annotation.value {
+        return value.clone();
+    }
     if annotation.key == "writeAuthorizedBy" {
         // "`WriteAuthorizedBy<T, typeof b>` | `{ writeAuthorizedBy: {
         // __ctWriterIdentityOf: { file, path: [binding] } } }`" (SM §11).
@@ -178,6 +183,15 @@ fn annotation_value(annotation: &Annotation) -> Value {
         .unwrap_or_else(|| json!({ "$source": annotation.argument.trim() }))
 }
 
+/// The list an annotation holds: the value the checker evaluated (LS
+/// §8.5), or the term its text is.
+pub fn label_list(annotation: &Annotation) -> Option<Value> {
+    annotation
+        .value
+        .clone()
+        .or_else(|| label_term(&annotation.argument))
+}
+
 /// The declared label of a position (`Slot.declared`): the annotations of
 /// every node from the root to the position, outermost first. "`
 /// confidentiality` lists join, outer first, each atom once" (LS §8.3),
@@ -190,7 +204,7 @@ pub fn declared_label(nodes: &[Vec<Annotation>]) -> Option<Value> {
     let mut integrity: Option<Value> = None;
     for annotation in nodes.iter().flatten() {
         match annotation.key {
-            "confidentiality" => match label_term(&annotation.argument) {
+            "confidentiality" => match label_list(annotation) {
                 Some(Value::Array(atoms)) => {
                     let list = confidentiality.get_or_insert_with(Vec::new);
                     for atom in atoms {
@@ -202,7 +216,7 @@ pub fn declared_label(nodes: &[Vec<Annotation>]) -> Option<Value> {
                 _ => unread = true,
             },
             "integrity" if integrity.is_none() => {
-                integrity = label_term(&annotation.argument).filter(Value::is_array);
+                integrity = label_list(annotation).filter(Value::is_array);
             }
             _ => {}
         }
