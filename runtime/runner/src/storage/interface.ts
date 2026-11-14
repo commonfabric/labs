@@ -3245,14 +3245,15 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
 
   /**
    * How this transaction settled: `committed`, or `failed` for a commit that
-   * was rejected and for an abort, once its commit callbacks have run, and
-   * `undefined` until then. It answers for this transaction wherever its
+   * was rejected and for an abort, from the moment its commit callbacks start
+   * to run, the outcome being final by then, so a callback reads it too; and
+   * `undefined` before that. It answers for this transaction wherever its
    * commit went. {@link status} reports the storage transaction this one
    * wraps, which a commit sealed into a destination, a serving wave or the
    * client's speculation overlay, leaves uncommitted, so that it still reads
    * `ready` once this transaction has settled. A callback
-   * {@link addCommitCallback} adds after that point never runs, so code that
-   * registers one late asks this first.
+   * {@link addCommitCallback} adds once they have all run never runs, so code
+   * that may register one late asks this first.
    */
   settledOutcome(): "committed" | "failed" | undefined;
 
