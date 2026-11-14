@@ -434,6 +434,18 @@ const PRESENCE_PROBE_READ = {
 };
 
 /**
+ * The metadata of the reads that resolve a new action's declared inputs to
+ * certify its static read set (`#collectStaticReadTargetsWithCompleteness()`):
+ * runtime wiring, and dependency discovery as the scheduler's dependency
+ * seeding is. One frozen object, so the reads share the transaction's
+ * resolution memo, which is keyed by it.
+ */
+const STATIC_READ_TARGET_READ = Object.freeze({
+  ...machineryRead,
+  ...schedulerDependencyRead,
+});
+
+/**
  * How many times a named piece's run starts again after its start transaction
  * is refused retryably, matching the bound `Runtime.editWithRetry()` puts on
  * any other retrying writer, and how many times a piece's instantiation runs
@@ -13349,15 +13361,17 @@ export class Runner {
     // Declared inputs can point through their argument-slot redirect and then
     // through an ordinary link to the effective source cell. Resolve the full
     // static chain so the completeness certificate covers the same target the
-    // action transaction will record at runtime. What the resolution finds
-    // goes into that certificate and nowhere else: it is dependency discovery
-    // (§8.10.1), so it consumes no label of the transaction it runs in, while
-    // the action's own run reads the same target as an ordinary read.
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/TBD-static-read-targets
-    return tx.runWithAmbientReadMeta({
-      ...machineryRead,
-      ...schedulerDependencyRead,
-    }, () => {
+    // action transaction will record at runtime.
+    //
+    // This is the same dependency discovery (§8.10.1) as
+    // `#populateDeclaredSchedulerReads()`, and carries its marker. Both read
+    // the action's declared inputs through their links; that one makes the
+    // reactivity log cover them for the scheduler's subscriptions, and this
+    // one names the cells they reach in the scheduler's certificate of the
+    // action's reads. Neither result reaches a value anything writes. The
+    // action's own run reads the same cells as ordinary reads, so its labels
+    // and its read ceiling are weighed there, where the value is consumed.
+    return tx.runWithAmbientReadMeta(STATIC_READ_TARGET_READ, () => {
       const targets: NormalizedFullLink[] = [];
       let complete = true;
       for (const input of inputCells) {

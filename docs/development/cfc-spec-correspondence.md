@@ -421,23 +421,6 @@ gap, pending [specs#96](https://github.com/commonfabric/specs/pull/96). His
 reason, in his words: "CFC is not a gate for chat". The conformance statement's
 §10 records the gap.
 
-The resolution that certifies a new JavaScript action node's static read set
-(`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) runs under
-`schedulerDependencyRead`, so the flow join takes no label from it, ahead of a
-ruling: `SPEC-PENDING https://github.com/commonfabric/specs/pull/TBD-static-read-targets`.
-A setup that instantiates such a node resolves each declared input through
-the node's argument to the cell the action will read, and the result goes into
-the scheduler's certificate of the action's reads and into nothing the setup
-writes; the action's own run reads the same cell as an ordinary labeled read.
-The runtime reads it as dependency discovery, which §8.10.1 says does not
-count as consumed input, the reading labs already applies to dependency
-seeding; §18.6.2's wiring class, whose rationale it shares, names only a
-reference written to another slot. It changes what is stored at strict, with
-no default-off dial, so it does not satisfy step 4 above: a result document
-whose setup instantiates such a node no longer takes the label stored at the
-slot the input passes through. The read stays journaled, for scheduling and
-conflict detection. The conformance statement's §2 records the site.
-
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

@@ -37,11 +37,39 @@ const space = signer.did();
 /** The confidentiality of another principal's data. */
 const BOB = "bob-secret";
 
+/** The confidentiality stored at the argument slot that holds the link. */
+const SLOT = "slot-secret";
+
+/** The confidentiality of a third principal's data. */
+const CAROL = "carol-secret";
+
 describe("cfc-static-read-targets", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
   let frame: Frame;
   let certificates: { reads: NormalizedFullLink[] }[];
+  let others: Runtime[];
+
+  /**
+   * Records in `into` every certificate `on` hands its scheduler, so a case
+   * can see what an instantiation resolved.
+   */
+  const recordCertificates = (
+    on: Runtime,
+    into: { reads: NormalizedFullLink[] }[],
+  ): void => {
+    const scheduler = on.scheduler as unknown as {
+      subscribe: (action: Action, ...rest: unknown[]) => () => void;
+    };
+    const subscribe = scheduler.subscribe.bind(on.scheduler);
+    scheduler.subscribe = (action: Action, ...rest: unknown[]) => {
+      const certificate = (action as unknown as {
+        completeSchedulerScopeSummary?: { reads: NormalizedFullLink[] };
+      }).completeSchedulerScopeSummary;
+      if (certificate !== undefined) into.push(certificate);
+      return subscribe(action, ...rest);
+    };
+  };
 
   beforeEach(() => {
     storageManager = StorageManager.emulate({ as: signer });
@@ -51,20 +79,9 @@ describe("cfc-static-read-targets", () => {
       // The stamps below reach storage at "persist".
       cfcFlowLabels: "persist",
     });
-    // Every certificate the runner hands the scheduler, so a case can see
-    // what the instantiation resolved.
     certificates = [];
-    const scheduler = runtime.scheduler as unknown as {
-      subscribe: (action: Action, ...rest: unknown[]) => () => void;
-    };
-    const subscribe = scheduler.subscribe.bind(runtime.scheduler);
-    scheduler.subscribe = (action: Action, ...rest: unknown[]) => {
-      const certificate = (action as unknown as {
-        completeSchedulerScopeSummary?: { reads: NormalizedFullLink[] };
-      }).completeSchedulerScopeSummary;
-      if (certificate !== undefined) certificates.push(certificate);
-      return subscribe(action, ...rest);
-    };
+    recordCertificates(runtime, certificates);
+    others = [];
     frame = pushFrame({
       space,
       generatedIdCounter: 0,
@@ -75,14 +92,22 @@ describe("cfc-static-read-targets", () => {
 
   afterEach(async () => {
     popFrame(frame);
+    for (const other of others) await other.dispose();
     await runtime?.dispose();
     await storageManager?.close();
   });
 
-  /** Seeds a document of Bob's holding `{ x: 21 }`, every read of which carries {@link BOB}. */
-  const seedBobsDocument = async (): Promise<IMemorySpaceAddress> => {
+  /**
+   * Seeds the document `cause` holding `value`, every read of which carries
+   * `atom`.
+   */
+  const seedDocument = async (
+    cause: string,
+    value: FabricValue,
+    atom: string,
+  ): Promise<IMemorySpaceAddress> => {
     const tx = runtime.edit();
-    const id = runtime.getCell(space, "bobs-document", undefined, tx)
+    const id = runtime.getCell(space, cause, undefined, tx)
       .getAsNormalizedFullLink().id;
     writeSeedEnvelopeDoc(tx, space);
     const address: IMemorySpaceAddress = {
@@ -92,16 +117,16 @@ describe("cfc-static-read-targets", () => {
       path: [],
     };
     seedStoredEnvelope(tx, address, {
-      value: { x: 21 },
+      value,
       cfc: {
         version: 1,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
-          entries: [{ path: [], label: { confidentiality: [BOB] } }],
+          entries: [{ path: [], label: { confidentiality: [atom] } }],
         },
       },
-    });
+    } as FabricValue);
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).ok).toBeDefined();
     return address;
@@ -134,12 +159,12 @@ describe("cfc-static-read-targets", () => {
 
   /**
    * Sets {@link doubling} up on `doubled` over Bob's `x` and stops it, then
-   * labels the slot of its argument document that holds the link, as a
-   * declared slot does, and returns the result cell, the argument document
-   * and Bob's document.
+   * labels the slot of its argument document that holds the link with
+   * {@link SLOT}, as a declared slot does, and returns the result cell, the
+   * argument document and Bob's document.
    */
   const setUpOverLabeledSlot = async () => {
-    const bobs = await seedBobsDocument();
+    const bobs = await seedDocument("bobs-document", { x: 21 }, BOB);
     const first = doubling();
     const tx = runtime.edit();
     const resultCell = runtime.getCell(
@@ -180,7 +205,7 @@ describe("cfc-static-read-targets", () => {
           version: 1,
           entries: [{
             path: ["x"],
-            label: { confidentiality: [BOB] },
+            label: { confidentiality: [SLOT] },
             origin: "declared",
           }],
         },
@@ -188,8 +213,8 @@ describe("cfc-static-read-targets", () => {
     } as FabricValue);
     runtime.prepareTxForCommit(labelTx);
     expect((await labelTx.commit().settled).ok).toBeDefined();
-    expect(labelsOf(argument)).toEqual([BOB]);
-    certificates = [];
+    expect(labelsOf(argument)).toEqual([SLOT]);
+    certificates.length = 0;
     return { resultCell, argument, bobs };
   };
 
@@ -238,7 +263,7 @@ describe("cfc-static-read-targets", () => {
       const { tx, argument } = await instantiateAgain();
       try {
         expect(
-          [...tx.getReadActivities()].some((read) =>
+          [...(tx.getReadActivities?.() ?? [])].some((read) =>
             read.id === argument.id &&
             JSON.stringify(read.path) === JSON.stringify(["value", "x"])
           ),
@@ -248,7 +273,7 @@ describe("cfc-static-read-targets", () => {
       }
     });
 
-    it("leaves the action's own run to carry the label of what it reads", async () => {
+    it("leaves the action's own run to carry the label stored at the slot it reads through", async () => {
       const { resultCell } = await setUpOverLabeledSlot();
       const next = doubling();
       const tx = runtime.edit();
@@ -264,8 +289,75 @@ describe("cfc-static-read-targets", () => {
         labelsOf(
           resultCell.key("doubled").resolveAsCell().getAsNormalizedFullLink(),
         ),
-      ).toContain(BOB);
+      ).toContain(SLOT);
     });
+
+    it("keeps the resolving read a conflict dependency of the transaction", async () => {
+      // A change to the slot the input resolves through, committed while the
+      // instantiating transaction is open, refuses that transaction's commit.
+
+      const { tx, argument, bobs } = await instantiateAgain();
+      const change = runtime.edit();
+      runtime.getCellFromLink({ ...argument, path: ["x"] }, undefined, change)
+        .setRaw(
+          runtime.getCellFromLink({ ...bobs, path: [] }, undefined, change)
+            .getAsLink(),
+        );
+      runtime.prepareTxForCommit(change);
+      expect((await change.commit().settled).ok).toBeDefined();
+
+      // A write of the transaction's own, so its commit is not elided.
+      runtime.getCell<number>(space, "elsewhere", undefined, tx).set(1);
+      runtime.prepareTxForCommit(tx);
+      const result = await tx.commit().settled;
+      expect(result.error).toBeDefined();
+    });
+  });
+
+  it("certifies an action under a read ceiling a link it resolves through exceeds, and refuses the action's own read", async () => {
+    // Bob's `x` is a link to Carol's `y`, and the runtime's read ceiling
+    // admits Carol's label and not Bob's. The setup resolves the input
+    // through Bob's slot to certify the action, which takes nothing of the
+    // slot into anything, and the action's own run, which reads the value
+    // through that slot, is refused there.
+
+    const carol = await seedDocument("carols-document", { y: 21 }, CAROL);
+    const bob = await seedDocument("bobs-chain", {
+      x: runtime.getCellFromLink({ ...carol, path: ["y"] }).getAsLink(),
+    } as FabricValue, BOB);
+    const reader = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      cfcReadMaxConfidentiality: [CAROL],
+      cfcReadOnExceed: "fail",
+    });
+    others.push(reader);
+    const readerCertificates: { reads: NormalizedFullLink[] }[] = [];
+    recordCertificates(reader, readerCertificates);
+    const errors: unknown[] = [];
+    reader.scheduler.onError((error) => errors.push(error));
+    const testPattern = doubling();
+
+    const tx = reader.edit();
+    const resultCell = reader.getCell(
+      space,
+      "ceiling-chain",
+      testPattern.resultSchema,
+      tx,
+    );
+    reader.run(tx, testPattern, {
+      x: reader.getCellFromLink({ ...bob, path: ["x"] }, undefined, tx),
+    }, resultCell);
+    reader.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).ok).toBeDefined();
+    expect(readerCertificates).toHaveLength(1);
+    await resultCell.key("doubled").pull().catch((error) => errors.push(error));
+    await reader.idle();
+
+    expect(errors.map(String)).toContainEqual(
+      expect.stringMatching(/read ceiling/),
+    );
   });
 
   it("joins a stored name the setup carries over, which it writes", async () => {

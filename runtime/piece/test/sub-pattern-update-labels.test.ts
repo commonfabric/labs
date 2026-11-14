@@ -489,6 +489,9 @@ describe("sub-pattern-update-labels", () => {
     it("leaves the result document of a view that reads the labeled cell unlabeled across an edit of the sub-pattern", async () => {
       // The serving runtime sets the sub-pattern up again at its swap to the
       // new pattern, which instantiates the action the view computes with.
+      // The update the piece's own runtime runs, above, is the case that
+      // stamps the view when that instantiation joins the slot's label; this
+      // pins the served route's outcome, which that join does not reach.
 
       const options = {
         clause: "policy" as const,
