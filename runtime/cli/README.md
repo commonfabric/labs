@@ -574,11 +574,11 @@ structure tree lists sections with the keys and hosts in each.
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
-row. Other bytes use the same control-picture glyphs as the pager's
-non-printable display mode. Use `--language binary` or its `bytes` alias to
-select it explicitly for piped input. Interactive views retain at most 256 KiB
-and report the omitted byte count when the complete size is known. Use `--plain`
-to stream the complete dump without building it in memory.
+row. Other bytes use the same control-picture glyphs as the pager's pictures
+mode. Use `--language binary` or its `bytes` alias to select it explicitly for
+piped input. Interactive views retain at most 256 KiB and report the omitted
+byte count when the complete size is known. Use `--plain` to stream the complete
+dump without building it in memory.
 
 Each language selects how bytes are decoded. Text languages currently require
 valid UTF-8. The binary language keeps each raw byte unchanged. An explicit
@@ -820,15 +820,21 @@ by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
 or when it is too narrow for the indentation and any text.
 
-Press `c` to cycle how non-printable characters are shown. The first mode draws
-each control character as its control-picture glyph, such as `␉` for a tab, one
-column per character. The ANSI color mode applies color escape sequences to the
-text that follows them instead of showing them. It also advances each tab to the
-next column that is a multiple of 4, counting the columns drawn from the start
-of the line. Other control characters still appear as control pictures. The
+Press `c` to cycle how non-printable characters are shown. The pager starts in
+the ANSI color mode, which applies color escape sequences to the text that
+follows them instead of showing them. It also advances each tab to the next
+column that is a multiple of 4, counting the columns drawn from the start of the
+line. It draws a character overstruck through backspaces once, the way a printer
+would: struck over itself it is bold, and struck over an underscore it is
+underlined. Other characters struck together draw the last one struck, as a
+terminal would. This is how `man` marks emphasis, so a manual page that `man`
+formats for `cf view` keeps its bold and underlined text. Other control
+characters appear as their control-picture glyphs, such as `␇` for a bell. The
 hidden mode drops every complete escape sequence that starts with `ESC [`, and
 shows each run of other control characters, including the escape characters of
-other sequences, as one `…`. Editing always uses the first mode.
+other sequences, as one `…`. The pictures mode draws each control character as
+its control-picture glyph, such as `␉` for a tab, one column per character.
+Editing always uses the pictures mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
