@@ -27,6 +27,7 @@ import {
   byteInputFor,
   decodeLanguageInput,
   diffSemanticsFor,
+  finishGrammarLoads,
   type Language,
   languageForName,
   languageForTransformedOutput,
@@ -235,7 +236,11 @@ export async function buildPreparedView(
 }> {
   const selected = selectView(input, file, forceDiff, selection);
   await prepareLanguages(selected.languages);
-  return builtView(selected);
+  // A language embedded in another, such as the language an Org source block
+  // names, starts loading its parser when a parse reaches it.
+  let view = builtView(selected);
+  while (await finishGrammarLoads()) view = builtView(selected);
+  return view;
 }
 
 /**

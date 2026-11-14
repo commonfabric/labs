@@ -515,9 +515,9 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, TOML, HCL, shell, makefile, Java properties, INI, ProGuard, and
-XML files use their own syntax highlighting. HCL covers OpenTofu and Terraform
-configuration named `.tf` or `.tofu`, variable definitions files named
+Swift, Kotlin, TOML, HCL, shell, makefile, Java properties, INI, ProGuard, XML,
+and Org mode files use their own syntax highlighting. HCL covers OpenTofu and
+Terraform configuration named `.tf` or `.tofu`, variable definitions files named
 `.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
 files, such as dependency lock files. A string's interpolations and template
 directives are colored as code inside the string. Shell covers Bash and POSIX
@@ -570,6 +570,12 @@ lines and comments heads a section whose name does not start the way a JSON
 array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
+
+Org mode covers `.org` files. Headlines, keywords, blocks, comments, drawers,
+tables, lists, links, code, and timestamps are colored, and the structure tree
+lists headlines, each inside the one above it. A source block is colored as the
+language its first parameter names, such as `bash`, when `cf view` supports that
+language and it is not Org, and as a string otherwise.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with

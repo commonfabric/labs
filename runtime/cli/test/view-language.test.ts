@@ -45,6 +45,7 @@ import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
+import { orgLanguage } from "../lib/view/languages/org/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -165,6 +166,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
+  assertEquals(languageForName("org"), orgLanguage);
+  assertEquals(languageForName("orgmode"), orgLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -188,6 +191,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ini",
     "proguard",
     "xml",
+    "org",
     "binary",
     "plain-text",
   ]);
@@ -232,6 +236,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "xml",
     "svg",
     "plist",
+    "org",
+    "orgmode",
     "binary",
     "bytes",
     "plain-text",

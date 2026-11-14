@@ -45,6 +45,7 @@ import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
+import { orgLanguage } from "./org/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -260,7 +261,7 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"make"`, `"binary"`, or `"plain-text"`.
+   * `"make"`, `"org"`, `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
@@ -378,8 +379,9 @@ export function prepareLanguages(
 }
 
 // A language used before its parser has loaded shows its source as plain text
-// and starts the load, so a view that opens files as it runs listens for loads.
-export { onGrammarLoad } from "./treesitter/adapter.ts";
+// and starts the load, so a view that opens files as it runs listens for loads,
+// and a view built once waits for the loads its parse started.
+export { finishGrammarLoads, onGrammarLoad } from "./treesitter/adapter.ts";
 
 /** Whether a renderer can be projected onto line-aligned diff content. */
 export function canRenderDiffLines(language: Language): boolean {
@@ -491,6 +493,7 @@ function allLanguages(): readonly Language[] {
     iniLanguage,
     proguardLanguage,
     xmlLanguage,
+    orgLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];
