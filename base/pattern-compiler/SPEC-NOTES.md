@@ -1698,7 +1698,7 @@ numbers have gaps.
     | outputs compared | 1314 |
     | equal | 0 |
     | tighter | 1190: 1170 equal before the atom of a kept output is added, 20 tighter before |
-    | atom names the pattern | 124: 76 before the atom is added, 48 looser on integrity before (notes 202 and 203); 103 equal otherwise, 21 tighter in confidentiality |
+    | atom names the pattern | 124: 76 before the atom is added, 48 looser on integrity before (notes 202 and 203); 103 equal otherwise, 21 tighter otherwise |
     | looser | 0 |
     | incomparable | 0 |
     | outputs whose label is a bound, counted apart | 124 |
@@ -1722,9 +1722,11 @@ numbers have gaps.
 215. **The outputs the run holds no value at.** The earlier run had 196.
     143 were at the position of a tag that names a pattern, where the
     run holds a value and its label below `$UI` (note 213): the harness
-    did not read them. The 26 of them whose template has a clause or was
-    not evaluated then are compared now, and are equal in
-    confidentiality. Of the 53 that remain: 26 are at a position the
+    did not read them. 26 of them had an empty runtime label beside a
+    template with a clause (12) or one that was not evaluated (14). The
+    12 are read now and are equal in confidentiality, 2 of them as
+    bounds. The 14 are still not compared, because their template is
+    not evaluated. Of the 53 that remain: 26 are at a position the
     run did not render, below a conditional that gave `null` or a
     string, or beyond the end of an array, and nothing is stored there;
     17 are a link to a cell that holds no value, 6 of them in a module
@@ -1745,7 +1747,12 @@ numbers have gaps.
     of a body that throws. So "no output is looser in confidentiality"
     holds for every output the run holds a value at, and for 7 outputs
     with no value the template has a clause where the runtime stores no
-    label.
+    label. Two rows counted apart as bounds have a clause where the
+    runtime's label is empty: `$UI/children/0/children/0` and
+    `$UI/children/0/children/2` of `system/profile-create/profile-create.tsx`,
+    a conditional that rendered `null` under a condition whose label is
+    stored and not declared. That is the finding of PL §3.5 against the
+    runtime (question 69).
 216. **Note 203 is not closed** (PL §3.10, question 74). The three
     rendered positions of `patterns/examples/cfc-spec-gallery/main.tsx`
     are now in the category "atom names the pattern", tighter in
