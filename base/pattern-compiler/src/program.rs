@@ -364,7 +364,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                     (*start, *start),
                     position,
                     format!(
-                        "A side-write of this computation is on a cycle of the plan's edges, through the cones {}. {}",
+                        "This side-write is on a cycle of the plan's edges, through the cones {}. {}",
                         cones.join(", "),
                         messages::rewrite("side-write:cycle")
                     ),

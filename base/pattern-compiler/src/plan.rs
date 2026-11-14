@@ -21,13 +21,14 @@ use oxc_span::GetSpan;
 use serde_json::{json, Map, Value};
 
 use crate::footprint::{
-    bind_use, body_functions, parameter_names, BindRec, Class, Entry, HandleAt, Record, RefName,
-    Seg, UseRecord, WriteRec, WriteTarget,
+    bind_use, body_functions, parameter_names, BindRec, Class, HandleAt, Record, RefName, Seg,
+    UseRecord, WriteRec, WriteTarget,
 };
 use crate::module::{symbol_of, Binding, DefKind};
 use crate::program::Resolver;
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind};
+use crate::types::{Shape, TypeId};
 use oxc_syntax::symbol::SymbolId;
 
 /// The plan of one pattern.
@@ -42,8 +43,7 @@ pub struct PatternPlan {
     /// offset of the construct in the module's text.
     pub unsupported: Vec<(String, u32)>,
     /// The static side-writes that are on a cycle of `Plan.edges`: the
-    /// offset of the writing body, and the names of the cones on the
-    /// cycle.
+    /// offset of the side-write, and the names of the cones on the cycle.
     pub cycles: Vec<(u32, Vec<String>)>,
 }
 
@@ -111,10 +111,27 @@ struct ConeOut {
     picks: Vec<usize>,
     /// The values of other cones the cone uses.
     uses: BTreeSet<usize>,
+    /// For a `value` slot a body of the cone reads: the type the body
+    /// declares at the slot's position, where the emitter has it. It
+    /// stands for `Slot.schema` in the rule for which slots read a
+    /// `handle` target (PL §3.11).
+    views: BTreeMap<usize, Vec<Option<TypeId>>>,
 }
 
 type SlotKey = (Root, Vec<String>, &'static str, bool, bool);
-type Target = (usize, Root, Vec<String>, Vec<String>, bool);
+
+/// A static target of a side-write: the slot of the handle, its root and
+/// path, the path below the cell, `resolved`, the module and the offset
+/// of the write, and whether the body reads its own target there.
+struct Target {
+    slot: usize,
+    root: Root,
+    at: Vec<String>,
+    below: Vec<String>,
+    resolved: bool,
+    site: Option<(usize, u32)>,
+    reads_own: bool,
+}
 type Names = HashMap<(String, Vec<Seg>, bool), Value>;
 
 struct Emitter<'r, 'm, 'a> {
@@ -153,6 +170,9 @@ struct Emitter<'r, 'm, 'a> {
     opaque: bool,
     /// The entries of `Plan.dynamicReads` of each body of the plan.
     body_dynamic: Vec<(usize, usize)>,
+    /// The declared type of each formal input of the body whose record
+    /// is being written.
+    formal_types: HashMap<String, TypeId>,
 }
 
 /// What the edges of the plan need of a body.
@@ -161,8 +181,6 @@ struct BodyFact {
     /// Whether the body is a computation whose side-writes are all static.
     side_writes: bool,
     at: u32,
-    /// The static targets: the slot of the handle, its root and path, the
-    /// path below the cell, and `resolved`.
     targets: Vec<Target>,
 }
 
@@ -422,6 +440,60 @@ impl<'a> Emitter<'_, '_, 'a> {
         Some((def.module, function.span().start))
     }
 
+    // ----- types -----
+
+    /// The type one segment below a type: a property, or for `*` an
+    /// element of an array or a child of a record.
+    fn type_below(&self, ty: TypeId, segment: &str) -> Option<TypeId> {
+        let ty = self.resolver.present(ty);
+        if segment == "*" {
+            return match self.resolver.shape(ty) {
+                Shape::Object(_, index) => index,
+                _ => self.resolver.element_of(ty),
+            };
+        }
+        self.resolver
+            .with_optional_reads_declared(|| self.resolver.property(ty, segment))
+    }
+
+    /// The type at a path of a formal input.
+    fn entry_type(&self, ty: TypeId, path: &[Seg]) -> Option<TypeId> {
+        let mut ty = ty;
+        for segment in path {
+            ty = match segment {
+                Seg::Key(key) => self.type_below(ty, key)?,
+                Seg::Star => self.type_below(ty, "*")?,
+                Seg::Hop => match self.resolver.shape(self.resolver.present(ty)) {
+                    Shape::Handle(_, value) => value,
+                    _ => return None,
+                },
+            };
+        }
+        Some(ty)
+    }
+
+    /// Whether a `value` read under type `view` continues through the
+    /// link stored at the position `rest` below it: `Some(false)` where
+    /// the type has a handle type or a reference type on the way or
+    /// there, and `None` where the emitter cannot tell (PL §3.11).
+    fn reaches_cell(&self, view: TypeId, rest: &[String]) -> Option<bool> {
+        let mut ty = self.resolver.present(view);
+        // The slot's own position: a `value` slot resolves through a link
+        // at its last segment (PL §2.5).
+        if let Shape::Handle(_, value) = self.resolver.shape(ty) {
+            ty = value;
+        }
+        for segment in rest {
+            ty = self.resolver.present(self.type_below(ty, segment)?);
+            match self.resolver.shape(ty) {
+                Shape::Handle(..) | Shape::Unknown => return Some(false),
+                Shape::Unresolved(_) | Shape::Parameter(_) => return None,
+                _ => {}
+            }
+        }
+        Some(true)
+    }
+
     // ----- cones and values -----
 
     /// The cone the expression being evaluated belongs to, made where
@@ -439,6 +511,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     selectors: Vec::new(),
                     picks: Vec::new(),
                     uses: BTreeSet::new(),
+                    views: BTreeMap::new(),
                 });
                 let cone = self.cones.len() - 1;
                 self.cone = Some(cone);
@@ -1673,6 +1746,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if !reads.contains(&slot) {
                         reads.push(slot);
                     }
+                    if let (Class::Value, true, Some(cone)) = (entry.class, computation, self.cone)
+                    {
+                        let view = self
+                            .formal_types
+                            .get(&entry.input)
+                            .and_then(|ty| self.entry_type(*ty, &entry.path));
+                        self.cones[cone].views.entry(slot).or_default().push(view);
+                    }
                     if matches!(entry.class, Class::Identity | Class::Resolved) {
                         names.insert(key, json!(slot));
                     } else if entry.class == Class::Value {
@@ -1870,7 +1951,14 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut writes: Vec<Value> = Vec::new();
         let mut envelopes: Vec<Value> = Vec::new();
         let mut fact = BodyFact {
-            side_writes: computation && record.tier == Some("static side-write"),
+            // An authored function has no tier of its own (FA §6.3): used
+            // in the reactive tier, it is a computation with static
+            // side-writes where every write it makes has a static target.
+            side_writes: computation
+                && match record.tier {
+                    Some(tier) => tier == "static side-write",
+                    None => record.detail.edges.iter().all(|edge| edge.fixed),
+                },
             at,
             targets: Vec::new(),
         };
@@ -1889,6 +1977,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     resolved,
                 } => {
                     let handle = name_of(&names, input, position, *resolved);
+                    let written = target;
                     let mut target = Map::new();
                     target.insert("kind".to_string(), json!("handle"));
                     let mut state_cell = None;
@@ -1909,8 +1998,28 @@ impl<'a> Emitter<'_, '_, 'a> {
                                 }));
                             }
                             if *fixed && named.is_none() {
-                                fact.targets
-                                    .push((slot, root, slot_at, below.clone(), *resolved));
+                                // One target for each site that writes it.
+                                let mut sites: Vec<(Option<(usize, u32)>, bool)> = record
+                                    .detail
+                                    .side_writes
+                                    .iter()
+                                    .filter(|write| write.target == *written && write.path == *path)
+                                    .map(|write| (Some(write.site), write.reads_own))
+                                    .collect();
+                                if sites.is_empty() {
+                                    sites.push((None, false));
+                                }
+                                for (site, reads_own) in sites {
+                                    fact.targets.push(Target {
+                                        slot,
+                                        root: root.clone(),
+                                        at: slot_at.clone(),
+                                        below: below.clone(),
+                                        resolved: *resolved,
+                                        site,
+                                        reads_own,
+                                    });
+                                }
                             }
                         }
                         Some(Value::Object(computed)) => {
@@ -2078,7 +2187,23 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         let prefix = kind != BodyKind::Lift;
+        // The type each formal input is declared with, where it is one
+        // name.
+        let mut types: HashMap<String, TypeId> = HashMap::new();
+        for (formal, parameter) in formals.iter().zip(&function.params().items) {
+            if let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern {
+                if let Some(Ok(ty)) = identifier
+                    .symbol_id
+                    .get()
+                    .map(|symbol| self.resolver.declared_symbol_type(home, symbol, 0))
+                {
+                    types.insert(formal.clone(), ty);
+                }
+            }
+        }
+        let saved_types = std::mem::replace(&mut self.formal_types, types);
         let body = self.body_record(plan_kind, &name, &record, &inputs, prefix, start, true);
+        self.formal_types = saved_types;
         if made {
             self.cone = None;
         }
@@ -2326,24 +2451,65 @@ impl<'a> Emitter<'_, '_, 'a> {
                 output_edges.push((self.values[*value].cone, to, *value));
             }
         }
-        let mut write_edges: Vec<(usize, usize, Value, u32)> = Vec::new();
+        // The edges of the static side-writes (PL §3.11, "Which slots read
+        // a `handle` target"): the cone, the cone that reads, `via`, where
+        // the write is, and whether the writing body reads its own target.
+        let mut write_edges: Vec<(usize, usize, Value, u32, bool)> = Vec::new();
         for (from, cone) in self.cones.iter().enumerate() {
             for body in &cone.bodies {
                 let fact = &self.body_facts[*body];
                 if !fact.side_writes {
                     continue;
                 }
-                for (slot, root, at, below, resolved) in &fact.targets {
+                for target in &fact.targets {
+                    let Target {
+                        slot,
+                        root,
+                        at,
+                        below,
+                        resolved,
+                        site,
+                        reads_own,
+                    } = target;
                     let mut cell = at.clone();
                     cell.extend(below.iter().cloned());
+                    let state = matches!(root, Root::State(_));
                     for (to, other) in self.cones.iter().enumerate() {
                         let reads = other.slots.iter().any(|index| {
-                            let (other_root, path, class, _, in_place) = &self.slots[*index];
-                            other_root == root
-                                && !*in_place
-                                && !(path == at && *class == "identity")
-                                && path.len() >= at.len()
-                                && (path.starts_with(&cell) || cell.starts_with(path))
+                            let (other_root, path, class, slot_resolved, in_place) =
+                                &self.slots[*index];
+                            if other_root != root {
+                                return false;
+                            }
+                            let overlaps = path.starts_with(&cell) || cell.starts_with(path);
+                            if state {
+                                // No slot is excepted.
+                                return overlaps;
+                            }
+                            if path.len() >= at.len() {
+                                // At or below the handle's position. The
+                                // handle's `identity` slot and a `shape`
+                                // slot in place there observe the
+                                // reference and not the cell.
+                                let excepted = path == at
+                                    && (index == slot
+                                        || (*class == "identity" && !*slot_resolved)
+                                        || (*class == "shape" && *in_place));
+                                return overlaps && !excepted;
+                            }
+                            // Above the handle's position: a `value` slot
+                            // whose type has data there.
+                            if *class != "value" || !at.starts_with(path) {
+                                return false;
+                            }
+                            let rest = &at[path.len()..];
+                            match other.views.get(index) {
+                                Some(views) => views.iter().any(|view| {
+                                    view.and_then(|view| self.reaches_cell(view, rest))
+                                        .unwrap_or(true)
+                                }),
+                                None => true,
+                            }
                         });
                         if !reads {
                             continue;
@@ -2363,7 +2529,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                                 Value::Object(via)
                             }
                         };
-                        write_edges.push((from, to, via, fact.at));
+                        // The report names the side-write where it is in
+                        // this module, and else the function.
+                        let at = match site {
+                            Some((module, start)) if *module == self.module => *start,
+                            _ => fact.at,
+                        };
+                        write_edges.push((from, to, via, at, *reads_own));
                     }
                 }
             }
@@ -2374,7 +2546,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         for (from, to, _) in &output_edges {
             successors[*from].insert(*to);
         }
-        for (from, to, _, _) in &write_edges {
+        for (from, to, ..) in &write_edges {
             successors[*from].insert(*to);
         }
         let reaches = |from: usize, to: usize| -> bool {
@@ -2426,10 +2598,18 @@ impl<'a> Emitter<'_, '_, 'a> {
         for (index, cone) in order.iter().enumerate() {
             position[*cone] = index;
         }
-        // The static side-writes on a cycle (`side-write:cycle`).
+        // The static side-writes on a cycle (`side-write:cycle`): an edge
+        // on a cycle through another cone, and an edge from a cone to
+        // itself where the writing body does not read its own target
+        // (`scheduler-and-serving-loop.md` §8.2).
         let mut cycles: Vec<(u32, Vec<String>)> = Vec::new();
-        for (from, to, _, at) in &write_edges {
-            if from != to && reaches(*to, *from) {
+        for (from, to, _, at, reads_own) in &write_edges {
+            let reported = if from == to {
+                !*reads_own
+            } else {
+                reaches(*to, *from)
+            };
+            if reported {
                 let mut names: Vec<String> = (0..count)
                     .filter(|cone| component[*cone] == component[*from])
                     .map(|cone| self.cones[cone].entry.clone())
@@ -2510,7 +2690,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 ));
             }
         }
-        for (from, to, via, _) in &write_edges {
+        for (from, to, via, ..) in &write_edges {
             sorted_edges.push((position[*from], position[*to], via.clone()));
         }
         sorted_edges.sort_by_key(|(from, to, via)| (*from, *to, via.to_string()));
@@ -2847,6 +3027,7 @@ pub fn emit_module<'a>(
             operands: Vec::new(),
             opaque: false,
             body_dynamic: Vec::new(),
+            formal_types: HashMap::new(),
         };
         let Some(function) = emitter.function_at(module, *start) else {
             continue;

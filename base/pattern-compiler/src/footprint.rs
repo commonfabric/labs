@@ -173,6 +173,17 @@ impl std::fmt::Display for RefName {
     }
 }
 
+/// One site that writes a static target through a handle: the target as
+/// its `WriteRec` has it, the module and the offset of the write, and
+/// whether the body reads at or below what the site writes (FA §6.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideWrite {
+    pub target: WriteTarget,
+    pub path: Vec<Seg>,
+    pub site: (usize, u32),
+    pub reads_own: bool,
+}
+
 /// One write edge, or one write envelope where `fixed` is false.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteRec {
@@ -248,6 +259,8 @@ pub struct Detail {
     /// The positions whose type is a handle type or a reference type: a
     /// `shape` entry there is made in place (PL §1.1, `Slot.inPlace`).
     pub by_reference: Vec<(String, Vec<Seg>)>,
+    /// The sites of the writes with a static target through a handle.
+    pub side_writes: Vec<SideWrite>,
     /// `Body.outputs`: the result path, whether the reference is `passes`,
     /// and the entries it names.
     pub outputs: Vec<(Vec<Seg>, bool, Vec<RefName>)>,
@@ -701,6 +714,8 @@ struct Store {
     materializer: BTreeSet<(usize, u32)>,
     /// The shapes of FA §6.6, by site.
     not_idempotent: BTreeMap<(usize, u32), &'static str>,
+    /// The write sites of a computation that reads its own target.
+    own_reads: BTreeSet<(usize, u32)>,
     /// The cell each write through one anchored handle lands in.
     write_targets: Vec<(PathKey, (usize, u32))>,
     /// The cells the body has read through a handle.
@@ -724,8 +739,9 @@ struct Store {
 
 /// The target of a write the record is filled in for at the end.
 enum Pending {
-    /// A handle, and whether the write appends an element.
-    Handle(Proj, bool),
+    /// A handle, whether the write appends an element, and the site of
+    /// the write.
+    Handle(Proj, bool, (usize, u32)),
     Created((usize, u32)),
     Argument((usize, u32)),
     Request((usize, u32)),
@@ -3472,7 +3488,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     let dynamic = handle.path.contains(&Seg::Star) || handle.dynamic;
                     for val in &values {
                         self.store.pending.push((
-                            Pending::Handle(handle.clone(), appends),
+                            Pending::Handle(handle.clone(), appends, site),
                             val.clone(),
                             !dynamic,
                         ));
@@ -3592,9 +3608,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
             }
         }
         let mut edges: Vec<WriteRec> = Vec::new();
+        let mut side_writes: Vec<SideWrite> = Vec::new();
         for (pending, val, fixed) in &store.pending {
             let (target, mut below) = match pending {
-                Pending::Handle(proj, appends) => {
+                Pending::Handle(proj, appends, _) => {
                     // The handle's position, and the path below its cell.
                     let hop = proj
                         .path
@@ -3632,6 +3649,17 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     None => continue,
                 },
             };
+            if let (Pending::Handle(_, _, site), true) = (pending, *fixed) {
+                let write = SideWrite {
+                    target: target.clone(),
+                    path: below.clone(),
+                    site: *site,
+                    reads_own: store.own_reads.contains(site),
+                };
+                if !side_writes.contains(&write) {
+                    side_writes.push(write);
+                }
+            }
             edges.push(WriteRec {
                 target: target.clone(),
                 path: below.clone(),
@@ -3671,6 +3699,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .collect(),
             label_metadata: store.label_metadata,
             by_reference: store.by_reference.iter().cloned().collect(),
+            side_writes,
             outputs: store.output_refs.clone(),
             binds: store
                 .binds
@@ -3968,17 +3997,21 @@ impl<'a> Analyzer<'_, '_, 'a> {
         }
         // The third shape of FA §6.6: a read at or below a path the body
         // writes, through the same anchored handle.
-        if self.computation {
-            let targets = self.store.write_targets.clone();
-            for ((input, path), site) in targets {
-                let store = &self.store;
-                let read = store
-                    .entries
-                    .keys()
-                    .chain(store.envelope.keys())
-                    .chain(store.read_cells.iter())
-                    .any(|(other, below)| *other == input && below.starts_with(&path));
-                if read {
+        // An authored function is a computation where the reactive tier
+        // calls it, so which of its writes read their own target is kept
+        // for it too.
+        let targets = self.store.write_targets.clone();
+        for ((input, path), site) in targets {
+            let store = &self.store;
+            let read = store
+                .entries
+                .keys()
+                .chain(store.envelope.keys())
+                .chain(store.read_cells.iter())
+                .any(|(other, below)| *other == input && below.starts_with(&path));
+            if read {
+                self.store.own_reads.insert(site);
+                if self.computation {
                     self.store
                         .not_idempotent
                         .entry(site)

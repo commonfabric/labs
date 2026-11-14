@@ -293,7 +293,8 @@ export const Two = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => {
 
 const WRITES: &str = r#"import { Cell, lift, pattern } from "commonfabric";
 const copyAB = lift((x: { a: Cell<number>; b: Cell<number> }) => { x.b.set(x.a.get() + 1); return 0; });
-const copyBA = lift((x: { a: Cell<number>; b: Cell<number> }) => { x.a.set(x.b.get() + 1); return 0; });
+const copyBA = lift((x: { a: Cell<number>; b: Cell<number> }) => {
+  x.a.set(x.b.get() + 1); return 0; });
 const own = lift((x: { a: Cell<number> }) => { x.a.set(x.a.get() + 1); return 0; });
 export const Cycle = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => {
   const one = copyAB({ a, b });
@@ -350,7 +351,9 @@ fn a_cycle_through_a_static_side_write_is_reported_and_a_read_of_the_own_target_
         .filter(|diagnostic| diagnostic.id == "side-write:cycle")
         .map(|diagnostic| diagnostic.line)
         .collect();
-    assert_eq!(cycles, [2, 3]);
+    // The report names the side-write and not the function: `x.b.set`
+    // on line 2, and `x.a.set` on line 4.
+    assert_eq!(cycles, [2, 4]);
     let plan = plan_of(&analysis, "Cycle");
     let edges = plan["edges"].as_array().expect("edges");
     // PL §1.4: "An edge from a cone to itself or to a cone with a lower
@@ -1380,4 +1383,123 @@ export const P = pattern<{ title: string }>(({ title }) => {
         let child = calls[site]["child"].as_u64().expect("a child") as usize;
         assert_eq!(plan["children"][child]["name"], expected);
     }
+}
+
+fn edge_lines(plan: &Value) -> Vec<String> {
+    plan["edges"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .filter(|edge| edge["via"]["kind"] != "output")
+        .map(|edge| {
+            format!(
+                "{} -> {}",
+                plan["cones"][edge["from"].as_u64().unwrap() as usize]["entry"]
+                    .as_str()
+                    .unwrap(),
+                plan["cones"][edge["to"].as_u64().unwrap() as usize]["entry"]
+                    .as_str()
+                    .unwrap()
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_value_slot_above_a_handle_reads_its_cell_where_its_type_has_data_there() {
+    // PL §3.11, "Which slots read a `handle` target": "Its path is a
+    // proper prefix of the handle's path, its class is `value`, and its
+    // schema has a data type at the handle's position, so that the read
+    // continues through the link stored there. A `value` slot whose
+    // schema has a handle type at the position stops there ... and a slot
+    // of another class above the position does not reach the cell."
+    let analysis = program(
+        r#"import { Cell, lift, pattern } from "commonfabric";
+const write = lift((x: { n: Cell<number>; v: number }) => { x.n.set(x.v); return 0; });
+const whole = lift((x: { box: { n: number } }) => JSON.stringify(x.box));
+const stops = lift((x: { box: { n: Cell<number> } }) => JSON.stringify(x.box));
+const above = lift((x: { box: { n: number } }) => x.box === undefined);
+export const P = pattern<{ box: { n: Cell<number> }; v: number }>(({ box, v }) => {
+  const a = write({ n: box.n, v });
+  const b = whole({ box });
+  const c = stops({ box });
+  const d = above({ box });
+  return { a, b, c, d };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(edge_lines(&plan), ["a -> b"]);
+}
+
+#[test]
+fn a_shape_slot_in_place_below_the_position_of_a_handle_reads_its_cell() {
+    // PL §3.11: "Two slots at the handle's own position are excepted: the
+    // handle's `identity` slot, and a `shape` slot with `inPlace` there."
+    // A `shape` slot in place at a position inside the cell is not.
+    let analysis = program(
+        r#"import { Cell, lift, pattern } from "commonfabric";
+const write = lift((x: { a: Cell<{ inner?: Cell<number> }> }) => { x.a.set({}); return 0; });
+const probe = lift((x: { a: { inner?: Cell<number> } }) => x.a.inner !== undefined);
+const held = lift((x: { a?: Cell<{ inner?: Cell<number> }> }) => x.a !== undefined);
+export const P = pattern<{ a: Cell<{ inner?: Cell<number> }> }>(({ a }) => {
+  const one = write({ a });
+  const two = probe({ a });
+  const three = held({ a });
+  return { one, two, three };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let probe = body_named(&plan, "probe");
+    assert_eq!(
+        reads_of(&plan, probe),
+        ["argument a/inner : shape, inPlace"]
+    );
+    assert_eq!(
+        reads_of(&plan, body_named(&plan, "held")),
+        ["argument a : shape, inPlace"]
+    );
+    assert_eq!(edge_lines(&plan), ["one -> two"]);
+}
+
+#[test]
+fn an_edge_from_a_cone_to_itself_is_reported_unless_a_body_reads_its_own_target() {
+    // `scheduler-and-serving-loop.md` §8.2: "The compiler reports an edge
+    // to a cone with a lower index, and an edge from a cone to itself
+    // where no body of the cone reads its own write target, as a warning
+    // that names the side-write, `side-write:cycle`."
+    let analysis = program(
+        r#"import { Cell, computed, lift, pattern } from "commonfabric";
+function put(n: Cell<number>, v: number): number {
+  n.set(v);
+  return 0;
+}
+function read(n: Cell<number>): number { return n.get(); }
+const own = lift((x: { a: Cell<number> }) => {
+  x.a.set(x.a.get() + 1);
+  return 0;
+});
+export const Self = pattern<{ a: Cell<number>; v: number }>(({ a, v }) => {
+  const both = computed(() => put(a, v) + read(a));
+  return { both };
+});
+export const Own = pattern<{ a: Cell<number> }>(({ a }) => {
+  const one = own({ a });
+  return { one };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Self");
+    assert_eq!(edge_lines(&plan), ["both -> both"]);
+    let cycles: Vec<(u32, u32)> = analysis.modules[0]
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.id == "side-write:cycle")
+        .map(|diagnostic| (diagnostic.line, diagnostic.column))
+        .collect();
+    // The report names the side-write, `n.set(v)`, and not the function.
+    assert_eq!(cycles, [(3, 3)]);
+    let own = plan_of(&analysis, "Own");
+    assert_eq!(edge_lines(&own), ["one -> one"]);
 }
