@@ -66,6 +66,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
   documents as the rapids fix, and says how pieces created before the record
   gain one.
 
+- [Sharing one email message with another person](email-share-by-row-grant.md)
+  releases one message from a Loom-synced mailbox to another person: the
+  owner's share piece queries the row at space scope, a `ShareGrant` over the
+  row document names the reader, a display rule matching the bare-DID owner
+  clause releases it, and a toolshed attestation that a key proved a mailbox
+  lets a grant name an email address. The mail store stays closed; sharing
+  the handle waits on Loom's participants rule.
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
   own `describe()` and `it()`, which every test file already resolves to,
