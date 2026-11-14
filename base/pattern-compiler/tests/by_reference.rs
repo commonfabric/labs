@@ -345,3 +345,59 @@ fn readable_cell_stands_for_its_value_where_a_union_of_values_is_declared() {
            ({ profile }) => ({ name: face({ profile }) }));\n",
     );
 }
+
+// By ruling: an argument bound by reference takes the declared type of its
+// path.
+
+const EDIT: &str = "const edit = handler<unknown, { note: Writable<string> }>((_, state) => state.note.set(\"\"));\n\
+const Show = pattern<{ note: string }, { n: number }>(({ note }) => ({ n: 1 }));\n";
+
+#[test]
+fn condition_does_not_narrow_the_place_an_argument_is_bound_to() {
+    assert_refused(
+        &format!(
+            "{EDIT}const P = pattern<{{ note: string | undefined }}, {{ a: unknown }}>(({{ note }}) => ({{\n\
+               a: note ? edit({{ note }}) : undefined,\n\
+             }}));\n"
+        ),
+        "",
+    );
+    assert_refused(
+        &format!(
+            "{EDIT}const P = pattern<{{ row: {{ note: string | undefined }} }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+               a: row.note !== undefined && edit({{ note: row.note }}),\n\
+             }}));\n"
+        ),
+        "",
+    );
+}
+
+#[test]
+fn non_null_assertion_does_not_change_the_type_of_a_place() {
+    assert_refused(
+        &format!(
+            "{EDIT}const P = pattern<{{ row: {{ note: string | undefined }} }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+               a: edit({{ note: row.note! }}),\n\
+             }}));\n"
+        ),
+        "",
+    );
+}
+
+#[test]
+fn place_of_the_declared_type_is_accepted_under_a_condition() {
+    assert_accepted(&format!(
+        "{EDIT}const P = pattern<{{ row: {{ note: string; kind: \"a\" | \"b\" }} }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+           a: row.kind === \"a\" ? edit({{ note: row.note }}) : undefined,\n\
+         }}));\n"
+    ));
+}
+
+#[test]
+fn receiver_of_the_place_keeps_its_narrowing() {
+    assert_accepted(&format!(
+        "{EDIT}const P = pattern<{{ row: {{ note: string }} | undefined }}, {{ a: unknown }}>(({{ row }}) => ({{\n\
+           a: row ? edit({{ note: row.note }}) : undefined,\n\
+         }}));\n"
+    ));
+}

@@ -134,12 +134,22 @@ impl<'a> Resolver<'_, 'a> {
                     Ok(self.resolve_type(module, &cast.type_annotation))
                 }
             }
-            Expression::Identifier(identifier) => self
-                .declared_name(module, identifier, next)
-                .map(|ty| self.narrowed(module, expression, ty)),
-            Expression::StaticMemberExpression(member) => self
-                .declared_property(module, &member.object, member.property.name.as_str(), next)
-                .map(|ty| self.narrowed(module, expression, ty)),
+            Expression::Identifier(identifier) => {
+                let place = self.take_place_not_narrowed();
+                self.declared_name(module, identifier, next)
+                    .map(|ty| match place {
+                        true => ty,
+                        false => self.narrowed(module, expression, ty),
+                    })
+            }
+            Expression::StaticMemberExpression(member) => {
+                let place = self.take_place_not_narrowed();
+                self.declared_property(module, &member.object, member.property.name.as_str(), next)
+                    .map(|ty| match place {
+                        true => ty,
+                        false => self.narrowed(module, expression, ty),
+                    })
+            }
             Expression::ComputedMemberExpression(member) => match unwrap(&member.expression) {
                 Expression::StringLiteral(key) => {
                     self.declared_property(module, &member.object, key.value.as_str(), next)

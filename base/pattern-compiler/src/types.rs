@@ -223,6 +223,9 @@ pub struct TypeStore {
     /// `undefined` comes from the read of an optional property alone: the
     /// read then has the property's declared type.
     optional_reads_declared: bool,
+    /// Set while the type of a place is asked for: the outermost
+    /// reference is not narrowed (§7.5.2).
+    place_not_narrowed: bool,
     /// The functions whose return type is being inferred.
     in_progress: std::collections::HashSet<(usize, u32)>,
 }
@@ -761,6 +764,22 @@ impl<'a> Resolver<'_, 'a> {
         let result = compute();
         self.types.borrow_mut().optional_reads_declared = before;
         result
+    }
+
+    /// `compute` with the next reference typed left as declared: the
+    /// outermost identifier or property read is not narrowed.
+    pub(crate) fn without_narrowing<T>(&self, compute: impl FnOnce() -> T) -> T {
+        let before = std::mem::replace(&mut self.types.borrow_mut().place_not_narrowed, true);
+        let result = compute();
+        self.types.borrow_mut().place_not_narrowed = before;
+        result
+    }
+
+    /// Whether the reference being typed is a place left as declared.
+    /// Asking clears the mark, so that the parts of the reference are
+    /// narrowed as usual.
+    pub(crate) fn take_place_not_narrowed(&self) -> bool {
+        std::mem::replace(&mut self.types.borrow_mut().place_not_narrowed, false)
     }
 
     /// `ty | undefined`, or `ty` where it has `undefined` or is not

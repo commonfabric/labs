@@ -989,6 +989,28 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
+    /// The type of an argument bound by reference (§7.5.2, by ruling): the
+    /// declared type of the path it names. A condition that narrows the
+    /// value does not narrow the place, and `!` does not change the type
+    /// of a place. The receiver of the last property read keeps its
+    /// narrowing, so that the property is found.
+    fn place_type(&self, module: usize, expression: &Expression<'a>) -> crate::declared::Declared {
+        let mut place = expression;
+        loop {
+            place = match place {
+                Expression::ParenthesizedExpression(inner) => &inner.expression,
+                Expression::TSNonNullExpression(inner) => &inner.expression,
+                _ => break,
+            };
+        }
+        match place {
+            Expression::Identifier(_) | Expression::StaticMemberExpression(_) => {
+                self.without_narrowing(|| self.typed_at(module, place, 0))
+            }
+            _ => self.typed_at(module, expression, 0),
+        }
+    }
+
     /// [`Self::check_against`], with `by_reference` for an argument bound
     /// by reference in tier R (§7.5.2).
     fn check_against_in(
@@ -1073,7 +1095,12 @@ impl<'a> Resolver<'_, 'a> {
             }
             _ => {}
         }
-        let Ok(from) = self.typed_at(module, expression, 0) else {
+        let typed = if by_reference {
+            self.place_type(module, expression)
+        } else {
+            self.typed_at(module, expression, 0)
+        };
+        let Ok(from) = typed else {
             return Verdict::Unsure;
         };
         let verdict = self.relate_in(from, to, 0, by_reference);
