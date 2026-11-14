@@ -7,6 +7,7 @@ import {
   hashOf,
   hashStringOf,
   isDeepFrozen,
+  isFabricPlainObject,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
@@ -41,6 +42,7 @@ import {
 } from "./stored-setup-build.ts";
 import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "./stored-argument-refusal.ts";
 import {
+  type StagedArgument,
   storedArgumentSlotIssues,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
@@ -130,7 +132,11 @@ import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import { type EntityKind, entityKindOfIdString } from "./entity-kind.ts";
 import { inSpaceRootCause } from "./in-space-root-cause.ts";
-import { MAX_PATH_RESOLUTION_LENGTH, resolveLink } from "./link-resolution.ts";
+import {
+  MAX_PATH_RESOLUTION_LENGTH,
+  readStoredReference,
+  resolveLink,
+} from "./link-resolution.ts";
 import { FILTER_INPUT_SCHEMA } from "./builtins/filter.ts";
 import { FLATMAP_INPUT_SCHEMA } from "./builtins/flatmap.ts";
 import {
@@ -243,9 +249,11 @@ import {
 import {
   internalVerifierRead,
   isDurableReadTx,
+  linkResolutionProbe,
   machineryRead,
   markDurableReadTx,
   schedulerDependencyRead,
+  writeDestinationRead,
 } from "./storage/reactivity-log.ts";
 import {
   isCfcEnforcementRejection,
@@ -4111,26 +4119,46 @@ export class Runner {
       argumentLink,
       argumentSchema,
       defaults,
+      argument,
     );
   }
 
+  /**
+   * Refuses the transaction unless the argument at `argumentLink` satisfies
+   * `argumentSchema`. Given `staged`, the value this setup just wrote there,
+   * validation takes the argument's slots and references from it rather than
+   * reading them back (`materializeStagedArgumentForValidation()`).
+   */
   #validateArgument(
     tx: IExtendedStorageTransaction,
     argumentLink: NormalizedFullLink,
     argumentSchema: JSONSchema,
     defaults: FabricValue,
+    staged?: unknown,
   ): void {
     const validationFailure = storedArgumentValidationIssue(
       this.#runtime.getCellFromLink(argumentLink, undefined, tx),
       argumentSchema,
       defaults,
       tx,
+      staged === undefined ? undefined : this.#stagedArgument(tx, staged),
     );
     if (validationFailure !== undefined) {
       throw new Error(
         `${STORED_ARGUMENT_SCHEMA_REFUSAL}: ${validationFailure}`,
       );
     }
+  }
+
+  /** `value`, an argument this setup staged, as validation is handed it. */
+  #stagedArgument(
+    tx: IExtendedStorageTransaction,
+    value: unknown,
+  ): StagedArgument {
+    return {
+      value,
+      cellAt: (link) => this.#runtime.getCellFromLink(link, undefined, tx),
+    };
   }
 
   #updateResultSchemaMeta<R>(
@@ -4341,14 +4369,20 @@ export class Runner {
       resultCell,
       { derivedInternalCells: pattern.derivedInternalCells },
     ) as R;
+    // A write-destination read (CFC §18.6.2): the stored projection decides
+    // whether setup writes the one it builds (`changed`, below), never what it
+    // writes, which is the pattern's own result bound to this piece. The name
+    // a setup carries over is what it writes, so that one is read again
+    // without the marker, at its own slot.
     const previousResult = writableResultCell.getRaw({
-      meta: ignoreReadForScheduling,
+      meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
     });
-    const nameCarried = options.preserveName &&
-      isObjectOrArray(previousResult) &&
-      Boolean(previousResult[NAME]);
+    const storedName = options.preserveName && isObjectOrArray(previousResult)
+      ? writableResultCell.key(NAME).getRaw({ meta: ignoreReadForScheduling })
+      : undefined;
+    const nameCarried = Boolean(storedName);
     if (nameCarried) {
-      result = { ...result, [NAME]: previousResult[NAME] };
+      result = { ...result, [NAME]: storedName };
     }
     // Convert-and-freeze (default): a deep-frozen value lets the storage write
     // boundary's `cloneIfNecessary` identity-pass instead of
@@ -4488,16 +4522,69 @@ export class Runner {
     leaveOut: ReadonlySet<string> = new Set(),
   ): T {
     if (argument === undefined) return argument;
-    const raw = this.#runtime
-      .getCellFromLink(argumentLink, undefined, tx)
-      .getRaw({ meta: ignoreReadForScheduling });
-    const stored = leaveOut.size > 0 && isObjectNotArray(raw)
-      ? Object.fromEntries(
-        Object.entries(raw).filter(([slot]) => !leaveOut.has(slot)),
-      )
-      : raw;
+    const stored = this.#readStoredArgument(
+      tx,
+      argumentLink,
+      new Set([...leaveOut, ...namedArgumentSlots(argument)]),
+    );
     recordReplayedArgumentSlots(tx, argumentLink, argument, stored);
     return foldStoredArgumentSlots(argument, stored);
+  }
+
+  /**
+   * The stored argument document at `argumentLink`, as a setup that writes it
+   * again reads it: `undefined` where it holds nothing, and otherwise each
+   * slot it holds less those in `skip`, which the setup takes from elsewhere.
+   * A document that is no plain record is a whole value and is read whole.
+   * Everything is read under no schema: what is wanted is the stored bytes,
+   * and a load under the link's schema, the outgoing pattern's, would deliver
+   * all it reaches, in other spaces too.
+   *
+   * The slots are read one by one, so that each read observes only what the
+   * setup does with it. The document's keys are a non-recursive read of its
+   * root. A slot holding content is read as content. A slot holding a
+   * reference is read as reference-identity probes under `machineryRead`, a
+   * wiring read (CFC §18.6.2): the setup's only use of that reference is to
+   * write it again, to the same slot of the argument it stages, where the
+   * reference's restriction stays. A slot the candidate schema refuses is
+   * read again as an ordinary read before its value moves to the piece's
+   * refused-slot store (`#restageOverStoredSlots`), since that write carries
+   * no link's restriction. What a reference reaches is not read here at all.
+   */
+  #readStoredArgument(
+    tx: IExtendedStorageTransaction,
+    argumentLink: NormalizedFullLink,
+    skip: ReadonlySet<string> = new Set(),
+  ): unknown {
+    const cell = this.#runtime.getCellFromLink(
+      { ...argumentLink, schema: undefined },
+      undefined,
+      tx,
+    );
+    const top = cell.getRaw({
+      meta: ignoreReadForScheduling,
+      nonRecursive: true,
+    });
+    if (!isFabricPlainObject(top as FabricValue) || isCellLink(top)) {
+      return top === undefined
+        ? undefined
+        : cell.getRaw({ meta: ignoreReadForScheduling });
+    }
+    const document = cell.getAsNormalizedFullLink();
+    const stored: Record<string, unknown> = {};
+    for (const slot of Object.keys(top as object)) {
+      if (skip.has(slot)) continue;
+      const position = { ...document, path: [...document.path, slot] };
+      const reference = readStoredReference(tx, position, {
+        ...linkResolutionProbe,
+        ...machineryRead,
+        ...ignoreReadForScheduling,
+      });
+      stored[slot] = reference !== undefined && isCellLink(reference)
+        ? reference
+        : tx.readValueOrThrow(position, { meta: ignoreReadForScheduling });
+    }
+    return stored;
   }
 
   /**
@@ -4541,6 +4628,15 @@ export class Runner {
     );
     let staged = projection;
     const stage = (leaveOut: ReadonlySet<string>): string | undefined => {
+      // A slot left out moves to the refused-slot store by a plain write,
+      // which carries none of the restriction a link's write would, so what
+      // the slot holds is read here as an ordinary read, its label joining
+      // what the setup writes, the store among it.
+      for (const slot of leaveOut) {
+        if (dropped.has(slot)) {
+          argumentCell.key(slot).getRaw({ meta: ignoreReadForScheduling });
+        }
+      }
       staged = mergeSchemaDefaults<T>(
         this.#argumentOverStoredSlots(
           tx,
@@ -4573,6 +4669,7 @@ export class Runner {
         pattern.argumentSchema,
         defaults,
         tx,
+        this.#stagedArgument(tx, staged),
       );
     };
 
@@ -4588,6 +4685,9 @@ export class Runner {
       defaults,
       tx,
       carried,
+      // Only the carried slots are asked about, and the staged value holds
+      // each of them as the stored argument does.
+      this.#stagedArgument(tx, foldStoredArgumentSlots(argument, stored)),
     );
     const issue = stage(new Set(dropped.keys()));
     if (issue !== undefined && dropped.size < carried.length) {
@@ -4779,17 +4879,18 @@ export class Runner {
         new Set(droppedArgumentFields),
       );
     } else {
-      // Read under no schema: what is wanted is the stored bytes, and a load
-      // under the link's schema, the outgoing pattern's, would deliver all it
-      // reaches, in other spaces too, which nothing here reads.
       const previousArgumentCell = this.#runtime.getCellFromLink(
         { ...argumentLink, schema: undefined },
         undefined,
         tx,
       );
-      const previousArgument = previousArgumentCell.getRaw({
-        meta: ignoreReadForScheduling,
-      }) as T | undefined;
+      // The slots the caller names are what it supplies, so only the rest of
+      // the stored argument is read.
+      const previousArgument = this.#readStoredArgument(
+        tx,
+        argumentLink,
+        namedArgumentSlots(argument),
+      ) as T | undefined;
 
       const previousArgumentSchema = argumentLink.schema;
       const nextArgumentCell = previousArgumentCell.asSchema(
@@ -17428,6 +17529,17 @@ function getTxDebugActionId(
   tx?: IExtendedStorageTransaction,
 ): string | undefined {
   return tx ? (tx.tx as { debugActionId?: string }).debugActionId : undefined;
+}
+
+/**
+ * The top-level slots `argument`, an argument a caller supplies to a setup,
+ * names: none unless it is a plain record, which is the one shape whose slots
+ * fold over a stored argument's (`foldStoredArgumentSlots()`).
+ */
+function namedArgumentSlots(argument: unknown): ReadonlySet<string> {
+  return isFabricPlainObject(argument as FabricValue) && !isCellLink(argument)
+    ? new Set(Object.keys(argument as object))
+    : new Set();
 }
 
 /**
