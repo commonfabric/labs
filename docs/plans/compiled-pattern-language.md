@@ -662,6 +662,15 @@ as an assumption.
 98. **A truthiness test on a value of type `unknown`.** *Assumed:*
     accepted, as a test of presence. The ruling names the test against
     `undefined` alone, so it can be read as refusing this.
+99. **The declared type of a bound path whose prefix a condition
+    narrows** (LS question 35). *Assumed:* the declared type is taken at
+    the last step, and the prefix keeps its narrowing so that the
+    property is found. The alternative refuses a path below a narrowed
+    prefix.
+100. **Which read and append the read-then-push warning reports** (LS
+    question 36). *Assumed:* any read of the list in a body that calls
+    `push` or `pushAll` on it, and not `addUnique`. This reports more
+    sites than today's classifier.
 
 ## Open, and not needing the owner
 
