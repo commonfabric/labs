@@ -2,8 +2,8 @@
  * A session's windows onto a room's messages: `openWindow` sets a window to
  * the newest or the oldest run of the main conversation or of one thread,
  * with what lies beyond it on either side, and `closeWindow` removes it. A
- * request the room can't fulfill changes nothing, and one viewer's windows
- * are not another's.
+ * request the room can't fulfill changes nothing, and one instance of the
+ * room holds no other's windows.
  */
 import {
   type AddIntegrity,
@@ -178,8 +178,8 @@ export default pattern(() => {
         ),
       },
 
-      // Closing a window removes it alone, and another viewer's room has
-      // windows of its own.
+      // Closing a window removes it alone, and another instance of the room,
+      // Bob's here, holds windows of its own.
       {
         action: alice.messages.closeWindow,
         event: { requestId: "r7", windowId: "oldest" },

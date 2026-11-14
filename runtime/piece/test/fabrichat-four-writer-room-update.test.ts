@@ -407,9 +407,11 @@ describe("fabrichat-four-writer-room-update", () => {
     expect(windowsDocument()).toEqual(windowsBefore);
   });
 
-  it("offers `ensureFileStore`, and sends, edits and reacts afterwards, on messages stored before and after", async () => {
+  it("offers `ensureFileStore`, which the earlier program lacks", () => {
     expect(room.key("ensureFileStore").getRaw()).toBeDefined();
+  });
 
+  it("sends, edits and reacts afterwards, on messages stored before and after", async () => {
     await send(
       "sendMessage",
       trusted({ body: "Fourth" }, "ChatSendSurface", "ChatSend"),

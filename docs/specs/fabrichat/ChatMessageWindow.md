@@ -95,3 +95,11 @@ interface RoomWindowEvent {
 session's windows are its own, and another session of the same person reads
 none of them. They are no part of the room's record. Only the room's
 `commitWindow` handler writes them.
+
+A session's windows are stored under the schema of the program that last wrote
+them, which describes the messages they name, their reactions' write policy
+included. Where that policy lists writers the room's does not, as one a room
+program listing `commitDelete` and `commitObliterate` among its reactions'
+writers stores (see [`ChatMessage`](ChatMessage.md#deleted-messages)), the
+runtime refuses the room's rewriting those windows, so an `openWindow` or a
+`closeWindow` changes nothing there.

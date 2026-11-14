@@ -171,6 +171,14 @@ message said before remains in the room. A deletion takes no file out of its
 store: an attachment's entry stays there, and anyone else linking it still
 reads it.
 
+A deletion and an obliteration each write the whole message, so they write
+under the write policy the message's stored envelope holds for its reactions.
+Where that policy lists writers the room's own reactions policy does not, as a
+message stored by a room program that listed `commitDelete` and
+`commitObliterate` among its reactions' writers does, the runtime refuses the
+write ([`cfc-conformance-statement.md`](../cfc-conformance-statement.md) §10),
+and the message can be neither deleted nor obliterated.
+
 ## A message the room can't read
 
 No send stores a message that lacks `sentAt` or `body`, or holds either of
