@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fromFileUrl } from "@std/path";
 import { FakeTime } from "@std/testing/time";
 import ports from "@commonfabric/ports" with { type: "json" };
@@ -15,8 +15,6 @@ import {
   integrationRerun,
   integrationTestDir,
   offsetPorts,
-  patternTestListLine,
-  patternTestStartOrder,
   precompilePatternTests,
   readPatternTestList,
   runFilteredIntegration,
@@ -40,78 +38,77 @@ Deno.test("selectPatternTestFiles returns the files slash-separated and sorted",
   );
 });
 
-Deno.test("readPatternTestList reads each path and the cost written after it", () => {
-  const text = [
-    patternTestListLine("patterns/showcase/dice/dice.test.tsx", 12.5),
-    "",
-    patternTestListLine("patterns\\system\\notes\\note.test.tsx"),
-    patternTestListLine("patterns/chat.test.tsx", 0),
-  ].join("\n") + "\n";
-  const { files, costs } = readPatternTestList(text);
-  assertEquals(files, [
-    "patterns/showcase/dice/dice.test.tsx",
-    "patterns/system/notes/note.test.tsx",
-    "patterns/chat.test.tsx",
-  ]);
-  assertEquals([...costs], [
-    ["patterns/showcase/dice/dice.test.tsx", 12.5],
-    ["patterns/chat.test.tsx", 0],
-  ]);
+Deno.test("readPatternTestList reads the path on each line that has one", () => {
+  assertEquals(
+    readPatternTestList(
+      "patterns/showcase/dice/dice.test.tsx\n\n  patterns/chat.test.tsx\n",
+    ),
+    ["patterns/showcase/dice/dice.test.tsx", "patterns/chat.test.tsx"],
+  );
 });
 
-Deno.test("readPatternTestList refuses a line whose cost is not a number of seconds", () => {
-  for (
-    const line of [
-      "dice.test.tsx\tslow",
-      "dice.test.tsx\t-1",
-      "dice.test.tsx\t4\t5",
-    ]
-  ) {
-    assertThrows(
-      () => readPatternTestList(line),
-      Error,
-      "Malformed pattern test list line",
+Deno.test("runPackageIntegration runs pattern test files one at a time, in the seed's order", async () => {
+  // A stand-in `cf` that fails where another copy of itself is still
+  // running, and otherwise notes the file it was handed.
+  const scratch = await Deno.makeTempDir();
+  const cf = `${scratch}/cf`;
+  await Deno.writeTextFile(
+    cf,
+    [
+      "#!/bin/sh",
+      `mkdir "${scratch}/running" || exit 3`,
+      `for file; do :; done`,
+      `echo "$file" >> "${scratch}/ran"`,
+      `rmdir "${scratch}/running"`,
+    ].join("\n") + "\n",
+  );
+  await Deno.chmod(cf, 0o755);
+  const files = Array.from(
+    { length: 6 },
+    (_, at) => `patterns/showcase/f${at}.test.tsx`,
+  );
+  const seed = 20261111;
+  const saved = Object.fromEntries(
+    [
+      "CF_BINARY",
+      "CF_COMPILE_CACHE_FILE",
+      "CF_TEST_RECORDS_DIR",
+      SHUFFLE_SEED_VARIABLE,
+    ].map((name) => [
+      name,
+      Deno.env.get(name),
+    ]),
+  );
+  Deno.env.set("CF_BINARY", cf);
+  Deno.env.delete("CF_COMPILE_CACHE_FILE");
+  Deno.env.set("CF_TEST_RECORDS_DIR", scratch);
+  Deno.env.set(SHUFFLE_SEED_VARIABLE, String(seed));
+  try {
+    const outcome = await runPackageIntegration(
+      "pattern-tests",
+      "",
+      fromFileUrl(new URL("..", import.meta.url)),
+      scratch,
+      undefined,
+      files,
     );
-  }
-});
-
-Deno.test("patternTestStartOrder starts the costliest files first and unpriced ones before them", () => {
-  const costs = new Map([
-    ["a.test.tsx", 5],
-    ["b.test.tsx", 300],
-    ["c.test.tsx", 40],
-  ]);
-  const files = ["a.test.tsx", "b.test.tsx", "c.test.tsx", "d.test.tsx"];
-  for (const seed of [1, 20260928]) {
-    assertEquals(patternTestStartOrder(files, costs, seed), [
-      "d.test.tsx",
-      "b.test.tsx",
-      "c.test.tsx",
-      "a.test.tsx",
-    ]);
-  }
-});
-
-Deno.test("patternTestStartOrder puts files of equal cost in the seed's order, not the path's", () => {
-  const tied = Array.from({ length: 8 }, (_, at) => `tied-${at}.test.tsx`);
-  const files = ["long.test.tsx", ...tied];
-  const costs = new Map<string, number>([
-    ["long.test.tsx", 100],
-    ...tied.map((file) => [file, 10] as [string, number]),
-  ]);
-  const orders = new Set<string>();
-  for (let seed = 1; seed <= 5; seed++) {
-    const order = patternTestStartOrder(files, costs, seed);
-    assertEquals(order[0], "long.test.tsx");
+    assertEquals(outcome.success, true);
+    const order = shuffledPaths(files, seed);
     assertEquals(
-      order.slice(1),
-      shuffledPaths(files, seed).filter((file) => file !== "long.test.tsx"),
+      (await Deno.readTextFile(`${scratch}/ran`)).trimEnd().split("\n"),
+      order,
     );
-    orders.add(order.join());
+    assertEquals(
+      outcome.tests.map(({ record }) => [record.test.n, record.outcome]),
+      order.map((file) => [file, "pass"]),
+    );
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+    await Deno.remove(scratch, { recursive: true });
   }
-  // Five seeds give more than one order, so the ties are not left in the
-  // order the paths sort in.
-  assert(orders.size > 1);
 });
 
 Deno.test("selectIntegrationTestFiles keeps .test.ts files matching the filter", () => {
