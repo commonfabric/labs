@@ -1045,19 +1045,20 @@ describe("cfc-result-wiring-stamp", () => {
       expect(derivedOf(result)).toContain(BOB);
     });
 
-    it("stays where a run given no transaction finds the result unchanged", async () => {
+    it("stays where a run of another pattern given no transaction finds the result unchanged", async () => {
       // Only a setup in the transaction it was asked in restates an unchanged
       // result (`#isAsking` in `runner.ts`). A run given no transaction holds
       // none of the reads that chose its pattern, so a re-mint there could
-      // drop a clause they carried.
+      // drop a clause they carried. Another pattern's setup reads no stored
+      // name, so its join is empty and only the gate keeps the stamp.
 
-      const { mixed } = patterns();
+      const { mixed, sameMixed } = patterns();
       const result = await setUp("unasked-unchanged", mixed);
       await plantValueStamp(result, BOB);
 
       const again = runtime.run(
         undefined,
-        mixed,
+        sameMixed,
         { x: 1 },
         runtime.getCell(space, "unasked-unchanged"),
       );
