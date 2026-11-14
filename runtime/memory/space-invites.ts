@@ -322,8 +322,17 @@ export function inviteCodeVerifier(link: InviteLink): string {
  *   while making itself the browser's default for the scheme answers on it,
  *   and the Weaver accepts only a nonce it issued. It is never an invitation,
  *   and {@link parseInviteLink} returns undefined for it.
+ *
+ * Any other URL on the scheme is malformed: the scheme belongs to this link
+ * format, so {@link parseInviteLink} refuses it rather than passing it on.
  */
 export const INVITE_LINK_SCHEME = "fbrc";
+
+/**
+ * The query keys that make a `/join` or `/open` URL an invitation, so that one
+ * carrying none of them, such as another site's `/open?id=…`, is not one.
+ */
+const INVITE_LINK_QUERY_KEYS = ["host", "space", "invite"] as const;
 
 /**
  * Builds the canonical join link, `/join?host&space&invite[&inviter]#code`, on
@@ -366,12 +375,15 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
  * service named in the query, which the code verifier binds, never the link's
  * origin or the scheme form's `join`.
  *
- * Other `https` paths and other {@link INVITE_LINK_SCHEME} actions, the setup
- * reply among them, return undefined. A malformed invitation throws a
- * secret-free {@link SpaceInviteError}: `invalid-link` for its shape, including
- * a code given both in the fragment and in `options.code`, or in
- * `options.code` beside any form but `fbrc://join`. A returned `inviter` is the
- * link's unverified claim; see {@link InviteLink}.
+ * A URL that is not an invitation returns undefined: another scheme's URL on
+ * any path but `/join` or `/open`, a `/join` or `/open` URL whose query names
+ * none of `host`, `space`, and `invite`, and the setup reply,
+ * `fbrc://setup?…`. Anything else throws a secret-free
+ * {@link SpaceInviteError}: `invalid-link` for a malformed invitation or any
+ * other {@link INVITE_LINK_SCHEME} URL, such as `fbrc://JOIN?…` or
+ * `fbrc:join?…`; `invalid-link` too for a code given both in a fragment and in
+ * `options.code`, or in `options.code` beside any form but `fbrc://join`. A
+ * returned `inviter` is the link's unverified claim; see {@link InviteLink}.
  */
 export function parseInviteLink(
   link: string | URL,
@@ -384,23 +396,27 @@ export function parseInviteLink(
     throw new SpaceInviteError("invalid-link");
   }
   if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
-    if (url.hostname !== "join") return undefined;
-    if (url.port || url.pathname !== "") {
+    if (url.hostname === "setup") return undefined;
+    if (url.host !== "join" || url.pathname !== "") {
       throw new SpaceInviteError("invalid-link");
     }
   } else {
-    if (url.pathname !== "/join" && url.pathname !== "/open") return undefined;
+    if (
+      (url.pathname !== "/join" && url.pathname !== "/open") ||
+      !INVITE_LINK_QUERY_KEYS.some((key) => url.searchParams.has(key))
+    ) return undefined;
     normalizeInviteHost(url.origin);
     if (options.code !== undefined) throw new SpaceInviteError("invalid-link");
   }
   const fragment = new URLSearchParams(url.hash.slice(1));
-  const fragmentKeys = [...fragment.keys()].join(",");
   if (
     url.username || url.password ||
     !["host,invite,space", "host,invite,inviter,space"].includes(
       [...url.searchParams.keys()].sort().join(","),
     ) ||
-    fragmentKeys !== (options.code === undefined ? "code" : "")
+    (options.code === undefined
+      ? [...fragment.keys()].join(",") !== "code"
+      : url.hash !== "")
   ) throw new SpaceInviteError("invalid-link");
   const space = url.searchParams.get("space");
   if (!isInviteDIDKey(space)) throw new SpaceInviteError("invalid-link");

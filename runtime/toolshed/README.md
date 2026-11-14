@@ -292,10 +292,11 @@ custom scheme every Weaver answers, where `join` is the URL's host and its path
 is empty; and that scheme form without a fragment, with the code passed
 separately as `parseInviteLink(url, { code })`, which is how Android delivers it
 (the code arrives as the intent's `S.code` extra). The result's `host` is always
-the service named in the query, never the link's own origin. Other paths and
-other actions of the scheme return `undefined`, among them
-`fbrc://setup?n=<nonce>`, the reply a Weaver receives while making itself the
-browser's default for the scheme, which is never an invitation. `inviter` is a
+the service named in the query, never the link's own origin. Other paths, a
+`/join` or `/open` URL whose query names none of `host`, `space`, and `invite`,
+and `fbrc://setup?n=<nonce>` return `undefined`; the last is the reply a Weaver
+receives while making itself the browser's default for the scheme, and is never
+an invitation. Any other URL on the scheme throws `invalid-link`. `inviter` is a
 display hint that anyone holding the link can change; it is checked only
 syntactically and is not part of the code verifier. A recipient cannot read the
 space ACL before redeeming, and afterwards an ACL check can show at most that

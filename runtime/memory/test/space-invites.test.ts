@@ -290,7 +290,7 @@ describe("space-invites", () => {
       })
     ).toThrow("invalid-request");
   });
-  describe("parseInviteLink() forms", () => {
+  describe("parseInviteLink()", () => {
     const invite = {
       host: "https://service.example",
       space,
@@ -335,22 +335,23 @@ describe("space-invites", () => {
         invite,
       );
     });
-    it("returns `undefined` for the setup reply and every other action or path", () => {
+    it("returns `undefined` for the setup reply and for URLs that name no invitation", () => {
       for (
         const other of [
           `${INVITE_LINK_SCHEME}://setup?n=abc123`,
           // The setup action is never an invitation, whatever it carries.
           `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
-          `${INVITE_LINK_SCHEME}://other${query}${link.hash}`,
-          `${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`,
-          `${INVITE_LINK_SCHEME}:join${query}${link.hash}`,
-          `${INVITE_LINK_SCHEME}:///join${query}${link.hash}`,
           `https://links.example/setup${query}${link.hash}`,
           `https://links.example/join/${query}${link.hash}`,
+          // Another site's `/open` or `/join`, naming no invitation field.
+          "https://drive.example/open?id=abc",
+          "https://meet.example/join?confno=1#pwd=x",
+          "https://links.example/open",
         ]
       ) {
-        expect(parseInviteLink(other)).toBeUndefined();
-        expect(parseInviteLink(other, { code: invite.code })).toBeUndefined();
+        expect(parseInviteLink(other), other).toBeUndefined();
+        expect(parseInviteLink(other, { code: invite.code }), other)
+          .toBeUndefined();
       }
     });
     it("throws `invalid-link`, without the code, for a malformed scheme-form or separated-code invitation", () => {
@@ -360,14 +361,24 @@ describe("space-invites", () => {
         [`${scheme}#`, {}],
         // A code both in the fragment and apart from it.
         [`${scheme}${link.hash}`, { code: invite.code }],
-        // A fragment other than the code beside a separate code.
+        // Any fragment beside a separate code.
         [`${scheme}#inviter=${inviter}`, { code: invite.code }],
+        [`${scheme}#=junk`, { code: invite.code }],
+        [`${scheme}#&&&`, { code: invite.code }],
+        // A `/join` or `/open` URL naming an invitation field is one.
+        ["https://links.example/open?invite=x&id=abc", {}],
         // A separate code is defined only for the scheme form.
         [link.href.replace(link.hash, ""), { code: invite.code }],
         [link.href.replace(link.hash, "").replace("/join?", "/open?"), {
           code: invite.code,
         }],
-        // Anything but the bare `join` host.
+        // Any other URL on the scheme.
+        [`${INVITE_LINK_SCHEME}://other${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}:join${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}:/join${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}:///join${query}${link.hash}`, {}],
+        [`${INVITE_LINK_SCHEME}://${query}`, { code: invite.code }],
         [`${INVITE_LINK_SCHEME}://join/${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}://join/x${query}`, { code: invite.code }],
         [`${INVITE_LINK_SCHEME}://join:5${query}${link.hash}`, {}],
@@ -380,9 +391,10 @@ describe("space-invites", () => {
         [`${scheme}${link.hash}&access=OWNER`, {}],
       ];
       for (const [malformed, options] of cases) {
-        expect(refusal(() => parseInviteLink(malformed, options))).toBe(
-          "invalid-link",
-        );
+        expect(refusal(() => parseInviteLink(malformed, options)), malformed)
+          .toBe(
+            "invalid-link",
+          );
       }
     });
     it("throws `invalid-request` for a separate code that is not an invitation secret", () => {
