@@ -2993,15 +2993,16 @@ impl<'a> Analyzer<'_, '_, 'a> {
             // kind `created` for the link an `instantiate` or an `effect`
             // site returned.
             let site = (module, site_start);
-            let fixed = self
+            let mut fixed = self
                 .store
                 .calls
                 .get(&site)
                 .is_some_and(|kind| kind == "bind" || kind.starts_with("createCell"));
             // The path of the write below the cell (PL §3.11): the
             // static keys of the `key` calls the receiver is written
-            // with, and `*` for an append. A key that is not static
-            // leaves the write at the path above it.
+            // with, and `*` for an append. "A write below a key that is
+            // not static is too broad to predict": an envelope that names
+            // the site, and no edge.
             let mut below: Vec<Seg> = Vec::new();
             let mut at = unwrap(&member.object);
             while let Expression::CallExpression(inner) = at {
@@ -3024,11 +3025,16 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     Some(keys) => {
                         below.splice(0..0, keys);
                     }
-                    None => below.clear(),
+                    None => {
+                        below.clear();
+                        fixed = false;
+                    }
                 }
                 at = unwrap(inner_member.object());
             }
-            if matches!(name, "push" | "pushAll" | "addUnique") {
+            if !fixed {
+                below.clear();
+            } else if matches!(name, "push" | "pushAll" | "addUnique") {
                 below.push(Seg::Star);
             }
             self.store

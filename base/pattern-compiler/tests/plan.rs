@@ -2892,3 +2892,40 @@ export const Counted = pattern<{ items: Item[]; name: string }>(({ items, name }
         assert!(path.last() != Some(&json!("length")), "{slot}");
     }
 }
+
+#[test]
+fn a_write_below_a_key_that_is_not_static_of_a_created_cell_is_an_envelope_with_no_edge() {
+    // PL §3.11: "A write below a key that is not static is too broad to
+    // predict ... Its record is a `WriteEnvelope` of kind `created` that
+    // names the site, and no edge: the envelope has no path, and the
+    // created cell bounds the write."
+    let analysis = program(
+        r#"import { Cell, handler, pattern, Writable } from "commonfabric";
+const make = handler<{ k: string }, { out: Cell<unknown[]> }>((event, state) => {
+  const made = new Writable<Record<string, number>>({});
+  made.key(event.k).set(1);
+  made.key("a").set(2);
+  state.out.push(made);
+});
+export const P = pattern<{ out: Cell<unknown[]> }>(({ out }) => ({ make: make({ out }) }));
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let body = &plan["bodies"][0];
+    let targets: Vec<&Value> = body["writes"]
+        .as_array()
+        .expect("writes")
+        .iter()
+        .map(|write| &write["target"])
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            // The initial value the constructor writes.
+            &json!({ "kind": "created", "call": 0, "path": [] }),
+            &json!({ "kind": "created", "call": 0, "path": ["a"] }),
+            &json!({ "kind": "handle", "slot": body["reads"][1], "path": ["*"] }),
+        ]
+    );
+    assert_eq!(body["envelopes"], json!([{ "kind": "created", "call": 0 }]));
+}
