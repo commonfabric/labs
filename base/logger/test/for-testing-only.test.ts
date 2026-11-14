@@ -126,6 +126,19 @@ describe("captureLogsForTestingOnly()", () => {
     });
   });
 
+  it("keeps the floor lifted until the last of overlapping captures ends, in either order", () => {
+    const first = captureLogsForTestingOnly("capture-test");
+    const second = captureLogsForTestingOnly("capture-test-other");
+
+    first[Symbol.dispose]();
+    expect(getGlobalLogFloor()).toBeUndefined();
+    other.info("plain", "still recorded");
+    expect(second.textsOf("plain")).toEqual(["still recorded"]);
+
+    second[Symbol.dispose]();
+    expect(getGlobalLogFloor()).toBe("error");
+  });
+
   it("puts back the logger and the global floor, and stops recording, once disposed", () => {
     const captured = captureLogsForTestingOnly("capture-test");
     captured[Symbol.dispose]();

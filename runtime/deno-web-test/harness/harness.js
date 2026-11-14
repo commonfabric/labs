@@ -84,8 +84,8 @@ export class TestController {
     if (this.globalError) {
       return { error: this.globalError };
     }
-    if (loadError) {
-      return { error: loadError.message };
+    if (loadError !== null) {
+      return { error: loadError };
     }
     return { ok: true };
   }
@@ -118,14 +118,14 @@ export class TestHarness {
     this.tests = [];
   }
 
-  // Imports the test file, resolving with what its import threw, or with
-  // `null` once it has loaded.
+  // Imports the test file, resolving with the message of what its import
+  // threw, whatever was thrown, or with `null` once it has loaded.
   async load() {
     this.document.querySelector("#title").innerText = this.testFile;
     try {
       await this.importModule(`/dist${this.testFile}`);
     } catch (e) {
-      return e;
+      return e instanceof Error ? e.message : String(e);
     }
     return null;
   }

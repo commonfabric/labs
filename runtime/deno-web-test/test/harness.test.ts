@@ -178,13 +178,22 @@ describe("harness", () => {
           expect(document.title.innerText).toBe("/a.test.js");
         });
 
-        it("resolves with what the import threw", async () => {
-          const thrown = new Error("this file fails as it loads");
+        it("resolves with the message of what the import threw", async () => {
           const { harness } = harnessFor(
             "?test=/a.test.js",
-            () => Promise.reject(thrown),
+            () => Promise.reject(new Error("this file fails as it loads")),
           );
-          expect(await harness.load()).toBe(thrown);
+          expect(await harness.load()).toBe("this file fails as it loads");
+        });
+
+        it("resolves with a thrown value that is not an `Error` as text", async () => {
+          for (const [thrown, text] of [["boom", "boom"], [null, "null"]]) {
+            const { harness } = harnessFor(
+              "?test=/a.test.js",
+              () => Promise.reject(thrown),
+            );
+            expect(await harness.load()).toBe(text);
+          }
         });
       });
 
@@ -251,6 +260,12 @@ describe("harness", () => {
           expect(await controller.whenReady()).toEqual({
             error: "this file fails as it loads",
           });
+        });
+
+        it("resolves with an error for a test file that throws `null` as it loads", async () => {
+          const { harness } = harnessFor("", () => Promise.reject(null));
+          const controller = new TestController(harness, new EventTarget());
+          expect(await controller.whenReady()).toEqual({ error: "null" });
         });
 
         it("resolves with an uncaught error the page raised as it loaded", async () => {
