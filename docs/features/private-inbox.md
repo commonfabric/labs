@@ -591,20 +591,22 @@ case, a loom daemon of the owner's running as another identity, for which loom
 shares still arrive at the daemon. The pattern sandbox formats a date given no
 zone in UTC and one given a zone in that zone, while a date's local getters read
 the host's zone, so the notice gives UTC explicitly. It reads the record's
-`reason` and `refusedAt` and nothing else, so it never reads through the
-record's link to the refused inbox, and nothing the refused inbox's owner labels
-reaches Home's rendering. A code Home doesn't know is shown as given, and an
-empty one as `none given`. The notice carries a "Use a new inbox" button, as
-"Replacing a refused inbox" says, and says that a loom daemon running as another
-identity than the owner's stops receiving loom shares once the owner uses it.
-The notice goes when the record is cleared.
-`patterns/system/home/home.test.tsx` tests it, and
+`reason` and `refusedAt`, and its `inbox` only as a link, compared with Home's
+own and never followed, so nothing the refused inbox's owner labels reaches
+Home's rendering. A code Home doesn't know is shown as given, and an empty one
+as `none given`. The notice carries a "Use a new inbox" button, as "Replacing a
+refused inbox" says, and says that a loom daemon running as another identity
+than the owner's stops receiving loom shares once the owner uses it. While Home
+holds no inbox and the refused inbox is Home's own, which the button's click
+never takes, the notice says so and offers no button. The notice goes when the
+record is cleared. `patterns/system/home/home.test.tsx` tests it, and
 `home-refusal-notice.test.tsx` beside it, with the refused inbox created by
 another user, checks that `inspectConfLabel` reports no user's label on the
 notice's sentence, where it reports one once the computed producing the notice's
 text reads the refused inbox's offers. It covers the notice's text only: the
-same read in the computed that decides whether the notice shows, or in another
-computed the notice renders, leaves the test green.
+same read in the computed that decides whether the notice shows, in the one that
+decides whether it offers the button, or in another computed the notice renders,
+leaves the test green.
 
 A Home of a vintage whose ensure takes no refusal is sent the same event. Event
 schemas are open, so its handler is delivered the fields it declares, `adopt`
@@ -622,9 +624,10 @@ does nothing while the record holds no refusal. Otherwise it:
 
 1. keeps the inbox Home holds, or, when Home holds none, takes Home's own, which
    the ensure has had created by then, as "Creating Home's own" says. While
-   Home holds none and has none of its own, or its own is the refused inbox, it
-   does nothing more, and the refusal stays recorded for a click after the next
-   ensure;
+   Home holds none and has none of its own, it does nothing more, and the
+   refusal stays recorded for a click after the next ensure. While Home holds
+   none and its own is the refused inbox, it does nothing either, and nothing
+   else in Home replaces that inbox: the notice offers no button then;
 2. clears the refusal record;
 3. records the refusal it acted on in `privateInboxReplacement`, under
    `replacement`: the refused inbox, as a typed link; the refusal's `reason`

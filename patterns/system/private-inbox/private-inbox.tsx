@@ -1184,7 +1184,7 @@ export const requestPrivateInbox = handler<
  * Home without one, so the notice's button finds it. While Home holds none and
  * has none of its own, this does nothing, and the refusal stays recorded for
  * the next click, after the next ensure; nor does it take Home's own when that
- * is the refused inbox.
+ * is the refused inbox, and Home's notice offers no button then.
  *
  * `privateInboxReplacement` admits a write only from this handler, and only
  * for an event the renderer marks as a click on

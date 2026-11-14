@@ -281,7 +281,9 @@ export type HomeOutput = {
   // For the owner, from the button on Home's refusal notice: replaces the
   // refused inbox with the one Home holds, or with its own when it holds none,
   // and points the profiles that point at the refused inbox at Home's. While
-  // Home holds none and has none of its own, it does nothing.
+  // Home holds none and has none of its own, it does nothing, nor while Home
+  // holds none and its own is the refused inbox, when the notice offers no
+  // button.
   // Refused unless the renderer marks the event as a click on that button.
   replaceRefusedPrivateInbox: Stream<void>;
   // For the host: creates Home's own private inbox when `ownPrivateInbox`
@@ -516,11 +518,32 @@ const Home = pattern(
     // and the run joins the label its owner gives its offers. The notice
     // renders after everything else, for the reason the chats panel does, and
     // the screen's header slot shows it above the tabs. Only its text is
-    // computed: its markup, button included, is static, and `refused` decides
-    // whether it shows.
+    // computed: its markup is static, `refused` decides whether it shows, and
+    // `ownRefusedStyles` whether it offers the button.
     const refusalReason = privateInboxRefusal.key("refusal").key("reason");
     const refusedAt = privateInboxRefusal.key("refusal").key("refusedAt");
     const refused = computed(() => typeof refusedAt.get() === "number");
+    // Whether the refused inbox is Home's own while Home holds none, which the
+    // button's click never takes: the notice then hides the button and says
+    // why. It compares the stored links, read typed as the click reads them,
+    // and follows neither. The markup stays static, and this decides only
+    // which part of it displays, so that Home's anonymous cells keep their
+    // numbers.
+    const ownRefusedStyles = computed(() => {
+      const own = ownPrivateInbox.get()?.piece;
+      const refusedInbox = privateInboxRefusal.get()?.refusal?.inbox;
+      const ownRefused = privateInbox.get()?.piece === undefined &&
+        own !== undefined && refusedInbox !== undefined &&
+        equals(own, refusedInbox);
+      return {
+        replace: { display: ownRefused ? "none" : "flex" },
+        ownRefused: {
+          fontSize: "12px",
+          color: "#666",
+          display: ownRefused ? "inline" : "none",
+        },
+      };
+    });
     const refusalNoticeText = computed(() => {
       const stored = refusalReason.get();
       const reason = typeof stored === "string" ? stored : "";
@@ -793,22 +816,35 @@ const Home = pattern(
                         {" "}
                         {refusalNoticeText.noticed}.
                       </span>
-                      <span style={{ fontSize: "12px", color: "#666" }}>
-                        Using a new inbox points the profiles that point at the
-                        refused one at Home's own inbox instead. A loom daemon
-                        running as an identity other than yours then stops
-                        receiving loom shares.
+                      <span
+                        id="home-private-inbox-own-refused"
+                        style={ownRefusedStyles.ownRefused}
+                      >
+                        The refused inbox is Home's own, so Home has no other
+                        inbox to use instead.
                       </span>
-                      <div>
-                        <cf-button
-                          id="home-private-inbox-replace"
-                          size="sm"
-                          data-ui-action={TRUSTED_REPLACE_REFUSED_INBOX_ACTION}
-                          onClick={replaceRefusedInboxStream}
-                        >
-                          Use a new inbox
-                        </cf-button>
-                      </div>
+                      <cf-vstack
+                        id="home-private-inbox-replace-offer"
+                        gap="1"
+                        style={ownRefusedStyles.replace}
+                      >
+                        <span style={{ fontSize: "12px", color: "#666" }}>
+                          Using a new inbox points the profiles that point at
+                          the refused one at Home's own inbox instead. A loom
+                          daemon running as an identity other than yours then
+                          stops receiving loom shares.
+                        </span>
+                        <div>
+                          <cf-button
+                            id="home-private-inbox-replace"
+                            size="sm"
+                            data-ui-action={TRUSTED_REPLACE_REFUSED_INBOX_ACTION}
+                            onClick={replaceRefusedInboxStream}
+                          >
+                            Use a new inbox
+                          </cf-button>
+                        </div>
+                      </cf-vstack>
                     </cf-vstack>
                   </cf-alert>
                 </div>

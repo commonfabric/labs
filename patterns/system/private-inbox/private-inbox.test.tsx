@@ -1829,6 +1829,19 @@ export default pattern(() => {
     // deno-lint-ignore no-explicit-any
     profiles: [ownlessAdvertising] as any,
   });
+  const ownRefusedAdvertising = ProfileHome({
+    initialName: "Own refused advertising",
+  });
+  const ownRefused = new Writable<PrivateInboxHolder>({});
+  const ownRefusedOwn = new Writable<PrivateInboxHolder>({});
+  const ownRefusedRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const replaceOwnRefused = ReplacingHome({
+    privateInbox: ownRefused,
+    ownPrivateInbox: ownRefusedOwn,
+    privateInboxRefusal: ownRefusedRefusal,
+    // deno-lint-ignore no-explicit-any
+    profiles: [ownRefusedAdvertising] as any,
+  });
   const action_advertise_the_inbox_to_replace = action(() => {
     const refused = elsewhere.get().piece?.resolveAsCell();
     const homeInbox = home.get().piece?.resolveAsCell();
@@ -1851,12 +1864,18 @@ export default pattern(() => {
     ownlessRefusal.set({
       refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
     });
+    ownRefusedAdvertising.setInbox.send({ inbox: refused });
+    ownRefusedOwn.set({ piece: refused });
+    ownRefusedRefusal.set({
+      refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
+    });
   });
   const action_replace_the_refused_inbox = action(() => {
     replaceRefused.replace.send();
     replaceUnrefused.replace.send();
     replaceOwning.replace.send();
     replaceOwnless.replace.send();
+    replaceOwnRefused.replace.send();
   });
   const assert_the_profiles_pointing_at_the_refused_inbox_point_at_home_inbox =
     assert(() =>
@@ -1895,6 +1914,16 @@ export default pattern(() => {
       equals(ownlessAdvertising.inbox?.piece, elsewhere.get().piece) &&
       ownlessRefusal.get().refusal?.reason === REFUSED &&
       replaceOwnless.replacement.replacement === undefined,
+  );
+  // Nor does the click take Home's own inbox when that is the refused one,
+  // and Home's notice offers no button then.
+  const assert_replacing_while_holding_none_leaves_a_refused_own_inbox = assert(
+    () =>
+      ownRefused.get().piece === undefined &&
+      equals(ownRefusedOwn.get().piece, elsewhere.get().piece) &&
+      equals(ownRefusedAdvertising.inbox?.piece, elsewhere.get().piece) &&
+      ownRefusedRefusal.get().refusal?.reason === REFUSED &&
+      replaceOwnRefused.replacement.replacement === undefined,
   );
   const action_point_back_at_the_replaced_inbox = action(() => {
     replacedSecond.setInbox.send({
@@ -2109,6 +2138,10 @@ export default pattern(() => {
       { assertion: assert_replacing_while_holding_none_takes_homes_own_inbox },
       {
         assertion: assert_replacing_while_holding_and_owning_none_does_nothing,
+      },
+      {
+        assertion:
+          assert_replacing_while_holding_none_leaves_a_refused_own_inbox,
       },
       { action: action_point_back_at_the_replaced_inbox },
       { action: action_repoint_again },
