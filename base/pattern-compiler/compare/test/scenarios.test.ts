@@ -179,12 +179,16 @@ describe("the runtime's labels read by origin (ruling T2)", () => {
     }
   });
 
-  it("has the container of a map tighter with the static part and equal without it", async () => {
+  it("has the container of a map tighter with the static part and without it", async () => {
+    // The container holds the elements' clause on an entry of origin
+    // `declared` and on its `enumerate` and `shape` entries, which are of
+    // origin `structure`: stamps of the coordinator's run, which are
+    // compared (PL §3.1, "Which entries are the static part"; §3.6).
     for (const flag of [true, false]) {
       const rows = await overall(flag);
 
-      expect(rows.titles).toBe("tighter, equal");
-      expect(rows.loud).toBe("tighter, equal");
+      expect(rows.titles).toBe("tighter, tighter");
+      expect(rows.loud).toBe("tighter, tighter");
     }
   });
 
@@ -192,7 +196,8 @@ describe("the runtime's labels read by origin (ruling T2)", () => {
     // The document of an `ifElse` result stores one entry, of origin
     // `declared`. The label of the condition reaches a reader through that
     // entry alone, so without it the template, which has the condition's
-    // label, is the wider one.
+    // label, is the wider one. The comparison of a conditional is made
+    // with the static part included (PL §3.5; section 8, question 69).
     expect((await overall(true)).direct).toBe("equal, looser");
     expect((await overall(false)).direct).toBe("tighter, looser");
   });

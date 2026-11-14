@@ -141,12 +141,12 @@ export type Row = {
   reached: Evaluated;
   comparison: Comparison;
   /**
-   * The runtime's label read by origin (ruling T2): the entries of each
-   * document on the way from the output to its value, without the entries of
-   * origin `declared` that a module's result document carries, and without
-   * the entries of origin `structure` the runtime makes from them for a
-   * container. Those are the join of the labels the module's argument schema
-   * declares, which does not depend on what the run read. The argument's own
+   * The runtime's label read by origin (ruling T2; PL §3.1, "Which entries
+   * are the static part"): the entries of each document on the way from the
+   * output to its value, without the static part. The static part is the
+   * entries of origin `declared` outside the argument's document, and no
+   * entry of another origin: an entry of origin `structure` is the stamp of
+   * a run, as a `derived` one is, and is compared. The argument's own
    * document keeps its declared entries: they are the labels of the inputs.
    */
   runtimeByOrigin: { all: Label; withoutStatic: Label };
@@ -622,7 +622,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             labelMap: {
               ...metadata.labelMap,
               entries: metadata.labelMap.entries.filter((entry) =>
-                entry.origin !== "declared" && entry.origin !== "structure"
+                entry.origin !== "declared"
               ),
             },
           };
