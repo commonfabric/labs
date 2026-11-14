@@ -16,6 +16,14 @@ import {
 } from "../../src/executor/serving-port-plane.ts";
 import { ServingPortBridge } from "../../src/executor/serving-port-bridge.ts";
 import {
+  isPlaceCompileFailure,
+  markPlaceCompileFailure,
+} from "../../src/harness/compile-failure.ts";
+import type {
+  ModuleCompiler,
+  ModuleCompileRequest,
+} from "../../src/harness/module-compile.ts";
+import {
   type BridgeNotices,
   type BridgeRequests,
   type PlaneNotices,
@@ -63,13 +71,20 @@ describe("ServingPortBridge", () => {
   let channel: MessageChannel;
   let bridge: ServingPortBridge;
 
-  /** Builds the bridge over a server whose store is at `store`. */
-  const start = (store?: URL) => {
+  /**
+   * Builds the bridge over a server whose store is at `store`, compiling for
+   * its worker in `moduleCompiler` where one is given.
+   */
+  const start = (store?: URL, moduleCompiler?: ModuleCompiler) => {
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
       ...(store === undefined ? {} : { store }),
     });
-    bridge = new ServingPortBridge({ server, port: channel.port2 });
+    bridge = new ServingPortBridge({
+      server,
+      port: channel.port2,
+      ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
+    });
   };
 
   beforeEach(() => {
@@ -113,6 +128,103 @@ describe("ServingPortBridge", () => {
       await expect(plane.engineForSpace(space)).rejects.toThrow(
         "which another thread cannot open; a serving worker needs a file store",
       );
+    });
+
+    describe("compiler", () => {
+      const request: ModuleCompileRequest = {
+        program: {
+          main: "/main.ts",
+          files: [{ name: "/main.ts", contents: "export const x = 1;" }],
+        },
+        authoredSources: [],
+        mounts: [],
+        moduleIdentities: new Map<string, string>(),
+        specifierAliases: new Map<string, string>(),
+        storedSource: false,
+        noCheck: true,
+        diagnosticMessages: "typescript",
+        instanceNames: false,
+      };
+
+      /** What a compile through the plane rejects with. */
+      const failureOf = async (): Promise<unknown> => {
+        try {
+          await plane.compiler.compile(request);
+        } catch (error) {
+          return error;
+        }
+        throw new Error("the compile did not fail");
+      };
+
+      it("compiles in the server's thread's compiler, and returns its modules", async () => {
+        const requests: ModuleCompileRequest[] = [];
+        start(undefined, {
+          compile: (asked) => {
+            requests.push(asked);
+            return Promise.resolve(
+              new Map([["/main.ts", { js: "exports.x = 1;" }]]),
+            );
+          },
+        });
+
+        const modules = await plane.compiler.compile(request);
+
+        expect([...modules]).toEqual([["/main.ts", { js: "exports.x = 1;" }]]);
+        expect(requests.map((asked) => asked.program)).toEqual([
+          request.program,
+        ]);
+      });
+
+      it("rejects with the failure of a compile, which is not one of the place it ran", async () => {
+        start(undefined, {
+          compile: () => Promise.reject(new Error("the source does not parse")),
+        });
+
+        const failure = await failureOf();
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(String(failure)).toContain("the source does not parse");
+        expect(isPlaceCompileFailure(failure)).toBe(false);
+      });
+
+      it("keeps a failure of the place a compile ran marked as one", async () => {
+        start(undefined, {
+          compile: () =>
+            Promise.reject(
+              markPlaceCompileFailure(new Error("the compile worker died")),
+            ),
+        });
+
+        const failure = await failureOf();
+
+        expect(String(failure)).toContain("the compile worker died");
+        expect(isPlaceCompileFailure(failure)).toBe(true);
+      });
+
+      it("fails a compile as one of the place where the process runs none", async () => {
+        start();
+
+        expect(isPlaceCompileFailure(await failureOf())).toBe(true);
+      });
+
+      it("fails the compiles it still awaits, as failures of the place, once it stops compiling", async () => {
+        const asked = Promise.withResolvers<void>();
+        start(undefined, {
+          compile: () => {
+            asked.resolve();
+            return new Promise<never>(() => {});
+          },
+        });
+        const failed = failureOf();
+        await asked.promise;
+
+        plane.stopCompiling();
+
+        const failure = await failed;
+        expect(String(failure)).toContain("stopped compiling");
+        expect(isPlaceCompileFailure(failure)).toBe(true);
+        expect(isPlaceCompileFailure(await failureOf())).toBe(true);
+      });
     });
 
     it("carries the server's view changes to the worker's observer", async () => {

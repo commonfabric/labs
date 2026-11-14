@@ -18,9 +18,11 @@ import type {
 } from "@commonfabric/memory/v2/server";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type { CollectedMemory } from "../collected-memory.ts";
+import type { ModuleCompilerPool } from "../harness/module-compiler-pool.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { mergeServingLoopDiagnostics } from "./diagnostics-merge.ts";
+import { compileWorkerLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import {
   admissionActivates,
   DEFAULT_MAX_PARKED_RUNTIMES,
@@ -125,6 +127,22 @@ export type ServingWorkerPoolOptions = {
    * sessions with the key that crosses.
    */
   route?: URL;
+
+  /**
+   * The compile workers this process shares, which every serving worker's
+   * runtimes compile in, over their port, in place of a compile worker of
+   * each serving worker's own. Their diagnostics join the workers'. Absent,
+   * each serving worker compiles where its entry module says.
+   */
+  moduleCompiler?: ModuleCompilerPool;
+
+  /**
+   * The compiled-module cache directory every process on the host shares
+   * (`openSharedCompileCache()`), which every serving worker's runtimes read
+   * and put compiled modules in. Absent, each serving worker uses the cache
+   * its entry module gives, if any.
+   */
+  compileCacheDir?: string;
 
   /**
    * How many workers spaces are placed on at most. A space gets a worker of
@@ -484,8 +502,9 @@ export class ServingWorkerPool {
   /**
    * What the workers' realms logged, as of now, once those that are
    * starting serve, taken together with what the realm of each host that
-   * closed in order had logged. A worker that fails takes what its realm
-   * logged with it. Rejects once the pool is closed.
+   * closed in order had logged, and with the latest snapshots of the compile
+   * workers the process shares (`moduleCompiler`). A worker that fails takes
+   * what its realm logged with it. Rejects once the pool is closed.
    */
   async diagnostics(): Promise<ServingLoopDiagnostics> {
     const workers = await this.#startedWorkers();
@@ -497,7 +516,11 @@ export class ServingWorkerPool {
     // in order is in the closed hosts' sum already, with what its realm
     // logged last, and one that failed took what its realm logged with it,
     // as it would have had it failed before it was asked.
+    const compiler = this.#options.moduleCompiler;
     return mergeServingLoopDiagnostics([
+      ...(compiler === undefined
+        ? []
+        : [compileWorkerLoopDiagnostics(compiler)]),
       ...(this.#closedDiagnostics === undefined
         ? []
         : [this.#closedDiagnostics]),
@@ -874,6 +897,9 @@ export class ServingWorkerPool {
         },
         onOccupancy: (occupancy) => this.#onOccupancy(started, occupancy),
         onHeartbeat: (heapUsed) => this.#onHeartbeat(started, heapUsed),
+        ...(this.#options.moduleCompiler === undefined
+          ? {}
+          : { moduleCompiler: this.#options.moduleCompiler }),
         ...(this.#options.onActivationSettled === undefined
           ? {}
           : { onActivationSettled: this.#options.onActivationSettled }),
@@ -908,6 +934,8 @@ export class ServingWorkerPool {
       ensureSpaceRoots: this.#options.ensureSpaceRoots,
       experimental: this.#options.experimental,
       route: this.#options.route?.href,
+      compileOnHost: this.#options.moduleCompiler !== undefined,
+      compileCacheDir: this.#options.compileCacheDir,
     };
     started.ready = started.bridge.init(init).then(({ lifetimeLock }) => {
       // The worker's answer and its error event can reach this thread in one

@@ -154,9 +154,12 @@ never older than a counters post before it, replaces the merged counters
 with everything else. The loop's own
 logger counts and timing statistics are each worker realm's own, so they
 cross on request (`ServingLoopHandle.diagnostics()`), each serving worker's
-with those of the compile worker it starts under `compile-worker:` logger
-names (`servingLoopDiagnostics()`, a snapshot read without waiting on the
-compile worker), added up across the serving workers (`diagnostics-merge.ts`:
+with those of a compile worker of its own, where it starts one, under
+`compile-worker:` logger names (`servingLoopDiagnostics()`, a snapshot read
+without waiting on the compile worker), added up across the serving workers
+and with the snapshots of the compile workers the process shares, which the
+server's thread holds (`ModuleCompilerPool.diagnostics()`;
+`diagnostics-merge.ts`:
 counts add, and a timing key's distribution is the mixture of the workers'
 distributions), and a request waits for each serving worker's turn:
 `/api/health/serving-loop-realm` is the route that asks, kept apart from
@@ -191,12 +194,15 @@ replay keying, which keys on the holder and the counter.
 
 **The runtime's other needs are already remote.** Pattern sources come from
 `/api/patterns` over HTTP, which the main thread answers; the compiled-module
-byte cache is per worker, and that worker's runtimes take turns at a cold compile
-so that a program compiles once per worker, which with a worker per space is
-once per space whose own storage closure does not hold it; the type-check,
-transform and emit step of a serving runtime's compiles runs in a compile
-worker the serving worker starts (`ModuleCompileWorker`), so its CPU and its
-heap are off the thread that serving worker's loops run on, except for a
+byte cache is a directory every toolshed on the host shares
+(`openSharedCompileCache()`), and every runtime that would compile a set of
+modules the cache does not hold takes a turn for that set first, on a lock the
+operating system holds, so a program compiles once on the host however many
+workers and processes load it at once; the type-check, transform and emit step
+of a serving runtime's compiles runs in the compile workers the process holds
+on its main thread (`ModuleCompilerPool`), which the serving worker reaches
+over its port (`compiler.compile`), so its CPU and its heap are off the thread
+that serving worker's loops run on, except for a
 compile instrumented for pattern coverage or one that asks for its
 transformed program, which runs on that thread; external effects (`fetch`,
 LLM calls, the outbox) run where the runtime runs. A Worker started without
@@ -296,9 +302,8 @@ places it on a fresh one.
 graph: on a four-core machine one takes about half a second to load, and holds
 about 45 MB of JavaScript heap, about 110 MB of the process's memory, before
 it serves anything, where a kept runtime in a shared host holds about 3 MB.
-A serving worker whose runtimes compile also starts a compile worker of its
-own (`ModuleCompileWorker`), a second isolate that lasts until the serving
-worker's host closes.
+The compile workers are the process's, not each serving worker's, so a space
+that has compiled holds one isolate.
 Three knobs bound that: `maxWorkers`, past which a space joins a worker that
 already serves one; `spareWorkers`, which hides the load time from a
 placement; and the cap on workers kept only for parked runtimes, with the
@@ -398,9 +403,14 @@ between the two.
     space against one worker for every space on the same box: activation
     latency with and without a spare, the process's memory by active space
     count, and the wave timings of two spaces settling at once.
-11. [ ] **Compile workers the serving workers share.** Each serving worker
-    starts a compile worker of its own at its first compile and keeps it
-    until its host closes, so with a worker per space a space that has
-    compiled holds two isolates. Compiles handed to a set of compile workers
-    on the main thread, reached over the serving port, would let every
-    serving worker share them, and a serving worker's own would go.
+11. [x] **Compile workers the serving workers share.** The toolshed holds
+    `SERVER_EXECUTION_COMPILE_WORKERS` compile workers (default 1) on its main
+    thread, and every serving worker sends its compiles there over the serving
+    port (`ServingWorkerInit.compileOnHost`), so a serving worker no longer
+    starts one of its own. The compiled-module cache is a directory every
+    toolshed on the host shares (`SERVER_EXECUTION_COMPILE_CACHE_DIR`, default
+    `compiled-modules` under `CACHE_DIR`), and a runtime takes a turn for a set
+    of modules on the cache's lock before it compiles them, so the same modules
+    compile once on the host. The recompile of a stored source closure, which
+    every space takes once after a release changes the runtime version, reads
+    and puts that cache too.

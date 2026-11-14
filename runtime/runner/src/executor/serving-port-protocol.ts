@@ -28,6 +28,11 @@ import {
   type TimingStatsBreakdown,
 } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
+import type {
+  EncodedCompileFailure,
+  EncodedModule,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompileRequest } from "../harness/module-compile.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import type { HostOccupancy } from "./host.ts";
@@ -131,7 +136,39 @@ export type ServingWorkerInit = {
    * host crosses through the process's own server.
    */
   readonly route: string | undefined;
+
+  /**
+   * Whether the worker's serving runtimes compile on the server's thread,
+   * through `compiler.compile`, in the compile workers the process shares.
+   * Absent or false, they compile where the worker's entry module says.
+   */
+  readonly compileOnHost: boolean | undefined;
+
+  /**
+   * The shared compiled-module cache directory
+   * (`openSharedCompileCache()`) the worker's serving runtimes read and put
+   * compiled modules in, and take their turns at a cold compile through.
+   * Absent, they use the cache the worker's entry module gives, if any.
+   */
+  readonly compileCacheDir: string | undefined;
 };
+
+/** A compile `compiler.compile` ran, as its answer crosses. */
+export type PortCompileAnswer =
+  | {
+    readonly kind: "compiled";
+    readonly modules: readonly (readonly [string, EncodedModule])[];
+  }
+  | {
+    readonly kind: "failed";
+    readonly failure: EncodedCompileFailure;
+
+    /**
+     * Whether the failure is of the place the compile ran, such as a compile
+     * worker that died, rather than of its inputs.
+     */
+    readonly place: boolean;
+  };
 
 /** What the worker asks of the thread that holds the memory server. */
 export type PlaneRequests = {
@@ -227,6 +264,15 @@ export type PlaneRequests = {
   "loopback.send": {
     params: { transport: number; payload: string };
     result: void;
+  };
+
+  /**
+   * Runs a compile in the compile workers the server's thread holds for the
+   * whole process (`ServingWorkerInit.compileOnHost`).
+   */
+  "compiler.compile": {
+    params: { request: ModuleCompileRequest };
+    result: PortCompileAnswer;
   };
 };
 
