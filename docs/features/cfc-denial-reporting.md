@@ -88,13 +88,14 @@ gate builds them only where something takes them.
 Where a label is read, `labelSource` says where from: `stored` for the cell's
 own label, `consumed` for one a read consumed on its way, `schema` for the
 information-flow constraint the gate falls back to, and `unreadable` when
-reading it threw, which is the case the gate blocks on without ever seeing a
-label. A read that reported no consumed labels reports `unreadable` too, while
-one that consumed the read-failure marker as a stored label, as a runtime secret
-is stored, reports `consumed`. The kind carries nothing of the label, so it is
-the one part of the inputs the worker's host read gate also returns to the host,
-in the refusal of a host's read (`CellReadRefusal`,
-`runtime/runtime-client/src/protocol/types.ts`).
+reading it threw, whether the stored envelope could not be interpreted or the
+schema could not be walked for its labels, which is the case the gate blocks on
+without ever seeing a label. A read that reported no consumed labels reports
+`unreadable` too, while one that consumed the read-failure marker as a stored
+label, as a runtime secret is stored, reports `consumed`. The kind carries
+nothing of the label, so it is the one part of the inputs the worker's host read
+gate also returns to the host, in the refusal of a host's read
+(`CellReadRefusal`, `runtime/runtime-client/src/protocol/types.ts`).
 
 A refused commit's message still quotes its first prepare reason. That message
 is a value returned to the caller that asked for the commit; the log is read by

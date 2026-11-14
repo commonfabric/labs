@@ -79,8 +79,12 @@ export type DisplayFitSources = {
 
 /**
  * The label a display decision was made on, as a denial reports it: a cell's
- * stored label, its schema's, a read's consumed labels, or none it could
- * read, which is what a read that reports no consumed labels is decided on.
+ * stored label (`stored`), the one its schema declares (`schema`), a read's
+ * consumed labels (`consumed`), or none it could read (`unreadable`). Labels
+ * could not be read where a read reports no consumed labels, as one reaching
+ * a document whose stored envelope this build cannot interpret does, where a
+ * cell's own labels cannot be resolved, and where its schema cannot be walked
+ * for the labels it declares.
  */
 export type RenderLabelSummary = {
   labelSource: "stored" | "schema" | "consumed" | "unreadable";
@@ -129,8 +133,9 @@ export function admitsEverything(policy: RenderPolicy): boolean {
  * boundary evaluates the consumed labels). A read that reports no consumed
  * labels counts as consuming the marker no policy admits, and reads that
  * consumed none are fitted by the cell's schema. A refusal names the schema
- * as its source when the schema refused, and names the labels as unreadable
- * when a read reported none.
+ * as its source when what the schema declares refused, and names the labels
+ * as unreadable when a read reported none or the schema could not be walked
+ * for its labels.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -436,6 +441,15 @@ export function confidentialityLabelsFromCellSchema(
 ): readonly unknown[] {
   const declared = schemaLabelsOf(cell);
   return declared.readFailed ? [CFC_LABEL_READ_FAILED_ATOM] : declared.atoms;
+}
+
+/**
+ * The label a decision made on `cell`'s schema alone reports, as a denial
+ * reports it: what the schema declares, or none it could read where the
+ * schema could not be walked for its labels.
+ */
+export function schemaLabelSummary(cell: Cell<unknown>): RenderLabelSummary {
+  return schemaRefusal(schemaLabelsOf(cell), []);
 }
 
 /**

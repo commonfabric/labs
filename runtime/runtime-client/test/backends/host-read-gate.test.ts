@@ -873,6 +873,7 @@ describe("HostReadGate", () => {
       // An envelope of a version this build does not know is read as no
       // label at all by nothing: the read fails closed, and what refused it
       // is the failure to read a label rather than a label.
+
       await using docs = await shelf();
       const unknown = await docs.write("unknown-envelope", "a value", [], {
         cfc: { version: 99, labelMap: { version: 1, entries: [] } },
@@ -892,12 +893,63 @@ describe("HostReadGate", () => {
       expect(updates).toEqual([expect.objectContaining(refusal)]);
     });
 
+    it("delivers the unreadable refusal to a subscription whose document arrives with an envelope this build cannot interpret", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const later = docs.runtime.getCell(space, "arrives-unreadable")
+        .asSchema({ type: "string" });
+      const { updates, cancel } = subscribe(gate, later);
+      try {
+        await docs.write("arrives-unreadable", "a value", [], {
+          cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+        });
+        await docs.runtime.idle();
+
+        expect(updates.at(-1)).toEqual(expect.objectContaining({
+          refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
+        }));
+      } finally {
+        cancel();
+      }
+    });
+
+    it("delivers the unreadable refusal to a subscription whose value is rewritten with such an envelope, and the value once it is readable again", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const cell = (await docs.write("rewritten", "first value"))
+        .asSchema({ type: "string" });
+      const { updates, cancel } = subscribe(gate, cell);
+      try {
+        expect(updates.at(-1)).toEqual(
+          expect.objectContaining({ value: "first value" }),
+        );
+
+        await docs.write("rewritten", "unreadable value", [], {
+          cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+        });
+        await docs.runtime.idle();
+        expect(updates.at(-1)).toEqual(expect.objectContaining({
+          refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
+        }));
+        expect(holds(updates, "unreadable value")).toBe(false);
+
+        await docs.write("rewritten", "readable again");
+        await docs.runtime.idle();
+        expect(updates.at(-1)).toEqual(
+          expect.objectContaining({ value: "readable again" }),
+        );
+      } finally {
+        cancel();
+      }
+    });
+
     it("names the labels unreadable for a read under a schema nesting one that carries its own definitions", async () => {
       // TODO(danfuzz): This read should be decided on the labels its schema
       // declares, which are none, so that the owner is shown the value. It is
       // refused because `ContextualFlowControl.joinSchema` resolves the nested
       // schema's `$ref` against the outer root rather than its own `$id`, and
       // cannot walk it. Expect `{ value: ... }` once it does.
+
       await using docs = await shelf();
       const view = await docs.write("nested-definitions", {
         view: { type: "vnode", name: "h1", props: {}, children: [] },
@@ -917,6 +969,7 @@ describe("HostReadGate", () => {
       // A runtime secret's label is the read-failure marker, which no ceiling
       // admits; the read that consumes it read its label, so what refused it
       // is a label, not a failure to read one.
+
       await using docs = await shelf();
       const secret = await docs.write("secret-under-the-marker", "a secret", [
         [[], [CFC_LABEL_READ_FAILED_ATOM as unknown as CfcAtom]],

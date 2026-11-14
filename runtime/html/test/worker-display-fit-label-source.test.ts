@@ -10,7 +10,6 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { readProjected, Runtime } from "@commonfabric/runner";
 import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc";
-import { vnodeSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { readRefusal } from "../src/worker/display-fit.ts";
@@ -67,13 +66,14 @@ describe("worker-display-fit-label-source", () => {
   });
 
   it("names the labels unreadable for a read whose schema cannot be walked for its labels", async () => {
-    // A schema carrying its own `$defs`, nested under another, refers to its
-    // definitions from a root that does not hold them, so no label can be
-    // read out of it, and nothing it declares refused the read.
+    // A reference to a definition the schema does not hold names nothing,
+    // so no label can be read out of the schema, and nothing it declares
+    // refused the read.
+
     await using shelf = runtimeOf();
     const cell = shelf.runtime.getCell(space, "unwalkable-schema").asSchema({
       type: "object",
-      properties: { view: vnodeSchema },
+      properties: { view: { $ref: "#/$defs/Undefined" } },
     });
     const read = readProjected(cell, (value) => value);
 

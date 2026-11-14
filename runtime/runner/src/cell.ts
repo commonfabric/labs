@@ -120,6 +120,7 @@ import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
+  StoredCfcMetadataError,
   storesCfcEnvelope,
 } from "./cfc/metadata.ts";
 import { cfcConfidentialityForObservationNode } from "./cfc/observation.ts";
@@ -252,7 +253,8 @@ type SinkOptions = {
    * links, as `collectConsumedLabel()` joins them for a transaction, and pass
    * the join to the callback as a third argument. The label metadata is read
    * on the sink's transaction, so a label-only write to anything the read
-   * reached re-fires the sink. Off by default.
+   * reached re-fires the sink. The join is `undefined` where a document the
+   * read reached stores labels this build cannot interpret. Off by default.
    */
   includeConsumedLabel?: boolean;
 };
@@ -5478,7 +5480,7 @@ function subscribeToReferencedDocs<T>(
       // them, as the label above is: a write of a label alone, the value
       // left as it was, runs the sink again with what it then consumes.
       const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx, { subscribe: true })
+        ? consumedLabelOrUnreadable(tx)
         : undefined;
       sink.cleanup = callback(delivered, cfcLabel, consumed);
 
@@ -6029,6 +6031,25 @@ export function pullProjected<R>(
  */
 export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
   return writeTargetOf(requireCellImpl(cell));
+}
+
+/**
+ * The labels `tx` consumed, read so that a sink running on it sees them, or
+ * `undefined` where a document it reached stores labels this build cannot
+ * interpret. That read fails closed (`docs/specs/cfc-stored-envelope.md`),
+ * and a sink's callback is handed no labels for it, which a decision on them
+ * reads as labels that could not be read, while the sink stays subscribed to
+ * what it read, so that a later write it can interpret runs it again.
+ */
+function consumedLabelOrUnreadable(
+  tx: IExtendedStorageTransaction,
+): SinkConsumedLabel | undefined {
+  try {
+    return collectConsumedLabel(tx, { subscribe: true });
+  } catch (error) {
+    if (error instanceof StoredCfcMetadataError) return undefined;
+    throw error;
+  }
 }
 
 /**
