@@ -23,6 +23,7 @@ import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
+  type LabelMapEntry,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
@@ -5445,80 +5446,130 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       }
     });
 
+    /**
+     * Sets the seam pattern up on `cause`, then plants `resultEntry`, where
+     * given, on the result document's stored label map; returns the result
+     * cell, the planted entry's document id, and the pattern an update moves
+     * to, which adds an internal cell seeded with its schema default.
+     */
+    const setUpForUpdate = async (
+      runtime: Runtime,
+      storageManager: ReturnType<typeof StorageManager.emulate>,
+      cause: string,
+      resultEntry?: LabelMapEntry,
+    ) => {
+      const resultCell = runtime.getCell(signer.did(), cause, seamResultSchema);
+      const initial = runtime.edit();
+      await runtime.setup(
+        initial,
+        seamPattern,
+        { title: "public" },
+        resultCell.withTx(initial),
+      );
+      initial.prepareCfc();
+      expect((await initial.commit().settled).error).toBeUndefined();
+      const resultId = resultCell.getAsNormalizedFullLink().id;
+      if (resultEntry !== undefined) {
+        const original = storedDocument(storageManager, resultId);
+        expect(original?.value).toBeDefined();
+        const seed = runtime.edit();
+        writeSeedEnvelopeDoc(seed, signer.did());
+        seedStoredEnvelope(seed, {
+          space: signer.did(),
+          scope: "space",
+          id: resultId,
+          path: [],
+        }, {
+          value: original!.value as FabricValue,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries: [resultEntry] },
+          },
+        });
+        expect((await seed.commit().settled).error).toBeUndefined();
+        expect(storedDocument(storageManager, resultId)?.value).toEqual(
+          original!.value,
+        );
+        expect(replicaEntries(storageManager, resultId)).toEqual([
+          resultEntry,
+        ]);
+      }
+      const added = {
+        partialCause: "addedByUpdate",
+        schema: { type: "string", default: "fresh" },
+      } as const;
+      const updated = {
+        ...seamPattern,
+        resultSchema: {
+          type: "object",
+          properties: {
+            savedTitle: { type: "string" },
+            added: { type: "string" },
+          },
+        },
+        derivedInternalCells: [...seamPattern.derivedInternalCells, added],
+        result: {
+          ...seamPattern.result,
+          added: { $alias: { partialCause: "addedByUpdate", path: [] } },
+        },
+      } satisfies Pattern;
+      return { resultCell, resultId, added, updated };
+    };
+
+    /** A label entry at a document's root naming `atom`, of `origin`. */
+    const rootEntry = (
+      origin: "declared" | "derived",
+      atom: string,
+    ): LabelMapEntry => ({
+      path: [],
+      origin,
+      ...(origin === "derived" ? { observes: "value" as const } : {}),
+      label: { confidentiality: [atom] },
+    });
+
     for (const origin of ["declared", "derived"] as const) {
-      it(`carries a ${origin} result label into a new update store as derived data`, async () => {
+      it(`carries a ${origin} label the update reads into a new update store as derived data`, async () => {
+        // The update's transaction reads a document labeled `retained-source`
+        // before it sets the piece up, so the join carries the clause, and the
+        // store the update creates for its new internal cell takes it in the
+        // derived component, never as a declaration.
+
         const storageManager = StorageManager.emulate({ as: signer });
         const runtime = strictRuntime(storageManager);
         try {
-          const resultCell = runtime.getCell(
-            signer.did(),
+          const { resultCell, added, updated } = await setUpForUpdate(
+            runtime,
+            storageManager,
             `writer-fit-update-${origin}`,
-            seamResultSchema,
           );
-          const initial = runtime.edit();
-          await runtime.setup(
-            initial,
-            seamPattern,
-            { title: "public" },
-            resultCell.withTx(initial),
+          const source = runtime.getCell(
+            signer.did(),
+            `writer-fit-update-${origin}-source`,
           );
-          initial.prepareCfc();
-          expect((await initial.commit().settled).error).toBeUndefined();
-          const resultId = resultCell.getAsNormalizedFullLink().id;
-          const original = storedDocument(storageManager, resultId);
-          expect(original?.value).toBeDefined();
-          const sourceEntry = {
-            path: [],
-            origin,
-            ...(origin === "derived" ? { observes: "value" as const } : {}),
-            label: { confidentiality: ["retained-source"] },
-          };
+          const sourceId = source.getAsNormalizedFullLink().id;
           const seed = runtime.edit();
           writeSeedEnvelopeDoc(seed, signer.did());
           seedStoredEnvelope(seed, {
             space: signer.did(),
             scope: "space",
-            id: resultId,
+            id: sourceId,
             path: [],
           }, {
-            value: original!.value as FabricValue,
+            value: { note: "public" },
             cfc: {
               version: 1,
               schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
               labelMap: {
                 version: 1,
-                entries: [sourceEntry],
+                entries: [rootEntry(origin, "retained-source")],
               },
             },
           });
           expect((await seed.commit().settled).error).toBeUndefined();
-          expect(storedDocument(storageManager, resultId)?.value).toEqual(
-            original!.value,
-          );
-          expect(replicaEntries(storageManager, resultId)).toEqual([
-            sourceEntry,
-          ]);
 
-          const added = {
-            partialCause: "addedByUpdate",
-            schema: { type: "string", default: "fresh" },
-          } as const;
-          const updated = {
-            ...seamPattern,
-            resultSchema: {
-              type: "object",
-              properties: {
-                savedTitle: { type: "string" },
-                added: { type: "string" },
-              },
-            },
-            derivedInternalCells: [...seamPattern.derivedInternalCells, added],
-            result: {
-              ...seamPattern.result,
-              added: { $alias: { partialCause: "addedByUpdate", path: [] } },
-            },
-          } satisfies Pattern;
           const update = runtime.edit();
+          source.withTx(update).getRaw();
           await runtime.setup(
             update,
             updated,
@@ -5527,6 +5578,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           );
           update.prepareCfc();
           expect((await update.commit().settled).error).toBeUndefined();
+
           const addedId = getDerivedInternalCellLink(resultCell, added).id;
           expect(storedDocument(storageManager, addedId)?.value).toBe("fresh");
           const entries = replicaEntries(storageManager, addedId);
@@ -5538,13 +5590,53 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             entry.origin === "derived" &&
             entry.label.confidentiality?.includes("retained-source")
           )).toBe(true);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      });
+
+      it(`leaves a ${origin} label on the stored result, which the update does not otherwise read, off the store it newly creates`, async () => {
+        // The setup compares the projection it builds with the stored result
+        // only to decide whether to write it, a write-destination read (CFC
+        // §18.6.2), so a label the stored result carries joins nothing the
+        // setup writes, and the store it creates for a new internal cell,
+        // seeded with its schema default, takes none of it.
+
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = strictRuntime(storageManager);
+        try {
+          const resultEntry = rootEntry(origin, "retained-result");
+          const { resultCell, resultId, added, updated } = await setUpForUpdate(
+            runtime,
+            storageManager,
+            `writer-fit-update-unread-${origin}`,
+            resultEntry,
+          );
+
+          const update = runtime.edit();
+          await runtime.setup(
+            update,
+            updated,
+            { title: "next" },
+            resultCell.withTx(update),
+          );
+          update.prepareCfc();
+          expect((await update.commit().settled).error).toBeUndefined();
+
+          const addedId = getDerivedInternalCellLink(resultCell, added).id;
+          expect(storedDocument(storageManager, addedId)?.value).toBe("fresh");
+          expect(
+            replicaEntries(storageManager, addedId).flatMap((entry) =>
+              entry.label.confidentiality ?? []
+            ),
+          ).not.toContain("retained-result");
           if (origin === "declared") {
             expect(
               replicaEntries(storageManager, resultId).filter((entry) =>
                 entry.origin === "declared"
               ),
-            )
-              .toEqual([sourceEntry]);
+            ).toEqual([resultEntry]);
           }
         } finally {
           await runtime.dispose();
