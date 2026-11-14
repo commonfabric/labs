@@ -67,10 +67,10 @@ next.
   nothing in the corpus. `cfc-flow:ui-contract` reports twice, in the
   lobby and in FabriChat, each for a sub-pattern whose trusted surface
   is in the pattern that embeds it; by the document's rule for a
-  pattern written as a tag, the lobby's is not a report. A write-floor or writer-fit
-  constraint on a write a body makes through a handle is never
-  decided, because the template holds the handle's `identity` slot,
-  which has no declared label. Not built: hashes of code and schemas,
+  pattern written as a tag, the lobby's is not a report. A write-floor
+  or writer-fit constraint on a write a body makes through a handle is
+  never decided, because the template holds the handle's `identity`
+  slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. The crate's `SPEC-NOTES.md` lists the places where it found
   the documents ambiguous; notes 167 to 176 are not yet written into
