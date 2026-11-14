@@ -41,7 +41,8 @@ and `src/plan.rs` emits a first slice of the plan of
 §1.1 as JSON: the records without their hashes and constraints, and with
 the label templates of §3 for expression code, a use of a body, a
 `select`, a `pick`, a `fold`, a collection, a write edge, an operation, and
-a binding. A record or a rendered tree used as one value has no template.
+a binding. A constructed value, a rendered tree included, has an entry
+per path.
 A slot holds the JSON schema of the type at its path and the label its
 annotations declare, where the emitter has the type of the slot's root
 (`src/schema.rs`), and the plan lists the constraints of

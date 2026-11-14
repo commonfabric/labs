@@ -1084,3 +1084,56 @@ numbers have gaps.
 162. **`function-body:wish`** (LS §5.2) is reported at the call, in every
     function body, the body of an authored function included whatever
     calls it. The corpus has no report.
+163. **A label argument as data** (LS §8.5). This replaces note 147.
+    The checker evaluates the argument where it resolves the alias and
+    keeps the value beside the text: a list with each alias replaced by
+    its body, a type parameter of an alias by the term written for it
+    where the alias is used, a spread by its members, `typeof NAME` and
+    `typeof NAME.key` by the value of the constant's static initializer,
+    `AnyOf<list>` by `{ anyOf: list }`, and `CurrentPrincipal` by
+    `{ __ctCurrentPrincipal: true }`, the form the schema mapping gives
+    it. LS says "`CurrentPrincipal` and the other marker types the API
+    exports for atoms" and names no other; the crate reads no other.
+    `PolicyOf<typeof rules>` is `{ policyOf: { module, binding } }`,
+    where the mapping has a record with a digest the crate does not
+    compute. `Cfc<T, M>` adds the label keys of the record `M`, and
+    `RepresentsCurrentUser` and `AuthoredByCurrentUser` add
+    `addIntegrity` with their atom. A term the checker cannot evaluate
+    keeps `{ "$source": text }` in the schema and declares nothing.
+164. **A writer policy** (LS §8.5; PL §1.5, §4.4). This replaces the
+    last part of note 150 and `WriterPolicy.body` of note 149.
+    `WriteAuthorizedBy`, `TrustedActionWrite` and
+    `TrustedActionWriteWithIntegrity` around a type are the annotation
+    `writeAuthorizedBy` with one policy, and `WritePolicyAnyOf` is
+    `writePolicyAnyOf` with one policy per member, written directly or
+    through an alias. `WriterPolicy.body` is the record
+    `{ module, binding }` PL §1.5 hashes, with the path of the module
+    where PL has its content-addressed identity. A trusted-action policy
+    has `uiContract` with `helper: "UiAction"`, the action, the pattern,
+    and `requiredEventIntegrity`, which for `TrustedActionWrite` is the
+    pattern alone, as the schema mapping has it.
+    `TrustedActionUiContract` is the annotation `uiContract` and gives
+    no constraint: PL §4.4 has the UI contract on a `WriterPolicy` only.
+    `cfc-flow:write-policy` compares the writing handler or function
+    with each alternative by module and name. LS §8.3 requires two
+    declarations of one key on a path to be alike; a path with a
+    `writeAuthorizedBy` below a `writePolicyAnyOf`, as
+    `fabrifile/store.tsx` has at `entries/*/addedBy`, gives one `writer`
+    constraint per annotation, and the write has to satisfy each.
+165. **Where the constraints are read** (PL §1.5). Still as note 149:
+    only a write edge of a body through a handle of a slot has
+    constraints. A `state` target, an `argument` target, a `created`
+    target, a `request` target, and a kept output against
+    `Plan.resultSchema` have none, and an input constraint is not listed
+    on an output whose template has a `derive` by the body. A push has
+    the target path `*`, so the annotation of the element type applies
+    to it.
+166. **The corpus, with the label arguments read.** The plans of the
+    accepted modules that are emitted with no unsupported construct
+    have 11 slots with a declared label, and 10 `writer`, 4 `writerFit`
+    and 2 `writeFloor` records. Over every plan of the corpus, the
+    refused modules included, there are 32 `writer`, 8 `writeFloor`, 5
+    `writerFit` and 4 `requiredIntegrity` records, and 93 write edges
+    list a `writer` constraint, 51 of them in `fabrichat/room.tsx`.
+    `cfc-flow:write-policy` reports nothing: every such edge is in a
+    handler its policy names.
