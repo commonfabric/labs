@@ -172,31 +172,6 @@ carry a key it did not. Such a pair crosses under the realm encoding
 (Section 3.4 of [4-realm-encoding.md](./4-realm-encoding.md)) and nowhere else.
 See `1-fabric-values.md` Section 1.4.11.
 
-### `RegExp@1` — regular expressions
-
-> **Disabled.** This type is disabled for codecs, and likely to be removed
-> entirely. No codec recognizes `RegExp@1`, so a decoder treats it as any
-> unrecognized tag (Section 8).
-
-State is `{ source: string, flags: string, flavor: string }`, and all three
-fields are required. `source` is the pattern string and `flags` the flag string
-(for example `gi`). `flavor` names the regular-expression dialect the pattern
-and flags are written in, for example `es2025`, that of ECMAScript 2025. The
-format has no default flavor, and requires no implementation to support any
-particular one.
-
-On decoding, a state that is not an object, that lacks any of the three
-fields, or that has one that is not a string produces a `ProblematicValue`. An
-implementation constructs each pattern whose flavor it supports, which
-validates it, and may refuse one that fails to construct, producing a
-`ProblematicValue`. A pattern under a flavor the implementation does not
-construct is stored faithfully and **not** validated. See `1-fabric-values.md`
-Section 1.4.5.
-
-> **JS implementation note.** This implementation constructs `es2025` patterns,
-> as JavaScript `RegExp`s, and refuses one that fails to construct. It
-> constructs no other flavor.
-
 ### `Unavailable@1` — unavailable data
 
 State is `{ reason: string }` for a transient reason, and for reason `error`
@@ -778,7 +753,7 @@ pair is one code point, and so is a lone surrogate, which the format treats as
 a code point of its own value (`1-fabric-values.md` Section 6.7, and the WTF-8
 encoding of `2-hash-byte-format.md` Section 4.4). The guarantee covers every
 string the value holds: string values, record keys, and the strings in a
-type's state, such as an `Error@1` message or a `RegExp@1` source. It is about
+type's state, such as an `Error@1` message. It is about
 the value, not the text: a string's JSON text can be several times as long as
 its count of code points, an escaped code unit taking six characters.
 

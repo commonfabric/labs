@@ -46,8 +46,8 @@ most of a value passes through untouched and tagging is reserved for what
 genuinely needs it.
 
 Tagging is not the same question as what the transport can carry, and the two
-should not be conflated. A `FabricRegExp` is tagged here even though cloning
-carries a native `RegExp` perfectly well, because it is a class instance and
+should not be conflated. A `FabricBytes` is tagged here even though cloning
+carries a native `Uint8Array` perfectly well, because it is a class instance and
 reconstructing one is a codec's job under any format.
 
 ### 1.1 Transport Requirements
@@ -316,7 +316,6 @@ form.
 | `FabricEpochDay` | `EpochDay@1` | `bigint` |
 | `FabricEpochNsec` | `EpochNsec@1` | `bigint` |
 | `FabricKeyPair` | `KeyPair@1` | `{ algorithm: string, publicKey: ArrayBuffer, privateKey: ArrayBuffer }`, or `{ publicKey: CryptoKey, privateKey: CryptoKey }` |
-| `FabricRegExp` | `RegExp@1` | `{ source, flags, flavor }` (disabled for codecs, and likely to be removed entirely; see below) |
 | `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, errorMessage }` |
 | `symbol` | `Symbol@1` | `string` (the registry key) |
 
@@ -331,12 +330,12 @@ the transferable object in the tree rather than having to reach through a view
 and reason about its offset. Both byte-carrying types do this. A bare
 `Uint8Array` is therefore not a form this format emits.
 
-Four of these differ from their JSON counterparts in kind rather than in
+Three of these differ from their JSON counterparts in kind rather than in
 spelling, which is most of the reason this format exists, and they differ along
 two axes.
 
 `FabricBytes` carries bytes as bytes, where JSON must represent them as
-base64url text. `FabricRegExp` and `FabricUnavailable` are terminal here and
+base64url text. `FabricUnavailable` is terminal here and
 nonterminal under JSON — concrete proof that terminality belongs to the pair
 (class, format) rather than to the class. `FabricHash` differs on **both** axes
 at once: terminal here and nonterminal under JSON, and carrying its hash as a
@@ -572,10 +571,3 @@ a question the wire did ask.
 that of an error with no stored message; `{ reason: "error", errorKind:
 undefined }` and `{ reason: "error", errorKind: "sync", errorMessage:
 undefined }` are refused, each being a field that is present and not a string.
-
-`RegExp@1` is disabled for codecs, and likely to be removed entirely: no codec
-recognizes the tag, so a decoder treats it as any unrecognized tag (Section 6).
-Its state, as specified, has no optional field. `source`, `flags` and `flavor`
-are all required, as they are under JSON (`3-json-encoding.md` Section 3), and
-there is no default flavor, so `{}`, `{ source: "a", flags: "g" }` and
-`{ source: undefined, flags: "g", flavor: "es2025" }` are all refused.
