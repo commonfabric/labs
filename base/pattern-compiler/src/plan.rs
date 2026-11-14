@@ -95,6 +95,10 @@ struct Computed {
     /// where this slice builds it: for expression code of an operator, and
     /// for a use of a body.
     template: Option<Value>,
+    /// For the assembled result of a `map`, a `filter`, or a `flatMap`:
+    /// the template of one element of it, where it has one. The plan has
+    /// a per-element output beside the assembled one (PL §1.4).
+    element: Option<Option<Value>>,
     /// The paths below the value that a collection has as its source: each
     /// is an interim output of its own (PL §1.1, `Output.path`).
     below: Vec<Vec<String>>,
@@ -173,6 +177,8 @@ struct Emitter<'r, 'm, 'a> {
     /// The declared type of each formal input of the body whose record
     /// is being written.
     formal_types: HashMap<String, TypeId>,
+    /// For each collection, the membership of what it iterates.
+    iterated: Vec<Option<Value>>,
 }
 
 /// What the edges of the plan need of a body.
@@ -540,6 +546,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             collection: None,
             scan: false,
             template: None,
+            element: None,
             below: Vec::new(),
             referred: false,
             order,
@@ -547,13 +554,133 @@ impl<'a> Emitter<'_, '_, 'a> {
         order
     }
 
-    /// A selection point of the cone being evaluated: a `select` with two
-    /// branches (PL §3.5).
-    fn selector(&mut self) {
+    /// A selection point of the cone being evaluated: the selector of a
+    /// `select` with `arity` branches (PL §3.5).
+    fn selector(&mut self, arity: u32) -> usize {
+        let selector = self.selectors.len();
         if let Some(cone) = self.cone {
-            self.cones[cone].selectors.push(self.selectors.len());
-            self.selectors.push(2);
+            self.cones[cone].selectors.push(selector);
         }
+        self.selectors.push(arity);
+        selector
+    }
+
+    /// Evaluates expression code that computes one value, which has the
+    /// template `evaluate` returns.
+    fn build(
+        &mut self,
+        hint: &str,
+        at: u32,
+        evaluate: impl FnOnce(&mut Self, usize) -> Option<Value>,
+    ) -> Place {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let mut template = None;
+        let place = self.in_cone(hint, at, |emitter, cone| {
+            template = evaluate(emitter, cone);
+        });
+        self.operands = saved.0;
+        self.opaque = saved.1;
+        if let Place::Value(value, _) = &place {
+            self.values[*value].template = template;
+        }
+        place
+    }
+
+    /// The template of one operand of a `select` or a `pick`, with what
+    /// `evaluate` observed while it evaluated the operand: the template
+    /// of the place, and where the evaluation made a further observation,
+    /// as `a?.b` observes whether `a` is present, their join.
+    fn one(
+        &mut self,
+        class: &'static str,
+        evaluate: impl FnOnce(&mut Self) -> Place,
+    ) -> (Place, Option<Value>) {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let place = evaluate(self);
+        self.observe(&place, class);
+        let mut inputs: Vec<Value> = Vec::new();
+        for input in std::mem::replace(&mut self.operands, saved.0) {
+            if !inputs.contains(&input) {
+                inputs.push(input);
+            }
+        }
+        let opaque = std::mem::replace(&mut self.opaque, saved.1);
+        let template = if opaque {
+            None
+        } else if let Place::Record(_) = &place {
+            // A record written in place has a template per path (PL
+            // §3.4), and one only where every member is a constant.
+            inputs
+                .iter()
+                .all(|input| input["op"] == "const")
+                .then(|| json!({ "op": "const" }))
+        } else if inputs.len() == 1 {
+            inputs.pop()
+        } else {
+            Some(join(inputs))
+        };
+        (place, template)
+    }
+
+    /// The class a test of truthiness needs (PL §3.5): "`value` at the
+    /// root for a scalar condition, `shape` at the root for a record or
+    /// array, whose truthiness is its existence".
+    fn test_class(&self, expression: &Expression<'a>) -> &'static str {
+        let Ok(ty) = self.resolver.typed_at(self.module, expression, 0) else {
+            return "value";
+        };
+        let ty = self.resolver.present(ty);
+        match self.resolver.shape(ty) {
+            Shape::Object(..)
+            | Shape::Array(_)
+            | Shape::Tuple(_)
+            | Shape::NonPrimitive
+            | Shape::Handle(..)
+            | Shape::Unknown
+            | Shape::Opaque(_)
+            | Shape::Code(_) => "shape",
+            _ => "value",
+        }
+    }
+
+    /// A `select` over the condition `test` and two branches (PL §3.5).
+    /// `first` and `second` say what each branch is: an expression, or
+    /// the condition itself.
+    fn select(
+        &mut self,
+        hint: &str,
+        at: u32,
+        test: &Expression<'a>,
+        class: Option<&'static str>,
+        branches: [Option<&Expression<'a>>; 2],
+    ) -> Place {
+        self.build(hint, at, |emitter, _| {
+            let selector = emitter.selector(2);
+            let class = class.unwrap_or_else(|| emitter.test_class(test));
+            let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
+            let mut templates = Vec::new();
+            for branch in branches {
+                let template = match branch {
+                    Some(branch) => {
+                        emitter
+                            .one("identity", |emitter| emitter.eval(branch, "branch"))
+                            .1
+                    }
+                    // "When the selected arm of `&&` or `||` is the
+                    // condition, the result carries that operand's full
+                    // template, not only its truthiness."
+                    None => emitter.one("identity", |_| tested.clone()).1,
+                };
+                templates.push(template);
+            }
+            select_node(selector, condition, templates)
+        })
     }
 
     /// A dynamic key in the reactive tier: a `pick` whose choice the value
@@ -561,19 +688,77 @@ impl<'a> Emitter<'_, '_, 'a> {
     fn pick(&mut self, object: &Place, key: &Place, hint: &str, at: u32) -> Place {
         let object = object.clone();
         let key = key.clone();
-        self.in_cone(hint, at, |emitter, cone| {
-            emitter.cones[cone].picks.push(emitter.picks.len());
+        if let Place::Record(fields) = &object {
+            // "When `a` is a constructed object with a static key set,
+            // the compiler emits a `select` over its keys in place of a
+            // `pick`, and each branch is the template of that member."
+            // The last branch is the one for a key that names no member.
+            let fields = fields.clone();
+            return self.build(hint, at, |emitter, _| {
+                let selector = emitter.selector(fields.len() as u32 + 1);
+                let condition = emitter.one("value", |_| key).1;
+                let mut branches: Vec<Option<Value>> = Vec::new();
+                for member in fields.values() {
+                    branches.push(emitter.one("identity", |_| member.clone()).1);
+                }
+                branches.push(Some(json!({ "op": "const" })));
+                select_node(selector, condition, branches)
+            });
+        }
+        self.build(hint, at, |emitter, cone| {
+            let pick = emitter.picks.len();
+            emitter.cones[cone].picks.push(pick);
             emitter.picks.push("valueCode");
-            emitter.consume(&key);
+            let choice = emitter.one("value", |_| key).1;
             match &object {
                 Place::Slot(root, path) => {
-                    // The chosen child is one of the container's.
+                    // The chosen child is one of the container's: its
+                    // `shape` slot, which `choice` joins, and the slot of
+                    // what is read of it.
                     let mut child = path.clone();
                     child.push("*".to_string());
-                    let slot = emitter.slot(root, &child, "value");
-                    emitter.cones[cone].slots.insert(slot);
+                    let shape = emitter.slot(root, &child, "shape");
+                    let value = emitter.slot(root, &child, "value");
+                    emitter.cones[cone].slots.insert(shape);
+                    emitter.cones[cone].slots.insert(value);
+                    let choice = join(vec![choice?, json!({ "op": "slot", "slot": shape })]);
+                    Some(json!({
+                        "op": "pick",
+                        "pick": pick,
+                        "from": { "container": shape },
+                        "choice": choice,
+                        "body": { "op": "slot", "slot": value },
+                    }))
                 }
-                other => emitter.pass(other),
+                Place::Value(value, path) => {
+                    // A container the instance computed: `from` names its
+                    // output, and `body` is the template of the chosen
+                    // child, which for one opaque call is the call's.
+                    emitter.values[*value].referred = true;
+                    if emitter.values[*value].cone != cone {
+                        emitter.cones[cone].uses.insert(*value);
+                    }
+                    let output = if path.is_empty() {
+                        json!({ "$value": value })
+                    } else {
+                        if !emitter.values[*value].below.contains(path) {
+                            emitter.values[*value].below.push(path.clone());
+                        }
+                        json!({ "$value": value, "$path": path })
+                    };
+                    let body = emitter.values[*value].template.clone()?;
+                    Some(json!({
+                        "op": "pick",
+                        "pick": pick,
+                        "from": { "output": output },
+                        "choice": choice?,
+                        "body": body,
+                    }))
+                }
+                other => {
+                    emitter.pass(other);
+                    None
+                }
             }
         })
     }
@@ -597,6 +782,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if let Some(cone) = self.cone {
                     self.cones[cone].slots.insert(slot);
                 }
+                self.operands.push(json!({ "op": "slot", "slot": slot }));
             }
             Place::Record(fields) => {
                 for member in fields.values() {
@@ -631,23 +817,10 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// Expression code of an operator: a `derive` over the templates of
     /// what it observes (PL §1.1, §3.19).
     fn derived(&mut self, hint: &str, at: u32, evaluate: impl FnOnce(&mut Self, usize)) -> Place {
-        let saved = (
-            std::mem::take(&mut self.operands),
-            std::mem::replace(&mut self.opaque, false),
-        );
-        let place = self.in_cone(hint, at, evaluate);
-        let inputs = std::mem::replace(&mut self.operands, saved.0);
-        let opaque = std::mem::replace(&mut self.opaque, saved.1);
-        if let Place::Value(value, _) = &place {
-            if !opaque {
-                self.values[*value].template = Some(json!({
-                    "op": "derive",
-                    "inputs": inputs,
-                    "by": { "expression": true },
-                }));
-            }
-        }
-        place
+        self.build(hint, at, |emitter, cone| {
+            evaluate(emitter, cone);
+            (!emitter.opaque).then(|| join(std::mem::take(&mut emitter.operands)))
+        })
     }
 
     /// The template of a place that is one value: a slot passed through,
@@ -661,7 +834,13 @@ impl<'a> Emitter<'_, '_, 'a> {
             // Every path of what one opaque call or one expression
             // computed has its template (PL §3.3).
             Place::Value(value, _) => self.values[*value].template.clone(),
-            Place::Const => Some(json!({ "op": "const" })),
+            // The stream of a binding of the reactive tier is named by
+            // constants of the plan (PL §3.14).
+            Place::Const | Place::Stream(_) => Some(json!({ "op": "const" })),
+            // "A body that uses the index adds the collection's
+            // `enumeration` to its element template" (PL §3.6): the
+            // membership of what the construct iterates.
+            Place::Index(collection) => self.iterated.get(*collection).cloned().flatten(),
             _ => None,
         }
     }
@@ -789,9 +968,13 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 
     /// The statements of expression code: a promoted `computed` with a
-    /// statement body (`language-subset.md` §6.1).
-    fn code_block(&mut self, statements: &[Statement<'a>]) {
-        for statement in statements {
+    /// statement body (`language-subset.md` §6.1). The result is the
+    /// template of what the statements return: `Err` where they do not
+    /// return on every path, and `Ok(None)` where the value returned has
+    /// no template. An `if` is a `select` over what its two paths return
+    /// (PL §3.5).
+    fn code_block(&mut self, statements: &[Statement<'a>]) -> Result<Option<Value>, ()> {
+        for (index, statement) in statements.iter().enumerate() {
             match statement {
                 Statement::VariableDeclaration(declaration) => {
                     for declarator in &declaration.declarations {
@@ -803,20 +986,66 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
                 Statement::IfStatement(statement) => {
-                    self.selector();
-                    let test = self.eval(&statement.test, "condition");
-                    self.consume(&test);
-                    self.code_block(std::slice::from_ref(&statement.consequent));
-                    if let Some(alternate) = &statement.alternate {
-                        self.code_block(std::slice::from_ref(alternate));
+                    let selector = self.selector(2);
+                    let class = self.test_class(&statement.test);
+                    let (_, condition) =
+                        self.one(class, |emitter| emitter.eval(&statement.test, "condition"));
+                    let saved = self.env.clone();
+                    let consequent = self.code_block(std::slice::from_ref(&statement.consequent));
+                    self.env = saved.clone();
+                    let alternate = match &statement.alternate {
+                        Some(alternate) => self.code_block(std::slice::from_ref(alternate)),
+                        None => Err(()),
+                    };
+                    self.env = saved;
+                    if let (Ok(first), Ok(second)) = (&consequent, &alternate) {
+                        return Ok(select_node(
+                            selector,
+                            condition,
+                            vec![first.clone(), second.clone()],
+                        ));
+                    }
+                    // A path that does not return goes on with the
+                    // statements after the `if`.
+                    let rest = self.code_block(&statements[index + 1..]);
+                    let branch = |path: Result<Option<Value>, ()>| match path {
+                        Ok(template) => Ok(template),
+                        Err(()) => rest.clone(),
+                    };
+                    return match (branch(consequent), branch(alternate)) {
+                        (Ok(first), Ok(second)) => {
+                            Ok(select_node(selector, condition, vec![first, second]))
+                        }
+                        // A path that returns nothing returns `undefined`.
+                        (Ok(first), Err(())) => Ok(select_node(
+                            selector,
+                            condition,
+                            vec![first, Some(json!({ "op": "const" }))],
+                        )),
+                        (Err(()), Ok(second)) => Ok(select_node(
+                            selector,
+                            condition,
+                            vec![Some(json!({ "op": "const" })), second],
+                        )),
+                        (Err(()), Err(())) => Err(()),
+                    };
+                }
+                Statement::BlockStatement(block) => {
+                    let saved = self.env.clone();
+                    let returned = self.code_block(&block.body);
+                    self.env = saved;
+                    if returned.is_ok() {
+                        return returned;
                     }
                 }
-                Statement::BlockStatement(block) => self.code_block(&block.body),
                 Statement::ReturnStatement(statement) => {
-                    if let Some(argument) = &statement.argument {
-                        let place = self.eval(argument, "branch");
-                        self.pass(&place);
-                    }
+                    return Ok(match &statement.argument {
+                        Some(argument) => {
+                            self.one("identity", |emitter| emitter.eval(argument, "branch"))
+                                .1
+                        }
+                        None => Some(json!({ "op": "const" })),
+                    });
                 }
                 Statement::EmptyStatement(_) => {}
                 other => {
@@ -824,6 +1053,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
         }
+        Err(())
     }
 
     /// A call, in the reactive tier, of a pattern the compiler can see:
@@ -937,6 +1167,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             Expression::ChainExpression(chain) => match &chain.expression {
                 ChainElement::ComputedMemberExpression(member) => {
                     let object = self.eval(&member.object, hint);
+                    if member.optional {
+                        self.observe(&object, "shape");
+                    }
                     match unwrap(&member.expression) {
                         Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
                         key => {
@@ -947,6 +1180,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 ChainElement::StaticMemberExpression(member) => {
                     let object = self.eval(&member.object, hint);
+                    // `a?.b` observes whether `a` is present.
+                    if member.optional {
+                        self.observe(&object, "shape");
+                    }
                     Self::extend(&object, member.property.name.as_str())
                 }
                 ChainElement::CallExpression(call) => self.call(call, hint),
@@ -1011,43 +1248,100 @@ impl<'a> Emitter<'_, '_, 'a> {
             Expression::CallExpression(call) => self.call(call, hint),
             Expression::NewExpression(new) => self.construct(new, hint),
             Expression::JSXElement(_) | Expression::JSXFragment(_) => {
-                self.in_cone(hint, at, |emitter, _| match expression {
-                    Expression::JSXElement(element) => emitter.jsx_element(element),
-                    Expression::JSXFragment(fragment) => {
-                        for child in &fragment.children {
-                            emitter.jsx_child(child);
+                // A rendered tree has a template per path (PL §3.4), and
+                // none as one value.
+                self.build(hint, at, |emitter, _| {
+                    match expression {
+                        Expression::JSXElement(element) => emitter.jsx_element(element),
+                        Expression::JSXFragment(fragment) => {
+                            for child in &fragment.children {
+                                emitter.jsx_child(child);
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                    None
                 })
             }
-            Expression::ConditionalExpression(conditional) => {
-                self.in_cone(hint, at, |emitter, _| {
-                    emitter.selector();
-                    let test = emitter.eval(&conditional.test, "condition");
-                    emitter.consume(&test);
-                    for branch in [&conditional.consequent, &conditional.alternate] {
-                        let place = emitter.eval(branch, "branch");
-                        emitter.pass(&place);
-                    }
-                })
-            }
-            Expression::LogicalExpression(logical) => self.in_cone(hint, at, |emitter, _| {
-                emitter.selector();
-                let left = emitter.eval(&logical.left, "condition");
-                emitter.consume(&left);
-                let right = emitter.eval(&logical.right, "branch");
-                emitter.pass(&right);
-            }),
+            Expression::ConditionalExpression(conditional) => self.select(
+                hint,
+                at,
+                &conditional.test,
+                None,
+                [Some(&conditional.consequent), Some(&conditional.alternate)],
+            ),
+            // "`a && b` is `select(a, [b, a])` ... `a || b` and `??` are
+            // analogous" (PL §3.5). `??` tests whether `a` is present.
+            Expression::LogicalExpression(logical) => match logical.operator {
+                LogicalOperator::And => {
+                    self.select(hint, at, &logical.left, None, [Some(&logical.right), None])
+                }
+                LogicalOperator::Or => {
+                    self.select(hint, at, &logical.left, None, [None, Some(&logical.right)])
+                }
+                LogicalOperator::Coalesce => self.select(
+                    hint,
+                    at,
+                    &logical.left,
+                    Some("shape"),
+                    [None, Some(&logical.right)],
+                ),
+            },
             Expression::BinaryExpression(binary) => self.derived(hint, at, |emitter, _| {
-                for operand in [&binary.left, &binary.right] {
+                let equality = matches!(
+                    binary.operator,
+                    BinaryOperator::Equality
+                        | BinaryOperator::Inequality
+                        | BinaryOperator::StrictEquality
+                        | BinaryOperator::StrictInequality
+                );
+                let absent = |operand: &Expression<'a>| match unwrap(operand) {
+                    Expression::Identifier(identifier) => identifier.name == "undefined",
+                    Expression::NullLiteral(_) => true,
+                    _ => false,
+                };
+                let kind_test = |operand: &Expression<'a>| match unwrap(operand) {
+                    Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::Typeof,
+                    _ => false,
+                };
+                for (operand, other) in
+                    [(&binary.left, &binary.right), (&binary.right, &binary.left)]
+                {
+                    // A test of presence, `x === undefined`, observes
+                    // whether `x` holds anything, and a test of kind,
+                    // `typeof x === "string"`, observes `x` for `shape`
+                    // and nothing of the name it is compared with.
+                    if equality && absent(operand) && !absent(other) {
+                        continue;
+                    }
+                    if equality
+                        && kind_test(other)
+                        && matches!(unwrap(operand), Expression::StringLiteral(_))
+                    {
+                        continue;
+                    }
+                    if let (true, Expression::UnaryExpression(unary)) =
+                        (equality && kind_test(operand), unwrap(operand))
+                    {
+                        let place = emitter.eval(&unary.argument, "operand");
+                        emitter.observe(&place, "shape");
+                        continue;
+                    }
                     let place = emitter.eval(operand, "operand");
-                    emitter.consume(&place);
+                    if equality && absent(other) {
+                        emitter.observe(&place, "shape");
+                    } else {
+                        emitter.consume(&place);
+                    }
                 }
             }),
             Expression::UnaryExpression(unary) => self.derived(hint, at, |emitter, _| {
                 let place = emitter.eval(&unary.argument, "operand");
-                emitter.consume(&place);
+                if unary.operator == UnaryOperator::Typeof {
+                    emitter.observe(&place, "shape");
+                } else {
+                    emitter.consume(&place);
+                }
             }),
             Expression::TemplateLiteral(template) => self.derived(hint, at, |emitter, _| {
                 for operand in &template.expressions {
@@ -1167,7 +1461,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                             // A function of the standard library, such as
                             // `String`: expression code over its
                             // arguments.
-                            return self.in_cone(hint, at, |emitter, _| {
+                            return self.derived(hint, at, |emitter, _| {
                                 for argument in &arguments {
                                     let place = emitter.eval(argument, "operand");
                                     emitter.consume(&place);
@@ -1259,7 +1553,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             // operands as arguments.
             "equals" | "equalLinks" => {
                 let receiver = receiver.clone();
-                self.in_cone(hint, at, |emitter, _| {
+                self.derived(hint, at, |emitter, _| {
                     let mut operands = vec![receiver];
                     for argument in arguments {
                         operands.push(emitter.eval(argument, "operand"));
@@ -1292,7 +1586,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 {
                     return Place::Const;
                 }
-                self.in_cone(hint, at, |emitter, _| {
+                self.derived(hint, at, |emitter, _| {
                     emitter.consume(&receiver);
                     for place in &places {
                         emitter.consume(place);
@@ -1329,13 +1623,19 @@ impl<'a> Emitter<'_, '_, 'a> {
         // evaluates it in order, and a selector holds the position the
         // scan stopped at.
         let scan = matches!(via, "some" | "every" | "findIndex" | "find");
+        // The membership of what the construct iterates: for an input
+        // collection its `enumeration` slot, and for a collection the
+        // instance computed the producing template (PL §3.6).
+        let mut iterated: Option<Value> = None;
         let source = match receiver {
             Place::Slot(root, path) => {
                 let slot = self.slot(root, path, "enumeration");
+                iterated = Some(json!({ "op": "slot", "slot": slot }));
                 json!({ "slot": slot })
             }
             Place::Value(value, path) => {
                 self.values[*value].referred = true;
+                iterated = self.values[*value].template.clone();
                 match self.values[*value].collection {
                     Some(collection) if !scan && !self.values[*value].scan => {
                         json!({ "collection": collection, "via": via })
@@ -1360,8 +1660,16 @@ impl<'a> Emitter<'_, '_, 'a> {
                 // assembled result does not come before the body.
                 let receiver = receiver.clone();
                 let saved = self.cone.take();
-                let array = self.in_cone(name, at, |emitter, _| emitter.pass(&receiver));
+                // "For a constant, the membership template ... [is]
+                // `const`. For a literal written in place, the
+                // membership is the literal's `enumeration`" (PL §3.6),
+                // which is `const` for a static set of keys (§3.4).
+                let array = self.build(name, at, |emitter, _| {
+                    emitter.pass(&receiver);
+                    Some(json!({ "op": "const" }))
+                });
                 self.cone = saved;
+                iterated = Some(json!({ "op": "const" }));
                 match array {
                     Place::Value(value, _) => {
                         self.values[value].referred = true;
@@ -1383,9 +1691,15 @@ impl<'a> Emitter<'_, '_, 'a> {
             "source": source,
             "bodyUses": { "index": uses_index },
         }));
+        self.iterated.push(iterated.clone());
         // The body: one cone, evaluated once per element key.
         let saved_env = self.env.clone();
         let saved_cone = self.cone.take();
+        let saved_operands = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let bodies_before = self.plan_bodies.len();
         self.within.push(json!({ "element": collection }));
         let parameters = &function.params().items;
         if let Some(element) = parameters.first() {
@@ -1398,32 +1712,132 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.bind_pattern(&index.pattern, Place::Index(collection));
         }
         let (cone, _) = self.computing(name, function.span().start);
-        let result = match function.expression_body() {
-            Some(expression) => Some(self.eval(expression, name)),
-            None => function
-                .block_body()
-                .and_then(|statements| self.statements(statements)),
+        // The expression the callback returns, for the class a test of
+        // its truthiness needs.
+        let returned = function.expression_body().or_else(|| {
+            function.block_body().and_then(|statements| {
+                statements.iter().find_map(|statement| match statement {
+                    Statement::ReturnStatement(statement) => statement.argument.as_ref(),
+                    _ => None,
+                })
+            })
+        });
+        let tests = scan || via == "filter";
+        let class = match (tests, returned) {
+            (true, Some(returned)) => self.test_class(returned),
+            (true, None) => "value",
+            (false, _) => "identity",
         };
-        if let Some(result) = &result {
-            if scan {
-                self.consume(result);
-            } else {
-                self.pass(result);
+        let (result, body) = self.one(class, |emitter| {
+            let result = match function.expression_body() {
+                Some(expression) => Some(emitter.eval(expression, name)),
+                None => function
+                    .block_body()
+                    .and_then(|statements| emitter.statements(statements)),
+            };
+            result.unwrap_or(Place::Const)
+        });
+        // The element as the source has it, passed through.
+        let source_element = |emitter: &mut Self| {
+            let slot = emitter.slot(&Root::Element(collection), &[], "identity");
+            emitter.cones[cone].slots.insert(slot);
+            json!({ "op": "slot", "slot": slot })
+        };
+        let fold = |body: Option<Value>, through: Option<usize>| -> Option<Value> {
+            let mut node = Map::new();
+            node.insert("op".to_string(), json!("fold"));
+            node.insert("collection".to_string(), json!(collection));
+            node.insert("body".to_string(), body?);
+            if let Some(through) = through {
+                node.insert("through".to_string(), json!(through));
             }
+            Some(Value::Object(node))
+        };
+        let joined = |fold: Option<Value>, iterated: &Option<Value>| -> Option<Value> {
+            Some(join(vec![fold?, iterated.clone()?]))
+        };
+        // The membership of the result, the template of an element of
+        // it, and for a scan the template of its value.
+        let (membership, element, scanned) = match via {
+            "map" => (iterated.clone(), body, None),
+            // PL §3.7: "`fold` over the source with body the template of
+            // `pred`, joined with the source's membership", and "an
+            // element of the result is the source element, passed
+            // through".
+            "filter" => (
+                joined(fold(body, None), &iterated),
+                Some(source_element(self)),
+                None,
+            ),
+            // "`fold` over the source with body the `enumeration` of the
+            // segment `body` returns".
+            "flatMap" => {
+                let segment = match &result {
+                    Place::Slot(root, path) => {
+                        let slot = self.slot(root, path, "enumeration");
+                        self.cones[cone].slots.insert(slot);
+                        Some(json!({ "op": "slot", "slot": slot }))
+                    }
+                    Place::Value(value, _) => self.values[*value].template.clone(),
+                    Place::Record(_) | Place::Const => Some(json!({ "op": "const" })),
+                    _ => None,
+                };
+                (joined(fold(segment, None), &iterated), body, None)
+            }
+            // A scan (PL §3.13): a `fold` of the predicate's template
+            // through the deciding element, joined with the membership.
+            // The runtime supplies the `through`, and no value function
+            // reports it.
+            _ => {
+                let through = self.selectors.len();
+                self.selectors.push(0);
+                let choice = joined(fold(body, Some(through)), &iterated);
+                let scanned = if via == "find" {
+                    let pick = self.picks.len();
+                    self.picks.push("runtime");
+                    let element = source_element(self);
+                    choice.map(|choice| {
+                        json!({
+                            "op": "pick",
+                            "pick": pick,
+                            "from": { "collection": collection },
+                            "choice": choice,
+                            "body": element,
+                        })
+                    })
+                } else {
+                    choice
+                };
+                (iterated.clone(), None, scanned)
+            }
+        };
+        if let Some(membership) = &membership {
+            self.collections[collection]["membership"] = membership.clone();
+        }
+        // "`child`: the body instantiates a child" (PL §1.1,
+        // `Collection.bodyUses`).
+        let instantiates = self.plan_bodies[bodies_before..].iter().any(|body| {
+            body["calls"]
+                .as_array()
+                .is_some_and(|calls| calls.iter().any(|call| call["kind"] == "instantiate"))
+        });
+        if instantiates {
+            self.collections[collection]["bodyUses"]["child"] = json!(true);
         }
         self.within.pop();
         self.cone = saved_cone;
         self.env = saved_env;
+        self.operands = saved_operands.0;
+        self.opaque = saved_operands.1;
         let value = self.value(name, cone);
         self.values[value].collection = Some(collection);
         if scan {
             self.values[value].scan = true;
-            // The `through` of the fold: the runtime supplies it, and no
-            // value function reports it.
-            self.selectors.push(0);
-            if via == "find" {
-                self.picks.push("runtime");
-            }
+            self.values[value].template = scanned;
+        } else {
+            // The assembled result has the membership template (PL §1.4).
+            self.values[value].template = membership;
+            self.values[value].element = Some(element);
         }
         let place = Place::Value(value, Vec::new());
         // A cone outside the construct that uses the collection reads its
@@ -1459,25 +1873,21 @@ impl<'a> Emitter<'_, '_, 'a> {
                     Some(expression) => {
                         // A promoted `computed` is its expression, and
                         // has the expression's template.
-                        let mut inner = None;
-                        let place = self.in_cone(hint, at, |emitter, _| {
-                            let place = emitter.eval(expression, hint);
-                            emitter.pass(&place);
-                            inner = match &place {
-                                Place::Value(..) => emitter.template_of(&place, "identity"),
-                                _ => None,
-                            };
-                        });
-                        if let Place::Value(value, _) = &place {
-                            self.values[*value].template = inner;
-                        }
-                        place
+                        self.build(hint, at, |emitter, _| {
+                            emitter
+                                .one("identity", |emitter| emitter.eval(expression, hint))
+                                .1
+                        })
                     }
                     None => {
                         let statements = function.block_body().unwrap_or(&[]);
                         let saved = self.env.clone();
-                        let place = self.in_cone(hint, at, |emitter, _| {
-                            emitter.code_block(statements);
+                        let place = self.build(hint, at, |emitter, _| {
+                            match emitter.code_block(statements) {
+                                Ok(template) => template,
+                                // Statements that return nothing.
+                                Err(()) => Some(json!({ "op": "const" })),
+                            }
                         });
                         self.env = saved;
                         place
@@ -1493,17 +1903,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                     Place::Unknown
                 }
             },
-            "ifElse" | "when" | "unless" | "str" => self.in_cone(hint, at, |emitter, _| {
-                if name != "str" {
-                    emitter.selector();
+            // The callable forms map to the operation of `?:`, `&&`,
+            // `||`, and a template literal (PL §3.5, §3.19).
+            "ifElse" | "when" | "unless" if !arguments.is_empty() => {
+                let branch = |index: usize| arguments.get(index).copied();
+                let branches = match name {
+                    "ifElse" => [branch(1), branch(2)],
+                    "when" => [branch(1), None],
+                    _ => [None, branch(1)],
+                };
+                if name == "ifElse" && (branches[0].is_none() || branches[1].is_none()) {
+                    self.unsupported("an `ifElse` with fewer than three arguments", at);
+                    return Place::Unknown;
                 }
-                for (index, argument) in arguments.iter().enumerate() {
+                self.select(hint, at, arguments[0], None, branches)
+            }
+            "ifElse" | "when" | "unless" | "str" => self.derived(hint, at, |emitter, _| {
+                for argument in arguments {
                     let place = emitter.eval(argument, hint);
-                    if index == 0 || name == "str" {
-                        emitter.consume(&place);
-                    } else {
-                        emitter.pass(&place);
-                    }
+                    emitter.consume(&place);
                 }
             }),
             _ if EFFECTS.contains(&name) => {
@@ -1538,14 +1956,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Place::Slot(Root::Operation(operation), Vec::new())
             }
             // The context reads (PL §3.16).
-            "spaceOf" | "equals" => self.in_cone(hint, at, |emitter, _| {
+            "spaceOf" | "equals" => self.derived(hint, at, |emitter, _| {
                 for argument in arguments {
                     let place = emitter.eval(argument, "operand");
                     emitter.resolve(&place);
                 }
             }),
             "principalOf" | "principalsOf" | "profileOwnerOf" => {
-                self.in_cone(hint, at, |emitter, _| {
+                self.derived(hint, at, |emitter, _| {
                     if let Some(first) = arguments.first() {
                         let place = emitter.eval(first, "operand");
                         emitter.resolve(&place);
@@ -1558,7 +1976,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 })
             }
             "spaceAccess" | "spaceAccessOf" | "spaceMembers" | "spaceDeleted" => {
-                self.in_cone(hint, at, |emitter, _| {
+                self.derived(hint, at, |emitter, _| {
                     let Some(first) = arguments.first() else {
                         return;
                     };
@@ -1577,6 +1995,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                             if let Some(cone) = emitter.cone {
                                 emitter.cones[cone].slots.insert(slot);
                             }
+                            emitter.operands.push(json!({ "op": "slot", "slot": slot }));
                             let reads =
                                 emitter.dynamic(json!({ "why": { "kind": "space", "of": slot } }));
                             emitter
@@ -1595,7 +2014,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 })
             }
-            "linksOf" => self.in_cone(hint, at, |emitter, _| {
+            "linksOf" => self.derived(hint, at, |emitter, _| {
                 if let Some(first) = arguments.first() {
                     let place = emitter.eval(first, "operand");
                     emitter.observe(&place, "enumeration");
@@ -1605,7 +2024,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             // A rendering as text reads every operand by `value`, over its
             // whole subtree (BI, "Debug strings").
             "toIndentedDebugString" | "toCompactDebugString" => {
-                self.in_cone(hint, at, |emitter, _| {
+                self.derived(hint, at, |emitter, _| {
                     for argument in arguments {
                         let place = emitter.eval(argument, "operand");
                         emitter.consume(&place);
@@ -2654,17 +3073,35 @@ impl<'a> Emitter<'_, '_, 'a> {
                 output.insert("cone".to_string(), json!(cone));
                 if let Some(collection) = value.collection {
                     output.insert("collection".to_string(), json!(collection));
-                } else if let Some(template) = &value.template {
+                }
+                if let Some(template) = &value.template {
                     output.insert("template".to_string(), template.clone());
                 }
                 output.insert("kept".to_string(), json!(kept));
                 output.insert("constraints".to_string(), json!([]));
+                let assembled = Value::Object(output.clone());
                 listed.push((
                     cone,
                     value.order,
                     Some((value.order, below.to_vec())),
-                    Value::Object(output),
+                    assembled,
                 ));
+                // The per-element entry of an element construct: its
+                // path "has `*` at the position of each enclosing
+                // collection", and its template is over `element` slots
+                // (PL §1.4).
+                if let (Some(element), true) = (&value.element, below.is_empty()) {
+                    let mut path: Vec<Value> =
+                        output["path"].as_array().cloned().unwrap_or_default();
+                    path.push(json!("*"));
+                    output.insert("path".to_string(), json!(path));
+                    output.remove("collection");
+                    output.remove("template");
+                    if let Some(element) = element {
+                        output.insert("template".to_string(), element.clone());
+                    }
+                    listed.push((cone, value.order, None, Value::Object(output)));
+                }
             };
             for path in &value.kept {
                 entry(json!(path), None, true, &[]);
@@ -2794,6 +3231,26 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         (plan, self.unsupported, cycles)
     }
+}
+
+/// The join of several templates: expression code over them (PL §3.2).
+fn join(inputs: Vec<Value>) -> Value {
+    json!({ "op": "derive", "inputs": inputs, "by": { "expression": true } })
+}
+
+/// A `select` node, where the condition and every branch have a template.
+fn select_node(
+    selector: usize,
+    condition: Option<Value>,
+    branches: Vec<Option<Value>>,
+) -> Option<Value> {
+    let branches: Option<Vec<Value>> = branches.into_iter().collect();
+    Some(json!({
+        "op": "select",
+        "selector": selector,
+        "condition": condition?,
+        "branches": branches?,
+    }))
 }
 
 /// Whether a hint names no declaration: the expression is an operand, a
@@ -3042,6 +3499,7 @@ pub fn emit_module<'a>(
             opaque: false,
             body_dynamic: Vec::new(),
             formal_types: HashMap::new(),
+            iterated: Vec::new(),
         };
         let Some(function) = emitter.function_at(module, *start) else {
             continue;

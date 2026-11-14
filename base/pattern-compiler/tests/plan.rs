@@ -1030,9 +1030,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     for output in plan["outputs"].as_array().expect("outputs") {
         if output["cone"] == json!(facts_cone) {
             // "`facts.main`, `facts.entries`, `facts.places` ... are
-            // interim outputs". The room passes `facts.places` to a row
-            // used as a JSX tag, which the crate does not compile in, so
-            // it is in no record of this plan (SPEC-NOTES 105).
+            // interim outputs".
             // "Kept outputs in the slice: the room's `messages` output
             // (from `facts.list`)".
             if output["kept"] == json!(true) {
@@ -1044,7 +1042,9 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
             }
             assert_eq!(output["interim"], "facts");
             assert!(
-                output["path"] == json!(["main"]) || output["path"] == json!(["entries"]),
+                output["path"] == json!(["main"])
+                    || output["path"] == json!(["entries"])
+                    || output["path"] == json!(["places"]),
                 "{output}"
             );
             assert_eq!(
@@ -1250,7 +1250,64 @@ fn template_line(plan: &Value, template: &Value) -> String {
             };
             format!("derive({by}) {{ {} }}", inputs.join(" "))
         }
-        other => panic!("an unexpected template {other:?}"),
+        Some("select") => {
+            let branches: Vec<String> = template["branches"]
+                .as_array()
+                .expect("branches")
+                .iter()
+                .map(|branch| template_line(plan, branch))
+                .collect();
+            format!(
+                "select({} ? {})",
+                template_line(plan, &template["condition"]),
+                branches.join(" | ")
+            )
+        }
+        Some("fold") => format!(
+            "fold({}{}: {})",
+            plan["collections"][template["collection"].as_u64().unwrap() as usize]["name"]
+                .as_str()
+                .unwrap(),
+            if template.get("through").is_some() {
+                " through"
+            } else {
+                ""
+            },
+            template_line(plan, &template["body"])
+        ),
+        Some("pick") => {
+            let from = &template["from"];
+            let from = if let Some(slot) = from.get("container") {
+                format!("container [{}]", slot_line(plan, slot))
+            } else if let Some(output) = from.get("output") {
+                let output = &plan["outputs"][output.as_u64().unwrap() as usize];
+                format!(
+                    "output {}/{}",
+                    output["interim"].as_str().unwrap_or(""),
+                    output["path"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|segment| segment.as_str().unwrap())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                )
+            } else {
+                format!(
+                    "collection {}",
+                    plan["collections"][from["collection"].as_u64().unwrap() as usize]["name"]
+                        .as_str()
+                        .unwrap()
+                )
+            };
+            format!(
+                "pick({}, choice {}, body {})",
+                from,
+                template_line(plan, &template["choice"]),
+                template_line(plan, &template["body"])
+            )
+        }
+        other => panic!("an unexpected template {other:?} in {template}"),
     }
 }
 
@@ -1597,4 +1654,215 @@ export const Own = pattern<{ a: Cell<number> }>(({ a }) => {
     assert_eq!(cycles, [(3, 3)]);
     let own = plan_of(&analysis, "Own");
     assert_eq!(edge_lines(&own), ["one -> one"]);
+}
+
+// ----- PL §3: `select`, `pick`, `fold`, and the templates of the records -----
+
+fn interim_template(plan: &Value, name: &str) -> String {
+    template_line(plan, &output_named(plan, name)["template"])
+}
+
+#[test]
+fn a_conditional_and_a_logical_operator_are_a_select() {
+    // PL §3.5: "`c ? a : b` produces `select` with `condition` the
+    // template of `c` and two branches. `a && b` is `select(a, [b, a])`
+    // ... `a || b` and `??` are analogous." "The condition's slots have
+    // the class the test needs: `value` at the root for a scalar
+    // condition, `shape` at the root for a record or array".
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number } }>(({ on, a, b, box }) => {
+  const one = on ? a : b;
+  const two = a && b;
+  const three = a || b;
+  const four = box ? a : b;
+  const five = a ?? b;
+  return { one, two, three, four, five };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let a = "[argument a : identity]";
+    let b = "[argument b : identity]";
+    assert_eq!(
+        interim_template(&plan, "one"),
+        format!("select([argument on : value] ? {a} | {b})")
+    );
+    assert_eq!(
+        interim_template(&plan, "two"),
+        format!("select([argument a : value] ? {b} | {a})")
+    );
+    assert_eq!(
+        interim_template(&plan, "three"),
+        format!("select([argument a : value] ? {a} | {b})")
+    );
+    assert_eq!(
+        interim_template(&plan, "four"),
+        format!("select([argument box : shape] ? {a} | {b})")
+    );
+    assert_eq!(
+        interim_template(&plan, "five"),
+        format!("select([argument a : shape] ? {a} | {b})")
+    );
+    // Each `select` has a selector of its own, of arity 2, that its cone
+    // lists.
+    assert_eq!(plan["selectors"].as_array().expect("selectors").len(), 5);
+    let one = &output_named(&plan, "one")["template"];
+    assert_eq!(
+        plan["selectors"][one["selector"].as_u64().unwrap() as usize],
+        json!({ "arity": 2 })
+    );
+}
+
+#[test]
+fn a_dynamic_key_is_a_pick_over_a_container_slot_an_output_or_a_select_over_static_keys() {
+    // PL §3.18: "`a[k]` | The container slot of `a`, or the output that
+    // computes `a` | The template of `k` joined with the `shape` of the
+    // chosen child". "One of them is the `shape` slot at the path of `a`
+    // followed by `*`, which `choice` joins. `from` names that slot as
+    // `container` ... The plan has no slot at the path of `a` itself on
+    // account of the pick". "When `a` is a constructed object with a
+    // static key set, the compiler emits a `select` over its keys in
+    // place of a `pick`".
+    let analysis = program(
+        r#"import { lift, pattern } from "commonfabric";
+const build = lift((x: { n: number }) => { const out: Record<string, number> = {}; out["a"] = x.n; return out; });
+export const P = pattern<{ table: Record<string, number>; key: string; n: number; m: number }>(({ table, key, n, m }) => {
+  const chosen = table[key];
+  const built = build({ n });
+  const found = built[key];
+  const made = { x: n, y: m };
+  const member = made[key];
+  return { chosen, found, member };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        interim_template(&plan, "chosen"),
+        "pick(container [argument table/* : shape], choice derive(expression) { [argument key : value] [argument table/* : shape] }, body [argument table/* : value])"
+    );
+    assert!(!plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .any(|slot| slot["path"] == json!(["table"])));
+    assert_eq!(
+        interim_template(&plan, "found"),
+        "pick(output built/, choice [argument key : value], body derive(by build) { [argument n : identity] })"
+    );
+    assert_eq!(
+        interim_template(&plan, "member"),
+        "select([argument key : value] ? [argument n : identity] | [argument m : identity] | const)"
+    );
+    // "Every `pick` node has a choice point of its own".
+    assert_eq!(
+        plan["picks"],
+        json!([{ "chosenBy": "valueCode" }, { "chosenBy": "valueCode" }])
+    );
+}
+
+const FOLDS: &str = r#"import { pattern } from "commonfabric";
+interface Item { title: string; done: boolean; tags: string[] }
+export const P = pattern<{ items: Item[] }>(({ items }) => {
+  const titles = items.map((item) => item.title);
+  const open = items.filter((item) => !item.done);
+  const tags = items.flatMap((item) => item.tags);
+  const any = items.some((item) => item.done);
+  const first = items.find((item) => item.done);
+  const numbered = items.map((item, index) => index + 1);
+  return { titles, open, tags, any, first, numbered };
+});
+"#;
+
+fn collection_named<'p>(plan: &'p Value, name: &str) -> &'p Value {
+    plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|collection| collection["name"] == name)
+        .unwrap_or_else(|| panic!("no collection {name}"))
+}
+
+#[test]
+fn the_membership_of_a_map_a_filter_and_a_flat_map_are_the_templates_of_pl_sections_3_6_and_3_7() {
+    let plan = plan_of(&program(FOLDS), "P");
+    let enumeration = "[argument items : enumeration]";
+    // §3.6: "For a `map` over an input collection, the `enumeration` slot
+    // of that collection."
+    assert_eq!(
+        template_line(&plan, &collection_named(&plan, "titles")["membership"]),
+        enumeration
+    );
+    // §3.7: "`fold` over the source with body the template of `pred`,
+    // joined with the source's membership."
+    assert_eq!(
+        template_line(&plan, &collection_named(&plan, "open")["membership"]),
+        format!("derive(expression) {{ fold(open: derive(expression) {{ [element done : value] }}) {enumeration} }}")
+    );
+    // §3.7: "`fold` over the source with body the `enumeration` of the
+    // segment `body` returns, joined with the source's membership."
+    assert_eq!(
+        template_line(&plan, &collection_named(&plan, "tags")["membership"]),
+        format!("derive(expression) {{ fold(tags: [element tags : enumeration]) {enumeration} }}")
+    );
+    // §1.4: the assembled entry's "`template` is the collection's
+    // membership template", and a per-element entry's "`path` has `*` at
+    // the position of each enclosing collection ... its `template` is
+    // over `element` slots."
+    let outputs = plan["outputs"].as_array().expect("outputs");
+    let at = |path: Value| {
+        outputs
+            .iter()
+            .find(|output| output["path"] == path)
+            .unwrap_or_else(|| panic!("no output at {path}"))
+    };
+    assert_eq!(
+        template_line(&plan, &at(json!(["titles"]))["template"]),
+        enumeration
+    );
+    assert_eq!(
+        template_line(&plan, &at(json!(["titles", "*"]))["template"]),
+        "[element title : identity]"
+    );
+    assert!(at(json!(["titles", "*"])).get("collection").is_none());
+    // §3.7: "An element of the result is the source element, passed
+    // through: `slot` templates over the source's `element` root".
+    assert_eq!(
+        template_line(&plan, &at(json!(["open", "*"]))["template"]),
+        "[element  : identity]"
+    );
+    // §3.6: "A body that uses the index adds the collection's
+    // `enumeration` to its element template".
+    assert_eq!(
+        template_line(&plan, &at(json!(["numbered", "*"]))["template"]),
+        format!("derive(expression) {{ {enumeration} const }}")
+    );
+}
+
+#[test]
+fn a_scan_is_a_fold_through_the_deciding_element_and_find_is_a_pick() {
+    // PL §3.13: "`some` is a `fold` of the predicate's template through
+    // the first truthy element ... Each is joined with the collection's
+    // membership." "`xs.find((x) => pred)`. `pick` over the collection.
+    // The choice is the `fold` through the first match, joined with
+    // membership; the body is the matching element, passed through".
+    let plan = plan_of(&program(FOLDS), "P");
+    let enumeration = "[argument items : enumeration]";
+    let any = &output_named(&plan, "any")["template"];
+    assert_eq!(
+        template_line(&plan, any),
+        format!("derive(expression) {{ fold(any through: [element done : value]) {enumeration} }}")
+    );
+    let through = any["inputs"][0]["through"].as_u64().expect("through") as usize;
+    assert_eq!(plan["selectors"][through], json!({ "arity": 0 }));
+    let first = &output_named(&plan, "first")["template"];
+    assert_eq!(
+        template_line(&plan, first),
+        format!("pick(collection first, choice derive(expression) {{ fold(first through: [element done : value]) {enumeration} }}, body [element  : identity])")
+    );
+    assert_eq!(
+        plan["picks"][first["pick"].as_u64().unwrap() as usize],
+        json!({ "chosenBy": "runtime" })
+    );
 }
