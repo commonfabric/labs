@@ -82,8 +82,12 @@ transformer and builder and reads the stored labels of its slots and outputs
 (`compare/harness.ts`), and two fixtures. Run the tests from the repository
 root with `deno test -A base/pattern-compiler/compare/test/`, and print the
 tables with `deno run -A base/pattern-compiler/compare/report.ts`. Notes 177
-to 186 of `SPEC-NOTES.md` say what the comparison takes as each side's label
-and what it found.
+to 186 and 191 to 193 of `SPEC-NOTES.md` say what the comparison takes as
+each side's label and what it found. A third fixture, `defaulted.tsx`,
+compares a whole read and a property read of an object with a declared
+integrity atom and a defaulted property, and each row is also compared with
+the runtime's label read by origin, without the static part a module's
+result document carries.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the

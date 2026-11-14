@@ -1343,3 +1343,92 @@ numbers have gaps.
     nothing that names the document today's runtime stores it in. Observed as
     §6.5 has it: today the whole record, and the template the presence of
     `editedAt` with the kind of `body`.
+187. **`binding:write-to-computed`, and what the crate decides** (ruling T3;
+    LS §10.2; PL §3.11). The crate decides the case of a bound path in the
+    plan, for the state of a handler bound in the reactive tier, a pattern
+    compiled in included. A path is a reference where it is an element of a
+    `filter` over a stored collection, a `select` whose branches are stored
+    places, a `pick` of a child of a stored container, the expression of a
+    `computed` typed as a handle, or a `computed` that stays a body and
+    returns, on every `return`, a `filter`, `slice`, `sort`, `find`, `at`,
+    `get`, `key` or member chain over a stored place, or a `map` whose
+    callback returns its element. The binding's state entry then has
+    `"through": "reference"`, which no record of PL §1.1 has. A path is
+    produced where its template is a `derive` by expression code, a `fold`,
+    or a `const` under a listing of the checker. Anything else that could
+    hold a reference is counted as `mixed` and not reported: a selection
+    with one branch of each kind, what an authored function returns, a
+    record or an array a body assembles, and a parameter a function returns.
+    `Body.outputs` of FA §3.8 would decide the last three, and the crate does
+    not read it here. A `lift` result that writes through its argument is
+    not examined.
+188. **No hint for a callee that only reads** (ruling T3; LS §10.2). The
+    brief of this slice asked for a hint where a writable handle is bound to
+    a produced value and the callee only reads. LS §10.2 names one
+    diagnostic, an error for a callee that writes. The crate follows LS and
+    counts the read case (`plan:handle bound to a computed value:computed:
+    read`) without reporting it.
+189. **A literal reached through a pattern compiled in** (LS §10.2). A
+    literal given to a handler where a writable handle is declared is
+    reported. A literal given to a pattern in the reactive tier reaches the
+    pattern's own bindings as a constant, which the emitter does not tell
+    from a property the argument leaves out. The checker counts the
+    argument (`types:by-reference:a writable handle bound to:a literal`),
+    and the plan does not report the write. PL §3.15 refuses it.
+190. **The position of a report inside a pattern compiled in.** A
+    `binding:write-to-computed` found in a pattern compiled into the plan
+    is positioned at the outermost call or tag of the module being
+    compiled, since a diagnostic of a module has a position in that module.
+    The message names the inner binding by file and line. LS §10.2 does
+    not say where such a report is positioned.
+191. **An `ifElse` without the static part carries no label of its
+    condition** (ruling T2; PL §3.1, §3.5). The document of an `ifElse`
+    result stores one entry, of origin `declared`, with the join of the
+    argument schema's labels. The label of the condition reaches a reader
+    through that entry alone. Read by origin, without it, the runtime's
+    label is the selected branch's own label, and the template, which
+    joins the condition, is looser in both runs of the fixture. With the
+    static part the row is equal when the labeled branch is selected and
+    tighter otherwise. The ruling expects equal without it. The container
+    of a `map` is as the ruling has it: tighter with the static part and
+    equal without. For a container the static part is the `declared` entry
+    of the module's result document and the entries of origin `structure`
+    the runtime makes from the declared label of the elements; with the
+    `structure` entries kept the row stays tighter.
+192. **Which documents the static part is removed from** (ruling T2). The
+    comparison walks the documents from an output to its value and leaves
+    out the `declared` and `structure` entries of each, except those of
+    the argument's own document, whose declared entries are the labels of
+    the inputs. PL §3.1 does not say how a reader tells the two apart, and
+    a stored entry does not say which schema declared it.
+193. **A defaulted property in the comparison** (ruling T1). The fixture
+    `compare/fixtures/defaulted.tsx` declares an integrity atom on an
+    object with one defaulted property. The runtime's label at the
+    defaulted property has the object's atom, with the property given or
+    not. The comparison gives a slot at a property the argument leaves out
+    the empty integrity, so that row is looser, the exception by ruling.
+    The atom of the fixture is a string, which has no propagation class
+    and which a `derive` drops on both sides, so the whole read and the
+    property read are compared on outputs that pass the place on. A
+    hereditary atom written as a type argument (`typeof` of a constant
+    record with the `PolicyCertified` type) produced no stored label in
+    the run, so a `derive` over the whole object is not compared.
+194. **The surface of a pattern written as a tag** (PL §4.4, §8). A
+    pattern's own plan is not reported under `cfc-flow:ui-contract` where
+    another plan of the same module compiles the pattern in as a tag and
+    reports none of its bindings there. A tag in another module is not
+    followed, and a pattern with a tag under a surface in one place and
+    under none in another is reported from the second.
+195. **`.length` of a value the instance computed.** `.length` of an input
+    collection is its `enumeration` slot, and of an input string its
+    `value` slot (PL §3.8). `.length` of a collection the instance
+    computed has the template of the value at the path `length`, which for
+    an assembled result is the membership and for a constructed value the
+    nearest entry. PL §3.8 does not treat a string.
+196. **Alignments that needed no change.** The comparison compares atoms by
+    the canonical JSON of the whole atom, the type's URL included, and
+    prints the last segment only. The evaluator's `derive` and `fold` keep
+    the atoms every input has whose propagation class is hereditary
+    (`atomPropagationClass`), which is the class-aware meet of PL's
+    notation. A `select` keeps every atom all its branches have, of any
+    class, since it passes the selected branch on.
