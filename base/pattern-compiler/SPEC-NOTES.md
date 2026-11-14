@@ -1001,3 +1001,86 @@ numbers have gaps.
     makes one such value assignable "to a cell of such a type", and says
     nothing of an array of them, so the third row of §7.5.1 refuses the
     cell of the array. Not changed.
+155. **`Binding.state` and `Collection.construct`** (PL §1.1). A
+    collection has `construct`, which for a `reduce` is `operation`. A
+    path bound to the index of an element has `place: { index }` and the
+    membership the collection iterates as its template, and a path bound
+    to `undefined` has no entry. A constant written as the name of a
+    module-scope constant is still held as `null`: the emitter evaluates
+    a static initializer for a label argument (note 163) and not here.
+156. **A join** (PL §3.2). This replaces note 122 and the joins of notes
+    124, 127, 132 and 136. `joined` drops `const` inputs and equal
+    inputs and returns the one template left, and a `fold` is not joined
+    with the membership its collection iterates. Expression code of an
+    operator keeps its `const` operands, as the condition of `T_label`
+    does in PL §6.2. PL does not say where the line is between "a join"
+    and "expression code with a constant operand"; the crate takes every
+    place a rule says "joined with" or "the join of" as a join, and the
+    operands of an operator, a call of the standard library, and a
+    template literal as expression code.
+157. **The cones of an element body** (PL §1.4). This replaces note 119.
+    Each declaration of the callback that computes is a cone, and the
+    returned expression is one more, made before the constructs written
+    in that expression. `Plan.cones` is ordered by the edges and then by
+    the order in which the cones were made, so the cone of the returned
+    expression is after every cone it uses, and is not last where a
+    construct written in the returned expression is unused by it, which
+    the grammar makes rare. A value a declaration cone computes that
+    another cone of the body uses is an interim output at the empty path
+    under the declaration's name, as a declaration of a pattern compiled
+    into a callback already was: PL says the path "has `*` at the
+    position of each enclosing collection" and gives no path for an
+    interim name inside a body.
+158. **The entries of a constructed value** (PL §3.4). This replaces
+    note 126. A value one cone computes that is a record or an array
+    written in place, a JSX element, a `select` or a static-key `pick`
+    over such values, a promoted `computed` with an expression body that
+    returns one, or the element of a `map`, has a container entry and
+    one entry per member that is not constructed in place and not
+    `const`. A rendered tree has the paths `props/<name>` and
+    `children/<n>`; `type` and `name` are constants and have no entry.
+    JSX text that is white space with a line break is no child. A child
+    whose type is an array, or that is the assembled result of an
+    element construct, puts every later child at `children/*`, whose
+    template joins the element template and the membership of each
+    spread child with the templates of the later children. A spread
+    attribute whose operand declares no properties is the member `*` of
+    `props` and decides the key set. Chosen where PL is silent or the
+    crate differs: (a) the template of the value observed whole is, for
+    a `select`, the one `select` over the whole branches, and not the
+    join of the per-path `select` nodes, which is the same label in
+    fewer nodes; (b) a record written directly in a pattern body or in
+    the returned object has an entry per member as before and no
+    container entry, since each member is a value of its own cone;
+    (c) a promoted `computed` with a block body, and a `pick` whose
+    `from` is an output, are one template; (d) what a tag that names a
+    factory value renders has no slot in the crate, so its entry has no
+    template. Of the 9,100 outputs of the plans emitted with no
+    unsupported construct, 9,051 have a template, and 356 of 364 plans
+    have one on every output.
+159. **The readers of a state target** (PL §3.11). This replaces the
+    last part of note 116. The `identity` slot at the cell's root is no
+    reader. `side-write:cycle` is reported nowhere in the corpus, where
+    it was reported at 12 sites, each an edge from a cone to itself
+    through that slot.
+160. **The `shape` slots of `B1`** (PL §6.2, note 130 a). The listing
+    gives `B1` a `shape` slot at `threadInfo/*` and one in place at
+    `threadInfo/*/root`. The source tests `record?.root === undefined`
+    on an element of `StoredThreadInfo[]`, whose type admits neither
+    `null` nor `undefined`, with `root: Cell<unknown>` required. Both
+    tests are decided by the type (FA §2.2), and FA §2.3 removes a
+    `shape` entry that only such a test recorded where another entry is
+    at or below its path, which `threadInfo/*/root : identity` is. The
+    crate follows FA and has neither slot. `T_label` equals the listing
+    as merged.
+161. **The child slots of a `pick`** (PL §3.18). This replaces note 123.
+    A read of a path below the chosen child in the cone the pick is
+    written in, or in a cone that uses its output, has the slot at the
+    path of the container, `*`, and that path, with the class of the
+    read. A child passed on whole is read for `value` at the child,
+    because the crate does not follow what a later reader observes
+    through a reference a `select` or an output passes on; PL would have
+    the `identity` slot there and the reader's own slots below it.
+162. **`function-body:wish`** (LS §5.2) is reported at the call, in every
+    function body, the body of an authored function included whatever
+    calls it. The corpus has no report.

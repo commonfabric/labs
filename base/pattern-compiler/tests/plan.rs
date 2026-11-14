@@ -976,7 +976,9 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     // enumeration", `s4` "the `root` handle of each record", and `s5`
     // "each `title`". Of the four `shape` slots the listing gives `B1`,
     // the crate has the one in place at `threadInfo` and the one at the
-    // root of the list (SPEC-NOTES 130).
+    // root of the list. The tests at `threadInfo/*` and at
+    // `threadInfo/*/root` are decided by the type, and FA §2.3 removes
+    // their entries (SPEC-NOTES 160).
     let titles = body_named(&plan, "threadTitles#1");
     assert_eq!(titles["kind"], "function");
     assert_eq!(
@@ -1941,9 +1943,11 @@ fn the_templates_of_a_row_are_those_of_pl_section_6_2() {
     let replies = format!("select({guarded} ? {guarded} | const)");
     assert_eq!(interim_template(&plan, "replies"), replies);
     // "T_label = select( condition: derive(expression) [ T_repl, const
-    // ], branches: [ const, derive(expression) [ const, T_repl ] ] )".
-    // The template literal is a `derive` over its substitutions (§3.19),
-    // so the crate has no `const` in the second branch.
+    // ], branches: [ const, derive(expression) [ T_repl ] ] )". "A
+    // template literal is a `derive` over the templates of its
+    // substitutions (section 3.19), and its text is no operand", and
+    // the condition "is an operator with two operands, one of them a
+    // constant, so it has the `const` node".
     assert_eq!(
         interim_template(&plan, "threadLabel"),
         format!("select(derive(expression) {{ {replies} const }} ? const | derive(expression) {{ {replies} }})")
