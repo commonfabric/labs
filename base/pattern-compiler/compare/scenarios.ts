@@ -89,6 +89,14 @@ export const compareStateDeclared = (): Promise<Row[]> =>
   compare("state-declared", { note: "n" });
 
 /**
+ * Runs `fixtures/created.tsx`: a `lift` creates a cell under a type that
+ * declares a clause and returns its handle, which the pattern passes on to
+ * the rendered tree, in place and through an authored function.
+ */
+export const compareCreated = (): Promise<Row[]> =>
+  compare("created", { note: "n" });
+
+/**
  * Runs `fixtures/handler.tsx` and sends one event to its handler, which
  * sets a cell to a value derived from the event and a labeled input, and
  * pushes onto a list. The event's `text` has a label its schema declares.

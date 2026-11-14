@@ -95,7 +95,10 @@ export type Plan = {
     kind: string;
     name?: string;
     writes?: PlanWrite[];
+    /** The inputs the instance computed (PL §1.1, `Body.computed`). */
+    computed?: { observes?: string; template?: Template }[];
   }[];
+  operations?: { kind?: string; input?: Template }[];
   stateCells?: { name: string; within?: unknown[] }[];
   selectors?: { arity: number }[];
 };
@@ -934,6 +937,77 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         );
       };
 
+      // Whether `template` is the label of a reference the instance
+      // computed, whose target no slot names (PL §3.1, "A reference whose
+      // target no slot names"): what a materializer returned, which the
+      // crate writes as the template of the materializer's body, or the
+      // result of a body that holds an `identity` entry of `Body.computed`.
+      // A `select` is one where a branch is, and a `pick` where its body
+      // is.
+      // The result is `"at"` where the reference is the value at the
+      // path, and `"below"` where a body's result holds it at a path the
+      // plan does not name.
+      const computedReference = (
+        template: Template,
+      ): "at" | "below" | undefined => {
+        switch (template.op) {
+          case "derive": {
+            if (!("body" in template.by)) return undefined;
+            if (
+              (plan.operations ?? []).some((operation) =>
+                operation.kind === "materializer" &&
+                sameValue(operation.input, template)
+              )
+            ) return "at";
+            const body = plan.bodies?.[template.by.body];
+            return (body?.computed ?? []).some((entry) =>
+                entry.observes === "identity"
+              )
+              ? "below"
+              : undefined;
+          }
+          case "select":
+            return template.branches.map(computedReference).find((where) =>
+              where !== undefined
+            );
+          case "pick":
+            return computedReference(template.body);
+          default:
+            return undefined;
+        }
+      };
+      // What a value read through each link stored at `cell`'s path or
+      // below it consumes, the entries of the target's own document
+      // included. The plan names no address for the target of a computed
+      // reference, so the links are found in the stored value, and the
+      // harness cannot tell the link of the reference from another link
+      // stored below the path.
+      const throughStoredLinks = (
+        cell: AnyCell,
+        where: "at" | "below",
+      ): Label[] => {
+        if (where === "at") {
+          return [consumed(cfcLabelViewForResolvedCell(cell), "value")];
+        }
+        const last = hops(cell).at(-1);
+        if (last === undefined) return [];
+        const found: Label[] = [];
+        const scan = (value: unknown, path: string[]) => {
+          if (value === null || typeof value !== "object") return;
+          if (path.length > 0 && parseLink(value, last) !== undefined) {
+            found.push(
+              consumed(cfcLabelViewForResolvedCell(at(cell, path)), "value"),
+            );
+            return;
+          }
+          for (const [key, inner] of Object.entries(value)) {
+            scan(inner, [...path, key]);
+          }
+        };
+        scan(read.readValueOrThrow(last), []);
+        return found;
+      };
+
       const note = (kind: string, index: number, context: Context) =>
         `${rowKey}|${kind}${index}|${JSON.stringify(context.elements)}`;
 
@@ -1329,7 +1403,22 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               // integrity of the dereferenced value (PL §3.1, "An atom on
               // a link").
               const stored = evaluate(template, false, { elements }, true);
-              const reached = evaluate(template, true, { elements }, true);
+              // "The template's side is joined with what a value read
+              // through the link stored at the runtime's output path
+              // consumes ... Both sides then read one target" (PL §3.1,
+              // "A reference whose target no slot names").
+              const where = computedReference(template);
+              const target = where === undefined
+                ? []
+                : throughStoredLinks(cell, where);
+              const reading = (kept: boolean): Evaluated => {
+                const evaluated = evaluate(template, true, { elements }, kept);
+                return target.length === 0 ? evaluated : {
+                  ...evaluated,
+                  label: join([evaluated.label, ...target]),
+                };
+              };
+              const reached = reading(true);
               const withoutStatic = byOrigin(cell, observes, false);
               rows.push({
                 output: number,
@@ -1339,7 +1428,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 reached,
                 comparison: compareLabels(reached.label, runtimeLabel),
                 comparisonOfTemplateAlone: compareLabels(
-                  evaluate(template, true, { elements }).label,
+                  reading(false).label,
                   runtimeLabel,
                 ),
                 runtimeByOrigin: {

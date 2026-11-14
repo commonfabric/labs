@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  compareCreated,
   compareDefaulted,
   compareIsEdited,
   comparePassed,
@@ -217,6 +218,28 @@ describe("the static part, by the document an entry is in", () => {
     expect([...new Set(row.runtimeByOrigin.withoutStatic.confidentiality)])
       .toEqual(["alice"]);
     expect(row.comparisonWithoutStatic.confidentiality).toBe("equal");
+  });
+});
+
+describe("a reference a site of a body made", () => {
+  it("is compared with both sides reading the cell the stored link leads to", async () => {
+    // PL §3.9, "A reference a site of the body made": the template of a
+    // path that passes the handle on is the label of the reference, and
+    // the clause the created cell's type declares stays at the cell. PL
+    // §3.1, "A reference whose target no slot names": the template's side
+    // is joined with what a value read through the stored link consumes.
+    const rows = Object.fromEntries(
+      (await compareCreated()).map((row) => [row.path.join("/"), row]),
+    );
+    const direct = rows["$UI/children/0/props/$value"];
+    const throughFunction = rows["$UI/children/1"];
+
+    for (const row of [direct, throughFunction]) {
+      // The label of the reference alone has no clause.
+      expect(row.stored.label.confidentiality).toEqual([]);
+      expect([...new Set(row.runtime.confidentiality)]).toEqual(["alice"]);
+      expect(row.comparison.confidentiality).toBe("equal");
+    }
   });
 });
 
