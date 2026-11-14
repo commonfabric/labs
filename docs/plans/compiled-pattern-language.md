@@ -49,29 +49,30 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `bf454a771d`, on 426 corpus modules, it accepts 335
-  without an error and reports 384 errors: `any` in a type (182), 73
+  prototype commit `0a87982d44`, on 426 corpus modules, it accepts 334
+  without an error and reports 387 errors: `any` in a type (182), 76
   type mismatches, a function type in data from one declaration (35),
   and `patternTool` (31) are most of them. Footprint analysis covers
   `footprint-analysis.md` §2 to §8, with the record of each use of a
   body, and finds 90 of 1,972 bodies widening (4.6%) where the
   document's script found 83 of 1,962. Its listing for FabriChat's
   `commitEdit` equals the one in §12.3. A `plan` command emits the
-  plan as JSON with label templates of every kind
-  `plan-and-label-templates.md` defines, on outputs, computed inputs,
-  collection membership, write edges, operation inputs, and bindings.
-  It emits a plan with no unsupported construct for 226 of the 288
-  accepted modules that hold a pattern. In those plans 1,751 of 2,630
-  outputs have a template; nearly all the rest are rendered trees and
-  records used as one value, for which the document gives no paths.
-  Not built: `wish`, `reduce`, and spreads, a pattern used as a JSX tag
-  compiled in, a cone per declaration inside an element callback,
-  emitted schemas, hashes, constraints, and the six `cfc-flow:*`
-  diagnostics, which need the schemas. `side-write:cycle` fires nine
-  times, most from an edge of a cone to itself through a cell the body
-  writes and does not read. The crate's `SPEC-NOTES.md` lists the
-  places where it found the documents ambiguous; notes 113 to 129 are
-  not yet written into the documents.
+  plan as JSON with label templates, slot schemas, declared labels,
+  and constraint records, and with the records of `wish`, `reduce`,
+  scans, and spreads. It emits a plan with no unsupported construct
+  for 271 of the 288 accepted modules that hold a pattern;
+  `patternTool` is the most frequent construct left. In those plans
+  2,393 of 3,694 outputs have a template and 5,720 of 10,167 slots
+  have a schema. One slot in the corpus has a declared label, because
+  the prototype does not yet read a label argument through an alias,
+  `typeof NAME`, or a marker type; so `cfc-flow:write-policy`, the one
+  such diagnostic built, reports nothing. Four of the `cfc-flow:*`
+  diagnostics are not built because `plan-and-label-templates.md`
+  names what "fits" only by today's runtime functions. Not built
+  either: hashes, a cone per declaration inside an element callback,
+  and per-path entries for a constructed value. The crate's
+  `SPEC-NOTES.md` lists the places where it found the documents
+  ambiguous; notes 130 to 153 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
