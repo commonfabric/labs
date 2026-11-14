@@ -1135,11 +1135,23 @@ with a plan of its own (section 3.15).
 
 A JSX tag that names a pattern is such a call: `<Row message={m} />` is
 `Row({ message: m })` (`language-subset.md` §4.5). Where the tag names a
-pattern the compiler can see, the pattern is compiled into the enclosing
-plan under a `site` step, and its attributes are the paths of its
-argument, bound place by place as below. Where the tag names a factory
-value, the instantiation is a `Child`. A pattern is one the compiler can
-see whichever module declares it and however that module exports it, a
+pattern the compiler can see, the pattern is compiled into the enclosing plan under a
+`site` step whose name is the tag's name, and its attributes are the paths of
+its argument, bound place by place as below. The children written between the
+tags are the path `children` of the argument, an array literal of the
+children, as the JSX factory passes them (`h` in
+`runtime/runner/src/builder/h.ts`). The tag evaluates to what the pattern
+returns, as the call does. *Assumed,* with question 53 of section 8: the
+entries of the enclosing rendered tree at the tag's position are those of the
+callee's `[UI]`, since that is what a renderer shows of a result at a child
+position. Where the tag names a factory value, the instantiation is a `Child`
+with one write edge of target `argument` per attribute and one at `children`.
+Its callee is `{ factory }` with the `identity` slot of the factory value. A
+factory value that the instance itself computed in the reactive tier has no
+such slot and no body to name an entry of; *assumed* (section 8, question 58):
+the tag is refused there, and the author passes the factory value in the
+argument or instantiates it in a function body. A pattern is one the compiler
+can see whichever module declares it and however that module exports it, a
 default export included.
 
 The argument of a pattern compiled into another is bound place by place.
@@ -1610,7 +1622,13 @@ with a handle as the marker that mapping gives it, each label annotation
 as the `ifc` metadata of its node (`language-subset.md` §8.2), and the
 default and the scope of a node where it declares one
 (`language-subset.md` §8.8). Its hash is taken over that document in
-canonical form. The type each member is the schema of:
+canonical form. The plan holds the hash and never the document. The
+compiler emits each schema document a plan names once, beside the plan,
+and the runtime stores it as a schema document under the `cid:`
+identifier the hash gives (`execution-and-storage.md` §4.1), where a
+reader of the plan resolves it. A named type that contains itself is
+hoisted into `$defs` and referred to by `$ref`, as the mapping's §5 has
+it, so the document is finite. The type each member is the schema of:
 
 | Member | The type |
 | --- | --- |
@@ -1694,9 +1712,16 @@ on a path. The values are the label arguments in the canonical form
 - `declared.integrity` is the combined `integrity` list at the path. The
   nodes below the path add nothing: the integrity of a subtree read
   whole is a meet.
+- A handle type on the way is two nodes: the handle, with the
+  annotations written around it, and its value type, with the
+  annotations written inside it. A slot whose path crosses the hop
+  combines both, the handle's first.
 - A slot at a path with no such annotation at or above it has no
   `declared` member, and one with an annotation of one dimension alone
   has that member alone.
+- Where two nodes on the path declare `integrity` differently the type
+  is refused (`cfc-label:conflict`, `language-subset.md` §8.3), so the
+  combined list is the list of whichever node declares it.
 - *Assumed* (section 8, question 55): an `identity` slot and a `shape`
   slot in place have no `declared` member, because they observe the
   reference stored at the position, whose label is a pointer label, and
@@ -1741,15 +1766,26 @@ labels, by the rule of section 4.4, "When a constraint is checked".
 | `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity` | An input constraint: the `declared` member of each slot it lists, and for an entry of `Body.computed` the entry's template with its `slot` nodes replaced in the same way |
 | `cfc-flow:ui-contract` | A `writer` constraint whose alternative has a `uiContract`, and the bindings of the plan that name the handler (section 4.4) |
 
-A template is evaluated on declared labels only where every `slot` node
+Section 4.4 defines the relations each check tests ("The relations a
+constraint tests") and, per diagnostic, the cases the compiler reports
+and the cases it leaves to the runtime ("What the compiler decides"). A
+template is evaluated on declared labels only where every `slot` node
 it reaches has the `declared` member of the dimension tested, on every
 selection, and it has no `dynamic` node, no `fold` and no `pick`. An
 input constraint is evaluated only where it lists no entry of
 `Body.handles`. In every other case the diagnostic is not reported and
-the constraint is checked at instantiation. For confidentiality the
-declared label is a lower bound, so a `select` is evaluated as the join
-of its condition with the meet of its branches' clauses, and only a
-failure is reported.
+the constraint is checked at instantiation.
+
+`cfc-flow:write-policy` needs no hash. Two bodies have one `Body.code`
+exactly where they are one declaration, so the compiler compares the
+declaration the policy's binding reference resolves to
+(`language-subset.md` §8.5) with the declaration of the body whose
+record holds the write edge. A write made by an authored function the
+body calls is an edge of the body's record
+(`footprint-analysis.md` §3.6), so it is checked as the body's. A
+policy written through `WritePolicyAnyOf` or a trusted-action alias has
+one `WriterPolicy` per alternative, and the edge passes where one of
+them names the body.
 
 ## 2. Slots and observation classes
 
@@ -2612,7 +2648,12 @@ the array (section 3.8). A collection over the array gives the position no
 element key and no cone instance (section 1.3).
 
 **A computed key.** A key that is static in the sense of
-`language-subset.md` §4.3 is the name it evaluates to. A key that is not
+`language-subset.md` §4.3 is the name it evaluates to. The path segment
+is that string: for a string or a number literal and for a template
+literal with no substitution, its text; for a module-scope constant, its
+value; and for a well-known key, the string the API's constant holds, so
+`[UI]` is the segment `$UI` and `[NAME]` is `$NAME` (`UI` and `NAME` in
+`base/api/index.ts`). A key that is not
 static is refused there (`reactive:unsupported-expression`), so the plan
 has no record for one.
 
@@ -3466,7 +3507,7 @@ because a runtime call of the body returned it (`Body.calls`).
 
 | The site | A write through what it returned |
 | --- | --- |
-| `createCell` | A `WriteEdge` with target `created`, or with target `state` where the cell is a `StateCell` (section 3.14). Under a cause computed from data in a `lift` or a `computed`, a `created` envelope |
+| `createCell` | A `WriteEdge` with target `created`, or with target `state` where the cell is a `StateCell` (section 3.14). The target's `path` is the path of the write below the cell: empty for a `set` of the whole value, and the path of a `key(...)` chain or of the element a `push` adds otherwise. Under a cause computed from data in a `lift` or a `computed`, a `created` envelope |
 | `bind` | `stream.send(event)` on the stream the site returned is a `WriteEdge` with target `created` that names the `bind` site, with an empty path. The event carries the body's template, as an event sent on a stream the body was given does |
 | `instantiate`, `effect` | *Assumed* (section 8, question 52): a `WriteEnvelope` of kind `created` that names the site. The link leads to the result of an instance, or of an effect, and a write through it lands in a cell that a handle in that result links to, which the plan cannot name. The envelope bounds the write to the cells reached through what the site returned. A write that lands at a path the instance or the effect itself computes is refused, by the rule for a write to a value an instance computes (above) |
 
@@ -3619,8 +3660,10 @@ kind.
   `bodyUses` is as for a `map`.
 - **The predicate** is the cones of the callback, by the rules of section
   1.4, with slots of root `element` that name this collection. They are
-  evaluated per element key. What the callback returns is an output whose
-  path has `*`, and it is observed for truthiness, with the classes of
+  evaluated per element key. What the callback returns is a per-element
+  output (section 1.4): an interim entry of `Plan.outputs` whose `path`
+  has `*` at the position of this collection, as what the callback of a
+  `map` returns has. It is observed for truthiness, with the classes of
   section 3.5.
 - **A `Selector` of arity 0,** which the `fold` names in `through`. It is
   an entry of `Plan.selectors` and of no `Cone.selectors`: the runtime
@@ -3684,13 +3727,20 @@ expression.
     The slot is in `Cone.slots`, so that the value function receives it,
     and the step's template has `const` where the expression reads it,
     by the rule above.
-  - The step's result is an output of the step cone whose path has `*`.
-    Its template is the template of `expr`.
+  - The step's result is a per-element output of the step cone
+    (section 1.4): an interim entry of `Plan.outputs` whose `path` has
+    `*` at the position of the `reduce`'s collection. Its template is
+    the template of `expr`.
   - The cone the `reduce` is written in computes `init` and writes it
     into the operation's state by a `WriteEdge` with target `request`,
     at the path `initial`, with the template of `init`.
   - `Operation.input` is the `fold` over the collection of the step's
-    template, joined with the template of `init`. The result is the
+    template, joined with the template of `init`. The `fold` joins the
+    membership the collection iterates by its own rule (section 3.2),
+    so the membership is no third input. A call always has an `init`
+    and a callback that is an expression: `language-subset.md` §4.4.1
+    refuses the others (`collection:reduce-initial`,
+    `collection:reduce-callback`). The result is the
     stored result of the operation and has that label, instantiated. A
     cone that uses it reads a slot with root `operation`.
 
@@ -3949,26 +3999,31 @@ key, the plan records the cell as follows.
 The initial value of any other created cell is a `WriteEdge` with target
 `created`.
 
-**Declaring a database** (`sqliteDatabase`). The declaration is legal in
-the reactive tier only (`builtin-inventory.md`, "`sqliteDatabase`"), so it
-is not a site of `Body.calls`. It is an `Operation` of kind `database`,
-with `implementation: { builtin: "sqliteDatabase" }`, named by `name` and
-`within` as a state cell is. Its `tables` member holds the table
-declarations, which are constants of the plan, and its `scope` the scope
-the declared type of the handle gives. It has no request: no write edge
-has the target `request` for it, no transaction is its own, and its
-`input` is `const`. Its state document holds the handle, and a slot with
-root `operation` reads it: `db.query(...)` holds the handle by value as
-an operand of a `sqliteQuery` request, and `db.exec(...)` in a handler is
-a write through the handle, a `WriteEdge` with target `handle` whose slot
-is the handle's `identity` slot. The declaration has no label rule of its
-own. The handle's `owner` is written once, from the acting principal of
-the transaction that first writes the handle. *Assumed:* the state
-document carries what section 2.6 gives the bookkeeping of an operation,
-the confidentiality of `Operation.input`, which is `const` here and so
-empty, and no integrity. The handle then carries no label beyond what
-the table declarations in it declare, as today
-(`execution-and-storage.md` §6.8; section 8, question 40).
+**Declaring a database** (`sqliteDatabase`). The declaration is legal in the
+reactive tier only (`builtin-inventory.md`, "`sqliteDatabase`"), so it is not
+a site of `Body.calls`. It is an `Operation` of kind `database`, with
+`implementation: { builtin: "sqliteDatabase" }`, named by `name` and `within`
+as a state cell is. Its `tables` member holds the table declarations, which
+are constants of the plan, and its `scope` the scope the declared type of the
+handle gives. It has no request: no write edge has the target `request` for
+it, no transaction is its own, and its `input` is `const`. Its state document
+holds the handle, and a slot with root `operation` reads it: `db.query(...)`
+holds the handle by value as an operand of a `sqliteQuery` request.
+`db.query(sql, options)` is an `Operation` of kind `effect` with
+`implementation: { builtin: "sqliteQuery" }`, and its write edges with target
+`request` are at the paths of the built-in's operands: `db` for the handle,
+read for `value`, `sql` for the statement, and each member of `options` at its
+own name (`builtin-inventory.md`, "`sqliteQuery`", "Request operands"). Its
+`Operation.scope` is the one that entry gives a query with a `scope` option or
+with `readClearance`. `db.exec(...)` in a handler is a write through the
+handle, a `WriteEdge` with target `handle` whose slot is the handle's
+`identity` slot. The declaration has no label rule of its own. The handle's
+`owner` is written once, from the acting principal of the transaction that
+first writes the handle. *Assumed:* the state document carries what section
+2.6 gives the bookkeeping of an operation, the confidentiality of
+`Operation.input`, which is `const` here and so empty, and no integrity. The
+handle then carries no label beyond what the table declarations in it declare,
+as today (`execution-and-storage.md` §6.8; section 8, question 40).
 
 **Requesting an effect** (`effect`, legal in a handler and an action). The
 request is staged in the event's transaction. Each path of it is a
@@ -4824,6 +4879,18 @@ bodies"), and `Body.calls` has no site for one.
   a cell is held by reference, as in any request. `Operation.input` is
   the join of those templates, and it is `const` for a call whose
   operands are all constants.
+  - The argument is a record of type `WishParams` (`WishFunction` in
+    `base/api/index.ts`). A string written as the argument is no value
+    of that type and is refused by the type check
+    (`subset-type:mismatch`), and so is a member the type does not
+    declare.
+  - Each operand is one edge, at the path of its name and no deeper. For
+    an operand that is a record or an array written in place, the
+    edge's template is the template of the value observed whole
+    (section 3.4): the join of the templates of its entries.
+  - Where the argument is written with a spread, its members are those
+    section 3.4 gives the object literal. A member the spread's type
+    declares as optional has the `select` of that rule as its template.
 - **The result.** The stored result of the operation has the paths of
   `WishState` (`base/api/index.ts`): `result`, `candidates`, `error`,
   `errorCode` and `[UI]`. A reader has slots with root `operation` at the
@@ -4856,6 +4923,17 @@ I(a path of the result) = empty
 No integrity is minted, as today. The same label is the identity label of
 the reference at `result` and at each member of `candidates`: which
 target was found depends on the operands and on what the resolution read.
+
+The rule is how the runtime resolves a slot, and no node of a reader's
+template states it. A reader's template has the `slot` node with root
+`operation` and nothing else for the read: no `dynamic` node, and no
+copy of `Operation.input`. When the runtime resolves a slot whose root
+is an operation of kind `wish`, the label is the instantiated
+`Operation.input` of that operation joined with the label of the entry
+of `Plan.dynamicReads` of kind `search` that names it. The two parts are
+in the plan, and the join is made at resolution (section 4.2), as the
+label of any slot with root `operation` comes from the operation's
+record.
 The rest of the operation's state document has the label section 2.6
 gives the bookkeeping of an operation.
 
@@ -4869,21 +4947,38 @@ row of that key.
 | --- | --- | --- |
 | `/`, `/a/b`, or a path below `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | A path or a well-known target of the current space | Nothing. The `dynamic` node holds the links followed along the path |
 | `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, `#chatManager`, `#profile`, `#profileName`, `#profileBio`, `#profileSpace`, with or without a path | A well-known target of the home space of the demanding principal | `Operation.scope` is `user`. For a profile target without `headless: true`, a `Child` for each of the two profile sidecars (below) |
-| `#now` with no path | The one-shot clock | A `StateCell` named from the operation's `name` with the suffix `/now`, with the operation's `within`. The runtime writes the coarsened time into it once, when it is empty, and `result` is a reference to it. The cell has no input label. The `dynamic` node holds nothing |
+| `#now` with no path | The one-shot clock | A `StateCell` of scope `space`, named from the operation's `name` with the suffix `/now`, with the operation's `within`. The runtime writes the coarsened time into it once, when it is empty, and `result` is a reference to it. The cell has no input label. The `dynamic` node holds nothing |
 | `#now/N` | The ticking clock, `N` whole seconds | Nothing. `result` is a reference to the clock cell of the space for that interval, which the runtime writes. The cell has no input label. Each tick is a commit of the runtime's, and it reaches a reader in a set of changes, as any change from storage does (Notation). The `dynamic` node holds nothing |
 | Any other `#tag` | A search by hashtag | `Operation.scope` is `user` unless the `scope` operand is a constant that names neither `"~"` nor `"profile"` (`wishTargetMayUseHomeSpace`). Without `headless: true`, a `Child` for the suggestion sidecar. The `dynamic` node holds the name and schema of every candidate considered |
 | `#profilePicture`, `#profileAvatar`, `#profile/picture`, `#profile/avatar` | None: the target is refused | Nothing. The result holds the error, with the label of `Operation.input` |
-| Any other string | A suggestion for the situation the query describes | `Operation.scope` is `user`, and a `Child` for the suggestion sidecar |
+| Any other string | A suggestion for the situation the query describes | `Operation.scope` is `user`. Without `headless: true`, a `Child` for the suggestion sidecar. With it the result holds nothing and no instance is made |
 
 A `path` operand is appended to the path the query names. It may be
-computed, except with the key `#now`, where it decides between the two
-clocks.
+computed, except in two cases, where the compiler emits the records of
+every row the path could select.
+
+- With the key `#now` the path decides between the two clocks, so a
+  computed `path` keeps the `StateCell` of the one-shot clock.
+- With the key `#profile` the path decides between a home target and
+  the refused targets `#profile/picture` and `#profile/avatar`, so a
+  computed `path` has the row of the home target.
+
+**What counts as a constant.** The `query`, `scope` and `headless`
+operands are constants where each is a literal written at the call, or a
+name that resolves to a module-scope constant with a static initializer
+(`language-subset.md` §8.8), whose value the compiler reads. `headless`
+is `true` for the table only where it is the constant `true`. An operand
+that is anything else is computed, and the compiler emits the records of
+every row it could select. Treating a constant as computed adds records
+and removes none, so it is sound and costs the records.
 
 **A sidecar** is a `Child` whose callee is one of three system patterns,
 `{ compiled }` with that pattern's content address: the suggestion
 pattern, the profile-creation pattern, and the profile picker
 (`launchSuggestionPattern`, `launchProfileCreatePattern` and
-`launchProfilePickerPattern` in `wish.ts`). Its `name` is the operation's
+`launchProfilePickerPattern` in `wish.ts`). The sidecars' names are
+`suggestion`, `profileCreate` and `profilePicker`. The `name` of the
+`Child` is the operation's
 `name`, `/`, and the sidecar's name, with the operation's `within`, so its
 identifier derives from the wish's cause. The built-in instantiates it on
 the runs that need it, writes its argument under the label of the result,
@@ -4899,7 +4994,8 @@ is `user`, the plan has the `StateCell` of the one-shot clock and a
 `Child` for each of the three sidecars, and a tick of a clock can make a
 reader stale.
 *Assumed,* with `builtin-inventory.md` (its open question 2; section 8,
-question 48): such a call compiles, with a hint that names the cost.
+question 48): such a call compiles, with a hint that names the cost
+(`wish:computed-query`, `language-subset.md` §10.2).
 
 **Today.** The result is a reference, the action's transaction joins the
 operands and every read the resolution made, and hashtag search joins
@@ -5399,13 +5495,188 @@ question 15 of section 8.
   because a handler bound to an exported stream also receives events from
   other patterns (section 6.3 has one).
 
+**What `cfc-flow:ui-contract` reads.** The check needs no record beyond
+the plan's and the rendered tree of the source. Today the renderer forms
+an event's UI provenance from the element a listener is bound on and the
+elements above it (`getEventProvenance` and `getEventUiProvenance` in
+`runtime/html/src/main/event-provenance.ts`), and the compiler reads the
+same three attributes from the JSX the pattern writes.
+
+- **An element binds a handler** where an `on*` attribute of a host
+  element holds the stream of an entry of `Plan.bindings` whose body is
+  the handler, an element of a pattern compiled into the plan included.
+- **The chain of an element** is the element and the host elements that
+  enclose it in the JSX of the plan, outward through the callbacks of
+  element constructs, the branches of a selection, and the tags of
+  patterns compiled in. The `UiAction`, `UiPromptSlot` and
+  `UiDisclosure` helpers are host elements with the data attribute each
+  one sets (`createUiHelper` in `runtime/runner/src/builder/h.ts`).
+- **The surface of an element** has three parts. Its pattern is the
+  value of `data-ui-pattern` on the nearest element of the chain that
+  has the attribute. Its integrity names are the names in
+  `data-ui-event-integrity` of every element of the chain, each value
+  split at white space and commas. Its contract attributes are those
+  of the nearest element of the chain that has any of `data-ui-action`,
+  `data-ui-surface`, `data-ui-role` and `data-ui-disclosure-kind`.
+- **An element satisfies a `uiContract`** where the contract's
+  `trustedPattern`, if it has one, is the surface's pattern, every name
+  of `requiredEventIntegrity` is among the surface's integrity names,
+  and, for the helper `UiAction`, the contract's `action` is the value
+  of `data-ui-action` among the contract attributes. This is
+  `recordedTrustedEventProvenanceMatchesUiContract`
+  (`runtime/runner/src/cfc/ui-contract.ts`) over what the renderer
+  would record for the element. `WriterPolicy.uiContract` has no member
+  for the surface and the role of `UiPromptSlot` or the kind of
+  `UiDisclosure`, so an alternative with one of those helpers is not
+  decided.
+
+The warning is reported for a handler and an alternative with a
+`uiContract` where the plan has at least one element that binds the
+handler, none of them satisfies the contract, and the surface of each is
+decided. A surface is decided where every one of those attributes
+on its chain is a constant, in the sense section 3.19 gives the operands
+of `wish`, and no element of the chain has a spread attribute. Where a
+surface is not decided, and where no element of the plan binds the
+handler, the compiler is silent. The chain ends at the root of the
+pattern's own tree. A pattern that embeds this one can enclose its tree
+in a surface, and an event then satisfies a contract the warning named,
+which is one more reason it is a warning.
+
 A compile-time check does not replace the run-time one. Declared labels are a
 lower bound on what a slot carries: a derived component can add
 confidentiality the schema does not declare (§8.12.8). So a compile-time pass
 on `maxConfidentiality` settles nothing, and only a compile-time *failure* is
-final: a requirement no label of the declared shape can meet. For
-`requiredIntegrity` and the write floor a declared atom that satisfies the
-pattern does settle it, because integrity is not unioned across components.
+reported: a clause the declaration states that the ceiling does not admit.
+For `requiredIntegrity` and the write floor a declared atom that satisfies
+the pattern does settle it for the slot, because the slot has every atom
+its declaration states. "The relations a constraint tests" and "What the
+compiler decides", below, state the relations and the cases.
+
+**The relations a constraint tests.** Four relations decide the label
+constraints. Each is stated here over labels as data, so that the
+compiler and the runtime evaluate one definition. The runtime functions
+named are the ones that hold each relation today, and the specification
+states them in §8.10.3 (`08-10-validation-at-boundaries.md`), §8.12.4 and
+§8.12.4.1 (`08-12-store-label-monotonicity.md`), and §4.3.3
+(`04-label-representation.md`).
+
+A confidentiality label is a list of clauses. A clause is an atom, or
+`{ anyOf: [...] }` with a list of atoms, its **alternatives**. An atom
+that is no such record is a clause with itself as its one alternative. A
+ceiling is a list of clauses too. An integrity label is a list of atoms,
+and a required integrity is a list of patterns.
+
+- **An atom `a` entails an atom `b`** where the two are structurally
+  equal, or where both are `Expires` atoms with exactly the members
+  `type` and `timestamp`, the timestamps are finite numbers, and the
+  timestamp of `a` is at most that of `b` (`atomEntails` in
+  `runtime/runner/src/cfc/atom-pattern.ts`). The runtime adds equality
+  across a committed field, which no label a compiler reads holds.
+- **A ceiling clause subsumes a label clause** where the ceiling clause
+  has at least one alternative, and every alternative of it entails some
+  alternative of the label clause. One case is added on the label's
+  side: an alternative `{ type: PersonalSpace, owner }`, with those two
+  members alone, also counts as `{ type: User, subject: owner }`
+  (`clauseSubsumes` in `runtime/runner/src/cfc/clause.ts`).
+- **A label fits a ceiling** where every clause of the label is subsumed
+  by some clause of the ceiling. A clause that holds the marker of a
+  failed label read fits no ceiling (`atomsOutsideCeiling` and
+  `cfcObservationFitsCeiling` in
+  `runtime/runner/src/cfc/observation.ts`). The empty label fits every
+  ceiling, and the empty ceiling admits the empty label alone. An absent
+  ceiling is no constraint.
+- **A pattern matches an atom** by the structural match of
+  `matchAtomPattern` (`runtime/runner/src/cfc/atom-pattern.ts`): a
+  scalar pattern matches the equal scalar; an array pattern matches an
+  array of the same length member by member; a record pattern matches a
+  record that has every member the pattern names, each matched in turn,
+  whatever other members the record has; a member the pattern gives as
+  `undefined` requires the record to lack it; and a variable matches any
+  value, the same value at each of its occurrences in one pattern.
+- **An atom satisfies a required pattern** where the pattern matches it
+  or the atom entails the pattern (`integrityAtomSatisfies` in
+  `observation.ts`). A pattern of the form `{ type: Concept, uri }` is
+  different: it is satisfied by a concrete atom that reaches the concept
+  in the trust closure of the acting principal, which is a fact of the
+  run (§4.8.9, `04-label-representation.md`).
+- **An integrity label satisfies a required integrity** where every
+  pattern is satisfied by some atom of the label
+  (`cfcIntegritySatisfiesFloor`).
+- **Several integrity labels satisfy a required integrity coherently**
+  where, for every pattern, one atom satisfies it in every one of the
+  labels. Two atoms are one witness where they are structurally equal,
+  and an atom whose `scope` has a `valueRef` is compared without its
+  `scope.projection` (`cfcIntegritySatisfiesFloorCoherently` and
+  `cfcIntegrityWitnessKey`). With no label the requirement holds, and
+  with one label the relation is the one above.
+
+The constraints use them as follows.
+
+| Constraint | Holds where |
+| --- | --- |
+| `maxConfidentiality` | The join of `C` over the listed inputs fits `ceiling`. A join of labels fits a ceiling exactly where each of them does, which is how `verifyInputRequirements` tests it, read by read |
+| `requiredIntegrity` | The integrity labels of the listed inputs, one label per input, satisfy `patterns` coherently |
+| `writeFloor` | `I(template)` of the write satisfies `patterns`. Where the edge has a `reference`, the label is the integrity of the referenced value, since `verifyWriteFloor` holds each link written at the path to the floor by the label of what it links to |
+| `writerFit` | `C(template)` of the write fits the ceiling formed from the confidentiality declared at the target and the **residency clauses** of the target document: `{ type: Space, space }` with the document's space, `{ type: PersonalSpace, owner }` with that space for a document of scope `space`, and `{ type: User, subject }` with the principal of the scope instance for a document of scope `user` or `session`. A target that declares no confidentiality has the residency clauses alone (the persist region of `prepareBoundaryCommitSteps`) |
+
+Before the runtime tests a fit it evaluates the exchange rules of the
+deployment over the label, which can add alternatives to a clause
+(`evaluateAccessExchange` in `prepare.ts`; §5.3,
+`05-policy-architecture.md`). The fit is tested on the label so
+rewritten. The relation is the same, and the rewriting is a fact of the
+run.
+
+**What the compiler decides.** The compiler evaluates a constraint on
+declared labels: each `slot` node of a template stands for the
+`declared` member of the slot in the dimension tested, in the canonical
+data form of `language-subset.md` §8.5. It evaluates a template by the
+table of section 3.2, with these rules.
+
+- A template is evaluated only where every `slot` node it reaches, on
+  every selection, has the `declared` member of the dimension tested,
+  and it has no `dynamic`, `fold` or `pick` node. An input constraint is
+  evaluated only where it lists no entry of `handles`.
+- An atom, a clause or a pattern that holds a term bound at run time is
+  not compared, and a check that would compare one is not decided. The
+  terms are the `CurrentPrincipal` marker, the atom of a `PolicyOf`
+  term, and a `Concept` pattern.
+- **Confidentiality.** A declared label is a lower bound: the label at
+  run time holds the declared clauses and can hold more. So the
+  compiler computes a lower bound of `C(template)`: `const` is empty, a
+  `slot` is its declared list, a `derive` is the union of its inputs,
+  and a `select` is the union of its condition with the clauses that
+  every branch has. A check fails where one clause of that lower bound
+  is subsumed by no clause of the ceiling. A check that does not fail
+  this way is not decided: it is never a pass.
+- **Integrity.** A declared integrity is a lower bound too: the runtime
+  joins the components of a stored label at a path
+  (`labelForEntriesAtPath` in `runtime/runner/src/cfc/consumed-label.ts`),
+  so a slot has its declared atoms and can have more. A check that the
+  declared atoms satisfy is therefore a pass, whatever else the slot
+  carries. *Assumed* (section 8, question 57): for a failure the
+  compiler takes the declared list as the whole integrity of the slot.
+  It computes `I(template)` from the declared lists: a `slot` is its
+  declared list, a `derive` is the atoms that every input has, with
+  `const` inputs left out, plus the `TransformedBy` atom of its `by`,
+  and a `select` is decided only where every branch evaluates to the
+  same list. Where a pattern can match a `TransformedBy` atom and the
+  compiler has no `Body.code` or `Cone.code` to form the atom from, the
+  check is not decided.
+
+| Diagnostic | Reported where | Not decided where |
+| --- | --- | --- |
+| `cfc-flow:max-confidentiality` | A clause of the declared confidentiality of a listed slot, or of the lower bound of a listed `computed` entry's template, is subsumed by no clause of `ceiling` | An input has no declared confidentiality; the constraint lists a handle entry; a run-time term is involved; *assumed* (section 8, question 56), any clause of the inputs or of the ceiling holds a `Policy` atom, since an exchange rule can then rewrite a clause |
+| `cfc-flow:required-integrity` | Every listed input has a declared integrity, or a `computed` entry whose template evaluates, and for some pattern no one atom satisfies it in all of them | An input has no declared integrity; the constraint lists a handle entry; a pattern is a `Concept` pattern or holds another run-time term |
+| `cfc-flow:write-floor` | `I(template)` evaluates and does not satisfy `patterns`. For an edge with a `reference`, the declared integrity of the referenced slot does not | The template does not evaluate; the target path declares `addIntegrity`, `exactCopyOf` or `projection`, which credit the floor at run time and have no rule here (section 8, question 14); a run-time term is involved |
+| `cfc-flow:writer-fit` | A clause of the lower bound of `C(template)` is subsumed by no clause declared at the target, and no alternative of that clause is an atom of type `Space`, `PersonalSpace` or `User`, which a residency clause could admit | The lower bound is empty; the failing clause has such an alternative; a `Policy` atom or another run-time term is involved; the edge has a `reference`, whose label stays with the linked value |
+
+The compiler is silent in every case it does not decide, and the
+constraint is checked at instantiation. A check the compiler passed is
+checked at instantiation all the same, because the plan does not record
+the verdict. The runtime's own conditions on when a refusal applies, such
+as the enforcement mode under which a writer-fit misfit rejects, are no
+part of the compile-time check: the compiler reports a declaration that
+cannot hold under full enforcement.
 
 **What a failed constraint does.** There are two cases.
 
@@ -6133,6 +6404,16 @@ has four more: in place at `argument threadInfo` and at
 `threadInfo/*`. They join `T_titles`. With
 FabriChat's labels none changes an instantiated label.
 
+The four follow from the source of `threadTitles` by the transfer rules
+of `footprint-analysis.md` §3.1 and §3.2. `threadInfo?.get()` tests an
+optional handle, which is the `shape` slot in place at
+`argument threadInfo`. The `??` after it tests what `get()` returned,
+which is the `shape` slot at the root of the list, across the link.
+`record?.root` tests each record, a `shape` slot at `threadInfo/*`: the
+rule for `v?.k` records `shape` at `v` whatever the type of `v`
+declares. `record?.root === undefined` compares a position of handle
+type with `undefined`, a `shape` slot in place at `threadInfo/*/root`.
+
 The listings of this section leave out three more things that the rules
 of section 3 and of `footprint-analysis.md` give the record of the same
 source (`footprint-analysis.md` §12.5 lists the same). None changes
@@ -6152,7 +6433,13 @@ an instantiated label with FabriChat's labels.
   an `enumeration` slot at `argument messages` whose path crosses the
   handle's link, with a `shape` slot beside it for the `??` on the
   result (`footprint-analysis.md` §3.2, §7.2). Both join `T_facts`. The
-  reads of the elements are under a computed index and stay with `h0`.
+  reads of the elements are under a computed index and stay with `h0`:
+  `cellAt` calls `messages.key(index)`, and `key` with a key that is
+  not static records nothing at the handle and yields a handle that is
+  not anchored (`footprint-analysis.md` §7.1). A handle found below an
+  anchored handle under such a key is counted under the anchored
+  handle's entry, whose envelope has `*` at the key (its §7.5). So `B2`
+  has no slot at `messages/*`, of any class.
 
 The binding, an entry of `Plan.bindings`. The middle column is the
 member `place` of each state path:
@@ -7309,7 +7596,15 @@ this document made.
     which changes only when the code that can run changes and needs the
     call graph to be closed at compile time. What
     `computeModuleIdentities` takes from the modules a module imports
-    was not traced.
+    was not traced. It also takes a fingerprint of the runtime surface
+    (`runtimeFingerprint` of `ModuleIdentitiesOptions`, in the same
+    file), so under the assumption a compiler needs that value from the
+    deployment to form `Body.code`, and the identity of every body
+    changes when the runtime surface does. No compile-time check needs
+    the hash (section 1.5, "The compile-time checks"), so a compiler
+    can decide every `cfc-flow:*` diagnostic before this is ruled,
+    except a required integrity whose pattern can match a
+    `TransformedBy` atom, which it leaves to the runtime (section 4.4).
 55. **The declared label of a slot that observes a reference.** Section
     1.5 gives an `identity` slot and a `shape` slot in place no
     `declared` member, because an annotation declares the label of the
@@ -7317,3 +7612,47 @@ this document made.
     *Assumed.* A compile-time check then never fails on such a slot and
     is left to instantiation. The alternative reads the annotation as a
     declaration about the reference too.
+56. **A confidentiality check at compile time, and exchange rules.**
+    Section 4.4 has the compiler report `cfc-flow:max-confidentiality`
+    and `cfc-flow:writer-fit` where a declared clause is subsumed by no
+    clause of the ceiling. At run time the exchange rules of the
+    deployment are evaluated over the label before the fit is tested
+    (`evaluateAccessExchange`), and a rule can add an alternative that
+    makes the clause fit. *Assumed:* the compiler reports the failure
+    unless a clause of the inputs or of the ceiling holds a `Policy`
+    atom, and is silent where one does. A rule that reaches the label
+    at run time through a `Policy` atom no declaration states can still
+    admit what the compiler refused. The alternatives are to make the
+    two diagnostics warnings, or to report them only for a deployment
+    profile that states it has no exchange rule for the atoms involved.
+    Which atoms a rule can rewrite was not traced through the
+    evaluator.
+57. **An integrity check at compile time, and integrity a declaration
+    does not state.** The runtime joins the components of a stored label
+    at a path on both axes (`labelForEntriesAtPath` and `joinLabels` in
+    `runtime/runner/src/cfc/consumed-label.ts`), so a slot can carry an
+    atom at run time that its declaration lacks: a stamp, or a carried
+    claim. A declared atom that satisfies a pattern therefore settles
+    the check, and a declared list that lacks one does not prove a
+    failure. *Assumed:* for `cfc-flow:required-integrity` and
+    `cfc-flow:write-floor` the compiler takes the declared integrity of
+    a slot as all of it, and reports the failure. A program is then
+    refused that the runtime would admit where the slot gains the atom
+    at run time, and the author states the atom in the declaration. The
+    alternatives are to make the two diagnostics warnings, or to report
+    nothing and leave both to the runtime. The rule also needs the
+    runtime's credit for `addIntegrity`, `exactCopyOf` and `projection`
+    at a write target (`verifyWriteFloor`), which question 14 leaves
+    without a rule, so the compiler is silent where a target declares
+    one.
+58. **A tag that names a factory value the instance computed.** Section
+    1.1 names the callee of a `Child` by the `identity` slot of the
+    factory value, or by an entry of `computed` of the body whose site
+    instantiates it. A tag in the reactive tier whose name is a factory
+    value that expression code of the instance computed, a selection
+    between two patterns for one, has neither. *Assumed:* the tag is
+    refused, and `language-subset.md` §4.5 has to name the diagnostic.
+    The alternative adds a form to `Child.callee` that names an entry
+    of `Plan.outputs`, with the output's template as the label of which
+    pattern was chosen. How many tags of the corpus are of this kind
+    the prototype has to count.

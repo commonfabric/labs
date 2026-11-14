@@ -49,8 +49,8 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `0a87982d44`, on 426 corpus modules, it accepts 334
-  without an error and reports 387 errors: `any` in a type (182), 76
+  prototype commit `3854df2c22`, on 426 corpus modules, it accepts 335
+  without an error and reports 386 errors: `any` in a type (182), 75
   type mismatches, a function type in data from one declaration (35),
   and `patternTool` (31) are most of them. Footprint analysis covers
   `footprint-analysis.md` §2 to §8, with the record of each use of a
@@ -58,21 +58,21 @@ next.
   document's script found 83 of 1,962. Its listing for FabriChat's
   `commitEdit` equals the one in §12.3. A `plan` command emits the
   plan as JSON with label templates, slot schemas, declared labels,
-  and constraint records, and with the records of `wish`, `reduce`,
-  scans, and spreads. It emits a plan with no unsupported construct
-  for 271 of the 288 accepted modules that hold a pattern;
+  and constraint records. It emits a plan with no unsupported
+  construct for 271 of the 288 accepted modules that hold a pattern;
   `patternTool` is the most frequent construct left. In those plans
-  2,393 of 3,694 outputs have a template and 5,720 of 10,167 slots
-  have a schema. One slot in the corpus has a declared label, because
-  the prototype does not yet read a label argument through an alias,
-  `typeof NAME`, or a marker type; so `cfc-flow:write-policy`, the one
-  such diagnostic built, reports nothing. Four of the `cfc-flow:*`
-  diagnostics are not built because `plan-and-label-templates.md`
-  names what "fits" only by today's runtime functions. Not built
-  either: hashes, a cone per declaration inside an element callback,
-  and per-path entries for a constructed value. The crate's
-  `SPEC-NOTES.md` lists the places where it found the documents
-  ambiguous; notes 130 to 153 are not yet written into the documents.
+  9,051 of 9,100 outputs have a template, counting an entry per path of
+  a constructed value. The checker evaluates label arguments through
+  aliases, `typeof NAME`, and the writer-policy aliases: 11 slots have
+  a declared label, and 93 write edges carry a writer constraint, 51
+  of them in FabriChat's `room.tsx`. `cfc-flow:write-policy` reports
+  nothing, and each of the 93 edges is in a handler its policy names.
+  `side-write:cycle` reports nothing. Not built: the four `cfc-flow:*`
+  diagnostics that compare labels, `cfc-flow:ui-contract`, hashes, and
+  constraints at state, argument, created, and request targets. The
+  crate's `SPEC-NOTES.md` lists the places where it found the
+  documents ambiguous; notes 154 to 166 are not yet written into the
+  documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -710,6 +710,23 @@ as an assumption.
     declared label** (PL questions 54 and 55). *Assumed:* the module
     and the binding; and no declared label on an `identity` slot or an
     in-place `shape` slot.
+109. **What the compiler reports about label flow** (PL questions 56
+    and 57). *Assumed:* it reports a confidentiality clause that no
+    ceiling clause subsumes, unless a `Policy` atom is involved, though
+    an exchange rule could make the clause fit at run time; and it
+    takes a declared integrity as complete for a failure, though the
+    runtime joins label components on both axes, so that a declaration
+    is a lower bound.
+110. **A JSX tag that names a factory value the instance computed** (PL
+    question 58). *Assumed:* refused. `language-subset.md` names no
+    diagnostic for it.
+111. **Two refusals that look intended** in the corpus. A handle from
+    `key` on an optional property, of type `Cell<T | undefined>`, given
+    where a handler declares an optional `Writable<T>` (FabriChat's
+    `room.tsx`); and an array of pattern results given where a cell of
+    an array of that pattern's result type is declared
+    (`quick-capture.tsx`). *Assumed:* both refused, as
+    `language-subset.md` §7.5 reads.
 
 ## Open, and not needing the owner
 

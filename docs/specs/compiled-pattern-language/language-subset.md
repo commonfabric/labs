@@ -924,6 +924,8 @@ expressions.
   apply to it: a tag that names a statically resolved pattern is compiled
   into the enclosing pattern as such a call is, and a tag that names a
   factory value instantiates a child (`plan-and-label-templates.md` §1.1).
+  The children written between the tags are the property `children` of
+  the argument, an array of the children.
 - An attribute whose name starts with `on` takes a stream, or an arrow
   function written in place. The arrow's body is tier F, and the form is
   equivalent to an `action`.
@@ -2412,6 +2414,24 @@ the type of `b` or `undefined`. One kind of optional property is read
 without `undefined`: a property of a pattern's input whose type declares
 a default (§7.6.1).
 
+The types of the three forms, in every tier:
+
+- **`a?.b`, `a?.[k]` and `a?.m(...)`.** The receiver is typed with
+  `null` and `undefined` removed, the access or the call is typed on
+  that, and the result is that type or `undefined`. Where the type of
+  `a` has neither, the result is the type of the plain form. So with
+  `handle` of type `Cell<T[]> | undefined`, `handle?.get()` has the type
+  `T[] | undefined`: the method is the handle's, and the `undefined`
+  comes from the absent receiver.
+- **`a ?? b`.** The type is the type of `a` with `null` and `undefined`
+  removed, in a union with the type of `b`. `b` is checked against the
+  type of `a` so reduced, as the expected type at its position.
+- **An empty array literal** has the element type its position expects,
+  and `never[]` where nothing is expected. `never[]` is assignable to
+  every array type, and a union of an array type with `never[]` is that
+  array type. So `list ?? []` with `list` of type `T[] | undefined` has
+  the type `T[]`, and `handle?.get() ?? []` above has it too.
+
 #### 7.6.1 Optional properties of an input
 
 A `?` on a property of a pattern's input type says one thing to the
@@ -2996,6 +3016,49 @@ Anything else in a label argument is an error
 or indexed type, an optional tuple element. A label argument that is no list
 at all stays `cfc-label:not-a-list`.
 
+**The value of a label argument.** The compiler reads a label argument
+as data, in the order below, and the result is the **canonical form**:
+the JSON value the schema holds under `ifc` and the plan holds in
+`Slot.declared` and in a constraint
+(`plan-and-label-templates.md` §1.5). Nothing of the argument's source
+text is kept, so two arguments that evaluate to equal values declare one
+label, however each was written.
+
+1. **A reference to an alias** is replaced by the alias's body, with the
+   type arguments substituted, wherever it stands: as the whole
+   argument, as an element of a list, as a property of an object atom,
+   as an alternative of `AnyOf`. The step is repeated until no reference
+   to an alias is left. The alias may be declared in the module, in
+   another module of the program, or exported by `commonfabric`.
+2. **A constant reference `typeof NAME`** is replaced by the value of
+   the constant's initializer.
+3. **A spread `...L`** in a list is replaced by the elements of the
+   list `L` evaluates to.
+4. **A marker type** is replaced by the record the API declares it as.
+   `CurrentPrincipal` is `{ "__ctCurrentPrincipal": true }`
+   (`base/api/cfc.ts`). The marker is a term the runtime binds to the
+   acting principal, so an atom that holds it is compared at run time
+   alone (`plan-and-label-templates.md` §4.4).
+5. **`AnyOf<list>`** is the clause `{ "anyOf": [...] }` with the atoms
+   of the list.
+6. **`PolicyOf<typeof rules>`** is the policy atom of the rule set the
+   binding reference names, as the lowering forms it today
+   (`#extractLiteralLikeValue` in
+   `base/schema-generator/src/formatters/common-fabric-formatter.ts`).
+   It holds the identity of the declaration and is bound at run time.
+7. **A literal type** is its value, `null` is `null`, an object type
+   literal is the record of its properties' values, and a tuple is the
+   array of its elements' values.
+
+The steps apply to the argument of every alias of §8.1 alike, to the
+members of `Cfc<T, M>` included. A label annotation reached through an
+alias of the payload, as `type Secret<T> = Confidential<T, L>` is, is
+read after the generic alias is instantiated (§8.4), so the annotation
+and its argument are found whichever alias the source names. An
+argument that these steps do not reduce to a JSON value is
+`cfc-label:not-static`: no slot declares a label from an argument the
+compiler could not read.
+
 ### 8.6 Assignability
 
 Annotations are not part of structural assignability. A `string` is
@@ -3355,6 +3418,7 @@ none of the other seven.
 | --- | --- | --- | --- | --- |
 | `pattern-context:let-declaration`, `pattern-context:var-declaration` | error | `let` or `var` in a tier-R body | Use `const`. For a value computed with reassignment, write `computed(() => { let x = ...; ...; return x; })` | carries |
 | `pattern-context:assignment` | error | Assignment, compound assignment, `++`, `--`, or `delete` in tier R | Move the write into an `action(() => ...)` or a `handler` | carries (now also covers `++`, `--`, `delete`) |
+| `wish:computed-query` | hint | A `wish` whose `query`, or whose `path` with the key `#now` or `#profile`, is not a constant (`plan-and-label-templates.md` §3.19). The plan then holds the records of every kind of target: the user scope, the state cell of the one-shot clock, and a child for each sidecar. *Assumed,* with that document's question 48 | Write the query as a literal or a module-scope constant, so that the plan holds the records of that target alone | new |
 | `pattern-context:loop` | error | A loop in tier R | Use `map`, `filter`, or `flatMap` on the collection, or move the loop into `computed(() => ...)` | carries |
 | `pattern-context:early-return` | error | A `return` that is not the last statement, or a second `return` | Write one `return` and select with `c ? a : b` | carries |
 | `pattern-context:missing-return` | error | The block body of a pattern callback or of a reactive collection callback ends in `return;`, or has no `return` statement (§4.2) | End the body with `return` and the value: the pattern's result, or the value the callback gives for the element | new |
