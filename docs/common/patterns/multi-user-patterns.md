@@ -539,6 +539,36 @@ Plain `new Writable(...)` inherits the containing pattern or factory scope. Use
 the scoped constructors when the local cell must have a specific sharing
 boundary.
 
+## Scoped State In A Served Run
+
+With [`serverExecution`](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)
+on, handlers and derivations run in a serving runtime on the server, one per
+space, and clients send events. A served run is not a second reader with access
+of its own. On a deployment that enforces access lists, its reads of a space
+that names an owner are authorized as that owner, and the server's own identity
+reads nothing of such a space but its access list. The registry entry lists the
+configurations where no owner is bound; in none of them does the server read
+less. So access does not explain a served run missing what the person it runs
+for can read, and a pattern has no narrower "server view" to design around.
+
+What a served run can't reach is a scoped instance that belongs to someone
+else, which is the scope rule above:
+
+- A served handler runs as the person and session that sent its event. The
+  `PerUser` and `PerSession` state it reads and writes is that person's and
+  that session's instance, as when their own runtime runs it.
+- No run reads another user's `PerUser` instance or another session's
+  `PerSession` instance, served or not. A value every member reads belongs in
+  `PerSpace` state.
+- A serving runtime serves one space. A served run reads another space's
+  `PerSpace` state. Of that space's `PerUser` and `PerSession` state it reads
+  only the instance of the person it runs for, and only when that space's access
+  list grants them `READ`; any other such read is refused. A handler whose run
+  reads a refused instance fails, and none of its writes commit. An instance
+  read this way is what that space's own serving runtime last derived for the
+  person, so a link to a piece in another space that needs a current value
+  declares its `PerSpace` part.
+
 ## Authorization And Admin Roles
 
 Scopes decide which data instance a user sees. They do not decide who may write

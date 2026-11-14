@@ -138,8 +138,8 @@ describe("fabrichat spaces across runtimes", () => {
 
   it("reads a group room's message count through the manager's link, and starts a room after it", async () => {
     // The link is part of every manager handler's declared reads, so a room
-    // started with one already listed shows that the link reaches nothing a
-    // served handler may not read.
+    // started with one already listed shows that a served handler's run can
+    // read all that the link reaches.
     await start("createGroup", {
       requestId: "g-count",
       title: "Counted",
