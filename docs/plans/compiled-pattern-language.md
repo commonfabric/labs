@@ -809,6 +809,18 @@ as an assumption.
     chosen branch, stands, and the comparison is made with the
     runtime's static part included for a conditional.
 
+120. **Where the pattern's `TransformedBy` is added** (PL questions 71
+    and 72). *Assumed:* at kept outputs only, with no condition, as one
+    entry at the root of the result document. A promoted `computed`
+    that passes a value unchanged to a child argument, a write target,
+    or an effect request then has fewer atoms than today. What a reader
+    that dereferences a link gets of the link's atom is not stated.
+121. **Two labels the comparison found the documents wrong or silent
+    about** (PL questions 73 and 74). *Assumed:* the label of an event
+    slot is what the event arrived with, and a declared label is not a
+    lower bound there; and no `TransformedBy` is minted beside a label
+    that only a declaration gives.
+
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12): which output or argument
