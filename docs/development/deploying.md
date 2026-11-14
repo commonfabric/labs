@@ -198,7 +198,23 @@ about 110 MB before it serves anything
 "Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
 heaps come to together by closing the workers kept only for a parked space's
 runtime; it closes no worker that serves a space, so it does not bound a space
-that grows. The serving workers compile in compile workers the toolshed holds,
+that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
+256) does: each serving worker runs as a `node:worker_threads` thread whose
+old generation that limit bounds, and the pool ends a worker whose heap
+reaches it, alone. The limit bounds each worker, not their sum, so a host that
+runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
+memory. It is not exact. A worker that reaches it while evaluating its modules
+or in a timer reports an out-of-memory error and is ended at once. One that
+reaches it in a message handler or a promise continuation reports nothing:
+Deno ends what was running and raises the limit, and the pool ends the worker
+at its next heartbeat, up to ten seconds later, during which the worker can
+go on allocating. V8 bounds no memory outside the heap, array buffers among
+it, so the pool also ends a worker whose heartbeat reports as many megabytes
+of external memory as the limit, which the same ten seconds can exceed.
+`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0` sets no limit and starts the
+workers as Deno `Worker`s, as before the limit existed.
+
+The serving workers compile in compile workers the toolshed holds,
 `SERVER_EXECUTION_COMPILE_WORKERS` of them (default 1), each holding the
 TypeScript compiler's heap once it has compiled, and every toolshed on the
 host reads and puts compiled modules in one directory,
@@ -214,8 +230,23 @@ module that cannot be written there is logged
 (`shared-compile-cache-write-failed`) and compiled again by the next runtime
 that needs it; it fails no compile.
 
-A worker that reaches the limit takes its process down. Events still queued
-survive that, and the restarted process handles them.
+A space whose worker was ended at its heap limit is not served again by itself,
+since its program would grow the next worker's heap the same way. If it was
+the only space on the worker it stays unserved until a commit that would
+start a tenure is admitted for it or a pattern-lifecycle verb names it, which
+is when its program or its input may have changed. The toolshed logs
+`worker-failed` with the spaces the worker held, and `/api/health/stats`
+counts such workers in
+`servingLoop.workers.heapLimited` and the spaces left unserved in
+`servingLoop.workers.heapStopped`.
+Spaces that shared the worker are each moved to a worker of their own, beyond
+`SERVER_EXECUTION_MAX_WORKERS` if need be, so that the one that grows ends a
+worker nothing else is on ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§1, "Workers").
+
+The main thread and the compile workers are Deno isolates under the 16 GiB
+limit, and one of those that reaches it takes its process down. Events still
+queued survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

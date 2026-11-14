@@ -19,6 +19,7 @@ import {
   type ServedLifecycleVerbDescriptor,
 } from "@commonfabric/piece/ops";
 import { serveFromPort } from "@commonfabric/runner/executor/serving-worker-main";
+import { servingWorkerPort } from "@commonfabric/runner/executor/serving-thread";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import env from "@/env.ts";
 import { toolshedClientBuild } from "@/lib/build-info.ts";
@@ -26,7 +27,7 @@ import { selfDirectedFetch } from "@/lib/internal-api-origin.ts";
 
 const fetch = selfDirectedFetch(env);
 
-serveFromPort(self as unknown as Parameters<typeof serveFromPort>[0], {
+serveFromPort(servingWorkerPort(), {
   clientBuild: toolshedClientBuild(),
   runLifecycleVerb: (host, space, verb, identity) =>
     runServedLifecycleVerb(

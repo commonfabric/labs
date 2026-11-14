@@ -29,6 +29,7 @@
     // injected (03.3) source reads what the server attaches.
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@node/v8": "node:v8",
+    "@node/worker_threads": "node:worker_threads",
     "@node/vm": "node:vm",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@types/ws": "npm:@types/ws@^8.18.1",
@@ -109,6 +110,7 @@
     "./executor/space-server": "./src/executor/space-server.ts",
     "./executor/serving-worker-host": "./src/executor/serving-worker-host.ts",
     "./executor/serving-worker-main": "./src/executor/serving-worker-main.ts",
+    "./executor/serving-thread": "./src/executor/serving-thread.ts",
     "./executor/stats": "./src/executor/stats.ts",
     "./executor/watermark": "./src/executor/watermark.ts",
     "./cfc/migration-reason": "./src/cfc/migration-reason.ts",

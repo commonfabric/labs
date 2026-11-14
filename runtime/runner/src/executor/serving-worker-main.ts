@@ -31,6 +31,7 @@ import type {
   PortLike,
 } from "./serving-port-protocol.ts";
 import { servingRuntimeFactory } from "./serving-runtime.ts";
+import { watchHeapLimit } from "./serving-thread.ts";
 
 /** What an entry module adds to the host the init request describes. */
 export type ServingWorkerMainOptions = {
@@ -80,12 +81,19 @@ export function serveFromPort(
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
     // A timer on this thread, so that the watchdog on the server's thread hears
-    // nothing once this thread stops (serving-loop.md §2).
+    // nothing once this thread stops (serving-loop.md §2). It also runs once
+    // a handler of this thread has ended at the heap limit, which is how the
+    // pool learns of that.
+    const heapLimitReached = watchHeapLimit();
     const heartbeat = setInterval(
-      () =>
+      () => {
+        const { heapUsed, external } = Deno.memoryUsage();
         endpoint.notify("worker.heartbeat", {
-          heapUsed: Deno.memoryUsage().heapUsed,
-        }),
+          heapUsed,
+          external,
+          heapLimitReached: heapLimitReached(),
+        });
+      },
       init.heartbeatIntervalMs,
     );
     // The environment a served handler's `fetch` resolves against is this
