@@ -17,7 +17,6 @@ import {
   reviewCommand,
   reviewOpen,
   reviewText,
-  selectCommandTarget,
   setCommandType,
   setComposerSelect,
   setForce,
@@ -27,9 +26,6 @@ export default pattern(() => {
   const fixture = DebugViewFixture();
   const view = fixture.view;
 
-  const action_select_command_target = action(() => {
-    selectCommandTarget(view[UI]);
-  });
   const action_enter_prompt = action(() => {
     enterPrompt(view[UI]);
   });
@@ -120,7 +116,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
-      { action: action_select_command_target },
+      { press: view[UI], control: "Command", within: "Debug session" },
       { assertion: assert_command_target },
       { action: action_review_command },
       { assertion: assert_empty_prompt_rejected },

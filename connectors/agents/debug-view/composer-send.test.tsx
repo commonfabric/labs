@@ -15,7 +15,6 @@ import {
   reviewCommand,
   reviewOpen,
   reviewText,
-  selectCommandTarget,
   sendCommand,
 } from "./test/fixture.ts";
 
@@ -24,9 +23,6 @@ export default pattern(() => {
   const view = fixture.view;
   const commandAccepting = fixture.commandAccepting;
 
-  const action_select_command_target = action(() => {
-    selectCommandTarget(view[UI]);
-  });
   const action_enter_prompt = action(() => {
     enterPrompt(view[UI]);
   });
@@ -100,7 +96,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
-      { action: action_select_command_target },
+      { press: view[UI], control: "Command", within: "Debug session" },
       { action: action_enter_prompt },
       { action: action_review_command },
       { assertion: assert_command_review },
