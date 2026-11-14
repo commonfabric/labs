@@ -28,6 +28,12 @@ import {
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
+import { markPlaceCompileFailure } from "../harness/compile-failure.ts";
+import {
+  decodeCompileFailure,
+  decodeModules,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { DemandShareCache } from "./demand-shares.ts";
 import {
@@ -608,8 +614,14 @@ export class ServingPlane {
   #nextTransport = 1;
   #closed = false;
 
+  /** Rejects once `stopCompiling()` is called; never resolves. */
+  readonly #compilerStopped = Promise.withResolvers<never>();
+
   constructor(endpoint: ServingPlaneEndpoint) {
     this.#endpoint = endpoint;
+    // A plane that stops compiling with no compile awaited rejects nothing
+    // anyone handles.
+    this.#compilerStopped.promise.catch(() => {});
     this.#server = new PlaneMemoryServer(
       this,
       endpoint,
@@ -665,6 +677,48 @@ export class ServingPlane {
   /** The loopback plane, for the serving runtime factory. */
   get loopback(): TransportPlane {
     return this.#loopback;
+  }
+
+  /**
+   * The compile workers the server's thread holds for the whole process,
+   * for the serving runtime factory (`ServingWorkerInit.compileOnHost`). A
+   * failure of the place a compile ran stays marked as one on this side.
+   */
+  get compiler(): ModuleCompiler {
+    const endpoint = this.#endpoint;
+    const stopped = this.#compilerStopped.promise;
+    return {
+      async compile(request) {
+        let answer;
+        try {
+          answer = await Promise.race([
+            endpoint.request("compiler.compile", { request }),
+            stopped,
+          ]);
+        } catch (error) {
+          // The port, not the compile, failed.
+          throw markPlaceCompileFailure(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+        if (answer.kind === "compiled") return decodeModules(answer.modules);
+        const error = decodeCompileFailure(answer.failure, request);
+        throw answer.place ? markPlaceCompileFailure(error) : error;
+      },
+    };
+  }
+
+  /**
+   * Fails every compile {@link compiler} still awaits, and each asked of it
+   * from here on, as a failure of the place it was to run. A worker's host
+   * calls this ahead of its close, so that an activation waiting for a
+   * compile fails at once rather than holding the close. The server's thread
+   * finishes a compile it had started; its answer is dropped.
+   */
+  stopCompiling(): void {
+    this.#compilerStopped.reject(
+      new Error("the serving worker stopped compiling"),
+    );
   }
 
   /**

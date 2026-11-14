@@ -19,9 +19,11 @@ import {
 import {
   attachMemorySocketPipeline,
   bufferTextMessagesUntilNegotiated,
+  type MemorySocketServer,
   setUpMemorySocket,
   warnOnOversizedOutboundFrame,
 } from "./memory.handlers.ts";
+import memoryRouter from "./memory.index.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
 
 const HELLO = encodeMemoryBoundary({
@@ -35,7 +37,10 @@ class FakeSocket extends EventTarget {
   binaryType: BinaryType = "blob";
   readonly sent: EncodedMemoryMessage[] = [];
   closedWith: { code?: number; reason?: string } | undefined;
+  /** When set, `close()` throws this, as a socket racing its peer can. */
+  closeError: Error | undefined;
   #sentWaiters: Array<{ count: number; resolve: () => void }> = [];
+  #closeCalled = Promise.withResolvers<void>();
 
   send(payload: EncodedMemoryMessage): void {
     this.sent.push(payload);
@@ -50,6 +55,13 @@ class FakeSocket extends EventTarget {
 
   close(code?: number, reason?: string): void {
     this.closedWith = { code, reason };
+    this.#closeCalled.resolve();
+    if (this.closeError !== undefined) throw this.closeError;
+  }
+
+  /** Resolves once `close()` has been called. */
+  whenClosed(): Promise<void> {
+    return this.#closeCalled.promise;
   }
 
   /** Resolves once the socket has sent `count` messages. */
@@ -111,6 +123,57 @@ const consoleErrorsDuring = async (
   return reported;
 };
 
+// A memory server that records the frames handed to its connections and how
+// often they were closed. Each frame goes to `handle`, which by default hands
+// it to the real `memoryServer`'s connection.
+const recordingServer = (
+  handle?: (payload: string, index: number) => Promise<void>,
+) => {
+  const received: string[] = [];
+  let closes = 0;
+  const server: MemorySocketServer = {
+    connect(send) {
+      const real = memoryServer.connect(send);
+      return {
+        id: real.id,
+        receive(payload) {
+          received.push(payload);
+          return handle === undefined
+            ? real.receive(payload)
+            : handle(payload, received.length - 1);
+        },
+        close() {
+          closes++;
+          real.close();
+        },
+      };
+    },
+  };
+  return { server, received, closes: () => closes };
+};
+
+// Delivers the hello to `fake`, attaches the pipeline over `server`, and
+// resolves once the negotiated socket has been handed off to it.
+const attachOver = async (
+  fake: FakeSocket,
+  server: MemorySocketServer,
+  hello: string = HELLO,
+): Promise<void> => {
+  const socket = fake as unknown as WebSocket;
+  const negotiation = bufferTextMessagesUntilNegotiated(socket);
+  const handedOff = Promise.withResolvers<void>();
+  const handoff = negotiation.handoff;
+  negotiation.handoff = (handlers) => {
+    handoff(handlers);
+    handedOff.resolve();
+  };
+  fake.dispatchEvent(new MessageEvent("message", { data: hello }));
+  const firstMessage = await negotiation.firstMessage;
+  expect(attachMemorySocketPipeline(socket, negotiation, firstMessage!, server))
+    .toBe(true);
+  await handedOff.promise;
+};
+
 describe("memory.handlers", () => {
   // The toolshed `memoryServer` is a module-level singleton constructed when
   // memory.ts is imported. Deno isolates each test file's module graph, so
@@ -159,6 +222,81 @@ describe("memory.handlers", () => {
         "Memory websocket failed before negotiation",
       );
       expect((rejection as Error).cause).toBeUndefined();
+    });
+
+    it("closes with 1009 and drops later frames once the buffer before negotiation overflows", async () => {
+      const fake = new FakeSocket();
+      const negotiation = bufferTextMessagesUntilNegotiated(
+        fake as unknown as WebSocket,
+        { maxBufferedBytes: 8 },
+      );
+      fake.dispatchEvent(new MessageEvent("message", { data: "first" }));
+      expect(await negotiation.firstMessage).toBe("first");
+
+      fake.dispatchEvent(new MessageEvent("message", { data: "1234" }));
+      expect(fake.closedWith).toBeUndefined();
+      fake.dispatchEvent(new MessageEvent("message", { data: "56789" }));
+      expect(fake.closedWith).toEqual({
+        code: 1009,
+        reason: "Memory websocket negotiation buffer exceeded",
+      });
+      fake.closedWith = undefined;
+      fake.dispatchEvent(new MessageEvent("message", { data: "123456789" }));
+      expect(fake.closedWith).toBeUndefined();
+
+      const delivered: unknown[] = [];
+      const errors: Error[] = [];
+      negotiation.handoff({
+        onMessage: (message) => delivered.push(message),
+        onError: (error) => errors.push(error),
+      });
+      expect(delivered).toEqual([]);
+      expect(errors.map((error) => error.message)).toEqual([
+        "Memory websocket negotiation buffer exceeded",
+      ]);
+      negotiation.dispose();
+    });
+
+    it("hands frames buffered within the limit over in order", async () => {
+      const fake = new FakeSocket();
+      const negotiation = bufferTextMessagesUntilNegotiated(
+        fake as unknown as WebSocket,
+        { maxBufferedBytes: 8 },
+      );
+      fake.dispatchEvent(new MessageEvent("message", { data: "first" }));
+      await negotiation.firstMessage;
+      fake.dispatchEvent(new MessageEvent("message", { data: "1234" }));
+      fake.dispatchEvent(new MessageEvent("message", { data: "5678" }));
+
+      const delivered: unknown[] = [];
+      negotiation.handoff({ onMessage: (message) => delivered.push(message) });
+      fake.dispatchEvent(new MessageEvent("message", { data: "after" }));
+
+      expect(delivered).toEqual(["1234", "5678", "after"]);
+      expect(fake.closedWith).toBeUndefined();
+      negotiation.dispose();
+    });
+
+    it("still reports an overflow to the handoff when closing the socket throws", async () => {
+      const fake = new FakeSocket();
+      fake.closeError = new Error("socket already closing");
+      const negotiation = bufferTextMessagesUntilNegotiated(
+        fake as unknown as WebSocket,
+        { maxBufferedBytes: 4 },
+      );
+      fake.dispatchEvent(new MessageEvent("message", { data: "first" }));
+      await negotiation.firstMessage;
+
+      fake.dispatchEvent(new MessageEvent("message", { data: "12345" }));
+
+      expect(fake.closedWith?.code).toBe(1009);
+      const errors: Error[] = [];
+      negotiation.handoff({
+        onMessage: () => {},
+        onError: (error) => errors.push(error),
+      });
+      expect(errors).toHaveLength(1);
+      negotiation.dispose();
     });
   });
 
@@ -546,6 +684,212 @@ describe("memory.handlers", () => {
       );
       expect((logged as Error).cause).toBe(failure);
     });
+
+    it("returns `false` and connects nothing for a first frame that is not a memory message", async () => {
+      const fake = new FakeSocket();
+      const socket = fake as unknown as WebSocket;
+      const negotiation = bufferTextMessagesUntilNegotiated(socket);
+      const recorder = recordingServer();
+      fake.dispatchEvent(new MessageEvent("message", { data: "not memory" }));
+      const firstMessage = await negotiation.firstMessage;
+
+      expect(
+        attachMemorySocketPipeline(
+          socket,
+          negotiation,
+          firstMessage!,
+          recorder.server,
+        ),
+      ).toBe(false);
+      expect(recorder.received).toEqual([]);
+      negotiation.dispose();
+    });
+
+    it("closes with 1003 for a frame that is neither text nor binary", async () => {
+      const fake = new FakeSocket();
+      const recorder = recordingServer();
+      await attachOver(fake, recorder.server);
+
+      const reported = await consoleErrorsDuring(() => {
+        fake.dispatchEvent(new MessageEvent("message", { data: 42 }));
+      });
+
+      expect(fake.closedWith).toEqual({
+        code: 1003,
+        reason: "Memory websocket expects text or binary frames",
+      });
+      expect(reported).toHaveLength(1);
+      expect(recorder.received).toEqual([HELLO]);
+      expect(recorder.closes()).toBe(1);
+    });
+
+    it("does not close a socket that has already closed when it fails", async () => {
+      const fake = new FakeSocket();
+      const recorder = recordingServer();
+      await attachOver(fake, recorder.server);
+      fake.readyState = WebSocket.CLOSED;
+
+      const reported = await consoleErrorsDuring(() => {
+        fake.dispatchEvent(new Event("error"));
+      });
+
+      expect(fake.closedWith).toBeUndefined();
+      expect(reported).toHaveLength(1);
+      expect(recorder.closes()).toBe(1);
+    });
+
+    it("closes its connection when closing the failed socket throws", async () => {
+      const fake = new FakeSocket();
+      fake.closeError = new Error("socket already closing");
+      const recorder = recordingServer();
+      await attachOver(fake, recorder.server);
+
+      await consoleErrorsDuring(() => {
+        fake.dispatchEvent(new Event("error"));
+      });
+
+      expect(fake.closedWith?.code).toBe(1011);
+      expect(recorder.closes()).toBe(1);
+    });
+
+    it("closes with 1011 and ignores later frames after a frame that cannot be decoded", async () => {
+      // The hello negotiates compression, so a binary frame must carry a
+      // compressed message; three bytes do not.
+      const fake = new FakeSocket();
+      const recorder = recordingServer();
+      await attachOver(fake, recorder.server);
+
+      const reported = await consoleErrorsDuring(async () => {
+        fake.dispatchEvent(
+          new MessageEvent("message", { data: new Uint8Array([1, 2, 3]) }),
+        );
+        await fake.whenClosed();
+      });
+      fake.dispatchEvent(new MessageEvent("message", { data: "later" }));
+      fake.dispatchEvent(new CloseEvent("close"));
+
+      expect(fake.closedWith).toEqual({
+        code: 1011,
+        reason: "Memory websocket message failure",
+      });
+      expect(String(reported[0]?.[0])).toContain("after a frame failure");
+      expect(recorder.received).toEqual([HELLO]);
+      expect(recorder.closes()).toBe(1);
+    });
+
+    it("closes with 1011 when its server cannot handle a later frame", async () => {
+      const fake = new FakeSocket();
+      const failure = new Error("store unavailable");
+      const recorder = recordingServer((_payload, index) =>
+        index === 0 ? Promise.resolve() : Promise.reject(failure)
+      );
+      await attachOver(fake, recorder.server);
+
+      const reported = await consoleErrorsDuring(async () => {
+        fake.dispatchEvent(new MessageEvent("message", { data: "second" }));
+        await fake.whenClosed();
+      });
+
+      expect(fake.closedWith).toEqual({
+        code: 1011,
+        reason: "Memory websocket message failure",
+      });
+      expect(reported).toHaveLength(1);
+      expect(String(reported[0][0])).toContain(
+        "after a frame its server could not handle",
+      );
+      expect(reported[0][1]).toBe(failure);
+      expect(recorder.received).toEqual([HELLO, "second"]);
+      expect(recorder.closes()).toBe(1);
+    });
+
+    it("closes with 1011 without a handoff when its server cannot handle the first frame", async () => {
+      const fake = new FakeSocket();
+      const socket = fake as unknown as WebSocket;
+      const failure = new Error("store unavailable");
+      const recorder = recordingServer(() => Promise.reject(failure));
+      const negotiation = bufferTextMessagesUntilNegotiated(socket);
+      let handedOff = false;
+      const handoff = negotiation.handoff;
+      negotiation.handoff = (handlers) => {
+        handedOff = true;
+        handoff(handlers);
+      };
+      fake.dispatchEvent(new MessageEvent("message", { data: HELLO }));
+      const firstMessage = await negotiation.firstMessage;
+
+      const reported = await consoleErrorsDuring(async () => {
+        attachMemorySocketPipeline(
+          socket,
+          negotiation,
+          firstMessage!,
+          recorder.server,
+        );
+        await fake.whenClosed();
+      });
+
+      expect(fake.closedWith).toEqual({
+        code: 1011,
+        reason: "Memory websocket setup failure",
+      });
+      expect(handedOff).toBe(false);
+      expect(String(reported[0][0])).toContain("after its first frame failed");
+      expect(reported[0][1]).toBe(failure);
+      expect(recorder.closes()).toBe(1);
+      negotiation.dispose();
+    });
+
+    it("keeps serving frames when writing the write trace fails", async () => {
+      const envGet = Deno.env.get.bind(Deno.env);
+      using _env = stub(
+        Deno.env,
+        "get",
+        (name) => name === "CF_DEBUG_MEMORY_WRITES" ? "1" : envGet(name),
+      );
+      let traceAttempts = 0;
+      using _console = stub(console, "error", (...args: unknown[]) => {
+        if (String(args[0]).startsWith("[memwrite]")) {
+          traceAttempts++;
+          throw new Error("stderr closed");
+        }
+      });
+      const fake = new FakeSocket();
+      const hello = encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: { ...getMemoryProtocolFlags(), messageCompressionV1: false },
+      });
+      await attachOver(fake, recordingServer().server, hello);
+
+      fake.dispatchEvent(
+        new MessageEvent("message", {
+          data: encodeMemoryBoundary({
+            type: "transact",
+            requestId: "traced",
+            space: "did:key:diagnostic",
+            sessionId: "missing-session",
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{ op: "set", id: "of:donuts", value: { value: 1 } }],
+            },
+          }),
+        }),
+      );
+      await Promise.race([fake.whenSent(2), fake.whenClosed()]);
+
+      expect(traceAttempts).toBe(1);
+      expect(fake.closedWith).toBeUndefined();
+      const response = fake.sent[1];
+      if (typeof response !== "string") {
+        throw new Error("Expected text response");
+      }
+      expect(decodeMemoryBoundary(response)).toMatchObject({
+        type: "response",
+        requestId: "traced",
+      });
+      fake.dispatchEvent(new CloseEvent("close"));
+    });
   });
 
   describe("setUpMemorySocket()", () => {
@@ -605,6 +949,83 @@ describe("memory.handlers", () => {
 
       expect(reported).toEqual([]);
       expect(fake.closedWith).toBeUndefined();
+    });
+
+    it("closes with 1002 for a first frame that is not a memory message", async () => {
+      const fake = new FakeSocket();
+      const recorder = recordingServer();
+
+      const setup = setUpMemorySocket(
+        fake as unknown as WebSocket,
+        recorder.server,
+      );
+      fake.dispatchEvent(new MessageEvent("message", { data: "not memory" }));
+      await setup;
+
+      expect(fake.closedWith).toEqual({
+        code: 1002,
+        reason: "Memory websocket expects memory protocol",
+      });
+      expect(recorder.received).toEqual([]);
+    });
+
+    it("does not close a socket that is no longer open for a first frame that is not a memory message", async () => {
+      const fake = new FakeSocket();
+
+      const setup = setUpMemorySocket(fake as unknown as WebSocket);
+      fake.dispatchEvent(new MessageEvent("message", { data: "not memory" }));
+      fake.readyState = WebSocket.CLOSING;
+      await setup;
+
+      expect(fake.closedWith).toBeUndefined();
+    });
+
+    it("attaches the pipeline to its server for a memory hello", async () => {
+      const fake = new FakeSocket();
+      const recorder = recordingServer();
+
+      const setup = setUpMemorySocket(
+        fake as unknown as WebSocket,
+        recorder.server,
+      );
+      fake.dispatchEvent(new MessageEvent("message", { data: HELLO }));
+      await setup;
+      await fake.whenSent(1);
+
+      expect(recorder.received).toEqual([HELLO]);
+      const reply = fake.sent[0];
+      if (typeof reply !== "string") throw new Error("Expected text hello");
+      expect(decodeMemoryBoundary<{ type: string }>(reply).type).toBe(
+        "hello.ok",
+      );
+      expect(fake.closedWith).toBeUndefined();
+      fake.dispatchEvent(new CloseEvent("close"));
+    });
+
+    it("resolves when closing a socket whose setup failed throws", async () => {
+      const fake = new FakeSocket();
+      fake.closeError = new Error("socket already closing");
+
+      const reported = await consoleErrorsDuring(async () => {
+        const setup = setUpMemorySocket(fake as unknown as WebSocket);
+        fake.dispatchEvent(
+          new MessageEvent("message", { data: new ArrayBuffer(3) }),
+        );
+        await setup;
+      });
+
+      expect(fake.closedWith?.code).toBe(1011);
+      expect(reported).toHaveLength(1);
+    });
+  });
+
+  describe("subscribe", () => {
+    it("answers 500 for a request it cannot upgrade to a websocket", async () => {
+      const response = await memoryRouter.request("/api/storage/memory", {
+        headers: { connection: "Upgrade", upgrade: "websocket" },
+      });
+
+      expect(response.status).toBe(500);
     });
   });
 

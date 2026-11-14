@@ -26,6 +26,8 @@ import {
   type ServingWorkerPoolOptions,
 } from "../src/executor/serving-worker-host.ts";
 import type { ServingLoopStats } from "../src/executor/stats.ts";
+import { ModuleCompilerPool } from "../src/harness/module-compiler-pool.ts";
+import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -435,6 +437,94 @@ describe("serving-worker", () => {
     expect(placed.map((each) => each.spaces).sort()).toEqual(
       [[space], [otherSpace]].sort(),
     );
+  });
+
+  it("ends a worker whose heap reaches its limit while it serves, alone, and leaves its space unplaced until a commit names it", async () => {
+    const workerModule = new URL(
+      "./fixtures/serving-worker-that-grows.ts",
+      import.meta.url,
+    );
+    workerModule.searchParams.set("marker", `${directory}/grew`);
+    await start({ workerModule, heapLimitMb: 160, watchdogIntervalMs: 200 });
+
+    // The first worker's heap grows as soon as it is told of the space, before
+    // it derives anything, and stops at its limit with the worker's timers
+    // still posting heartbeats.
+    await startParent(space, 1);
+    await closures.matching((entry) =>
+      entry.cause === "failed" && entry.spaces.includes(space)
+    );
+
+    // A session on the space does not place it again, during the wait that
+    // follows a failed worker or after it.
+    const writer = newClient();
+    const argument = writer.getCell<{ n: number }>(space, "worker-arg");
+    await argument.sync();
+    await worker.accessForTestingOnly.waiting.get(space)?.resumed;
+    expect(worker.stats().workers).toMatchObject({
+      serving: 0,
+      started: 1,
+      failed: 1,
+      heapLimited: 1,
+      heapStopped: 1,
+    });
+
+    // A commit does, and the total the reader reads is the fresh worker's.
+    const tx = writer.edit();
+    argument.withTx(tx).set({ n: 2 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await readTotal(space, 3);
+    expect(worker.stats().workers).toMatchObject({
+      serving: 1,
+      started: 2,
+      failed: 1,
+      heapStopped: 0,
+    });
+  });
+
+  it("compiles a program two spaces' workers recompile after a runtime version change once, in the process's compile workers", async () => {
+    let compiles = 0;
+    let compileWorkersStarted = 0;
+    class CountedPool extends ModuleCompilerPool {
+      override compile(request: Parameters<ModuleCompilerPool["compile"]>[0]) {
+        compiles += 1;
+        return super.compile(request);
+      }
+    }
+    const compiler = new CountedPool(1, () => {
+      compileWorkersStarted += 1;
+      return new Worker(
+        new URL("../src/harness/compile-worker.ts", import.meta.url),
+        { type: "module" },
+      );
+    });
+    try {
+      await start({
+        moduleCompiler: compiler,
+        compileCacheDir: `${directory}/compiled`,
+      });
+      // The writers store the closure compiled under an earlier release's
+      // version, so each space's worker recompiles its stored source, as
+      // every space does once after a deploy.
+      const restore = setCompileCacheRuntimeVersionForTesting(
+        "an-earlier-release",
+      );
+      try {
+        await startParent(space, 1);
+        await startParent(otherSpace, 10);
+      } finally {
+        restore();
+      }
+      await readTotal(space, 2);
+      await readTotal(otherSpace, 11);
+
+      const stats = await worker.requestStats();
+      expect(stats.workers).toMatchObject({ serving: 2, shared: 0 });
+      expect(compiles).toBe(1);
+      expect(compileWorkersStarted).toBe(1);
+    } finally {
+      compiler.close();
+    }
   });
 
   it("serves two spaces from one worker under `maxWorkers: 1`", async () => {

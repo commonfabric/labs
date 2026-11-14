@@ -574,11 +574,11 @@ structure tree lists sections with the keys and hosts in each.
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
-row. Other bytes use the same control-picture glyphs as the pager's
-non-printable display mode. Use `--language binary` or its `bytes` alias to
-select it explicitly for piped input. Interactive views retain at most 256 KiB
-and report the omitted byte count when the complete size is known. Use `--plain`
-to stream the complete dump without building it in memory.
+row. Other bytes use the same control-picture glyphs as the pager's pictures
+mode. Use `--language binary` or its `bytes` alias to select it explicitly for
+piped input. Interactive views retain at most 256 KiB and report the omitted
+byte count when the complete size is known. Use `--plain` to stream the complete
+dump without building it in memory.
 
 Each language selects how bytes are decoded. Text languages currently require
 valid UTF-8. The binary language keeps each raw byte unchanged. An explicit
@@ -612,21 +612,22 @@ button activates that button. Releasing it anywhere else, or pressing a key
 first, lets go of the button without activating it. Printable keys enter text
 while a filter is active.
 
-Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
-them. Tab and Shift-Tab, like the navigation keys, move the focus through those
-first and then through the buttons. Space toggles the focused check box, and so
-does a click on it. Moving the focus to an input line selects its text, so that
-typing replaces it. While an input line is focused, every key but Tab,
-Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
-Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
-word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
-Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
-where the click lands, and a click on its label selects its text. An arrow at
-either end of the line says that its text runs on past that end. A check box's
-highlighted letter toggles it, an input line's moves the focus to it, and a
-button's activates it; while an input line is focused, Alt with the letter does.
-Enter activates the default button wherever the focus is, unless it is on
-another button.
+Some dialogs also hold check boxes, radio buttons, and input lines, drawn as
+Turbo Vision draws them. On a screen too short for all of a dialog's fields, its
+buttons stay in view and its fields scroll to show the focused one. Tab and
+Shift-Tab, like the navigation keys, move the focus through those first and then
+through the buttons. Space toggles the focused check box, and so does a click on
+it. Moving the focus to an input line selects its text, so that typing replaces
+it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
+and Alt with a letter goes to it: typed text goes in, Backspace and Delete (or
+Ctrl-D) delete a character, Alt-Backspace deletes the word before the cursor,
+and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E) move its
+cursor. A click on an input line puts its cursor where the click lands, and a
+click on its label selects its text. An arrow at either end of the line says
+that its text runs on past that end. A check box's highlighted letter toggles
+it, an input line's moves the focus to it, and a button's activates it; while an
+input line is focused, Alt with the letter does. Enter activates the default
+button wherever the focus is, unless it is on another button.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -688,45 +689,109 @@ Press `P` to push the branch checked out in the repository the viewer runs in,
 as it stands, to the branch of the same name on `origin`. The push is forced,
 but fails rather than discard commits on `origin` that the branch has never
 included, even when they have been fetched. A dialog shows git's output as it
-arrives, with an Abort button that stops the push. When the push ends, the
-dialog adds how it ended, and two buttons replace Abort. Close leaves that
-summary in the status line. Quit (`Q`) closes the viewer, first offering to save
-any unsaved edits. When the server's reply offers a page for creating a pull
-request, the viewer opens it in the browser. Git asks nothing on the terminal
-while the viewer holds it; a question such as a key's passphrase goes to the
-program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
-`origin`'s default branch, and refuses when `origin` names no default branch
-(`git remote set-head origin --auto` finds it). It also refuses a checkout not
-on a branch, and refuses when git started the viewer as its pager for a
-different repository.
+arrives, with an Abort button that stops the push. Up, Down, Page Up, Page Down,
+Home, End, and the mouse wheel scroll the output, and Left and Right move the
+focus between the buttons. When the push ends, the dialog adds how it ended, and
+two buttons replace Abort. Close leaves that summary in the status line. Quit
+(`Q`) closes the viewer, first offering to save any unsaved edits. Git asks
+nothing on the terminal while the viewer holds it; a question such as a key's
+passphrase goes to the program `SSH_ASKPASS` names, and fails when it names
+none. `P` refuses to push `origin`'s default branch, and refuses when `origin`
+names no default branch (`git remote set-head origin --auto` finds it). It also
+refuses a checkout not on a branch, and refuses when git started the viewer as
+its pager for a different repository.
 
-Press `O` to open the settings dialog. Its check box, "Quit when the pushed
-branch's pull request opens", has the viewer watch the GitHub webhook relay
-while the push dialog is up. The relay passes on each delivery of the
-organization's GitHub webhook as it arrives, and keeps none for a subscriber
-that was not connected; `github-webhook-relay/README.md` in the infra repository
-describes it. The dialog's input line holds the `host:port` of the relay's
-subscriber listener. When the push succeeds and the server offers a page for
-creating a pull request, the viewer connects to the relay, and opens the page
-once it has connected or failed to. While it connects, Abort, or an interrupt,
-gives up on the connection and opens the page. When a delivery reports that a
-pull request was opened from the pushed branch, at the pushed commit, in the
-GitHub repository that `origin` names, the viewer closes the push dialog and
-quits as Quit does. Once the screen is restored, it prints the pull request's
-address on the terminal. The address is printed only when the viewer quit for
-it, so a quit after cancelling the save prompt it raised prints nothing. With
-the check box on, the push dialog says under git's output whether the viewer is
-connecting or watching, or why it is not watching: no relay is set, `origin` is
-not on GitHub, or the connection failed or ended. Closing the push dialog stops
-the watch.
+Once the push succeeds, the settings say what happens next, and the radio
+buttons under "Pull requests" choose one of the four ways below. The first and
+the third act on the page for creating a pull request that the server's reply
+may offer, which GitHub does when the branch has new commits and no open pull
+request. The second and the fourth create the pull request after any push that
+succeeds, including one that had nothing new to push, unless the branch already
+has an open pull request, which they look for as `L` does, below. The pull
+request goes to the GitHub repository of the remote named `upstream`, `github`,
+or `origin`, whichever is the first to name one, and merges into that remote's
+default branch, from the branch on `origin`. Its title and description are the
+subject and the rest of the message of the branch's oldest commit that the
+default branch, as last fetched, does not have, leaving out merges and commits
+whose changes that branch already has.
 
-The viewer keeps these settings in git's configuration, as the boolean
-`cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the
-`git config` command can set them too. OK saves each setting that differs from
-what the dialog opened showing. It saves it in the configuration file that git
-read the setting's value from, which may be a file another one includes, so that
-git then reads the new value. A value read from the machine's own configuration
-file, or set nowhere, is saved in the user's global configuration file instead.
+- "Just push, and link to them": the summary gives the page's address, which the
+  status line makes a link for terminals that open links.
+- "Use the GitHub API": the viewer creates the pull request with GitHub's REST
+  API, using `GH_TOKEN`, `GITHUB_TOKEN`, or else the token `gh auth token`
+  prints.
+- "Show them in the browser", the default: the viewer opens the page in the
+  browser.
+- "Use touch-gate and a security key": the viewer asks a touch-gate server to
+  create the pull request with the token the settings name. The dialog asks, in
+  brighter text, for the named security key to be touched, as "Touch the
+  “carthusian” security key to create a PR.", and the server acts only once it
+  is. The server's address, its certificate, the secret its clients share, and
+  the registered security keys come from `~/.config/touch-gate`, as the touch-
+  gate project's client keeps them, and the viewer talks to the security key
+  through libfido2's `fido2-token` and `fido2-assert` tools.
+
+When creating the pull request with the GitHub API or touch-gate fails, or is
+aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
+again. Trying again looks for an open pull request first, in case the failed
+attempt created one.
+
+Press `L` to land the checked-out branch's open pull request; `l` pans right,
+and `h` and `H` pan left. A dialog opens at once, saying what it looks for, and
+its Cancel button stops the search. The viewer looks for the pull request in
+`~/.cache/github-prs.tsv`, a list of open pull requests that another program
+keeps, one a line as its repository, branch, and number separated by tabs. The
+list does not say whose fork a branch is in, so unless it names exactly one pull
+request for the branch, the viewer asks GitHub. With the first radio button, the
+dialog closes and the status line gives the pull request's address as a link.
+With the third, the viewer opens the pull request in the browser, or, when no
+browser can be opened, gives its address in the status line as the first does.
+With the second or the fourth, the viewer asks GitHub's GraphQL API how GitHub's
+page would merge the pull request: by the method the token's account last used,
+or else by the repository's default. GitHub's merge API itself merges with a
+merge commit unless told otherwise, which a repository that allows only
+squashing or rebasing refuses. With the second radio button, the dialog then
+asks whether to merge that way, with Merge and Cancel buttons. No button is its
+default: Enter does nothing until Tab or an arrow key has moved the focus to a
+button, while a button's letter acts at once. With the fourth, the touch of the
+security key approves the merge, so the viewer asks nothing first. The viewer
+merges the pull request with GitHub's API or touch-gate, in a dialog like the
+push's. The merge happens only while the pull request's head is the commit the
+viewer has checked out. Asking for the merge method needs a GitHub token, from
+the same places the API uses. When a creation or a merge is aborted after its
+request was sent, it may have happened anyway, and the summary says so.
+
+Press `O` to open the settings dialog. Below the radio buttons, an input line
+holds the name of the token the touch-gate server uses. Its check box, "Quit
+when the pushed branch's pull request opens", has the viewer quit as soon as it
+creates the pull request, printing its address as described below, and otherwise
+has it watch the GitHub webhook relay while the push dialog is up. The relay
+passes on each delivery of the organization's GitHub webhook as it arrives, and
+keeps none for a subscriber that was not connected;
+`github-webhook-relay/README.md` in the infra repository describes it. The
+dialog's last input line holds the `host:port` of the relay's subscriber
+listener. When the push succeeds and the server offers a page for creating a
+pull request, the viewer connects to the relay, and gives the page's address or
+opens the page once it has connected or failed to. While it connects, Abort, or
+an interrupt, gives up on the connection. When a delivery reports that a pull
+request was opened from the pushed branch, at the pushed commit, in the GitHub
+repository that `origin` names, the viewer closes the push dialog and quits as
+Quit does. Once the screen is restored, it prints the pull request's address on
+the terminal. The address is printed only when the viewer quit for it, so a quit
+after cancelling the save prompt it raised prints nothing. With the check box
+on, the push dialog says under git's output whether the viewer is connecting or
+watching, or why it is not watching: no relay is set, `origin` is not on GitHub,
+or the connection failed or ended. Closing the push dialog stops the watch.
+
+The viewer keeps these settings in git's configuration, as the strings
+`cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
+`cf-view.touchGateToken`, the boolean `cf-view.quitOnPullRequest`, and the
+string `cf-view.webhookRelay`, so the `git config` command can set them too. OK
+saves each setting that differs from what the dialog opened showing. It saves it
+in the configuration file that git read the setting's value from, which may be a
+file another one includes, so that git then reads the new value. A value read
+from the machine's own configuration file, or set nowhere, is saved in the
+user's global configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
@@ -755,15 +820,21 @@ by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
 or when it is too narrow for the indentation and any text.
 
-Press `c` to cycle how non-printable characters are shown. The first mode draws
-each control character as its control-picture glyph, such as `␉` for a tab, one
-column per character. The ANSI color mode applies color escape sequences to the
-text that follows them instead of showing them. It also advances each tab to the
-next column that is a multiple of 4, counting the columns drawn from the start
-of the line. Other control characters still appear as control pictures. The
+Press `c` to cycle how non-printable characters are shown. The pager starts in
+the ANSI color mode, which applies color escape sequences to the text that
+follows them instead of showing them. It also advances each tab to the next
+column that is a multiple of 4, counting the columns drawn from the start of the
+line. It draws a character overstruck through backspaces once, the way a printer
+would: struck over itself it is bold, and struck over an underscore it is
+underlined. Other characters struck together draw the last one struck, as a
+terminal would. This is how `man` marks emphasis, so a manual page that `man`
+formats for `cf view` keeps its bold and underlined text. Other control
+characters appear as their control-picture glyphs, such as `␇` for a bell. The
 hidden mode drops every complete escape sequence that starts with `ESC [`, and
 shows each run of other control characters, including the escape characters of
-other sequences, as one `…`. Editing always uses the first mode.
+other sequences, as one `…`. The pictures mode draws each control character as
+its control-picture glyph, such as `␉` for a tab, one column per character.
+Editing always uses the pictures mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its

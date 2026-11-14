@@ -566,7 +566,7 @@ const trackSelection = handler<
 });
 
 /** What starting a comment works on. */
-interface OpenComposerState {
+export interface OpenComposerState {
   content: Writable<string>;
   anchors: AnchorsCell;
   comments: CommentsCell;
@@ -689,7 +689,7 @@ const resumeDraft = handler<unknown, ResumeState>(
 );
 
 /** What discarding a draft works on. */
-interface DiscardState {
+export interface DiscardState {
   anchors: AnchorsCell;
   comments: CommentsCell;
 }
@@ -720,7 +720,7 @@ const closeComposer = handler<unknown, CloseComposerState>(
 );
 
 /** What posting from the composer works on. */
-interface PostCommentState {
+export interface PostCommentState {
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
   composing: Writable<string>;
@@ -764,7 +764,7 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
 });
 
 /** What the `addComment` verb works on. */
-interface AddCommentState {
+export interface AddCommentState {
   content: Writable<string>;
   anchors: AnchorsCell;
   comments: CommentsCell;
@@ -790,7 +790,7 @@ const addComment = handler<AddCommentEvent, AddCommentState>(
 );
 
 /** What replying to a comment works on. */
-interface ReplyState {
+export interface ReplyState {
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
 }
@@ -828,7 +828,7 @@ const reopenComment = handler<CommentIdEvent, ResolveState>(
 );
 
 /** What deleting a comment works on. */
-interface DeleteCommentState {
+export interface DeleteCommentState {
   anchors: AnchorsCell;
   comments: CommentsCell;
 }

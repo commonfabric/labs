@@ -2309,7 +2309,8 @@ The generic top-level utility
    threading the shared cycle-detection state. The dispatch gates on
    `instanceof` against the abstract base; it does not enumerate concrete
    subclasses. The (now deep-frozen) result is recorded in the deep-frozen cache
-   so subsequent `isDeepFrozen()` checks short-circuit in O(1).
+   so subsequent `isDeepFrozen()` checks short-circuit in O(1) while the cache
+   retains it.
 
 4. **Plain object or array** — Recurses into children, then freezes the
    container with `Object.freeze()`. Arrays preserve sparse holes. The

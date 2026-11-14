@@ -26,6 +26,7 @@ import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
 import {
   isPatternCoverageCacheRuntimeVersion,
   moduleByteCacheRuntimeVersion,
+  storedSourceByteCacheVersion,
 } from "./compilation-cache/cache-variants.ts";
 import {
   buildSourceDocs,
@@ -126,6 +127,14 @@ type SourceUpdatePreparation = {
   entryIdentity: string;
   runtimeVersion: string | undefined;
   delegations: ModuleDelegationMap;
+
+  /**
+   * The hold tokens (`IStorageManager.holdDocument()`) of the candidate's
+   * source documents, which `stageSourceUpdate()` reads, kept for as long as
+   * the preparation is, so that a release pass between preparing and staging
+   * leaves them loaded.
+   */
+  documentHolds: readonly object[];
 };
 
 const logger = getLogger("pattern-manager");
@@ -579,6 +588,23 @@ function programCompilationKey(
     createRef(
       { src: program, spaceScoped: space !== undefined },
       "pattern source",
+    ),
+  );
+}
+
+/**
+ * Helper for `#byteCacheBodiesOrTurn()`, which names the turn at a cold
+ * compile of `identities` under `runtimeVersion`: the same for every compile
+ * of the same modules, in whatever order they are listed, and fixed in length.
+ */
+function compileTurnKey(
+  runtimeVersion: string,
+  identities: readonly string[],
+): string {
+  return toURI(
+    createRef(
+      { runtimeVersion, identities: [...identities].sort() },
+      "compile turn",
     ),
   );
 }
@@ -2291,6 +2317,24 @@ export class PatternManager {
           "cannot authorize source update without verified source closures",
         );
       }
+      // Staging reads each candidate module's source document inside the
+      // transition's commit, and throws when one is missing rather than
+      // loading it. Nothing else keeps what the load above read: the cells
+      // that read it go with this call, so a release pass before staging would
+      // drop those documents. The preparation holds them for as long as it
+      // lives, taken here, while they are loaded.
+      const documentHolds: object[] = [];
+      for (const identity of candidate.keys()) {
+        const { id, scope } = this.#runtime
+          .getCell(space, sourceDocKey(identity))
+          .getAsNormalizedFullLink();
+        const hold = this.#runtime.storageManager.holdDocument?.({
+          space,
+          id,
+          scope,
+        });
+        if (hold !== undefined) documentHolds.push(hold);
+      }
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
@@ -2300,6 +2344,7 @@ export class PatternManager {
         previousEntryIdentity,
         entryIdentity,
         runtimeVersion,
+        documentHolds,
         delegations: deriveModuleDelegations(
           previous,
           [...candidate].map(([identity, doc]) => ({
@@ -2557,12 +2602,12 @@ export class PatternManager {
   }
 
   /**
-   * Helper for the compiles that consult the process byte cache, which returns
+   * Helper for the compiles that consult the shared byte cache, which returns
    * what it holds for `identities`. On a miss, and where this runtime shares
-   * turns at a cold compile, it also holds this runtime's turn, and reads again
-   * once the turn comes, since the compile that held it may have put those
-   * modules. `endTurn` ends a turn it holds; the caller calls it once it has
-   * compiled and put the modules, or failed to.
+   * turns at a cold compile, it also holds this runtime's turn for those
+   * modules, and reads again once the turn comes, since the compile that held
+   * it may have put them. `endTurn` ends a turn it holds; the caller calls it
+   * once it has compiled and put the modules, or failed to.
    */
   async #byteCacheBodiesOrTurn(
     runtimeVersion: string,
@@ -2577,8 +2622,17 @@ export class PatternManager {
     if (held !== undefined || compileTurns === undefined) {
       return { bodies: held };
     }
-    const endTurn = await compileTurns.take();
-    const bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    const endTurn = await compileTurns.take(
+      compileTurnKey(runtimeVersion, identities),
+    );
+    let bodies;
+    try {
+      bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    } catch (error) {
+      // The caller is handed the turn only on a return.
+      endTurn();
+      throw error;
+    }
     if (bodies === undefined) return { bodies, endTurn };
     endTurn();
     return { bodies };
@@ -2949,12 +3003,14 @@ export class PatternManager {
             compiledBodiesServed = true;
             return storageBodiesNeedingRepair;
           }
-          // Process byte cache (cross-runtime, cross-space): a full hit skips
+          // Shared byte cache (cross-runtime, cross-space): a full hit skips
           // the transform-and-emit step (`compileToModules`: TS program build,
-          // type-check, CF transform, emit). Trust by provenance: bytes this
-          // process compiled were SES-verified then; bytes a test seeded from a
-          // CI disk file are trusted via the workflow cache key, which
-          // fingerprints every compile input.
+          // type-check, CF transform, emit). Trust by provenance: bytes a
+          // runtime compiled were SES-verified then, and the cache holds only
+          // what this process or another toolshed on the host put, in a
+          // directory that belongs to the user the toolsheds run as; bytes a
+          // test seeded from a CI disk file are trusted via the workflow cache
+          // key, which fingerprints every compile input.
           const { bodies: processBodies, endTurn } = await this
             .#byteCacheBodiesOrTurn(cacheOpts.runtimeVersion, identities);
           endCompileTurn = endTurn;
@@ -3703,7 +3759,12 @@ export class PatternManager {
    * closure `input` describes, calls `onCompiled` once the compile step has
    * finished, and evaluates the compiled modules. The closure is the same
    * bytes in every space that verifies it; `input.space` only decides where
-   * its fabric imports are resolved.
+   * its fabric imports are resolved. Where this runtime shares a byte cache,
+   * the compile takes its modules from there when it holds them all, takes
+   * its turn for them otherwise, and puts what it compiled once the
+   * evaluation has verified it. It reads and puts under the stored-source
+   * version (`storedSourceByteCacheVersion()`), which a compile of fresh
+   * source never reads.
    */
   async #compileAndEvaluateClosure(
     input: ColdCompilationInput,
@@ -3711,50 +3772,81 @@ export class PatternManager {
   ): Promise<ColdCompilationResult> {
     const harness = this.#runtime.harness;
     const { entryIdentity, sourceFiles, dataFiles, patternCoverage } = input;
-    const compiled = await harness.compileResolvedToRecordGraph(
-      sourceFiles,
-      input.entryFilename,
-      {
-        fabricImports: { space: input.space },
-        ...(patternCoverage ? { patternCoverage } : {}),
-        sourcePackages: input.sourcePackages,
-      },
-    );
-    if (compiled.entryIdentity !== entryIdentity) {
-      throw deterministicCompileError(
-        `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
-      );
-    }
-    onCompiled();
-    const cachedModules: CachedCompiledModule[] = compiled.modules.map(
-      (module) => ({
-        identity: module.identity,
-        filename: module.filename,
-        code: module.js,
-        ...(module.isData ? { isData: true } : {}),
-        ...(module.sourceMap !== undefined
-          ? { sourceMap: module.sourceMap as never }
-          : {}),
-        // The spans naming the lines this body's coverage probes stand for.
-        ...(module.patternCoverageSpans !== undefined
-          ? { patternCoverageSpans: module.patternCoverageSpans }
-          : {}),
-        ...(module.builderSourceSites !== undefined
-          ? { builderSourceSites: module.builderSourceSites }
-          : {}),
-        imports: module.imports,
-      }),
-    );
-    const result = await harness.evaluateCachedModules(
-      cachedModules,
-      entryIdentity,
-      {
+    const byteCache = this.#runtime.moduleByteCache;
+    const ownVersion = byteCache === undefined
+      ? undefined
+      : await this.compileCacheRuntimeVersion({
+        patternCoverage: patternCoverage !== undefined,
+      });
+    const runtimeVersion = ownVersion === undefined
+      ? undefined
+      : storedSourceByteCacheVersion(ownVersion);
+    let endCompileTurn: (() => void) | undefined;
+    try {
+      const compiled = await harness.compileResolvedToRecordGraph(
         sourceFiles,
-        ...(dataFiles.length === 0 ? {} : { dataFiles }),
-        ...(patternCoverage ? { patternCoverage } : {}),
-      },
-    );
-    return { modules: compiled.modules, result };
+        input.entryFilename,
+        {
+          fabricImports: { space: input.space },
+          ...(patternCoverage ? { patternCoverage } : {}),
+          sourcePackages: input.sourcePackages,
+          ...(runtimeVersion === undefined ? {} : {
+            precompiledModulesFor: async ({ identities }) => {
+              const { bodies, endTurn } = await this.#byteCacheBodiesOrTurn(
+                runtimeVersion,
+                identities,
+              );
+              endCompileTurn = endTurn;
+              return bodies;
+            },
+          }),
+        },
+      );
+      if (compiled.entryIdentity !== entryIdentity) {
+        throw deterministicCompileError(
+          `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
+        );
+      }
+      onCompiled();
+      const cachedModules: CachedCompiledModule[] = compiled.modules.map(
+        (module) => ({
+          identity: module.identity,
+          filename: module.filename,
+          code: module.js,
+          ...(module.isData ? { isData: true } : {}),
+          ...(module.sourceMap !== undefined
+            ? { sourceMap: module.sourceMap as never }
+            : {}),
+          // The spans naming the lines this body's coverage probes stand for.
+          ...(module.patternCoverageSpans !== undefined
+            ? { patternCoverageSpans: module.patternCoverageSpans }
+            : {}),
+          ...(module.builderSourceSites !== undefined
+            ? { builderSourceSites: module.builderSourceSites }
+            : {}),
+          imports: module.imports,
+        }),
+      );
+      const result = await harness.evaluateCachedModules(
+        cachedModules,
+        entryIdentity,
+        {
+          sourceFiles,
+          ...(dataFiles.length === 0 ? {} : { dataFiles }),
+          ...(patternCoverage ? { patternCoverage } : {}),
+        },
+      );
+      // Put only now, so that the cache holds no body a verifier has not
+      // passed: the evaluation above verified each one before running it. The
+      // turn is held until they are put, so a compile that waited for it
+      // finds them.
+      if (byteCache !== undefined && runtimeVersion !== undefined) {
+        byteCache.putAll(runtimeVersion, compiled.modules);
+      }
+      return { modules: compiled.modules, result };
+    } finally {
+      endCompileTurn?.();
+    }
   }
 
   /**

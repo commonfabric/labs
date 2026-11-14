@@ -1,11 +1,11 @@
 import { getLogger } from "@commonfabric/logger";
 import { sha256 } from "@/lib/sha2.ts";
-import { runtime } from "@/index.ts";
 import { identity } from "@/lib/identity.ts";
 import {
   type Cell,
   cellRuntime,
   type IExtendedStorageTransaction,
+  type Runtime,
   sendEvent,
   WebhookConfigSchema,
 } from "@commonfabric/runner";
@@ -85,17 +85,20 @@ export async function verifyWebhookSecret(
 }
 
 // Compute entity ID for a webhook registration in toolshed's service space
-export async function webhookEntityId(webhookId: string): Promise<string> {
+/** A storage entity id in toolshed's service space. */
+type EntityId = `of:${string}`;
+
+export async function webhookEntityId(webhookId: string): Promise<EntityId> {
   return `of:${await sha256("cf:webhook:" + webhookId)}`;
 }
 
 // Compute entity ID for a per-space webhook index in toolshed's service space
-async function spaceIndexEntityId(space: string): Promise<string> {
+async function spaceIndexEntityId(space: string): Promise<EntityId> {
   return `of:${await sha256("cf:webhooks-for:" + space)}`;
 }
 
 // Build a cell link targeting toolshed's own service space
-function serviceCellLink(entityId: string) {
+function serviceCellLink(entityId: EntityId) {
   return linkRefFrom({
     id: entityId,
     space: identity.did(),
@@ -112,24 +115,26 @@ function parseCellLink(cellLink: string) {
   return linkRefFrom(payload);
 }
 
-// Read a cell from toolshed's service space, returning its value.
+// Read a cell from toolshed's service space, returning its value, or `null`
+// for a cell never written.
 // Throws on storage errors so callers can distinguish "not found" from "storage failure".
-async function readServiceCell<T>(entityId: string): Promise<T | null> {
-  const link = serviceCellLink(entityId);
-  const cell = runtime.getCellFromLink(link as any);
+async function readServiceCell<T>(
+  runtime: Runtime,
+  entityId: EntityId,
+): Promise<T | null> {
+  const cell = runtime.getCellFromLink<T | null>(serviceCellLink(entityId));
   await cell.sync();
   await runtime.storageManager.synced();
-  const data = cell.get();
-  return data as T | null;
+  return cell.get() ?? null;
 }
 
 // Write a value to a cell in toolshed's service space
 async function writeServiceCell(
-  entityId: string,
+  runtime: Runtime,
+  entityId: EntityId,
   value: unknown,
 ): Promise<void> {
-  const link = serviceCellLink(entityId);
-  const cell = runtime.getCellFromLink(link as any);
+  const cell = runtime.getCellFromLink(serviceCellLink(entityId));
   await cell.sync();
   await runtime.storageManager.synced();
 
@@ -141,28 +146,34 @@ async function writeServiceCell(
 
 // Read a single webhook registration from toolshed's service space
 export async function getRegistration(
+  runtime: Runtime,
   webhookId: string,
 ): Promise<WebhookRegistration | null> {
   const entityId = await webhookEntityId(webhookId);
-  return readServiceCell<WebhookRegistration>(entityId);
+  return readServiceCell<WebhookRegistration>(runtime, entityId);
 }
 
 // Write a single webhook registration to toolshed's service space
 export async function saveRegistration(
+  runtime: Runtime,
   registration: WebhookRegistration,
 ): Promise<void> {
   const entityId = await webhookEntityId(registration.id);
-  await writeServiceCell(entityId, registration);
+  await writeServiceCell(runtime, entityId, registration);
 }
 
 // Null out a webhook registration
-export async function deleteRegistration(webhookId: string): Promise<void> {
+export async function deleteRegistration(
+  runtime: Runtime,
+  webhookId: string,
+): Promise<void> {
   const entityId = await webhookEntityId(webhookId);
-  await writeServiceCell(entityId, null);
+  await writeServiceCell(runtime, entityId, null);
 }
 
 // Write URL+secret to a pattern's confidential config cell
 export async function writeConfidentialConfig(
+  runtime: Runtime,
   cellLink: string,
   url: string,
   secret: string,
@@ -180,17 +191,22 @@ export async function writeConfidentialConfig(
 }
 
 // Per-space index of webhook IDs in toolshed's service space (for admin list)
-export async function getServiceIndex(space: string): Promise<string[]> {
+export async function getServiceIndex(
+  runtime: Runtime,
+  space: string,
+): Promise<string[]> {
   const entityId = await spaceIndexEntityId(space);
-  const data = await readServiceCell<string[]>(entityId);
+  const data = await readServiceCell<string[]>(runtime, entityId);
   return data ?? [];
 }
 
 /** The index of webhook IDs for `space`, as a synced cell. */
-async function serviceIndexCell(space: string): Promise<Cell<string[]>> {
+async function serviceIndexCell(
+  runtime: Runtime,
+  space: string,
+): Promise<Cell<string[]>> {
   const entityId = await spaceIndexEntityId(space);
-  const link = serviceCellLink(entityId);
-  const cell = runtime.getCellFromLink(link as any) as Cell<string[]>;
+  const cell = runtime.getCellFromLink<string[]>(serviceCellLink(entityId));
   await cell.sync();
   await runtime.storageManager.synced();
   return cell;
@@ -236,10 +252,11 @@ export function removeFromIndex(
 }
 
 export async function addToServiceIndex(
+  runtime: Runtime,
   space: string,
   webhookId: string,
 ): Promise<void> {
-  const cell = await serviceIndexCell(space);
+  const cell = await serviceIndexCell(runtime, space);
   const { error } = await cellRuntime(cell).editWithRetry((tx) =>
     addToIndex(cell, tx, webhookId)
   );
@@ -247,10 +264,11 @@ export async function addToServiceIndex(
 }
 
 export async function removeFromServiceIndex(
+  runtime: Runtime,
   space: string,
   webhookId: string,
 ): Promise<void> {
-  const cell = await serviceIndexCell(space);
+  const cell = await serviceIndexCell(runtime, space);
   const { error } = await cellRuntime(cell).editWithRetry((tx) =>
     removeFromIndex(cell, tx, webhookId)
   );
@@ -262,6 +280,7 @@ export async function removeFromServiceIndex(
 // through the stream/handler system rather than being treated as a regular
 // cell set.
 export async function sendToStream(
+  runtime: Runtime,
   cellLink: string,
   payload: unknown,
 ): Promise<void> {

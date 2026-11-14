@@ -12,7 +12,6 @@ import {
   action,
   computed,
   Default,
-  equals,
   handler,
   ifElse,
   NAME,
@@ -46,6 +45,12 @@ const createEmptyPerson = (): Person => ({
   role: "user",
 });
 
+/** The person the form is editing, as a reference into the list, or `null`
+ * when the form is adding a new person. */
+export interface Editing {
+  editing: Writable<Person> | null;
+}
+
 // Form submit handler - must be at module scope
 // cf-form flushes buffered values to bound cells before emitting cf-submit,
 // so handlers read from the cells directly (type-safe, no reconstruction needed)
@@ -54,7 +59,7 @@ const handleFormSubmit = handler<
   {
     formData: Writable<Person>;
     people: Writable<Person[]>;
-    editing: Writable<{ editing: Person | null }>;
+    editing: Writable<Editing>;
     modalOpen: Writable<boolean>;
   }
 >((_, { formData, people, editing, modalOpen }) => {
@@ -63,13 +68,9 @@ const handleFormSubmit = handler<
   if (target === null) {
     people.push(next);
   } else {
-    const current = people.get();
-    const index = current.findIndex((p) => equals(p, target));
-    if (index >= 0) {
-      const updated = [...current];
-      updated[index] = next;
-      people.set(updated);
-    }
+    // The reference points at the person's place in the list, so saving
+    // writes there.
+    target.set(next);
   }
 
   modalOpen.set(false);
@@ -78,7 +79,7 @@ const handleFormSubmit = handler<
 
 export const EditPerson = pattern<
   {
-    editing: Writable<{ editing: Person | null }>;
+    editing: Writable<Editing>;
     formData: Writable<Person>;
     people: Writable<Person[]>;
     modalOpen: Writable<boolean>;
@@ -169,40 +170,33 @@ export const EditPerson = pattern<
 const startEdit = handler<
   unknown,
   {
-    person: Person;
-    people: Writable<Person[]>;
-    editing: Writable<{ editing: Person | null }>;
+    person: Writable<Person>;
+    editing: Writable<Editing>;
     formData: Writable<Person>;
     modalOpen: Writable<boolean>;
   }
->((_event, { person, people, editing, formData, modalOpen }) => {
-  const current = people.get();
-  const index = current.findIndex((p) => equals(p, person));
-  if (index >= 0) {
-    formData.set({ ...current[index] });
-    editing.set({ editing: person });
-    modalOpen.set(true);
-  }
+>((_event, { person, editing, formData, modalOpen }) => {
+  formData.set({ ...person.get() });
+  editing.set({ editing: person });
+  modalOpen.set(true);
 });
 
 const deletePerson = handler<
   Event,
   {
-    person: Person;
+    index: number;
     people: Writable<Person[]>;
   }
->((event, { person, people }) => {
+>((event, { index, people }) => {
   // Stop propagation to prevent card's onClick (startEdit) from firing
   event?.stopPropagation?.();
-  const current = people.get();
-  const filteredPeople = current.filter((p) => !equals(p, person));
-  people.set(filteredPeople);
+  people.set(people.get().toSpliced(index, 1));
 });
 
 // ===== Pattern =====
 
 export default pattern<FormDemoInput, FormDemoOutput>(({ people }) => {
-  const editing = new Writable<{ editing: Person | null }>({ editing: null });
+  const editing = new Writable<Editing>({ editing: null });
   const formData = new Writable<Person>(createEmptyPerson());
   const modalOpen = new Writable(false);
 
@@ -238,12 +232,11 @@ export default pattern<FormDemoInput, FormDemoOutput>(({ people }) => {
         {/* Main content - list of people */}
         <cf-vscroll flex showScrollbar fadeEdges>
           <cf-vstack gap="2" padding="4">
-            {people.map((person) => (
+            {people.map((person, index) => (
               <cf-card
                 style="cursor: pointer;"
                 onClick={startEdit({
                   person,
-                  people,
                   editing,
                   formData,
                   modalOpen,
@@ -267,7 +260,7 @@ export default pattern<FormDemoInput, FormDemoOutput>(({ people }) => {
                   </cf-vstack>
                   <cf-button
                     variant="ghost"
-                    onClick={deletePerson({ person, people })}
+                    onClick={deletePerson({ index, people })}
                   >
                     ×
                   </cf-button>

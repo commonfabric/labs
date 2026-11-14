@@ -16,6 +16,7 @@ import {
   mergeSamples,
   moveHistory,
   type Observation,
+  orderDay,
   parseContext,
   percentile90,
   readCostsForward,
@@ -1186,6 +1187,19 @@ describe("a day's sample of its runs", () => {
 
   it("has no percentile for a day nothing ran on", () => {
     expect(sampledPercentile90(samplesOf([]))).toBe(0);
+  });
+});
+
+describe("orderDay()", () => {
+  it("gives the day a seed names", () => {
+    expect(orderDay(20260820)).toBe("2026-08-20");
+  });
+
+  it("gives no day for a seed that names none, or for no seed", () => {
+    expect(orderDay(20261340)).toBeUndefined();
+    expect(orderDay(2026082)).toBeUndefined();
+    expect(orderDay(-20260820)).toBeUndefined();
+    expect(orderDay(undefined)).toBeUndefined();
   });
 });
 
@@ -2494,7 +2508,7 @@ describe("moveHistory()", () => {
   });
 
   it("hands over what main last said once nothing is left behind", () => {
-    const from = twoDays();
+    const from = { ...twoDays(), ordersOnMain: ["2026-08-14"] };
     const into = emptyState();
     moveHistory(from, into, () => true);
     expect(into.lastMainByOrder).toEqual([{ seed: 20260814, outcome: "fail" }]);
@@ -2502,6 +2516,8 @@ describe("moveHistory()", () => {
     expect(into.pendingMain).toEqual([
       { day: "2026-08-14", commit: "c9", source: "main" },
     ]);
+    expect(into.ordersOnMain).toEqual(["2026-08-14"]);
+    expect(from.ordersOnMain).toBeUndefined();
   });
 });
 

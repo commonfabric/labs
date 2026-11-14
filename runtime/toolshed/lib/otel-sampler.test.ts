@@ -49,3 +49,11 @@ Deno.test("traceidratio reflects the configured ratio", () => {
     );
   }
 });
+
+Deno.test("the parent-based samplers take the root sampler their names say", () => {
+  const root = (name: string) =>
+    samplerFromEnv(name, "1.0").toString().match(/^ParentBased\{root=(\w+),/)
+      ?.[1];
+  assertEquals(root("parentbased_always_on"), "AlwaysOnSampler");
+  assertEquals(root("parentbased_always_off"), "AlwaysOffSampler");
+});

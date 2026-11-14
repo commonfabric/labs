@@ -1,4 +1,16 @@
-import { assert, handler, pattern, TESTS, Writable } from "commonfabric";
+import {
+  assert,
+  handler,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import {
+  findNodeById,
+  hasExactText,
+} from "../../tools/test-support/vnode-helpers.ts";
 import {
   SAVE_TITLE_ACTION,
   TRUSTED_SAVE_SURFACE,
@@ -38,18 +50,27 @@ export default pattern(() => {
     title: "Second title",
   });
 
-  const assert_initial_saved_empty = assert(() => savedTitle.get() === "");
+  const assert_initial_saved_empty = assert(() =>
+    savedTitle.get() === "" &&
+    instance[NAME] === "Authorized Save (empty)" &&
+    hasExactText(findNodeById(instance[UI], "saved-title"), "")
+  );
   const assert_first_draft_visible = assert(() =>
     draftTitle.get() === "First title"
   );
   const assert_first_save_committed = assert(() =>
-    savedTitle.get() === "First title"
+    savedTitle.get() === "First title" &&
+    instance[NAME] === "Authorized Save (First title)" &&
+    hasExactText(findNodeById(instance[UI], "saved-title"), "First title")
   );
   const assert_second_draft_does_not_autosave = assert(() =>
-    savedTitle.get() === "First title"
+    savedTitle.get() === "First title" &&
+    instance[NAME] === "Authorized Save (First title)"
   );
   const assert_second_save_committed = assert(() =>
-    savedTitle.get() === "Second title"
+    savedTitle.get() === "Second title" &&
+    instance[NAME] === "Authorized Save (Second title)" &&
+    hasExactText(findNodeById(instance[UI], "saved-title"), "Second title")
   );
 
   return {

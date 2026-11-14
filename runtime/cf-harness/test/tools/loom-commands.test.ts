@@ -591,6 +591,38 @@ describe("loom-commands tools", () => {
       );
     });
 
+    it("starts no further piece checks once the turn is cancelled", async () => {
+      const space =
+        "did:key:z6MkpiecesAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      const ids = Array.from(
+        { length: 20 },
+        (_, index) => `fid1:${String(index).padStart(43, "C")}`,
+      );
+      const controller = new AbortController();
+      const { context } = contextWith({
+        answer: JSON.stringify({
+          ok: true,
+          id: "loom.inspect",
+          result: {
+            components: ids.map((id) => ({ ref: `pattern:${space}/${id}` })),
+          },
+        }),
+      });
+      let reads = 0;
+      await runCommandTool.invoke({
+        ...context,
+        signal: controller.signal,
+        getFabricSession: () => {
+          reads += 1;
+          controller.abort();
+          return Promise.reject(new Error("cancelled read"));
+        },
+      }, { command: "loom.inspect", args: {} });
+      // the first window of checks may already be under way; none after it
+      expect(reads).toBeGreaterThan(0);
+      expect(reads).toBeLessThan(ids.length);
+    });
+
     it("reports a failed Fabric session read without blaming a held reference", async () => {
       const { context, calls } = contextWith();
       const minted = await mintAddressHandle(

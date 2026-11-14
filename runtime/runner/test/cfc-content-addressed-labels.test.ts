@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, CFC_CONCEPT_KIND } from "@commonfabric/api/cfc";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -796,6 +797,31 @@ describe("CFC content-addressed labels", () => {
           path: [],
         }, { value: malformed });
         const id = writeReferencingEnvelope(runtime, tx, "malformed", hash);
+        expect(() => readStoredCfcMetadata(tx, { space, id })).toThrow(
+          "does not hold a label",
+        );
+        tx.abort();
+        return Promise.resolve();
+      });
+    });
+
+    it("refuses a label document whose content is a class instance", async () => {
+      // An instance keeps its state in private fields, so it has no member a
+      // check of members alone could refuse, and its canonical label content
+      // is the empty label. The id is that content's hash, so only the
+      // shape check stands between it and an empty label.
+
+      await withRuntime((runtime) => {
+        const tx = runtime.edit();
+        const instance = new FabricBytes(new Uint8Array([1, 2, 3]));
+        const hash = cfcLabelDocumentHash(instance as unknown as IFCLabel);
+        tx.writeOrThrow({
+          space,
+          scope: "space",
+          id: `cid:${hash}` as URI,
+          path: [],
+        }, { value: instance });
+        const id = writeReferencingEnvelope(runtime, tx, "instance", hash);
         expect(() => readStoredCfcMetadata(tx, { space, id })).toThrow(
           "does not hold a label",
         );

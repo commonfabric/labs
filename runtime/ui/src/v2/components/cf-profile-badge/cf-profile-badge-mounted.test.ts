@@ -95,8 +95,6 @@ function profileLink(
     space: () => SPACE,
     id: () => "of:face",
     runtime: () => runtime,
-    resolveAsCellWithWriteTarget: () =>
-      Promise.resolve({ cell: field, writeTarget: field }),
     subscribe: (
       callback: (
         value: unknown,
