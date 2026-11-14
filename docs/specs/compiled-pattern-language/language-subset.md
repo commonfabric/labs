@@ -2217,13 +2217,33 @@ Eight points complete the table.
   same, by the kind rule. Where the place is a value the instance
   computes, such as the result of an operator, of a collection operation,
   or of a `computed`, the checker accepts the argument, and
-  `plan-and-label-templates.md` defines the write (its §3.11, "A write
-  through a handle to a value the instance computes"). Where the callee
-  is a child with a plan of its own, the value is stored in the child's
-  argument document, the write lands there, and the next evaluation of
-  the operation replaces it. For a handler, a `lift` result, and a
-  pattern compiled into the instance, that document assumes that the
-  runtime refuses the write ([§13](#13-open-questions), question 28).
+  `plan-and-label-templates.md` defines the write (its §3.11, "A write through a
+  handle to a value the instance computes"). By ruling there are two cases, and
+  they are the same whether the callee is a child, a handler, a `lift` result,
+  or a pattern compiled into the instance. Where the place holds a value the
+  instance produces (the result of a `computed` or of an operator, an assembled
+  collection, a literal), a write through the handle is refused at run time, and
+  the compiler reports the argument where the callee writes through the handle
+  (`binding:write-to-computed`, [§10.2](#102-reactive-tier)). Where the place
+  holds a reference to a stored place, the handle resolves through the reference
+  and the write lands there. An element that a `filter` in a `computed` passes
+  on is such a reference, and so is a handle that a `computed` returns: in the
+  example that follows, `open` filters a stored list, and the write of the
+  handler bound to each of its elements lands in the record of the stored list.
+
+  ```tsx
+  // Shown for illustration only.
+  const open = computed(() => links.get().filter((link) => !link.removedAt));
+  const rows = open.map((link) => (
+    <cf-button onClick={retractLink({ link })}>Remove</cf-button>
+  ));
+  ```
+
+  An argument given to a pattern that a function body instantiates is not bound
+  by reference
+  ([§7.5.3](#753-the-argument-of-an-instantiation-in-a-function-body)): it is
+  the initial value of the child's stored argument, and the child writes it
+  freely.
 
 The plan records each path so bound as a link: every entry of
 `Binding.state` of a binding made in tier R has `capture: "link"`
@@ -3470,7 +3490,7 @@ identifier is not reported).
 Message texts are normative in content, not in wording: each must name the
 construct found and the replacement given here.
 
-**What a diagnostic is computed from.** Twelve diagnostics of the catalog
+**What a diagnostic is computed from.** Thirteen diagnostics of the catalog
 need a result of a stage after the type checker. The table names, for
 each, the first result that suffices. Every other diagnostic is decided
 from the source, its types, and the calls between its functions.
@@ -3478,11 +3498,12 @@ from the source, its types, and the calls between its functions.
 | Diagnostic | Computed from |
 | --- | --- |
 | `footprint:widened`, `footprint:dynamic-read`, `footprint:materializer`, `side-write:not-idempotent`, `mergeable-push:read-then-push` (§10.3) | The footprint analysis of one body, with the summaries of the authored functions it calls (`footprint-analysis.md` §5.3, §7.2, §6.3, §6.6, §6.4). No other body and nothing of the plan |
+| `binding:write-to-computed` (§10.2) | The write edges and write envelopes of the callee's record (`footprint-analysis.md` §6.2), and what the bound path resolves to in the enclosing plan: an output whose template passes no reference on (`plan-and-label-templates.md` §3.11) |
 | `side-write:cycle` (§10.3) | `Plan.edges`, the edges between the cones of an instance, which are built from the write edges of every body and the slots of every cone (`plan-and-label-templates.md` §3.11) |
 | `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy`, `cfc-flow:write-floor`, `cfc-flow:writer-fit`, `cfc-flow:ui-contract` (§10.5) | The label templates of the plan and the declared labels of their slots (`plan-and-label-templates.md` §4.4) |
 
 A compiler that stops after footprint analysis reports the first five and
-none of the other seven.
+none of the other eight.
 
 ### 10.1 Module scope
 
@@ -3536,6 +3557,7 @@ none of the other seven.
 | `cell:cause-not-literal` | error | In tier R, the argument of `X.for(cause)` on a cell constructor, or of `h.for(cause)` on a handle, is not a string literal (§4.7) | Write a string literal, which names the cell in place of the variable's name: `Writable.for<number>("count")`. For a cell per element, declare the cell in the body of the collection callback, where the element's key is part of its identifier. A cause computed from data is legal only in a function body | new |
 | `cell:method-tier` | error | A method, a constructor form, or a declaration of §4.7 called in a tier its "Tiers" column leaves out, where no other entry covers the case. In tier R: a write (`set`, `update`, `push`, `pushAll`, `addUnique`, `remove`, `removeByValue`, `removeAll`, `increment`, `applyChanges`, `send`, `exec`), `sample()`, `getArgumentCell()`, or `.for(cause)` on an instantiation. In tier F: `sqliteDatabase(...)`. It is reported in place of `reactive:unsupported-call` and `pattern-context:statement`. Not reported here: a collection method in tier F (`cell:collection-method-in-function`), `query` in a `lift` or a `computed` (`function-body:effect-in-computation`), and a cause in tier R that is not a string literal (`cell:cause-not-literal`) | For a write: move it into an `action(() => ...)` or a `handler`. For `sample()`: read with `get()`, or move the read into `computed(() => ...)`. For `getArgumentCell()`: call it in a function body. For `.for(cause)` on an instantiation: bind the instance to a `const`, whose name identifies it. For `sqliteDatabase`: declare the database in the pattern body and give the handle to the function body | new |
 | `sqlite:tables-not-static` | error | The `tables` option of a `sqliteDatabase` declaration is not static in the sense of §4.7: it is not an object literal with static keys, a value is not a `table(...)` call written in place or bound to a `const`, an argument of a `table` call is not a constant expression, or a row-label rule has a block body or refers to something other than its parameter, constant expressions, and the `cfSqlite` helpers | Write the table declarations from literals and constants. Data that varies belongs in the rows of a table, not in its declaration | new |
+| `binding:write-to-computed` | error | In tier R, an argument path or a state path is bound where the callee declares a handle that can write, the callee's record has a write edge or a write envelope through that handle, and the path holds a value the instance produces and can hold no reference: the result of an operator, of a template literal, or of a standard-library call, a literal, a member of a record or an array assembled in place, or a result path of a `computed` or a `lift` at which the body returns a value it computed (§7.5.2; `plan-and-label-templates.md` §3.11; `footprint-analysis.md` §6.2). Not reported where the path can hold a reference on some evaluation, such as an element a `filter` passes on, a value a body returns unchanged, or a conditional with such an operand: the runtime decides those per write. Not reported for an argument that a function body gives to a pattern it instantiates. *Assumed:* the severity, since the ruling says that the compiler reports the case and the write is refused at run time in every case reported | Bind a state cell, an input, or an element of a stored collection, and derive the computed value from it. Where the callee only reads, declare the property as a value or as a `ReadonlyCell` | new |
 | `collection:nested-scan` | warning | An inline reactive collection callback scans a captured reactive collection | Measure, and consider an index (`keyBy`, `groupBy`) or an aggregate | carries |
 | `pattern-context:get-call` | — | — | — | retired: a `.get()` on a cell is valid at every tier-R expression site (§4.4); the statement case is `pattern-context:statement` and the non-cell case is `opaque-get:invalid-call` |
 | `pattern-context:optional-chaining` | — | — | — | retired: `?.` is a path projection at every tier-R site |
@@ -4493,31 +4515,18 @@ use, so that the other numbers stay as other documents cite them.
     lists no tuple of open length and the schema of one is not specified
     here. *Assumed:* refused. The prototype has to count the sites in the
     corpus, which the script did not.
-28. **A write through a handle bound to a value the instance computes**
-    (to `plan-and-label-templates.md`, and to the prototype). §7.5.2
-    lets a tier-R argument that is a value stand where the callee
-    declares a handle that can write, and does not ask whether the place
-    the value has can be written. For an input, a state cell, an element
-    of a stored collection, and a projection of one, the write lands in
-    the cell the place is in. For a value an operation of the instance
-    computes, nothing in this document says where a write lands, and an
-    interim value is not stored at all. The checker accepts the
-    argument, and `plan-and-label-templates.md` (§3.11 and §3.15)
-    defines the write. For a child with a plan of its own the value is
-    stored in the child's argument document: the write lands there, and
-    the next evaluation of the operation replaces it. For a handler, a
-    `lift` result, and a pattern compiled into the instance, the place
-    is an output of the instance. *Assumed,* with that document's
-    question 42: the runtime refuses the write, which rejects the
-    event's transaction in a handler. The alternative lets the write
-    land in the stored output, where the next evaluation of the
-    operation replaces it, which is how a write to a derived cell is
-    understood to behave today: no refusal of such a write was found in
-    the runtime. Whether the compiler also reports the argument, where
-    it has the callee's body and the body has a write edge through the
-    path, is not decided, and this document has no diagnostic for it.
-    The prototype has to count the arguments that name a computed value
-    where a writable handle is declared.
+28. **A write through a handle bound to a value the instance computes.** Not
+    open: ruled, and §7.5.2 states it with `plan-and-label-templates.md` (§3.11
+    and §3.15; its question 42). A write through a handle bound to a value the
+    instance produces is refused at run time, which rejects the event's
+    transaction in a handler, and the compiler reports the argument where the
+    callee writes through the handle (`binding:write-to-computed`, §10.2). Where
+    the bound place holds a reference to a stored place, the write lands there.
+    An argument given to a pattern that a function body instantiates is the
+    initial value of the child's stored argument, and the child writes it
+    freely. The entry keeps its number because other documents cite it. The
+    prototype has to count the arguments that name a computed value where a
+    writable handle is declared.
 29. **Whether a write through a handle of `unknown` is refused** (to
     the project owner; the continuation plan's question 93). By ruling,
     a handle of `T` is assignable to the same kind of handle of

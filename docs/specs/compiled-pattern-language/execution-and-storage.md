@@ -872,11 +872,15 @@ Six rules hold for an invocation.
   A path that resolves to a slot of the instance without a stored link,
   as a path of a binding of the reactive tier does, takes the default of
   that slot's schema in the same way. A read of a default carries no
-  integrity: the runtime gives the slot, or the defaulted part of a
-  stored object, the empty integrity when it instantiates the label, and
-  the confidentiality the read consumed (`plan-and-label-templates.md`
-  §2.5). Where there is no default, the slot reads as `undefined` if its
-  schema admits that, and the cone fails otherwise
+  integrity: where a slot reads as a default, the runtime gives it the
+  empty integrity when it instantiates the label, and the
+  confidentiality the read consumed. Integrity is anchored in a stored
+  object as a whole: a slot that reads a stored object whole keeps the
+  integrity of the observation at the object's address, also where a
+  default fills one of its properties, and a slot that selects a
+  defaulted property has the empty integrity
+  (`plan-and-label-templates.md` §2.5). Where there is no default, the slot
+  reads as `undefined` if its schema admits that, and the cone fails otherwise
   (`plan-and-label-templates.md` §5.2).
 - **Other cones' outputs are pulled.** A cone asks for an upstream output
   when its code reaches the use, so an output used only in the unselected
@@ -1042,6 +1046,16 @@ For a slot with `resolved` the handle is the resolved reference.
 - A write through a handle is refused unless a `WriteEdge` or a
   `WriteEnvelope` of the body covers it. A target with `resolved` is
   resolved when the write is made, as section 1.4 says.
+- A write through a handle bound to a path that holds a value the instance
+  produced, and no reference, is refused, by ruling
+  (`plan-and-label-templates.md` §3.11, "A write through a handle to a value the
+  instance computes"). The runtime decides it when the write is made, by whether
+  the bound path holds a reference. In a handler the refusal rejects the event's
+  transaction, and a cone whose write is refused fails. Where the path holds a
+  reference, the write lands in the cell the reference links to, as the next
+  paragraph says. A path of a child's argument that a function body gave when it
+  instantiated the child is written freely by the child
+  (`plan-and-label-templates.md` §3.15).
 
 **A handle or a reference from a computed input.** A handle or a container
 can reach a body in a value the instance computed, such as one another
@@ -4317,8 +4331,11 @@ existence label fixed at first creation (5.4); the scheduler is switched
 per space, so a space is migrated as a whole and holds no instances of
 both kinds (9); a default belongs to the stored place, and a reader
 bound by reference reads it through the schema the link holds (2.2, 4.4,
-4.7); a read of a default carries no integrity (2.2). The ruling on the
-keep set
+4.7); a read of a default carries no integrity, and a read of a stored
+object whole keeps the object's integrity where a default fills one of
+its properties (2.2); a write through a handle bound to a value the
+instance produced is refused, and one bound to a reference lands at the
+reference's target (2.4). The ruling on the keep set
 answers what was question 1 of this list, the size of a result document.
 
 ### 11.1 For the project owner

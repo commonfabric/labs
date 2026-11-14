@@ -261,8 +261,9 @@ observation class (value, shape, enumeration, identity, or label metadata).
   ([plan format and label templates](plan-and-label-templates.md), §3.9).
 
 A template label is equal to the label the runtime computes today or tighter,
-with three deliberate exceptions
+with four deliberate exceptions
 ([plan format and label templates](plan-and-label-templates.md), §3.1).
+Tighter means fewer confidentiality clauses or more integrity atoms.
 
 - The membership label of a collection index bucket is wider, because it
   includes the keys of the elements that are not in the bucket (§3.17 there).
@@ -276,6 +277,20 @@ with three deliberate exceptions
   operation, a child's argument, a side-write, and the copied state of a
   binding. Today each occurrence of an element has a run of its own. This
   exception is accepted by ruling and is to be revisited (§2.6 there).
+- A read of a default carries no integrity, where today the read has the
+  integrity of the entries that resolve at the place. Fewer integrity atoms is
+  looser, and the exception is by ruling. Integrity is anchored in a stored
+  object as a whole: a read of the object whole keeps the object's integrity,
+  also where a default fills one of its properties, and a read that selects a
+  defaulted property carries none (§2.5 there).
+
+Two rows are tighter than today by ruling. The runtime joins the confidentiality
+that the arguments of a node declare onto the node's result, whatever a run
+read. A conditional and the container of a `map` are trusted not to join the
+labels of all their arguments, so their templates leave that static part out,
+and the comparison of staging step 3 expects the difference (§3.1, §3.5 and §3.6
+there). Whether a conditional written in a `computed` may carry less integrity
+than today is open (§3.5 there, question 64).
 
 Instantiating a template means substituting actual labels for slots and
 combining them. The runtime does this only for what it stores or checks:
@@ -910,14 +925,18 @@ Each stage can be checked before the next begins.
    much of the pattern corpus they accept and how often the analysis gives up.
 3. Emit the plan alongside the transformer's existing output, and compare
    template labels with the labels the runtime computes for the whole corpus.
-   Template labels must be equal or tighter, with the three deliberate
+   Template labels must be equal or tighter, with the four deliberate
    exceptions listed under [Label templates](#label-templates): the
    membership label of a collection index bucket, a static read through
-   a cell handle on a run that throws before the read, and what an element
-   body stores once per element key
+   a cell handle on a run that throws before the read, what an element
+   body stores once per element key, and, by ruling, the empty integrity
+   of a read of a default
    ([plan format and label templates](plan-and-label-templates.md), §3.1).
-   The comparison expects these three differences and no other in that
-   direction.
+   The comparison expects these four differences and no other in that
+   direction. It compares dereferenced labels, and it expects a template
+   to be tighter than the runtime where the runtime joins the labels that
+   the arguments of a node declare, as for a conditional and the
+   container of a `map`.
 4. Run one pattern with one transaction per cause and with only its keep set
    stored. Then do the same for `map`. FabriChat is the reference pattern for
    this stage and the previous one, because it exercises event integrity,

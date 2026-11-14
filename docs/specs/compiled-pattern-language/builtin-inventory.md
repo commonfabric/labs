@@ -204,7 +204,13 @@ These facts hold for every registered built-in and are not repeated per entry.
 - **CFC:** the transaction reads the condition's root and link topology, so
   the store carries the condition's label and the pointer's, and neither
   branch's content label. A reader that follows the reference consumes the
-  selected branch's label at that point. No integrity is minted.
+  selected branch's label at that point. No integrity is minted. The
+  store also holds, as an entry of origin `declared`, the confidentiality
+  that the schemas of the condition and of both branches declare,
+  whichever branch is selected (`applyInputIfcToOutput` in
+  `builder/node-utils.ts`). By ruling the template does not join that
+  static part, and is tighter there (`plan-and-label-templates.md` §3.1
+  and §3.5).
 - **Execution:** pure structural: served, and speculated by clients.
   Computation; replayable.
 - **New design:** class A. The conditional expressions `?:`, `&&`, and `||`
@@ -306,6 +312,11 @@ These facts hold for every registered built-in and are not repeated per entry.
   pattern run in its own transactions that read only that element
   (`builtins/list-result-schema.ts`). The coordinator's transaction joins
   the per-slot references and not element content. No integrity is minted.
+  The container also holds, as an entry of origin `declared`, the
+  confidentiality that the schema of the list and of its elements
+  declares (`applyInputIfcToOutput` in `builder/node-utils.ts`). By ruling
+  the template of the container does not join that static part, and is
+  tighter there (`plan-and-label-templates.md` §3.1 and §3.6).
 - **Execution:** pure structural: served and speculated. Computation;
   replayable. `SUBPATTERN_ARGUMENT_BUILTIN_REFS` in
   `builder/builtin-replayability.ts` additionally disqualifies every cell
