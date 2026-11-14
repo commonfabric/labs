@@ -261,6 +261,11 @@ is relitigated.
   and the write lands there. An argument given to a pattern that a
   function body instantiates is the initial value of the child's stored
   argument, and the child writes it freely.
+- A child in the reactive tier does not write an argument given as a
+  literal or a computed value. The runtime allows it today. A pattern
+  that changes or owns one of its arguments is given a writable cell
+  for it, and the corpus patterns that rely on today's behavior are
+  rewritten that way.
 - `elementById` yields a handle of the element type or `undefined`,
   because the record for a key may never have been written or may have
   been cleared.
@@ -780,14 +785,6 @@ as an assumption.
     on dereferenced labels. The static part the runtime joins from a
     module's argument schema is separated by its origin and expected
     as a difference, by ruling.
-
-118. **A child in the reactive tier that writes an argument given as
-    a literal or a computed value.** By the ruling on writes through a
-    bound handle, `plan-and-label-templates.md` §3.15 refuses the write.
-    A pattern that is given `title: "x"` in a pattern body and edits
-    its own title is this case. *Assumed:* refused, as the ruling
-    reads. The corpus sites with a literal argument are not counted;
-    the earlier count had no category for a literal.
 
 ## Open, and not needing the owner
 
