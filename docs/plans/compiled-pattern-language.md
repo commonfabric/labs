@@ -644,6 +644,16 @@ as an assumption.
     such arguments. *Assumed:* the runtime refuses the write. The
     alternative lets it land and be replaced at the next evaluation,
     which is understood to be what happens today.
+96. **The integrity of a slot that reads a stored object whole where a
+    default fills one of its properties** (PL question 43). *Assumed:*
+    the meet over the parts read, which is empty, so one defaulted
+    property removes the object's claims from a whole read. The
+    alternative keeps a label per path below the slot.
+97. **A default on a type that names `undefined`** (LS question 34).
+    *Assumed:* the type keeps the named `undefined`.
+98. **A truthiness test on a value of type `unknown`.** *Assumed:*
+    accepted, as a test of presence. The ruling names the test against
+    `undefined` alone, so it can be read as refusing this.
 
 ## Open, and not needing the owner
 
