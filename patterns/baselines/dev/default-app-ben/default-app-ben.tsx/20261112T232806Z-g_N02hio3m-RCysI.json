@@ -1,0 +1,165 @@
+{
+  "argumentSchema": {
+    "asCell": [
+      "opaque"
+    ]
+  },
+  "pattern": "dev/default-app-ben/default-app-ben.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AnonymousType_1"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "type": "object"
+      },
+      "SuggestionHistoryEntry": {
+        "properties": {
+          "messages": {
+            "items": true,
+            "type": "array"
+          },
+          "result": {},
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "messages",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    },
+    "additionalProperties": {
+      "type": "unknown"
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addPiece": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/MentionablePiece"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "backlinksIndex": {
+        "properties": {
+          "mentionable": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/AnonymousType_1"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mentionable"
+        ],
+        "type": "object"
+      },
+      "fabUI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "pieceRegistry": {
+        "$ref": "#/$defs/AnonymousType_1"
+      },
+      "pinToChat": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "accumulate": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "accumulate"
+        ],
+        "type": "object"
+      },
+      "recordSuggestion": {
+        "$ref": "#/$defs/SuggestionHistoryEntry",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "sidebarUI": {
+        "type": "unknown"
+      },
+      "suggestionHistory": {
+        "items": {
+          "$ref": "#/$defs/SuggestionHistoryEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "backlinksIndex",
+      "fabUI",
+      "pieceRegistry",
+      "suggestionHistory",
+      "addPiece",
+      "recordSuggestion",
+      "pinToChat",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

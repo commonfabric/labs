@@ -1,83 +1,15 @@
 // PATTERN TIER: fixture — scaffolding that pins a bug or drives the
 // runtime. Do not copy from this file. Tiers: patterns/index.md
 /**
- * CT-1597 Reduction Log
+ * Fixture: a lunch poll whose view reads a nullable reactive value inside a
+ * `computed()` block.
  *
- * MIGRATION NOTE (derive removal): the authored `derive()` calls below were
- * later replaced with plain reactive expressions (bare projections / ternaries),
- * which auto-wrap to the same lowered reactive computations. The repro is
- * preserved: the nullable reactive value (`string | null` / `OptionTally | null`)
- * captured by the JSX `computed()` block still emits the identical
- * `{ "anyOf": [..., { "type": "null" }] }` input schema (verified via
- * --show-transformed — same null-branch schema count as the original `derive()`
- * form). The STEP log below records the original bisection, which was performed
- * with `derive()`; the diagnosis (a null-typed reactive value captured by a
- * computed() generating a null-branch schema) is unchanged by the migration.
- *
- * STEP 0 - BASELINE: WIP from 93d545ad6 — BLANK (confirmed in browser)
- *
- * STEP 1: Replace <cf-screen> + slot="header" + <cf-vscroll> with plain <div>
- *   Hypothesis: The shell components cause the blank render
- *   Result: STILL BLANK — shell is NOT the trigger
- *
- * STEP 2: Strip mixed scopes — make all inputs PerSpace only
- *   Hypothesis: PerUser/PerSession scope mixing causes the blank render
- *   Result: STILL BLANK — mixed scopes NOT the trigger
- *
- * STEP 3: Replace ALL computed() blocks with stub <div>s
- *   Hypothesis: One or more computed() blocks causes the blank render
- *   Result: RENDERS — computed blocks ARE the trigger (or interaction with them)
- *
- * STEP 4: Restore computed blocks one at a time to isolate the offender.
- *   Restoring #3 (top choice — conditional null return) first.
- *   Result: BLANK AGAIN — computed #3 is load-bearing for the bug
- *
- * STEP 5: Simplify computed #3 — does computed(() => null) cause blanking?
- *   Hypothesis: ANY computed() returning null anywhere causes blanking
- *   Result: NO — computed(() => null) is fine, renders correctly
- *
- * STEP 6: Does accessing topChoice (a derived OptionTally|null) inside computed() cause blanking?
- *   Hypothesis: Reading topChoice (derived value containing complex object or null) triggers it
- *   Result: YES — reading topChoice inside computed() blanks the render even with unconditional <div> return
- *
- * STEP 7: Is it topChoice specifically (nullable derive result) or any derive result?
- *   Reading `ranked` (always an array, never null) inside computed() — RENDERS fine.
- *   Reading `topChoice` (nullable derive result: OptionTally|null) inside computed() — BLANKS.
- *   => The issue is specific to a derive() whose result type includes null.
- *
- * STEP 8: Minimal nullable derive (string|null from options) read inside computed() — BLANKS.
- *   => The trigger is: any derive() whose return type includes null, read inside computed().
- *   This reproduces with a simple string|null derive, not just complex OptionTally|null.
- *
- * STEP 9: (skipped — bisection complete, cause identified)
- *
- * ROOT CAUSE IDENTIFIED:
- *   The `ts-transformers` compiler, when transforming a `computed(() => {...})` block
- *   that closes over a `derive()` result whose TypeScript return type includes `null`
- *   (e.g. `OptionTally | null` or `string | null`), generates an input schema for the
- *   lowered `derive()` call that contains `{ "anyOf": [..., { "type": "null" }] }`.
- *
- *   Specifically, --show-transformed shows:
- *     computed block captures minimalNullable → schema: { anyOf: [{type:"string"},{type:"null"}] }
- *     computed block captures topChoice       → schema: { anyOf: [{$ref:"#/$defs/OptionTally"},{type:"null"}] }
- *
- *   The runtime's derive/schema machinery does not handle {type:"null"} in an anyOf
- *   when used as an input subscription schema — it causes the entire derived subtree
- *   (everything below the header) to render blank, silently.
- *
- *   Non-nullable derives (e.g. `ranked` which returns OptionTally[]) work fine in computed().
- *   Plain `computed(() => null)` (no captured nullable derive) also works fine.
- *   The bug only manifests when a nullable derive result is captured by a computed() block.
- *
- * PROPOSED FIX DIRECTION:
- *   In `ts-transformers` (the compiler): when generating the input schema for variables
- *   captured by a computed() closure, if a variable's schema contains {type:"null"} in
- *   an anyOf, either (a) strip the null branch from the input schema (null cells will
- *   simply pass null through), or (b) ensure the runtime's derive() subscription logic
- *   treats {type:"null"} in anyOf as "accept null values" rather than an unresolvable schema.
- *
- *   Alternatively, in the runtime: make the derive() input subscription tolerant of
- *   null in anyOf — treat it as optional/nullable rather than causing a silent failure.
+ * `minimalNullable` is a `string | null`, so the computed block that reads it
+ * is compiled with an input schema whose `anyOf` includes `{ type: "null" }`.
+ * Such a block once blanked everything below the poll's header. The rest of
+ * the poll is the surrounding app it was reduced from: joining, options only
+ * the host can add or remove, and per-option votes. `main.test.tsx` checks the
+ * block renders both with and without a value and drives every handler.
  */
 
 import {
@@ -86,9 +18,7 @@ import {
   handler,
   NAME,
   pattern,
-  type PerSession as _PerSession,
   type PerSpace,
-  type PerUser as _PerUser,
   Stream,
   UI,
   type VNode,
@@ -178,12 +108,6 @@ const POLL_THEME = {
   },
 };
 
-const _VOTE_SWATCH: Record<VoteColor, string> = {
-  green: "#2f8a64",
-  yellow: "#d4a82f",
-  red: "#a33b35",
-};
-
 const trimmedName = (n: string | undefined) => (n ?? "").trim();
 
 const newOptionId = () =>
@@ -192,15 +116,6 @@ const newOptionId = () =>
   }`;
 
 const colorForIndex = (i: number) => PLAYER_COLORS[i % PLAYER_COLORS.length];
-
-const _getInitials = (name: string): string => {
-  const trimmed = name.trim();
-  if (!trimmed) return "?";
-  return trimmed.split(/\s+/).map((w) => w[0]).join("").toUpperCase().slice(
-    0,
-    2,
-  );
-};
 
 const joinAs = handler<JoinEvent, {
   users: UsersCell;
@@ -428,9 +343,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       trimmedName(myName) === trimmedName(adminName);
     const ranked = tallyOptions(options, votes, users);
 
-    const _topChoice = voteCount > 0 && ranked.length > 0 ? ranked[0] : null;
-
-    // STEP 8: minimal nullable reactive value — simple string|null from options
+    // The nullable value the computed block in the view reads.
     const minimalNullable = options.length > 0 ? options[0].title : null;
 
     return {
@@ -525,8 +438,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                   </div>
                 </div>
 
-                {/* Top choice — only when there are votes */}
-                {/* STEP 8: does reading a simple string|null reactive value inside computed() blank? */}
+                {/* A computed block reading a nullable value */}
                 {computed(() => {
                   const v = minimalNullable;
                   return <div>minimal nullable: {v ?? "null"}</div>;

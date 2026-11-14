@@ -14,9 +14,15 @@
  * inside an assertion, and instantiation has already run its JSX.
  *
  * The other half of the stories is covered by catalog-stories-1.test.tsx;
- * cf-calendar and cf-submit-input have test files of their own.
+ * cf-calendar and cf-submit-input have test files of their own instead, and
+ * cf-chat and cf-toast have test files of their own as well.
  */
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
+import {
+  findElement,
+  hasText,
+  propValue,
+} from "../../../tools/test-support/vnode-helpers.ts";
 
 import ProgressStory from "./cf-progress-story.tsx";
 import RadioStory from "./cf-radio-story.tsx";
@@ -99,8 +105,12 @@ export default pattern(() => {
   const assert_cf_skeleton_story = assert(() =>
     skeletonStory[NAME] === "cf-skeleton Story" && skeletonStory[UI] != null
   );
+  // The slider starts horizontal, so it takes the full width.
   const assert_cf_slider_story = assert(() =>
-    sliderStory[NAME] === "cf-slider Story" && sliderStory[UI] != null
+    sliderStory[NAME] === "cf-slider Story" &&
+    hasText(sliderStory[UI], "Value: 40") &&
+    propValue(findElement(sliderStory[UI], "cf-slider"), "style") ===
+      "width: 100%;"
   );
   const assert_cf_svg_story = assert(() =>
     svgStory[NAME] === "cf-svg Story" && svgStory[UI] != null
