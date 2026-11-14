@@ -26,7 +26,7 @@ use crate::module::{symbol_of, DefKind, ModuleTier};
 use crate::program::Resolver;
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind, Promotion};
-use crate::types::Shape;
+use crate::types::{Shape, TypeId};
 
 /// The record of one body, in the notation of FA.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1301,10 +1301,17 @@ impl<'a> Analyzer<'_, '_, 'a> {
     /// Whether `expression` has a type the checker cut because it is the
     /// recursive use of a type inside itself, for W6.
     fn recursive_type(&self, expression: &Expression<'a>, below: bool) -> bool {
-        let resolver = self.resolver;
-        let Ok(ty) = resolver.typed_at(self.module(), expression, 0) else {
+        let Ok(ty) = self.resolver.typed_at(self.module(), expression, 0) else {
             return false;
         };
+        self.cut_type(ty, below)
+    }
+
+    /// Whether `ty` is the cut of a recursive type. `below` says that the
+    /// value was reached through a cut, where the checker evaluated no
+    /// type.
+    fn cut_type(&self, ty: TypeId, below: bool) -> bool {
+        let resolver = self.resolver;
         let members = match resolver.shape(ty) {
             Shape::Union(members) => members,
             _ => vec![ty],
@@ -1495,6 +1502,13 @@ impl<'a> Analyzer<'_, '_, 'a> {
     }
 
     fn bind_pattern(&mut self, pattern: &BindingPattern<'a>, val: Val) {
+        self.bind_typed(pattern, val, None);
+    }
+
+    /// Binds a pattern to a value whose type is `ty`, where the caller
+    /// has it. The type decides whether a destructuring enters a
+    /// recursive type (FA §5.2, W6).
+    fn bind_typed(&mut self, pattern: &BindingPattern<'a>, val: Val, ty: Option<TypeId>) {
         match pattern {
             BindingPattern::BindingIdentifier(identifier) => {
                 self.bind(identifier.symbol_id.get(), val);
@@ -1503,12 +1517,23 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 // A default in a destructuring (FA §3.1).
                 self.observe(&val, Class::Shape);
                 let default = self.eval(&assignment.right);
-                self.bind_pattern(&assignment.left, Val::alts(vec![val, default]));
+                self.bind_typed(&assignment.left, Val::alts(vec![val, default]), ty);
             }
             BindingPattern::ObjectPattern(object) => {
                 for property in &object.properties {
+                    let mut inner = None;
                     let member = match static_key_name(&property.key) {
-                        Some(name) if !property.computed => self.extend(&val, name),
+                        Some(name) if !property.computed => {
+                            let below = Self::below_cut(&val);
+                            // Below a cut the checker evaluated no type.
+                            let recursive = val.has_projection()
+                                && match ty {
+                                    Some(ty) => self.cut_type(ty, below),
+                                    None => below,
+                                };
+                            inner = ty.and_then(|ty| self.resolver.property(ty, name));
+                            self.enter_key(&val, recursive, name, property.span.start)
+                        }
                         _ => {
                             // A destructuring under a computed key.
                             self.observe(&val, Class::Enumeration);
@@ -1518,7 +1543,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                             self.member(&val)
                         }
                     };
-                    self.bind_pattern(&property.value, member);
+                    self.bind_typed(&property.value, member, inner);
                 }
                 if let Some(rest) = &object.rest {
                     // The rest of a value is a record of its remaining
@@ -1534,8 +1559,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
             BindingPattern::ArrayPattern(array) => {
                 self.observe(&val, Class::Enumeration);
                 let member = self.member(&val);
+                let inner = ty.and_then(|ty| self.resolver.element_of(ty));
                 for element in array.elements.iter().flatten() {
-                    self.bind_pattern(element, member.clone());
+                    self.bind_typed(element, member.clone(), inner);
                 }
                 if let Some(rest) = &array.rest {
                     self.bind_pattern(&rest.argument, Val::bag(member));
@@ -1753,13 +1779,18 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     self.observe(&iterated, Class::Enumeration);
                     self.member(&iterated)
                 };
+                let element = self
+                    .resolver
+                    .typed_at(self.module(), &statement.right, 0)
+                    .ok()
+                    .and_then(|ty| self.resolver.element_of(ty));
                 self.cond += 1;
                 // Twice, so that what one round binds reaches the next.
                 for _ in 0..2 {
                     match &statement.left {
                         ForStatementLeft::VariableDeclaration(declaration) => {
                             for declarator in &declaration.declarations {
-                                self.bind_pattern(&declarator.id, member.clone());
+                                self.bind_typed(&declarator.id, member.clone(), element);
                             }
                         }
                         ForStatementLeft::AssignmentTargetIdentifier(identifier) => {
@@ -1861,7 +1892,11 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 Some(init) => self.eval(init),
                 None => Val::Computed,
             };
-            self.bind_pattern(&declarator.id, val);
+            let ty = declarator
+                .init
+                .as_ref()
+                .and_then(|init| self.resolver.typed_at(self.module(), init, 0).ok());
+            self.bind_typed(&declarator.id, val, ty);
         }
     }
 
@@ -2154,13 +2189,25 @@ impl<'a> Analyzer<'_, '_, 'a> {
             self.observe(&object, Class::Value);
             return Val::Computed;
         }
-        // W6: the path enters a recursive type a second time (FA §5.2).
-        let below = object
-            .projections()
+        let recursive = self.recursive_type(&member.object, Self::below_cut(&object));
+        self.enter_key(&object, recursive, name, member.span.start)
+    }
+
+    /// Whether a value was reached through the cut of a recursive type.
+    fn below_cut(val: &Val) -> bool {
+        val.projections()
             .iter()
-            .any(|proj| !proj.entered.is_empty());
-        if !self.recursive_type(&member.object, below) {
-            return self.extend(&object, name);
+            .any(|proj| !proj.entered.is_empty())
+    }
+
+    /// The property `name` of `object`, in whatever form the access is
+    /// written: a property access, a keyed access, or a destructuring.
+    /// `recursive` says that the type of `object` is the cut of a
+    /// recursive type. W6: the path enters a recursive type a second time
+    /// (FA §5.2).
+    fn enter_key(&mut self, object: &Val, recursive: bool, name: &str, start: u32) -> Val {
+        if !recursive {
+            return self.extend(object, name);
         }
         let entered = "(recursive)".to_string();
         let again = object
@@ -2175,10 +2222,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 }
                 self.observe(&Val::Proj(Proj { path, ..proj }), Class::Value);
             }
-            self.widen("W6", member.span.start);
+            self.widen("W6", start);
             return Val::Computed;
         }
-        let extended = self.extend(&object, name);
+        let extended = self.extend(object, name);
         Self::enter(extended, &entered)
     }
 
@@ -2204,7 +2251,13 @@ impl<'a> Analyzer<'_, '_, 'a> {
             self.presence(&member.object, &object);
         }
         match unwrap(&member.expression) {
-            Expression::StringLiteral(key) => return self.extend(&object, key.value.as_str()),
+            Expression::StringLiteral(key) => {
+                // A keyed access enters a recursive type as a property
+                // access does (FA §5.2).
+                let recursive = object.has_projection()
+                    && self.recursive_type(&member.object, Self::below_cut(&object));
+                return self.enter_key(&object, recursive, key.value.as_str(), member.span.start);
+            }
             Expression::NumericLiteral(index) if self.kinds(&member.object).tuple => {
                 return self.extend(&object, &index.value.to_string());
             }

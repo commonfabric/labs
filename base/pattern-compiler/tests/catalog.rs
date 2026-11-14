@@ -24,9 +24,12 @@ fn entries_of_document(text: &str) -> Vec<(String, String)> {
             continue;
         }
         let cells: Vec<&str> = line.trim_matches('|').split(" | ").collect();
-        let severity = match cells[1].trim() {
-            "—" => "retired",
-            other => other,
+        // A row of the catalog has a severity in its second cell. The
+        // table of what each diagnostic is computed from (§10) does not.
+        let severity = match cells.get(1).map(|cell| cell.trim()) {
+            Some("—") => "retired",
+            Some(other @ ("error" | "warning" | "hint")) => other,
+            _ => continue,
         };
         for (index, piece) in cells[0].split('`').enumerate() {
             if index % 2 == 1 {
