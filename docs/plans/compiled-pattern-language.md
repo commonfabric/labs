@@ -803,7 +803,10 @@ as an assumption.
     where the condition's input schema declares it. Where the branch is
     a literal, the stored value gets the join. This is confirmed by a
     test over three cases, not committed. It is a finding against the
-    runtime. *Assumed:* the template, which joins the condition and the
+    runtime, and by the owner's decision it is not filed, because the
+    builder path is retired; what matters is that a conditional in
+    pattern code has the right label in the compiled path. *Assumed:*
+    the template, which joins the condition and the
     chosen branch, stands, and the comparison is made with the
     runtime's static part included for a conditional.
 
