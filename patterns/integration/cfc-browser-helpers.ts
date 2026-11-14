@@ -173,14 +173,13 @@ const viewSettledReady = (): boolean =>
 // anything, so a re-check on the next DOM mutation retries the fill; a ready
 // field is filled once and verified.
 //
-// Each invocation keeps a progress ledger on `globalThis.__cfFillDiag`
-// (per selector): which phase it reached and when, how many attempts the fill
-// `fillId` names has made, and when its first and its latest began.
-// waitForCondition never
-// re-enters a predicate whose promise is still pending, so if one of the
-// awaits below stalls (typically `commit()` waiting on a stuck cell
-// round-trip), the ledger's `phase` names the exact await the fill died in —
-// that is what `readCfInputProbe` reports on timeout.
+// Each fill keeps a progress ledger on `globalThis.__cfFillDiag`, keyed by
+// selector, which each attempt updates: which phase it reached and when, how
+// many attempts the fill `fillId` names has made, and when its first and its
+// latest began. waitForCondition never re-enters a predicate whose promise is
+// still pending, so if one of the awaits below stalls (typically `commit()`
+// waiting on a stuck cell round-trip), the ledger's `phase` names the exact
+// await the fill died in — that is what `readCfInputProbe` reports on timeout.
 const fillAndVerify = async (
   probe: ProbeApi,
   selector: string,
@@ -201,17 +200,17 @@ const fillAndVerify = async (
     __cfFillDiag?: Record<string, FillDiag>;
   }).__cfFillDiag ??= {});
   const now = Date.now();
-  // An earlier fill of the same selector left its own ledger, which this fill's
-  // first attempt replaces.
-  const earlier = registry[selector]?.fillId === fillId
+  // A ledger under another `fillId` is an earlier fill's, and this fill's first
+  // attempt replaces it.
+  const previousAttempt = registry[selector]?.fillId === fillId
     ? registry[selector]
     : undefined;
   const diag: FillDiag = {
     fillId,
-    attempts: (earlier?.attempts ?? 0) + 1,
+    attempts: (previousAttempt?.attempts ?? 0) + 1,
     phase: "settling",
     phaseAt: now,
-    firstAttemptAt: earlier?.firstAttemptAt ?? now,
+    firstAttemptAt: previousAttempt?.firstAttemptAt ?? now,
     lastAttemptAt: now,
   };
   registry[selector] = diag;
@@ -847,9 +846,9 @@ export async function fillCfInput(
 }
 
 /**
- * The message `fillCfInput` fails with, rendering `probe` at `xlong`: the
- * page-level context, the console tail last, follows the field's own state and
- * the IPC counts, and a shorter cut drops it.
+ * Returns the message `fillCfInput` fails with, which renders `probe` at
+ * `xlong`: the page-level context, the console tail last, follows the field's
+ * own state and the IPC counts, and a shorter cut drops it.
  */
 export function fillFailureMessage(
   selector: string,
@@ -3080,21 +3079,21 @@ type CfInputProbe = {
   consoleTail?: unknown;
 
   /**
-   * Where nothing matches the selector: the ids of the elements the page
-   * holds, through shadow roots, sorted, at most {@link PRESENT_IDS_MAX} of
-   * them. They say how far the view around the missing field rendered.
+   * Ids of the elements the page holds, through shadow roots, sorted, at most
+   * {@link PRESENT_IDS_MAX} of them, where nothing matches the selector. They
+   * say how far the view around the missing field rendered.
    */
   presentIds?: string[];
 
-  /** Where nothing matches the selector: how many distinct ids the page holds. */
+  /** Number of distinct ids the page holds, where nothing matches the selector. */
   presentIdCount?: number;
 };
 
-/** The most ids a probe that finds no match reports. */
+/** Largest number of ids a probe that finds no match reports. */
 export const PRESENT_IDS_MAX = 100;
 
 /**
- * What the page holds for the cf input `selector` names, read once, for a
+ * Reads, once, what the page holds for the cf input `selector` names, for a
  * failure report.
  */
 export async function readCfInputProbe(
@@ -3102,8 +3101,12 @@ export async function readCfInputProbe(
   selector: string,
 ): Promise<CfInputProbe> {
   return await page.evaluate((targetSelector, presentIdsMax) => {
+    // The walk that finds the matches also gathers every id it passes, for a
+    // probe that finds none.
+    const ids = new Set<string>();
     function collect(root: Document | ShadowRoot, result: Element[]): void {
       for (const element of root.querySelectorAll("*")) {
+        if (element.id !== "") ids.add(element.id);
         try {
           if (element.matches(targetSelector)) result.push(element);
         } catch {
@@ -3177,14 +3180,7 @@ export async function readCfInputProbe(
     collect(document, matches);
     const element = matches[0];
     if (!element) {
-      const ids = new Set<string>();
-      const collectIds = (root: Document | ShadowRoot): void => {
-        for (const present of root.querySelectorAll("*")) {
-          if (present.id !== "") ids.add(present.id);
-          if (present.shadowRoot) collectIds(present.shadowRoot);
-        }
-      };
-      collectIds(document);
+      // The page context goes last, so that its console tail ends the report.
       return {
         selector: targetSelector,
         found: false,
@@ -3193,9 +3189,9 @@ export async function readCfInputProbe(
         readOnly: false,
         visible: false,
         hostTagName: "",
-        ...context,
         presentIds: [...ids].sort().slice(0, presentIdsMax),
         presentIdCount: ids.size,
+        ...context,
       };
     }
     const input = element instanceof HTMLInputElement

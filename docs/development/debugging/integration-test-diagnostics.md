@@ -20,11 +20,16 @@ What the failure probe contains, and where each piece lives:
 - **Fill phase ledger** (`__cfFillDiag`, in
   [`cfc-browser-helpers.ts`](../../../patterns/integration/cfc-browser-helpers.ts))
   — per-selector progress through the fill (settled → found → visible → filled
-  → committed), naming the exact await that hung. A fill on a page that never
+  → committed), naming the exact await that hung, with how many attempts the
+  fill made and when its first and latest began. A fill on a page that never
   exposes `commonfabric.viewSettled` stops at the settle and says so.
 - **Host/bound-cell state** (`readCfInputProbe`, same file) — whether the
   `cf-input` host has a bound cell and a pending commit, alongside DOM
-  value/visibility/disabled.
+  value/visibility/disabled. Where nothing matches the selector, it lists the
+  ids the page holds instead, through shadow roots, sorted and at most
+  `PRESENT_IDS_MAX`, with their count, so a missing field says how far the
+  view around it rendered. The failure message renders this probe at `xlong`,
+  so its page context, the console tail last, survives.
 - **Main-thread pending IPC** (`RuntimeClient.getPendingRequests()`,
   [`runtime-client.ts`](../../../runtime/runtime-client/src/runtime-client.ts))
   — the runtime-client requests still awaiting a worker response; works even

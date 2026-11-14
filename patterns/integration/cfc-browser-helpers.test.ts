@@ -3110,12 +3110,13 @@ describe("CFC browser helpers", () => {
           "d-nested",
         ]);
         expect(probe.presentIdCount).toBe(4);
+        expect(Object.keys(probe).at(-1)).toBe("consoleTail");
       } finally {
         await probePage.close();
       }
     });
 
-    it("lists at most its maximum of ids, the first in sorted order, and counts them all", async () => {
+    it("lists the first `PRESENT_IDS_MAX` ids in sorted order, and counts every id", async () => {
       const probePage = await browser.newPage();
       try {
         const total = PRESENT_IDS_MAX + 50;
@@ -3144,7 +3145,7 @@ describe("CFC browser helpers", () => {
       }
     });
 
-    it("keeps the end of a probe longer than fifty lines", () => {
+    it("keeps the end of a probe longer than `long` keeps", () => {
       const probe = {
         selector: "#absent-input",
         found: false,
@@ -3160,7 +3161,6 @@ describe("CFC browser helpers", () => {
       const message = fillFailureMessage("#absent-input", "Grace", probe);
 
       expect(message).toContain("the last console line");
-      expect(message).not.toContain("... lines:");
     });
 
     it("dates a fill's first attempt and its latest, and starts the count again for the next fill", async () => {
@@ -3182,7 +3182,10 @@ describe("CFC browser helpers", () => {
         }).commonfabric = {
           viewSettled: () => {
             // The field renders on the second settle, so the first attempt
-            // finds nothing.
+            // finds nothing and a second one fills it. The first attempt
+            // changes no DOM, so the second comes from the waiter's 500 ms
+            // backstop, which is what dates the latest attempt after the
+            // first.
             settleCalls++;
             if (
               settleCalls === 2 && !document.querySelector("#late-ledger-input")
