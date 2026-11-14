@@ -79,13 +79,17 @@ implemented as written, with the reading this crate chose.
 evaluator of the templates of `plan-and-label-templates.md` §3.2
 (`compare/template.ts`), a harness that runs a pattern through the existing
 transformer and builder and reads the stored labels of its slots and outputs
-(`compare/harness.ts`), five fixtures, a generator of scenarios
+(`compare/harness.ts`), six fixtures, a generator of scenarios
 (`compare/generate.ts`), and a run over the corpus (`compare/corpus.ts`).
 The harness resolves a slot of root `argument`, `element`, `state`,
 `binding`, and `event`. It sends an event to the stream of a binding and
 compares the write edges of the handler's body with the labels at the paths
 that event's run wrote. It finds the branch of a `select` and the child of a
-`pick` from the values the run stored. The generator gives each top-level
+`pick` from the values the run stored. Every kept output carries the atom of
+the plan's pattern, and a row whose atom names the pattern where the
+runtime's names other code is counted in a category of its own. The position
+of a tag that names a pattern is read below the `$UI` of the result the run
+holds there. The generator gives each top-level
 input of a plan a value of its type and a confidentiality atom of its own,
 and each handler an event of the type its event declares.
 
@@ -102,10 +106,11 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.js
 `run` takes each module the crate emits a plan for with no unsupported
 construct, skips the ones that need `wish` or request an effect, and appends
 one line per module to the results file. `report` prints the modules run and
-skipped by reason, the outputs and write edges compared by relation, what
-was not compared by reason, and the looser rows by what differs, with one
-example each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md`
-say what the comparison takes as each side's label and what it found.
+skipped by reason, the outputs and write edges compared by category, what
+was not compared by reason, the looser rows by what differs, and the outputs
+the run holds no value at by what the run stores there, with one example
+each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what
+the comparison takes as each side's label and what it found.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the

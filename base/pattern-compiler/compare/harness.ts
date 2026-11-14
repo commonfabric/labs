@@ -144,6 +144,11 @@ export type Row = {
   reached: Evaluated;
   comparison: Comparison;
   /**
+   * The template's label without the atom a kept output carries, against
+   * the runtime's: what the row was before the atom was added.
+   */
+  comparisonOfTemplateAlone: Comparison;
+  /**
    * The runtime's label read by origin (ruling T2; PL §3.1, "Which entries
    * are the static part"): the entries of each document on the way from the
    * output to its value, without the static part. The static part is the
@@ -180,6 +185,34 @@ export type WriteRow = {
 /** Something the harness did not compare, and why. */
 export type Skipped = { what: string; reason: string };
 
+/**
+ * A kept output the run holds no value at, which is not compared, with
+ * what the run has there.
+ */
+export type Missing = {
+  path: string[];
+  /** The `op` of the root of the output's template. */
+  root: string;
+  /** The length of the shortest prefix of the path that has no value. */
+  absentFrom: number;
+  /** What the value above that prefix is: `object`, `array`, or a type. */
+  above: string;
+  /** Whether the document the path ends in stores a value at the path. */
+  stored: boolean;
+  /** The start of what that document stores there, as JSON. */
+  raw?: string;
+  /** The same for the shortest prefix of the path that has no value. */
+  rawAtAbsent?: string;
+  /** The same for the path above that prefix. */
+  rawAbove?: string;
+  /** The label a value read of the path consumes. */
+  runtime: Label;
+  /** The template's label, where it is evaluated. */
+  template?: Label;
+  /** Whether the path has a value once it is read on its own. */
+  afterPull: boolean;
+};
+
 /** How the branch of each `select` and the child of each `pick` was found. */
 export type Decided = {
   /** From the value stored at the output the node is the template of. */
@@ -198,6 +231,7 @@ export type Run = {
   writes: WriteRow[];
   skipped: Skipped[];
   decided: Decided;
+  missing: Missing[];
 };
 
 /** A plan construct or a state of the run the harness has no reading for. */
@@ -381,6 +415,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     await storageManager.synced();
 
     const skipped: Skipped[] = [];
+    const missing: Missing[] = [];
     const how = new Map<string, keyof Decided>();
     const selects = new Map<number, SelectNode>();
     const picks = new Map<number, PickNode>();
@@ -639,6 +674,41 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         }));
       };
 
+      // The cell at a path of the result. "The entries of the enclosing
+      // rendered tree at the tag's position are those of the callee's
+      // `[UI]`" (PL §1.1): where the run holds the result of a pattern at
+      // a position and the path goes on with a member of a view node, or
+      // ends there, the path is read below the result's `$UI`.
+      const VIEW_NODE = new Set(["children", "props", "name", "type"]);
+      const treeOf = (cell: AnyCell, next: string | undefined): AnyCell => {
+        try {
+          const last = hops(cell).at(-1);
+          const raw = last === undefined
+            ? undefined
+            : read.readValueOrThrow(last);
+          if (
+            raw === null || typeof raw !== "object" || Array.isArray(raw) ||
+            !("$UI" in raw) || (raw as { type?: unknown }).type === "vnode"
+          ) return cell;
+          if (next !== undefined && (!VIEW_NODE.has(next) || next in raw)) {
+            return cell;
+          }
+          return cell.key("$UI" as never) as AnyCell;
+        } catch {
+          return cell;
+        }
+      };
+      const outputAt = (path: readonly string[]): AnyCell => {
+        let cell = output;
+        path.forEach((key, index) => {
+          if (index > 0) cell = treeOf(cell, key);
+          cell = cell.key(key as never) as AnyCell;
+        });
+        return path.length > 0 && valueOf(cell) === undefined
+          ? treeOf(cell, undefined)
+          : cell;
+      };
+
       const note = (kind: string, index: number, context: Context) =>
         `${rowKey}|${kind}${index}|${JSON.stringify(context.elements)}`;
 
@@ -708,7 +778,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             if (node === undefined) return decide("unobserved");
             // The value stored at the output is the selected branch's.
             if (current?.template === node) {
-              const value = valueOf(at(output, current.path));
+              const value = valueOf(outputAt(current.path));
               const known = node.branches.map((branch) =>
                 branch.op === "slot"
                   ? slotValue(branch.slot, context)
@@ -734,7 +804,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             // The stored value is `a` where it converts to false under
             // `&&`, and where it converts to true under `||`.
             if (current?.template === node && node.branches.length === 2) {
-              const value = valueOf(at(output, current.path));
+              const value = valueOf(outputAt(current.path));
               const same = node.branches.map((branch) =>
                 sameValue(branch, node.condition)
               );
@@ -808,7 +878,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return decide("unobserved");
             }
             const stored = current?.template === node
-              ? valueOf(at(output, current.path))
+              ? valueOf(outputAt(current.path))
               : NO_VALUE;
             if (from.container !== undefined) {
               const shape = from.container;
@@ -960,8 +1030,59 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               const observes = entry.collection === undefined && !container
                 ? "value"
                 : "shape";
-              const cell = at(output, path);
+              const cell = outputAt(path);
               if (valueOf(cell) === undefined) {
+                const absentFrom = path.findIndex((_, index) =>
+                  valueOf(outputAt(path.slice(0, index + 1))) === undefined
+                );
+                const above = valueOf(outputAt(path.slice(0, absentFrom)));
+                let stored = false;
+                const rawOf = (cell: AnyCell): string => {
+                  try {
+                    const way = hops(cell);
+                    const last = way.at(-1);
+                    const value = last === undefined
+                      ? undefined
+                      : read.readValueOrThrow(last);
+                    stored = value !== undefined;
+                    return `${way.length} hops: ${
+                      JSON.stringify(value)?.slice(0, 200)
+                    }`;
+                  } catch (error) {
+                    stored = false;
+                    return `error: ${(error as Error)?.message}`.slice(0, 200);
+                  }
+                };
+                const rawAtAbsent = rawOf(
+                  outputAt(path.slice(0, absentFrom + 1)),
+                );
+                const rawAbove = rawOf(outputAt(path.slice(0, absentFrom)));
+                const raw = rawOf(cell);
+                let label: Label | undefined;
+                try {
+                  label = evaluate(template, true, { elements }, true).label;
+                } catch {
+                  // The template names something the run does not hold.
+                }
+                missing.push({
+                  path,
+                  root: template.op,
+                  absentFrom: absentFrom + 1,
+                  above: Array.isArray(above)
+                    ? "array"
+                    : above === NO_VALUE
+                    ? "unreadable"
+                    : above === null
+                    ? "null"
+                    : typeof above,
+                  stored,
+                  raw,
+                  rawAtAbsent,
+                  rawAbove,
+                  runtime: consumed(cfcLabelViewForResolvedCell(cell), "value"),
+                  template: label,
+                  afterPull: false,
+                });
                 throw new Unsupported("an output the run holds no value at");
               }
               const runtimeLabel = consumed(
@@ -983,6 +1104,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 stored,
                 reached,
                 comparison: compareLabels(reached.label, runtimeLabel),
+                comparisonOfTemplateAlone: compareLabels(
+                  evaluate(template, true, { elements }).label,
+                  runtimeLabel,
+                ),
                 runtimeByOrigin: {
                   all: byOrigin(cell, observes, true),
                   withoutStatic,
@@ -1080,7 +1205,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         };
       };
 
-      return { outputRows, writeTargets, writeRow, at };
+      return { outputRows, writeTargets, writeRow, at, read };
     };
 
     const reading = async <T>(
@@ -1164,6 +1289,29 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       });
     }
 
+    // Whether an output with no value has one once it is read on its own:
+    // the first read of the outputs reads a path up to its first `*`.
+    for (const entry of missing) {
+      try {
+        const cell = entry.path.reduce(
+          (cell, key) => cell.key(key as never) as AnyCell,
+          result as AnyCell,
+        );
+        await cell.pull();
+        await runtime.idle();
+        entry.afterPull = await reading((within) => {
+          try {
+            return within.at(result.withTx(within.read) as AnyCell, entry.path)
+              .get() !== undefined;
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        // A path that cannot be read has no value.
+      }
+    }
+
     const decided: Decided = {
       byValue: 0,
       byCondition: 0,
@@ -1171,7 +1319,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       unobserved: 0,
     };
     for (const by of how.values()) decided[by]++;
-    return { rows, writes, skipped, decided };
+    return { rows, writes, skipped, decided, missing };
   } finally {
     await runtime.dispose();
     await storageManager.close();

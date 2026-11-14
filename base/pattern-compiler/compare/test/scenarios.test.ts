@@ -10,7 +10,7 @@ import {
   runSmall,
 } from "../scenarios.ts";
 import { categoryOf } from "../template.ts";
-import type { Row } from "../harness.ts";
+import { type Row, runScenario } from "../harness.ts";
 
 // The comparison of stage 3
 // (`docs/specs/compiled-pattern-language/README.md`, "Staging") for one
@@ -271,5 +271,36 @@ describe("a computed whose template is not a derive (note 202)", () => {
       tagged: "C tighter, I equal, by name",
       "tagged/who": NAMED,
     });
+  });
+});
+
+describe("a pattern written as a tag", () => {
+  it("is read at the tag's position, where the run holds the callee's result", async () => {
+    // "The entries of the enclosing rendered tree at the tag's position
+    // are those of the callee's `[UI]`" (PL §1.1). The run holds the
+    // result of `Row` at the position, with its tree under `$UI`.
+    const read = (name: string) =>
+      Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
+    const modules = JSON.parse(await read("tagged.plan.json"));
+    const { plan } = modules[0].patterns.find((pattern: { name: string }) =>
+      pattern.name === "default"
+    );
+    const run = await runScenario({
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: await read("tagged.tsx") }],
+      },
+      plan,
+      argument: { secret: "s3cret" },
+    });
+
+    expect(run.missing).toEqual([]);
+    const row = run.rows.find((row) =>
+      row.path.join("/") === "$UI/children/0/children/0"
+    );
+    expect([...new Set(row?.runtime.confidentiality)]).toEqual(["alice"]);
+    // The expression is written in `Row`, so it mints the atom of `Row`
+    // and the output carries the atom of the plan's pattern beside it.
+    expect(row && verdict(row)).toBe("C equal, I tighter, by name");
   });
 });

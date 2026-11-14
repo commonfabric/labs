@@ -63,6 +63,11 @@ export type ResultRow = {
   category: Category;
   /** The category against the runtime's label without its static part. */
   withoutStatic: Category;
+  /**
+   * For an output: the category of the template's label before the atom
+   * of a kept output is added to it.
+   */
+  templateAlone?: Category;
   /** A selector or a pick of the template was not found from the run. */
   bound: boolean;
 };
@@ -78,6 +83,22 @@ export type ModuleResult = {
   notCompared?: Record<string, number>;
   decided?: Run["decided"];
   events?: number;
+  /** The kept outputs the run holds no value at. */
+  missing?: {
+    path: string;
+    root: string;
+    absentFrom: number;
+    above: string;
+    stored: boolean;
+    raw?: string;
+    rawAtAbsent?: string;
+    rawAbove?: string;
+    runtime: string;
+    template?: string;
+    afterPull: boolean;
+  }[];
+  /** What the run wrote to the console as an error or a warning. */
+  logged?: string[];
 };
 
 const repository = fromFileUrl(new URL("../../../", import.meta.url));
@@ -120,6 +141,9 @@ const resultRow = (
     overall: row.comparison.overall,
     category: categoryOf(row.comparison),
     withoutStatic: categoryOf(row.comparisonWithoutStatic),
+    ...("comparisonOfTemplateAlone" in row
+      ? { templateAlone: categoryOf(row.comparisonOfTemplateAlone) }
+      : {}),
     bound: evaluated.bound,
   };
 };
@@ -156,6 +180,18 @@ export const runModule = async (
       : []
   );
   let run: Run;
+  // What the runtime reports while the scenario runs: a write it refuses
+  // is logged and does not fail the run.
+  const logged = new Map<string, number>();
+  const { error: consoleError, warn: consoleWarn } = console;
+  const log = (...parts: unknown[]) => {
+    const line = parts.map((part) =>
+      part instanceof Error ? `${part.name}: ${part.message}` : `${part}`
+    ).join(" ").split("\n")[0].slice(0, 160);
+    logged.set(line, (logged.get(line) ?? 0) + 1);
+  };
+  console.error = log;
+  console.warn = log;
   try {
     run = await runScenario({
       program: {
@@ -171,6 +207,9 @@ export const runModule = async (
   } catch (error) {
     const message = `${(error as Error)?.message ?? error}`.split("\n")[0];
     return { ...base, skipped: `the run fails: ${message.slice(0, 100)}` };
+  } finally {
+    console.error = consoleError;
+    console.warn = consoleWarn;
   }
   const notCompared: Record<string, number> = {};
   for (const { reason } of run.skipped) {
@@ -194,6 +233,24 @@ export const runModule = async (
     notCompared,
     decided: run.decided,
     events: events.length,
+    missing: run.missing.map((entry) => ({
+      path: entry.path.join("/"),
+      root: entry.root,
+      absentFrom: entry.absentFrom,
+      above: entry.above,
+      stored: entry.stored,
+      raw: entry.raw,
+      rawAtAbsent: entry.rawAtAbsent,
+      rawAbove: entry.rawAbove,
+      runtime: showLabel(entry.runtime),
+      ...(entry.template === undefined
+        ? {}
+        : { template: showLabel(entry.template) }),
+      afterPull: entry.afterPull,
+    })),
+    logged: [...logged].sort((a, b) => b[1] - a[1]).slice(0, 12).map((
+      [line, times],
+    ) => `${times}x ${line}`),
   };
 };
 
@@ -308,6 +365,18 @@ const report = async (file: string) => {
           }`,
       );
     }
+    // What each row was before the atom of a kept output was added.
+    if (kind === "output") {
+      for (
+        const [was, group] of count(
+          of,
+          (row) =>
+            `${row.category}, and ${row.templateAlone} before the atom of a kept output is added`,
+        )
+      ) {
+        console.log(`    ${`${group.length}`.padStart(6)}  ${was}`);
+      }
+    }
     // A row counted under "atom names the pattern" is equal or tighter
     // on each axis otherwise.
     const named = of.filter((row) => row.category === "atom names the pattern");
@@ -346,7 +415,11 @@ const report = async (file: string) => {
     }`,
   );
   console.log("\nrows that are looser or incomparable, by what differs:");
-  const looser = rows.filter((row) => row.overall === "looser" && !row.bound);
+  const looser = rows.filter((row) =>
+    !row.bound &&
+    (row.overall === "looser" || row.withoutStatic === "looser" ||
+      row.withoutStatic === "incomparable")
+  );
   for (
     const [cause, group] of count(
       looser,
@@ -359,7 +432,40 @@ const report = async (file: string) => {
       `  ${`${group.length}`.padStart(5)}  ${cause}\n` +
         `         ${example.module} ${example.path}\n` +
         `         runtime  ${example.runtime}\n` +
+        `         runtime without the static part ${example.runtimeWithoutStatic}\n` +
         `         template ${example.template}`,
+    );
+  }
+  console.log("\noutputs the run holds no value at:");
+  const missing = ran.flatMap((result) =>
+    (result.missing ?? []).map((entry) => ({ ...entry, module: result.module }))
+  );
+  for (
+    const [cause, group] of count(
+      missing,
+      (entry) =>
+        `${entry.stored ? "something stored" : "nothing stored"}, ${
+          entry.afterPull
+            ? "a value once read on its own"
+            : "no value once read on its own"
+        }, absent from segment ${
+          entry.absentFrom === entry.path.split("/").length ? "last" : "above"
+        }, runtime label ${
+          entry.runtime === "C {} I {}" ? "empty" : "not empty"
+        }, template ${
+          entry.template === undefined
+            ? "not evaluated"
+            : entry.template.startsWith("C {}")
+            ? "without a clause"
+            : "with a clause"
+        }`,
+    )
+  ) {
+    const [example] = group;
+    console.log(
+      `  ${`${group.length}`.padStart(5)}  ${cause}\n` +
+        `         ${example.module} ${example.path} (\`${example.root}\`)\n` +
+        `         stored ${example.raw}`,
     );
   }
 };
