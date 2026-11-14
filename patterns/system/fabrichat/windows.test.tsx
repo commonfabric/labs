@@ -55,7 +55,9 @@ const shown = (
   windows: Readonly<Record<string, ChatMessageWindow>> | undefined,
   id: string,
 ): string => {
-  const window = windows?.[id];
+  const window = windows !== undefined && Object.hasOwn(windows, id)
+    ? windows[id]
+    : undefined;
   if (window === undefined) return "none";
   const bodies = window.messages.map((message) => String(message?.get()?.body));
   return [
@@ -229,6 +231,17 @@ export default pattern(() => {
           count: 1,
         },
       },
+      // A `windowId` an object inherits a member under is a window like any
+      // other: none is open under it, so it is one more.
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "r10",
+          windowId: "toString",
+          from: { before: "end" },
+          count: 1,
+        },
+      },
       {
         action: alice.messages.openWindow,
         event: {
@@ -241,6 +254,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           shown(alice.messages.windows.get(), "one-too-many") === "none" &&
+          shown(alice.messages.windows.get(), "toString") === "none" &&
           shown(alice.messages.windows.get(), "newest") === "A - newer"
         ),
       },

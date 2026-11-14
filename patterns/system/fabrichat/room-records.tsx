@@ -2290,7 +2290,7 @@ export const commitWindow = handler<RoomWindowEvent, WindowActState>(
     if (typeof windowId !== "string" || windowId === "") return;
     const current = (windows.get() ?? {}) as ChatMessageWindows;
     if (op === "close") {
-      if (!(windowId in current)) return;
+      if (!Object.hasOwn(current, windowId)) return;
       windows.set(
         Object.fromEntries(
           Object.entries(current).filter(([id]) => id !== windowId),
@@ -2301,7 +2301,7 @@ export const commitWindow = handler<RoomWindowEvent, WindowActState>(
     const requestId = event?.requestId;
     if (typeof requestId !== "string") return;
     if (
-      !(windowId in current) &&
+      !Object.hasOwn(current, windowId) &&
       Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
     ) {
       return;

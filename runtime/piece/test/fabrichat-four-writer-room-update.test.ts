@@ -507,6 +507,24 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(await third.key("body").pull()).toBe("Third");
     });
 
+    it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
+      // A close of a window that isn't open changes nothing, so it makes no
+      // write the stored policy could refuse.
+
+      const refusals = await refusalsDuring(async () => {
+        const tx = runtime.edit();
+        room.withTx(tx).key("messages").key("closeWindow").send({
+          requestId: "c1",
+          windowId: "valueOf",
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      });
+
+      expect(refusals).toEqual([]);
+    });
+
     it("refuses this tree's `openWindow` setting the window the earlier program wrote, over the messages' reactions' stored write policy", async () => {
       const refusals = await refusalsDuring(async () => {
         const tx = runtime.edit();
