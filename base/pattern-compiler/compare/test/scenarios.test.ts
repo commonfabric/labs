@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   compareDefaulted,
   compareIsEdited,
+  comparePassed,
   compareSmall,
   runHandler,
   runSmall,
@@ -224,5 +225,26 @@ describe("the branch a selector took, found from the run", () => {
         unobserved: 0,
       });
     }
+  });
+});
+
+describe("a computed whose template is not a derive (note 202)", () => {
+  it("has no TransformedBy where the runtime's lift mints one", async () => {
+    const rows = Object.fromEntries(
+      (await comparePassed()).map((row) => [
+        row.path.join("/"),
+        `C ${row.comparison.confidentiality}, I ${row.comparison.integrity}`,
+      ]),
+    );
+
+    expect(rows).toEqual({
+      // A slot passed on, and the membership of a collection.
+      same: "C equal, I looser",
+      count: "C equal, I looser",
+      // The container entry of a constructed value is `const`, and the
+      // lift's label is on the container too.
+      tagged: "C tighter, I looser",
+      "tagged/who": "C equal, I looser",
+    });
   });
 });

@@ -1432,3 +1432,167 @@ numbers have gaps.
     (`atomPropagationClass`), which is the class-aware meet of PL's
     notation. A `select` keeps every atom all its branches have, of any
     class, since it passes the selected branch on.
+
+## The comparison beyond the fixtures, and over the corpus
+
+197. **When the evaluator mints** (PL §3.2, question 66). PL §3.2 now
+    assumes that a `derive` and a `fold` mint `TransformedBy` where the
+    label has a confidentiality clause or a hereditary atom, and not
+    beside an empty label. The evaluator of `compare/template.ts` minted
+    on every `derive` (note 181), with an option for the other reading.
+    The option's default is now the assumed one, for `fold` as for
+    `derive`. `greeting` of the small fixture and `derived` of the
+    defaulted one are equal where they were tighter. `isEdited` over a
+    message that was not edited is now looser on integrity: its template
+    has no clause (note 184), so it mints nothing, and the runtime's
+    label has the clauses of the fields that are present and a
+    `TransformedBy` atom beside them.
+198. **The label an event's schema declares** (PL §3.12). The fixture
+    `compare/fixtures/handler.tsx` declares a clause on the field `text`
+    of its event. The runtime's label at the paths the handler wrote has
+    the clause of the input the handler read and not that of `text`,
+    with the event sent to the stream at the result path or to the
+    stream the manifest of internal cells names. An event is not stored,
+    so the harness takes as the label of an `event` slot the label the
+    plan's slot declares. The template then has the clause of `text`
+    and is looser on confidentiality. PL §3.12 says "Today. The handler's
+    transaction join over the event payload and the state it read lands
+    on every written path", which the run does not show for a label the
+    event's schema declares. No corpus pattern declares a label on an
+    event.
+199. **What the harness reads for a handler, and what the plan lacks for
+    it.** A binding names the result path that holds its stream
+    (`result`), and a handler's body the schema of the type its event
+    declares (`eventSchema`); no record of PL §1.1 has either. A state
+    cell is found in the run's manifest of internal cells by the name of
+    the plan's `StateCell`, which is the transformer's `.for(...)` name.
+    A slot of root `binding` resolves through the binding's state entry
+    to the slot its `place` names, or has the label of the entry's
+    template. The template of a write edge is evaluated with no
+    `identity` slot dereferenced: the body writes through a handle and
+    does not read what it holds. A write edge is compared at the paths
+    the event's run wrote: a target whose stored value changed, and for
+    a target that ends in `*` the elements the run added. A write the
+    run did not make has no row.
+200. **Selectors and picks from the run** (PL §3.2; closes note 185 in
+    part). The plan holds no value code. The harness finds the branch of
+    a `select` in three ways, in this order. Where the node is the whole
+    template of an output and the branches are slots, the branch is the
+    one whose value is the stored one, where exactly one is. Where one
+    branch is the condition itself, which is the form of `&&` and `||`
+    (PL §3.5), the stored value decides by whether it converts to true.
+    Where the condition is one slot, its value decides, by presence where
+    the slot observes `shape` (the form of `??`) and by conversion to
+    true otherwise. The child of a `pick` in a container is the value of
+    the key's slot where the key is one slot, or the child whose value
+    is the stored one; the element of a `find` is the first whose value
+    is the stored one. A selector inside a `derive` whose condition is
+    computed is not found, and its row is a bound and is counted apart.
+201. **A generated scenario gives labels through links** (stage 3). The
+    corpus declares a label on 9 slots, so a run of a corpus pattern
+    with its own schema's labels compares almost nothing. The generator
+    writes each top-level input to a cell of its own under the input's
+    schema with one more confidentiality atom, and the argument holds a
+    link to the cell. The pattern's argument schema then declares none
+    of these atoms, and the static part of PL §3.1 is empty for them.
+    With the small fixture run this way, `ifElse(flag, secret, note)`
+    has the label of the selected branch and no label of `flag`, with
+    the static part or without it: the template, which joins the
+    condition, is looser on confidentiality. Note 191 found the same
+    without the static part. Where the argument schema declares the
+    condition's label, the static part hides it.
+202. **A `computed` whose template is not a `derive`** (PL §3.5, §3.8,
+    §3.4; section 8, question 64). Every looser row of the corpus run
+    but three is of this kind, on integrity alone. The runtime runs a
+    `computed` as a lift, which mints `TransformedBy` on every path it
+    writes where its join has a label. The template mints for a `derive`
+    and a `fold` only. It has no atom where the body's value is a slot
+    passed on (`computed(() => secret)`, `computed(() => zoom.get())`),
+    the membership of a collection (`computed(() => items.get().length)`,
+    PL §3.8), a selection (`computed(() => pending || isProcessing)`,
+    `(bookmarks.get() ?? []).length`), or a constructed value
+    (`computed(() => ({ who: secret, n: 1 }))`, whose container entry is
+    `const` and whose entry at `who` is the slot). PL §3.1 names the
+    conditional as open and not counted among the four exceptions; the
+    other three forms are the same difference and PL does not name them.
+203. **A label that only a declaration gives, and the mint beside it.**
+    `patterns/examples/cfc-spec-gallery/main.tsx` renders the result of
+    a `materializer` with no input. The template is a `derive` over a
+    `derive` with no inputs, which has no label and so mints nothing.
+    The runtime's label has the caveat the materializer's result schema
+    declares, and a `TransformedBy` atom minted beside it. The template
+    is tighter on confidentiality, which PL §3.12 expects of a declared
+    entry ("added as it is today"), and looser on integrity. PL does not
+    say whether a template mints beside a label that a declaration adds
+    after the template is evaluated.
+204. **The container of a constructed value in the comparison** (PL §3.4;
+    extends note 177). An output entry that has entries below it is
+    compared with what a read of the container's shape consumes, as an
+    entry that names a collection is. A value read of the container
+    consumes the labels of everything below it, and the template of the
+    container entry is `const`.
+205. **`TransformedBy` atoms are counted by identity.** A label view lists
+    an atom once for each of its entries that has it. A value read of a
+    rendered node joined the same atom from each entry, and the
+    comparison counted each occurrence, so a template with one atom read
+    as looser than a runtime label with the same atom many times. The
+    count is now of distinct atoms. Where the entries below a path have
+    atoms of different identities the runtime's side still counts each,
+    though a read of the whole has only what every part has.
+206. **A literal argument of a pattern compiled in** (LS §10.2; PL §3.15;
+    closes note 189). `binding:write-to-computed` is reported where a
+    call of a pattern the plan compiles in writes a property of its
+    argument as a literal, the pattern's parameter binds that property
+    by name, and a handler bound in the pattern writes through it. The
+    three corpus sites are `Counter({ value: N })` at
+    `examples/cf-picker/cf-picker.tsx` lines 25 and 29 and
+    `examples/drag-drop-demo/drag-drop-demo.tsx` line 61. An argument the
+    call leaves out is not reported, and neither is a property bound to
+    a path the caller's own argument leaves out (`outgoingNotices:
+    input.outgoingNotices` of `system/fabrichat/manager.tsx`, called from
+    `system/home/home.tsx` with no such property), which the emitter
+    holds as a constant too. Not reported: a literal given as an
+    attribute of a tag, a parameter the pattern does not destructure, a
+    module-scope constant given by name, and a write through the
+    parameter by an `action` of the pattern. The corpus has 389 errors
+    (386 before) and 333 accepted modules (335), and 270 modules with a
+    plan with no unsupported construct (271).
+207. **The comparison over the corpus** (`compare/corpus.ts`). Of the 270
+    modules with a plan with no unsupported construct, one pattern each
+    (the default export, or the first exported by name), with a
+    generated scenario, in one process with no server:
+
+    | | |
+    | --- | --- |
+    | modules attempted | 270 |
+    | modules run | 213 |
+    | not run: needs `wish` | 33 |
+    | not run: requests an effect | 14 |
+    | not run: the run's commit is refused (a trusted-event policy 6, a trust-sensitive form 2, a `maxConfidentiality` the generated atom exceeds 2) | 10 |
+    | outputs compared | 1191: 1120 equal, 23 tighter, 48 looser, 0 incomparable |
+    | outputs whose label is a bound, counted apart | 118 |
+    | events sent, one per handler whose stream the result holds | 145 |
+    | write edges compared | 28: 28 equal |
+
+    The 48 looser rows are looser on integrity alone: 45 by note 202 (25
+    with a slot as the template, 17 with a `select`, 3 with a constructed
+    value) and 3 by note 203. None is one of the four exceptions of PL
+    §3.1, and none is looser on confidentiality. Not compared, by
+    reason: 196 outputs the run holds no value at; 183 write edges the
+    event's run did not make; 171 rows that read a state cell of a
+    per-element body, which the manifest does not name by element; 113
+    outputs at an element of a collection no output entry names; 89 at
+    an element slot outside its collection; 89 below a child no pick
+    chose; 23 over a collection whose source is not a stored slot; 20
+    with a slot of root `operation`; 12 outputs with no template; 10
+    with a `dynamic` node; 1 write target with no stored cell. Of the
+    selectors and picks the rows met, 12 were found from a stored value,
+    195 from the slot of the condition or the key, and 304 were not
+    found. Of the handler bindings of the patterns run, 145 are at the
+    top level with their stream at a result path, 121 are at the top
+    level and bound in the rendered tree, where the plan names no result
+    path for the stream, and 385 are in a per-element body. No slot of
+    root `cause` was met. The column "without the static part" (ruling
+    T2) has 56 looser rows: the 8 more are array results of a `computed`
+    whose only entries are of origin `structure`, which note 192 leaves
+    out with the declared ones.
