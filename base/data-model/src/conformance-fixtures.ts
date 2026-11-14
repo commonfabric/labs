@@ -128,8 +128,8 @@ export type SizeMeasure =
   | "bigintBytes";
 
 /**
- * What a reader must support to read a fixture entry, a reader that does not
- * skipping the entry: by each measure the guarantee it must state at least,
+ * What a reader must support to read a fixture entry (a reader that does not
+ * skips the entry): by each measure the guarantee it must state at least,
  * given only where that is past the measure's floor.
  */
 export type FixtureRequirements = {
