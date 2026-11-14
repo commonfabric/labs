@@ -122,6 +122,8 @@ export type Scenario = {
 
 /** One row of the comparison: an output path of one run. */
 export type Row = {
+  /** The index of the entry in the plan's `outputs`. */
+  output: number;
   path: string[];
   runtime: Label;
   /** The template's label as §3.2 gives it. */
@@ -872,7 +874,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
 
       const outputRows = (): Row[] => {
         const rows: Row[] = [];
-        for (const entry of plan.outputs) {
+        for (const [number, entry] of plan.outputs.entries()) {
           if (entry.kept === false || entry.interim !== undefined) continue;
           const name = entry.path.join("/");
           if (entry.template === undefined) {
@@ -931,6 +933,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               const reached = evaluate(template, true, { elements });
               const withoutStatic = byOrigin(cell, observes, false);
               rows.push({
+                output: number,
                 path,
                 runtime: runtimeLabel,
                 stored,
