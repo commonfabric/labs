@@ -532,10 +532,11 @@ And a unit that recorded nothing recorded nothing under any name, which
 fails the run whether or not anything was there to excuse.
 
 What the tree holds is what the unit's own test processes registered. A
-manifest holds every identity the default branch recorded in a file the tree
-still holds, so it names tests renamed since it was published, and no run of
-this tree can record one of those. Where a unit's processes registered no
-test by an identity's name and none inside it, that identity is absent, so
+manifest holds every identity the default branch was still recording in a
+file the tree held when the manifest was published, so it names tests
+renamed since, and no run of this tree can record one of those. Where a
+unit's processes registered no test by an identity's name and none inside
+it, that identity is absent, so
 long as everything they registered that encloses it is a group they
 registered a test inside. A registered test can record steps it names only
 as it runs, so a registration says nothing about what lies beneath a test,
@@ -1258,6 +1259,22 @@ published before the deletion still names it, and a consumer reconciles
 the manifest against the tree before packing, so the entry drops out
 there too.
 
+A test renamed or deleted in a unit the tree still holds is different,
+because the topology places it by that unit. What says it is gone is the
+default branch's records, which are also what say which tests there are.
+The default branch runs every unit whole, so a test it has not recorded in
+two test orders in which it recorded others of the same unit, both later
+than the last order it recorded the test in, is a test the unit no longer
+holds under that name, and so is one it has never recorded while recording
+others of the unit in two orders. An order is the one a push shuffles by,
+which the date of the commit under test names. Two orders rather than one,
+because every run in one order can stop at the same place before reaching
+the test. Such an identity is left out of the manifest. A name is held
+while anything inside it is recorded, since a group of tests is not always
+recorded for itself, and each configuration of a unit is read apart from
+the others. A record a branch makes under the old name does not bring the
+name back, and a push to the default branch that records it does.
+
 A deletion is never bridged. The alias file joins a test's history to the
 name it now has, and a deleted test has no such name; an alias to one
 would credit another test with its record. Nothing declares a removal
@@ -1265,8 +1282,10 @@ either. What says a test is gone is the tree not holding it, which is the
 same thing that says where every other test runs.
 
 A consumer that keeps a rolling aggregate drops an identity on two
-conditions together. No suite claims it, and no run of it has been
-recorded inside the longest window the aggregate keeps counters for.
+conditions together. The tree has lost it, because no suite claims it or
+because the default branch has stopped recording it in a unit it still
+runs. And no run of it has been recorded inside the longest window the
+aggregate keeps counters for.
 Either alone is not enough: an identity whose records never say which
 unit they came from is claimed by nobody and is running, and a topology
 that reads the tree wrongly stops claiming tests that are running. An

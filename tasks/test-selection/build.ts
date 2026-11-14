@@ -11,6 +11,7 @@
 
 import {
   type AliasResolver,
+  enclosingNames,
   isMainRun,
   parseReportGroups,
   type RunContext,
@@ -38,10 +39,13 @@ import {
   type IdentityState,
   isDay,
   isDaySamples,
+  latestOrdersOnMain,
+  MAIN_ORDERS_COUNTED,
   mergeSamples,
   moveHistory,
   NEW_REAL_TEST_FAILURE_RULE,
   type Observation,
+  orderDay,
   parseContext,
   readCostsForward,
   readNewRealTestFailuresForward,
@@ -418,6 +422,12 @@ export function parseAggregate(value: unknown): AggregateState | undefined {
   for (const identity of Object.values(states)) {
     readCostsForward(identity);
     readNewRealTestFailuresForward(identity);
+    // Only what reads as a day is kept, and the next record of the
+    // identity on `main` adds to it.
+    const held: unknown = identity.ordersOnMain;
+    const days = Array.isArray(held) ? held.filter(isDay) : [];
+    if (days.length > 0) identity.ordersOnMain = latestOrdersOnMain([], days);
+    else delete identity.ordersOnMain;
   }
   // This says which days are not read again, so one that is not a day is
   // a state this cannot read rather than one to guess at: read as later
@@ -571,6 +581,9 @@ export function readReport(
       continue;
     }
     const day = dayOf(group.context.startedAt);
+    const committedOn = group.context.ci?.event === "push"
+      ? orderDay(group.context.shuffleSeed)
+      : undefined;
     // What a lane spent on its own setup and on each of its batches is
     // not scored, and not discarded either: it is what the packer's
     // charges for both are fitted from. One group is one lane's
@@ -629,6 +642,7 @@ export function readReport(
         ...(group.context.shuffleSeed === undefined
           ? {}
           : { seed: group.context.shuffleSeed }),
+        ...(committedOn === undefined ? {} : { committedOn }),
         source: where.source,
         place: where.place,
         // A cost predicts what a lane will spend running this test again,
@@ -793,25 +807,96 @@ export function locateSurfaces(
 }
 
 /**
+ * The placed identities `main` has stopped recording in a unit it still
+ * runs, which are tests the unit no longer holds under those names.
+ *
+ * `main` runs every unit the tree holds, each one whole, and records every
+ * test a run reaches, skipped or not. A push to `main` shuffles its tests in
+ * the order its seed names, which is the date of the commit it tests, so a
+ * later order is a later tree. Only pushes count, since the run of the next
+ * day's order runs an earlier tree in a later order. A test `main` has not
+ * recorded in `MAIN_ORDERS_COUNTED` orders in which it recorded others of
+ * its unit, all later than the last order it recorded the test in, has been
+ * renamed or deleted, with an alias line or without one; so has a test it
+ * has never recorded while recording others of its unit in that many orders.
+ * A branch that has not yet taken the change goes on recording the old name,
+ * and those records do not bring the name back; a push to `main` that
+ * records it does.
+ *
+ * More than one order, because a run that stops part way through a unit
+ * records only the tests it reached, and every run in one order can stop
+ * at the same place. A test that is still there is recorded by the next
+ * order that does not stop there. A stop that does not depend on the
+ * order, such as a hook that fails in every run, leaves the tests after it
+ * here once it has lasted two orders, until a push records them again.
+ *
+ * A name is held while anything inside it is, since what is inside a
+ * name records whether or not the name does: a `describe` is recorded
+ * for itself only where it fails on its own account or the runner is
+ * told to expect it, and a test's steps are recorded beneath it.
+ *
+ * A unit is told apart by configuration as well as by suite and path,
+ * since each configuration of a unit is recorded by runs of its own.
+ */
+export function vanished(
+  states: ReadonlyMap<string, IdentityState>,
+  surfaces: ReadonlyMap<string, Surface>,
+): Set<string> {
+  // The last order `main` recorded each name or anything inside it in, and
+  // every order it recorded anything in, by unit, each as the day its seed
+  // names. No order at all is the empty string, which sorts before every
+  // day.
+  type Runs = { days: Set<string>; names: Map<string, string> };
+  const units = new Map<string, Runs>();
+  const placedIn = new Map<string, { runs: Runs; name: string }>();
+  for (const [key, state] of states) {
+    const surface = surfaces.get(key);
+    const test = testIdentityOfKey(key);
+    if (surface === undefined || test === undefined) continue;
+    const unit = `${surface.suite}\t${test.v ?? ""}\t${surface.unit}`;
+    let runs = units.get(unit);
+    if (runs === undefined) {
+      runs = { days: new Set(), names: new Map() };
+      units.set(unit, runs);
+    }
+    placedIn.set(key, { runs, name: test.n });
+    const days = state.ordersOnMain ?? [];
+    for (const recorded of days) runs.days.add(recorded);
+    const day = days.at(-1) ?? "";
+    for (const name of [test.n, ...enclosingNames(test.n)]) {
+      if (day >= (runs.names.get(name) ?? "")) runs.names.set(name, day);
+    }
+  }
+  const gone = new Set<string>();
+  for (const [key, { runs, name }] of placedIn) {
+    const held = runs.names.get(name) ?? "";
+    let later = 0;
+    for (const day of runs.days) if (day > held) later++;
+    if (later >= MAIN_ORDERS_COUNTED) gone.add(key);
+  }
+  return gone;
+}
+
+/**
  * The identities the aggregate carries for tests the tree has lost.
  *
- * A test deleted from the repository leaves its records in the store,
- * and the store is what the fold reads, so the aggregate carries its
- * state for good. Nothing can select it, because the topology has no
- * unit for it and the manifest holds only what the topology placed. What
- * it costs is a state read, scored and written back on every publisher
- * run, and a place in the count of identities the topology has no unit
- * for, which is the count that says a surface is recording without
- * saying where it runs.
+ * A test deleted from the repository leaves its records in the store, and
+ * the store is what the fold reads, so the aggregate carries its state for
+ * good. Nothing can select it, because the manifest holds only what the
+ * topology placed, less what `vanished` finds. What it costs is a state
+ * read, scored and written back on every publisher run, and a place in the
+ * count of identities the topology has no unit for, which is the count that
+ * says a surface is recording without saying where it runs.
  *
  * Two things have to hold before one is dropped, and neither is enough
- * alone. No suite claims the identity at all: an identity two suites
- * both claim is a topology defect over a test the tree holds twice, and
- * is not here. And no run of it has
- * been recorded inside the longest window a state keeps counters for,
+ * alone. The tree has lost it: no suite claims it at all, or it is in
+ * `stopped`, the identities `vanished` finds `main` has stopped recording in
+ * a unit it still runs. An identity two suites both claim is a topology
+ * defect over a test the tree holds twice, and is not here. And no run of it
+ * has been recorded inside the longest window a state keeps counters for,
  * which is what `lastRun` having no answer says: the default branch runs
- * every test the tree holds, so a test that is still there and still
- * runs records inside that window whether or not a change selects it.
+ * every test the tree holds, so a test that is still there and still runs
+ * records inside that window whether or not a change selects it.
  *
  * The second is what holds this against a topology that reads the tree
  * wrongly. A suite that enumerates nothing leaves every identity it
@@ -832,6 +917,7 @@ export function departed(
   suites: readonly Suite[],
   unplaced: Unplaced,
   folded: Pick<FoldResult, "states" | "surfaces">,
+  stopped: ReadonlySet<string>,
 ): string[] {
   // A skip registry belongs to one configuration, and the file it names
   // is a unit of every configuration of that suite. Keyed by the variant
@@ -843,12 +929,14 @@ export function departed(
       declared.add(`${suite.variant ?? ""}\t${unit}`);
     }
   }
-  return unplaced.unclaimed.filter((key) => {
-    const state = folded.states.get(key);
-    if (state === undefined || lastRun(state) !== undefined) return false;
+  const lost = unplaced.unclaimed.filter((key) => {
     const unit = folded.surfaces.get(key)?.unit;
     const test = testIdentityOfKey(key);
     return !declared.has(`${test?.v ?? ""}\t${unit}`);
+  });
+  return [...lost, ...stopped].filter((key) => {
+    const state = folded.states.get(key);
+    return state !== undefined && lastRun(state) === undefined;
   });
 }
 
