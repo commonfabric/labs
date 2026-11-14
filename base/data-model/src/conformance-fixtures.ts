@@ -20,6 +20,7 @@ import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
+import type { CODEC, JSON_CODEC } from "@/codec-interface/interface.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
 import { JSON_FORMAT } from "@/codec-json/interface.ts";
 import { deepFreeze } from "@/deep-freeze.ts";
@@ -30,7 +31,6 @@ import {
   FabricMap,
   FabricSet,
 } from "@/fabric-instances";
-import { FabricRegExp } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import {
@@ -129,13 +129,27 @@ export type SizeMeasure =
 
 /**
  * What a reader must support to read a fixture entry, a reader that does not
- * skipping the entry: the flavors of regular expression whose patterns it must
- * construct, and by each measure the guarantee it must state at least, given
- * only where that is past the measure's floor.
+ * skipping the entry: by each measure the guarantee it must state at least,
+ * given only where that is past the measure's floor.
  */
-export type FixtureRequirements =
-  & { readonly flavors?: readonly string[] }
-  & { readonly [Measure in SizeMeasure]?: number };
+export type FixtureRequirements = {
+  readonly [Measure in SizeMeasure]?: number;
+};
+
+/**
+ * The names in `ClassesByName` of the classes that bind a JSON codec, which
+ * are the classes whose values have text. A class binds one under `[CODEC]`
+ * or under the JSON format's own symbol, as `codecClassesFor()` reads it.
+ *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, key the class tables on
+ * `keyof ClassesByName`, and remove this.
+ */
+export type JsonCodecClassName<ClassesByName> = {
+  readonly [Name in keyof ClassesByName]: ClassesByName[Name] extends
+    | { readonly [CODEC]: unknown }
+    | { readonly [JSON_CODEC]: unknown } ? Name
+    : never;
+}[keyof ClassesByName];
 
 /** Makers of examples of each class in one of the class tables. */
 export type ExampleMakers<ClassesByName> = {
@@ -161,14 +175,6 @@ export type ClassCase = {
 // Cases
 //
 
-/**
- * Why the classes that bind no codec have no cases.
- *
- * TODO(danfuzz): Remove, with the `excluded` entries naming it, once
- * `FabricRegExp` is deleted.
- */
-export const NO_CODEC_EXCLUSION = "It binds no codec.";
-
 /** Why the classes whose codecs are stubs have no cases. */
 export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
   "`FabricInstance` support (1-fabric-values.md sections 1.4.3 and 1.4.4).";
@@ -178,7 +184,7 @@ export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
  * place among that class's makers.
  */
 export function classCasesOf<Name extends string>(
-  makers: { readonly [N in Name]: readonly (() => FabricValue)[] },
+  makers: { readonly [N in NoInfer<Name>]: readonly (() => FabricValue)[] },
   notes: { readonly [N in Name]: ClassCaseNotes },
 ): ClassCase[] {
   const cases: ClassCase[] = [];
@@ -317,21 +323,15 @@ const PRIMITIVE_TAGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Returns what a reader must support to read the entry for `stated`: `flavors`,
- * which a case marks by hand, and by each measure the size of the value its
- * text writes, where that is past the measure's floor. Returns `undefined`
- * where a reader need support nothing beyond the floors.
+ * Returns what a reader must support to read the entry for `stated`: by each
+ * measure the size of the value its text writes, where that is past the
+ * measure's floor. Returns `undefined` where a reader need support nothing
+ * beyond the floors.
  */
 export function requirementsOf(
   stated: TextWithMods,
-  flavors?: readonly string[],
 ): FixtureRequirements | undefined {
-  const requires:
-    & { flavors?: readonly string[] }
-    & { -readonly [Measure in SizeMeasure]?: number } = {};
-  if (flavors !== undefined) {
-    requires.flavors = flavors;
-  }
+  const requires: { -readonly [Measure in SizeMeasure]?: number } = {};
   const sizes = sizesOf(stated);
   for (const measure of SIZE_MEASURES) {
     if (sizes[measure] > SIZE_FLOORS[measure]) {
@@ -342,10 +342,8 @@ export function requirementsOf(
 }
 
 /**
- * Indicates whether this package meets `requires`: that it constructs each
- * flavor named, which it does for exactly the flavors a `FabricRegExp` can
- * give a JavaScript `RegExp` of, and that its guarantee by each measure named
- * is at least the size named.
+ * Indicates whether this package meets `requires`: that its guarantee by each
+ * measure named is at least the size named.
  */
 export function meetsRequirements(
   requires: FixtureRequirements | undefined,
@@ -353,18 +351,9 @@ export function meetsRequirements(
   if (requires === undefined) {
     return true;
   }
-  const constructs = (flavor: string) => {
-    try {
-      new FabricRegExp(flavor, "", "").value;
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  return (requires.flavors ?? []).every(constructs) &&
-    SIZE_MEASURES.every((measure) =>
-      (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
-    );
+  return SIZE_MEASURES.every((measure) =>
+    (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
+  );
 }
 
 /**
