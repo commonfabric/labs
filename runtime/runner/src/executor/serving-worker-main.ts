@@ -5,7 +5,10 @@
  * `ExecutorHost` over a `ServingPlane`, and answers once the host serves. The
  * runner's own entry (`serving-worker.ts`) calls this bare; an entry in a
  * higher layer calls it with the lifecycle verbs it can build and the fetch
- * and module cache its deployment uses.
+ * and module cache its deployment uses. Where the init says so, the serving
+ * runtimes compile in the compile workers the process shares, and read and
+ * put compiled modules in the cache directory every process on the host
+ * shares, in place of what the entry gives.
  */
 
 import { Identity, keyPairFromRealmValue } from "@commonfabric/identity";
@@ -15,6 +18,7 @@ import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease"
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import { collectedMemory } from "../collected-memory.ts";
+import { openSharedCompileCache } from "../compilation-cache/shared-compile-cache.deno.ts";
 import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
@@ -48,11 +52,15 @@ export type ServingWorkerMainOptions = {
   /** The serving runtimes' outbound fetch; absent, the platform fetch. */
   fetch?: RuntimeFetch;
 
-  /** A compiled-module cache every serving runtime of this worker shares. */
+  /**
+   * A compiled-module cache every serving runtime of this worker shares,
+   * where the init names no shared cache directory.
+   */
   moduleByteCache?: ModuleByteCache;
 
   /**
-   * The compile worker every serving runtime of this worker compiles in. It
+   * The compile worker every serving runtime of this worker compiles in,
+   * where the init does not have them compile on the server's thread. It
    * closes just before the host does, so a compile an activation still awaits
    * fails at once.
    */
@@ -88,6 +96,17 @@ export function serveFromPort(
       keyPairFromRealmValue(init.serviceKeyPair, "the serving worker's key"),
     );
     const plane = new ServingPlane(endpoint);
+    const shared = init.compileCacheDir === undefined
+      ? undefined
+      : openSharedCompileCache(init.compileCacheDir);
+    const moduleByteCache = shared?.moduleByteCache ?? options.moduleByteCache;
+    // The worker's own compile worker, where the init leaves it one.
+    const ownCompiler = init.compileOnHost === true
+      ? undefined
+      : options.moduleCompiler;
+    const moduleCompiler = init.compileOnHost === true
+      ? plane.compiler
+      : ownCompiler;
     const host = new ExecutorHost({
       server: plane.server,
       serviceIdentity: identity.did(),
@@ -100,12 +119,11 @@ export function serveFromPort(
         ...(init.experimental === undefined
           ? {}
           : { experimental: init.experimental }),
-        ...(options.moduleByteCache === undefined
+        ...(moduleByteCache === undefined ? {} : { moduleByteCache }),
+        ...(shared === undefined
           ? {}
-          : { moduleByteCache: options.moduleByteCache }),
-        ...(options.moduleCompiler === undefined
-          ? {}
-          : { moduleCompiler: options.moduleCompiler }),
+          : { compileClaims: shared.compileClaims }),
+        ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
       }),
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
@@ -139,8 +157,10 @@ export function serveFromPort(
       stats: () => host.stats(),
       counters: () => host.counters(),
       // This realm's loggers, the serving loop's own counts and timings, and
-      // the compile worker's timings, which hold the compiler's phases.
-      diagnostics: () => servingLoopDiagnostics(options.moduleCompiler),
+      // the timings of a compile worker of its own, which hold the compiler's
+      // phases. The compile workers the process shares report on the
+      // server's thread.
+      diagnostics: () => servingLoopDiagnostics(ownCompiler),
       collectedMemory,
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
@@ -158,7 +178,7 @@ export function serveFromPort(
       close: async () => {
         // The compile worker closes first, so a compile an activation still
         // awaits fails at once rather than holding the host's close.
-        options.moduleCompiler?.close();
+        ownCompiler?.close();
         try {
           await host.close();
         } finally {

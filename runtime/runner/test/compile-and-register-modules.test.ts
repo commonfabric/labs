@@ -13,7 +13,7 @@ import type { Pattern } from "../src/builder/types.ts";
 import { loadCompiledClosure } from "../src/compilation-cache/cell-cache.ts";
 import type { CompiledModuleArtifact } from "../src/harness/types.ts";
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
-import { CompileTurns } from "../src/harness/compile-interleave.ts";
+import type { CompileClaims } from "../src/harness/compile-interleave.ts";
 import type { ModuleByteCache } from "../src/runtime.ts";
 
 /**
@@ -402,7 +402,14 @@ describe("PatternManager.compileAndRegisterModules", () => {
         }
       },
     };
-    const compileTurns = new CompileTurns();
+    // Holds the first turn taken until the test releases it.
+    const released = Promise.withResolvers<void>();
+    const compileTurns: CompileClaims = {
+      async take() {
+        await released.promise;
+        return () => {};
+      },
+    };
     const storages = [
       StorageManager.emulate({ as: signer }),
       StorageManager.emulate({ as: signer }),
@@ -419,14 +426,13 @@ describe("PatternManager.compileAndRegisterModules", () => {
       moduleByteCache: byteCache,
     });
     try {
-      const endHeldTurn = await compileTurns.take();
       const compiled = waiting.patternManager.compileAndRegisterModules(
         program,
       );
       await firstRead.promise;
       await putting.patternManager.compileAndRegisterModules(program);
       expect(reads).toEqual([false, false]);
-      endHeldTurn();
+      released.resolve();
 
       const result = await compiled;
       expect(reads).toEqual([false, false, true]);

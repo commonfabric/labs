@@ -19,6 +19,16 @@ import type {
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
+import {
+  isPlaceCompileFailure,
+  markPlaceCompileFailure,
+} from "../harness/compile-failure.ts";
+import {
+  decodeModuleCompileRequest,
+  encodeCompileFailure,
+  encodeModules,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import type { HostOccupancy } from "./host.ts";
@@ -84,6 +94,13 @@ export type ServingPortBridgeOptions = {
 
   /** Called with the worker's heap size, in bytes, at each heartbeat. */
   onHeartbeat?: (heapUsed: number) => void;
+
+  /**
+   * Where the worker's `compiler.compile` requests run: the compile workers
+   * the process shares. Absent, each such request fails as a failure of the
+   * place it was to run.
+   */
+  moduleCompiler?: ModuleCompiler;
 };
 
 /** The observer events a bridge carries to its worker. */
@@ -423,6 +440,26 @@ export class ServingPortBridge {
         throw new Error(`loopback connection ${transport} is not open`);
       }
       return connection.receive(payload);
+    });
+    endpoint.onRequest("compiler.compile", async ({ request }) => {
+      const compiler = this.#options.moduleCompiler;
+      try {
+        if (compiler === undefined) {
+          throw markPlaceCompileFailure(
+            new Error("this process runs no compiles for its serving workers"),
+          );
+        }
+        const modules = await compiler.compile(
+          decodeModuleCompileRequest(request),
+        );
+        return { kind: "compiled", modules: encodeModules(modules) };
+      } catch (error) {
+        return {
+          kind: "failed",
+          failure: encodeCompileFailure(error),
+          place: isPlaceCompileFailure(error),
+        };
+      }
     });
     endpoint.onNotice("loopback.close", ({ transport }) => {
       const connection = this.#connections.get(transport);

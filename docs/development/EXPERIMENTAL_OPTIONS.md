@@ -2285,15 +2285,21 @@ the per-epic implementation notes).
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
   (default none). The serving memory server tests build reads the first.
+  Where the workers' runtimes compile takes two more:
+  `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
+  holds for every serving runtime (default 1), and
+  `SERVER_EXECUTION_COMPILE_CACHE_DIR`, the compiled-module cache directory
+  every toolshed on the host shares (default `compiled-modules` under
+  `CACHE_DIR`).
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-11-11.** Implemented, on by default in the toolshed over a
-  file store, with a worker per served space. Each worker's entry builds a
-  compiled-module byte cache for the spaces that worker serves, as the
-  main-thread loop builds one for its process. Run with the variable `true`,
+- **Status on 2026-11-14.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space. The workers compile in the
+  process's compile workers and share the host's compiled-module cache
+  directory, as the main-thread loop does. Run with the variable `true`,
   the pattern integration suites the `MultiRuntimeHarness` drives pass with a
   worker per space;
   the private-inbox and FabriChat suites need a serving runtime to run no child

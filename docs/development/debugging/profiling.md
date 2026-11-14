@@ -309,8 +309,10 @@ and timing statistics beside the realm's own, under logger names prefixed
 `compile-worker:`; `compile-worker:js-compiler`'s `phase/*` keys are the
 compiler's phase timings. They are a snapshot taken after the worker's latest
 compile, so reading them never waits on the worker. With serving in workers,
-each serving worker starts a compile worker of its own, and the route takes
-their snapshots together as it does the serving workers' own loggers. Their
+the compile workers are the process's (`SERVER_EXECUTION_COMPILE_WORKERS`), on
+the memory server's thread, and the route adds their snapshots to the serving
+workers' own loggers; the second and later compile workers' names are prefixed
+`compile-worker[1]:` and on. Their
 `performance.now()`
 timestamps, `lastTimestamp` and `slowest[].at`, are moved onto the realm's
 clock; `slowest[].epochMs` stays in epoch milliseconds. A realm `js-compiler`

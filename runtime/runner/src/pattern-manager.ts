@@ -591,6 +591,23 @@ function programCompilationKey(
   );
 }
 
+/**
+ * Helper for `#byteCacheBodiesOrTurn()`, which names the turn at a cold
+ * compile of `identities` under `runtimeVersion`: the same for every compile
+ * of the same modules, in whatever order they are listed, and fixed in length.
+ */
+function compileTurnKey(
+  runtimeVersion: string,
+  identities: readonly string[],
+): string {
+  return toURI(
+    createRef(
+      { runtimeVersion, identities: [...identities].sort() },
+      "compile turn",
+    ),
+  );
+}
+
 export class PatternManager {
   #runtime: Runtime;
 
@@ -2584,12 +2601,12 @@ export class PatternManager {
   }
 
   /**
-   * Helper for the compiles that consult the process byte cache, which returns
+   * Helper for the compiles that consult the shared byte cache, which returns
    * what it holds for `identities`. On a miss, and where this runtime shares
-   * turns at a cold compile, it also holds this runtime's turn, and reads again
-   * once the turn comes, since the compile that held it may have put those
-   * modules. `endTurn` ends a turn it holds; the caller calls it once it has
-   * compiled and put the modules, or failed to.
+   * turns at a cold compile, it also holds this runtime's turn for those
+   * modules, and reads again once the turn comes, since the compile that held
+   * it may have put them. `endTurn` ends a turn it holds; the caller calls it
+   * once it has compiled and put the modules, or failed to.
    */
   async #byteCacheBodiesOrTurn(
     runtimeVersion: string,
@@ -2604,7 +2621,9 @@ export class PatternManager {
     if (held !== undefined || compileTurns === undefined) {
       return { bodies: held };
     }
-    const endTurn = await compileTurns.take();
+    const endTurn = await compileTurns.take(
+      compileTurnKey(runtimeVersion, identities),
+    );
     const bodies = byteCache.getCompleteSet(runtimeVersion, identities);
     if (bodies === undefined) return { bodies, endTurn };
     endTurn();
@@ -3730,7 +3749,9 @@ export class PatternManager {
    * closure `input` describes, calls `onCompiled` once the compile step has
    * finished, and evaluates the compiled modules. The closure is the same
    * bytes in every space that verifies it; `input.space` only decides where
-   * its fabric imports are resolved.
+   * its fabric imports are resolved. Where this runtime shares a byte cache,
+   * the compile takes its modules from there when it holds them all, takes
+   * its turn for them otherwise, and puts what it compiled.
    */
   async #compileAndEvaluateClosure(
     input: ColdCompilationInput,
@@ -3738,15 +3759,40 @@ export class PatternManager {
   ): Promise<ColdCompilationResult> {
     const harness = this.#runtime.harness;
     const { entryIdentity, sourceFiles, dataFiles, patternCoverage } = input;
-    const compiled = await harness.compileResolvedToRecordGraph(
-      sourceFiles,
-      input.entryFilename,
-      {
-        fabricImports: { space: input.space },
-        ...(patternCoverage ? { patternCoverage } : {}),
-        sourcePackages: input.sourcePackages,
-      },
-    );
+    const byteCache = this.#runtime.moduleByteCache;
+    const runtimeVersion = byteCache === undefined
+      ? undefined
+      : await this.compileCacheRuntimeVersion({
+        patternCoverage: patternCoverage !== undefined,
+      });
+    let endCompileTurn: (() => void) | undefined;
+    let compiled;
+    try {
+      compiled = await harness.compileResolvedToRecordGraph(
+        sourceFiles,
+        input.entryFilename,
+        {
+          fabricImports: { space: input.space },
+          ...(patternCoverage ? { patternCoverage } : {}),
+          sourcePackages: input.sourcePackages,
+          ...(runtimeVersion === undefined ? {} : {
+            precompiledModulesFor: async ({ identities }) => {
+              const { bodies, endTurn } = await this.#byteCacheBodiesOrTurn(
+                runtimeVersion,
+                identities,
+              );
+              endCompileTurn = endTurn;
+              return bodies;
+            },
+          }),
+        },
+      );
+      if (byteCache !== undefined && runtimeVersion !== undefined) {
+        byteCache.putAll(runtimeVersion, compiled.modules);
+      }
+    } finally {
+      endCompileTurn?.();
+    }
     if (compiled.entryIdentity !== entryIdentity) {
       throw deterministicCompileError(
         `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,

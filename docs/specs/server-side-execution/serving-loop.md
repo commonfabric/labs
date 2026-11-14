@@ -89,6 +89,12 @@ execution observer and decides which worker serves which space:
   (default none; one in the toolshed, `SERVER_EXECUTION_SPARE_WORKERS`), so
   that a placement finds a worker whose modules have loaded. Spares do not
   count toward the cap.
+- The workers' runtimes compile in compile workers the process holds, not
+  each worker its own: `SERVER_EXECUTION_COMPILE_WORKERS` of them in the
+  toolshed (default 1), each started at its first compile. They read and put
+  compiled modules in the directory every toolshed on the host shares
+  (`SERVER_EXECUTION_COMPILE_CACHE_DIR`, default `compiled-modules` under
+  `CACHE_DIR`).
 - A host reports what it holds (`ExecutorHost.occupancy`): `busy` while it
   serves, starts, ends or re-evaluates a tenure or holds a notice for a
   tenure to come, `parked` while it holds nothing but runtimes kept from
@@ -580,16 +586,21 @@ the lease:
   a worker has no timer to post from and no lease to release.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
   the heartbeat is a timer on that thread. So a serving runtime runs the
-  type-check, transform and emit step of a compile in the compile worker its
-  serving worker starts (`ModuleCompileWorker`), and yields between the steps it
+  type-check, transform and emit step of a compile in the compile workers its
+  process holds on the memory server's thread (`ModuleCompilerPool`, reached
+  over the serving port), and yields between the steps it
   keeps: the security check of each emitted module and the evaluation of each
   module of a graph (`EngineOptions.interleaveCompile`), as its settle loop
   yields between actions. The longest stretch a pattern load holds the thread is
   then one module's check, one module's evaluation, or one write of the compile
   cache, and a thread that does that work is not silent for the length of a
-  whole program. The runtimes of one worker take turns at a cold compile
-  (`CompileTurns`), so one program compiles once per worker however many of its
-  spaces load it at the same time. A compile worker that dies fails the compiles
+  whole program. Every runtime on the host takes a turn at a cold compile of a
+  set of modules, keyed by that set, on the shared compiled-module cache's lock
+  (`openSharedCompileCache()`), so one program compiles once on the host however
+  many workers and processes load it at the same time, and the others read what
+  it put. A turn whose holder ends, however it ends, passes to the next. A
+  compile that fails puts nothing, and the next turn compiles again. A compile
+  worker that dies fails the compiles
   it held as failures of where they ran, never as deterministic compile
   failures, and the next compile starts a fresh one.
 - Nothing waits for a killed worker's teardown. `terminate()` takes effect when

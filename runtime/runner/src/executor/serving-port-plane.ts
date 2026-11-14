@@ -28,6 +28,12 @@ import {
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
+import { markPlaceCompileFailure } from "../harness/compile-failure.ts";
+import {
+  decodeCompileFailure,
+  decodeModules,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { DemandShareCache } from "./demand-shares.ts";
 import {
@@ -665,6 +671,31 @@ export class ServingPlane {
   /** The loopback plane, for the serving runtime factory. */
   get loopback(): TransportPlane {
     return this.#loopback;
+  }
+
+  /**
+   * The compile workers the server's thread holds for the whole process,
+   * for the serving runtime factory (`ServingWorkerInit.compileOnHost`). A
+   * failure of the place a compile ran stays marked as one on this side.
+   */
+  get compiler(): ModuleCompiler {
+    const endpoint = this.#endpoint;
+    return {
+      async compile(request) {
+        let answer;
+        try {
+          answer = await endpoint.request("compiler.compile", { request });
+        } catch (error) {
+          // The port, not the compile, failed.
+          throw markPlaceCompileFailure(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+        if (answer.kind === "compiled") return decodeModules(answer.modules);
+        const error = decodeCompileFailure(answer.failure, request);
+        throw answer.place ? markPlaceCompileFailure(error) : error;
+      },
+    };
   }
 
   /**
