@@ -23,6 +23,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
 import {
   ownerReleaseByIntentRequest,
@@ -578,6 +579,9 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
   getProgramFromIndex?: typeof getProgramFromIndex;
+
+  /** The transport index reads go over, in place of the global `fetch`. */
+  patternIndexFetch?: PatternIndexFetch;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
   followPieceOnServer?: typeof followPieceOnServer;
@@ -931,6 +935,10 @@ async function getPinnedProgramFromFile(
  * path's failures: creation compiles the program again, from the cache this
  * compile filled, and a served creation compiles it on the server.
  *
+ * Unlike a program read from local files, this one's fabric imports are not
+ * pinned: it deploys exactly as the index serves it, as `run_pattern` deploys
+ * it.
+ *
  * @throws IndexedPatternError when the index, a composed import, or the
  * compile fails.
  */
@@ -947,7 +955,13 @@ async function getProgramFromIndex(
     patternId: entry.patternId,
     getClient: () =>
       Promise.resolve(
-        new PatternIndexClient({ baseUrl: entry.patternIndexUrl, signer }),
+        new PatternIndexClient({
+          baseUrl: entry.patternIndexUrl,
+          signer,
+          ...(deps.patternIndexFetch === undefined
+            ? {}
+            : { fetchFn: deps.patternIndexFetch }),
+        }),
       ),
   });
   return program;

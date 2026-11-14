@@ -5152,9 +5152,12 @@ export async function newPieceFromCommand(
   );
   render(pieceId);
   const browserPieceRef = options.slug ?? pieceId;
+  // A piece from the index has no local source to update from.
+  const updateCode = main === undefined
+    ? ""
+    : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
-  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}
-  → Update code:     cf piece setsrc --cell ${pieceId} ${main ?? "<main>"} ...
+  → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}
   → Test a callable: cf piece call --cell ${pieceId} <callableName> ...
   → Inspect state:   cf piece inspect --cell ${pieceId} ...`));
 }

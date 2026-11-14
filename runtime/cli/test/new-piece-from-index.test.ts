@@ -1,6 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
+import { Identity } from "@commonfabric/identity";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
 import { newPieceFromCommand, piece } from "../commands/piece.ts";
 import { newPiece } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
@@ -168,5 +172,113 @@ describe("piece new --from-index", () => {
         },
       );
     }
+
+    describe("against the index", () => {
+      // Only the HTTP is faked here: the identity, the signed client, and the
+      // shared deploy path all run as they do for an operator.
+
+      const SOURCE = [
+        "import { computed, pattern } from 'commonfabric';",
+        "interface Input { n: number; }",
+        "export default pattern<Input, { doubled: number }>(({ n }) => ({",
+        "  doubled: computed(() => n * 2),",
+        "}));",
+        "",
+      ].join("\n");
+
+      let signer: Identity;
+      let storageManager: ReturnType<typeof StorageManager.emulate>;
+      let runtime: Runtime;
+
+      beforeEach(async () => {
+        signer = await Identity.generate();
+        storageManager = StorageManager.emulate({ as: signer });
+        runtime = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager,
+        });
+      });
+
+      afterEach(async () => {
+        await runtime?.dispose();
+        await storageManager?.close();
+      });
+
+      /** Creates `pat-1` from an index answering `getPattern` with `answer`. */
+      const createFrom = async (answer: Response) => {
+        const requests: { url: string; as: string | null }[] = [];
+        let created: unknown;
+        const error = await newPiece(
+          CONFIG,
+          { patternId: "pat-1", patternIndexUrl: INDEX_URL },
+          { start: false },
+          {
+            loadPieces: () =>
+              Promise.resolve({
+                runtime,
+                getSpace: () => signer.did(),
+                ensureDefaultPattern: () => Promise.resolve(),
+                create: (program: unknown) => {
+                  created = program;
+                  return Promise.resolve({
+                    id: "fid1:created",
+                    getCell: () => ({}),
+                  });
+                },
+                add: () => Promise.resolve(),
+              } as never),
+            loadIdentity: () => Promise.resolve(signer),
+            patternIndexFetch: (input, init) => {
+              requests.push({
+                url: String(input),
+                as: new Headers(init?.headers).get(
+                  FIRST_PARTY_HTTP_AUTH_HEADERS.userDid,
+                ),
+              });
+              return Promise.resolve(answer);
+            },
+          },
+        ).then(() => undefined, (e) => e);
+        return { requests, created, error };
+      };
+
+      it("creates the piece from the program the index served", async () => {
+        const { requests, created, error } = await createFrom(
+          Response.json({
+            patternId: "pat-1",
+            ownerDid: signer.did(),
+            createdAt: "2026-11-14T00:00:00.000Z",
+            description: "doubles n",
+            dependencies: [],
+            program: {
+              main: "/main.tsx",
+              files: [{ name: "/main.tsx", contents: SOURCE }],
+            },
+          }),
+        );
+
+        expect(error).toBeUndefined();
+        expect(requests).toEqual([
+          { url: `${INDEX_URL}/getPattern`, as: signer.did() },
+        ]);
+        expect(created).toEqual({
+          main: "/main.tsx",
+          files: [{ name: "/main.tsx", contents: SOURCE }],
+        });
+      });
+
+      it("throws an IndexedPatternError naming the id when the index fails", async () => {
+        const { created, error } = await createFrom(
+          Response.json({ error: "no such pattern" }, { status: 404 }),
+        );
+
+        expect(error?.name).toBe("IndexedPatternError");
+        expect(error.message).toBe(
+          'pattern index lookup failed for "pat-1": pattern index getPattern failed (404)',
+        );
+        expect(error.rawCauseMessage).toBe("no such pattern");
+        expect(created).toBeUndefined();
+      });
+    });
   });
 });

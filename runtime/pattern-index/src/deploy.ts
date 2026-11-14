@@ -354,13 +354,8 @@ export type IndexedPatternFailureStage = "lookup" | "compose" | "compile";
  * apart as `rawCauseMessage`, for a run artifact or an operator's log.
  */
 export class IndexedPatternError extends Error {
-  override name = "IndexedPatternError";
-
-  /** Which step failed: reading the index, composing, or compiling. */
-  readonly stage: IndexedPatternFailureStage;
-
-  /** The underlying text, which can quote source the caller did not write. */
-  readonly rawCauseMessage?: string;
+  #stage: IndexedPatternFailureStage;
+  #rawCauseMessage: string | undefined;
 
   constructor(
     stage: IndexedPatternFailureStage,
@@ -368,10 +363,22 @@ export class IndexedPatternError extends Error {
     rawCauseMessage?: string,
   ) {
     super(message);
-    this.stage = stage;
-    if (rawCauseMessage !== undefined) {
-      this.rawCauseMessage = rawCauseMessage;
-    }
+    this.#stage = stage;
+    this.#rawCauseMessage = rawCauseMessage;
+  }
+
+  override get name(): string {
+    return "IndexedPatternError";
+  }
+
+  /** Which step failed: reading the index, composing, or compiling. */
+  get stage(): IndexedPatternFailureStage {
+    return this.#stage;
+  }
+
+  /** The underlying text, which can quote source the caller did not write. */
+  get rawCauseMessage(): string | undefined {
+    return this.#rawCauseMessage;
   }
 }
 

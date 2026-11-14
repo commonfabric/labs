@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { Runtime } from "@commonfabric/runner";
+import {
+  computeEntryIdentity,
+  ensureCompilerStack,
+  Runtime,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   type PatternIndexClient,
@@ -68,6 +72,9 @@ describe("deploy", () => {
     runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
+      // A composed import resolves from the content-addressed source cache,
+      // which only a CFC-enforcing runtime writes.
+      cfcEnforcementMode: "enforce-explicit",
     });
     pieces = new PiecesController(
       createSession({
@@ -107,6 +114,40 @@ describe("deploy", () => {
       expect(program.files).toEqual([
         { name: "/main.tsx", contents: DOUBLING_SOURCE },
       ]);
+      expect(pattern.argumentSchema).toMatchObject({
+        properties: { n: { type: "number" } },
+      });
+    });
+
+    it("compiles the published patterns the program imports into the space first", async () => {
+      await ensureCompilerStack();
+      const doublerId = await computeEntryIdentity("/main.tsx", [
+        { name: "/main.tsx", contents: DOUBLING_SOURCE },
+      ]);
+      const composing = [
+        "import { pattern } from 'commonfabric';",
+        `import doubler from "cf:pattern:${doublerId}";`,
+        "interface Input { n: number; }",
+        "export default pattern<Input, { half: { doubled: number } }>(",
+        "  ({ n }) => ({ half: doubler({ n }) }),",
+        ");",
+        "",
+      ].join("\n");
+      const asked: string[] = [];
+
+      const { pattern } = await compileIndexedPattern(
+        deployOptions(
+          clientAnswering((id) => {
+            asked.push(id);
+            return Promise.resolve(
+              recordFor(id, id === doublerId ? DOUBLING_SOURCE : composing),
+            );
+          }),
+          "composer",
+        ),
+      );
+
+      expect(asked).toEqual(["composer", doublerId]);
       expect(pattern.argumentSchema).toMatchObject({
         properties: { n: { type: "number" } },
       });
