@@ -979,3 +979,25 @@ numbers have gaps.
     of emitted value code, of source as the loader receives it, or of a
     schema in its stored form, and the crate produces none of the three
     in that form.
+
+## PL as merged, and the label arguments
+
+154. **The three sites of note 131.** (a) `product/workbench/sessions.ts:267`
+    was a checker gap: a truthy `s?.startedAs` did not narrow the path
+    `s.startedAs`, because the rule for a chain that did not stop was
+    tried before the rule for the tested reference. Fixed, and the module
+    is accepted again. (b) `system/fabrichat/room.tsx:1848` is reported as
+    LS states it: `container?.key("fileStoreRecord")` on an optional
+    property that is not a handle is a `Cell<FileStoreRecord | undefined>`
+    (LS §4.7), and it is given where the handler declares
+    `fileStore?: Writable<FileStoreRecord | Default<{}>>`. LS §7.5.2
+    removes `undefined` before the comparison where the callee declares
+    the property optional, but states that for the second row, a value
+    where a cell is declared, and this argument is a handle, the fourth
+    row. The same place named as a value path would be accepted. Not
+    changed. (c) `system/quick-capture/quick-capture.tsx:113` is reported
+    as LS states it: an array of the values `Note(...)` returns, given in
+    a handler where `Notebook` declares a cell of `NotePiece[]`. LS §7.5
+    makes one such value assignable "to a cell of such a type", and says
+    nothing of an array of them, so the third row of §7.5.1 refuses the
+    cell of the array. Not changed.

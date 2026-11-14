@@ -848,7 +848,11 @@ impl<'a> Resolver<'_, 'a> {
             // A chain that is truthy did not stop, so each receiver it
             // tests with `?.` is present.
             Expression::ChainExpression(chain) if sense => {
-                if self.chain_tests(module, &chain.expression, reference) {
+                // The chain is the reference itself: `s?.startedAs` tests
+                // the path `s.startedAs`.
+                if self.reference_of(module, test).as_ref() == Some(reference) {
+                    self.assume_truthy(sense, ty)
+                } else if self.chain_tests(module, &chain.expression, reference) {
                     self.present(ty)
                 } else {
                     ty

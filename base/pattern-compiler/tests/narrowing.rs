@@ -783,3 +783,34 @@ fn filter_with_a_type_predicate_narrows_the_element_type() {
         ["{ name: string }[]", "string[]", "{ name: string } | undefined[]"]
     );
 }
+
+#[test]
+fn a_truthy_optional_chain_narrows_its_own_path() {
+    assert_eq!(
+        types(
+            "interface Entry { id: string; startedAs?: string }\n\
+             function show(s: Entry | undefined) {\n\
+               return s?.startedAs ? [/*?*/(s.startedAs), /*?*/s] : [];\n\
+             }\n"
+        ),
+        ["string", "{ id: string; startedAs?: string }"]
+    );
+}
+
+#[test]
+fn key_of_an_optional_handle_property_through_an_optional_receiver() {
+    assert_eq!(
+        types(
+            "interface Box { record?: Cell<{ n: number }>; note?: string }\n\
+             function show(box: Cell<Box> | undefined) {\n\
+               const a = box?.key(\"record\");\n\
+               const b = box?.key(\"note\");\n\
+               return [/*?*/a, /*?*/b];\n\
+             }\n"
+        ),
+        [
+            "Cell<{ n: number }> | undefined",
+            "Cell<string | undefined> | undefined"
+        ]
+    );
+}
