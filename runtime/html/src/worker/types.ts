@@ -336,9 +336,10 @@ export function normalizeRenderDeclassificationPolicy(
  * for acting-user identity atoms); `caveatKinds` admits Caveat-type atoms
  * by kind (the prompt-caveat family, SC-54). Admitting a caveat is not
  * discharging it: it stays on the value. Everything
- * else renders as the blocked placeholder. Undefined = no default ceiling
- * (today's behavior); the profile may only be tightened, not loosened,
- * without a new release judgment (SC-54 is one).
+ * else renders as the blocked placeholder. A reconciler given none applies
+ * none; the worker gives a host that declares none the default display
+ * ceiling. The profile may only be tightened, not loosened, without a new
+ * release judgment (SC-54 is one).
  */
 export interface RenderConfidentialityCeiling {
   atoms?: readonly CfcConfClause[];
@@ -351,14 +352,16 @@ export interface RenderConfidentialityCeiling {
  * Like the declassification policy, the ceiling crosses postMessage seams
  * (e.g. `InitializationData`) with no runtime validation. Fail-closed here
  * means a present-but-malformed value becomes the EMPTY ceiling (public-only
- * rendering) — never a mount crash, and never fail-open to unbounded. Only
- * an absent value keeps the documented no-ceiling default; malformed fields
- * inside an otherwise well-formed ceiling drop to empty individually.
+ * rendering) — never a mount crash, and never fail-open to unbounded. An
+ * absent value and `null` are the two that mean no ceiling: `null` is how a
+ * host whose absent value would be given a default says it wants none.
+ * Malformed fields inside an otherwise well-formed ceiling drop to empty
+ * individually.
  */
 export function normalizeRenderConfidentialityCeiling(
   value: unknown,
 ): RenderConfidentialityCeiling | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null) return undefined;
   if (!isObjectOrArray(value)) return {};
   const { atoms, caveatKinds } = value as {
     atoms?: unknown;
