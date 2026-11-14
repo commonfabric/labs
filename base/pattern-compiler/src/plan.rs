@@ -1107,6 +1107,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
             "for" | "asSchema" | "withTx" => receiver.clone(),
+            // The method forms of `equals` and `equalLinks` (LS §4.7, PL
+            // §3.16): on a handle, or on a cell constructor with both
+            // operands as arguments.
+            "equals" | "equalLinks" => {
+                let receiver = receiver.clone();
+                self.in_cone(hint, at, |emitter, _| {
+                    let mut operands = vec![receiver];
+                    for argument in arguments {
+                        operands.push(emitter.eval(argument, "operand"));
+                    }
+                    for operand in &operands {
+                        if name == "equals" {
+                            emitter.resolve(operand);
+                        } else {
+                            emitter.pass(operand);
+                        }
+                    }
+                })
+            }
             // A method of a string, a number, or an array that takes no
             // function, and a function of a global object of the standard
             // library: expression code over the receiver and the

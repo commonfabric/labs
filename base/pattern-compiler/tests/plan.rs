@@ -480,6 +480,32 @@ export const Context = pattern<{ a: Cell<Item>; b: Cell<Item>; list: Item[] }>((
 }
 
 #[test]
+fn the_method_forms_of_equals_and_equal_links_have_the_slots_of_the_function() {
+    // LS §4.7: "`a.equals(b)` and `X.equals(a, b)`, and the three forms
+    // mean the same." PL §3.16: "`a.equalLinks(b)`: The `identity` slots
+    // of both operands, not resolved".
+    let analysis = program(
+        r#"import { Cell, pattern } from "commonfabric";
+interface Item { title: string }
+export const Same = pattern<{ a: Cell<Item>; b: Cell<Item> }>(({ a, b }) => {
+  const same = a.equals(b);
+  const stored = a.equalLinks(b);
+  return { same, stored };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Same");
+    assert_eq!(
+        cone_slots(&plan, "same"),
+        ["argument a : identity, resolved", "argument b : identity, resolved"]
+    );
+    assert_eq!(
+        cone_slots(&plan, "stored"),
+        ["argument a : identity", "argument b : identity"]
+    );
+}
+
+#[test]
 fn a_dynamic_read_of_kind_space_in_a_body_names_the_slot_of_its_operand() {
     // PL §1.1, `DynamicReads`: "The access list of the space an
     // `identity` slot's target lives in, or of the space a `value` slot
