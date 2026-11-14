@@ -85,7 +85,7 @@ describe("generateValue", () => {
 });
 
 describe("a generated scenario for the handler fixture", () => {
-  it("gives each input an atom of its own beside the labels its schema declares", async () => {
+  it("gives each input an atom of its own where its schema declares no clause at its root", async () => {
     const { plan, schemas } = await planOf("handler");
     const inputs = generateInputs(plan, schemas);
 
@@ -93,13 +93,16 @@ describe("a generated scenario for the handler fixture", () => {
       Object.fromEntries(
         Object.entries(inputs).map(([name, input]) => [
           name,
-          (input.schema as { ifc: { confidentiality: unknown[] } }).ifc
-            .confidentiality,
+          [
+            (input.schema as { ifc: { confidentiality: unknown[] } }).ifc
+              .confidentiality,
+            input.declared,
+          ],
         ]),
       ),
     ).toEqual({
-      secret: ["alice", "input:secret"],
-      note: ["input:note"],
+      secret: [["alice"], {}],
+      note: [["input:note"], { clause: "input:note" }],
     });
   });
 
@@ -144,7 +147,7 @@ describe("a generated scenario for the handler fixture", () => {
       note: [["input:note"], "tighter"],
     });
     expect(run.writes.map((row) => clauses(row.runtime.confidentiality)))
-      .toEqual([["alice", "input:secret"], ["alice", "input:secret"]]);
+      .toEqual([["alice"], ["alice"]]);
   });
 });
 
@@ -176,6 +179,37 @@ describe("a generated scenario for a handler that writes its inputs", () => {
     expect(run.writes.map((row) => [row.write, row.path])).toEqual([
       [0, []],
       [1, ["2"]],
+    ]);
+  });
+});
+
+describe("a generated scenario for a handler that writes an input with a declared label", () => {
+  // `fixtures/declared-writes.tsx`. The runtime refuses a write that
+  // declares fewer clauses at a path than the store declares there
+  // ("confidentiality cannot be weakened"). The handler writes under the
+  // schema of its own type, so the input's store has to declare what that
+  // schema declares: no generated clause where the type declares clauses
+  // at its root, and the atom the runtime has for a `PolicyOf`, which the
+  // crate's schema names by module and binding.
+  it("has the runtime commit both events", async () => {
+    const { plan, schemas } = await planOf("declared-writes");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("declared-writes.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [0, 1].map((binding) => ({
+        binding,
+        event: generateEvent(plan, schemas, binding),
+      })),
+    });
+
+    expect(run.events).toEqual([
+      { binding: 0, handler: "overwrite", outcome: "committed" },
+      { binding: 1, handler: "seal", outcome: "committed" },
     ]);
   });
 });

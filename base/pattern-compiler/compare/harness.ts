@@ -98,8 +98,22 @@ export type Plan = {
   selectors?: { arity: number }[];
 };
 
-/** An input given through a cell of its own, written under `schema`. */
-export type LabeledInput = { schema: unknown; value: unknown };
+/**
+ * An input given through a cell of its own, written under `schema`.
+ *
+ * With `declared`, the cell is written under the schema the compiled
+ * pattern's argument has for the input, where it has one, with the clause
+ * of `declared` added to the clauses that schema declares at its root. A
+ * handler writes an input under the schema of its own type, and the
+ * runtime refuses a write that declares fewer clauses at a path than the
+ * store declares there, so the store has to declare the runtime's atoms
+ * and not the crate's names for them (a `PolicyOf`).
+ */
+export type LabeledInput = {
+  schema: unknown;
+  value: unknown;
+  declared?: { clause?: unknown };
+};
 
 /** One run of a pattern to compare. */
 export type Scenario = {
@@ -383,6 +397,39 @@ const indexNodes = (
   }
 };
 
+/**
+ * The schema `argument` has for the property `name`, as the schema of a
+ * cell that holds the value, with `clause` added at its root.
+ */
+const argumentProperty = (
+  argument: JSONSchema | undefined,
+  name: string,
+  clause: unknown,
+): JSONSchema | undefined => {
+  if (argument === undefined || typeof argument !== "object") return undefined;
+  const { properties, $defs } = argument as {
+    properties?: Record<string, JSONSchema>;
+    $defs?: Record<string, JSONSchema>;
+  };
+  const property = properties?.[name];
+  if (property === undefined || typeof property !== "object") return undefined;
+  // The cell holds the value. Whether the pattern takes the input as a
+  // handle is the pattern's own declaration.
+  const { asCell: _asCell, ...own } = property as Record<string, unknown> & {
+    ifc?: { confidentiality?: unknown[] };
+  };
+  return {
+    ...own,
+    ...($defs === undefined ? {} : { $defs }),
+    ...(clause === undefined ? {} : {
+      ifc: {
+        ...own.ifc,
+        confidentiality: [...(own.ifc?.confidentiality ?? []), clause],
+      },
+    }),
+  } as JSONSchema;
+};
+
 const scenarioSigner = () =>
   Identity.fromPassphrase("pattern-compiler-compare");
 
@@ -434,7 +481,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       const cell = runtime.getCell(
         space,
         { compareInput: name },
-        input.schema as JSONSchema,
+        (input.declared === undefined ? undefined : argumentProperty(
+          compiled.argumentSchema,
+          name,
+          input.declared.clause,
+        )) ?? input.schema as JSONSchema,
         start,
       );
       cell.set(input.value as never);

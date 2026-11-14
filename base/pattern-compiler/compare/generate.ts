@@ -144,9 +144,11 @@ export const inputClause = (name: string, audience?: unknown): unknown =>
 /**
  * The inputs of a generated scenario: for each property of the plan's
  * argument schema, a value and the schema the harness writes it under. The
- * schema is the property's own, with the labels it declares, and one more
- * confidentiality clause at its root that no other input has
- * (`inputClause`).
+ * schema is the property's own, with the labels it declares, and where
+ * it declares no clause at its root, one clause there that no other input
+ * has (`inputClause`). The harness writes the input under the runtime's
+ * schema for the property where the compiled pattern has one
+ * (`LabeledInput.declared`).
  */
 export const generateInputs = (
   plan: Plan & { argumentSchema?: string },
@@ -169,6 +171,13 @@ export const generateInputs = (
     // The cell holds the value. Whether the pattern takes the input as a
     // handle is the pattern's own declaration.
     delete own.asCell;
+    // A type that declares clauses at its root gets no clause more: a
+    // handler that writes the input declares the clauses of the type
+    // there, and the runtime refuses a write that declares fewer clauses
+    // than the store has ("confidentiality cannot be weakened").
+    const clause = (own.ifc?.confidentiality ?? []).length > 0
+      ? undefined
+      : inputClause(name, audience);
     inputs[name] = {
       value,
       schema: {
@@ -176,14 +185,11 @@ export const generateInputs = (
         ...(typeof root === "object" && root.$defs !== undefined
           ? { $defs: root.$defs }
           : {}),
-        ifc: {
-          ...own.ifc,
-          confidentiality: [
-            ...(own.ifc?.confidentiality ?? []),
-            inputClause(name, audience),
-          ],
-        },
+        ...(clause === undefined ? {} : {
+          ifc: { ...own.ifc, confidentiality: [clause] },
+        }),
       },
+      declared: clause === undefined ? {} : { clause },
     };
   }
   return inputs;
