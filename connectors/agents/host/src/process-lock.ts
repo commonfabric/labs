@@ -136,9 +136,30 @@ export class AgentsHostProcessLock {
     this.#path = path;
   }
 
-  static async acquire(
+  /**
+   * Acquiring a lock as if on the platform `platform` states, which a test
+   * chooses.
+   */
+  static get accessForTestingOnly(): {
+    acquire(
+      path: string,
+      platform: ProcessLockPlatform,
+    ): Promise<AgentsHostProcessLock>;
+  } {
+    return {
+      acquire: (path, platform) =>
+        AgentsHostProcessLock.#acquire(path, platform),
+    };
+  }
+
+  /** Acquires the lock at `path`, or rejects when another host holds it. */
+  static acquire(path: string): Promise<AgentsHostProcessLock> {
+    return AgentsHostProcessLock.#acquire(path, RUNNING_PLATFORM);
+  }
+
+  static async #acquire(
     path: string,
-    platform: ProcessLockPlatform = RUNNING_PLATFORM,
+    platform: ProcessLockPlatform,
   ): Promise<AgentsHostProcessLock> {
     const normalizedPath = resolve(path);
     if (heldPaths.has(normalizedPath)) {

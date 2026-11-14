@@ -242,13 +242,21 @@ async function syncDirectory(path: string): Promise<void> {
   }
 }
 
-async function writeAndSync(
-  file: Deno.FsFile,
+/**
+ * Writes all of `contents` to `file` and synchronizes it. Throws when a write
+ * reports no bytes written, which would otherwise repeat forever.
+ */
+export async function writeAndSync(
+  file: Pick<Deno.FsFile, "write" | "sync">,
   contents: string,
 ): Promise<void> {
   const bytes = new TextEncoder().encode(contents);
   for (let offset = 0; offset < bytes.length;) {
-    offset += await file.write(bytes.subarray(offset));
+    const written = await file.write(bytes.subarray(offset));
+    if (written === 0) {
+      throw new Error("command ledger write made no progress");
+    }
+    offset += written;
   }
   await file.sync();
 }
@@ -353,9 +361,24 @@ export class CommandLedger {
     this.#windowsSlot = windowsSlot;
   }
 
-  static async open(
+  /**
+   * Opening a ledger as if on the operating system, and as the user, that
+   * `system` states, which a test chooses.
+   */
+  static get accessForTestingOnly(): {
+    open(path: string, system: CommandLedgerSystem): Promise<CommandLedger>;
+  } {
+    return { open: (path, system) => CommandLedger.#open(path, system) };
+  }
+
+  /** Opens the ledger at `path`, creating its directory privately. */
+  static open(path: string): Promise<CommandLedger> {
+    return CommandLedger.#open(path, RUNNING_SYSTEM);
+  }
+
+  static async #open(
     path: string,
-    system: CommandLedgerSystem = RUNNING_SYSTEM,
+    system: CommandLedgerSystem,
   ): Promise<CommandLedger> {
     await ensurePrivateDirectory(dirname(path), system);
     if (system.os !== "windows") {

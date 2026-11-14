@@ -3,6 +3,7 @@ import { join } from "@std/path";
 import {
   CommandLedger,
   type CommandLedgerSystem,
+  writeAndSync,
 } from "../src/command-ledger.ts";
 import { AGENT_CONNECTOR_SCHEMAS } from "../src/protocol.ts";
 import type { AgentSessionCommandReceipt } from "../src/commands.ts";
@@ -219,11 +220,14 @@ Deno.test("command ledgers reject a directory owned by another user", async () =
   try {
     await assertRejects(
       () =>
-        CommandLedger.open(path, { os: "linux", uid: () => Deno.uid()! + 1 }),
+        CommandLedger.accessForTestingOnly.open(path, {
+          os: "linux",
+          uid: () => Deno.uid()! + 1,
+        }),
       Error,
       "directory has a different owner",
     );
-    const ledger = await CommandLedger.open(path, {
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, {
       os: "linux",
       uid: () => Deno.uid(),
     });
@@ -295,7 +299,7 @@ Deno.test("Windows command ledgers commit both slots before open returns", async
   const path = join(directory, "ledger.json");
   const previousPath = `${path}.previous`;
   try {
-    const ledger = await CommandLedger.open(path, WINDOWS);
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
     const empty = ledgerFile();
     assertEquals(await readLedger(path), empty);
     assertEquals(await readLedger(previousPath), empty);
@@ -312,7 +316,10 @@ Deno.test("Windows command ledgers commit both slots before open returns", async
     );
     assertEquals(await readLedger(path), empty);
 
-    const reopened = await CommandLedger.open(path, WINDOWS);
+    const reopened = await CommandLedger.accessForTestingOnly.open(
+      path,
+      WINDOWS,
+    );
     assertEquals(reopened.get("first"), first);
     assertEquals(reopened.pendingPublicationCount(), 1);
     await reopened.markPublished("first");
@@ -333,16 +340,19 @@ Deno.test("Windows command ledgers repair a missing or invalid slot from the val
   const valid = ledgerFile({ generation: 4, receipts: { stored } });
   try {
     await writeLedger(previousPath, valid);
-    const repaired = await CommandLedger.open(path, WINDOWS);
+    const repaired = await CommandLedger.accessForTestingOnly.open(
+      path,
+      WINDOWS,
+    );
     assertEquals(repaired.get("stored"), stored);
     assertEquals(await readLedger(path), valid);
 
     await Deno.writeTextFile(path, "interrupted");
-    await CommandLedger.open(path, WINDOWS);
+    await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
     assertEquals(await readLedger(path), valid);
 
     await Deno.writeTextFile(previousPath, "interrupted");
-    const ledger = await CommandLedger.open(path, WINDOWS);
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
     assertEquals(await readLedger(previousPath), valid);
     await ledger.put(receipt("next"));
     assertEquals(await readLedger(path), valid);
@@ -367,7 +377,7 @@ Deno.test("Windows command ledgers open from the newer of two valid slots", asyn
       `${path}.previous`,
       ledgerFile({ generation: 6, receipts: { older } }),
     );
-    const ledger = await CommandLedger.open(path, WINDOWS);
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
     assertEquals(ledger.get("newer"), newer);
     assertEquals(ledger.get("older"), undefined);
   } finally {
@@ -386,13 +396,13 @@ Deno.test("Windows command ledgers reject slots that disagree at one generation"
       ledgerFile({ generation: 3, receipts: { one } }),
     );
     assertEquals(
-      (await CommandLedger.open(path, WINDOWS)).get("one"),
+      (await CommandLedger.accessForTestingOnly.open(path, WINDOWS)).get("one"),
       one,
     );
 
     await writeLedger(`${path}.previous`, ledgerFile({ generation: 3 }));
     await assertRejects(
-      () => CommandLedger.open(path, WINDOWS),
+      () => CommandLedger.accessForTestingOnly.open(path, WINDOWS),
       Error,
       "command ledger generations disagree between Windows slots",
     );
@@ -408,7 +418,7 @@ Deno.test("Windows command ledgers reject two invalid slots", async () => {
     await writeLedger(path, ledgerFile({ generation: -1 }));
     await writeLedger(`${path}.previous`, null);
     const error = await assertRejects(
-      () => CommandLedger.open(path, WINDOWS),
+      () => CommandLedger.accessForTestingOnly.open(path, WINDOWS),
       AggregateError,
       "neither Windows command ledger slot is valid",
     );
@@ -431,13 +441,55 @@ Deno.test("Windows command ledgers accept files that Unix permissions would refu
     await writeLedger(path, ledgerFile());
     await Deno.chmod(path, 0o644);
     await assertRejects(
-      () => CommandLedger.open(path, { os: "linux", uid: () => Deno.uid() }),
+      () =>
+        CommandLedger.accessForTestingOnly.open(path, {
+          os: "linux",
+          uid: () => Deno.uid(),
+        }),
       Error,
       "file permits access by other users",
     );
-    const ledger = await CommandLedger.open(path, WINDOWS);
+    const ledger = await CommandLedger.accessForTestingOnly.open(path, WINDOWS);
     assert(ledger.pendingPublicationCount() === 0);
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test("writeAndSync writes every byte across short writes and then syncs", async () => {
+  const written: number[] = [];
+  const events: string[] = [];
+  await writeAndSync({
+    write: (bytes) => {
+      // Each write takes at most two bytes, as a short write would.
+      const taken = Math.min(2, bytes.length);
+      written.push(...bytes.subarray(0, taken));
+      events.push(`write ${taken}`);
+      return Promise.resolve(taken);
+    },
+    sync: () => {
+      events.push("sync");
+      return Promise.resolve();
+    },
+  }, "abcde");
+  assertEquals(new TextDecoder().decode(new Uint8Array(written)), "abcde");
+  assertEquals(events, ["write 2", "write 2", "write 1", "sync"]);
+});
+
+Deno.test("writeAndSync throws, without syncing, when a write makes no progress", async () => {
+  let synced = false;
+  const error = await assertRejects(() =>
+    writeAndSync({
+      write: () => Promise.resolve(0),
+      sync: () => {
+        synced = true;
+        return Promise.resolve();
+      },
+    }, "abc")
+  );
+  assertEquals(
+    error instanceof Error ? error.message : error,
+    "command ledger write made no progress",
+  );
+  assertEquals(synced, false);
 });

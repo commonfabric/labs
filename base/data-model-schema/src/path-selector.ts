@@ -43,7 +43,8 @@ type CanonicalSelectorMap = {
  *
  * Inner values are `WeakRef`s: a selector held strongly here would strongly
  * reference its schema — the outer `WeakMap` key — pinning both forever.
- * Dead refs are dropped lazily on lookup.
+ * A dead ref is replaced when the same path is interned again, and dead refs
+ * are swept when a map grows past `SELECTOR_CACHE_SWEEP_THRESHOLD`.
  *
  * As a `WeakMap`, this can only map from GC-able objects, so primitives are
  * handled by {@link #canonicalSelectorsByPrimitiveSchema}.

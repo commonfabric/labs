@@ -539,9 +539,11 @@ file share a browser with the tests in the others, so a file that only passes
 after some particular sibling has run is relying on something no longer written
 down anywhere. Each file has to stand on its own.
 
-A package that runs every test file in a browser as well, as `base/identity`
-and `base/static` do, hands its whole test directory to `deno-web-test`. The
-name still decides which files its plain `deno test` pass leaves out.
+A package that runs the files of its `test/` directory in a browser as well as
+in Deno, as `base/identity` and `base/static` do, hands that directory to
+`deno-web-test`. Test files elsewhere in the package, such as `base/static`'s
+`scripts/*.test.ts`, run in Deno only. The name still decides which files the
+plain `deno test` pass leaves out.
 
 Name a test that way whenever it needs a browser, including when its subject is
 not a component.

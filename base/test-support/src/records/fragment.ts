@@ -100,11 +100,18 @@ export class FragmentWriter {
     }
   }
 
-  /** Closes the fragment. Appends after close are ignored. */
+  /**
+   * Closes the fragment. Appends after close are ignored. A close that fails
+   * fails nothing: recording never fails a test.
+   */
   close(): void {
     const file = this.#file;
     this.#file = undefined;
-    file?.close();
+    try {
+      file?.close();
+    } catch {
+      // A file that a failed write already closed throws here.
+    }
   }
 }
 

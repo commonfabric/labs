@@ -215,7 +215,7 @@ Deno.test("AgentsHostProcessLock refuses a lock path another user owns", async (
     const owner = (await Deno.lstat(path)).uid;
     await assertRejects(
       () =>
-        AgentsHostProcessLock.acquire(path, {
+        AgentsHostProcessLock.accessForTestingOnly.acquire(path, {
           os: "linux",
           uid: () => (owner ?? 0) + 1,
         }),
@@ -224,10 +224,13 @@ Deno.test("AgentsHostProcessLock refuses a lock path another user owns", async (
     );
     assertEquals(await Deno.readTextFile(path), "held\n");
 
-    const lock = await AgentsHostProcessLock.acquire(path, {
-      os: "linux",
-      uid: () => owner,
-    });
+    const lock = await AgentsHostProcessLock.accessForTestingOnly.acquire(
+      path,
+      {
+        os: "linux",
+        uid: () => owner,
+      },
+    );
     await lock.release();
   } finally {
     await Deno.remove(directory, { recursive: true });
@@ -242,7 +245,7 @@ Deno.test("AgentsHostProcessLock leaves ownership and mode unchecked on Windows"
     await Deno.chmod(path, 0o644);
     await assertRejects(
       () =>
-        AgentsHostProcessLock.acquire(path, {
+        AgentsHostProcessLock.accessForTestingOnly.acquire(path, {
           os: "linux",
           uid: () => Deno.uid(),
         }),
@@ -250,12 +253,15 @@ Deno.test("AgentsHostProcessLock leaves ownership and mode unchecked on Windows"
       "process lock file permits access by other users",
     );
 
-    const lock = await AgentsHostProcessLock.acquire(path, {
-      os: "windows",
-      uid: () => {
-        throw new Error("the owner must not be read on Windows");
+    const lock = await AgentsHostProcessLock.accessForTestingOnly.acquire(
+      path,
+      {
+        os: "windows",
+        uid: () => {
+          throw new Error("the owner must not be read on Windows");
+        },
       },
-    });
+    );
     await lock.release();
     assertEquals(await Deno.readTextFile(path), `${Deno.pid}\n`);
   } finally {
