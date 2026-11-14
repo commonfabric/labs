@@ -319,3 +319,54 @@ export function adoptServerExperimentalOptions(
   }
   return opts;
 }
+
+/**
+ * The environment variable through which a server follows another
+ * deployment's posture: the `experimental` object that deployment publishes
+ * on {@link SERVER_EXPERIMENTAL_PATH}, as JSON. A local toolshed one client
+ * shares with a hosted deployment runs this way, since a client that talks to
+ * both can run only one posture.
+ */
+export const FOLLOWED_POSTURE_ENV = "EXPERIMENTAL_FOLLOWED_POSTURE";
+
+/**
+ * `ExperimentalOptions` for a server that may follow another deployment's
+ * posture ({@link FOLLOWED_POSTURE_ENV}): its own environment's flags
+ * ({@link experimentalOptionsFromEnv}), and each server-authoritative flag
+ * the followed posture publishes that the environment leaves unset, as a
+ * deployed client adopts its server's ({@link adoptServerExperimentalOptions}).
+ * Without a followed posture, the environment's flags alone.
+ *
+ * @throws Error when the followed posture is not a JSON object: whoever set
+ * it meant this server to follow it, and a server that ran its own defaults
+ * instead would disagree with the clients it shares.
+ */
+export function experimentalOptionsWithFollowedPosture(
+  env: EnvReader,
+  logPrefix?: string,
+): ExperimentalOptions {
+  const own = experimentalOptionsFromEnv(env, logPrefix);
+  const raw = env(FOLLOWED_POSTURE_ENV);
+  if (raw === undefined) return own;
+  let followed: unknown;
+  try {
+    followed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `${FOLLOWED_POSTURE_ENV} is not JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (
+    followed === null || typeof followed !== "object" || Array.isArray(followed)
+  ) {
+    throw new Error(
+      `${FOLLOWED_POSTURE_ENV} is ${debugStr`$quote${raw}`}; expected the JSON object a deployment publishes as its posture`,
+    );
+  }
+  return adoptServerExperimentalOptions(
+    parseServerExperimentalOptions(followed),
+    own,
+  );
+}

@@ -2818,6 +2818,24 @@ handshake's job stays what it is: refusing a connection whose peer resolved a
 wire contract differently — which, for a client that adopts, is a mismatch
 that should no longer arise.
 
+### A server that follows another deployment
+
+A client that talks to two servers can run only one posture, so the two
+servers have to run the same one. A local toolshed whose client also talks to
+a hosted deployment is the case: Loom's runs beside its owner's hosted home.
+Such a toolshed follows the hosted deployment's posture. Whoever starts it
+reads the deployment's `/api/meta` and passes its `experimental` object, as
+JSON, in `EXPERIMENTAL_FOLLOWED_POSTURE`. The toolshed resolves every flag it
+reads, for its own runtime, its serving runtimes and its memory route, with
+`experimentalOptionsWithFollowedPosture`: an explicit `EXPERIMENTAL_*` wins,
+otherwise the followed posture's value for a `"server"` flag, otherwise the
+default, the rule `adoptServerExperimentalOptions` applies for a client. It
+then publishes the posture it resolved, so its own clients adopt the
+followed deployment's flags in turn. A value that is not a JSON object stops
+the toolshed from starting. The toolshed does not fetch the posture itself:
+the launcher decides what to do when the deployment cannot be reached, for
+instance starting with the last posture it saw.
+
 ## Enabling flags locally
 
 Set the environment variables before building the shell (for browser-side flags)
