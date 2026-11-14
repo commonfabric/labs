@@ -724,12 +724,17 @@ export type WritePolicyInput =
      * chosen by that and the piece's identity fixed every reference the
      * wiring places. A read the journal holds no position for counts as read
      * before it, so a transaction with no activity clock stamps from all of
-     * its reads, which over-taints. Authority is the runtime's mark.
+     * its reads, which over-taints. `runtimeStarted` is whether the runtime
+     * started the setup on its own, to repair a piece or to carry on with a
+     * pattern an earlier transaction chose: such a setup leaves the value of
+     * an unchanged result holding data as stored. Authority is the runtime's
+     * mark.
      */
     readonly kind: "result-wiring";
     readonly target: CfcAddress;
     readonly buildDecided: boolean;
     readonly setupBegan: number;
+    readonly runtimeStarted: boolean;
   }
   | {
     /**

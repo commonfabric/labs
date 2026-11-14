@@ -4692,17 +4692,22 @@ const forEachFlowObservation = (
  * The result wirings a setup writes or restates in this transaction
  * (§8.9.1.3), by document, from the runtime's own record of each: whether the
  * build and the piece's identity alone decided which reference sits at each
- * slot, and the journal position the setup began at. A document set up more
- * than once is build-decided only where every setup says so, and takes the
- * latest position, so that what every setup's choice rested on joins. Only a
- * wiring at the document's root is taken.
+ * slot, the journal position the setup began at, and whether the runtime
+ * started the setup on its own. A document set up more than once is
+ * build-decided only where every setup says so, and takes the latest
+ * position, so that what every setup's choice rested on joins; it is
+ * runtime-started where any setup is. Only a wiring at the document's root is
+ * taken.
  */
 const resultWiringsByTarget = (
   tx: IExtendedStorageTransaction,
-): Map<string, { buildDecided: boolean; setupBegan: number }> => {
+): Map<
+  string,
+  { buildDecided: boolean; setupBegan: number; runtimeStarted: boolean }
+> => {
   const result = new Map<
     string,
-    { buildDecided: boolean; setupBegan: number }
+    { buildDecided: boolean; setupBegan: number; runtimeStarted: boolean }
   >();
   for (const input of tx.getCfcState().writePolicyInputs) {
     if (
@@ -4720,6 +4725,7 @@ const resultWiringsByTarget = (
     result.set(key, {
       buildDecided: input.buildDecided && (known?.buildDecided ?? true),
       setupBegan: Math.max(input.setupBegan, known?.setupBegan ?? 0),
+      runtimeStarted: input.runtimeStarted || (known?.runtimeStarted ?? false),
     });
   }
   return result;
@@ -4733,12 +4739,12 @@ const resultWiringsByTarget = (
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
  * verifier read that consumes nothing. A root holding data as well as
- * references is taken too, and only an asking setup restates one it finds
- * unchanged (`#isAsking` in `runner.ts`): one holding the reads that chose what
- * the data shows. The persist region re-derives that root's value entry from
- * the transaction's join, as the setup's write of the root would, and leaves
- * its existence entry and what sits below it as they are (`restatedDataRoot`
- * there). A document the transaction does not hold a value for is left out.
+ * references is taken too, where the setup is an asking one (`#isAsking` in
+ * `runner.ts`) that the runtime did not start on its own: one holding the reads
+ * that chose what the data shows. The persist region re-derives that root's
+ * value entries from the transaction's join, as the setup's write of the root
+ * would, and leaves its existence entry as it is (`restatedDataRoot` there). A
+ * document the transaction does not hold a value for is left out.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
@@ -4749,7 +4755,7 @@ const withRestatedResultWirings = (
   const wirings = resultWiringsByTarget(tx);
   if (wirings.size === 0) return targets;
   const result: ReturnType<typeof valueWriteTargets> = new Map(targets);
-  for (const key of wirings.keys()) {
+  for (const [key, wiring] of wirings) {
     const written = targets.get(key);
     if (written?.paths.some((path) => path.length === 0)) continue;
     const { space, id, scope } = targetFromKey(key);
@@ -4760,7 +4766,12 @@ const withRestatedResultWirings = (
       type: "application/json",
       path: ["value"],
     }, { meta: internalVerifierRead }).ok?.value;
-    if (value === undefined) continue;
+    if (
+      value === undefined ||
+      (wiring.runtimeStarted && !isPureLinkStructure(value))
+    ) {
+      continue;
+    }
     const root = pathKey([]);
     result.set(key, {
       space,
@@ -13227,10 +13238,11 @@ export function* prepareBoundaryCommitSteps(
     // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
     // A result wiring a setup restates, on a document holding data as well
     // as references, without writing its root
-    // (`withRestatedResultWirings`). The root's value entry is re-derived
-    // (below), but the root is not a written path: what sits below it keeps
-    // what the writes there left, and no existence entry records a creation
-    // this attempt did not make.
+    // (`withRestatedResultWirings`). Its derived value entries, at the root
+    // and below it, are replaced by one at the root (below), as a write of
+    // the root would replace them, but the root is not a written path: no
+    // existence entry records a creation this attempt did not make, and the
+    // membership entries below it keep what the writes there left.
     const restatedDataRoot = flowTarget !== undefined &&
       resultWirings.has(key) &&
       flowTarget.paths.some((path) => path.length === 0) &&
@@ -13836,14 +13848,14 @@ export function* prepareBoundaryCommitSteps(
         }) && entryPath[entryPath.length - 1] === "*"
         ? entryPath.slice(0, -1)
         : entryPath;
-      // A restated data root replaces its own value stamp and nothing below
-      // it (`restatedDataRoot`).
+      // A restated data root replaces the derived value entries at and below
+      // it (`restatedDataRoot`); its existence entry was carried above.
       if (
         flowPersist &&
         (entry.origin === "derived" || entry.origin === "structure") &&
         (flowWrittenPrefixes.hasPrefixOf(clearProbePath) ||
           (restatedDataRoot && entry.origin === "derived" &&
-            clearProbePath.length === 0))
+            entry.observes !== "shape"))
       ) {
         flowCleared = true;
         if (
@@ -14424,7 +14436,7 @@ export function* prepareBoundaryCommitSteps(
       // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
       // A restated data root's value entry is re-derived from the attempt's
       // join, as the setup's write of the root would set it (§8.9.1.3); the
-      // stale one was cleared above. It is not measured against the store,
+      // stale ones, at and below the root, were cleared above. It is not measured against the store,
       // as the membership stamps are not, and mints no existence entry.
       if (restatedDataRoot && flowHasJoin) {
         persistedLabelEntries.push(markFlowStampEntry({

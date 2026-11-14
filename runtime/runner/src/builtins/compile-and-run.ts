@@ -368,9 +368,11 @@ export function compileAndRun(
         // how we pass input into the builtin.
 
         // The instantiation is the builtin's, in a continuation of its
-        // action: no principal's act attributes what its setup initializes.
+        // action: no principal's act attributes what its setup initializes,
+        // and its transaction holds none of the reads that chose the program.
         runtime.runSynced(result, pattern, input.get(), {
           attributeInitialization: false,
+          runtimeStarted: true,
         });
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);

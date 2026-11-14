@@ -1069,30 +1069,71 @@ describe("cfc-result-wiring-stamp", () => {
       expect(derivedOf(result)).toContain(BOB);
     });
 
-    it("stays where a setup the runtime starts on its own finds the result unchanged", async () => {
-      // A repair or a continuation hands setup a transaction that holds none
-      // of the reads that chose the pattern (`runtimeStarted`), so it is not
-      // an asking one, and restates nothing.
+    describe("a setup the runtime starts on its own", () => {
+      // A repair or a continuation hands setup a transaction holding none of
+      // the reads that chose the pattern (`runtimeStarted`), so a setup there
+      // that finds the result unchanged leaves its value entry as stored.
+      // Each case sets up another pattern with the same result, which reads
+      // no stored name, so only that gate keeps the stamp.
 
-      const { mixed, sameMixed } = patterns();
-      const result = await setUp("runtime-started", mixed);
-      await plantValueStamp(result, BOB);
+      it("leaves the stamp through `setup()` given a transaction", async () => {
+        const { mixed, sameMixed } = patterns();
+        const result = await setUp("started-setup", mixed);
+        await plantValueStamp(result, BOB);
 
-      const tx = runtime.edit();
-      const resultCell = runtime.getCell(
-        space,
-        "runtime-started",
-        undefined,
-        tx,
-      );
-      await runtime.setup(tx, sameMixed, { x: 1 }, resultCell, {
-        runtimeStarted: true,
+        const { error } = await runtime.editWithRetry((tx) => {
+          void runtime.setup(
+            tx,
+            sameMixed,
+            { x: 1 },
+            runtime.getCell(space, "started-setup", undefined, tx),
+            { prepareForResume: true, runtimeStarted: true },
+          );
+        });
+        expect(error).toBeUndefined();
+        await runtime.idle();
+        runtime.runner.stop(result);
+
+        expect(derivedOf(result)).toContain(BOB);
       });
-      tx.prepareCfc();
-      expect((await tx.commit().settled).ok).toBeDefined();
-      await runtime.idle();
 
-      expect(derivedOf(result)).toContain(BOB);
+      it("leaves the stamp through `runSynced()`", async () => {
+        const { mixed, sameMixed } = patterns();
+        const result = await setUp("started-synced", mixed);
+        await plantValueStamp(result, BOB);
+
+        const again = await runtime.runSynced(
+          runtime.getCell(space, "started-synced"),
+          sameMixed,
+          { x: 1 },
+          { runtimeStarted: true },
+        );
+        await runtime.idle();
+        runtime.runner.stop(again);
+
+        expect(derivedOf(result)).toContain(BOB);
+      });
+
+      it("leaves the stamp through `run()` given a transaction", async () => {
+        const { mixed, sameMixed } = patterns();
+        const result = await setUp("started-run", mixed);
+        await plantValueStamp(result, BOB);
+
+        const tx = runtime.edit();
+        const again = runtime.run(
+          tx,
+          sameMixed,
+          { x: 1 },
+          runtime.getCell(space, "started-run", undefined, tx),
+          { runtimeStarted: true },
+        );
+        tx.prepareCfc();
+        expect((await tx.commit().settled).ok).toBeDefined();
+        await runtime.idle();
+        runtime.runner.stop(again);
+
+        expect(derivedOf(result)).toContain(BOB);
+      });
     });
 
     it("stays where the setup carries over the stored name, whose read takes the stamp", async () => {
