@@ -62,6 +62,18 @@ export const compareIsEdited = (edited: boolean): Promise<Row[]> =>
   );
 
 /**
+ * Runs `fixtures/defaulted.tsx`: an input object with a declared integrity
+ * atom and one property a default fills (ruling T1), read whole and by
+ * property. With `given`, the argument supplies the property.
+ */
+export const compareDefaulted = (given: boolean): Promise<Row[]> =>
+  compare(
+    "defaulted",
+    { profile: { name: "ada", ...(given ? { nick: "a" } : {}) } },
+    {},
+  );
+
+/**
  * A label on one line: its clauses, then its integrity atoms by type, with
  * `+witness` on a `TransformedBy` atom that carries an input witness.
  */

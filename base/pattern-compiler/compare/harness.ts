@@ -170,6 +170,29 @@ export const compareScenario = async (scenario: Scenario): Promise<Row[]> => {
         return slotCell(slot, elements);
       };
 
+      // Ruling T1: integrity is anchored in an object as a whole. A read of
+      // a stored object whole has the object's integrity, also where a
+      // default fills one of its properties. A slot at a property a default
+      // fills has the empty integrity: the argument holds no value there.
+      const filledByDefault = (slot: number): boolean => {
+        const { root, path } = plan.slots[slot];
+        if (root.kind !== "argument") return false;
+        let value: unknown = scenario.argument;
+        for (const key of path) {
+          if (value === null || typeof value !== "object") return false;
+          value = (value as Record<string, unknown>)[key];
+        }
+        return value === undefined;
+      };
+      const readSlot = (
+        slot: number,
+        cell: AnyCell,
+        observes: "value" | "shape",
+      ): Label => {
+        const label = consumed(cfcLabelViewForResolvedCell(cell), observes);
+        return filledByDefault(slot) ? { ...label, integrity: [] } : label;
+      };
+
       const inputsFor = (dereference: boolean): TemplateInputs => ({
         slot: (slot, elements) => {
           const cell = slotCell(slot, elements);
@@ -180,14 +203,12 @@ export const compareScenario = async (scenario: Scenario): Promise<Row[]> => {
               "followRef",
             );
             return dereference
-              ? join([
-                reference,
-                consumed(cfcLabelViewForResolvedCell(cell), "value"),
-              ])
+              ? join([reference, readSlot(slot, cell, "value")])
               : reference;
           }
-          return consumed(
-            cfcLabelViewForResolvedCell(cell),
+          return readSlot(
+            slot,
+            cell,
             observes === "value" ? "value" : "shape",
           );
         },

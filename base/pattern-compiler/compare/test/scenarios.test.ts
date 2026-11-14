@@ -1,7 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { compareIsEdited, compareSmall } from "../scenarios.ts";
+import {
+  compareDefaulted,
+  compareIsEdited,
+  compareSmall,
+} from "../scenarios.ts";
 
 // The comparison of stage 3
 // (`docs/specs/compiled-pattern-language/README.md`, "Staging") for one
@@ -96,6 +100,37 @@ describe("the template of a message row's isEdited against the runtime's label",
       runtime: ["body", "edited", "sent"],
       template: [],
       overall: "tighter",
+    });
+  });
+});
+
+describe("an object with a declared integrity atom and a defaulted property (ruling T1)", () => {
+  const relations = async (given: boolean) =>
+    Object.fromEntries(
+      (await compareDefaulted(given)).map((row) => [
+        row.path.join("/"),
+        `C ${row.comparison.confidentiality}, I ${row.comparison.integrity}`,
+      ]),
+    );
+
+  it("has the object's integrity on a whole read and none at the property a default fills", async () => {
+    expect(await relations(false)).toEqual({
+      whole: EQUAL,
+      name: EQUAL,
+      // The runtime gives the defaulted property the object's atom. The
+      // template has the empty integrity there, which is looser: the
+      // exception by ruling of PL §3.1.
+      nick: "C equal, I looser",
+      derived: "C equal, I tighter",
+    });
+  });
+
+  it("is equal at the property where the argument supplies it", async () => {
+    expect(await relations(true)).toEqual({
+      whole: EQUAL,
+      name: EQUAL,
+      nick: EQUAL,
+      derived: "C equal, I tighter",
     });
   });
 });

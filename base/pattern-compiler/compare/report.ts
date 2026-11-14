@@ -6,7 +6,12 @@
  * Run from the repository root:
  * `deno run -A --no-check base/pattern-compiler/compare/report.ts`
  */
-import { compareIsEdited, compareSmall, showLabel } from "./scenarios.ts";
+import {
+  compareDefaulted,
+  compareIsEdited,
+  compareSmall,
+  showLabel,
+} from "./scenarios.ts";
 import type { Row } from "./harness.ts";
 
 const table = (title: string, rows: Row[]) => {
@@ -32,4 +37,7 @@ for (const flag of [true, false]) {
 }
 for (const edited of [true, false]) {
   table(`is-edited, edited = ${edited}`, await compareIsEdited(edited));
+}
+for (const given of [false, true]) {
+  table(`defaulted, nick given = ${given}`, await compareDefaulted(given));
 }

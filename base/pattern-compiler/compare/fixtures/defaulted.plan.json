@@ -1,0 +1,267 @@
+[
+  {
+    "module": "compare/fixtures/defaulted.tsx",
+    "patterns": [
+      {
+        "line": 16,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/defaulted.tsx",
+                "start": 500
+              },
+              "bodies": [],
+              "entry": "derived",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/defaulted.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/defaulted.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/defaulted.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "derived"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 1
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "nick"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "whole"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            }
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "declared": {
+                "integrity": [
+                  "vouched"
+                ]
+              },
+              "observes": "value",
+              "path": [
+                "profile"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "profile",
+                "name"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "profile",
+                "nick"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "profile"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            }
+          ],
+          "stateCells": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "profile": {
+                  "ifc": {
+                    "integrity": [
+                      "vouched"
+                    ]
+                  },
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "nick": {
+                      "default": "anon",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "nick"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "profile"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "ifc": {
+                "integrity": [
+                  "vouched"
+                ]
+              },
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "nick": {
+                  "default": "anon",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "nick"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "default": "anon",
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]
