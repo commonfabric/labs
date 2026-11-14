@@ -893,6 +893,20 @@ const mintedRuntimeInjectedEventKeys = (
 ): readonly string[] | undefined =>
   keys !== undefined && mintedRuntimeInjectedKeys.has(keys) ? keys : undefined;
 
+/** What `resolveAsCell()` names an inline array element by. */
+type ResolveAsCellOptions = {
+  /**
+   * Whether an inline object or array held in an array, which the resolved
+   * link passes through, is named at its address in the document that stores
+   * it. Otherwise the handle names a `snapshot:` of the element's content,
+   * which is what keeps a handle a program holds on to pointing at that
+   * content. A caller that looks the target up and keeps no handle sets this:
+   * minting the snapshot reads every container on the path and hashes the
+   * element, and such a caller has no use for it.
+   */
+  readonly inlineArrayItemsInPlace?: boolean;
+};
+
 /**
  * Module augmentation for runtime-specific cell methods.
  * These augmentations add implementation details specific to the runner runtime.
@@ -1056,6 +1070,15 @@ declare module "@commonfabric/api" {
 
   interface ICreatable<C extends AnyBrandedCell<any>> {
     for(cause: unknown, allowIfSet?: boolean): C;
+  }
+
+  interface IResolvable<T, C extends AnyBrandedCell<T>> {
+    /**
+     * Like `resolveAsCell()` with no argument, except that `options` says
+     * what an inline array element the resolved link passes through is
+     * named by: its stored address, or a snapshot of its content.
+     */
+    resolveAsCell(options?: ResolveAsCellOptions): C;
   }
 }
 
@@ -4251,8 +4274,14 @@ export class CellImpl<T extends FabricValue>
     }, options);
   }
 
-  resolveAsCell(): Cell<T> {
-    return this.#resolveAsCell("value");
+  /**
+   * Returns the cell at the position this cell's link resolves to, following
+   * links by value, with the labels the resolution's slot restrictions carry.
+   * An inline array element the resolved link passes through is named by a
+   * snapshot of its content, unless `options` asks for its stored address.
+   */
+  resolveAsCell(options?: ResolveAsCellOptions): Cell<T> {
+    return this.#resolveAsCell("value", options);
   }
 
   /**
@@ -4260,7 +4289,10 @@ export class CellImpl<T extends FabricValue>
    * this one lands in, for `"writeRedirect"`: write redirects are followed,
    * and a link stored there as the value is not.
    */
-  #resolveAsCell(lastNode: "value" | "writeRedirect"): Cell<T> {
+  #resolveAsCell(
+    lastNode: "value" | "writeRedirect",
+    options?: ResolveAsCellOptions,
+  ): Cell<T> {
     const readTx = this.#runtime.readTx(this.#tx);
     const tracesBefore = readTx.getCfcState().dereferenceTraces.length;
     let link: NormalizedFullLink = resolveLink(
@@ -4292,7 +4324,9 @@ export class CellImpl<T extends FabricValue>
         );
       }
     }
-    link = maybeConvertArrayPathToImmutableLink(readTx, link);
+    if (options?.inlineArrayItemsInPlace !== true) {
+      link = maybeConvertArrayPathToImmutableLink(readTx, link);
+    }
     return createCell(
       this.#runtime,
       link,
