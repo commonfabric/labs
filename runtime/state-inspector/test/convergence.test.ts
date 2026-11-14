@@ -3,11 +3,13 @@
 // then checks the verdicts. Side-effect free.
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import type { FabricValue } from "@commonfabric/api";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 
 import {
+  buildCrossSpaceLinkIndex,
   convergence,
   convergenceExact,
   type ConvergenceResult,
@@ -251,6 +253,83 @@ Deno.test("cross-space convergence", async (t) => {
           }
         }
       });
+
+      await t.step(
+        "scans stop at the finding limit and the examination cap",
+        () => {
+          for (const scan of [convergenceScan, convergenceScanExact]) {
+            const limited = scan(refs, { limit: 1 });
+            expect(limited.findings).toHaveLength(1);
+            expect(limited.examineCapped).toBe(false);
+
+            const capped = scan(refs, { examineCap: 1 });
+            expect(capped.sharedEntities).toBe(2);
+            expect(capped.examined).toBe(1);
+            expect(capped.examineCapped).toBe(true);
+            expect(capped.findings).toHaveLength(1);
+
+            expect(scan(refs).findings).toHaveLength(2);
+          }
+        },
+      );
+
+      await t.step("an entity deleted at head counts as absent", () => {
+        const deleted = `${dir}/Deleted.sqlite`;
+        makeSpace(deleted, [{ id: "of:X", value: { n: 1 } }]);
+        const db = new Database(deleted);
+        db.exec(
+          `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+             VALUES (2, 'session-d', 2, '{}', '{}');
+           INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+             VALUES ('of:X', 2, 0, 'delete', NULL, 2);
+           INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+             VALUES ('of:Orphan', 3, 0, 'set', '{"value":1}', 99);`,
+        );
+        db.close();
+        const pair = openSpaces([`${dir}/A.sqlite`, deleted]);
+        try {
+          const result = convergenceExact(pair, { id: "of:X" });
+          expect(result.verdict).toBe("partial");
+          expect(result.views.map((view) => view.present)).toEqual([
+            true,
+            false,
+          ]);
+          expect(result.views[1].value).toBeUndefined();
+
+          // A revision whose commit row is missing still counts as present,
+          // with no last writer to report.
+          const orphan = convergenceExact(pair, { id: "of:Orphan" }).views[1];
+          expect(orphan).toMatchObject({
+            present: true,
+            headSeq: 3,
+            lastSession: null,
+            lastWriteAt: null,
+          });
+        } finally {
+          for (const ref of pair) ref.space.close();
+        }
+      });
+
+      await t.step(
+        "the link index skips a candidate that cannot be decoded",
+        () => {
+          const broken = `${dir}/Broken.sqlite`;
+          makeSpace(broken, [{ id: "of:holder", value: {} }]);
+          const db = new Database(broken);
+          db.prepare("UPDATE revision SET data = ? WHERE id = 'of:holder'").run(
+            '{"space":"did:key:zOther"',
+          );
+          db.close();
+          const spaces = openSpaces([broken]);
+          try {
+            const index = buildCrossSpaceLinkIndex(spaces);
+            expect(index.examinedEntities).toBe(1);
+            expect(index.edges).toEqual([]);
+          } finally {
+            for (const ref of spaces) ref.space.close();
+          }
+        },
+      );
 
       await t.step("scan surfaces X (diverged) and Y (partial), not Z", () => {
         const scan: ScanResult = convergenceScan(refs);

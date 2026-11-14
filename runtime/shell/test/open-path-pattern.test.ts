@@ -61,7 +61,10 @@ class InProcessTransport extends EventEmitter<RuntimeTransportEvents>
     if (!("msgId" in message)) return;
     const { msgId, data } = message;
     if (
-      data.type === RequestType.Initialize || data.type === RequestType.Dispose
+      data.type === RequestType.Initialize ||
+      data.type === RequestType.Attach ||
+      data.type === RequestType.SetForwardWorkerConsole ||
+      data.type === RequestType.Dispose
     ) {
       queueMicrotask(() => this.emit("message", { msgId }));
       return;

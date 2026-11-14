@@ -4,6 +4,7 @@
 // parseable, `</script>`-safe embedded bundle.
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
@@ -348,6 +349,49 @@ Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
             "op names must be HTML-escaped in the shell",
           );
           assertStringIncludes(html, "&lt;img src=x onerror");
+        },
+      );
+
+      await t.step(
+        "an entity two identities wrote carries its stale-read analysis",
+        () => {
+          const writable = new Database(dbPath);
+          try {
+            const commit = writable.prepare(
+              `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+               VALUES (?, ?, 1, ?, '{}')`,
+            );
+            const rev = writable.prepare(
+              `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+               VALUES ('of:contested', ?, 0, 'set', '{"value":1}', ?)`,
+            );
+            const read = (seq: number) =>
+              JSON.stringify({
+                reads: {
+                  confirmed: [{ id: "of:contested", path: [], seq }],
+                  pending: [],
+                },
+              });
+            commit.run(20, "session:did:key:zAlice:a", "{}");
+            rev.run(20, 20);
+            commit.run(21, "session:did:key:zAlice:a", "{}");
+            rev.run(21, 21);
+            // Bob read the entity at 20 and committed without seeing 21.
+            commit.run(22, "session:did:key:zBob:b", read(20));
+            rev.run(22, 22);
+          } finally {
+            writable.close();
+          }
+          const contested = buildInspectorBundle(space).conflicts.find((c) =>
+            c.id === "of:contested"
+          );
+          expect(contested).toMatchObject({
+            multiUser: true,
+            staleReadsAnalyzed: true,
+          });
+          expect(contested?.staleReads?.map((r) => r.missedWriteSeq)).toEqual(
+            [21],
+          );
         },
       );
     } finally {

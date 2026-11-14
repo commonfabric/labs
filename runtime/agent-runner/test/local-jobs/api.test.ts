@@ -815,6 +815,30 @@ describe("local-jobs/api", () => {
         store.close();
       }
     });
+    it("returns 400 invalid_request for a message body that cannot be read, accepting no message", async () => {
+      const { post, call, store } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        const events = [...store.events(job.id, 0)];
+        const response = await call(`/jobs/${job.id}/messages`, {
+          method: "POST",
+          body: new ReadableStream({
+            start(controller) {
+              controller.error(new Error("the connection dropped"));
+            },
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          code: "invalid_request",
+          error: "The body could not be read.",
+        });
+        expect([...store.events(job.id, 0)]).toEqual(events);
+      } finally {
+        store.close();
+      }
+    });
   });
 
   describe("GET /jobs", () => {

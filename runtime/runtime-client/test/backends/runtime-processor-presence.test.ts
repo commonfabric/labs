@@ -13,7 +13,11 @@ import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import { defer } from "@commonfabric/async/defer";
 
 import type { WorkerClient } from "@/backends/worker-client.ts";
-import { NotificationType, type PresenceWireEvent } from "@/protocol/mod.ts";
+import {
+  NotificationType,
+  type PresenceWireEvent,
+  RequestType,
+} from "@/protocol/mod.ts";
 import { buildProcessor } from "./build-processor.ts";
 
 const identity = { principal: "did:key:z6Mk-presence-worker", sessionId: "s" };
@@ -176,7 +180,8 @@ describe("RuntimeProcessor presence", () => {
       name: "Ada",
       facets: {},
     } as never, owner)).toEqual({ value: false });
-    await processor.handlePresenceJoin({
+    await processor.handleRequest({
+      type: RequestType.PresenceJoin,
       cell,
       subscriptionId: "membership:1",
     } as never, owner);
@@ -185,11 +190,12 @@ describe("RuntimeProcessor presence", () => {
       name: "Ada",
       facets: { caret: { focused: true } },
     } as never, other)).toEqual({ value: false });
-    expect(processor.handlePresencePublish({
+    await expect(processor.handleRequest({
+      type: RequestType.PresencePublish,
       subscriptionId: "membership:1",
       name: "Ada",
       facets: { caret: { focused: true } },
-    } as never, owner)).toEqual({ value: true });
+    }, owner)).resolves.toEqual({ value: true });
     expect(published).toEqual([{
       name: "Ada",
       facets: { caret: { focused: true } },
@@ -200,9 +206,10 @@ describe("RuntimeProcessor presence", () => {
       } as never, other),
     ).toEqual({ value: false });
     expect(
-      await processor.handlePresenceLeave({
+      await processor.handleRequest({
+        type: RequestType.PresenceLeave,
         subscriptionId: "membership:1",
-      } as never, owner),
+      }, owner),
     ).toEqual({ value: true });
     expect(processor.handlePresencePublish({
       subscriptionId: "membership:1",

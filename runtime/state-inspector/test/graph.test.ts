@@ -3,6 +3,7 @@
 // nodes, the pattern/argument/owns edges, neighborhood restriction, and DOT.
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
@@ -163,6 +164,52 @@ Deno.test("entity graph: nodes, edges, neighborhood, dot", async (t) => {
         assert(dot.includes("My Notebook"));
         assert(dot.trimEnd().endsWith("}"));
       });
+
+      await t.step(
+        "data links skip id-less links, collapse duplicates, and mark external targets",
+        () => {
+          const writable = new Database(dbPath);
+          try {
+            writable.exec(
+              `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+                 VALUES (8, 'session:did:key:zX:u', 8, '{}', '{}')`,
+            );
+            writable.prepare(
+              `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+               VALUES ('of:linker', 8, 0, 'set', ?, 8)`,
+            ).run(JSON.stringify({
+              value: {
+                nowhere: { "/": { "link@1": { path: ["x"] } } },
+                first: link("of:free"),
+                second: link("of:free"),
+                far: {
+                  "/": {
+                    "link@1": { id: "of:far", path: [], space: "did:key:zFar" },
+                  },
+                },
+              },
+            }));
+          } finally {
+            writable.close();
+          }
+          const graph = buildSpaceGraph(space);
+          const fromLinker = graph.edges.filter((e) => e.from === "of:linker");
+          expect(fromLinker.map((e) => [e.to, e.external ?? false])).toEqual([
+            ["of:free", false],
+            ["did:key:zFar/of:far", true],
+          ]);
+          expect(graph.stats.externalEdges).toBe(1);
+          expect(
+            graph.nodes.find((n) => n.id === "did:key:zFar/of:far"),
+          ).toMatchObject({ label: "(external)", present: false });
+
+          const around = subgraphAround(graph, "of:linker", 1);
+          expect(around.stats.externalEdges).toBe(1);
+          expect(around.stats.edgesByKind.link).toBe(2);
+          expect(subgraphAround(graph, "of:input", 1).stats.externalEdges)
+            .toBe(0);
+        },
+      );
     } finally {
       space.close();
     }

@@ -6,6 +6,7 @@
 // over-reporting the reviews flagged). session_ids use the real %-encoded form.
 
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
@@ -240,6 +241,103 @@ Deno.test("conflicts: engine-faithful checks do NOT over-report", async (t) => {
         // not a conflict for it. The old `rd.branch ?? inspectedBranch` bug flagged it.
         const c = entityConflicts(space, X, { branch: "feature" });
         assertEquals(c.staleReads.length, 0);
+      } finally {
+        space.close();
+      }
+    },
+  );
+
+  await t.step(
+    "a set, a delete, or an undecodable patch after the read conflicts",
+    () => {
+      for (
+        const [op, data] of [
+          ["set", '{"value":{"v":2}}'],
+          ["delete", null],
+          ["patch", "{"],
+        ] as const
+      ) {
+        const p = `${dir}/whole-${op}.sqlite`;
+        {
+          const { db, commit, setRev } = open(p);
+          setRev(commit(SA, []));
+          db.prepare(
+            `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+             VALUES (?, ?, 0, ?, ?, ?)`,
+          ).run(X, 2, op, data, commit(SA, []));
+          commit(SB, [{ seq: 1, path: ["value", "unrelated"] }]);
+          db.close();
+        }
+        const space = openSpace(p);
+        try {
+          const c = entityConflicts(space, X);
+          expect(c.staleReads.map((r) => [r.missedWriteSeq, r.missedWriteOp]))
+            .toEqual([[2, op]]);
+          expect(c.staleReads[0].readerAlsoWrote).toBe(false);
+        } finally {
+          space.close();
+        }
+      }
+    },
+  );
+
+  await t.step("an operation that is not a write never conflicts", () => {
+    const p = `${dir}/unknown-op.sqlite`;
+    {
+      const { db, commit, setRev } = open(p);
+      setRev(commit(SA, []));
+      db.prepare(
+        `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+         VALUES (?, 2, 0, 'touch', NULL, ?)`,
+      ).run(X, commit(SA, []));
+      commit(SB, [{ seq: 1 }]);
+      db.close();
+    }
+    const space = openSpace(p);
+    try {
+      expect(entityConflicts(space, X).staleReads).toEqual([]);
+    } finally {
+      space.close();
+    }
+  });
+
+  await t.step(
+    "reads that cannot be decoded or resolved are skipped",
+    () => {
+      const p = `${dir}/unreadable.sqlite`;
+      {
+        const { db, commit, setRev } = open(p);
+        setRev(commit(SA, []));
+        setRev(commit(SA, []));
+        const insert = db.prepare(
+          `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+           VALUES (?, ?, 1, ?, '{}')`,
+        );
+        // An original that mentions X but is not JSON.
+        insert.run(3, SB, `{"id":"${X}"`);
+        // A user-scoped read from a session with no principal.
+        insert.run(
+          4,
+          "anonymous",
+          JSON.stringify({
+            reads: { confirmed: [{ id: X, path: [], seq: 1, scope: "user" }] },
+          }),
+        );
+        // The same read in the space scope does conflict.
+        insert.run(
+          5,
+          "anonymous",
+          JSON.stringify({
+            reads: { confirmed: [{ id: X, path: [], seq: 1, scope: "space" }] },
+          }),
+        );
+        db.close();
+      }
+      const space = openSpace(p);
+      try {
+        expect(
+          entityConflicts(space, X).staleReads.map((r) => r.readerCommitSeq),
+        ).toEqual([5]);
       } finally {
         space.close();
       }

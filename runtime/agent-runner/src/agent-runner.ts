@@ -167,7 +167,8 @@ const recordKey = (host: string, link: NormalizedFullLink): string =>
 /**
  * One user's runner over their agent queue. `start()` registers it and
  * begins following the queue; `stop()` aborts the runs it holds and stops
- * following. `idle()` resolves once no scan is pending and no run is held.
+ * following. `idle()` resolves once no scan is pending and no run is held;
+ * a run a scan lets go of when its lease expires stops being held then.
  */
 export class AgentRunner {
   readonly #options: AgentRunnerOptions;
@@ -177,6 +178,7 @@ export class AgentRunner {
   #registeredAt: string | undefined;
   #stopQueue: (() => void) | undefined;
   #scan: Promise<void> | undefined;
+  #scanStarted = Promise.withResolvers<void>();
   #scanRequested = false;
   #cancelScheduledWake: (() => void) | undefined;
   #stopped = false;
@@ -215,7 +217,11 @@ export class AgentRunner {
     }
   }
 
-  /** Aborts held runs, waits for them to end, and stops following. */
+  /**
+   * Aborts held runs, waits for them to end, and stops following. A run a
+   * scan has already let go of, because its lease expired, is no longer held,
+   * so it is not waited for, whether or not its execution has settled.
+   */
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#cancelScheduledWake?.();
@@ -243,8 +249,15 @@ export class AgentRunner {
   /** Resolves once no scan is pending and no run is held. */
   async idle(): Promise<void> {
     while (this.#scan !== undefined || this.#active.size > 0) {
-      await Promise.all([
-        this.#scan,
+      // A scan can drop a held run whose execution never settles, so a scan
+      // is waited for on its own, and a wait on the held runs ends when one
+      // of them finishes or a scan starts.
+      if (this.#scan !== undefined) {
+        await this.#scan;
+        continue;
+      }
+      await Promise.race([
+        this.#scanStarted.promise,
         ...[...this.#active.values()].flatMap((run) =>
           run.finished === undefined ? [] : [run.finished]
         ),
@@ -294,6 +307,8 @@ export class AgentRunner {
     if (this.#stopped) return;
     this.#scanRequested = true;
     if (this.#scan !== undefined) return;
+    this.#scanStarted.resolve();
+    this.#scanStarted = Promise.withResolvers<void>();
     this.#scan = (async () => {
       try {
         while (this.#scanRequested && !this.#stopped) {

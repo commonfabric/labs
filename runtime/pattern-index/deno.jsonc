@@ -1,7 +1,6 @@
 {
   "name": "@commonfabric/pattern-index",
   "exports": {
-    ".": "./mod.ts",
     "./client": "./src/client.ts",
     "./successors": "./src/successors.ts",
     "./feedback": "./src/feedback.ts",

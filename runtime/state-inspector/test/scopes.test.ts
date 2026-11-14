@@ -4,6 +4,7 @@
 // (as in real DBs) to exercise the encode/decode path.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
@@ -236,6 +237,58 @@ Deno.test("scope awareness: enumerate, compose, diverge", async (t) => {
         const single = scopeOverlay(space, "of:A");
         assertEquals(single.overridden, false);
       });
+
+      await t.step(
+        "parseScope keeps a part with a malformed escape as written",
+        () => {
+          const s = parseScope("session:did%3Akey%3AzUser:%E0%A4%A");
+          expect(s.kind).toBe("session");
+          expect(s.principal).toBe(DID);
+          expect(s.sessionId).toBe("%E0%A4%A");
+        },
+      );
+
+      await t.step(
+        "an undecodable scoped row falls through to the shared value",
+        () => {
+          const writable = new Database(dbPath);
+          try {
+            writable.exec(
+              `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+                 VALUES (6, 'anonymous', 6, '{}', '{}');
+               INSERT INTO revision (id, scope_key, seq, op_index, op, data, commit_seq)
+                 VALUES ('of:D', 'space', 6, 0, 'set', '{"value":"space-D"}', 6),
+                        ('of:D', '${USER}', 6, 0, 'set', '{', 6);`,
+            );
+          } finally {
+            writable.close();
+          }
+
+          const resolved = valueAsIdentity(space, {
+            id: "of:D",
+            identity: DID,
+          });
+          expect(resolved).toMatchObject({
+            exists: true,
+            resolvedScope: "space",
+            value: "space-D",
+            overrides: false,
+          });
+
+          const overlay = scopeOverlay(space, "of:D");
+          expect(overlay.divergent).toBe(true);
+          expect(overlay.variants.map((v) => v.summary)).toEqual([
+            '"space-D"',
+            expect.stringMatching(/^«decode-error: /),
+          ]);
+          expect(overlay.variants[1].value).toBeUndefined();
+
+          // A commit whose session names no principal attributes to nobody.
+          const participants = spaceParticipants(space);
+          expect(participants.map((p) => p.did)).toEqual([DID]);
+          expect(participants[0].commits).toBe(5);
+        },
+      );
     } finally {
       space.close();
     }

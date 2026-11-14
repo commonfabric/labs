@@ -81,6 +81,14 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("reads a command endpoint that names no relevant commands as naming none", async () => {
+      const commands = { url: ASK.commands.url, actor: ASK.commands.actor };
+      const profile = (await read({ ask: { ...ASK, commands } })).get("ask")!;
+
+      expect(profile.commands).toEqual(commands);
+      expect(profile.commands).not.toHaveProperty("relevant");
+    });
+
     it("retains host model bounds and refuses widening them", async () => {
       const profile = (await read({
         ask: { ...ASK, maxInputBytes: 65536, maxOutputTokens: 8192 },

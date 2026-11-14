@@ -344,11 +344,7 @@ interface DetailContext {
   readDocument: (id: string) => EntityDocument | undefined;
 }
 
-function refTo(
-  id: string | undefined,
-  ctx: DetailContext,
-): LinkRef | undefined {
-  if (!id) return undefined;
+function refTo(id: string, ctx: DetailContext): LinkRef {
   const info = ctx.labelOf.get(id);
   return { id, label: info?.label, kind: info?.kind };
 }
@@ -404,11 +400,11 @@ function detailFromDoc(
     const internalIds = linksWithPaths(value.internal, DETAIL_LINK_WALK).links
       .map((l) => l.link.id).filter((x): x is string => !!x);
     if (internalIds.length) {
-      lineage.internal = internalIds.map((cid) => refTo(cid, ctx)!);
+      lineage.internal = internalIds.map((cid) => refTo(cid, ctx));
     }
   }
   if (c.lineage.internal?.length) {
-    lineage.internal = c.lineage.internal.map((cid) => refTo(cid, ctx)!);
+    lineage.internal = c.lineage.internal.map((cid) => refTo(cid, ctx));
   }
   if (c.lineage.pattern) {
     const mid = ctx.moduleIndex.get(c.lineage.pattern.identity);

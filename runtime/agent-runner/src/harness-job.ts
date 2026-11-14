@@ -472,6 +472,23 @@ export const selectHarnessJobSandboxRuntime = (
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
 
 /**
+ * Whether the run recorded at `runRoot` holds a checkpoint it can continue
+ * from. A run root that is not there recorded nothing to continue.
+ *
+ * @throws Error when the run's artifacts are there but cannot be read.
+ */
+export const canContinueRecordedRun = async (
+  runRoot: string,
+): Promise<boolean> => {
+  try {
+    return canContinueHarnessRun(await readHarnessRunArtifacts(runRoot));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
+
+/**
  * Runs one job. It ends `completed` with the submitted value or final text and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
  * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`,
@@ -665,16 +682,8 @@ export const runHarnessJob = async (
       }
       : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
-  let recordedRun = false;
-  if (runRef !== undefined) {
-    try {
-      recordedRun = canContinueHarnessRun(
-        await readHarnessRunArtifacts(runRef),
-      );
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-    }
-  }
+  const recordedRun = runRef !== undefined &&
+    await canContinueRecordedRun(runRef);
   const report = loopResult !== undefined
     ? reportOf(loopResult)
     : failedReport ??

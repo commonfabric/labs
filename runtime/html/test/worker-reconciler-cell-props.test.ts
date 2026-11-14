@@ -596,6 +596,16 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
           if (appliedBatchId === undefined) {
             throw new Error("expected listener update batch");
           }
+          // A batch before the one that retired the old listener leaves it
+          // in place: the main thread may still deliver its events.
+          reconciler.acknowledgeBatchApplied(appliedBatchId - 1);
+          assertEquals(
+            reconciler.dispatchEvent(
+              firstEventOp.handlerId,
+              { type: "click", phase: "before-ack" },
+            ),
+            true,
+          );
           reconciler.acknowledgeBatchApplied(appliedBatchId);
           assertEquals(
             reconciler.dispatchEvent(

@@ -153,6 +153,36 @@ describe("reap", () => {
       ).toContain("commit: only the kept rows, unchanged");
     });
 
+    it("fails a result whose backup's ACL payload cannot be decoded", () => {
+      const backup = new Database(store);
+      try {
+        backup.prepare(
+          `UPDATE revision SET data = '{' WHERE id = ? AND seq = 3`,
+        ).run(ACL);
+      } finally {
+        backup.close();
+      }
+      const verification = verifyReap({ result: out, against: store });
+      expect(verification.ok).toBe(false);
+      expect(
+        verification.checks.filter((check) => !check.passed).map((check) =>
+          check.name
+        ),
+      ).toEqual(["the backup's ACL document holds a deletion tombstone"]);
+    });
+
+    it("fails, as a check, against a backup that is not a database", async () => {
+      const notStore = `${dir}/not-a-store.sqlite`;
+      await Deno.writeTextFile(notStore, "plain text, not SQLite");
+      const verification = verifyReap({ result: out, against: notStore });
+      expect(verification.ok).toBe(false);
+      const failed = verification.checks.filter((check) => !check.passed);
+      expect(failed.map((check) => check.name)).toEqual([
+        "the stores can be compared",
+      ]);
+      expect(failed[0].detail).not.toBe("");
+    });
+
     it("fails a result reaped from a store whose space is not deleted", async () => {
       const live = `${dir}/live.sqlite`;
       const engine = await open({ url: toFileUrl(live) });

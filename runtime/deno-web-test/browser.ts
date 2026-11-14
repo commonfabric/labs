@@ -3,13 +3,11 @@ import {
   BOOT_FAILURE_MESSAGE,
   BrowserProcess,
 } from "@commonfabric/integration/browser-process";
-import { backtickQuote } from "@commonfabric/text/markdown";
 import { sleep } from "@commonfabric/async/sleep";
-import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { DRIVER_BINDING, SETTLE_GLOBAL } from "./commands-protocol.ts";
 import { DEFAULT_TEST_TIMEOUT_MS, extractAstralConfig } from "./config.ts";
-import { commandId, pressOn, readKeyPress } from "./driver-commands.ts";
+import { runCommand } from "./driver-commands.ts";
 import { TestResult } from "./interface.ts";
 import { Manifest } from "./manifest.ts";
 import { tsToJs } from "./utils.ts";
@@ -30,7 +28,7 @@ export async function launchWithRetry(
   launchImpl: LaunchFn = BrowserProcess.start,
   sleepImpl: SleepFn = sleep,
 ): Promise<BrowserProcess> {
-  for (let attempt = 1; attempt <= LAUNCH_RETRY_ATTEMPTS; attempt++) {
+  for (let attempt = 1;; attempt++) {
     try {
       return await launchImpl(options);
     } catch (error) {
@@ -43,12 +41,9 @@ export async function launchWithRetry(
       await sleepImpl(250 * 2 ** (attempt - 1));
     }
   }
-  throw new Error("unreachable");
 }
 
 export class BrowserController extends EventTarget {
-  static readonly #HARNESS_READY_TIMEOUT_MS = 10_000;
-  static readonly #HARNESS_READY_POLL_MS = 200;
   #manifest: Manifest;
   #page: Page | null;
   #process: BrowserProcess | null;
@@ -89,29 +84,27 @@ export class BrowserController extends EventTarget {
         );
       });
     }
-    await this.#waitUntilReady();
+    await this.#waitUntilReady(this.#page);
   }
 
   async getTestCount(): Promise<number> {
     if (!this.#page) {
       throw new Error("No page loaded.");
     }
-    return (await this.#page.evaluate(() =>
-      // @ts-ignore This is defined in the JS harness
-      globalThis.__denoWebTest.getTestCount()
-    ))
-      .ok;
+    return (await this.#page.evaluate<{ ok: number }, []>(
+      "globalThis.__denoWebTest.getTestCount()",
+    )).ok;
   }
 
   /** Runs the loaded file's test at `index`, numbered as it registered. */
-  async runTest(index: number): Promise<TestResult | void> {
+  async runTest(index: number): Promise<TestResult | null> {
     if (!this.#page) {
       throw new Error("No page loaded.");
     }
 
-    return (await this.#page.evaluate((at: number) =>
-      // @ts-ignore This is defined in the JS harness
-      globalThis.__denoWebTest.runAt(at), { args: [index] })).ok;
+    return (await this.#page.evaluate<{ ok: TestResult | null }, []>(
+      `globalThis.__denoWebTest.runAt(${index})`,
+    )).ok;
   }
 
   /**
@@ -146,29 +139,14 @@ export class BrowserController extends EventTarget {
    * document.
    */
   async #runCommand(page: Page, payload: string, contextId: number) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(payload);
-    } catch {
-      // `commandId` reports the payload below.
-    }
-    const id = commandId(parsed);
-    if (id === undefined || typeof parsed !== "object" || parsed === null) {
-      this.#reportCommandFailure(
-        `A test sent a command with no id: ${backtickQuote(payload)}`,
-      );
-      return;
-    }
-    let error: string | null = null;
-    try {
-      await pressOn(page.keyboard, readKeyPress(parsed));
-    } catch (e) {
-      error = describeFailure(e);
-    }
-    let failure: string | undefined;
-    try {
-      const settled = await page.unsafelyGetCelestialBindings().Runtime
-        .callFunctionOn({
+    const report = await runCommand(
+      payload,
+      page.keyboard,
+      // Celestial resolves a CDP error response, here a document that is
+      // gone, as `undefined` rather than rejecting, and its send throws once
+      // the connection to the browser is closed.
+      (id, error) =>
+        page.unsafelyGetCelestialBindings().Runtime.callFunctionOn({
           functionDeclaration: `function (name, id, error) {
             globalThis[name](id, error);
           }`,
@@ -176,55 +154,22 @@ export class BrowserController extends EventTarget {
           arguments: [{ value: SETTLE_GLOBAL }, { value: id }, {
             value: error,
           }],
-        });
-      // Celestial resolves a CDP error response, here a document that is
-      // gone, as `undefined` rather than rejecting.
-      if (settled === undefined) {
-        failure = "the document that sent it is gone";
-      } else if (settled.exceptionDetails) {
-        const { exception, text } = settled.exceptionDetails;
-        failure = exception?.description ?? text;
-      }
-    } catch (e) {
-      // Celestial's send throws once the connection to the browser is closed.
-      failure = describeFailure(e);
-    }
-    if (failure !== undefined) {
-      this.#reportCommandFailure(
-        `Command ${id} could not be settled: ${failure}`,
-      );
+        }),
+    );
+    if (report !== undefined) {
+      this.dispatchEvent(new ConsoleEvent({ type: "error", text: report }));
     }
   }
 
-  /** Helper for `#runCommand`, which reports `text` on the console. */
-  #reportCommandFailure(text: string) {
-    this.dispatchEvent(new ConsoleEvent({ type: "error", text }));
-  }
-
-  async #waitUntilReady() {
-    if (!this.#page) {
-      throw new Error("No page loaded.");
+  /** Helper for `load`, which waits for `page` to load its test file. */
+  async #waitUntilReady(page: Page) {
+    const response = await page.evaluate<
+      { ok: true; error?: undefined } | { error: string },
+      []
+    >("globalThis.__denoWebTest.whenReady()");
+    if (response.error !== undefined) {
+      throw new Error(response.error);
     }
-    const attempts = Math.ceil(
-      BrowserController.#HARNESS_READY_TIMEOUT_MS /
-        BrowserController.#HARNESS_READY_POLL_MS,
-    );
-    for (let i = 0; i < attempts; i++) {
-      const response = await this.#page.evaluate(() =>
-        // @ts-ignore This is defined in the JS harness
-        globalThis.__denoWebTest && globalThis.__denoWebTest.isReady()
-      );
-      if (response.ok) {
-        return;
-      }
-      if (response.error) {
-        throw new Error(response.error?.message ?? response.error);
-      }
-      await sleep(BrowserController.#HARNESS_READY_POLL_MS);
-    }
-    throw new Error(
-      `Test harness not ready in ${BrowserController.#HARNESS_READY_TIMEOUT_MS}ms.`,
-    );
   }
 
   async close() {

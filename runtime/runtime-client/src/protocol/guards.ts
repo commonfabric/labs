@@ -20,11 +20,9 @@ import {
   ErrorNotification,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
-  InitializationData,
   IPCClientMessage,
   IPCClientNotification,
   IPCClientRequest,
-  IPCRemoteMessage,
   IPCRemoteNotification,
   IPCRemoteResponse,
   NavigateRequestNotification,
@@ -55,23 +53,6 @@ export function isCellRef(value: unknown): value is CellRef {
   return Array.isArray(value.path) && typeof value.id === "string" &&
     !!value.id &&
     isDID(value.space);
-}
-
-/**
- * Is `value` an {@link InitializationData}? The shallowest guard here: it
- * checks `apiUrl` and `spaceDid` are strings and that `identity` is present at
- * all, and looks at nothing else the type declares. What it establishes is
- * that initialization has something to work with, not that the worker will
- * accept it.
- */
-export function isInitializationData(
-  value: unknown,
-): value is InitializationData {
-  return (
-    isObjectNotArray(value) &&
-    typeof value.apiUrl === "string" && !!value.identity &&
-    typeof value.spaceDid === "string"
-  );
 }
 
 /**
@@ -117,17 +98,6 @@ export function isIPCClientNotification(
       value.type as ClientNotificationType,
     )
   );
-}
-
-/**
- * Is `value` anything the worker sends the connection -- a response or a
- * notification? The transport's own traffic is not included: a ready or
- * worker-console notification is handled before dispatch reaches here.
- */
-export function isIPCRemoteMessage(
-  value: unknown,
-): value is IPCRemoteMessage {
-  return isIPCRemoteResponse(value) || isIPCRemoteNotification(value);
 }
 
 /**

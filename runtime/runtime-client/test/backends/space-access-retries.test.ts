@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
@@ -113,6 +114,24 @@ describe("SpaceAccessRetries", () => {
         gates[1].resolve();
         await later;
         expect(heard).toHaveLength(2);
+      });
+
+      it("logs an observer that throws, and still tells the others", async () => {
+        const { retries, gates } = gatedRetries();
+        retries.subscribe(() => {
+          throw new Error("observer broke");
+        });
+        const heard: MemorySpace[] = [];
+        retries.subscribe((space) => heard.push(space));
+        using errors = stub(console, "error");
+        const retry = retries.retry(SPACE);
+        gates[0].resolve();
+        await retry;
+        expect(heard).toEqual([SPACE, SPACE]);
+        expect(errors.calls.map((call) => call.args)).toEqual([
+          ["space-access-retry subscriber threw:", new Error("observer broke")],
+          ["space-access-retry subscriber threw:", new Error("observer broke")],
+        ]);
       });
     });
   });

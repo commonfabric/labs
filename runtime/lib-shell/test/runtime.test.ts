@@ -1,5 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import {
   fabricFromRealmValue,
   realmFromFabricValue,
@@ -9,6 +11,7 @@ import {
   cfcEnforcementStrictness,
   RUNTIME_CFC_DIAL_DEFAULTS,
 } from "@commonfabric/runner/cfc";
+import { slugIdForSpace } from "@commonfabric/runner/slugs";
 import {
   createSession,
   Identity,
@@ -18,15 +21,29 @@ import type { DID } from "@commonfabric/identity";
 import {
   createRuntimeClientOptions,
   defaultRenderConfidentialityCeiling,
+  fetchBuildHash,
   resolveSpaceDid,
   RuntimeInternals,
+  type RuntimeTelemetrySink,
   type RuntimeTrustSnapshot,
 } from "@commonfabric/lib-shell";
 import {
+  type CellHandle,
+  type ConsoleNotification,
+  type ErrorNotification,
   EventEmitter,
+  FavoritesManager,
+  NotificationType,
+  type PieceHandle,
+  type PieceSourceView,
+  type RuntimeClient,
+  type RuntimeClientEvents,
+  type RuntimeTelemetryMarkerResult,
   type RuntimeTransport,
+  type SlugRefusal,
   TransportNotificationType,
 } from "@commonfabric/runtime-client";
+import { readBuildHash } from "../src/build-hash.ts";
 
 /** Fails to compile unless `Bound` satisfies `Declared`. */
 type Satisfies<Bound extends Declared, Declared> = Bound;
@@ -42,42 +59,41 @@ export type NonDidActingPrincipalIsRejected = Satisfies<
   RuntimeTrustSnapshot
 >;
 
-type MockRuntimeClientEvents = {
-  console: [unknown];
-  navigaterequest: [{ cell: { id(): string; space(): DID } }];
-  error: [unknown];
-  telemetry: [unknown];
-  connectionrestored: [];
-  spaceaccessrestored: [{ space: DID }];
-};
+/**
+ * Declares `standIn`, which implements the parts of a `RuntimeClient` the
+ * case drives, as the client `RuntimeInternals` takes. Each member it has is
+ * typed as the client types it, except that the event methods return the
+ * emitter they were called on, which for a stand-in is not a client.
+ */
+function asRuntimeClient(
+  standIn:
+    & Partial<Omit<RuntimeClient, keyof EventEmitter<RuntimeClientEvents>>>
+    & Partial<EventEmitter<RuntimeClientEvents>>,
+): RuntimeClient {
+  return standIn as RuntimeClient;
+}
 
-class MockRuntimeClient {
+/**
+ * Declares a stand-in holding only the piece id, which is all of a handle
+ * these cases read, as the handle a client returns.
+ */
+function pieceHandle<T>(id: string): PieceHandle<T> {
+  return { id: () => id } as PieceHandle<T>;
+}
+
+/**
+ * Declares a stand-in holding only a cell's id and space, which is all of a
+ * cell these cases read, as a cell handle.
+ */
+function cellHandle<T = unknown>(id: string, space: DID): CellHandle<T> {
+  return { id: () => id, space: () => space } as CellHandle<T>;
+}
+
+class MockRuntimeClient extends EventEmitter<RuntimeClientEvents> {
   readonly signal: AbortSignal = new AbortController().signal;
   idleCalls = 0;
   syncedCalls = 0;
   slugByPieceId = new Map<string, string | undefined>();
-  #handlers = new Map<
-    keyof MockRuntimeClientEvents,
-    Array<(...args: unknown[]) => void>
-  >();
-
-  on<K extends keyof MockRuntimeClientEvents>(
-    event: K,
-    handler: (...args: MockRuntimeClientEvents[K]) => void,
-  ): void {
-    const handlers = this.#handlers.get(event) ?? [];
-    handlers.push(handler as (...args: unknown[]) => void);
-    this.#handlers.set(event, handlers);
-  }
-
-  emit<K extends keyof MockRuntimeClientEvents>(
-    event: K,
-    ...args: MockRuntimeClientEvents[K]
-  ): void {
-    for (const handler of this.#handlers.get(event) ?? []) {
-      handler(...args);
-    }
-  }
 
   idle(): Promise<void> {
     this.idleCalls += 1;
@@ -137,9 +153,9 @@ class MockRuntimeClient {
     pieceId: string,
     space: DID,
     scope?: string,
-  ): Promise<{ pieceId: string }> {
+  ): Promise<PieceSourceView> {
     this.pieceSourceCalls.push({ pieceId, space, scope });
-    return Promise.resolve({ pieceId });
+    return Promise.resolve({ space, pieceId, files: [], history: [] });
   }
 
   /** Records which space each root-pattern request targeted. */
@@ -168,15 +184,18 @@ class MockRuntimeClient {
   /** When set, every `getPiece` rejects rather than answering. */
   failEveryGetPiece = false;
 
-  /** When set, the next `getPiece` returns this, which the test settles. */
-  nextGetPiece: Promise<{ id: () => string }> | undefined = undefined;
+  /**
+   * When set, the next `getPiece` returns this, which the test settles: a
+   * rejection, or `null` for a piece the client did not find.
+   */
+  nextGetPiece: Promise<null> | undefined = undefined;
 
-  getPiece(
+  getPiece<T = unknown>(
     pieceId: string,
     space: DID,
     runIt?: boolean,
     scope?: string,
-  ): Promise<{ id: () => string }> {
+  ): Promise<PieceHandle<T> | null> {
     this.getPieceCalls.push({ pieceId, runIt, space, scope });
     const next = this.nextGetPiece;
     if (next) {
@@ -190,7 +209,7 @@ class MockRuntimeClient {
       this.failNextGetPiece = false;
       return Promise.reject(new Error("the socket went away"));
     }
-    return Promise.resolve({ id: () => pieceId });
+    return Promise.resolve(pieceHandle<T>(pieceId));
   }
 
   /**
@@ -210,17 +229,16 @@ class MockRuntimeClient {
   > = [];
 
   /** What the next `resolveSlug` refuses with, when it refuses. */
-  slugRefusal: { code: string; message: string } | undefined = undefined;
+  slugRefusal: SlugRefusal | undefined = undefined;
 
-  resolveSlug(
+  resolveSlug<T = unknown>(
     slug: string,
     space: DID,
     member?: string,
-  ): Promise<{
-    piece?: { id(): string; cell(): { ref(): { space: DID; scope: string } } };
-    pathAfter?: string[];
-    refusal?: { code: string; message: string };
-  }> {
+  ): Promise<
+    | { piece: PieceHandle<T>; pathAfter: string[]; refusal?: undefined }
+    | { piece?: undefined; pathAfter?: undefined; refusal: SlugRefusal }
+  > {
     this.resolveSlugCalls.push({ slug, space, member });
     if (this.slugRefusal) {
       return Promise.resolve({ refusal: this.slugRefusal });
@@ -228,12 +246,14 @@ class MockRuntimeClient {
     const reference = this.slugReference;
     if (!reference) return Promise.reject(new Error(`asking failed`));
     return Promise.resolve({
+      // The piece id and the address its cell was reached at are all of
+      // a landing these cases read.
       piece: {
         id: () => reference.pieceId,
         cell: () => ({
           ref: () => ({ space: reference.space, scope: reference.scope }),
         }),
-      },
+      } as PieceHandle<T>,
       pathAfter: reference.pathAfter,
     });
   }
@@ -282,14 +302,13 @@ describe("RuntimeInternals", () => {
   describe("createPiece", () => {
     it("forwards deterministic creation options and the explicit home space", async () => {
       const calls: unknown[] = [];
-      const piece = { id: () => "participant-header" };
       const client = Object.assign(new MockRuntimeClient(), {
-        createPiece: (...args: unknown[]) => {
+        createPiece: <T>(...args: unknown[]) => {
           calls.push(args);
-          return Promise.resolve(piece);
+          return Promise.resolve(pieceHandle<T>("participant-header"));
         },
       });
-      const runtime = new RuntimeInternals(client as never);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const space = "did:key:z6Mk-host-create-home" as DID;
       const source = new URL("https://fabric.example/header.tsx");
       const options = {
@@ -298,13 +317,12 @@ describe("RuntimeInternals", () => {
         run: true,
       };
       try {
-        expect(
-          await runtime.createPiece(space, source, {
-            cause: options.cause,
-            argument: {},
-            run: true,
-          }),
-        ).toBe(piece);
+        const piece = await runtime.createPiece(space, source, {
+          cause: options.cause,
+          argument: {},
+          run: true,
+        });
+        expect(piece.id()).toBe("participant-header");
         expect(calls).toEqual([[source, space, options]]);
       } finally {
         await runtime.dispose();
@@ -320,7 +338,7 @@ describe("RuntimeInternals", () => {
         client.spaceRootCalls.push(space);
         return Promise.resolve(rootPattern as never);
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const space = "did:key:z6Mk-root-cache" as DID;
 
       try {
@@ -347,7 +365,7 @@ describe("RuntimeInternals", () => {
         starts.push(options?.start);
         return Promise.resolve({ id: `root-${options?.start}` } as never);
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const space = "did:key:z6Mk-root-start" as DID;
 
       try {
@@ -368,7 +386,7 @@ describe("RuntimeInternals", () => {
 
     it("rejects a failed lookup's later requests with its error, asking the worker once", async () => {
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const space = "did:key:z6Mk-root-retry" as DID;
 
       try {
@@ -394,7 +412,7 @@ describe("RuntimeInternals", () => {
         client.spaceRootCalls.push(space);
         return Promise.resolve(answers.shift() as never);
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const space = "did:key:z6Mk-root-absent" as DID;
 
       try {
@@ -408,16 +426,47 @@ describe("RuntimeInternals", () => {
         await runtime.dispose();
       }
     });
+
+    it("asks again after a lookup in flight across a restored connection fails", async () => {
+      const client = new MockRuntimeClient();
+      const held = Promise.withResolvers<never>();
+      const answers = [held.promise, Promise.resolve({ id: "root" } as never)];
+      client.getSpaceRootPattern = (space: DID) => {
+        client.spaceRootCalls.push(space);
+        return answers.shift()!;
+      };
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
+      const space = "did:key:z6Mk-root-in-flight" as DID;
+
+      try {
+        const first = runtime.getSpaceRootPattern(space);
+        client.emit("connectionrestored");
+        held.reject(new Error("the socket went away"));
+        await expect(first).rejects.toThrow("the socket went away");
+
+        await expect(runtime.getSpaceRootPattern(space)).resolves.toEqual({
+          id: "root",
+        });
+        expect(client.spaceRootCalls).toEqual([space, space]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
   });
 
   it("reads a piece's source state through the client", async () => {
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
     const space = "did:key:z6Mk-source-space" as DID;
     try {
       const source = await runtime.getPieceSource(space, "of:fid1:piece");
 
-      expect(source).toEqual({ pieceId: "of:fid1:piece" });
+      expect(source).toEqual({
+        space,
+        pieceId: "of:fid1:piece",
+        files: [],
+        history: [],
+      });
       // The shell method takes (space, pieceId); the client takes them the
       // other way round, so the order is worth pinning.
       expect(client.pieceSourceCalls).toEqual([{
@@ -436,7 +485,7 @@ describe("RuntimeInternals", () => {
     // both — the id alone names a different document.
 
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
     const space = "did:key:z6Mk-scoped-space" as DID;
     try {
       await runtime.getPieceSource(space, "of:fid1:piece", "user");
@@ -458,7 +507,7 @@ describe("RuntimeInternals", () => {
 
   it("creates spaces through the worker client and returns each DID", async () => {
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
     try {
       await expect(runtime.createSpace("notebook")).resolves.toBe(
         "did:key:z6Mk-created-1",
@@ -475,7 +524,7 @@ describe("RuntimeInternals", () => {
   it("returns the worker's registration for a refused space host", async () => {
     const space = "did:key:z6Mk-lib-shell-routed-space" as DID;
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
     try {
       await expect(
         runtime.registerSpaceHostDetailed(space, "http://host-b.test/"),
@@ -492,7 +541,7 @@ describe("RuntimeInternals", () => {
     const spaceDid = "did:key:z6Mk-lib-shell-runtime-did-nav" as DID;
     const client = new MockRuntimeClient();
     client.slugByPieceId.set("piece-789", "demo");
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await expect(runtime.getSlug(spaceDid, "piece-789")).resolves.toBe(
@@ -514,7 +563,7 @@ describe("RuntimeInternals", () => {
         space,
         scope: "space",
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.resolveSlug(space, "top", "42")).resolves.toEqual({
@@ -542,7 +591,7 @@ describe("RuntimeInternals", () => {
         space,
         scope: "space",
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.resolveSlug(space, "plain", "42")).resolves
@@ -568,7 +617,7 @@ describe("RuntimeInternals", () => {
         space: "did:key:z6Mk-lib-shell-other-space" as DID,
         scope: "space",
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.resolveSlug(space, "top", "42")).rejects.toThrow(
@@ -591,7 +640,7 @@ describe("RuntimeInternals", () => {
         space,
         scope: "user",
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.resolveSlug(space, "top", "42")).resolves.toEqual({
@@ -610,7 +659,7 @@ describe("RuntimeInternals", () => {
         code: "missing-member",
         message: "no member 999 in top",
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.resolveSlug(space, "top", "999")).resolves
@@ -627,7 +676,7 @@ describe("RuntimeInternals", () => {
 
     it("guards resolveSlug after dispose", async () => {
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       await runtime.dispose();
 
       await expect(runtime.resolveSlug(space, "top", "42")).rejects.toThrow(
@@ -642,7 +691,7 @@ describe("RuntimeInternals", () => {
     // key by its ends answers about one and evicts the other.
     const space = "did:key:z6Mk-lib-shell-invalidate" as DID;
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await runtime.getPattern(space, "fid1:XYZ");
@@ -665,7 +714,7 @@ describe("RuntimeInternals", () => {
   it("caches one id in two scopes as two pieces", async () => {
     const space = "did:key:z6Mk-lib-shell-scope-cache" as DID;
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await runtime.getPattern(space, "fid1:XYZ", { scope: "space" });
@@ -689,7 +738,7 @@ describe("RuntimeInternals", () => {
     const space = "did:key:z6Mk-lib-shell-cache-levels" as DID;
     const client = new MockRuntimeClient();
     client.failNextGetPiece = true;
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await expect(runtime.getPattern(space, "fid1:gone")).rejects.toThrow();
@@ -706,7 +755,7 @@ describe("RuntimeInternals", () => {
     const space = "did:key:z6Mk-lib-shell-failed-load" as DID;
     const client = new MockRuntimeClient();
     client.failNextGetPiece = true;
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow(
@@ -732,7 +781,7 @@ describe("RuntimeInternals", () => {
     const space = "did:key:z6Mk-lib-shell-failed-upgrade" as DID;
     const client = new MockRuntimeClient();
     client.failNextGetPiece = true;
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await expect(
@@ -753,7 +802,7 @@ describe("RuntimeInternals", () => {
     const space = "did:key:z6Mk-lib-shell-failed-refresh" as DID;
     const client = new MockRuntimeClient();
     client.failNextGetPiece = true;
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow();
@@ -771,7 +820,7 @@ describe("RuntimeInternals", () => {
     const space = "did:key:z6Mk-lib-shell-failed-invalidate" as DID;
     const client = new MockRuntimeClient();
     client.failNextGetPiece = true;
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     try {
       await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow();
@@ -793,7 +842,7 @@ describe("RuntimeInternals", () => {
       const space = "did:key:z6Mk-lib-shell-restored-heal" as DID;
       const client = new MockRuntimeClient();
       client.failNextGetPiece = true;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.getPattern(space, "fid1:cut-off")).rejects
@@ -816,7 +865,7 @@ describe("RuntimeInternals", () => {
       const space = "did:key:z6Mk-lib-shell-restored-permanent" as DID;
       const client = new MockRuntimeClient();
       client.failEveryGetPiece = true;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const askThrice = async () => {
         for (let ask = 0; ask < 3; ask++) {
           await expect(runtime.getPattern(space, "fid1:broken")).rejects
@@ -843,7 +892,7 @@ describe("RuntimeInternals", () => {
     it("asks the worker nothing for a piece that loaded", async () => {
       const space = "did:key:z6Mk-lib-shell-restored-loaded" as DID;
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         const loaded = await runtime.getPattern(space, "fid1:fine");
@@ -862,9 +911,9 @@ describe("RuntimeInternals", () => {
       // broke can, once the requests it went on to make were answered.
       const space = "did:key:z6Mk-lib-shell-restored-in-flight" as DID;
       const client = new MockRuntimeClient();
-      const held = Promise.withResolvers<{ id: () => string }>();
+      const held = Promise.withResolvers<null>();
       client.nextGetPiece = held.promise;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         const first = runtime.getPattern(space, "fid1:in-flight");
@@ -884,7 +933,7 @@ describe("RuntimeInternals", () => {
     it("looks up a space root whose lookup failed again", async () => {
       const space = "did:key:z6Mk-lib-shell-restored-root" as DID;
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
@@ -909,7 +958,7 @@ describe("RuntimeInternals", () => {
       const space = "did:key:z6Mk-lib-shell-restored-event" as DID;
       const client = new MockRuntimeClient();
       client.failNextGetPiece = true;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const asked: Promise<{ id(): string }>[] = [];
       runtime.addEventListener("connectionrestored", () => {
         asked.push(runtime.getPattern(space, "fid1:cut-off"));
@@ -938,7 +987,7 @@ describe("RuntimeInternals", () => {
       const space = "did:key:z6Mk-lib-shell-granted-piece" as DID;
       const client = new MockRuntimeClient();
       client.failNextGetPiece = true;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.getPattern(space, "fid1:refused")).rejects
@@ -969,7 +1018,7 @@ describe("RuntimeInternals", () => {
         client.spaceRootCalls.push(asked);
         return answers.shift()!;
       };
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
@@ -994,7 +1043,7 @@ describe("RuntimeInternals", () => {
       const other = "did:key:z6Mk-lib-shell-granted-other" as DID;
       const client = new MockRuntimeClient();
       client.failEveryGetPiece = true;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         await expect(runtime.getPattern(other, "fid1:refused")).rejects
@@ -1020,9 +1069,9 @@ describe("RuntimeInternals", () => {
     it("loads a piece whose load was in flight when the space admitted the principal again, once that load fails", async () => {
       const space = "did:key:z6Mk-lib-shell-granted-in-flight" as DID;
       const client = new MockRuntimeClient();
-      const held = Promise.withResolvers<{ id: () => string }>();
+      const held = Promise.withResolvers<null>();
       client.nextGetPiece = held.promise;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
 
       try {
         const first = runtime.getPattern(space, "fid1:in-flight");
@@ -1043,7 +1092,7 @@ describe("RuntimeInternals", () => {
       const space = "did:key:z6Mk-lib-shell-granted-event" as DID;
       const client = new MockRuntimeClient();
       client.failNextGetPiece = true;
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       const asked: { space: DID; load: Promise<{ id(): string }> }[] = [];
       runtime.addEventListener("spaceaccessrestored", (event) => {
         const { detail } = event as CustomEvent<{ space: DID }>;
@@ -1070,7 +1119,7 @@ describe("RuntimeInternals", () => {
   it("guards removePiece after dispose", async () => {
     const spaceDid = "did:key:z6Mk-lib-shell-runtime-did-nav" as DID;
     const client = new MockRuntimeClient();
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     await runtime.dispose();
 
@@ -1097,7 +1146,7 @@ describe("RuntimeInternals", () => {
         }),
       } as never);
     };
-    const runtime = new RuntimeInternals(client as any);
+    const runtime = new RuntimeInternals(asRuntimeClient(client));
 
     let navigation: NavigationDetail | undefined;
     const navigationReceived = deferred<NavigationDetail>();
@@ -1109,10 +1158,7 @@ describe("RuntimeInternals", () => {
 
     try {
       client.emit("navigaterequest", {
-        cell: {
-          id: () => "piece-123",
-          space: () => spaceDid,
-        },
+        cell: cellHandle("piece-123", spaceDid),
       });
 
       await navigationReceived.promise;
@@ -1145,10 +1191,7 @@ describe("RuntimeInternals", () => {
 
     try {
       client.emit("navigaterequest", {
-        cell: {
-          id: () => "piece-456",
-          space: () => nextSpace,
-        },
+        cell: cellHandle("piece-456", nextSpace),
       });
 
       await expect(navigationReceived.promise).resolves.toEqual({
@@ -1168,7 +1211,7 @@ describe("RuntimeInternals", () => {
     client.synced = () => Promise.reject(new Error("convergence failed"));
 
     let navigated = false;
-    const runtime = new RuntimeInternals(client as any, {
+    const runtime = new RuntimeInternals(asRuntimeClient(client), {
       navigate: () => {
         navigated = true;
       },
@@ -1178,7 +1221,7 @@ describe("RuntimeInternals", () => {
     console.error = (...args: unknown[]) => errors.push(args);
     try {
       client.emit("navigaterequest", {
-        cell: { id: () => "piece-fail", space: () => space },
+        cell: cellHandle("piece-fail", space),
       });
       // Let the fire-and-forget handler settle. An unhandled rejection here
       // would fail the test via Deno's sanitizer.
@@ -1202,7 +1245,7 @@ describe("RuntimeInternals", () => {
     client.synced = () => syncedGate;
 
     let navigated = false;
-    const runtime = new RuntimeInternals(client as any, {
+    const runtime = new RuntimeInternals(asRuntimeClient(client), {
       navigate: () => {
         navigated = true;
       },
@@ -1212,7 +1255,7 @@ describe("RuntimeInternals", () => {
     console.error = (...args: unknown[]) => errors.push(args);
     try {
       client.emit("navigaterequest", {
-        cell: { id: () => "piece-dispose", space: () => space },
+        cell: cellHandle("piece-dispose", space),
       });
       // The handler is now parked on synced(); dispose, then cancel it.
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1679,12 +1722,8 @@ describe("RuntimeInternals", () => {
       }
 
       const OriginalWorker = globalThis.Worker;
-      const locationGlobal = globalThis as unknown as {
-        location: URL | undefined;
-      };
-      const originalLocation = locationGlobal.location;
+      using _location = pageLocation(new URL("http://shell.test/"));
       (globalThis as { Worker: unknown }).Worker = StubWorker;
-      locationGlobal.location = new URL("http://shell.test/");
       try {
         await expect(RuntimeInternals.create({
           identity,
@@ -1699,7 +1738,6 @@ describe("RuntimeInternals", () => {
         })).rejects.toThrow("stub worker");
       } finally {
         (globalThis as { Worker: unknown }).Worker = OriginalWorker;
-        locationGlobal.location = originalLocation;
       }
       expect(capturedUrls).toHaveLength(1);
       return new URL(capturedUrls[0]);
@@ -1767,7 +1805,7 @@ describe("RuntimeInternals", () => {
 
     function makeRuntime() {
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       return { client, runtime };
     }
 
@@ -1840,7 +1878,7 @@ describe("RuntimeInternals", () => {
   describe("lifetime signal", () => {
     it("exposes the client's lifetime signal", async () => {
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       try {
         expect(runtime.signal).toBe(client.signal);
       } finally {
@@ -1858,7 +1896,7 @@ describe("RuntimeInternals", () => {
 
     function makeRuntime() {
       const client = new MockRuntimeClient();
-      const runtime = new RuntimeInternals(client as any);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
       return { client, runtime };
     }
 
@@ -2053,6 +2091,525 @@ describe("RuntimeInternals", () => {
       } finally {
         await runtime.dispose();
       }
+    });
+  });
+
+  describe("client delegation", () => {
+    // Each method here hands its arguments to the client and returns what the
+    // client answers, and refuses once the runtime is disposed.
+
+    const space = "did:key:z6Mk-lib-shell-delegation" as DID;
+    const blob = {
+      space,
+      contentType: "image/gif",
+      body: new Uint8Array([0x47, 0x49, 0x46]),
+      name: "pixel.gif",
+    };
+
+    function delegatingClient() {
+      const calls: Array<[string, unknown[]]> = [];
+      const answering = <T>(name: string, answer: T) =>
+      (
+        ...args: unknown[]
+      ): Promise<T> => {
+        calls.push([name, args]);
+        return Promise.resolve(answer);
+      };
+      const client = Object.assign(new MockRuntimeClient(), {
+        getPiecesListCell: <T>(...args: unknown[]) =>
+          answering(
+            "getPiecesListCell",
+            cellHandle<T[]>("pieces-list", space),
+          )(...args),
+        getCell: <T>(...args: unknown[]) =>
+          answering("getCell", cellHandle<T>("slug-cell", space))(...args),
+        synced: answering("synced", undefined),
+        idle: answering("idle", undefined),
+        registerSpaceHost: answering("registerSpaceHost", true),
+        uploadBlob: answering("uploadBlob", {
+          id: "blob-id",
+          url: "https://fabric.example/blob-id",
+        }),
+      });
+      return {
+        client,
+        calls,
+        runtime: new RuntimeInternals(asRuntimeClient(client)),
+      };
+    }
+
+    it("reads a space's pieces list cell", async () => {
+      const { calls, runtime } = delegatingClient();
+      try {
+        expect((await runtime.getPiecesListCell(space)).id()).toBe(
+          "pieces-list",
+        );
+        expect(calls).toEqual([["getPiecesListCell", [space]]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("reads a slug's cell at the address the slug derives in the space", async () => {
+      const { calls, runtime } = delegatingClient();
+      try {
+        expect((await runtime.getSlugCell(space, "lunch")).id()).toBe(
+          "slug-cell",
+        );
+        await runtime.getSlugCell(space, "dinner");
+
+        const lunch = entityRefFromString(slugIdForSpace(space, "lunch"));
+        const dinner = entityRefFromString(slugIdForSpace(space, "dinner"));
+        expect(lunch).not.toEqual(dinner);
+        expect(calls).toEqual([
+          ["getCell", [space, lunch]],
+          ["getCell", [space, dinner]],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("waits on the client for a space to sync and for the runtime to idle", async () => {
+      const { calls, runtime } = delegatingClient();
+      try {
+        await runtime.synced(space);
+        await runtime.idle();
+        expect(calls).toEqual([["synced", [space]], ["idle", []]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns the client's verdict on a space host", async () => {
+      const { calls, runtime } = delegatingClient();
+      try {
+        expect(
+          await runtime.registerSpaceHost(space, "https://memory.example"),
+        ).toBe(true);
+        expect(calls).toEqual([
+          ["registerSpaceHost", [space, "https://memory.example"]],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("uploads a blob and returns where it landed", async () => {
+      const { calls, runtime } = delegatingClient();
+      try {
+        expect(await runtime.uploadBlob(blob)).toEqual({
+          id: "blob-id",
+          url: "https://fabric.example/blob-id",
+        });
+        expect(calls).toEqual([["uploadBlob", [blob]]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns one favorites manager however often asked", async () => {
+      const { runtime } = delegatingClient();
+      try {
+        const favorites = runtime.favorites();
+        expect(favorites).toBeInstanceOf(FavoritesManager);
+        expect(runtime.favorites()).toBe(favorites);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("throws from every method once disposed, asking the client nothing", async () => {
+      const { calls, runtime } = delegatingClient();
+      await runtime.dispose();
+
+      const disposed = "RuntimeInternals disposed.";
+      expect(() => runtime.favorites()).toThrow(disposed);
+      expect(() => runtime.getPiecesListCell(space)).toThrow(disposed);
+      await expect(runtime.getSlugCell(space, "lunch")).rejects.toThrow(
+        disposed,
+      );
+      await expect(runtime.synced(space)).rejects.toThrow(disposed);
+      await expect(runtime.idle()).rejects.toThrow(disposed);
+      await expect(
+        runtime.registerSpaceHost(space, "https://memory.example"),
+      ).rejects.toThrow(disposed);
+      await expect(runtime.uploadBlob(blob)).rejects.toThrow(disposed);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("missing pieces", () => {
+    const space = "did:key:z6Mk-lib-shell-missing" as DID;
+
+    it("rejects a load the client answers with no piece, naming the id", async () => {
+      const client = new MockRuntimeClient();
+      client.nextGetPiece = Promise.resolve(null);
+      const runtime = new RuntimeInternals(asRuntimeClient(client));
+      try {
+        await expect(runtime.getPattern(space, "fid1:absent")).rejects
+          .toThrow("Pattern not found: fid1:absent");
+        await expect(runtime.getPattern(space, "fid1:present")).resolves
+          .toBeDefined();
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  });
+
+  describe("dispose()", () => {
+    function sinkRecording(
+      order: string[],
+      shutdown = () => {},
+    ): RuntimeTelemetrySink {
+      return {
+        handleMarker: () => {},
+        shutdown: () => {
+          order.push("sink shutdown");
+          shutdown();
+        },
+      };
+    }
+
+    function disposeRecordingClient(order: string[]) {
+      return Object.assign(new MockRuntimeClient(), {
+        dispose: () => {
+          order.push("client dispose");
+          return Promise.resolve();
+        },
+      });
+    }
+
+    it("disposes the client once however often it is disposed", async () => {
+      const order: string[] = [];
+      const runtime = new RuntimeInternals(
+        asRuntimeClient(disposeRecordingClient(order)),
+      );
+
+      await runtime.dispose();
+      await runtime.dispose();
+
+      expect(order).toEqual(["client dispose"]);
+    });
+
+    it("shuts the telemetry sink down before disposing the client, and only once", async () => {
+      const order: string[] = [];
+      const sink = sinkRecording(order);
+      const runtime = new RuntimeInternals(
+        asRuntimeClient(disposeRecordingClient(order)),
+        {},
+        sink,
+      );
+
+      await runtime.dispose();
+      await runtime.dispose();
+
+      expect(order).toEqual(["sink shutdown", "client dispose"]);
+    });
+
+    it("disposes the client when the telemetry sink fails to shut down, logging the failure", async () => {
+      const order: string[] = [];
+      const failure = new Error("exporter unreachable");
+      const sink = sinkRecording(order, () => {
+        throw failure;
+      });
+      const runtime = new RuntimeInternals(
+        asRuntimeClient(disposeRecordingClient(order)),
+        {},
+        sink,
+      );
+      using error = stub(console, "error");
+
+      await runtime.dispose();
+
+      expect(order).toEqual(["sink shutdown", "client dispose"]);
+      expect(error.calls.map((call) => call.args)).toEqual([
+        ["[RuntimeInternals] telemetry sink shutdown failed:", failure],
+      ]);
+    });
+  });
+
+  describe("worker events", () => {
+    const space = "did:key:z6Mk-lib-shell-events" as DID;
+
+    describe("console", () => {
+      it("hands a console event to an injected callback, logging nothing", async () => {
+        const client = new MockRuntimeClient();
+        const received: unknown[] = [];
+        const runtime = new RuntimeInternals(asRuntimeClient(client), {
+          onConsole: (event) => received.push(event),
+        });
+        using log = stub(console, "log");
+        const event: ConsoleNotification = {
+          type: NotificationType.ConsoleMessage,
+          method: "info",
+          args: ["hello"],
+        };
+        try {
+          client.emit("console", event);
+          expect(received).toEqual([event]);
+          expect(log.calls).toEqual([]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("logs a piece's console event under the piece's id, and another under `Console`", async () => {
+        const client = new MockRuntimeClient();
+        const runtime = new RuntimeInternals(asRuntimeClient(client));
+        using log = stub(console, "log");
+        try {
+          client.emit("console", {
+            type: NotificationType.ConsoleMessage,
+            metadata: { pieceId: "fid1:talker" },
+            method: "warn",
+            args: ["careful", 1],
+          });
+          client.emit("console", {
+            type: NotificationType.ConsoleMessage,
+            method: "log",
+            args: ["plain"],
+          });
+          expect(log.calls.map((call) => call.args)).toEqual([
+            ["Piece(fid1:talker) [warn]:", "careful", 1],
+            ["Console [log]:", "plain"],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
+    describe("error", () => {
+      it("hands an error event to an injected callback, logging nothing", async () => {
+        const client = new MockRuntimeClient();
+        const received: unknown[] = [];
+        const runtime = new RuntimeInternals(asRuntimeClient(client), {
+          onError: (event) => received.push(event),
+        });
+        using error = stub(console, "error");
+        const event: ErrorNotification = {
+          type: NotificationType.ErrorReport,
+          message: "host unreachable",
+          space,
+        };
+        try {
+          client.emit("error", event);
+          expect(received).toEqual([event]);
+          expect(error.calls).toEqual([]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("logs an error event when no callback is injected", async () => {
+        const client = new MockRuntimeClient();
+        const runtime = new RuntimeInternals(asRuntimeClient(client));
+        using error = stub(console, "error");
+        const event: ErrorNotification = {
+          type: NotificationType.ErrorReport,
+          message: "host unreachable",
+          space,
+        };
+        try {
+          client.emit("error", event);
+          expect(error.calls.map((call) => call.args)).toEqual([
+            ["[RuntimeClient Error]", event],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
+    describe("telemetry", () => {
+      const marker: RuntimeTelemetryMarkerResult = {
+        type: "runner.piece.install",
+        key: "fid1:piece",
+        timeStamp: 1,
+      };
+
+      it("records each marker and dispatches `telemetryupdate` for it", async () => {
+        const client = new MockRuntimeClient();
+        const runtime = new RuntimeInternals(asRuntimeClient(client));
+        let updates = 0;
+        runtime.addEventListener("telemetryupdate", () => updates++);
+        try {
+          expect(runtime.telemetry()).toEqual([]);
+          client.emit("telemetry", marker);
+          client.emit("telemetry", { ...marker, timeStamp: 2 });
+          expect(runtime.telemetry()).toEqual([
+            marker,
+            { ...marker, timeStamp: 2 },
+          ]);
+          expect(updates).toBe(2);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("forwards each marker to the telemetry sink", async () => {
+        const client = new MockRuntimeClient();
+        const markers: unknown[] = [];
+        const runtime = new RuntimeInternals(asRuntimeClient(client), {}, {
+          handleMarker: (received) => markers.push(received),
+          shutdown: () => {},
+        });
+        try {
+          client.emit("telemetry", marker);
+          expect(markers).toEqual([marker]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("records a marker the telemetry sink fails on, logging the failure", async () => {
+        const client = new MockRuntimeClient();
+        const failure = new Error("span limit");
+        const runtime = new RuntimeInternals(asRuntimeClient(client), {}, {
+          handleMarker: () => {
+            throw failure;
+          },
+          shutdown: () => {},
+        });
+        using error = stub(console, "error");
+        try {
+          client.emit("telemetry", marker);
+          expect(runtime.telemetry()).toEqual([marker]);
+          expect(error.calls.map((call) => call.args)).toEqual([
+            ["[RuntimeInternals] telemetry sink handleMarker failed:", failure],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+  });
+
+  /** Sets the page's `location` to `value` until disposed. */
+  function pageLocation(value: URL | undefined): Disposable {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "location");
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+    return {
+      [Symbol.dispose]() {
+        if (original) {
+          Object.defineProperty(globalThis, "location", original);
+        } else {
+          Reflect.deleteProperty(globalThis, "location");
+        }
+      },
+    };
+  }
+
+  /**
+   * Sets the page's `location` to `value` until disposed, and serves the
+   * manifest `response()` returns, recording each request it is sent.
+   */
+  function manifestPage(
+    value: URL | undefined,
+    response: () => Response | Promise<Response>,
+  ) {
+    const location = pageLocation(value);
+    const fetchStub = stub(
+      globalThis,
+      "fetch",
+      () => Promise.resolve(response()),
+    );
+    return {
+      requests: () =>
+        fetchStub.calls.map(({ args: [url, init] }) => ({
+          url: String(url),
+          cache: init?.cache,
+        })),
+      [Symbol.dispose]() {
+        fetchStub.restore();
+        location[Symbol.dispose]();
+      },
+    };
+  }
+
+  const shellPage = new URL("http://shell.test/some/page");
+
+  describe("readBuildHash()", () => {
+    it("returns the worker bundle hash the page origin's manifest names, bypassing the HTTP cache", async () => {
+      using page = manifestPage(shellPage, () =>
+        Response.json({
+          "scripts/worker-runtime.js": "worker-hash",
+          "scripts/other.js": "other-hash",
+        }));
+
+      expect(await readBuildHash()).toBe("worker-hash");
+      expect(page.requests()).toEqual([
+        { url: "http://shell.test/build-manifest.json", cache: "no-store" },
+      ]);
+    });
+
+    it("returns `undefined` for a manifest that names no worker bundle", async () => {
+      using _page = manifestPage(
+        shellPage,
+        () => Response.json({ "scripts/other.js": "other-hash" }),
+      );
+
+      expect(await readBuildHash()).toBeUndefined();
+    });
+
+    it("returns `undefined` for a manifest whose worker bundle entry is not a string", async () => {
+      using _page = manifestPage(
+        shellPage,
+        () => Response.json({ "scripts/worker-runtime.js": { hash: "h" } }),
+      );
+
+      expect(await readBuildHash()).toBeUndefined();
+    });
+
+    it("returns `undefined` when the manifest is not served", async () => {
+      using _page = manifestPage(
+        shellPage,
+        () => new Response("not found", { status: 404 }),
+      );
+
+      expect(await readBuildHash()).toBeUndefined();
+    });
+
+    it("returns `undefined` when fetching the manifest fails", async () => {
+      using _page = manifestPage(
+        shellPage,
+        () => Promise.reject(new TypeError("network down")),
+      );
+
+      expect(await readBuildHash()).toBeUndefined();
+    });
+
+    it("returns `undefined`, fetching nothing, where the page has no location", async () => {
+      using page = manifestPage(
+        undefined,
+        () => Response.json({ "scripts/worker-runtime.js": "worker-hash" }),
+      );
+
+      expect(await readBuildHash()).toBeUndefined();
+      expect(page.requests()).toEqual([]);
+    });
+  });
+
+  describe("fetchBuildHash()", () => {
+    // The memo lives as long as the module, so this is the one case in the
+    // file that calls `fetchBuildHash()`.
+
+    it("fetches the page origin's manifest once, however often asked", async () => {
+      using page = manifestPage(
+        shellPage,
+        () => Response.json({ "scripts/worker-runtime.js": "memo-hash" }),
+      );
+
+      expect(await fetchBuildHash()).toBe("memo-hash");
+      expect(await fetchBuildHash()).toBe("memo-hash");
+      expect(page.requests()).toEqual([
+        { url: "http://shell.test/build-manifest.json", cache: "no-store" },
+      ]);
     });
   });
 
