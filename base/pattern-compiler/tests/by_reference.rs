@@ -401,3 +401,22 @@ fn receiver_of_the_place_keeps_its_narrowing() {
          }}));\n"
     ));
 }
+
+#[test]
+fn argument_of_a_pattern_a_function_body_instantiates_is_an_initial_value() {
+    // Ruling T3: "An argument given to a pattern that a function body
+    // instantiates ... is the initial value of the child's stored argument;
+    // the child writes it freely. This is not a bound computed value."
+    let snippet = "const Note = pattern<{ title: Writable<string> }, { title: string }>(({ title }) => ({ title }));\n\
+         const make = handler<{ name: string }, { notes: Writable<unknown[]> }>((event, state) => {\n\
+           state.notes.push(Note({ title: event.name + \"!\" }));\n\
+         });\n";
+    assert_eq!(
+        counts(snippet, "types:by-reference:a writable handle bound to:"),
+        []
+    );
+    assert_eq!(
+        counts(snippet, "types:by-reference:an initial value of a child's argument:"),
+        [("a computed value: the result of an operator".to_string(), 1)]
+    );
+}

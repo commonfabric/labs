@@ -1177,15 +1177,16 @@ impl<'a> Resolver<'_, 'a> {
         };
         if by_reference && *verdict == Verdict::Yes && self.pairs(from, to, 0, &writable) {
             let origin = self.origin_of_place(module, expression, 0);
-            self.count(
-                module,
-                format!("types:by-reference:a writable handle bound to:{origin}"),
-            );
-            self.note(
-                module,
-                format!("a writable handle bound to {origin}"),
-                expression.span(),
-            );
+            // An argument of a pattern a function body instantiates is the
+            // initial value of the child's stored argument, which the child
+            // writes freely (ruling T3). It is counted on its own.
+            let what = if self.types.borrow().instantiating {
+                "an initial value of a child's argument"
+            } else {
+                "a writable handle bound to"
+            };
+            self.count(module, format!("types:by-reference:{what}:{origin}"));
+            self.note(module, format!("{what} {origin}"), expression.span());
         }
         for kind in [
             HandleKind::Cell,
@@ -2011,7 +2012,9 @@ impl<'a> Assignments<'_, '_, 'a> {
             } else {
                 declared.ty
             };
+            resolver.types.borrow_mut().instantiating = place == Place::Function;
             let verdict = resolver.check_against_in(self.module, value, expected, by_reference);
+            resolver.types.borrow_mut().instantiating = false;
             resolver.record(self.module, &site, value.span(), verdict);
         }
     }
@@ -2112,7 +2115,10 @@ impl<'a> Assignments<'_, '_, 'a> {
                 expected
             };
             resolver.types.borrow_mut().context = Some(call.span);
+            resolver.types.borrow_mut().instantiating =
+                place == Place::Function && callee == Callee::Pattern;
             let verdict = resolver.check_against_in(self.module, argument, expected, by_reference);
+            resolver.types.borrow_mut().instantiating = false;
             resolver.types.borrow_mut().context = None;
             // The arguments of an authored function called in tier R are
             // listed where they are not accepted (§13, question 31).

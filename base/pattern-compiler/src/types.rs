@@ -225,6 +225,9 @@ pub struct TypeStore {
     /// The call whose argument is being checked, which a site noted
     /// inside the argument is listed with.
     pub(crate) context: Option<Span>,
+    /// The argument being checked is that of a pattern a function body
+    /// instantiates (§7.5.3).
+    pub(crate) instantiating: bool,
     /// Sites the measurement lists: the module, the category, and the
     /// span.
     pub notes: Vec<(usize, String, Span)>,
