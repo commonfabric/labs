@@ -659,6 +659,18 @@ summary, a helper that returns one of its arguments, or a part of one, does
 not end the tracking: what the caller reads from the result is a read of the
 caller's own input.
 
+**A summary has no tier.** The tier of
+[§6.3](#63-computations-static-side-write-or-materializer), the three
+shapes of [§6.6](#66-idempotency), and the report of a read and a push
+([§6.4](#64-handlers)) are decided on a body of §1.2, with the
+summaries of the functions it calls applied. A summary lists the function's
+writes and reads and decides none of the three, because one function can be
+called from a computation and from a handler. A write, a read through a
+handle, or a widening that a summary brought into a body is reported at the
+call in the body's own text, and the message also names the position
+inside the function. Where calls nest, the call named is the outermost one,
+the one written in the body.
+
 Summaries are computed over the program's call graph from the leaves. A
 group of mutually recursive functions is iterated to a fixed point, which
 exists because the set of projections of a function's parameter types is
@@ -810,6 +822,14 @@ at the abstract value the joined return value has there:
   to name, and the path takes the body's template, which holds the
   journaled read that found the reference;
 - anything else gives no entry, and the path is computed.
+
+The result paths are those of the value the body built. A record the body
+built has each member at the path of its key, and a list at the path of
+its index. A bag at a result path `p` has its member at `p/*`, and the
+member is treated by the list above: a bag of one projection whose path
+has no `*` gives `passes` at `p/*`, and a bag of alternatives or of a
+projection whose path has a `*` gives `oneOf`. A bag whose member joins a
+`Computed` value with projections gives no entry.
 
 `passes` names an entry whose path has no `*`, and an entry whose path has
 one is named in `oneOf`, alone or with others
@@ -988,10 +1008,26 @@ W1 is the widening on a key. `prices[flavor].amount` reads
 `prices/*/amount` and the key set of `prices`. Only a child that is then
 consumed whole widens to whole children.
 
-W6 keeps the set of paths finite. A body that walks a tree of donut boxes
-reads `box.label` and `box/children/*/label` as separate paths, and
-everything below the second level through `box/children/*/children` as one
-subtree.
+W6 keeps the set of paths finite. A path **enters** a recursive type `T`
+where it reaches a position of type `T` from inside a value of type `T`.
+The first position of type `T` on a path is where the walk of the type
+starts, and is not an entry. An access counts in whatever form it is
+written: a property access, an element access, a destructuring, or an
+iteration.
+
+An observation at the position of the second entry is recorded there, like
+any other. An observation below it widens: the entry is `value` at the
+position of the second entry. Where that position's last segment is `*`,
+the entry is at the path without it, the container that holds the elements,
+so that it covers their enumeration too.
+
+A body that walks a tree of donut boxes starts at `box`, enters the type
+at `box/children/*`, and enters it for the second time at
+`box/children/*/children/*`. It reads `box.label` and
+`box/children/*/label` as separate paths, and everything below the second
+level through `box/children/*/children` as one subtree. With a type that
+refers to itself through a property and no array, `node.next`, the second
+entry is `node/next/next`, and the widened entry is at that path.
 
 The following do not widen. They are listed because the current analysis
 ([§10](#10-relation-to-the-current-system)) treats several of them as if
@@ -1304,6 +1340,15 @@ the analysis fails closed. A handler is not a cone, so its edges are not
 among `Plan.edges`: they say what the body may write and, through the
 addresses they are bound to, which cones its writes make stale.
 
+**A read and a push.** A handler that reads a mergeable collection and
+appends to it through the same handle is reported as
+`mergeable-push:read-then-push`. `language-subset.md` §10.3 has the
+condition. The analysis supplies what it is decided from: for each `push`
+and `pushAll` of the body, the handle and the path below it that the call
+appends to, and each read the body makes through that handle with `get()`
+or `sample()`, with its path and its place in the order of evaluation. The
+report needs no other body and nothing of the plan.
+
 A write policy that names a handler is checked against the write edges:
 `plan-and-label-templates.md` §4.4 checks at compile time that the body of
 a static edge is one the target's policy names. For a dynamic target the
@@ -1502,6 +1547,10 @@ them.
 A body can hold a plain and a resolved `identity` entry at one position.
 The first is the reference as stored, which is what the body passes on when
 it passes on `h`. The second is the reference `h.resolveAsCell()` returns.
+A use of the handle a static resolution returned (a read or a write through
+it, passing it on, binding it) records the resolved entry and no plain
+entry beside it. The plain entry is in the record only where the body also
+uses `h` itself.
 
 ### 7.2 Static and dynamic reads
 
@@ -1550,6 +1599,16 @@ the handle being present, `profile?.get()` where `profile` may be
 `undefined`, counts as unconditional. When the handle is absent there is
 nothing at the entry's path to resolve, and the test of its presence is a
 `shape` observation the footprint holds anyway.
+
+The relaxation is for the optional chain on the handle the call is made
+on, `h?.get()`, `h?.sample()`, and `h?.resolveAsCell()`, and for nothing
+else. A test of the handle written as a condition of its own, as in
+`if (h) { ... h.get() ... }`, `h && h.get()`, or `h ? h.get() : x`, is a
+condition like any other, and the read under it is dynamic. The message of
+`footprint:dynamic-read` for such a read names the optional chain as the
+static form. A call that is unconditional in a function, by this rule, and
+whose call in the body is unconditional, is unconditional in the body
+([§3.6](#36-functions)).
 
 That observation is at the position that holds the handle, `profile`, and
 not at the root of the cell it links to, `profile->`. The plan has one path
@@ -1917,9 +1976,12 @@ depend on a run.
 | In a `lift` or a `computed`, with a constant cause or the element key | The site, with `identifiedBy: "cause"`. The cell is a `StateCell` of the plan, and the site names it in its `stateCell` member. The initial value is a `WriteEdge` with target `state`, a static target (§6.3) |
 | In a `lift` or a `computed`, with a cause computed from data | The same, and the cause by the reference rule: `value` for a scalar, `identity` for a cell. The write's target is dynamic, so the body is a materializer whose envelope is the site, a `WriteEnvelope` of kind `created` |
 
-A cause is constant when its expression is built from literals and
-module-scope constants alone. A cause that is the element of the enclosing
-element body, captured whole, is that element's key, and
+A cause is constant when its expression is built from literals and module-scope
+constants alone: a literal, a template literal whose substitutions are
+constant, an operator over constants, or a local `const` whose initializer is
+constant. An expression that holds a projection, a `Computed` value, a `let`
+binding, or a call is not constant. A cause that is the element of the
+enclosing element body, captured whole, is that element's key, and
 `plan-and-label-templates.md` §3.14 treats it as constant too.
 
 The `StateCell` of a cell created under a constant cause or the element
@@ -2003,8 +2065,10 @@ resolution and its observation of label metadata are static or journaled.
 
 | Call | Recorded |
 | --- | --- |
-| `eventKey()`, `currentPrincipal()` | The `cause` entry. No input is observed |
+| `eventKey()` | The `cause` entry at path `eventKey`, of class `value`. No input is observed |
+| `currentPrincipal()` | The `cause` entry at path `principal`, of class `value`. No input is observed |
 | `principalOf(x)`, `principalsOf(x)`, `profileOwnerOf(x)` | A resolution of `x`, and an observation of the label metadata of `x` |
+| `writtenPrincipalOf(x)` | *Assumed* ([§13](#13-open-questions), request 25): as `principalOf(x)` |
 | `spaceOf(x)` | A resolution of `x` |
 | `equals(a, b)` | A resolution of `a` and one of `b`, each decided on its own |
 | `spaceAccess(x)`, `spaceAccessOf(x, p)`, `spaceMembers(x)` | A resolution of `x`, and a dynamic read of kind `space` through its `identity` entry. `value` at `p` |
@@ -2012,6 +2076,11 @@ resolution and its observation of label metadata are static or journaled.
 | `resultOwnerOf(x)` | A plain `identity` entry at `x`, and a dynamic read of kind `link` through it for the links the call follows. `value` at a field name that is a scalar projection |
 | `linksOf(list)` | `enumeration` at `list` and `identity` at `list/*` |
 | `getPatternEnvironment()` | Nothing |
+
+The two `cause` entries are slots with root `cause`, whose two paths
+`plan-and-label-templates.md` §1.1 names (`SlotRoot`). A body that makes
+both calls has both entries, and a body that makes one call several times
+has one entry for it.
 
 **A resolution** is recorded by the rule of
 [§7.1](#71-what-a-body-may-do-with-a-handle): a resolved `identity` entry
@@ -3426,3 +3495,19 @@ asked.
     read for its value where the stored kind is a scalar and for its
     shape otherwise, which `plan-and-label-templates.md` §2.1 does not
     have. The prototype has to count the sites.
+25. **`writtenPrincipalOf`** (to `builtin-inventory.md` and
+    `plan-and-label-templates.md`). The published API has
+    `writtenPrincipalOf(target)` (`base/api/index.ts`), which two system
+    patterns call. The inventory's list of context reads and the table of
+    `plan-and-label-templates.md` §3.16 do not have it, so no document
+    says whether it is in the language or what its record is. Today it
+    returns the one principal named by the label of the cell a write to
+    the target lands in, where the value is the whole of that cell
+    (`writtenPrincipalOf` in `runtime/runner/src/builder/principal-of.ts`;
+    `runtime/runner/src/cfc/written-principal.ts`). *Assumed:* it is a
+    context read, legal where `principalOf` is, and recorded as
+    `principalOf` is: a resolution of the operand and an observation of
+    its label metadata (§8.4). The call follows the links a write
+    follows, which can differ from the links a read follows, so the
+    record may have to be that of `resultOwnerOf` in place of a resolved
+    entry. This document did not decide between the two.

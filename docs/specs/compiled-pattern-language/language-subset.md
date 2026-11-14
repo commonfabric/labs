@@ -2127,7 +2127,11 @@ Eight points complete the table.
   argument is compared, because the callee gets the value. An argument
   that is an optional property of a pattern's input whose type declares
   a default has the declared type without `undefined`
-  ([§7.6.1](#761-optional-properties-of-an-input)).
+  ([§7.6.1](#761-optional-properties-of-an-input)). *Assumed*
+  ([§13](#13-open-questions), question 35): where a condition narrowed
+  a prefix of the path, as `order.note` is narrowed for the argument
+  `order.note.text`, the declared type is that of the last step, read in
+  the narrowed type of the prefix.
 - **`AnyCell` and a value.** `AnyCell` is not among the handles of the
   second row. It declares a handle of a kind the type does not state
   ([§7.2](#72-api-types)), so the checker cannot say which handle a
@@ -3293,6 +3297,20 @@ identifier is not reported).
 Message texts are normative in content, not in wording: each must name the
 construct found and the replacement given here.
 
+**What a diagnostic is computed from.** Twelve diagnostics of the catalog
+need a result of a stage after the type checker. The table names, for
+each, the first result that suffices. Every other diagnostic is decided
+from the source, its types, and the calls between its functions.
+
+| Diagnostic | Computed from |
+| --- | --- |
+| `footprint:widened`, `footprint:dynamic-read`, `footprint:materializer`, `side-write:not-idempotent`, `mergeable-push:read-then-push` (§10.3) | The footprint analysis of one body, with the summaries of the authored functions it calls (`footprint-analysis.md` §5.3, §7.2, §6.3, §6.6, §6.4). No other body and nothing of the plan |
+| `side-write:cycle` (§10.3) | `Plan.edges`, the edges between the cones of an instance, which are built from the write edges of every body and the slots of every cone (`plan-and-label-templates.md` §3.11) |
+| `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy`, `cfc-flow:write-floor`, `cfc-flow:writer-fit`, `cfc-flow:ui-contract` (§10.5) | The label templates of the plan and the declared labels of their slots (`plan-and-label-templates.md` §4.4) |
+
+A compiler that stops after footprint analysis reports the first five and
+none of the other seven.
+
 ### 10.1 Module scope
 
 | Id | Sev. | Condition | Message tells the author to | Status |
@@ -3375,7 +3393,7 @@ construct found and the replacement given here.
 | `collection:shared-element-state` | error | The body of a per-element construct over a collection of plain values (§4.4.1) declares a state cell without using the index parameter, so elements with equal values would share the cell. A module-scope constant is such a collection whether the module declares it or imports it. A body that binds a handler and declares no state cell is not reported: equal elements bind equal state and share one stream. *Assumed* (§4.4.1): neither is a state cell in a body that instantiates a child, whose key holds the position. A state cell that a statically resolved pattern called in the body declares is a state cell of the body | Declare the index parameter and use it in the body, which puts the position in the element's key. Or make the elements cells: keep the list in a cell that a handler writes records into | new |
 | `function-body:instantiation-without-cause` | warning | A pattern instantiation without `.for(cause)` inside a loop, or inside a function written in the body, such as the callback of a JavaScript `map`, in a `lift`, a `computed`, an `assert`, or an authored function that one of them or tier R calls (§5.2). The instances of such a site are named by the order in which an evaluation makes them. Not reported in a `handler`, an `action`, or an inline event handler, and not for the callback of an inline `pattern(...)`, which is a tier-R body | Give each instance a cause taken from the record it belongs to: `PriceQuote({ url }).for(order.id)`. Without one, removing or inserting a record gives each later instance the argument of another record. Leave the site as it is where the list only grows at its end | new |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
-| `mergeable-push:read-then-push` | warning | A handler reads a mergeable collection and then pushes to it | Push without reading, or use the merge-safe operation the message names | carries |
+| `mergeable-push:read-then-push` | warning | A `handler`, an `action`, or an inline event handler reads a mergeable collection through a cell handle and then appends to it through the same handle, with `push` or `pushAll`. `addUnique` is not reported: it is the merge-safe operation the message names. A `lift` or a `computed` is not reported here: an append in one is `side-write:not-idempotent`. A read or an append in an authored function the body calls counts as the body's (`footprint-analysis.md` §3.6, §6.4). *Assumed* ([§13](#13-open-questions), question 36): which reads count, and whether the append has to depend on the read | Push without reading, or use the merge-safe operation the message names: `addUnique` on the element found with `elementById` for a uniqueness condition, a `set` of the whole value for another append that depends on the content | carries |
 | `footprint:widened` | hint | Footprint analysis gave up on an expression, for one of the causes of `footprint-analysis.md` §5.2 (§5.4). The report names what the widening covers: the input paths of the widened entries, which are several for a key that is not static, or the cell handle the analysis lost track of | The rewrite for the cause, as that document's §5.3 gives it: named properties in place of a key that is not static, the properties that are needed in place of a whole value that is converted, compared with `valueEqual`, rendered by a debug formatter, or passed to an imported function, a copy in place of an update of an input | new |
 | `footprint:dynamic-read` | hint | A read through a cell handle in a function body fails one of the three conditions of `footprint-analysis.md` §7.2, so it is journaled when the body runs and is no static entry of the footprint: the handle is one of several alternatives, the path below it is not static, or the `get()` or `sample()` is conditional | The condition that failed and the static form where one exists: read through one handle in place of a choice between two, use a static key, or move the `get()` ahead of the branch when every path reads the cell | new |
 | `footprint:materializer` | hint | A `lift` or a `computed` has a side-write whose target is dynamic or too broad to predict (`footprint-analysis.md` §6.2), so the body is a materializer for all of its writes (its §6.3) | The write and why its target is not static. Write through a handle the body is given, at a static path (`counts.key("glazed").set(n)`), or move the write into a `handler` or an `action` | new |
@@ -4383,3 +4401,45 @@ use, so that the other numbers stay as other documents cite them.
     accepts. The alternative removes both, and then the declaration
     says something the body's type does not: that `undefined` can be
     stored at a place that has a default.
+35. **The declared type of a path whose prefix is narrowed** (to the
+    project owner; from the prototype). By ruling, an argument bound by
+    reference has the declared type of its path, and a condition that
+    narrows the value does not narrow the handle (§7.5.2). The ruling is
+    stated for a condition on the place the argument names. It does not
+    say what the declared type is where the path is legal only because a
+    condition narrowed a prefix of it: `order.note.text` under
+    `order.note !== undefined`, with `note?: Note` declared, or a
+    property that one member of a union declares, under a test of the
+    discriminant. *Assumed:* the declared type is that of the last step
+    of the path, read in the type the checker has for the prefix, with
+    the narrowing of the prefix applied. So `order.note.text` binds a
+    handle of `string`, and is accepted where the callee declares a
+    required `Writable<string>`. The alternative applies the ruling at
+    every step: the handle has `undefined` in its type wherever a step
+    of the path may be absent, so the argument is a handle of
+    `string | undefined`, and the callee declares that or declares the
+    property optional. Under the assumption the callee holds a handle
+    typed `string` to a place where nothing is stored once `order.note`
+    is cleared, and what a read through it returns then is the matter of
+    question 12.
+36. **Which read and which append `mergeable-push:read-then-push`
+    reports** (to the project owner and to `footprint-analysis.md`; from
+    the prototype). The diagnostic carries, and the catalog fixes the
+    bodies and the two methods (§10.3). Two parts of the condition are
+    not fixed. Today the check reports an append only where the body
+    reads the collection at the same path, with `get()` or by iterating
+    it, and either the append depends on the read, through a condition
+    around it, an earlier exit, or the appended value, or the body makes
+    another write to the collection; a read that feeds neither is not
+    reported (`createMergeablePushClassifier` in
+    `base/ts-transformers/src/policy/mergeable-push-classification.ts`).
+    That check follows names through the text. The abstract values of
+    `footprint-analysis.md` §2.1 do not record what a `Computed` value
+    was computed from, so the analysis cannot decide the dependence as
+    it stands. *Assumed:* the report is made for every append through a
+    handle whose cell the body read with `get()` or `sample()` earlier in
+    the order of evaluation, at the path appended to, above it, or below
+    it, whether or not the append depends on the read. That reports more
+    sites than today. The alternative adds to the analysis a record of
+    which reads a condition and a value derive from, and keeps today's
+    two cases and its silence for an unrelated read.
