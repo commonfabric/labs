@@ -3,7 +3,6 @@ import { join } from "@std/path";
 import {
   CommandLedger,
   type CommandLedgerSystem,
-  writeAndSync,
 } from "../src/command-ledger.ts";
 import { AGENT_CONNECTOR_SCHEMAS } from "../src/protocol.ts";
 import type { AgentSessionCommandReceipt } from "../src/commands.ts";
@@ -459,7 +458,7 @@ Deno.test("Windows command ledgers accept files that Unix permissions would refu
 Deno.test("writeAndSync writes every byte across short writes and then syncs", async () => {
   const written: number[] = [];
   const events: string[] = [];
-  await writeAndSync({
+  await CommandLedger.accessForTestingOnly.writeAndSync({
     write: (bytes) => {
       // Each write takes at most two bytes, as a short write would.
       const taken = Math.min(2, bytes.length);
@@ -479,7 +478,7 @@ Deno.test("writeAndSync writes every byte across short writes and then syncs", a
 Deno.test("writeAndSync throws, without syncing, when a write makes no progress", async () => {
   let synced = false;
   const error = await assertRejects(() =>
-    writeAndSync({
+    CommandLedger.accessForTestingOnly.writeAndSync({
       write: () => Promise.resolve(0),
       sync: () => {
         synced = true;
