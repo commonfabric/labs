@@ -315,7 +315,9 @@ export const MIN_SERVING_WORKER_HEAP_LIMIT_MB = 256;
  * each worker may grow to {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB}: at 4
  * the workers of 16 toolsheds hold about 7 GB before any space grows and
  * 128 GB if every one reaches its limit, where 16 per toolshed came to
- * 512 GB.
+ * 512 GB. The pool goes past the cap only to give each space that shared a
+ * worker ended at its heap limit a worker of its own, until one of those
+ * closes.
  */
 export const DEFAULT_MAX_TOOLSHED_SERVING_WORKERS = 4;
 
@@ -629,7 +631,8 @@ export function startServerExecutionHost(options: {
           ? "by SERVER_EXECUTION_WORKER=true"
           : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
             "keeps it on the main thread)") +
-        `, on ${pool.maxWorkers} worker(s) at most` +
+        `, on ${pool.maxWorkers} worker(s) at most (more only while spaces ` +
+        "separated at a heap limit each hold one)" +
         `, with ${pool.spareWorkers} spare, ` +
         (pool.heapLimitMb === undefined
           ? "no heap limit per worker by SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0"
