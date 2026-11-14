@@ -29,7 +29,10 @@ it for Git hooks and other extensionless programs viewed directly, and a
 heredoc's body is a string with the expansions its delimiter allows. Makefiles
 have syntax highlighting, with recipes and the other commands make passes to the
 shell colored by the shell grammar, and a structure tree of targets and
-variables. TOML, which covers Gradle version catalogs and Cargo manifests and
+variables. Dockerfiles have syntax highlighting, with the shell form of their
+commands colored by the shell grammar, and a structure tree of build stages and
+the variables they set.
+TOML, which covers Gradle version catalogs and Cargo manifests and
 lock files, has syntax highlighting and a structure tree of tables and keys. HCL,
 which covers OpenTofu and Terraform configuration, variable definitions files,
 backend configuration files, and dependency lock files, has syntax highlighting
@@ -84,17 +87,18 @@ remain outside diff editing and semantic source loading.
 Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
-mode, Lean, ignore files, Go's module and checksum files, Bazel rc files, and
-Graphviz DOT use focused scanners.
+mode, Lean, ignore files, Go's module and checksum files, Bazel rc files,
+Graphviz DOT, and Dockerfiles use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
-makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
-directive configuration, ignore-file, Graphviz DOT, and diff support to honest
-handling of every textual syntax in the active `commonfabric` repositories.
+makefile, Dockerfile, Java properties, INI, ProGuard, Git attributes, XML, Org
+mode, directive configuration, ignore-file, Graphviz DOT, and diff support to
+honest handling of every textual syntax in the active `commonfabric`
+repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -973,7 +977,7 @@ file reconstructed exactly.
 
 ## Stage 9: build and operational configuration
 
-- [ ] Add Dockerfile, including every `Dockerfile.*` variant.
+- [x] Add Dockerfile, including every `Dockerfile.*` variant.
 - [x] Add Makefile and `.mk`.
 - [x] Add Git, Docker, Deno, and Bazel ignore files.
 - [x] Add Git attributes files.
@@ -1182,6 +1186,64 @@ slow, those of many very short lines took the longest: 50,000 lines holding one
 on 50,000 lines holding one `a` each. The scanner looks at each character a
 bounded number of times, so its work grows in proportion to the input's size.
 The fixtures come from Infra and gVisor.
+
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 96 Dockerfiles in 6 repositories: 79 in gVisor, 7 in Common
+Cluster, 6 in Infra, 2 in Labs, and one each in CRM and Web Weaver. 57 are named
+`Dockerfile`, and the other 39 add a suffix to that name, such as
+`Dockerfile.x86_64` and `Dockerfile.sandbox-rootfs`. The six months before the
+read hold 53 path-change events on them. Infra also holds three ignore files
+that BuildKit pairs with a Dockerfile, such as `Dockerfile.build.dockerignore`.
+They are not Dockerfiles, and they belong with the Docker ignore files.
+
+`Dockerfile` and `Containerfile`, their lowercase spellings, and the
+`.dockerfile` and `.containerfile` extensions select the language. So does a
+name that adds a dot and a suffix to either capitalized name, unless it is such
+an ignore file or its last suffix is an extension another language claims
+whatever the source holds, as shell claims `Dockerfile.sh`. It uses a focused
+scanner rather than Tree-sitter. No npm package carries a WebAssembly build of a
+Dockerfile grammar: the `tree-sitter-dockerfile` package holds only a security
+placeholder, and the
+[`camdencheek/tree-sitter-dockerfile`](https://github.com/camdencheek/tree-sitter-dockerfile)
+grammar's releases attach no build. A Dockerfile's own syntax is line-oriented,
+and the shell commands that make up most of its text are colored through the
+shell language's grammar, as makefile recipes are.
+
+The scanner reads the syntax of BuildKit's Dockerfile frontend. Parser
+directives open the file, and the `escape` directive can make the backtick the
+escape character. A line that ends in the escape character continues on the next
+line other than a blank line or a comment, and the shell grammar reads the
+continued command as one. The shell form of `RUN`, `CMD`, `ENTRYPOINT`, and a
+`HEALTHCHECK` command is colored as shell, unless a `SHELL` instruction earlier
+in the stage, or in the stage it is built from, names a shell other than `sh`,
+`bash`, `dash`, or `ash`. The exec form is colored as a JSON array of strings. A
+`RUN` whose command is a single heredoc runs that heredoc's body as a script,
+with the interpreter its shebang names or else the stage's shell, and the shell
+grammar colors the body when that is one of those shells. The shell reads the
+heredocs of any other `RUN` as part of its command, and the bodies of `COPY` and
+`ADD` heredocs are strings. Other arguments color quoted strings and variable
+references. The structure tree lists build stages, by name or by base image, and
+the variables that `ARG` and `ENV` set in each.
+
+A coverage check over the 96 files found every file selected by its name and
+reconstructed exactly. Outside shell commands, 4,761 of the 22,209 characters
+other than white space, 21.4 percent, have no token class: almost all are the
+paths that `COPY` and `WORKDIR` name and the values that `ENV` and `ARG` set.
+Inside shell commands, 49.4 percent have none, almost all package names and the
+other command arguments that the shell grammar reads as plain words. None of the
+files uses a heredoc or a parser directive. Fixtures come from Common Cluster,
+Infra, and gVisor.
+
+On 100 kilobytes of Common Cluster's `Dockerfile.sandbox-kitchensink`, repeated,
+the 95th-percentile lazy initialization is estimated at 33.5 milliseconds, the
+full highlight at 17.6, the document parse at 18.8, and the re-color after one
+edit at 13.6. All four are inside the maximums for a parser-backed language. The
+estimates are made as the shell column's are, from seven rounds, each between
+two TOML control runs: TOML's recorded 95th percentiles multiplied by the
+largest ratio of Dockerfile to TOML seen in any round. The machine was loaded so
+heavily that the controls ran 12.6 to 46 times slower than TOML's recorded
+medians, so no round met the condition the HCL measurement set on its controls,
+and these figures are less certain than HCL's.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.
