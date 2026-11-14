@@ -312,8 +312,10 @@ per worker (`heapLimitMb`, `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`) bounds a
 space that grows: the worker runs as a `node:worker_threads` thread with that
 limit, and the pool ends it alone, rather than the process, when its heap
 reaches it. A space that was alone on such a worker is left unplaced until a
-commit or a lifecycle verb names it, and spaces that shared one each get a
-worker of their own (`serving-loop.md` §1, "Workers").
+commit that would start a tenure or a lifecycle verb names it, and spaces that
+shared one each get a worker of their own, which can take the pool past
+`maxWorkers` until one of those workers closes (`serving-loop.md` §1,
+"Workers").
 
 **Failure.** A worker that fails affects its own spaces. The watchdog, the
 lease release and the backoff are the ones above, per worker and per space.

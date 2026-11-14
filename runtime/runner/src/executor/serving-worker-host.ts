@@ -1446,7 +1446,8 @@ export class ServingWorkerPool {
             "until a commit or a lifecycle verb names it, and no sooner " +
             `than in ${delayMs}ms`
           : atHeapLimit
-          ? `placing its ${worker.spaces.size} spaces again in ${delayMs}ms, ` +
+          ? `placing its ${worker.spaces.size} spaces ` +
+            `(${[...worker.spaces].join(", ")}) again in ${delayMs}ms, ` +
             "each on a worker of its own"
           : `placing its ${worker.spaces.size} space(s) again in ${delayMs}ms`),
     );

@@ -203,11 +203,14 @@ that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
 old generation that limit bounds, and the pool ends a worker whose heap
 reaches it, alone. The limit bounds each worker, not their sum, so a host that
 runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
-memory. It is not exact. Reaching it stops what grew the heap, and the pool
-ends the worker at its next heartbeat, up to ten seconds later; until then
-the worker can go on allocating. Array buffers are outside the heap and V8
-bounds them nowhere, so the pool ends a worker whose heartbeat reports as
-many megabytes of them as the limit, which the same ten seconds can exceed.
+memory. It is not exact. A worker that reaches it while evaluating its modules
+or in a timer reports an out-of-memory error and is ended at once. One that
+reaches it in a message handler or a promise continuation reports nothing:
+Deno ends what was running and raises the limit, and the pool ends the worker
+at its next heartbeat, up to ten seconds later, during which the worker can
+go on allocating. V8 bounds no memory outside the heap, array buffers among
+it, so the pool also ends a worker whose heartbeat reports as many megabytes
+of external memory as the limit, which the same ten seconds can exceed.
 `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0` sets no limit and starts the
 workers as Deno `Worker`s, as before the limit existed.
 
@@ -232,7 +235,8 @@ since its program would grow the next worker's heap the same way. If it was
 the only space on the worker it stays unserved until a commit that would
 start a tenure is admitted for it or a pattern-lifecycle verb names it, which
 is when its program or its input may have changed. The toolshed logs
-`worker-failed` with the space, and `/api/health/stats` counts such workers in
+`worker-failed` with the spaces the worker held, and `/api/health/stats`
+counts such workers in
 `servingLoop.workers.heapLimited` and the spaces left unserved in
 `servingLoop.workers.heapStopped`.
 Spaces that shared the worker are each moved to a worker of their own, beyond

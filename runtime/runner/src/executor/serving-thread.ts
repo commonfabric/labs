@@ -65,9 +65,12 @@ export type ServingThreadFailure = {
 /** How {@link startServingThread} starts a thread. */
 export type ServingThreadOptions = {
   /**
-   * The largest the thread's old generation may grow, in megabytes: a whole
-   * number, {@link MIN_SERVING_THREAD_HEAP_LIMIT_MB} or more. Absent, the
-   * thread is a Deno `Worker` under the process's own heap limit.
+   * The limit the thread's old generation starts with, in megabytes: a whole
+   * number, {@link MIN_SERVING_THREAD_HEAP_LIMIT_MB} or more. It is not a
+   * ceiling: Deno raises it each time the thread reaches it in a handler or a
+   * continuation, so whoever started the thread ends it then
+   * ({@link watchHeapLimit}). Absent, the thread is a Deno `Worker` under the
+   * process's own heap limit.
    */
   heapLimitMb?: number;
 

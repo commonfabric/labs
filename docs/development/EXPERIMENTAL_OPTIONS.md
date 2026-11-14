@@ -2265,7 +2265,8 @@ the per-epic implementation notes).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
 - **Purpose.** The serving loop's hosts and serving runtimes run in worker
-  threads of the toolshed process, one worker per served space, instead of on
+  threads of the toolshed process, one worker per served space up to a cap and
+  shared past it, instead of on
   the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
