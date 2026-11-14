@@ -46,7 +46,9 @@ structure tree of namespaces, sections, and declarations, and a project's
 Directive configuration, which covers nginx, Apache httpd, nftables, Netdata
 health alerts, and sysusers.d, has syntax highlighting and a structure tree of
 blocks, sections, and alert entries. Logs, checksums, version files, PID files,
-keys, and short prose files are plain text by name.
+keys, and short prose files are plain text by name. Git, Docker, and Bazel
+ignore files have syntax highlighting that follows each tool's comments,
+negation, wildcards, and white space.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -67,16 +69,16 @@ remain outside diff editing and semantic source loading.
 
 Python, Swift, Kotlin, Rust, TOML, HCL, and shell run on Tree-sitter through a
 shared, language-neutral adapter, which Go and HTML will use as well. Java
-properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org mode, and
-Lean use focused scanners.
+properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org mode, Lean,
+and ignore files use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean,
 shell, makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
-directive configuration, and diff support to honest handling of every textual
-syntax in the active `commonfabric` repositories.
+directive configuration, ignore-file, and diff support to honest handling of
+every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -749,9 +751,10 @@ file reconstructed exactly.
 
 - [ ] Add Dockerfile, including every `Dockerfile.*` variant.
 - [x] Add Makefile and `.mk`.
-- [ ] Add Git, Docker, Deno, and Bazel ignore files.
+- [x] Add Git, Docker, Deno, and Bazel ignore files.
 - [x] Add Git attributes files.
-- [ ] Add Git modules and worktree-include syntax.
+- [ ] Add Git modules.
+- [x] Add worktree-include syntax.
 - [ ] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
 - [ ] Add systemd units.
@@ -912,6 +915,49 @@ at 100 and 200 kilobytes: doubling the input multiplied the time by 1.1 to 2.4,
 and the slowest took 123 milliseconds at 200 kilobytes. 25,000 nested unclosed
 blocks build a structure tree. The fixtures come from Infra's Netdata alerts and
 gVisor's nginx benchmark configuration.
+
+Ignore files and worktree-include files are implemented ahead of the rest of
+this stage. A November 13, 2026 read of the local checkouts of the
+organization's repositories found 81 tracked ignore files in 30 repositories: 70
+`.gitignore` files, 7 Docker ignore files, two `.worktreeinclude` files, one
+`.denoignore`, and one `.bazelignore`. The six months before the read hold 189
+path-change events on them. Three of the Docker ignore files are named after
+the Dockerfile they serve, such as `Dockerfile.build.dockerignore`.
+
+Git, Docker, and Bazel read an ignore file differently, so each reading is its
+own language, and the three share one focused scanner. In all three, a line that
+starts with `#` is a comment. `gitignore` reads Git's patterns: a leading `!`
+negates a pattern; `*`, `?`, and bracket expressions are wildcards; `/`
+separates directories; a backslash makes the next character literal; and spaces
+at the end of a line that no backslash escapes are not part of the pattern.
+`.gitignore` selects it, and so do Claude Code's `.worktreeinclude`, which uses
+Git's syntax, and `.denoignore`, which only Labs has and nothing there reads,
+but which is written in Git's syntax. `dockerignore` reads Docker's patterns,
+which differ in that white space before a pattern, after its `!`, and at its
+end, escaped or not, is not part of it, and in that Go's `filepath.Match` and
+Go's regular expressions decide which bracket expressions are valid: only `^`
+negates one, a `]` or `-` must be escaped where a member starts, and a range may
+not run backwards. The `.dockerignore` extension selects it, which covers a file
+named after its Dockerfile, and so does the `.containerignore` extension, which
+Podman reads. `bazelignore` reads each line other than a comment as a literal
+directory path, as Bazel does, so it colors no wildcard and no negation; a
+carriage return ends a line there, as it does for Bazel's reader. An ignore file
+declares no names, so none of the three has a structure tree. Their patterns
+are colored by `languages/glob.ts`, as Git attributes patterns are, in Go's
+syntax for Docker.
+
+A coverage check over the 81 files found every file reconstructed exactly and
+every character other than white space with a token class. The timings ran on a
+machine whose load average was between 130 and 200 on 18 cores, which put every
+95th percentile over 100 milliseconds, so they are medians, each beside an INI
+control run interleaved with it whose median stayed between 1.5 and 3.8
+milliseconds. Re-coloring 100 kilobytes of the surveyed files took a median of
+2.0 to 5.0 milliseconds across runs. Of the 100-kilobyte inputs built to be
+slow, those of many very short lines took the longest: 50,000 lines holding one
+`[` each took a median of 13 to 105 milliseconds across runs, against 73 for INI
+on 50,000 lines holding one `a` each. The scanner looks at each character a
+bounded number of times, so its work grows in proportion to the input's size.
+The fixtures come from Infra and gVisor.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.

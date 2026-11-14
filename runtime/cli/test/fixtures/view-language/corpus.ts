@@ -189,6 +189,74 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     incompleteEvidence: { text: "script", className: "propertyName" },
   },
   {
+    languageId: "gitignore",
+    // Docker's ignore patterns and Git attributes patterns use the same `*`
+    // and bracket-expression wildcards, which each language colors the same
+    // way.
+    highlightingPeers: ["dockerignore", "gitattributes"],
+    surveyRepository: "infra",
+    surveyCommit: "d17b6041f60c91fe83c66e914cd62c5e9084a517",
+    surveyPath: ".gitignore",
+    before: new URL("./gitignore-infra/before", import.meta.url),
+    after: new URL("./gitignore-infra/after", import.meta.url),
+    incomplete: new URL("./gitignore-infra/incomplete", import.meta.url),
+    selection: {
+      filenames: [
+        ".gitignore",
+        "apple/Vendor/coreai-kit/.gitignore",
+        ".denoignore",
+        ".worktreeinclude",
+      ],
+      aliases: ["gitignore"],
+    },
+    beforeEvidence: { text: "*", className: "regex" },
+    afterEvidence: { text: "[co]", className: "regex" },
+    incompleteEvidence: { text: "*", className: "regex" },
+  },
+  {
+    languageId: "dockerignore",
+    // Git's ignore patterns and Git attributes patterns use the same `**`
+    // wildcard, which each language colors the same way.
+    highlightingPeers: ["gitignore", "gitattributes"],
+    surveyRepository: "infra",
+    surveyCommit: "d17b6041f60c91fe83c66e914cd62c5e9084a517",
+    surveyPath: "memory-router/Dockerfile.build.dockerignore",
+    before: new URL("./dockerignore-infra/before", import.meta.url),
+    after: new URL("./dockerignore-infra/after", import.meta.url),
+    incomplete: new URL("./dockerignore-infra/incomplete", import.meta.url),
+    selection: {
+      filenames: [
+        ".dockerignore",
+        "fly/pds/.dockerignore",
+        "memory-router/Dockerfile.build.dockerignore",
+        "memory-router/scripts/Dockerfile.systemd.dockerignore",
+      ],
+      aliases: ["dockerignore"],
+    },
+    beforeEvidence: { text: "**", className: "regex" },
+    afterEvidence: { text: "**", className: "regex" },
+    incompleteEvidence: { text: "**", className: "regex" },
+  },
+  {
+    languageId: "bazelignore",
+    // Git and Docker patterns separate their directories with `/` as Bazel
+    // separates those of a path, and color it the same way.
+    highlightingPeers: ["gitignore", "dockerignore", "gitattributes"],
+    surveyRepository: "gvisor",
+    surveyCommit: "82e8d12aed0ff0b736b1c937799b910beec68eb9",
+    surveyPath: ".bazelignore",
+    before: new URL("./bazelignore-gvisor/before", import.meta.url),
+    after: new URL("./bazelignore-gvisor/after", import.meta.url),
+    incomplete: new URL("./bazelignore-gvisor/incomplete", import.meta.url),
+    selection: {
+      filenames: [".bazelignore"],
+      aliases: ["bazelignore"],
+    },
+    beforeEvidence: { text: "/", className: "punctuation" },
+    afterEvidence: { text: "/", className: "punctuation" },
+    incompleteEvidence: { text: "/", className: "punctuation" },
+  },
+  {
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
@@ -701,6 +769,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "gitattributes",
+    // Ignore files write the same wildcards in their patterns, and color
+    // them the same way.
+    highlightingPeers: ["gitignore", "dockerignore"],
     surveyRepository: "labs",
     surveyCommit: "f94ac6bb1b1206bebe19228f4305edb7201fd97e",
     surveyPath: ".gitattributes",
@@ -720,6 +791,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "gitattributes",
+    // Ignore files write the same wildcards in their patterns, and color
+    // them the same way.
+    highlightingPeers: ["gitignore", "dockerignore"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "470efd7ecc4a90702d60c761eb5780c04f6546cd",
     surveyPath: ".gitattributes",
@@ -757,6 +831,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "gitattributes",
+    // Ignore files write the same wildcards in their patterns, and color
+    // them the same way.
+    highlightingPeers: ["gitignore", "dockerignore"],
     surveyRepository: "infra",
     surveyCommit: "cc5cd853a3c76ae8de1104525d4b2a64c0653aca",
     surveyPath: ".gitattributes",

@@ -1,0 +1,4 @@
+# The convenience symlinks that Bazel creates in the workspace.
+bazel-gvisor
+bazel-out/
+bazel-testlogs/

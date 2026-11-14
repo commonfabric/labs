@@ -35,6 +35,11 @@ import {
   jsonLinesLanguage,
 } from "../lib/view/languages/json/language.ts";
 import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
+import {
+  bazelignoreLanguage,
+  dockerignoreLanguage,
+  gitignoreLanguage,
+} from "../lib/view/languages/ignore/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
@@ -147,6 +152,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("ndjson"), jsonLinesLanguage);
   assertEquals(languageForName("yaml"), yamlLanguage);
   assertEquals(languageForName("yml"), yamlLanguage);
+  expect(languageForName("gitignore")).toBe(gitignoreLanguage);
+  expect(languageForName("dockerignore")).toBe(dockerignoreLanguage);
+  expect(languageForName("bazelignore")).toBe(bazelignoreLanguage);
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
   assertEquals(languageForName("swift"), swiftLanguage);
@@ -193,6 +201,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "json",
     "json-lines",
     "yaml",
+    "gitignore",
+    "dockerignore",
+    "bazelignore",
     "python",
     "swift",
     "kotlin",
@@ -227,6 +238,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "ndjson",
     "yaml",
     "yml",
+    "gitignore",
+    "dockerignore",
+    "bazelignore",
     "python",
     "py",
     "swift",
