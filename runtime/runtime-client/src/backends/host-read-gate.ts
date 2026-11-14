@@ -330,9 +330,9 @@ export class HostReadGate {
    * Subscribes a host to `cell`, delivering each read as a cell update for
    * `ref`: its value, or the refusal that stands in its place, decided again
    * whenever the membership or a module policy its labels name changes. A
-   * read that finds the value and label the last update delivered sends
-   * nothing: the host holds them already, and a change elsewhere in what the
-   * read depends on is no change to it. Each change to a refused read
+   * read that finds the value, label and written principal the last update
+   * delivered sends nothing: the host holds them already, and a change
+   * elsewhere in what the read depends on is no change to it. Each change to a refused read
    * delivers a refusal of its own, so a host that listens only for change
    * still hears one, and the first value admitted after a refusal is
    * delivered whatever it holds. `inspect` sees each value as it was read,
