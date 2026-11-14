@@ -97,7 +97,8 @@ describe("cfc-result-wiring-stamp", () => {
    * The patterns set up below: `plain` and `wider` differ in their result, so
    * one set up over the other rewrites the wiring; `named` carries a name,
    * which a setup of the same pattern keeps from the stored result. `mixed`,
-   * `remixed` and `namedMixed` hold data beside their references.
+   * `remixed`, `sameMixed` and `namedMixed` hold data beside their
+   * references; `sameMixed` is another pattern with the result `mixed` has.
    */
   const patterns = () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
@@ -127,6 +128,10 @@ describe("cfc-result-wiring-stamp", () => {
         a: double(x),
         note: "changed",
       })),
+      sameMixed: cf.pattern<{ x: number }>(({ x }) => {
+        triple(x);
+        return { a: double(x), note: "fixed" };
+      }),
       namedMixed: cf.pattern<{ x: number }>(({ x }) => ({
         [NAME]: title(x),
         a: double(x),
@@ -1012,17 +1017,32 @@ describe("cfc-result-wiring-stamp", () => {
       expect(derivedOf(result)).not.toContain(BOB);
     });
 
-    it("comes off at a setup that finds the result unchanged", async () => {
+    it("comes off at a setup of another pattern that finds the result unchanged", async () => {
       // The setup restates the data the result holds, in a transaction that
-      // read nothing labeled, so the value stamp is re-minted empty.
+      // read nothing labeled, so the value entry is re-derived empty.
 
-      const { mixed } = patterns();
+      const { mixed, sameMixed } = patterns();
       const result = await setUp("remint-unchanged", mixed);
       await plantValueStamp(result, BOB);
 
-      await setUp("remint-unchanged", mixed);
+      await setUp("remint-unchanged", sameMixed);
 
-      expect(derivedOf(result)).not.toContain(BOB);
+      expect(derivedOf(result)).toEqual([]);
+    });
+
+    it("stays where a setup of the same pattern finds the result unchanged", async () => {
+      // A setup of the pattern the result was set up with reads the name it
+      // would carry over, though none is stored, and that read takes the
+      // stamp at the root above it, so the attempt's join, which the value
+      // entry is re-derived from, carries the clause again.
+
+      const { mixed } = patterns();
+      const result = await setUp("remint-same", mixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-same", mixed);
+
+      expect(derivedOf(result)).toContain(BOB);
     });
 
     it("stays where a run given no transaction finds the result unchanged", async () => {

@@ -368,13 +368,33 @@ its trigger reads among it; a setup that carries the
 stored result's name over is not build-decided, so its membership keeps the
 full join. On a result document holding nothing but references, the stamp is
 re-minted at every setup, whether or not the setup writes the value; on one
-holding data as well, only a setup that writes the root re-mints it.
+holding data as well, only a setup that writes the root re-mints it, and the
+root's value entry is re-derived at an asking setup's restatement (below).
 It narrows what is stored at strict, with no default-off dial, so it does not
 satisfy step 4 above; its two deciding sites carry the `SPEC-PENDING` marker.
 The snapshot is pinned at that pull request's head, the one place the pin
 names an unmerged commit, so that the kernel manifest can carry the section's
 two functions; the next regeneration after the ruling repins it to specs
 `main`. @danfuzz directed landing it this way. The conformance statement's §9
+records the gap.
+
+A result document's value entry at a restatement (§8.9.1.3) implements
+[specs#98](https://github.com/commonfabric/specs/pull/98), stacked on
+[specs#88](https://github.com/commonfabric/specs/pull/88), ahead of its
+ruling. An asking setup that finds a result holding data beside its
+references unchanged re-derives the root's value entry from its transaction's
+flow join, as its write of the root would; a setup that is not asking
+restates no unchanged result, so it leaves the entry as stored; and the
+restatement mints no existence entry and leaves the existence entry and the
+entries below the root as they are. It changes what is stored at strict, with
+no default-off dial, so it does not satisfy step 4 above: it lowers a stale
+value stamp, and it can raise one from a restating setup's decision reads.
+Its three deciding sites carry the `SPEC-PENDING` marker. @danfuzz ruled that it
+lands at the strict default with no default-off dial, recorded here as a
+nonconforming semantic gap, pending
+[specs#98](https://github.com/commonfabric/specs/pull/98). His reason, in his
+words: "we should define the spec change and still accept doing the change in
+`labs` while pending and without a flag." The conformance statement's §9
 records the gap.
 
 The owner release by intent (§8.12.7 route 2d) implements

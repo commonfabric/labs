@@ -760,6 +760,20 @@ reference the stored document's membership guards, so the setup's read of it
 joins the stamp it re-mints. A container reached only through the restatement
 mints no existence entry.
 
+A recorded wiring whose document holds data beside its references is taken
+too, at its root, but its root is not treated as written: only an asking setup
+restates a wiring it finds unchanged, and the persist region's
+`restatedDataRoot` replaces the root's derived `value` entry with one
+re-derived from the transaction's whole flow join, the entry a write of the
+root would leave, or with none where the join is empty. The root's existence
+entry and every entry below the root stay as stored, and no existence entry is
+minted there. This implements
+[specs#98](https://github.com/commonfabric/specs/pull/98) ahead of its ruling,
+at strict and with no dial, at @danfuzz's direction; it lowers a stale value
+stamp and can raise one from the restating setup's decision reads, so it does
+not satisfy step 4 either, and its three deciding sites carry that pull
+request's `SPEC-PENDING` marker.
+
 This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
 ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It
 narrows what is stored and so does not satisfy the correspondence procedure's
@@ -808,11 +822,16 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   the attempt's whole join.
 - A result wiring at a path below its document's root is restated and
   narrowed only at the root.
-- A result document holding data beside its references is not restated, so
-  a setup that leaves it unchanged re-mints none of its membership: an
-  over-taint where an earlier attempt's stamp is wider than the setup's own.
-  Restating it would take a value stamp from what the setup read onto data no
-  write of the setup made.
+- A result document holding data beside its references has its value entry
+  re-derived at a restatement and none of its membership, so a setup that
+  leaves it unchanged keeps the stored membership: an over-taint where an
+  earlier attempt's stamp is wider than the setup's own.
+- A setup of the pattern a result was set up with reads the name it would
+  carry over from the stored result, whether or not one is stored, and that
+  read consumes the root's value entry. Its restatement re-derives the entry
+  from a join that carries the stored entry's clauses again, so a stale value
+  stamp comes off only at an asking setup of another pattern, such as an
+  update that changes the sub-pattern's module.
 
 ## 10. Write-policy alternatives across a release (§8.15.6, §8.15.13)
 

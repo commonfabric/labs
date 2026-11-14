@@ -4733,13 +4733,15 @@ const resultWiringsByTarget = (
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
  * verifier read that consumes nothing. A root holding data as well as
- * references is taken too: the setup states that data again, so the persist
- * region replaces the root's value stamp as it re-mints a membership, while
- * what sits below the root keeps the entries the writes there left. A document
- * the transaction does not hold a value for is left out.
+ * references is taken too, and only an asking setup restates one it finds
+ * unchanged (`#isAsking` in `runner.ts`): one holding the reads that chose what
+ * the data shows. The persist region re-derives that root's value entry from
+ * the transaction's join, as the setup's write of the root would, and leaves
+ * its existence entry and what sits below it as they are (`restatedDataRoot`
+ * there). A document the transaction does not hold a value for is left out.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/98
 const withRestatedResultWirings = (
   tx: IExtendedStorageTransaction,
   targets: ReturnType<typeof valueWriteTargets>,
@@ -13222,10 +13224,10 @@ export function* prepareBoundaryCommitSteps(
       ]),
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
-    // A result wiring this transaction restates, on a document holding data
-    // as well as references, without writing its root
-    // (`withRestatedResultWirings`). The root's value entries are replaced
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
+    // A result wiring a setup restates, on a document holding data as well
+    // as references, without writing its root
+    // (`withRestatedResultWirings`). The root's value entry is re-derived
     // (below), but the root is not a written path: what sits below it keeps
     // what the writes there left, and no existence entry records a creation
     // this attempt did not make.
@@ -14419,36 +14421,25 @@ export function* prepareBoundaryCommitSteps(
           }
         }
       }
-      // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
-      // A restated data root's value stamp is re-minted the way its
-      // membership is (§8.9.1.3): where the wiring is build-decided, from what
-      // the transaction read when its setup began, and with no integrity,
-      // since the runtime placed the data the build holds. A setup that
-      // carries the stored name over keeps the attempt's whole join. The
-      // stamp is not measured against the store, as the membership stamps
-      // are not, and mints no existence entry.
-      const restatedWiring = restatedDataRoot
-        ? resultWirings.get(key)
-        : undefined;
-      if (restatedWiring !== undefined) {
-        const buildDecided = restatedWiring.buildDecided;
-        const confidentiality = buildDecided
-          ? wiringConfidentiality(restatedWiring.setupBegan)
-          : flowConfidentiality;
-        const integrity = buildDecided ? [] : flowIntegrity;
-        if (confidentiality.length > 0 || integrity.length > 0) {
-          persistedLabelEntries.push(markFlowStampEntry({
-            path: [],
-            label: {
-              ...(confidentiality.length > 0
-                ? { confidentiality: [...confidentiality] }
-                : {}),
-              ...(integrity.length > 0 ? { integrity: [...integrity] } : {}),
-            },
-            origin: "derived",
-            observes: "value",
-          }));
-        }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
+      // A restated data root's value entry is re-derived from the attempt's
+      // join, as the setup's write of the root would set it (§8.9.1.3); the
+      // stale one was cleared above. It is not measured against the store,
+      // as the membership stamps are not, and mints no existence entry.
+      if (restatedDataRoot && flowHasJoin) {
+        persistedLabelEntries.push(markFlowStampEntry({
+          path: [],
+          label: {
+            ...(flowConfidentiality.length > 0
+              ? { confidentiality: [...flowConfidentiality] }
+              : {}),
+            ...(flowIntegrity.length > 0
+              ? { integrity: [...flowIntegrity] }
+              : {}),
+          },
+          origin: "derived",
+          observes: "value",
+        }));
       }
       for (const path of onwardStampPaths) {
         const at = declaredOnwardKey({ ...targetFromKey(key), path });

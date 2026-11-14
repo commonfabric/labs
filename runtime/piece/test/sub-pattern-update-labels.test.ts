@@ -6,7 +6,9 @@
  * argument: the labeled cell reaches the result only as a reference, which
  * carries its own restriction. So the result document stores no label after
  * the update, as it stores none after the piece is created, and a display
- * that is not cleared for the cell still shows the sub-pattern's view.
+ * that is not cleared for the cell still shows the sub-pattern's view. A
+ * result document that does hold such a label at its root sheds its value
+ * entry at an update that sets the sub-pattern up again without reading it.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -154,10 +156,13 @@ export default pattern<Record<string, never>, any>(() => {
 };
 
 /**
- * The piece's program with `View` in a module of its own, which stays the same
- * in every version: `version` changes only a comment of the main module.
+ * The piece's program with `View` in a module of its own. `main` and `view`
+ * are appended to the main module and to `View`'s module, so a version can
+ * change either one by a comment or by whitespace alone.
  */
-const splitProgram = (version: string): RuntimeProgram => ({
+const splitProgram = (
+  edits: { main: string; view: string },
+): RuntimeProgram => ({
   main: "/main.tsx",
   files: [
     {
@@ -170,7 +175,7 @@ export const View = pattern<
   { secret: BySealedPolicy<number> | undefined; owner: Record<string, never> },
   any
 >(({ owner }) => ({ [UI]: <div>{owner}</div> }));
-`,
+${edits.view}`,
     },
     {
       name: "/main.tsx",
@@ -187,8 +192,7 @@ export default pattern<Record<string, never>, any>(() => {
   const view = View({ secret, owner });
   return { [NAME]: "Mini", [UI]: view[UI], secret, owner };
 });
-// ${version}
-`,
+${edits.main}`,
     },
     { name: "/policy.ts", contents: POLICY },
   ],
@@ -221,6 +225,16 @@ const viewEntries = (runtime: Runtime, piece: Cell<unknown>): unknown[] =>
 /** Whether the entries `entries` carry the clause shape `clause`. */
 const carries = (entries: unknown, clause: Clause): boolean =>
   JSON.stringify(entries).includes(CLAUSE_MARK[clause]);
+
+/**
+ * The observation classes of the entries at the root of a piece's view
+ * document that carry the policy clause, in order.
+ */
+const stampedRootClasses = (runtime: Runtime, piece: Cell<unknown>) =>
+  (viewEntries(runtime, piece) as { path: unknown[]; observes?: string }[])
+    .filter((entry) => entry.path.length === 0 && carries(entry, "policy"))
+    .map((entry) => entry.observes)
+    .sort();
 
 /**
  * Whether a display not cleared for the policy clause is kept from a piece's
@@ -390,12 +404,13 @@ describe("sub-pattern-update-labels", () => {
     describe("a view an earlier update hid", () => {
       // An earlier update of such a piece, which read the labeled cell into
       // the sub-pattern's setup, stamped the cell's clause on the root of the
-      // sub-pattern's result document. Each case plants that stamp on a piece
-      // and then updates, restarts or renders it. An update sets the
-      // sub-pattern up again in the transaction it was asked in, and that
-      // setup restates the data the result holds, so the root's value stamp
-      // is re-minted from what decided the build, and the view shows again.
-      // The existence entry stays, as it does on any document that exists.
+      // sub-pattern's result document, as a value entry and an existence
+      // entry. Each case plants that stamp on a piece and then updates,
+      // restarts or renders it. An update sets the sub-pattern up again in
+      // the transaction it was asked in, and a setup there that finds the
+      // result unchanged re-derives the root's value entry from that
+      // transaction's join, so the view shows again. The existence entry
+      // stays, as it does on any document that exists.
 
       /** Creates a piece from `first`, and hides its view as such an update did. */
       const stamped = async (first: RuntimeProgram) => {
@@ -403,6 +418,10 @@ describe("sub-pattern-update-labels", () => {
         await runtime.idle();
         await plantStamp(runtime, piece.getCell());
         expect(viewHidden(piece.getCell())).toBe(true);
+        expect(stampedRootClasses(runtime, piece.getCell())).toEqual([
+          "shape",
+          "value",
+        ]);
         return piece;
       };
 
@@ -413,27 +432,57 @@ describe("sub-pattern-update-labels", () => {
       };
 
       for (const editView of [false, true]) {
-        it(`shows the view after an update that changes ${editView ? "the view" : "only the parent"}`, async () => {
+        it(`shows the view after an update that changes ${editView ? "the view" : "only the parent"}, keeping the existence entry`, async () => {
           const piece = await stamped(
             program({ ...options, version: "v1", editView }),
           );
 
-          await piece.setPattern(program({ ...options, version: "v2", editView }));
+          await piece.setPattern(
+            program({ ...options, version: "v2", editView }),
+          );
           await runtime.idle();
 
           expect(viewHidden(piece.getCell())).toBe(false);
-          expect(carries(viewEntries(runtime, piece.getCell()), "policy"))
-            .toBe(true);
+          expect(stampedRootClasses(runtime, piece.getCell())).toEqual([
+            "shape",
+          ]);
         });
       }
 
-      it("shows the view after an update that edits only a comment of the parent, with the view in a module of its own", async () => {
-        const piece = await stamped(splitProgram("v1"));
+      describe("with the view in a module of its own", () => {
+        const edits = [
+          {
+            name: "a comment of the view's module",
+            next: { main: "", view: "// v2\n" },
+            hidden: false,
+          },
+          {
+            name: "whitespace of the view's module",
+            next: { main: "", view: "\n\n" },
+            hidden: false,
+          },
+          {
+            // The sub-pattern's own module is unchanged, so its setup reads
+            // the name it would carry over from the stored result, though
+            // none is stored, and that read takes the stamp at the root
+            // above it: the join the value entry is re-derived from carries
+            // the clause again.
+            name: "a comment of the parent's module",
+            next: { main: "// v2\n", view: "" },
+            hidden: true,
+          },
+        ];
 
-        await piece.setPattern(splitProgram("v2"));
-        await runtime.idle();
+        for (const { name, next, hidden } of edits) {
+          it(`${hidden ? "keeps the view hidden" : "shows the view"} after an update that edits only ${name}`, async () => {
+            const piece = await stamped(splitProgram({ main: "", view: "" }));
 
-        expect(viewHidden(piece.getCell())).toBe(false);
+            await piece.setPattern(splitProgram(next));
+            await runtime.idle();
+
+            expect(viewHidden(piece.getCell())).toBe(hidden);
+          });
+        }
       });
 
       it("keeps the view hidden across an update to the same source", async () => {
@@ -614,7 +663,10 @@ describe("sub-pattern-update-labels", () => {
       expect(carries(await servedViewEntries(created.pieceId), "policy"))
         .toBe(false);
 
-      await servedUpdate(created.pieceId, program({ ...options, version: "v2" }));
+      await servedUpdate(
+        created.pieceId,
+        program({ ...options, version: "v2" }),
+      );
 
       expect(carries(await servedViewEntries(created.pieceId), "policy"))
         .toBe(false);
@@ -650,9 +702,14 @@ describe("sub-pattern-update-labels", () => {
       });
       expect(viewHidden((await servedPiece(created.pieceId)).cell)).toBe(true);
 
-      await servedUpdate(created.pieceId, program({ ...options, version: "v2" }));
+      await servedUpdate(
+        created.pieceId,
+        program({ ...options, version: "v2" }),
+      );
 
-      expect(viewHidden((await servedPiece(created.pieceId)).cell)).toBe(false);
+      const after = await servedPiece(created.pieceId);
+      expect(viewHidden(after.cell)).toBe(false);
+      expect(stampedRootClasses(after.runtime, after.cell)).toEqual(["shape"]);
     });
   });
 });
