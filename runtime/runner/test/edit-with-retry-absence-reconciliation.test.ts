@@ -1111,5 +1111,33 @@ describe("editWithRetry absence reconciliation", () => {
         );
       });
     });
+
+    it("reports its owner's cancellation when the owner cancels while the document loads and counting then fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        const owner = new AbortController();
+        const loadsSettled = storageManager.loadsSettled.bind(storageManager);
+        storageManager.loadsSettled = (keys) => {
+          owner.abort(new Error("the owner went away"));
+          return loadsSettled(keys);
+        };
+        storageManager.open(space).presentCount = () => {
+          throw new Error("the replica cannot count");
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry(
+          (tx) => {
+            runs++;
+            requireStored(runtime, tx);
+          },
+          undefined,
+          { signal: owner.signal },
+        );
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry stopped because its owner canceled",
+        );
+      });
+    });
   });
 });

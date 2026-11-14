@@ -429,10 +429,10 @@ export function isCfcEnforcementRejection<
  *
  * NOTE the asymmetry with a callback that THROWS: `editWithRetry` aborts that
  * transaction and reports the throw without a retry, because a thrown callback
- * is a failure rather than a request for a fresh attempt. The one re-run a
- * throw gets is absence reconciliation's, when a document the attempt read as
- * absent turns out to exist. `abort()` is the affordance for "discard this
- * attempt and run me again".
+ * is a failure rather than a request for a fresh attempt. The re-runs a throw
+ * gets are absence reconciliation's: one each time a document the attempt read
+ * as absent turns out to exist, while the retry budget lasts. `abort()` is the
+ * affordance for "discard this attempt and run me again".
  */
 export function isDiscardedAttemptRejection(
   error: { name?: string } | undefined | null,
