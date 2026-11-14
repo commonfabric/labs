@@ -60,8 +60,7 @@ KEYS (press ? in the viewer for the full list):
   Enter info card · in it: ↑/↓ pick a reference · Enter opens it · z reveals it
   v source/rendered · t look up a definition · # line numbers · \\ wrap mode
   b blame: when each line last changed, and who changed it · q quit
-  P push the checked-out branch to origin, then handle its pull request
-  L land the branch's pull request · O settings, such as how P and L work
+  P push the checked-out branch to origin and open the pull request page
 
 When stdout is not a terminal (piped/redirected) it prints the colorized text
 and exits, like less.`,

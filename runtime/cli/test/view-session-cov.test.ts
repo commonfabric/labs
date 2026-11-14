@@ -682,6 +682,7 @@ Deno.test("session: capital keycap shortcuts accept either letter case", () => {
     { lower: "j", upper: "J" },
     { lower: "k", upper: "K", setup: ["j"] },
     { lower: "h", upper: "H", setup: ["l"] },
+    { lower: "l", upper: "L" },
     { lower: "b", upper: "B", setup: ["space"] },
   ];
   for (const { lower, upper, setup = [] } of cases) {

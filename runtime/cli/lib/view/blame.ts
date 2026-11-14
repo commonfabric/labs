@@ -168,7 +168,7 @@ export function githubRepositoryPage(remote: string): string | null {
 
 /** Writes `bytes` to `stdin` and closes it, settling once that has finished
  * or failed. */
-export async function feed(
+async function feed(
   stdin: WritableStream<Uint8Array>,
   bytes: Uint8Array,
 ): Promise<void> {

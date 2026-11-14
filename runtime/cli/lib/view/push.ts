@@ -1,8 +1,8 @@
 /**
  * Pushing the checked-out branch from `cf view`: push it as it stands to the
- * `origin` remote, and find the page the hosting service offers for creating
- * a pull request. The repository is the one the viewer's working directory is
- * in, which is the one the diff workspace reads files from.
+ * `origin` remote, and open the page the hosting service offers for creating a
+ * pull request. The repository is the one the viewer's working directory is in,
+ * which is the one the diff workspace reads files from.
  */
 
 /** Runs git for its standard output, which it returns, or null when git
@@ -50,23 +50,18 @@ export interface RealPushIoOptions {
 
 /**
  * Force-pushes the checked-out branch to the same-named branch on `origin`,
- * unless that branch has commits the checked-out branch has never included.
- * The branch `origin` names as its default is never pushed, so the push
- * refuses when `origin` names none. Once the push succeeds, calls
- * `onPushed` with the branch's name and the address of the page the server
- * offers for creating a pull request, or null when it offers none; by
- * default, it opens the page. Returns one line saying how it ended, which
- * ends with what `onPushed` returns, and says the push was aborted when it
- * failed after `signal` aborted; git's own output has been shown by then.
+ * unless that branch has commits the checked-out branch has never included,
+ * and opens the pull request page when the server offers one. The branch
+ * `origin` names as its default is never pushed, so the push refuses when
+ * `origin` names none. When the server offers a page, calls `onOffered` with
+ * the branch's name, and opens the page once what it returns has settled.
+ * Returns one line saying how it ended, which says the push was aborted when
+ * it failed after `signal` aborted; git's own output has been shown by then.
  */
 export async function pushBranch(
   io: PushIo,
   signal?: AbortSignal,
-  onPushed: (
-    branch: string,
-    url: string | null,
-  ) => Promise<string> | string = (_, url) =>
-    url === null ? "" : openPage(io, url),
+  onOffered?: (branch: string) => Promise<void> | void,
 ): Promise<string> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return "This is not a git repository.";
@@ -109,22 +104,19 @@ export async function pushBranch(
       ? "Push aborted."
       : `Pushing ${branch} to origin failed.`;
   }
-  const then = await onPushed(branch, offeredPullRequestUrl(push.output));
-  return then === "" ? `${pushed}.` : `${pushed}. ${then}`;
-}
-
-/** Opens the page at `url` for creating a pull request, and returns a
- * sentence saying so, or giving its address when it cannot be opened. */
-export function openPage(io: Pick<PushIo, "open">, url: string): string {
-  return io.open(url) ? `Opened ${url}` : `Create a pull request at ${url}`;
+  const url = offeredPullRequestUrl(push.output);
+  if (url === null) return `${pushed}.`;
+  await onOffered?.(branch);
+  return io.open(url)
+    ? `${pushed} and opened ${url}`
+    : `${pushed}. Create a pull request at ${url}`;
 }
 
 /**
  * The address of the page a server offered for creating a pull request (or a
  * merge request) in the output of `git push`, or null when it offered none.
  * Servers send such offers on lines prefixed `remote:`, with the address on
- * the line making the offer or on the next such line. The address ends at
- * the first character that is not printable ASCII.
+ * the line making the offer or on the next such line.
  */
 export function offeredPullRequestUrl(output: string): string | null {
   let linesLeft = 0;
@@ -134,7 +126,7 @@ export function offeredPullRequestUrl(output: string): string | null {
     if (/create (a )?(pull|merge) request/i.test(message)) linesLeft = 2;
     if (linesLeft === 0) continue;
     linesLeft--;
-    const url = /https?:\/\/[!-~]+/.exec(message);
+    const url = /https?:\/\/\S+/.exec(message);
     if (url) return url[0];
   }
   return null;
