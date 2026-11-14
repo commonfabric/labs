@@ -242,6 +242,23 @@ is relitigated.
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
   rule for a default that is read and not stored, and needs this one.
+- Integrity is anchored in an object as a whole. A read of a stored
+  object whole carries the object's integrity, also where a default
+  fills one of its properties. A read that selects one property follows
+  the rules for a selection, and a selected property that is a default
+  carries none.
+- `ifElse` and the container of a `map` are trusted in the sense that
+  their result does not join the labels of all their arguments. The
+  runtime joins the labels of a module's argument schema onto its
+  result document, which widens both. The templates do not, and the
+  comparison expects a template tighter than the runtime there.
+- A write through a handle bound to a value the instance computes is
+  refused. Where the value at the bound path is a reference to a stored
+  place, as an element that a `filter` in a `computed` passes on or a
+  handle that a `computed` returns, the handle resolves to that place
+  and the write lands there. An argument given to a pattern that a
+  function body instantiates is the initial value of the child's stored
+  argument, and the child writes it freely.
 - `elementById` yields a handle of the element type or `undefined`,
   because the record for a key may never have been written or may have
   been cleared.
@@ -663,22 +680,6 @@ as an assumption.
     such a handle.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
-95. **A write through a handle bound to a value the instance computes**
-    (PL question 42; LS question 28): a `computed` result or an operator
-    result given where a handler, a `lift`, or a compiled-in pattern
-    declares a writable handle. The corpus has 21 such arguments in the
-    reactive tier, of which 2 are written through (one is a test of this
-    behavior, one is in `topics/topic.tsx`), and 13 more given to a
-    pattern instantiated in a function body, all written through, in
-    `notebook.tsx`, `daily-journal.tsx`, and `weekly-calendar.tsx`.
-    *Assumed:* the runtime refuses the write. The alternative lets it
-    land and be replaced at the next evaluation, which is understood to
-    be what happens today.
-96. **The integrity of a slot that reads a stored object whole where a
-    default fills one of its properties** (PL question 43). *Assumed:*
-    the meet over the parts read, which is empty, so one defaulted
-    property removes the object's claims from a whole read. The
-    alternative keeps a label per path below the slot.
 97. **A default on a type that names `undefined`** (LS question 34).
     *Assumed:* the type keeps the named `undefined`.
 98. **A truthiness test on a value of type `unknown`.** *Assumed:*
@@ -770,10 +771,10 @@ as an assumption.
     Either the template of a promoted conditional mints the atom, or
     this becomes a fourth exception. Not assumed either way.
 117. **What the corpus comparison compares.** The runtime copies values
-    where the plan passes references, and joins a static part from a
-    module's argument schema onto its result document. *Assumed:* the
-    comparison is made on dereferenced labels, with the static part
-    separated by its origin.
+    where the plan passes references. *Assumed:* the comparison is made
+    on dereferenced labels. The static part the runtime joins from a
+    module's argument schema is separated by its origin and expected
+    as a difference, by ruling.
 
 ## Open, and not needing the owner
 
