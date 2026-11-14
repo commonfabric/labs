@@ -68,6 +68,7 @@ function-body:handler-capture error
 function-body:cell-needs-cause error
 function-body:effect-in-computation error
 function-body:event-context-in-computation error
+function-body:wish error
 collection:shared-element-state error
 function-body:instantiation-without-cause warning
 verb-result:undeclared-return error

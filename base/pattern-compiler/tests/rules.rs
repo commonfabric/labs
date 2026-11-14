@@ -8,7 +8,7 @@ use pattern_compiler::catalog::{Status, CATALOG};
 use pattern_compiler::diagnostics::{Diagnostic, Severity};
 use pattern_compiler::program::{analyze, SourceFile};
 
-const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, \
+const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, wish, \
 handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
 type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy, \
 exchangeRules, UI, type Integrity, type PolicyOf, type VNode } from \"commonfabric\";\n";
@@ -328,6 +328,11 @@ const CASES: &[Case] = &[
         "function-body:event-context-in-computation",
         "const key = lift((name: string) => name + /*!*/eventKey());",
         "const key = handler<unknown, { last: Writable<string> }>((_, { last }) => { last.set(eventKey()); });",
+    ),
+    case(
+        "function-body:wish",
+        "const find = handler<unknown, { last: Writable<unknown> }>((_, { last }) => { last.set(/*!*/wish({ query: \"#profile\" })); });",
+        "const Box = pattern(() => { const profile = wish({ query: \"#profile\" }); return { profile }; });",
     ),
     case(
         "collection:shared-element-state",
@@ -1388,4 +1393,12 @@ fn a_widening_in_a_helper_is_reported_at_the_helper_only_where_the_helper_is_a_b
         2,
         "the helper, then the call in the lift"
     );
+}
+
+#[test]
+fn wish_in_an_authored_function_and_in_a_computation_is_refused() {
+    let helper = "function profile() { return wish({ query: \"#profile\" }); }\nconst Box = pattern(() => ({ profile: profile() }));\n";
+    assert_eq!(ids(&check(helper)), ["function-body:wish"]);
+    let lifted = "const find = lift((tag: string) => wish({ query: tag }));\n";
+    assert_eq!(ids(&check(lifted)), ["function-body:wish"]);
 }

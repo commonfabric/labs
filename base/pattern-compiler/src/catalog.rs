@@ -249,6 +249,7 @@ pub const CATALOG: &[Entry] = &[
          `query` on a SQLite handle needs the receiver's type",
     ),
     done("function-body:event-context-in-computation", Error),
+    done("function-body:wish", Error),
     part(
         "collection:shared-element-state",
         Error,

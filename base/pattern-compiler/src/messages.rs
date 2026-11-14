@@ -193,6 +193,11 @@ pub fn rewrite(id: &str) -> &'static str {
         "function-body:event-context-in-computation" => {
             "Read it in the `handler` or `action` and pass or store the value."
         }
+        "function-body:wish" => {
+            "Call `wish` in the pattern body and read its result in the function body. Where \
+             the query depends on a value the body computes, call it in the body of a pattern \
+             the function body instantiates."
+        }
         "collection:shared-element-state" => {
             "Take the index parameter and use it, for example in the cell's cause. Or make \
              the elements cells: keep the list in a cell that a handler writes records into."

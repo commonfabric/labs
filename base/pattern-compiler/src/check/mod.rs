@@ -2001,6 +2001,18 @@ impl<'p, 'a> Checker<'p, 'a> {
             }
             ApiValue::Structural | ApiValue::SplitBuiltin => {
                 self.record_call(CallKind::Structural, name, call.span);
+                // `wish` is an operation of the plan, which a function
+                // body has no site for (LS §5.2).
+                if name == "wish"
+                    && api.subpath.is_none()
+                    && matches!(self.cur(), Ctx::Function { .. })
+                {
+                    self.report(
+                        "function-body:wish",
+                        call.span,
+                        "`wish` called in a function body",
+                    );
+                }
             }
             ApiValue::Declaration => {
                 self.record_call(CallKind::CreateCell, name, call.span);
