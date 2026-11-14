@@ -225,11 +225,14 @@ export enum RequestType {
   /** Discards an unconfirmed custody seal owned by this client. */
   CustodySealCancel = "custodySeal:cancel",
 
-  /** Publishes a custody instance's answer once, into its answer slot. */
-  CustodyAnswerPublish = "custodyAnswer:publish",
+  /**
+   * Watches a custody room's answer: the worker publishes it once the seal
+   * can, and reports what the room's instance has published.
+   */
+  CustodyAnswerWatch = "custodyAnswer:watch",
 
-  /** Reads a custody instance's published answer, verified as the seal's. */
-  CustodyAnswerRead = "custodyAnswer:read",
+  /** Ends a custody answer watch. */
+  CustodyAnswerUnwatch = "custodyAnswer:unwatch",
 
   /** Lists the operation codecs available for a cell. */
   OperationCapabilities = "operation:capabilities",
@@ -647,6 +650,9 @@ export enum NotificationType {
 
   /** Reports a new operation-backed snapshot for a subscription. */
   OperationUpdate = "operation:update",
+
+  /** Reports what a watched custody room's instance has published. */
+  CustodyAnswerUpdate = "custodyAnswer:update",
 
   /** Carries one presence room event for a membership. */
   PresenceUpdate = "presence:update",
@@ -1614,47 +1620,69 @@ export type CustodySealCancelRequest = BaseRequest & {
 };
 
 /**
- * The {@link RequestType.CustodyAnswerPublish} request: the room's cells the
- * worker reads the answer from. The worker reads each at the address named;
- * whether the answer is published is decided by what it reads there.
+ * The {@link RequestType.CustodyAnswerWatch} request: the room's cells the
+ * worker follows. The worker reads each at the address named, with its own
+ * authority; whether the answer can be published is decided by what the seal
+ * reads there, and what the host is sent of it by the host-read gate.
  */
-export type CustodyAnswerPublishRequest = BaseRequest & {
-  type: RequestType.CustodyAnswerPublish;
+export type CustodyAnswerWatchRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerWatch;
+
+  /**
+   * Identifies this watch, chosen by the client. Every
+   * {@link CustodyAnswerUpdateNotification} carries it back.
+   */
+  watchId: string;
 
   /** The room's terms document; its space is the room space. */
   terms: CellRef;
 
-  /** A cell holding the room's custody policy reference. */
+  /** A cell holding, or whose label declares, the room's custody policy. */
   policy: CellRef;
 
   /** The room's projected answer. */
   output: CellRef;
 };
 
-/** What a custody answer publication wrote. */
-export type CustodyAnswerPublishResponse = {
-  /** The instance the answer was published for. */
-  instance: string;
+/** The {@link RequestType.CustodyAnswerUnwatch} request. */
+export type CustodyAnswerUnwatchRequest = BaseRequest & {
+  type: RequestType.CustodyAnswerUnwatch;
 
-  /** The answer as published. */
-  answer: JSONValue;
+  /** The watch to end, as {@link CustodyAnswerWatchRequest} named it. */
+  watchId: string;
 };
 
-/** The {@link RequestType.CustodyAnswerRead} request: the room's cells. */
-export type CustodyAnswerReadRequest = BaseRequest & {
-  type: RequestType.CustodyAnswerRead;
+/** What a watched custody room's instance has published, as a host sees it. */
+export type CustodyAnswerState =
+  | {
+    /**
+     * Nothing is published for the room's instance, or the room has not
+     * proposed.
+     */
+    readonly status: "pending";
 
-  /** The room's terms document; its space is the room space. */
-  terms: CellRef;
+    /**
+     * Why the worker's last attempt to find or publish the answer failed,
+     * when it failed other than as the seal does while it waits.
+     */
+    readonly error?: string;
+  }
+  | {
+    /** The room's instance has a published answer. */
+    readonly status: "published";
 
-  /** A cell holding the room's custody policy reference. */
-  policy: CellRef;
-};
+    /** The instance the answer was published for. */
+    readonly instance: string;
 
-/** A custody instance's published answer, absent while none is. */
-export type CustodyAnswerReadResponse = {
-  answer?: JSONValue;
-};
+    /** Whether this watch published it, rather than finding it published. */
+    readonly publishedHere: boolean;
+
+    /**
+     * The answer, as the host-read gate decides a read of it under the
+     * display ceiling: its value, or the refusal standing in its place.
+     */
+    readonly answer: CellValueResponse;
+  };
 
 /** The {@link RequestType.OperationQuery} request. */
 export type OperationQueryRequest = BaseRequest & {
@@ -3587,8 +3615,8 @@ export type IPCClientRequest =
   | CustodySealPrepareRequest
   | CustodySealCommitRequest
   | CustodySealCancelRequest
-  | CustodyAnswerPublishRequest
-  | CustodyAnswerReadRequest
+  | CustodyAnswerWatchRequest
+  | CustodyAnswerUnwatchRequest
   | OperationCapabilitiesRequest
   | OperationQueryRequest
   | OperationApplyRequest
@@ -4536,6 +4564,17 @@ export type OperationUpdateNotification = {
   field: OperationFieldSnapshot;
 };
 
+/** What a custody answer watch's room has published, each time it changes. */
+export type CustodyAnswerUpdateNotification = {
+  type: NotificationType.CustodyAnswerUpdate;
+
+  /** The watch this is for, as {@link CustodyAnswerWatchRequest} named it. */
+  watchId: string;
+
+  /** What the room's instance has published. */
+  state: CustodyAnswerState;
+};
+
 /** Reports one presence room event for a membership. */
 export type PresenceUpdateNotification = {
   type: NotificationType.PresenceUpdate;
@@ -4567,8 +4606,6 @@ export type RemoteResponse =
   | SnapshotSharePreview
   | CustodySealPreview
   | CustodySealCommitResponse
-  | CustodyAnswerPublishResponse
-  | CustodyAnswerReadResponse
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | StorageDiagnosticsResponse
@@ -4618,6 +4655,7 @@ export type IPCRemoteNotification =
   | VDomBatchNotification
   | PendingWritesNotification
   | OperationUpdateNotification
+  | CustodyAnswerUpdateNotification
   | PresenceUpdateNotification
   | EventNeedsAttentionNotification;
 
@@ -4838,13 +4876,13 @@ export type Commands = {
     request: CustodySealCancelRequest;
     response: EmptyResponse;
   };
-  [RequestType.CustodyAnswerPublish]: {
-    request: CustodyAnswerPublishRequest;
-    response: CustodyAnswerPublishResponse;
+  [RequestType.CustodyAnswerWatch]: {
+    request: CustodyAnswerWatchRequest;
+    response: EmptyResponse;
   };
-  [RequestType.CustodyAnswerRead]: {
-    request: CustodyAnswerReadRequest;
-    response: CustodyAnswerReadResponse;
+  [RequestType.CustodyAnswerUnwatch]: {
+    request: CustodyAnswerUnwatchRequest;
+    response: EmptyResponse;
   };
   [RequestType.OperationCapabilities]: {
     request: OperationCapabilitiesRequest;

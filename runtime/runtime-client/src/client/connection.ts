@@ -16,6 +16,7 @@ import {
   Commands,
   ConnectionRestoredNotification,
   ConsoleMessage,
+  CustodyAnswerUpdateNotification,
   ErrorNotification,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
@@ -25,6 +26,7 @@ import {
   isCellUpdateNotification,
   isConnectionRestoredNotification,
   isConsoleNotification,
+  isCustodyAnswerUpdateNotification,
   isErrorNotification,
   isEventIntentOutcomeNotification,
   isEventNeedsAttentionNotification,
@@ -174,6 +176,7 @@ export type RuntimeConnectionEvents = {
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
   operationupdate: [OperationUpdateNotification];
+  custodyanswerupdate: [CustodyAnswerUpdateNotification];
   presenceupdate: [PresenceUpdateNotification];
   eventneedsattention: [EventNeedsAttentionNotification];
   eventintentoutcome: [EventIntentOutcomeNotification];
@@ -678,6 +681,8 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("pendingwriteschange", message);
       } else if (isOperationUpdateNotification(message)) {
         this.emit("operationupdate", message);
+      } else if (isCustodyAnswerUpdateNotification(message)) {
+        this.emit("custodyanswerupdate", message);
       } else if (isPresenceUpdateNotification(message)) {
         this.emit("presenceupdate", message);
       } else if (isEventNeedsAttentionNotification(message)) {

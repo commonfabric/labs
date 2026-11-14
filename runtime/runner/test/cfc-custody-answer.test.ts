@@ -2,39 +2,29 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
-import type { FabricValue } from "@commonfabric/data-model";
-import { Identity } from "@commonfabric/identity";
-import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import type { Identity } from "@commonfabric/identity";
 
 import {
-  SEED_ENVELOPE_SCHEMA_HASH,
-  seedStoredEnvelope,
-  writeSeedEnvelopeDoc,
-} from "./cfc-seed-envelope.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
-import { refusingServer } from "./support/refusing-server.ts";
+  alice,
+  bob,
+  custodyRoom as setup,
+  type CustodyRoomFixture as Fixture,
+  mallory,
+  MODULE,
+  OTHER_MODULE,
+  otherArtifact,
+  PROJECT,
+  S,
+} from "./support/custody-room.ts";
 import {
-  commitCustodySeal,
-  CUSTODY_SEAL_READER,
+  type CustodyAnswerWatchUpdate,
   type CustodyRoom,
-  prepareCustodySeal,
   publishCustodyAnswer,
-  readCustodyAnswer,
-  TRUSTED_DECLASSIFIER_CONCEPT,
+  watchCustodyAnswer,
 } from "../src/cfc/custody-seal.ts";
-import { ACLManager } from "../src/acl-manager.ts";
-import {
-  buildCfcPolicyArtifactManifest,
-  cfcPolicyManifestDocId,
-} from "../src/cfc/policy.ts";
-import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
-import type { ImplementationIdentity } from "../src/cfc/types.ts";
-import { hostGestureProvenance } from "../src/cfc/host-review.ts";
-import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { Cell } from "../src/cell.ts";
-import { Runtime } from "../src/runtime.ts";
+import type { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 
 // A custody room releases one answer per instance. Its projector is
@@ -44,323 +34,6 @@ import { setCfcImplementationIdentity } from "../src/storage/extended-storage-tr
 // answer published for an instance never changes after the first publication.
 // Which instance a room renders is its bindings' to say, which the room's
 // members can write; the custody seal spec says what that leaves open.
-
-const alice = await Identity.fromPassphrase("custody-answer-alice");
-const bob = await Identity.fromPassphrase("custody-answer-bob");
-const mallory = await Identity.fromPassphrase("custody-answer-mallory");
-const roomOwner = await Identity.fromPassphrase("custody-answer-room");
-const S = roomOwner.did();
-
-const MODULE = "sha256:custody-answer-module";
-const REVIEWER = "did:web:review.example";
-
-const SEALED_BY = {
-  type: CFC_ATOM_TYPE.TransformedBy,
-  identity: { kind: "builtin", builtinId: "cfc-custody-seal" },
-};
-
-const PROJECT: ImplementationIdentity = {
-  kind: "verified",
-  moduleIdentity: MODULE,
-  symbol: "projectChoice",
-  bindingPath: ["projectChoice"],
-};
-
-/** The room's policy: it releases what `projectChoice` computed, `witnessed`
- * requiring as well that everything it read was the seal's, and `toSeal`
- * releasing it to the seal alone rather than to the room's readers. */
-const policyArtifact = (witnessed: boolean, toSeal: boolean) =>
-  buildCfcPolicyArtifactManifest({
-    formatVersion: 1,
-    moduleIdentity: MODULE,
-    symbol: "custodyRules",
-    template: {
-      templateVersion: 1,
-      exchangeRules: [{
-        name: "releaseChoice",
-        preCondition: {
-          confidentiality: [{ thisPolicy: true }],
-          integrity: [{
-            type: CFC_ATOM_TYPE.TransformedBy,
-            identity: {
-              kind: "verified",
-              moduleIdentity: { thisPolicyField: "moduleIdentity" },
-              symbol: "projectChoice",
-            },
-            ...(witnessed ? { inputWitness: SEALED_BY } : {}),
-          }],
-        },
-        postCondition: {
-          confidentiality: toSeal ? [CUSTODY_SEAL_READER] : [],
-          integrity: [],
-        },
-      }],
-      dependencies: { authorityOnly: [], dataBearing: [] },
-      integrityRequirements: {},
-    },
-  } as never);
-
-/** A member's own policy, whose rule releases whatever the member's code
- * computed: nothing a room would install, but every policy a label names is
- * evaluated. */
-const OTHER_MODULE = "sha256:custody-answer-other-module";
-const otherArtifact = buildCfcPolicyArtifactManifest({
-  formatVersion: 1,
-  moduleIdentity: OTHER_MODULE,
-  symbol: "releaseAnything",
-  template: {
-    templateVersion: 1,
-    exchangeRules: [{
-      name: "releaseAnything",
-      preCondition: {
-        confidentiality: [{ thisPolicy: true }],
-        integrity: [{
-          type: CFC_ATOM_TYPE.TransformedBy,
-          identity: { kind: "verified", moduleIdentity: "sha256:member-code" },
-        }],
-      },
-      postCondition: { confidentiality: [], integrity: [] },
-    }],
-    dependencies: { authorityOnly: [], dataBearing: [] },
-    integrityRequirements: {},
-  },
-} as never);
-
-const STANCE_SCHEMA = {
-  type: "object",
-  properties: { choice: { enum: ["pizza", "sushi", "tacos"] } },
-  required: ["choice"],
-  additionalProperties: false,
-};
-
-const termsFor = (question: string) => ({
-  question,
-  seats: [alice.did(), bob.did()],
-  stanceSchema: STANCE_SCHEMA,
-});
-
-const trustedClick = () => {
-  const event = {
-    type: "click",
-    provenance: hostGestureProvenance("CustodySeal"),
-  };
-  markRendererTrustedEvent(event);
-  return event;
-};
-
-type Fixture = Awaited<ReturnType<typeof setup>>;
-
-/** Three members' runtimes over one server, and a room whose policy is
- * installed in its space. */
-const setup = async ({ witnessed = true, toSeal = true } = {}) => {
-  const artifact = policyArtifact(witnessed, toSeal);
-  const policy = cfcAtom.modulePolicyRef(
-    MODULE,
-    "custodyRules",
-    artifact.policyDigest,
-    S,
-  );
-  const trust: CfcTrustConfigInput = {
-    statements: [{
-      concrete: {
-        type: CFC_ATOM_TYPE.Policy,
-        policyRefKind: "module",
-        moduleIdentity: MODULE,
-        symbol: "custodyRules",
-        policyDigest: artifact.policyDigest,
-      },
-      implements: TRUSTED_DECLASSIFIER_CONCEPT,
-      verifier: REVIEWER,
-    }],
-    delegations: [{
-      delegator: "*",
-      verifier: REVIEWER,
-      concepts: [TRUSTED_DECLASSIFIER_CONCEPT],
-    }],
-  };
-  const server: MemoryV2Server.Server = newSharedServer({
-    subscriptionRefreshDelayMs: 0,
-  });
-  // Every runtime reaches the server through this stand-in, so a test can
-  // have it refuse a space from some point on.
-  const refusing = refusingServer(server);
-  const managers: EmulatedStorageManager[] = [];
-  const created: Runtime[] = [];
-  const runtimeFor = (identity: Identity): Runtime => {
-    const storageManager = EmulatedStorageManager.connectTo(
-      refusing.server as MemoryV2Server.Server,
-      { as: identity },
-    );
-    managers.push(storageManager);
-    const runtime = new Runtime({
-      apiUrl: new URL("http://toolshed.test"),
-      storageManager,
-      trustSnapshotProvider: () => ({
-        id: identity.did(),
-        actingPrincipal: identity.did(),
-      }),
-      cfcTrustConfig: trust,
-      cfcEnforcementMode: "enforce-strict",
-      cfcFlowLabels: "persist",
-    });
-    runtime.registerCfcPolicyManifests(undefined, [artifact, otherArtifact]);
-    created.push(runtime);
-    return runtime;
-  };
-  const runtimes = new Map<Identity, Runtime>(
-    [alice, bob, mallory].map((identity) => [identity, runtimeFor(identity)]),
-  );
-  const host = runtimes.get(alice)!;
-  const install = host.edit();
-  host.getCell(S, "custody-room-state", {
-    type: "object",
-    ifc: {
-      confidentiality: [{ ...policy, subject: { __ctOwningSpace: true } }],
-    },
-  } as never, install).set({ open: true } as never);
-  const terms = host.getCell(S, "custody-terms", undefined, install);
-  terms.set(termsFor("Where should we eat?") as never);
-  // The room document whose cells receive the seal's links.
-  host.getCell(S, "room-cells", undefined, install).set({} as never);
-  expect((await install.commit().settled).error).toBeUndefined();
-  const roomAcl = new ACLManager(runtimeFor(roomOwner), S);
-  await roomAcl.set(alice.did(), "OWNER");
-  for (const member of [bob, mallory]) {
-    await roomAcl.set(member.did(), "WRITE");
-  }
-
-  const syncManifest = async (runtime: Runtime) => {
-    for (const digest of [artifact.policyDigest, otherArtifact.policyDigest]) {
-      await runtime.getCellFromEntityId(S, cfcPolicyManifestDocId(digest))
-        .sync();
-    }
-  };
-
-  const fixture = {
-    runtimes,
-    /** From now on, refuses every request naming `space`. */
-    refuse: (space: string) => refusing.refuse(space, "unauthorized"),
-    policy,
-    terms: terms.withTx(undefined),
-    room(identity: Identity, box?: Cell<unknown>): CustodyRoom {
-      const runtime = runtimes.get(identity)!;
-      return {
-        terms: runtime.getCellFromLink(terms.getAsNormalizedFullLink()),
-        policy,
-        ...(box === undefined
-          ? {}
-          : { box: runtime.getCellFromLink(box.getAsNormalizedFullLink()) }),
-      };
-    },
-    /** Replaces the room's terms, which starts a fresh instance. */
-    async setTerms(question: string): Promise<void> {
-      const tx = host.edit();
-      host.getCellFromLink(terms.getAsNormalizedFullLink(), undefined, tx)
-        .set(termsFor(question) as never);
-      expect((await tx.commit().settled).error).toBeUndefined();
-    },
-    /** Seals `choice` for `identity`, linking the box into `box`. */
-    async seal(identity: Identity, choice: string, box: Cell<unknown>) {
-      const runtime = runtimes.get(identity)!;
-      const home = identity.did();
-      const tx = runtime.edit();
-      const draft = runtime.getCell(home, `stance-${choice}`, undefined, tx);
-      writeSeedEnvelopeDoc(tx, home);
-      seedStoredEnvelope(tx, {
-        space: home,
-        scope: "space",
-        id: draft.getAsNormalizedFullLink().id,
-        path: [],
-      }, {
-        value: { choice },
-        cfc: {
-          version: 1,
-          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
-          labelMap: {
-            version: 1,
-            entries: [{
-              path: [],
-              label: { confidentiality: [cfcAtom.user(home)] },
-            }],
-          },
-        },
-      } as FabricValue);
-      expect((await tx.commit().settled).error).toBeUndefined();
-      const prepared = await prepareCustodySeal(
-        draft.withTx(undefined),
-        fixture.room(identity, box),
-        { allowedSources: [] },
-      );
-      return await commitCustodySeal(prepared.consent, trustedClick());
-    },
-    /**
-     * One run of the room's projector: the first choice every entry it finds
-     * through `from` agrees on, written as a string into `output`.
-     */
-    async project(
-      identity: Identity,
-      from: Cell<unknown>,
-      output: Cell<unknown>,
-      clause: unknown = { ...policy, subject: { __ctOwningSpace: true } },
-      code: ImplementationIdentity = PROJECT,
-    ): Promise<string | { refused: string }> {
-      const runtime = runtimes.get(identity)!;
-      await syncManifest(runtime);
-      const local = runtime.getCellFromLink(from.getAsNormalizedFullLink());
-      await local.sync();
-      await local.pull();
-      const target = runtime.getCellFromLink(
-        output.getAsNormalizedFullLink(),
-        {
-          type: "string",
-          ifc: { confidentiality: [clause] },
-        } as never,
-      );
-      await target.sync();
-      let answer = "";
-      const written = await runtime.editWithRetry((tx) => {
-        setCfcImplementationIdentity(tx, code);
-        const entries = (local.withTx(tx).get() ?? {}) as Record<
-          string,
-          { stance?: { choice?: string } }
-        >;
-        const choices = Object.values(entries).map((entry) =>
-          entry?.stance?.choice ?? ""
-        );
-        answer = choices.every((choice) => choice === choices[0])
-          ? choices[0] ?? ""
-          : "no agreement";
-        target.withTx(tx).set(answer as never);
-      });
-      if (written.error !== undefined) {
-        return { refused: String(written.error.message) };
-      }
-      return answer;
-    },
-    async publish(identity: Identity, output: Cell<unknown>) {
-      const runtime = runtimes.get(identity)!;
-      await syncManifest(runtime);
-      return await publishCustodyAnswer(
-        fixture.room(identity),
-        runtime.getCellFromLink(output.getAsNormalizedFullLink()),
-      );
-    },
-    /** The instance's published answer, as `identity`'s host reads it. */
-    async shown(identity: Identity) {
-      const runtime = runtimes.get(identity)!;
-      await syncManifest(runtime);
-      return await readCustodyAnswer(fixture.room(identity));
-    },
-    async dispose() {
-      for (const runtime of created) {
-        await runtime.dispose({ closeStorage: false });
-      }
-      for (const manager of managers) await manager.close();
-      await server.close();
-    },
-  };
-  return fixture;
-};
 
 /** Writes `value` into `cell` as a member's own code. */
 const writeAsMember = async (
@@ -943,5 +616,178 @@ describe("custody answers", () => {
     } finally {
       await fixture.dispose();
     }
+  });
+
+  describe("watching", () => {
+    /**
+     * Watches the room as `identity`'s host does, and answers each report
+     * that satisfies a test, resolved by the watch's own report rather than
+     * by polling.
+     */
+    const watch = (
+      fixture: Fixture,
+      identity: Identity,
+      output: Cell<unknown>,
+      room: CustodyRoom = fixture.room(identity),
+    ) => {
+      const runtime = fixture.runtimes.get(identity)!;
+      const reports: CustodyAnswerWatchUpdate[] = [];
+      let waiting:
+        | {
+          test: (update: CustodyAnswerWatchUpdate) => boolean;
+          resolve: (update: CustodyAnswerWatchUpdate) => void;
+        }
+        | undefined;
+      const cancel = watchCustodyAnswer(
+        room,
+        runtime.getCellFromLink(output.getAsNormalizedFullLink()),
+        (update) => {
+          reports.push(update);
+          if (waiting?.test(update)) {
+            waiting.resolve(update);
+            waiting = undefined;
+          }
+        },
+      );
+      return {
+        reports,
+        cancel,
+        /** The first report from now on that `test` admits. */
+        until(test: (update: CustodyAnswerWatchUpdate) => boolean) {
+          const { promise, resolve } = Promise.withResolvers<
+            CustodyAnswerWatchUpdate
+          >();
+          waiting = { test, resolve };
+          return promise;
+        },
+      };
+    };
+    const published = (update: CustodyAnswerWatchUpdate) =>
+      update.status === "published";
+
+    it("publishes once the last seat seals, though the projected answer does not change", async () => {
+      // The projector answers before every seat has sealed, and its answer
+      // is the same once the last one has, so nothing the projected answer
+      // does says the room is ready: the box does.
+
+      const fixture = await setup();
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        expect(await fixture.project(alice, box, output)).toBe("sushi");
+        const watching = watch(fixture, bob, output);
+        try {
+          await watching.until((update) => update.status === "pending");
+          expect(watching.reports.every((update) => !("error" in update)))
+            .toBe(true);
+
+          const shown = watching.until(published);
+          await fixture.seal(bob, "sushi", box);
+          const update = await shown;
+
+          expect(update).toMatchObject({
+            status: "published",
+            publishedHere: true,
+            value: "sushi",
+          });
+          expect(await fixture.shown(mallory)).toBe("sushi");
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reports an answer another member published as not its own", async () => {
+      const fixture = await setup();
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        await fixture.seal(bob, "sushi", box);
+        expect(await fixture.project(bob, box, output)).toBe("sushi");
+        const { instance } = await fixture.publish(bob, output);
+        const watching = watch(fixture, mallory, output);
+        try {
+          expect(await watching.until(published)).toMatchObject({
+            status: "published",
+            instance,
+            publishedHere: false,
+            value: "sushi",
+          });
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reports pending, with no error, while the room has not proposed", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(bob)!;
+        const watching = watch(fixture, bob, outputOf(fixture), {
+          terms: runtime.getCell(S, "terms-not-yet-proposed"),
+          policy: fixture.policy,
+        });
+        try {
+          expect(await watching.until(() => true)).toEqual({
+            status: "pending",
+          });
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("follows the room's terms to a fresh instance, which has published nothing", async () => {
+      const fixture = await setup();
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        await fixture.seal(bob, "sushi", box);
+        expect(await fixture.project(bob, box, output)).toBe("sushi");
+        const watching = watch(fixture, bob, output);
+        try {
+          const first = await watching.until(published);
+          const fresh = watching.until((update) => update.status === "pending");
+          await fixture.setTerms("Where should we eat tomorrow?");
+          expect(await fresh).toEqual({ status: "pending" });
+          expect(first).toMatchObject({ publishedHere: true });
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("reports a policy the seal will not publish under as an error", async () => {
+      const fixture = await setup({ witnessed: false });
+      try {
+        const box = boxOf(fixture);
+        const output = outputOf(fixture);
+        await fixture.seal(alice, "sushi", box);
+        await fixture.seal(bob, "sushi", box);
+        const watching = watch(fixture, bob, output);
+        try {
+          const update = await watching.until(() => true);
+          expect(update.status).toBe("pending");
+          expect("error" in update && update.error).toContain(
+            "requires a policy whose every rule requires the seal's witness",
+          );
+        } finally {
+          watching.cancel();
+        }
+      } finally {
+        await fixture.dispose();
+      }
+    });
   });
 });

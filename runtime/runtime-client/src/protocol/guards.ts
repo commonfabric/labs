@@ -17,6 +17,7 @@ import {
   ClientTransportNotificationType,
   ConnectionRestoredNotification,
   ConsoleNotification,
+  CustodyAnswerUpdateNotification,
   ErrorNotification,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
@@ -159,12 +160,27 @@ export function isIPCRemoteNotification(
     isNavigateRequestNotification(value) || isErrorNotification(value) ||
     isVDomBatchNotification(value) || isPendingWritesNotification(value) ||
     isOperationUpdateNotification(value) ||
+    isCustodyAnswerUpdateNotification(value) ||
     isPresenceUpdateNotification(value) ||
     isEventNeedsAttentionNotification(value) ||
     isSpaceAccessLostNotification(value) ||
     isSpaceAccessRestoredNotification(value) ||
     isConnectionRestoredNotification(value) ||
     isEventIntentOutcomeNotification(value);
+}
+
+/**
+ * Is `value` a {@link CustodyAnswerUpdateNotification}? The state is checked
+ * as an object with a status; what it reports is the watch's concern.
+ */
+export function isCustodyAnswerUpdateNotification(
+  value: unknown,
+): value is CustodyAnswerUpdateNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.CustodyAnswerUpdate &&
+    typeof value.watchId === "string" &&
+    isObjectNotArray(value.state) &&
+    (value.state.status === "pending" || value.state.status === "published");
 }
 
 /**

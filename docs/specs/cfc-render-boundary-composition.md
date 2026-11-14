@@ -127,13 +127,19 @@ included, and when the membership those labels name changes, and only a
 change in the decision is emitted. A trusted host component that never shows a
 value from a binding, handing the reference to a worker operation and showing
 only what that operation answers, declares the binding in
-`REFERENCE_BINDING_SINKS` beside the reconciler, and the ceiling does not gate
-it. A value it reads through such a binding serves only as a signal to ask the
-operation again. `cf-custody-seal` is one, whose dialog shows what the seal's
-preparation answers, and `cf-custody-answer` another, which shows the answer
-the seal published. The declaration is reviewed like the component itself,
-since a component that shows what such a binding holds releases it past the
-ceiling.
+`REFERENCE_BINDING_SINKS` beside the reconciler, and the reconciler hands it
+the handle whatever the bound cell holds. A read the component makes through
+that handle is still decided by the host read gate, which refuses a member
+the cells such operations work on, such as a room's policy cell, so the
+component reads nothing through the binding: the operation follows the cells
+in the worker, with the worker's authority, and tells the component when what
+it answers changes. `cf-custody-seal` is one, whose dialog shows what the
+seal's preparation answers, and `cf-custody-answer` another, which shows the
+answer the seal published, sent by the worker's custody answer watch as the
+host read gate decides a read of it. What each operation sends a host is
+listed with why in `host-read-dispositions.ts`. The declaration is reviewed
+like the component itself, since a component that shows what such a binding
+holds releases it past the ceiling.
 Regression guards: `test/worker-reconciler-cfc-prop-ceiling.test.ts`.
 
 `cf-render` shows what its `cell` binding names only through renders of its

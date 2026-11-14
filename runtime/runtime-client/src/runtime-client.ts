@@ -5,7 +5,7 @@
  * for interacting with cells across the worker boundary.
  */
 
-import type { CellScope, JSONValue } from "@commonfabric/api";
+import type { CellScope } from "@commonfabric/api";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { DID, Identity } from "@commonfabric/identity";
@@ -48,6 +48,8 @@ import { PieceHandle } from "./piece-handle.ts";
 import {
   type CellRef,
   ConsoleMessage,
+  type CustodyAnswerState,
+  type CustodyAnswerUpdateNotification,
   type CustodySealPreview,
   ErrorNotification,
   type EventAttentionListResponse,
@@ -409,6 +411,11 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     string,
     (field: OperationFieldSnapshot) => void
   >();
+  /** Each custody answer watch's listener, by the id the watch was given. */
+  #custodyAnswerWatches = new Map<
+    string,
+    (state: CustodyAnswerState) => void
+  >();
 
   /** Joined rooms by their key. */
   #presenceRooms = new Map<string, PresenceRoomState>();
@@ -464,6 +471,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
     this.#conn.on("operationupdate", this.#onOperationUpdate);
+    this.#conn.on("custodyanswerupdate", this.#onCustodyAnswerUpdate);
     this.#conn.on("presenceupdate", this.#onPresenceUpdate);
     this.#conn.on("eventneedsattention", this.#onEventNeedsAttention);
   }
@@ -583,42 +591,51 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
-   * Asks the worker to publish a custody instance's answer once, from the
-   * room's projected answer, into the instance's answer slot. The seal
-   * publishes only when every exchange rule of the room's policy requires the
+   * Watches a custody room's answer. The worker follows the room's cells
+   * with its own authority, and asks the seal to publish the projected answer
+   * once it can: when every exchange rule of the room's policy requires the
    * seal's witness and releases only to the seal, a rule of that policy
    * releases the projected answer to the seal, the answer is a string of at
    * most 1,024 characters, a number or a boolean, and every seat has sealed.
-   * It refuses the request otherwise, when the room changes while it
-   * publishes, and once the instance's answer is published.
+   * `onUpdate` is called with each change in what the room's instance has
+   * published: nothing yet, or the answer as the worker's host-read gate
+   * decides a read of it, which may be a refusal. The answer is the one the
+   * seal published into the slot of the instance the terms digest to, under
+   * the policy the policy cell names, never a value the room holds.
+   *
+   * @returns A function that ends the watch.
    */
-  async publishCustodyAnswer(cells: {
-    terms: CellRef;
-    policy: CellRef;
-    output: CellRef;
-  }): Promise<{ instance: string; answer: JSONValue }> {
-    return await this.#conn.request<RequestType.CustodyAnswerPublish>({
-      type: RequestType.CustodyAnswerPublish,
-      terms: cells.terms,
-      policy: cells.policy,
-      output: cells.output,
-    });
-  }
-
-  /**
-   * Reads a custody instance's published answer, verified to be the seal's
-   * write, or `undefined` while none is published.
-   */
-  async readCustodyAnswer(cells: {
-    terms: CellRef;
-    policy: CellRef;
-  }): Promise<JSONValue | undefined> {
-    const response = await this.#conn.request<RequestType.CustodyAnswerRead>({
-      type: RequestType.CustodyAnswerRead,
-      terms: cells.terms,
-      policy: cells.policy,
-    });
-    return response.answer;
+  async watchCustodyAnswer(
+    cells: { terms: CellRef; policy: CellRef; output: CellRef },
+    onUpdate: (state: CustodyAnswerState) => void,
+  ): Promise<() => void> {
+    const watchId = crypto.randomUUID();
+    this.#custodyAnswerWatches.set(watchId, onUpdate);
+    const unwatch = () =>
+      this.#conn.request<RequestType.CustodyAnswerUnwatch>({
+        type: RequestType.CustodyAnswerUnwatch,
+        watchId,
+      }).catch(() => undefined);
+    try {
+      await this.#conn.request<RequestType.CustodyAnswerWatch>({
+        type: RequestType.CustodyAnswerWatch,
+        watchId,
+        terms: cells.terms,
+        policy: cells.policy,
+        output: cells.output,
+      });
+    } catch (error) {
+      this.#custodyAnswerWatches.delete(watchId);
+      // The connection may have failed with the watch's response alone, so
+      // a watch the worker did start is ended rather than left running. The
+      // failure is not held up waiting on a connection that may be gone.
+      void unwatch();
+      throw error;
+    }
+    return () => {
+      if (!this.#custodyAnswerWatches.delete(watchId)) return;
+      void unwatch();
+    };
   }
 
   /** Discards a custody seal preview the host closed or replaced. */
@@ -1894,6 +1911,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   async dispose(): Promise<void> {
     this.#operationSubscriptions.clear();
+    this.#custodyAnswerWatches.clear();
     await this.#conn.dispose();
   }
 
@@ -1956,6 +1974,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#operationSubscriptions.get(data.subscriptionId)?.(
       data.field,
     );
+  };
+
+  #onCustodyAnswerUpdate = (data: CustodyAnswerUpdateNotification): void => {
+    this.#custodyAnswerWatches.get(data.watchId)?.(data.state);
   };
 
   #onPresenceUpdate = (data: PresenceUpdateNotification): void => {
