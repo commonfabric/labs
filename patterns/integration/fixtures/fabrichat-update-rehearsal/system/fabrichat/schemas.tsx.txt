@@ -434,12 +434,15 @@ export const reactionTalliesOf = (
 //
 
 /**
- * A room as a manager links it: only the part of `ChatRoomOutput` the manager
- * reads through the link. The manager runs in its user's home, not in the
- * room's space, and a server running it reads only the documents the room's
- * space shares with every member, never the ones each member has of their
- * own. A served handler whose declared reads reach one of those never runs,
- * and the link's schema is part of every manager handler's declared reads.
+ * A room as a manager reads it: only the part of `ChatRoomOutput` the manager
+ * reads through a link to the room. The links the manager stores declare
+ * nothing of the room (`ChatIndexEntry.room`); this is what an event naming a
+ * room carries, and what the manager's derivations that read rooms re-type a
+ * stored link to. The manager runs in its user's home, not in the room's
+ * space, and a server running it reads only the documents the room's space
+ * shares with every member, never the ones each member has of their own. A
+ * served handler whose declared reads reach one of those never runs, and an
+ * event's room link is part of its handler's declared reads.
  *
  * So the link carries what the room's space shares with every member and
  * costs little to read: what the room says about itself, how many messages it
@@ -492,19 +495,37 @@ export interface ChatContainer {
   fileStoreRecord?: FileStoreRecord;
 }
 
-/** One room in a user's chat manager. */
+/**
+ * One room in a user's chat manager: a link to the room, and what the
+ * manager's own handlers recorded of it when they read the room, so that a
+ * list of entries reads nothing in any room's space.
+ */
 export interface ChatIndexEntry {
-  /** The room. */
-  room: Cell<ChatRoomLink>;
+  /**
+   * The room, as a handle that declares nothing of the room: a read of an
+   * entry, or of anything holding one, keeps the link without loading the
+   * room. Whoever reads the room reads it through a link that declares what
+   * it reads, as a `ChatRoomLink` does.
+   */
+  // `Cell<…>` is written out rather than reached through an alias: a schema
+  // marks a reference position only where the wrapper is written in the type.
+  room: Cell<unknown>;
 
-  /** The room's kind, as its `about.kind` says. */
+  /** The room's kind, as its `about.kind` said when the entry was recorded. */
   kind: ChatRoomKind;
 
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When first listed for this user, using catalog admission for discovery. */
+  /** When first listed for this user. */
   since: FabricEpochNsec;
+
+  /**
+   * The room's title as the manager last read it, when the room has one:
+   * absent for a room with no title, and otherwise exactly the room's own,
+   * empty or not.
+   */
+  title?: string;
 
   /**
    * The opaque revision supplied by `rooms` for its membership or discovery
@@ -688,8 +709,13 @@ export interface ChatManagerNotice {
   /** The notice's id, unique in the manager. */
   id: string;
 
-  /** The room the recipient was admitted to. */
-  room: Cell<ChatRoomLink>;
+  /**
+   * The room the recipient was admitted to, as a handle that declares nothing
+   * of the room, as `ChatIndexEntry.room` is.
+   */
+  // `Cell<…>` is written out rather than reached through an alias: a schema
+  // marks a reference position only where the wrapper is written in the type.
+  room: Cell<unknown>;
 
   /** The DID of the person admitted. */
   recipient: string;

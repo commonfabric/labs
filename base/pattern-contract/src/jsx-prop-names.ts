@@ -7,8 +7,9 @@
  * names (`onClick`, `oncf-change`). A `data-*` or `aria-*` name is set as
  * that attribute, since those attributes have no property of their own name.
  * Any other name with a hyphen in it names no property at all: assigned, it
- * would add a property nothing reads, so the compiler warns of it and names
- * the property to write instead.
+ * would add a property nothing reads, so the compiler refuses it in authored
+ * source, and only warns of it when reloading stored source, naming the
+ * property to write instead.
  *
  * The compiler and the renderer both decide by these functions, so a name
  * the compiler lets through is one the renderer applies as the compiler
