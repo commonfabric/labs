@@ -1762,12 +1762,19 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 Place::Const | Place::Index(_) | Place::Stream(_) => {}
                 place => {
+                    // A value of the same cone is no output on account
+                    // of the use (PL §1.4): "the result of a body used
+                    // inside an initializer ... [is an entry] of
+                    // `Plan.outputs` only where another cone, a `pick`,
+                    // or a collection refers to [it]".
                     if let Place::Value(value, _) = &place {
-                        self.values[*value].referred = true;
-                        if let Some(cone) = self.cone {
-                            if self.values[*value].cone != cone {
+                        match self.cone {
+                            Some(cone) if self.values[*value].cone == cone => {}
+                            Some(cone) => {
+                                self.values[*value].referred = true;
                                 self.cones[cone].uses.insert(*value);
                             }
+                            None => self.values[*value].referred = true,
                         }
                     }
                     let mut at_path: Vec<String> = Vec::new();

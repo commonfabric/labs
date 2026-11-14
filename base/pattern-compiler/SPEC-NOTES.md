@@ -601,3 +601,91 @@ numbers have gaps.
     written; PL does not say whether inputs are a set. `WriteEdge.template`,
     `Operation.input`, `Collection.membership`, and
     `Binding.state.template` are not filled in.
+
+## The crate against PL as corrected from notes 86 to 97
+
+113. **Whose names are counted together** (PL §1.3). "Two bindings of a
+    handler `save` are `save#1` and `save#2`", and the handler is a body
+    named `save` too. Chosen: the names of `Plan.bodies` are counted
+    apart from the names of the other records, so a handler is not one
+    more declaration of the name its bindings have. PL lists `Body`
+    among the records that hold a name and does not say this. A hint
+    that is the property or the JSX attribute an expression is written
+    at is the fallback only: a call of a pattern, a use of a body, a
+    collection, an effect, and a binding of a named handler take their
+    base name before it. A state cell has no base name in PL's list, and
+    takes the property's name. A child or a state cell that a site of a
+    body makes is named after the ordinals are given, so it is
+    `make#1/n0`. A state cell a body creates under a constant cause is
+    still named `body/nK` and not `body/cause`: the footprint record
+    does not keep the cause.
+114. **PL §6.2 as corrected, against the crate.** This replaces note
+    104. The listing and the crate agree on the slots `e0` to `e8` and
+    `b0` to `b4`, the handles of `B0`, `n0`, the writes `w0` to `w7`,
+    the envelope, the binding, `m4` in place, and that the result of
+    `B1` and the conditions of `T_edited` and `T_label` are no outputs.
+    What differs: (a) `B1` reads `threadInfo?.get()`, which FA §7.1
+    makes static, so the crate has `threadInfo : value` and no handle,
+    where the listing has `handles h0 slot s2`, and `T_titles` has no
+    `dynamic` node. (b) `B2` has `messages : value` and
+    `messages/* : identity` beside `s0`, and its computed input is
+    `titles/* : identity` with `titles : enumeration`, where the listing
+    has `titles/* : value` (notes 71, 104). (c) `B4` lists the plain
+    `identity` slot beside `identity, resolved`. (d) `threadTitles`,
+    `bodyText` and `viewKeyOf` are used more than once, so their uses
+    have ordinals. (e) The row is a pattern used as a JSX tag, which the
+    crate does not compile in (note 105), so `m0` to `m6` have the root
+    `argument` and the path `message` in a plan of the row's own, `m1`
+    is absent, `c1` has no body in the room's plan, and `facts.places`
+    is no output of the room. (f) The source declares the row's key
+    inside the `computed` of `replies`, so the crate has no cone `key`:
+    `B4` and the pick are in the cone `replies`. (g) The crate has three
+    more `shape` slots in place than the listing names "among them":
+    `binding threadInfo`, `event attachments/*`. (h) `isEdited` reads
+    `editedAt` and `body` for `value` where the listing has `m5` and
+    `m3` for `shape`, until expression code takes its class from the
+    kind of test.
+115. **`Slot.inPlace` by type** (PL §1.1, §2.5). This replaces note 93.
+    A position is of handle type or of reference type where the body
+    uses a handle there, or where a test of truthiness, of presence, or
+    of kind is made on an expression whose static type is a handle or
+    `unknown` and no container or scalar. A `shape` entry from a
+    destructuring default, a spread, `in`, or `Object.hasOwn` has no
+    expression of the position, and is in place only by the first rule.
+116. **Which slots read a `handle` target** (PL §3.11). This replaces
+    the rule of note 94. `Slot.schema` is not emitted, so the type a
+    `value` slot above the handle has at the handle's position is the
+    declared type of the reading body's formal input there. Expression
+    code, a `computed` that is a body, and a parameter that is a
+    destructuring give no type, and the slot then counts as a reader. A
+    position of type `unknown` stops the read, as a handle type does.
+    Of the `identity` slots at the handle's own position the plain one
+    and the one the target names are excepted, and a resolved one the
+    target does not name is not. "No slot is excepted" for a state
+    target is taken literally, so the cone that writes a state cell has
+    an edge to itself through its own `identity` slot of the cell, and
+    is reported unless the body reads its own target. The corpus has 2
+    reports of `side-write:cycle` and 41 edges through a side-write
+    (20 before).
+117. **`side-write:cycle` names the side-write** where the write is in
+    the module of the pattern, and the function where it is in another
+    module. One site is reported once, whatever the number of cones it
+    is on a cycle with. An authored function used in the reactive tier
+    has no tier of its own (FA §6.3): it counts as a computation with
+    static side-writes where each of its writes has a static target,
+    and whether a write reads its own target is recorded for it too.
+118. **`Binding.state.place`** (PL §1.1). A path of a value the instance
+    computed resolves to an interim output at that path. A constant is
+    held as its value where it is a literal written at the binding, and
+    as `null` where it is a name of a constant or `undefined`, which the
+    emitter does not evaluate. The stream of another binding has the
+    template `const`: PL gives the template for a slot, an output, and a
+    constant, and the stream of a binding of the reactive tier is named
+    by constants of the plan (§3.14). A path bound to the index of an
+    element has neither `place` nor `template`: PL has no place for it.
+119. **The cones of an element body** (PL §1.4, question 44). PL states
+    the partition "the prototype emits" as one cone for each declaration
+    in the callback that computes and one for the returned expression.
+    The crate emits one cone for the whole callback (note 91), and a
+    declaration inside a promoted `computed` with a statement body is in
+    the cone of that `computed`. Not changed in this slice.

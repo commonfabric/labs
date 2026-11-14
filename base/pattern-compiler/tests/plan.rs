@@ -744,10 +744,11 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
         "event threadTitle : value",
     ];
     // "It leaves out the `shape` slots that footprint analysis records at
-    // optional positions ... One is at a data position, `event target`.
-    // The others are in place (`inPlace`), at the positions of the
-    // optional handles". The crate has one more at a data position,
-    // `event attachments` (SPEC-NOTES 91).
+    // optional positions ... Two are at data positions, `event target`
+    // and `event attachments`. ... The others are in place (`inPlace`),
+    // at the positions of the optional handles: among them `binding
+    // myProfile`, `binding joined`, `event replyTo/thread` and `event
+    // replyTo/quotes`."
     let left_out = [
         "binding joined : shape, inPlace",
         "binding myProfile : shape, inPlace",
@@ -786,7 +787,7 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
         body["calls"],
         json!([{ "kind": "createCell", "scope": "space", "identifiedBy": "order" }])
     );
-    // The writes w0 to w5, as `target path [reference]`.
+    // The writes w0 to w7, as `target path [reference]`.
     let writes: Vec<String> = body["writes"]
         .as_array()
         .expect("writes")
@@ -828,10 +829,11 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
             "handle [binding messages : identity] */attachments/* one of [event attachments/* : identity]",
             // w1
             "handle [binding messages : identity] */authorProfile passes [binding myProfile : identity, resolved]",
-            // The "two further reference edges" the listing leaves out.
+            // w7: "w7 handle b2 */replyTo/quotes passes e6".
             "handle [binding messages : identity] */replyTo/quotes passes [event replyTo/quotes : identity]",
+            // w6: "w6 handle b2 */replyTo/thread passes e5".
             "handle [binding messages : identity] */replyTo/thread passes [event replyTo/thread : identity]",
-            // w4
+            // w4: "w4 handle b3 * T_send", an `addUnique`.
             "handle [binding threadInfo : identity] *",
         ]
     );
@@ -882,6 +884,14 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
             "threadInfo argument threadInfo : identity link",
         ]
     );
+    // The middle column of the listing is the member `place`, and
+    // `template` is the label of the same place.
+    for entry in binding["state"].as_array().expect("state") {
+        match entry["place"].get("slot") {
+            Some(slot) => assert_eq!(entry["template"], json!({ "op": "slot", "slot": slot })),
+            None => assert_eq!(entry["template"], json!({ "op": "const" })),
+        }
+    }
     // "T_send has ... dynamic(handle B0.h0) ... dynamic(link through b2)":
     // the dynamic reads of the plan that name B0's handles.
     let through_handles = plan["dynamicReads"]
@@ -996,6 +1006,53 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
             json!(body_index(&plan, "threadTitles#1"))
         );
     }
+    // "By the partition of section 1.4, the cones of the slice are
+    // `facts`, `isEmpty`, the JSX tree ... The result of `B1` is computed
+    // and used inside the cone `facts` ... [It is not] an entry of
+    // `Plan.outputs`."
+    let cones = plan["cones"].as_array().expect("cones");
+    let cone_of = |entry: &str| {
+        cones
+            .iter()
+            .position(|cone| cone["entry"] == entry)
+            .unwrap_or_else(|| panic!("no cone {entry}"))
+    };
+    let facts_cone = cone_of("facts");
+    assert_eq!(
+        cones[facts_cone]["bodies"],
+        json!([
+            body_index(&plan, "threadTitles#1"),
+            body_index(&plan, "messageFacts")
+        ])
+    );
+    cone_of("isEmpty");
+    cone_of("$UI");
+    for output in plan["outputs"].as_array().expect("outputs") {
+        if output["cone"] == json!(facts_cone) {
+            // "`facts.main`, `facts.entries`, `facts.places` ... are
+            // interim outputs". The room passes `facts.places` to a row
+            // used as a JSX tag, which the crate does not compile in, so
+            // it is in no record of this plan (SPEC-NOTES 105).
+            // "Kept outputs in the slice: the room's `messages` output
+            // (from `facts.list`)".
+            if output["kept"] == json!(true) {
+                assert_eq!(
+                    output["path"].as_array().and_then(|path| path.last()),
+                    Some(&json!("messages"))
+                );
+                continue;
+            }
+            assert_eq!(output["interim"], "facts");
+            assert!(
+                output["path"] == json!(["main"]) || output["path"] == json!(["entries"]),
+                "{output}"
+            );
+            assert_eq!(
+                output["template"]["by"]["body"],
+                json!(body_index(&plan, "messageFacts"))
+            );
+        }
+    }
     // "c1 = collection source: output facts.main, bodyUses: { index:
     // false }". The output is interim, at the path `main` below `facts`.
     let main = plan["outputs"]
@@ -1056,6 +1113,44 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
         .as_array()
         .expect("picks")
         .contains(&json!({ "chosenBy": "valueCode" })));
+    // "The cones of the slice are ... per row `text`, `isEdited`, the
+    // row's key, `replies` and `threadLabel`. ... the conditions of
+    // `T_edited` and `T_label` [are computed and used] inside the cones
+    // `isEdited` and `threadLabel`. None of the three is an entry of
+    // `Plan.outputs`." The source declares the key inside the `computed`
+    // of `replies`, so the crate has it in that cone, with `B4`
+    // (SPEC-NOTES 114).
+    let cones = plan["cones"].as_array().expect("cones");
+    let cone = |entry: &str| {
+        cones
+            .iter()
+            .find(|cone| cone["entry"] == entry)
+            .unwrap_or_else(|| panic!("no cone {entry}"))
+    };
+    assert_eq!(
+        cone("text")["bodies"],
+        json!([body_index(&plan, "bodyText#1")])
+    );
+    assert_eq!(
+        cone("isEdited")["selectors"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        cone("replies")["bodies"],
+        json!([body_index(&plan, "viewKeyOf#1")])
+    );
+    assert_eq!(cone("replies")["picks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        cone("threadLabel")["selectors"].as_array().map(Vec::len),
+        Some(1)
+    );
+    for output in plan["outputs"].as_array().expect("outputs") {
+        let name = output["interim"].as_str().unwrap_or("");
+        assert!(
+            !matches!(name, "condition" | "branch" | "operand"),
+            "{output}"
+        );
+    }
 }
 
 #[test]
