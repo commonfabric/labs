@@ -594,8 +594,9 @@ function cellHome(cell: Cell<unknown>): HandleViewContext["home"] {
  * reaches, through any links it chains through, a document that is not the
  * argument's own data: one outside `context.home`, or one that stores a
  * confidentiality label. Only the documents that are its own data are read on
- * the way, and of the rest only the label metadata, which no read of the
- * payload's labels takes in (CFC §4.6.5).
+ * the way. Of a document inside `context.home` that stores such a label only
+ * the label metadata is read, which no read of the payload's labels takes in
+ * (CFC §4.6.5), and a document outside it is not read at all.
  *
  * A labeled document is not judged here because judging it would read it,
  * and that read would join its labels to everything the transaction doing the
