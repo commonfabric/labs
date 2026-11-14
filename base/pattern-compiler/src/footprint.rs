@@ -245,6 +245,9 @@ pub struct Detail {
     /// `spaceDeleted`.
     pub spaces: Vec<Vec<(String, Vec<Seg>)>>,
     pub label_metadata: bool,
+    /// The positions whose type is a handle type or a reference type: a
+    /// `shape` entry there is made in place (PL §1.1, `Slot.inPlace`).
+    pub by_reference: Vec<(String, Vec<Seg>)>,
     /// `Body.outputs`: the result path, whether the reference is `passes`,
     /// and the entries it names.
     pub outputs: Vec<(Vec<Seg>, bool, Vec<RefName>)>,
@@ -676,6 +679,8 @@ struct Store {
     decided: BTreeSet<PathKey>,
     /// The `shape` entries a test the type does not decide recorded.
     tested: BTreeSet<PathKey>,
+    /// The positions whose type is a handle type or a reference type.
+    by_reference: BTreeSet<PathKey>,
     static_reads: BTreeSet<(usize, u32)>,
     dynamic_reads: BTreeMap<(usize, u32), String>,
     writes: BTreeSet<String>,
@@ -1049,11 +1054,24 @@ impl<'a> Analyzer<'_, '_, 'a> {
             return;
         }
         let kinds = self.kinds(expression);
+        self.typed_position(val, &kinds);
         if kinds.scalar || kinds.untyped {
             self.observe(val, Class::Value);
         }
         if kinds.container || kinds.handle || kinds.reference || kinds.factory {
             self.observe_shape(val, !kinds.nullable && !kinds.several);
+        }
+    }
+
+    /// Records the positions of `val` as of handle type or of reference
+    /// type, where the type of the expression that yields it is one.
+    fn typed_position(&mut self, val: &Val, kinds: &Kinds) {
+        if (kinds.handle || kinds.reference) && !kinds.container && !kinds.scalar {
+            for proj in val.projections() {
+                if !proj.made {
+                    self.store.by_reference.insert(proj.key());
+                }
+            }
         }
     }
 
@@ -1063,6 +1081,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
             return;
         }
         let kinds = self.kinds(expression);
+        self.typed_position(val, &kinds);
         self.observe_shape(val, !kinds.nullable && !kinds.untyped);
     }
 
@@ -1072,6 +1091,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
             return;
         }
         let kinds = self.kinds(expression);
+        self.typed_position(val, &kinds);
         let decided = !kinds.nullable && !kinds.several && !kinds.untyped && !kinds.reference;
         self.observe_shape(val, decided);
     }
@@ -1188,6 +1208,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     Some((length, true)) if length == index => Class::Resolved,
                     _ => Class::Identity,
                 };
+                self.store.by_reference.insert(position.key());
                 self.observe(&Val::Proj(position), class);
                 crossed = true;
             }
@@ -1201,6 +1222,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 Some((length, true)) if length == proj.path.len() => Class::Resolved,
                 _ => Class::Identity,
             };
+            self.store.by_reference.insert(position.key());
             self.observe(&Val::Proj(position), class);
         }
     }
@@ -3648,6 +3670,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .map(|starts| starts.to_vec())
                 .collect(),
             label_metadata: store.label_metadata,
+            by_reference: store.by_reference.iter().cloned().collect(),
             outputs: store.output_refs.clone(),
             binds: store
                 .binds

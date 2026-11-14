@@ -1019,14 +1019,15 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
     // "B3 function bodyText reads m0 m1 m2 m4": the element's `shape`,
     // `body : value`, and `authorProfile : shape`. `m1`, the reference at
     // the element, belongs to the element construct and is not in the
-    // row's own plan.
+    // row's own plan. "`m4` is at a position of handle type, so it has
+    // `inPlace`".
     let text = body_named(&plan, "bodyText#1");
     assert_eq!(text["kind"], "function");
     assert_eq!(
         reads_of(&plan, text),
         [
             "argument message : shape",
-            "argument message/authorProfile : shape",
+            "argument message/authorProfile : shape, inPlace",
             "argument message/body : value",
         ]
     );
@@ -1248,5 +1249,34 @@ fn a_write_through_a_state_cell_has_a_target_of_kind_state() {
             "via": { "kind": "state", "cell": 0, "path": ["n"] },
         })),
         "{edges:?}"
+    );
+}
+
+#[test]
+fn a_shape_slot_is_in_place_by_the_type_of_its_position() {
+    // PL §1.1, `Slot.inPlace`: "A `shape` slot at a position of handle
+    // type, or of reference type, has it (section 2.5)." The handle
+    // `flag` is tested and never used, so no `identity` entry is beside
+    // the `shape` entry. The container `box` is tested and passed on by
+    // reference, and its position has a data type.
+    let analysis = program(
+        r#"import { Cell, lift, pattern } from "commonfabric";
+const probe = lift((x: { flag?: Cell<number>; box?: { n: number } }) => {
+  return { set: x.flag !== undefined, box: x.box === undefined ? undefined : x.box };
+});
+export const P = pattern<{ flag?: Cell<number>; box?: { n: number } }>(({ flag, box }) => {
+  return { probed: probe({ flag, box }) };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let reads = reads_of(&plan, body_named(&plan, "probe"));
+    assert_eq!(
+        reads,
+        [
+            "argument box : identity",
+            "argument box : shape",
+            "argument flag : shape, inPlace",
+        ]
     );
 }

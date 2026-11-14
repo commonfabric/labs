@@ -1652,13 +1652,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut names: Names = HashMap::new();
         // The `value` entries, for an operand that names a space.
         let mut value_names: Names = HashMap::new();
-        let identity_at = |entries: &[Entry], input: &str, path: &[Seg]| {
-            entries.iter().any(|entry| {
-                entry.input == input
-                    && entry.path == path
-                    && matches!(entry.class, Class::Identity | Class::Resolved)
-            })
-        };
+
         for entry in used.reads.iter().chain(&used.computed) {
             let place = if entry.input == "cause" && !inputs.contains_key("cause") {
                 Place::Slot(Root::Cause, slot_path(&[], &entry.path))
@@ -1673,7 +1667,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // reference is made in place (PL §1.1).
                     let in_place = entry.class == Class::Shape
                         && entry.path.last() != Some(&Seg::Hop)
-                        && identity_at(&used.reads, &entry.input, &entry.path);
+                        && record
+                            .detail
+                            .by_reference
+                            .iter()
+                            .any(|(input, path)| *input == entry.input && *path == entry.path);
                     let slot =
                         self.slot_with(&root, &path, class_name(entry.class), resolved, in_place);
                     if !reads.contains(&slot) {
