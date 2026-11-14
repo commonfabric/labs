@@ -16,7 +16,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 
 import { NAME } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
-import { isCellLink } from "../src/link-utils.ts";
+import { isCellLink, parseLink } from "../src/link-utils.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
@@ -139,23 +139,32 @@ describe("cfc-result-wiring-stamp", () => {
    * first reads Bob's document when `bobs` is given, and returns the result
    * cell once the transaction commits. The piece is stopped again, so the
    * next call sets it up afresh.
+   *
+   * The transaction is `editWithRetry()`'s. A stop asks for a release pass,
+   * which can drop the stopped piece's argument and `computed:` documents, and
+   * a later setup of the same piece reads them as absent. Its commit is then
+   * refused, and only an attempt that can run again once they have loaded
+   * converges ("Reading a released document again" in
+   * `docs/features/document-release.md`).
    */
   const setUp = async (
     cause: string,
     pattern: ReturnType<typeof patterns>[keyof ReturnType<typeof patterns>],
     bobs?: IMemorySpaceAddress,
   ): Promise<Cell<unknown>> => {
-    const tx = runtime.edit();
-    if (bobs !== undefined) {
-      runtime.getCellFromLink(bobs, undefined, tx).get();
-    }
-    const resultCell = runtime.getCell(space, cause, undefined, tx);
-    const result = runtime.run(tx, pattern, { x: 1 }, resultCell);
-    tx.prepareCfc();
-    expect((await tx.commit().settled).ok).toBeDefined();
+    let result: Cell<unknown> | undefined;
+    const { error } = await runtime.editWithRetry((tx) => {
+      if (bobs !== undefined) {
+        runtime.getCellFromLink(bobs, undefined, tx).get();
+      }
+      const resultCell = runtime.getCell(space, cause, undefined, tx);
+      result = runtime.run(tx, pattern, { x: 1 }, resultCell);
+    });
+    expect(error).toBeUndefined();
+    expect(result).toBeDefined();
     await runtime.idle();
-    runtime.runner.stop(result);
-    return result;
+    runtime.runner.stop(result!);
+    return result!;
   };
 
   /** The label entries stored on `cell`'s document. */
@@ -791,6 +800,13 @@ describe("cfc-result-wiring-stamp", () => {
     });
 
     it("stays where the setup carries over the stored name it guards, and rewrites another slot", async () => {
+      // The second setup runs after a release pass has dropped the stopped
+      // piece's argument and `computed:` documents, which a release does
+      // once the cells holding them are collected. A storage manager that
+      // records no hold stands in for that collection, so the pass awaited
+      // below drops them whenever the test runs.
+
+      storageManager.holdDocument = () => ({});
       const { named } = patterns();
       const bobs = await seedBobsDocument();
       const result = await setUp("name-carried-rewritten", named);
@@ -821,9 +837,21 @@ describe("cfc-result-wiring-stamp", () => {
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).ok).toBeDefined();
       await plantStamp(result, BOB);
+      await runtime.releaseUnreadDocuments();
 
       await setUp("name-carried-rewritten", named);
 
+      const read = runtime.edit();
+      const stored = storedFields(read, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: [],
+      }).value as Record<string, unknown>;
+      read.abort("stored value read");
+      expect(parseLink(stored[NAME], link)?.id).toBe(bobs.id);
+      expect(isCellLink(stored.a)).toBe(true);
+      expect(parseLink(stored.a, link)?.id).not.toBe(bobs.id);
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
