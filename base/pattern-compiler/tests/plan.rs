@@ -115,7 +115,9 @@ fn a_handler_is_one_body_whose_slots_have_the_roots_event_and_binding() {
 #[test]
 fn a_binding_of_the_reactive_tier_binds_every_path_by_reference() {
     // PL §1.1, `Binding.state`: "In the reactive tier every path is bound
-    // this way, and resolves to the slot or the output `template` names."
+    // this way, and resolves to what `place` names." "`template` is the
+    // label of the same place: the `slot` node, the output's template, or
+    // `const`."
     let plan = plan_of(&program(LIST), "List");
     let binding = &plan["bindings"][0];
     assert_eq!(binding["handler"], json!({ "body": 2 }));
@@ -124,9 +126,54 @@ fn a_binding_of_the_reactive_tier_binds_every_path_by_reference() {
     assert_eq!(state["path"], json!(["items"]));
     assert_eq!(state["capture"], "link");
     assert_eq!(
-        slot_line(&plan, &state["bound"]["slot"]),
+        slot_line(&plan, &state["place"]["slot"]),
         "argument items : identity"
     );
+    assert_eq!(
+        state["template"],
+        json!({ "op": "slot", "slot": state["place"]["slot"] })
+    );
+    assert!(state.get("bound").is_none());
+}
+
+#[test]
+fn a_state_path_of_a_binding_resolves_to_an_output_a_stream_or_a_constant() {
+    // PL §1.1, `Binding.state.place`: "A slot of the instance; an output
+    // of the instance (`Plan.outputs`); the stream of another binding of
+    // the reactive tier (`Plan.bindings`); or a constant written at the
+    // binding, which the plan holds and nothing stores."
+    let analysis = program(
+        r#"import { Cell, handler, pattern } from "commonfabric";
+const inner = handler<{ n: number }, { count: Cell<number> }>((event, state) => { state.count.set(event.n); });
+const outer = handler<unknown, { total: number; step: number; go: unknown }>((_, state) => { console.log(state.total, state.step, state.go); });
+export const P = pattern<{ count: Cell<number>; a: number }>(({ count, a }) => {
+  const total = a + 1;
+  const go = inner({ count });
+  const run = outer({ total, step: 2, go });
+  return { run };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let binding = plan["bindings"]
+        .as_array()
+        .expect("bindings")
+        .iter()
+        .find(|binding| binding["name"] == "run")
+        .expect("the binding");
+    let state = binding["state"].as_array().expect("state");
+    let at = |name: &str| {
+        state
+            .iter()
+            .find(|entry| entry["path"] == json!([name]))
+            .unwrap_or_else(|| panic!("no path {name}"))
+    };
+    assert_eq!(at("step")["place"], json!({ "constant": 2 }));
+    assert_eq!(at("step")["template"], json!({ "op": "const" }));
+    assert_eq!(at("go")["place"], json!({ "stream": 0 }));
+    let output = at("total")["place"]["output"].as_u64().expect("an output") as usize;
+    assert_eq!(plan["outputs"][output]["interim"], "total");
+    assert_eq!(at("total")["template"], plan["outputs"][output]["template"]);
 }
 
 #[test]
@@ -803,11 +850,11 @@ fn the_send_handler_and_its_binding_are_the_records_of_pl_section_6_2() {
         .expect("state")
         .iter()
         .map(|entry| {
-            let bound = &entry["bound"];
+            let bound = &entry["place"];
             let to = match bound.get("slot") {
                 Some(slot) => line(slot),
                 None => {
-                    assert!(bound.get("binding").is_some(), "{bound}");
+                    assert!(bound.get("stream").is_some(), "{bound}");
                     "the stream of another binding".to_string()
                 }
             };

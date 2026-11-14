@@ -2142,30 +2142,65 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     /// What a path of a binding's state is bound to, in the reactive
     /// tier: every path is a link (PL §3.14).
-    fn state_entries(&mut self, path: &mut Vec<String>, place: &Place, state: &mut Vec<Value>) {
-        let bound = match place {
+    fn state_entries(
+        &mut self,
+        path: &mut Vec<String>,
+        place: &Place,
+        written: Option<&Expression<'a>>,
+        state: &mut Vec<Value>,
+    ) {
+        let mut entry = Map::new();
+        entry.insert("path".to_string(), json!(path.clone()));
+        entry.insert("capture".to_string(), json!("link"));
+        match place {
             Place::Slot(root, at) => {
                 let slot = self.slot(root, at, "identity");
-                json!({ "slot": slot })
+                entry.insert("place".to_string(), json!({ "slot": slot }));
+                entry.insert(
+                    "template".to_string(),
+                    json!({ "op": "slot", "slot": slot }),
+                );
             }
             Place::Value(value, at) => {
+                // The template is the output's, filled in with the
+                // outputs (`finish`).
                 self.values[*value].referred = true;
-                json!({ "output": { "$value": value }, "path": at })
+                let output = if at.is_empty() {
+                    json!({ "$value": value })
+                } else {
+                    if !self.values[*value].below.contains(at) {
+                        self.values[*value].below.push(at.clone());
+                    }
+                    json!({ "$value": value, "$path": at })
+                };
+                entry.insert("place".to_string(), json!({ "output": output }));
             }
-            Place::Stream(binding) => json!({ "binding": binding }),
+            Place::Stream(binding) => {
+                // The stream of a binding of the reactive tier is named
+                // by the binding's `name` and `within` (PL §3.14), which
+                // are constants of the plan.
+                entry.insert("place".to_string(), json!({ "stream": binding }));
+                entry.insert("template".to_string(), json!({ "op": "const" }));
+            }
             Place::Record(fields) => {
                 for (name, member) in fields {
+                    let below = written.and_then(|written| member_written(written, name));
                     path.push(name.clone());
-                    self.state_entries(path, member, state);
+                    self.state_entries(path, member, below, state);
                     path.pop();
                 }
                 return;
             }
-            Place::Index(collection) => json!({ "index": collection }),
-            Place::Const => json!({ "constant": true }),
-            Place::Unknown => json!({}),
-        };
-        state.push(json!({ "path": path.clone(), "capture": "link", "bound": bound }));
+            // The position of an element: PL has no `place` for it.
+            Place::Index(_) => {}
+            Place::Const => {
+                let constant = written.and_then(constant_of).unwrap_or(Value::Null);
+                entry.insert("place".to_string(), json!({ "constant": constant }));
+                entry.insert("template".to_string(), json!({ "op": "const" }));
+            }
+            Place::Unknown => {}
+        }
+        state.push(Value::Object(entry));
     }
 
     /// A handler applied to its state in the reactive tier.
@@ -2187,7 +2222,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             let saved = self.cone.take();
             let place = self.eval(argument, hint);
             self.cone = saved;
-            self.state_entries(&mut Vec::new(), &place, &mut state);
+            self.state_entries(&mut Vec::new(), &place, Some(argument), &mut state);
         }
         let name = if matches!(hint, "branch" | "operand" | "condition" | "child") {
             name
@@ -2237,7 +2272,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     Place::Unknown
                 }
             };
-            self.state_entries(&mut vec![name], &place, &mut state);
+            self.state_entries(&mut vec![name], &place, None, &mut state);
         }
         self.bindings.push(json!({
             "handler": { "body": body },
@@ -2546,7 +2581,60 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .push(("a reference to a value that has no output".to_string(), 0));
         }
         name_ordinals(&mut plan);
+        // A state path that resolves to an output has the output's
+        // template (PL §1.1, `Binding.state.place`).
+        let outputs = plan["outputs"].clone();
+        for binding in plan["bindings"].as_array_mut().into_iter().flatten() {
+            for entry in binding["state"].as_array_mut().into_iter().flatten() {
+                let template = entry["place"]["output"]
+                    .as_u64()
+                    .and_then(|output| outputs[output as usize].get("template").cloned());
+                if let (Some(template), Some(entry)) = (template, entry.as_object_mut()) {
+                    entry.insert("template".to_string(), template);
+                }
+            }
+        }
         (plan, self.unsupported, cycles)
+    }
+}
+
+/// The expression written at a member of an object or an array literal.
+fn member_written<'e, 'a>(written: &'e Expression<'a>, name: &str) -> Option<&'e Expression<'a>> {
+    match unwrap(written) {
+        Expression::ObjectExpression(object) => object.properties.iter().find_map(|property| {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                return None;
+            };
+            (!property.computed && static_key_name(&property.key) == Some(name))
+                .then_some(&property.value)
+        }),
+        Expression::ArrayExpression(array) => array
+            .elements
+            .get(name.parse::<usize>().ok()?)
+            .and_then(|element| element.as_expression()),
+        _ => None,
+    }
+}
+
+/// The value of a literal written in place, as the plan holds it.
+fn constant_of(written: &Expression<'_>) -> Option<Value> {
+    match unwrap(written) {
+        Expression::StringLiteral(literal) => Some(json!(literal.value.as_str())),
+        Expression::NumericLiteral(literal) => {
+            if literal.value.fract() == 0.0 && literal.value.abs() < 9.0e15 {
+                Some(json!(literal.value as i64))
+            } else {
+                Some(json!(literal.value))
+            }
+        }
+        Expression::BooleanLiteral(literal) => Some(json!(literal.value)),
+        Expression::NullLiteral(_) => Some(Value::Null),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|text| json!(text.as_str())),
+        _ => None,
     }
 }
 
