@@ -65,10 +65,9 @@ import {
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
-  type FixtureRequirements,
   fixtureTextOf,
   hexOf,
-  NO_CODEC_EXCLUSION,
+  type JsonCodecClassName,
   requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
@@ -98,10 +97,7 @@ export type HashedOutcome = {
 /**
  * One conformance case: a value to hash, made fresh by `make`.
  *
- * `section` names the part of the spec the case exercises. `requires` names
- * the flavors of regular expression whose construction the case's outcome
- * depends on; the fixture entry adds the guarantees of size the case needs
- * past the floors. `spec` is the byte
+ * `section` names the part of the spec the case exercises. `spec` is the byte
  * stream the spec gives the value, in hexadecimal as the spec writes it,
  * spaces and all, for a value it gives one for. `equals` names another case,
  * earlier among the cases, whose value this one's is `valueEqual()` to.
@@ -113,7 +109,6 @@ export type HashedOutcome = {
 export type HashConformanceCase = {
   readonly name: string;
   readonly section: string;
-  readonly requires?: Pick<FixtureRequirements, "flavors">;
   readonly make: () => FabricValue;
   readonly spec?: string;
   readonly equals?: string;
@@ -991,7 +986,8 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
-  readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
+  readonly [Name in JsonCodecClassName<FabricPrimitiveClassesByName>]:
+    ClassCaseNotes;
 } = {
   FabricBytes: { section: SECTION_BYTES },
   FabricDurationDay: { section: SECTION_DURATION_DAY },
@@ -1000,7 +996,6 @@ const PRIMITIVE_CLASS_NOTES: {
   FabricEpochNsec: { section: SECTION_EPOCH_NSEC },
   FabricHash: { section: SECTION_HASH },
   FabricKeyPair: { section: SECTION_KEY_PAIR },
-  FabricRegExp: { excluded: NO_CODEC_EXCLUSION },
   FabricUnavailable: { section: SECTION_UNAVAILABLE },
 };
 
@@ -1187,13 +1182,13 @@ function outcomeOfStream(stream: Uint8Array): HashedOutcome {
 function fixtureEntryOf(
   { conformanceCase, stated, textRefused, hashed }: MadeCase,
 ): Record<string, FixtureJson> {
-  const { name, section, requires, spec, equals, divergence } = conformanceCase;
+  const { name, section, spec, equals, divergence } = conformanceCase;
   const specHashed = (spec === undefined)
     ? hashed
     : outcomeOfStream(bytesOfHex(spec.replaceAll(" ", "").toLowerCase()));
 
   const entry: Record<string, FixtureJson> = { name, section };
-  const required = requirementsOf(stated, requires?.flavors);
+  const required = requirementsOf(stated);
   if (required !== undefined) {
     entry.requires = required;
   }
