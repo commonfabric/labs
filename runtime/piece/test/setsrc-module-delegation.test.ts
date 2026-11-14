@@ -586,14 +586,13 @@ export default pattern<{seed?: ${seedType}}>(() => {
   });
 
   it("updates a piece whose argument carries a confidentiality label", async () => {
-    // The source transition stages the successor's delegation union on the
-    // same transaction that moves the piece's source pointer, so that the
-    // authority and the pointer land together. That transaction also reads the
-    // piece's argument. Where the argument carries a label, the join reaches
-    // the cache document the union is staged on, and measuring that write
-    // against the ceiling a content-addressed cache document declares — none —
-    // refuses the commit. At the strict rung that is a refused pattern update
-    // for exactly the pieces a confidentiality label is written for.
+    // The source transition reads the piece's argument, so where the argument
+    // carries a label, the transition's join carries its clause. The
+    // transition writes no cache record: the successor's delegation union is
+    // staged on its records once the transition commits, on a transaction
+    // that reads only cache records. So the update lands at the strict rung,
+    // and the successor's record takes no clause from the piece's data, which
+    // every later setup of the module reads.
     const strictStorage = StorageManager.emulate({ as: signer });
     const strictRuntime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
@@ -619,6 +618,7 @@ export default pattern<{seed?: ${seedType}}>(() => {
 
       await piece.setPattern(confidentialArgumentProgram("v2"));
       await strictRuntime.idle();
+      await strictRuntime.patternManager.flushCompileCacheWrites();
 
       // The swap happened, the argument survived it, and the successor
       // inherited the predecessor's writer authority.
@@ -635,11 +635,8 @@ export default pattern<{seed?: ${seedType}}>(() => {
         );
         expect(closure?.get(successor.identity)?.delegatedModuleIdentities)
           .toContain(previous.identity);
-        // The skip decides which store the value may land in, not whether the
-        // join follows it: the successor's record carries the argument's
-        // clause. Without this the case would pass equally if the label had
-        // stopped reaching the write at all, which is what the refusal was
-        // about.
+        // The delegation union above is on the record, and the argument's
+        // clause is not.
         const recordId = strictRuntime.getCell(
           strictPieces.getSpace(),
           sourceDocKey(successor.identity),
@@ -652,7 +649,7 @@ export default pattern<{seed?: ${seedType}}>(() => {
         })?.labelMap.entries ?? [];
         expect(
           stamped.flatMap((entry) => entry.label.confidentiality ?? []),
-        ).toContainEqual({
+        ).not.toContainEqual({
           type: "https://commonfabric.org/cfc/atom/Resource",
           class: "SetsrcDelegationCheck",
           subject: "did:example:owner",

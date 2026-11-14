@@ -491,18 +491,19 @@ describe("module identity delegation", () => {
     expect(await runReleaseHelper([])).toEqual({
       keptThroughRelease: true,
       stageError: null,
+      staged: "previous",
       releasedOnceDone: true,
     });
   });
 
   it("stages a prepared update whose successor's source documents a release dropped, loading them again", async () => {
-    // Staging reads each successor module's source document inside the
-    // commit and throws when it finds one absent; `editWithRetry()` loads
-    // what that attempt found absent and stages again.
+    // The staging that follows the transition's commit loads the successor's
+    // source documents before its transaction reads them.
 
     expect(await runReleaseHelper(["--without-holds"])).toEqual({
       keptThroughRelease: false,
       stageError: null,
+      staged: "previous",
       releasedOnceDone: true,
     });
   });

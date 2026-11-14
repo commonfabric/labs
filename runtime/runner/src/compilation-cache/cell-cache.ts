@@ -1751,10 +1751,11 @@ function effectiveModuleDelegationsForWrite(
 }
 
 /**
- * Stage a source update's delegation union on its durable artifacts. The source
- * transition owns this transaction; the returned union becomes runtime authority
- * only after that transaction commits. Compiled bodies stay in bounded cache
- * writes while these field updates share the source pointer's atomic boundary.
+ * Stage a source update's delegation union on its durable artifacts, and
+ * return the union, which becomes runtime authority once `tx` commits. The
+ * caller runs this on a cache transaction of its own, after the source
+ * transition has committed, so that `tx` reads nothing but cache records:
+ * whatever else it read would label the records it writes.
  */
 export function stageModuleDelegations(
   runtime: Runtime,

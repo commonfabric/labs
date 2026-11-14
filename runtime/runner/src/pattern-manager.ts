@@ -116,7 +116,7 @@ export type CompileCacheWriter = (
 
 declare const preparedSourceUpdateBrand: unique symbol;
 
-/** Verified, operation-local authority for an atomic source transition. */
+/** Verified, operation-local authority for one source transition. */
 export interface PreparedSourceUpdate {
   readonly [preparedSourceUpdateBrand]: true;
 }
@@ -130,9 +130,9 @@ type SourceUpdatePreparation = {
 
   /**
    * The hold tokens (`IStorageManager.holdDocument()`) of the candidate's
-   * source documents, which `stageSourceUpdate()` reads, kept for as long as
-   * the preparation is, so that a release pass between preparing and staging
-   * leaves them loaded.
+   * source documents, which the staging after the transition commits reads,
+   * kept for as long as the preparation is, so that a release pass between
+   * preparing and staging leaves them loaded.
    */
   documentHolds: readonly object[];
 };
@@ -2440,7 +2440,11 @@ export class PatternManager {
     }
   }
 
-  /** Stage the proposal with its matching source transition and register on commit. */
+  /**
+   * Check that `prepared` matches the source transition `tx` makes, and once
+   * `tx` commits, register the successor's delegations and stage them on its
+   * cache records (`#stageCommittedDelegations()`).
+   */
   stageSourceUpdate(
     prepared: PreparedSourceUpdate,
     space: MemorySpace,
@@ -2458,16 +2462,80 @@ export class PatternManager {
         "source update preparation does not match the transition",
       );
     }
-    const committed = stageModuleDelegations(
-      this.#runtime,
-      space,
-      proposal.delegations,
-      proposal.runtimeVersion,
-      tx,
-    );
+    // The transition writes no cache record: its transaction reads the
+    // piece's data, and a record every later setup of the module reads would
+    // take that label. The successor's authority is registered once the
+    // transition commits, and staged on its records after that, on a cache
+    // transaction of its own.
     tx.addVerdictCallback((_tx, result) => {
-      if (result.ok) this.#runtime.registerModuleDelegations(space, committed);
+      if (!result.ok) return;
+      this.#runtime.registerModuleDelegations(space, proposal.delegations);
+      void this.#stageCommittedDelegations(proposal);
     });
+  }
+
+  /**
+   * Helper for `stageSourceUpdate()`, which stages the delegations of
+   * `proposal`, a source update that has committed, on the successor's
+   * source and compiled records, on a transaction of its own that reads
+   * nothing but those records, and registers the union it staged. It is
+   * tracked as a cache write-back (`flushCompileCacheWrites()`).
+   */
+  async #stageCommittedDelegations(
+    proposal: SourceUpdatePreparation,
+  ): Promise<void> {
+    const { space, entryIdentity, delegations, runtimeVersion } = proposal;
+    const identities = [...delegations.keys()];
+    const targets = identities.map((identity) => ({ identity }));
+    const settlements: Promise<WaveSettlement>[] = [];
+    let committed: ModuleDelegationMap = new Map();
+    const staging = (async () => {
+      await (runtimeVersion === undefined
+        ? this.#syncSourceCacheWriteTargets(space, targets)
+        : this.#syncCompileCacheWriteTargets(space, targets, {
+          runtimeVersion,
+        }));
+      return await this.#editCacheWrite(settlements, (tx) => {
+        // Bookkeeping stamp, the same §3d reason as the write-backs'.
+        this.#runtime.stampServerRun(tx, {
+          actionId: `compile-cache/delegation-staging/${entryIdentity}`,
+          kind: "bookkeeping",
+        });
+        committed = stageModuleDelegations(
+          this.#runtime,
+          space,
+          delegations,
+          runtimeVersion,
+          tx,
+        );
+      });
+    })();
+    this.#trackCacheWriteBack(space, entryIdentity, identities, staging);
+    try {
+      const { error } = await staging;
+      if (error !== undefined) {
+        logger.warn("delegation-staging-failed", () => [
+          `staging the delegations of ${entryIdentity} in ${space} failed`,
+          error,
+        ]);
+        return;
+      }
+      this.#runtime.registerModuleDelegations(space, committed);
+      this.#watchCacheWriteDurability(
+        space,
+        entryIdentity,
+        identities,
+        settlements,
+        undefined,
+      );
+    } catch (error) {
+      logger.warn("delegation-staging-failed", () => [
+        `staging the delegations of ${entryIdentity} in ${space} failed`,
+        error,
+      ]);
+    } finally {
+      this.#untrackCacheWriteBack(space, entryIdentity, identities, staging);
+    }
   }
 
   /**
@@ -4654,7 +4722,7 @@ export class PatternManager {
    */
   async #syncSourceCacheWriteTargets(
     space: MemorySpace,
-    modules: readonly CacheableModule[],
+    modules: readonly Pick<CacheableModule, "identity">[],
   ): Promise<void> {
     await Promise.all(
       modules.map((module) =>
@@ -4666,7 +4734,7 @@ export class PatternManager {
   /** As {@link #syncSourceCacheWriteTargets}, for source and compiled records. */
   async #syncCompileCacheWriteTargets(
     space: MemorySpace,
-    modules: readonly CacheableModule[],
+    modules: readonly Pick<CacheableModule, "identity">[],
     opts: { runtimeVersion: string },
   ): Promise<void> {
     await Promise.all(
