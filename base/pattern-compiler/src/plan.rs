@@ -45,6 +45,8 @@ pub struct PatternPlan {
     /// The static side-writes that are on a cycle of `Plan.edges`: the
     /// offset of the side-write, and the names of the cones on the cycle.
     pub cycles: Vec<(u32, Vec<String>)>,
+    /// What the plan costs that a hint names: the kind, and the offset.
+    pub hints: Vec<(String, u32)>,
 }
 
 /// Where the data of a slot lives (`SlotRoot`).
@@ -179,6 +181,9 @@ struct Emitter<'r, 'm, 'a> {
     formal_types: HashMap<String, TypeId>,
     /// For each collection, the membership of what it iterates.
     iterated: Vec<Option<Value>>,
+    /// What the compiler reports as a hint: a `wish` whose query is not
+    /// a constant (PL §3.19, question 48).
+    hints: Vec<(String, u32)>,
 }
 
 /// What the edges of the plan need of a body.
@@ -1924,6 +1929,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     emitter.consume(&place);
                 }
             }),
+            "wish" => self.wish(arguments, hint, at),
             _ if EFFECTS.contains(&name) => {
                 let operation = self.operations.len();
                 self.operations.push(json!({
@@ -2074,6 +2080,221 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Place::Unknown
             }
         }
+    }
+
+    /// The template of an operand of a request as one value: the
+    /// template of its expression, and for a record or an array written
+    /// in place the join over its members (PL §3.4, §3.14).
+    fn operand_template(&mut self, expression: &Expression<'a>, hint: &str) -> Option<Value> {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let place = self.eval(expression, hint);
+        self.observe(&place, "identity");
+        let mut inputs: Vec<Value> = Vec::new();
+        for input in std::mem::replace(&mut self.operands, saved.0) {
+            if !inputs.contains(&input) {
+                inputs.push(input);
+            }
+        }
+        let opaque = std::mem::replace(&mut self.opaque, saved.1);
+        if opaque {
+            return None;
+        }
+        Some(match inputs.len() {
+            0 => json!({ "op": "const" }),
+            1 => inputs.remove(0),
+            _ if inputs.iter().all(|input| input["op"] == "const") => json!({ "op": "const" }),
+            _ => join(inputs),
+        })
+    }
+
+    /// A `wish` (PL §3.19): one `Operation` of kind `wish`, whose
+    /// operands a cone writes by edges with target `request`, whose
+    /// result a reader reads through slots with root `operation`, and
+    /// whose reads of what no slot names are one entry of
+    /// `Plan.dynamicReads` of kind `search`. A path of the result has
+    /// the label `C(Operation.input) ⊔ C(dynamic, kind search)` and no
+    /// integrity, which the runtime instantiates for a slot of the
+    /// operation. A constant query gives the row of its key: the scope,
+    /// the state cell of the one-shot clock, and the sidecars.
+    fn wish(&mut self, arguments: &[&Expression<'a>], hint: &str, at: u32) -> Place {
+        const OPERANDS: [&str; 6] = ["query", "path", "schema", "scope", "context", "headless"];
+        let operation = self.operations.len();
+        self.operations.push(json!({
+            "kind": "wish",
+            "implementation": { "builtin": "wish" },
+            "name": base_name(hint, "wish"),
+            "within": self.within_json(),
+        }));
+        let (cone, made) = self.computing(hint, at);
+        let mut written: Vec<(&'static str, &Expression<'a>)> = Vec::new();
+        match arguments.first().map(|first| unwrap(first)) {
+            Some(Expression::ObjectExpression(object)) => {
+                for property in &object.properties {
+                    let operand = match property {
+                        ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
+                            static_key_name(&property.key).and_then(|name| {
+                                OPERANDS
+                                    .iter()
+                                    .find(|operand| **operand == name)
+                                    .map(|operand| (*operand, &property.value))
+                            })
+                        }
+                        _ => None,
+                    };
+                    match operand {
+                        Some(operand) => written.push(operand),
+                        None => self.unsupported(
+                            "an operand of `wish` that is not written by its name",
+                            property.span().start,
+                        ),
+                    }
+                }
+            }
+            // The form with the query as the one argument.
+            Some(query) if constant_of(query).is_some() || self.is_string(query) => {
+                written.push(("query", query));
+            }
+            Some(other) => self.unsupported(
+                "a `wish` whose operands are not written in place",
+                other.span().start,
+            ),
+            None => {}
+        }
+        let mut templates: Option<Vec<Value>> = Some(Vec::new());
+        for (name, expression) in &written {
+            let template = self.operand_template(expression, hint);
+            let mut write = Map::new();
+            write.insert(
+                "target".to_string(),
+                json!({ "kind": "request", "of": { "operation": operation }, "path": [name] }),
+            );
+            match template {
+                Some(template) => {
+                    write.insert("template".to_string(), template.clone());
+                    if let Some(templates) = &mut templates {
+                        templates.push(template);
+                    }
+                }
+                None => templates = None,
+            }
+            write.insert("constraints".to_string(), json!([]));
+            self.cones[cone].writes.push(Value::Object(write));
+        }
+        if let Some(mut templates) = templates {
+            self.operations[operation]["input"] = match templates.len() {
+                1 => templates.remove(0),
+                _ if templates.iter().all(|template| template["op"] == "const") => {
+                    json!({ "op": "const" })
+                }
+                _ => join(templates),
+            };
+        }
+        self.dynamic(json!({ "why": { "kind": "search", "operation": operation } }));
+        if made {
+            self.cone = None;
+        }
+        // The row of the constant query.
+        let operand = |name: &str| {
+            written
+                .iter()
+                .find(|(operand, _)| *operand == name)
+                .map(|(_, expression)| unwrap(expression))
+        };
+        let strings = |expression: &Expression<'a>| -> Option<Vec<String>> {
+            match expression {
+                Expression::ArrayExpression(array) => array
+                    .elements
+                    .iter()
+                    .map(|element| match element.as_expression().map(unwrap) {
+                        Some(Expression::StringLiteral(text)) => Some(text.value.to_string()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => None,
+            }
+        };
+        let headless = matches!(operand("headless"), Some(Expression::BooleanLiteral(flag)) if flag.value);
+        // The `path` operand "is appended to the path the query names":
+        // `None` where it is computed.
+        let extra: Option<Vec<String>> = match operand("path") {
+            None => Some(Vec::new()),
+            Some(path) => strings(path),
+        };
+        let query = operand("query")
+            .and_then(constant_of)
+            .and_then(|query| query.as_str().map(|query| query.trim().to_string()));
+        // What the plan has beside the operation: the scope `user`, the
+        // state cell of the one-shot clock, and the sidecars.
+        let (user, clock, sidecars): (bool, bool, &[&str]) = match query.as_deref() {
+            None => {
+                self.hints
+                    .push(("a `wish` whose query is not a constant".to_string(), at));
+                (true, true, &["suggestion", "profileCreate", "profilePicker"])
+            }
+            Some(query) if query.starts_with('/') => (false, false, &[]),
+            Some(query) if query.starts_with('#') => {
+                let mut segments = query[1..].split('/').filter(|segment| !segment.is_empty());
+                let key = segments.next().unwrap_or("");
+                let below: Vec<&str> = segments.collect();
+                let first = below
+                    .first()
+                    .copied()
+                    .or_else(|| extra.as_ref().and_then(|extra| extra.first().map(String::as_str)));
+                let computed_path = extra.is_none() && below.is_empty();
+                match key {
+                    "default" | "mentionable" | "summaryIndex" | "knowledgeGraph"
+                    | "pieceRegistry" => (false, false, &[]),
+                    // The target is refused.
+                    "profilePicture" | "profileAvatar" => (false, false, &[]),
+                    "profile" if matches!(first, Some("picture" | "avatar")) => (false, false, &[]),
+                    "profile" | "profileName" | "profileBio" | "profileSpace" => {
+                        if headless {
+                            (true, false, &[])
+                        } else {
+                            (true, false, &["profileCreate", "profilePicker"])
+                        }
+                    }
+                    "favorites" | "journal" | "learned" | "learnedSummary" | "agent_queue"
+                    | "chatManager" => (true, false, &[]),
+                    // The path decides between the two clocks.
+                    "now" => (false, first.is_none() || computed_path, &[]),
+                    _ => {
+                        // `wishTargetMayUseHomeSpace`.
+                        let local = operand("scope").and_then(strings).is_some_and(|scope| {
+                            !scope.iter().any(|name| name == "~" || name == "profile")
+                        });
+                        let sidecars: &[&str] = if headless { &[] } else { &["suggestion"] };
+                        (!local, false, sidecars)
+                    }
+                }
+            }
+            // A suggestion for the situation the query describes.
+            Some(_) => (true, false, &["suggestion"]),
+        };
+        if user {
+            self.operations[operation]["scope"] = json!("user");
+        }
+        if clock {
+            self.state_cells.push(json!({
+                "name": "now",
+                "$ofOperation": [operation, "/now"],
+                "scope": "space",
+                "within": self.within_json(),
+            }));
+        }
+        for sidecar in sidecars {
+            self.children.push(json!({
+                "callee": { "compiled": null },
+                "sidecar": sidecar,
+                "name": sidecar,
+                "$ofOperation": [operation, format!("/{sidecar}")],
+                "within": self.within_json(),
+            }));
+        }
+        Place::Slot(Root::Operation(operation), Vec::new())
     }
 
     // ----- JSX -----
@@ -3490,8 +3711,9 @@ fn name_ordinals(plan: &mut Value) {
     let mut counts: BTreeMap<(bool, String, String), usize> = BTreeMap::new();
     for table in tables {
         for record in plan[table].as_array().into_iter().flatten() {
-            // A thing a site of a body makes is named from the body.
-            if record.get("$of").is_some() {
+            // A thing a site of a body makes is named from the body, and
+            // a sidecar or a clock cell of a `wish` from the operation.
+            if record.get("$of").is_some() || record.get("$ofOperation").is_some() {
                 continue;
             }
             if let Some(name) = record["name"].as_str() {
@@ -3504,7 +3726,7 @@ fn name_ordinals(plan: &mut Value) {
     let mut ordinals: BTreeMap<(bool, String, String), usize> = BTreeMap::new();
     for table in tables {
         for record in plan[table].as_array_mut().into_iter().flatten() {
-            if record.get("$of").is_some() {
+            if record.get("$of").is_some() || record.get("$ofOperation").is_some() {
                 continue;
             }
             let Some(name) = record["name"].as_str().map(str::to_string) else {
@@ -3521,11 +3743,23 @@ fn name_ordinals(plan: &mut Value) {
     // "A `Child` that a site of `Body.calls` instantiates has the body's
     // `name`, `/n`, and the index of the site in `Body.calls`" (PL §1.3).
     let bodies = plan["bodies"].clone();
+    let operations = plan["operations"].clone();
     for table in ["children", "stateCells"] {
         for record in plan[table].as_array_mut().into_iter().flatten() {
             let Some(record) = record.as_object_mut() else {
                 continue;
             };
+            // "Its `name` is the operation's `name`, `/`, and the
+            // sidecar's name" (PL §3.19).
+            if let Some(of) = record.remove("$ofOperation") {
+                let operation = of[0].as_u64().unwrap_or(0) as usize;
+                let name = format!(
+                    "{}{}",
+                    operations[operation]["name"].as_str().unwrap_or(""),
+                    of[1].as_str().unwrap_or("")
+                );
+                record.insert("name".to_string(), json!(name));
+            }
             if let Some(of) = record.remove("$of") {
                 let body = of[0].as_u64().unwrap_or(0) as usize;
                 let name = format!(
@@ -3590,6 +3824,7 @@ pub fn emit_module<'a>(
             body_dynamic: Vec::new(),
             formal_types: HashMap::new(),
             iterated: Vec::new(),
+            hints: Vec::new(),
         };
         let Some(function) = emitter.function_at(module, *start) else {
             continue;
@@ -3606,6 +3841,7 @@ pub fn emit_module<'a>(
         if let Some(result) = result {
             emitter.keep(&mut Vec::new(), &result);
         }
+        let hints = std::mem::take(&mut emitter.hints);
         let (plan, unsupported, cycles) = emitter.finish(&parsed.path);
         plans.push(PatternPlan {
             name: body.name.clone(),
@@ -3613,6 +3849,7 @@ pub fn emit_module<'a>(
             plan,
             unsupported,
             cycles,
+            hints,
         });
     }
     plans
@@ -3691,6 +3928,27 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
         with_patterns.len()
     ));
     out.push_str(&format!("side-write:cycle: {cycles}\n"));
+    // The operations by kind, and what a hint names, over the accepted
+    // modules.
+    let mut operation_kinds: BTreeMap<String, usize> = BTreeMap::new();
+    let mut hints: BTreeMap<&str, usize> = BTreeMap::new();
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        for operation in plan.plan["operations"].as_array().into_iter().flatten() {
+            let kind = operation["kind"].as_str().unwrap_or("").to_string();
+            *operation_kinds.entry(kind).or_default() += 1;
+        }
+        for (kind, _) in &plan.hints {
+            *hints.entry(kind.as_str()).or_default() += 1;
+        }
+    }
+    let listed: Vec<String> = operation_kinds
+        .iter()
+        .map(|(kind, count)| format!("{kind} {count}"))
+        .collect();
+    out.push_str(&format!("operations: {}\n", listed.join(", ")));
+    for (kind, count) in &hints {
+        out.push_str(&format!("hint, {kind}: {count}\n"));
+    }
     // The uses of bodies, and how many have an input bound to a value the
     // instance computed (FA §1.1).
     let mut uses = 0;

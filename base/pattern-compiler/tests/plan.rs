@@ -2055,3 +2055,132 @@ export const P = pattern<{ count: Cell<number>; out: Cell<unknown>; url: string 
         "derive(expression) { const [argument url : identity] }"
     );
 }
+
+const WISHES: &str = r##"import { pattern, wish } from "commonfabric";
+export const Wishes = pattern<{ tag: string; where: string }>(({ tag, where }) => {
+  const fav = wish<{ title: string }>({ query: "#favorites" });
+  const me = wish<{ name: string }>({ query: "#profile" });
+  const quiet = wish<{ name: string }>({ query: "#profile", headless: true });
+  const now = wish<number>({ query: "#now" });
+  const tick = wish<number>({ query: "#now/5" });
+  const note = wish<{ name: string }>({ query: "#note", scope: ["."] });
+  const person = wish<{ name: string }>({ query: "#person", scope: [".", "~"] });
+  const local = wish<{ name: string }>({ query: "/a/b", path: [where] });
+  const face = wish<string>({ query: "#profilePicture" });
+  const any = wish<{ name: string }>({ query: tag });
+  return { title: fav.result.title, name: note.result.name, any: any.result };
+});
+"##;
+
+fn operation_named<'p>(plan: &'p Value, name: &str) -> (usize, &'p Value) {
+    plan["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .enumerate()
+        .find(|(_, operation)| operation["name"] == json!(name))
+        .unwrap_or_else(|| panic!("no operation named {name}"))
+}
+
+fn names_of(plan: &Value, table: &str) -> Vec<String> {
+    plan[table]
+        .as_array()
+        .expect("a table")
+        .iter()
+        .map(|record| record["name"].as_str().expect("a name").to_string())
+        .collect()
+}
+
+#[test]
+fn a_wish_is_one_operation_whose_operands_are_request_edges_and_whose_reads_are_one_search_entry() {
+    // PL §3.19, "`wish`": "An `Operation` of kind `wish`, with
+    // `implementation: { builtin: "wish" }`", the operands written "by a
+    // `WriteEdge` with target `request`, at the path of the operand's
+    // name", "`Operation.input` is the join of those templates, and it is
+    // `const` for a call whose operands are all constants", and "one entry
+    // of `Plan.dynamicReads` of kind `search` that names the operation".
+    let plan = plan_of(&program(WISHES), "Wishes");
+    let (fav, operation) = operation_named(&plan, "fav");
+    assert_eq!(operation["kind"], json!("wish"));
+    assert_eq!(operation["implementation"], json!({ "builtin": "wish" }));
+    assert_eq!(operation["input"], json!({ "op": "const" }));
+    let writes: Vec<&Value> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .flat_map(|cone| cone["writes"].as_array().expect("writes"))
+        .filter(|write| write["target"]["of"] == json!({ "operation": fav }))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0]["target"]["kind"], json!("request"));
+    assert_eq!(writes[0]["target"]["path"], json!(["query"]));
+    assert_eq!(writes[0]["template"], json!({ "op": "const" }));
+    let searches: Vec<&Value> = plan["dynamicReads"]
+        .as_array()
+        .expect("dynamic reads")
+        .iter()
+        .filter(|read| read["why"]["kind"] == json!("search"))
+        .collect();
+    assert_eq!(searches.len(), 10, "one entry for each wish");
+    assert!(searches.contains(&&json!({ "why": { "kind": "search", "operation": fav } })));
+    // An operand that is not a constant has its template, and the input
+    // is the join.
+    let (_, local) = operation_named(&plan, "local");
+    assert_eq!(
+        template_line(&plan, &local["input"]),
+        "derive(expression) { const [argument where : identity] }"
+    );
+    // "A reader has slots with root `operation` at the paths it reads,
+    // and its template has the `slot` nodes."
+    let title = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["path"] == json!(["title"]))
+        .expect("the output title");
+    assert_eq!(
+        template_line(&plan, &title["template"]),
+        "[operation result/title : identity]"
+    );
+}
+
+#[test]
+fn a_constant_query_decides_the_scope_and_the_records_beside_the_operation() {
+    // The table of PL §3.19 from the constant query to its part.
+    let plan = plan_of(&program(WISHES), "Wishes");
+    let scope = |name: &str| operation_named(&plan, name).1.get("scope").cloned();
+    // A well-known target of the home space.
+    assert_eq!(scope("fav"), Some(json!("user")));
+    assert_eq!(scope("me"), Some(json!("user")));
+    // The clocks and a path of the current space have the scope of the
+    // cone instance.
+    assert_eq!(scope("now"), None);
+    assert_eq!(scope("tick"), None);
+    assert_eq!(scope("local"), None);
+    assert_eq!(scope("face"), None);
+    // "`user` unless the `scope` operand is a constant that names neither
+    // `"~"` nor `"profile"`".
+    assert_eq!(scope("note"), None);
+    assert_eq!(scope("person"), Some(json!("user")));
+    // "A query that is not a constant ... `Operation.scope` is `user`,
+    // and the plan has the `StateCell` of the one-shot clock and a `Child`
+    // for each of the three sidecars".
+    assert_eq!(scope("any"), Some(json!("user")));
+    assert_eq!(names_of(&plan, "stateCells"), ["now/now", "any/now"]);
+    assert_eq!(
+        names_of(&plan, "children"),
+        [
+            // "For a profile target without `headless: true`, a `Child`
+            // for each of the two profile sidecars".
+            "me/profileCreate",
+            "me/profilePicker",
+            // "Without `headless: true`, a `Child` for the suggestion
+            // sidecar".
+            "note/suggestion",
+            "person/suggestion",
+            "any/suggestion",
+            "any/profileCreate",
+            "any/profilePicker",
+        ]
+    );
+}
