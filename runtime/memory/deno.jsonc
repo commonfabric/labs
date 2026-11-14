@@ -78,6 +78,7 @@
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@denosaurs/plug": "jsr:@denosaurs/plug@^1.1.0",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
+    "@opentelemetry/sdk-trace-base": "npm:@opentelemetry/sdk-trace-base@^2.9.0",
     "@types/ws": "npm:@types/ws@8.18.1",
     "fflate": "npm:fflate@0.8.3",
     "ws": "npm:ws@8.22.0"
