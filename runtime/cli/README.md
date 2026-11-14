@@ -688,18 +688,24 @@ positions, and hunk expansion remain in place.
 Press `P` to push the branch checked out in the repository the viewer runs in,
 as it stands, to the branch of the same name on `origin`. The push is forced,
 but fails rather than discard commits on `origin` that the branch has never
-included, even when they have been fetched. A dialog shows git's output as it
-arrives, with an Abort button that stops the push. Up, Down, Page Up, Page Down,
-Home, End, and the mouse wheel scroll the output, and Left and Right move the
-focus between the buttons. When the push ends, the dialog adds how it ended, and
-two buttons replace Abort. Close leaves that summary in the status line. Quit
-(`Q`) closes the viewer, first offering to save any unsaved edits. Git asks
-nothing on the terminal while the viewer holds it; a question such as a key's
-passphrase goes to the program `SSH_ASKPASS` names, and fails when it names
-none. `P` refuses to push `origin`'s default branch, and refuses when `origin`
-names no default branch (`git remote set-head origin --auto` finds it). It also
-refuses a checkout not on a branch, and refuses when git started the viewer as
-its pager for a different repository.
+included, even when they have been fetched. A dialog says which branch it pushes
+where, then shows git's output as it arrives, with an Abort button that stops
+the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
+the output, and Left and Right move the focus between the buttons. When the push
+ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
+that summary in the status line. Quit (`Q`) closes the viewer, first offering to
+save any unsaved edits. Git asks nothing on the terminal while the viewer holds
+it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
+names, and fails when it names none. `P` refuses to push `origin`'s default
+branch, and refuses when `origin` names no default branch
+(`git remote set-head origin --auto` finds it). It also refuses a checkout not
+on a branch, and refuses when git started the viewer as its pager for a
+different repository.
+
+When a push fails or is aborted, as it can when the network is unreliable, a
+Retry push button (`P`) pushes again, unless git says the push was rejected,
+which pushing again cannot change. Each later push's output follows the earlier
+one's in the same dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
 buttons under "Pull requests" choose one of the four ways below. The first and
@@ -726,62 +732,85 @@ whose changes that branch already has.
   create the pull request with the token the settings name. The dialog asks, in
   brighter text, for the named security key to be touched, as "Touch the
   “carthusian” security key to create a PR.", and the server acts only once it
-  is. The server's address, its certificate, the secret its clients share, and
-  the registered security keys come from `~/.config/touch-gate`, as the touch-
-  gate project's client keeps them, and the viewer talks to the security key
-  through libfido2's `fido2-token` and `fido2-assert` tools.
+  is. As soon as the security key is touched, the dialog says so, before the
+  viewer sends the server the approval. When a security key fails, the summary
+  says what libfido2's error means, as "the security key stopped answering",
+  followed by the tool and the error's name, or else gives what the tool
+  printed. The server's address, its certificate, the secret its clients share,
+  and the registered security keys come from `~/.config/touch-gate`, as the
+  touch-gate project's client keeps them, and the viewer talks to the security
+  key through libfido2's `fido2-token` and `fido2-assert` tools.
 
 When creating the pull request with the GitHub API or touch-gate fails, or is
 aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
-again. Trying again looks for an open pull request first, in case the failed
+again, with the settings as they are then, its output following the failed
+attempt's. Trying again looks for an open pull request first, in case the failed
 attempt created one.
 
+When GitHub refuses a creation or a merge, whether the viewer asked it directly
+or through touch-gate, the summary gives GitHub's status and the message its
+reply gives, as "GitHub answered 405: Merge already in progress". The button
+that tries again is left out when the status says the request itself cannot
+succeed: 404 (not found), 405 (not allowed), 409 (in conflict), or 422 (not
+valid).
+
 Press `L` to land the checked-out branch's open pull request; `l` pans right,
-and `h` and `H` pan left. A dialog opens at once, saying what it looks for, and
-its Cancel button stops the search. The viewer looks for the pull request in
-`~/.cache/github-prs.tsv`, a list of open pull requests that another program
-keeps, one a line as its repository, branch, and number separated by tabs. The
-list does not say whose fork a branch is in, so unless it names exactly one pull
-request for the branch, the viewer asks GitHub. With the first radio button, the
-dialog closes and the status line gives the pull request's address as a link.
-With the third, the viewer opens the pull request in the browser, or, when no
-browser can be opened, gives its address in the status line as the first does.
-With the second or the fourth, the viewer asks GitHub's GraphQL API how GitHub's
-page would merge the pull request: by the method the token's account last used,
-or else by the repository's default. GitHub's merge API itself merges with a
-merge commit unless told otherwise, which a repository that allows only
-squashing or rebasing refuses. With the second radio button, the dialog then
-asks whether to merge that way, with Merge and Cancel buttons. No button is its
+and `h` and `H` pan left. A dialog like the push's opens at once, saying what it
+looks for, and its Abort button stops the search. The viewer looks for the pull
+request in `~/.cache/github-prs.tsv`, a list of open pull requests that another
+program keeps, one a line as its repository, branch, and number separated by
+tabs. The list does not say whose fork a branch is in, so unless it names
+exactly one pull request for the branch, the viewer asks GitHub. When the branch
+has no open pull request, or the viewer cannot land it, the dialog says so. With
+the first radio button, the dialog gives the pull request's address. With the
+third, the viewer opens the pull request in the browser, or, when no browser can
+be opened, gives its address as the first does. With the second or the fourth,
+the viewer asks GitHub's GraphQL API how GitHub's page would merge the pull
+request: by the method the token's account last used, or else by the
+repository's default. GitHub's merge API itself merges with a merge commit
+unless told otherwise, which a repository that allows only squashing or rebasing
+refuses. With the second radio button, the dialog then asks whether to merge
+that way, with Merge and Cancel buttons in place of Abort. No button is its
 default: Enter does nothing until Tab or an arrow key has moved the focus to a
 button, while a button's letter acts at once. With the fourth, the touch of the
 security key approves the merge, so the viewer asks nothing first. The viewer
-merges the pull request with GitHub's API or touch-gate, in a dialog like the
-push's. The merge happens only while the pull request's head is the commit the
-viewer has checked out. Asking for the merge method needs a GitHub token, from
-the same places the API uses. When a creation or a merge is aborted after its
-request was sent, it may have happened anyway, and the summary says so.
+merges the pull request with GitHub's API or touch-gate in the same dialog, its
+output following what the dialog found. The merge happens only while the pull
+request's head is the commit the viewer has checked out. Asking for the merge
+method needs a GitHub token, from the same places the API uses. When the merge
+fails or is aborted, a Merge PR button (`P`) merges the same pull request, at
+the same commit and by the same method, again, with the settings as they are
+then, without looking for it again and without asking first. When a creation or
+a merge is aborted after its request was sent, it may have happened anyway, and
+the summary says so.
 
 Press `O` to open the settings dialog. Below the radio buttons, an input line
 holds the name of the token the touch-gate server uses. Its check box, "Quit
-when the pushed branch's pull request opens", has the viewer quit as soon as it
-creates the pull request, printing its address as described below, and otherwise
-has it watch the GitHub webhook relay while the push dialog is up. The relay
-passes on each delivery of the organization's GitHub webhook as it arrives, and
-keeps none for a subscriber that was not connected;
+when the pull request opens or merges", has the viewer quit as soon as it
+creates or merges the pull request, printing its address as described below, and
+otherwise has it watch the GitHub webhook relay while the push or land dialog is
+up. The relay passes on each delivery of the organization's GitHub webhook as it
+arrives, and keeps none for a subscriber that was not connected;
 `github-webhook-relay/README.md` in the infra repository describes it. The
 dialog's last input line holds the `host:port` of the relay's subscriber
 listener. When the push succeeds and the server offers a page for creating a
-pull request, the viewer connects to the relay, and gives the page's address or
-opens the page once it has connected or failed to. While it connects, Abort, or
-an interrupt, gives up on the connection. When a delivery reports that a pull
+pull request, or `L` finds the pull request with the first or third radio
+button, the viewer connects to the relay, and gives the address or opens the
+page once it has connected or failed to. While it connects, Abort, or an
+interrupt, gives up on the connection. When a delivery reports that a pull
 request was opened from the pushed branch, at the pushed commit, in the GitHub
-repository that `origin` names, the viewer closes the push dialog and quits as
-Quit does. Once the screen is restored, it prints the pull request's address on
-the terminal. The address is printed only when the viewer quit for it, so a quit
-after cancelling the save prompt it raised prints nothing. With the check box
-on, the push dialog says under git's output whether the viewer is connecting or
-watching, or why it is not watching: no relay is set, `origin` is not on GitHub,
-or the connection failed or ended. Closing the push dialog stops the watch.
+repository that `origin` names, or that the pull request `L` found merged, the
+dialog gives the pull request's address and says it is quitting, and half a
+second later the viewer closes the dialog and quits as Quit does, unless the
+dialog was closed meanwhile. Pressing Quit in that moment quits at once, for the
+pull request all the same. Quitting once the viewer creates or merges the pull
+request works the same way. Once the screen is restored, it prints the pull
+request's address on the terminal. The address is printed only when the viewer
+quit for it, so a quit after cancelling the save prompt it raised prints
+nothing. With the check box on, the dialog says under its output whether the
+viewer is connecting or watching, or why it is not watching: no relay is set,
+`origin` is not on GitHub, or the connection failed or ended. Closing the dialog
+stops the watch.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and

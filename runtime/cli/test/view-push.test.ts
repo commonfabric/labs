@@ -3,16 +3,18 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { EditableSource } from "../lib/view/editsource.ts";
-import type {
-  CreateRequest,
-  GitHubApi,
-  MergeRequest,
+import {
+  type CreateRequest,
+  type GitHubApi,
+  GitHubRefusal,
+  type MergeRequest,
 } from "../lib/view/github.ts";
 import { type PagerDeps, runPager } from "../lib/view/pager.ts";
 import {
   offeredPullRequestUrl,
   pushBranch,
   type PushIo,
+  pushRefused,
   realPushIo,
 } from "../lib/view/push.ts";
 import { dialogBox } from "../lib/view/render.ts";
@@ -22,6 +24,7 @@ import {
   drawnRows,
   fakeRelay,
   frameRows,
+  mergedPayload,
   mouseKey,
   parseDocument,
   pullRequestPayload,
@@ -63,6 +66,7 @@ function fakeIo(options: FakeIoOptions = {}) {
   const answers = { ...FEATURE_CHECKOUT, ...options.answers };
   const ran: string[] = [];
   const opened: string[] = [];
+  const shown: string[] = [];
   const io: PushIo = {
     query: (args) => answers[args.join(" ")] ?? null,
     run: (args) => {
@@ -72,13 +76,14 @@ function fakeIo(options: FakeIoOptions = {}) {
         output: options.pushOutput ?? "",
       });
     },
+    write: (text) => shown.push(text),
     pagedGitDir: () => options.pagedGitDir ?? null,
     open: (url) => {
       opened.push(url);
       return options.opens ?? true;
     },
   };
-  return { io, ran, opened };
+  return { io, ran, opened, shown };
 }
 
 const decoder = new TextDecoder();
@@ -273,8 +278,10 @@ function deferred<T = void>() {
  * `relay` connects it to the webhook relay, `open` opens pages, `github` and
  * `touchGate` create and merge pull requests, `pullRequestList` lists the
  * open ones, and `source` makes the document editable. `handlers` holds the
- * process signal handlers the pager adds, and `exits` the codes it exits
- * with.
+ * process signal handlers the pager adds, `exits` the codes it exits
+ * with, and `timers` how long each timer it set was for. Each timer runs as
+ * soon as the code that set it yields, unless `holdTimers` holds them until
+ * `releaseTimers()` runs them.
  */
 function pagerHarness(
   pushIo: (signal: AbortSignal) => PushIo,
@@ -286,6 +293,7 @@ function pagerHarness(
     touchGate = () => unusedGitHub,
     pullRequestList = () => Promise.resolve(null),
     source,
+    holdTimers = false,
   }:
     & Partial<
       Pick<
@@ -293,7 +301,10 @@ function pagerHarness(
         "git" | "relay" | "open" | "github" | "touchGate" | "pullRequestList"
       >
     >
-    & { readonly source?: EditableSource } = {},
+    & {
+      readonly source?: EditableSource;
+      readonly holdTimers?: boolean;
+    } = {},
 ) {
   const writes: string[] = [];
   const watchers: Array<{ test: (text: string) => boolean; done: () => void }> =
@@ -301,6 +312,8 @@ function pagerHarness(
   const signals: AbortSignal[] = [];
   const handlers = new Map<Deno.Signal, () => void>();
   const exits: number[] = [];
+  const timers: number[] = [];
+  const held: Array<() => void> = [];
   const frame = (test: (text: string) => boolean) => {
     const { promise, resolve } = deferred();
     watchers.push({ test, done: resolve });
@@ -342,11 +355,14 @@ function pagerHarness(
         exits.push(code);
         throw new Error(`exit ${code}`);
       },
-      setTimer: (handler) => {
+      setTimer: (handler, ms) => {
+        timers.push(ms);
         let live = true;
-        queueMicrotask(() => {
+        const fire = () => {
           if (live) handler();
-        });
+        };
+        if (holdTimers) held.push(fire);
+        else queueMicrotask(fire);
         return () => live = false;
       },
       delay: () => Promise.resolve(),
@@ -356,6 +372,7 @@ function pagerHarness(
         const io = pushIo(signal);
         return {
           ...io,
+          write,
           run: (args) => {
             write("Writing objects:  50% (1/2)\r");
             write("Writing objects: 100% (2/2), done.\nTo origin\n");
@@ -379,7 +396,20 @@ function pagerHarness(
       deps,
     );
   };
-  return { run, frame, writes, signals, handlers, exits };
+  /** Runs each timer held so far that has not been cancelled. */
+  const releaseTimers = () => {
+    for (const fire of held.splice(0)) fire();
+  };
+  return {
+    run,
+    frame,
+    writes,
+    signals,
+    handlers,
+    exits,
+    timers,
+    releaseTimers,
+  };
 }
 
 describe("view-push", () => {
@@ -390,6 +420,42 @@ describe("view-push", () => {
       expect(await pushBranch(io)).toBe("Pushed feature to origin.");
       expect(ran).toEqual([PUSH_FEATURE]);
       expect(opened).toEqual([]);
+    });
+
+    it("says which branch it pushes where before git starts", async () => {
+      const { io, shown } = fakeIo();
+      let shownWhenRun: string[] = [];
+
+      await pushBranch({
+        ...io,
+        run: (args) => {
+          shownWhenRun = [...shown];
+          return io.run(args);
+        },
+      });
+
+      expect(shownWhenRun).toEqual(["Pushing feature to origin.\n"]);
+    });
+
+    it("hands what git printed to its failure callback when the push fails or is aborted", async () => {
+      for (const signal of [undefined, AbortSignal.abort()]) {
+        const handed: string[] = [];
+        const failed = (output: string) => {
+          handed.push(output);
+        };
+
+        const summary = await pushBranch(
+          fakeIo({ pushSucceeds: false, pushOutput: "fatal: no network" }).io,
+          signal,
+          undefined,
+          failed,
+        );
+
+        expect(summary).toBe(
+          signal ? "Push aborted." : "Pushing feature to origin failed.",
+        );
+        expect(handed).toEqual(["fatal: no network"]);
+      }
     });
 
     it("hands what follows the push to its callback, with no page when the server offers none, and appends what it says", async () => {
@@ -586,6 +652,34 @@ describe("view-push", () => {
     });
   });
 
+  describe("pushRefused()", () => {
+    it("returns true when git says the server, or git itself, rejected the update", () => {
+      expect(pushRefused(
+        "To github.com:fork/repo.git\n" +
+          " ! [rejected]        HEAD -> feature (stale info)\n" +
+          "error: failed to push some refs\n",
+      )).toBe(true);
+      expect(pushRefused(
+        " ! [remote rejected] HEAD -> feature (pre-receive hook declined)\n",
+      )).toBe(true);
+    });
+
+    it("returns false when git could not reach the server or finish", () => {
+      for (
+        const output of [
+          "ssh: Could not resolve hostname github.com: nodename nor servname " +
+          "provided, or not known\nfatal: Could not read from remote " +
+          "repository.\n",
+          "error: RPC failed; curl 56 Recv failure: Connection reset by peer\n" +
+          "fatal: the remote end hung up unexpectedly\n",
+          "",
+        ]
+      ) {
+        expect(pushRefused(output)).toBe(false);
+      }
+    });
+  });
+
   describe("realPushIo()", () => {
     it("pushes the branch to origin and opens the offered page", async () => {
       const { root, env, origin, work } = repositories();
@@ -764,6 +858,22 @@ describe("view-push", () => {
       const io = realPushIo({ opener: "cf-view-no-such-opener", write() {} });
 
       expect(io.open("https://example.test/")).toBe(false);
+    });
+
+    it("throws from `open()` when the program to open with cannot be started for a reason other than its absence", () => {
+      const root = Deno.makeTempDirSync();
+      try {
+        const opener = join(root, "opener");
+        Deno.writeTextFileSync(opener, "#!/bin/sh\n");
+        Deno.chmodSync(opener, 0o644);
+        const io = realPushIo({ opener, write() {} });
+
+        expect(() => io.open("https://example.test/")).toThrow(
+          Deno.errors.PermissionDenied,
+        );
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
     });
 
     it("runs git from the process's own directory and environment by default", async () => {
@@ -956,6 +1066,29 @@ describe("view-push", () => {
       expect(aborted).toBe(0);
     });
 
+    it("keeps the output and how the last task ended when another task continues the dialog, which then offers Abort to stop it", () => {
+      const session = editableSession();
+      let aborted = 0;
+      session.beginTask("Push", () => {});
+      session.appendTaskOutput("To origin\n");
+      session.finishTask("Failed. To retry, press Retry push.", "Retry push");
+
+      session.continueTask(() => aborted++);
+      session.appendTaskOutput("Pushing again.\n");
+
+      const dialog = session.view().dialog!;
+      expect(dialog.title).toBe("Push");
+      expect(dialog.buttons.map((b) => b.label)).toEqual(["Abort"]);
+      expect(dialog.body.slice(0, 4).map((line) => line.trimEnd())).toEqual([
+        "To origin",
+        "",
+        "Failed. To retry, press Retry push.",
+        "Pushing again.",
+      ]);
+      session.handleKey({ name: "a", char: "a" });
+      expect(aborted).toBe(1);
+    });
+
     it("quits on `Q` once the push ends, and not on `q` or while it runs", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
@@ -1064,14 +1197,26 @@ describe("view-push", () => {
       expect(drawnRows(session).join("\n")).toContain(" Close ");
     });
 
-    it("closes the dialog and quits, keeping the address to print, when the pull request opens while it is up", () => {
+    it("gives the address and says it is quitting when the pull request opens while the dialog is up, then closes it and quits, keeping the address to print", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask("Pushed feature to origin.");
       expect(session.exitMessage).toBeNull();
+      expect(session.pullRequestQuitPending).toBe(false);
 
       session.quitForPullRequest(PULL_REQUEST);
 
+      expect(session.pullRequestQuitPending).toBe(true);
+      expect(session.taskDialogUp).toBe(true);
+      expect(session.quit).toBe(false);
+      const body = session.view().dialog!.body;
+      expect(body.slice(-2)).toEqual([
+        `Pull request: ${PULL_REQUEST}`,
+        "Quitting…",
+      ]);
+      session.completePullRequestQuit();
+
+      expect(session.pullRequestQuitPending).toBe(false);
       expect(session.taskDialogUp).toBe(false);
       expect(session.view().message).toBe("Pushed feature to origin.");
       expect(session.quit).toBe(true);
@@ -1083,13 +1228,63 @@ describe("view-push", () => {
       session.beginTask("Push", () => {});
 
       session.quitForPullRequest(PULL_REQUEST);
-      expect(session.taskDialogUp).toBe(true);
-      expect(session.quit).toBe(false);
+      expect(session.pullRequestQuitPending).toBe(false);
+      expect(session.view().dialog!.body.join("\n")).not.toContain("Quitting");
       session.finishTask("Pushed feature to origin.");
+      expect(session.pullRequestQuitPending).toBe(true);
+      session.completePullRequestQuit();
 
       expect(session.view().message).toBe("Pushed feature to origin.");
       expect(session.quit).toBe(true);
       expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("quits for the pull request, keeping the address to print, when Quit is pressed while the dialog says it is quitting", () => {
+      const session = editableSession();
+      session.beginTask("Push", () => {});
+      session.finishTask("Pushed feature to origin.");
+      session.quitForPullRequest(PULL_REQUEST);
+
+      session.handleKey({ name: "Q", char: "Q" });
+
+      expect(session.quit).toBe(true);
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("quits for the pull request, keeping the address to print, when an interrupt arrives while the dialog says it is quitting, by way of the save prompt when there are unsaved edits", () => {
+      for (const edited of [false, true]) {
+        const session = editableSession();
+        if (edited) {
+          session.handleKey({ name: "e", char: "e" });
+          session.handleKey({ name: "X", char: "X" });
+          session.handleKey({ name: "escape" });
+        }
+        session.beginTask("Push", () => {});
+        session.finishTask("Pushed feature to origin.");
+        session.quitForPullRequest(PULL_REQUEST);
+
+        expect(session.requestQuitFromSignal()).toBe(edited);
+
+        if (edited) {
+          expect(session.view().dialog?.title).toBe("Save Changes");
+          session.handleKey({ name: "d", char: "d" });
+        }
+        expect(session.quit).toBe(true);
+        expect(session.exitMessage).toBe(PULL_REQUEST);
+      }
+    });
+
+    it("does not quit for the pull request once Close takes the dialog down while it says it is quitting", () => {
+      const session = editableSession();
+      session.beginTask("Push", () => {});
+      session.finishTask("Pushed feature to origin.");
+      session.quitForPullRequest(PULL_REQUEST);
+
+      session.handleKey({ name: "c", char: "c" });
+      session.completePullRequestQuit();
+
+      expect(session.pullRequestQuitPending).toBe(false);
+      expect(session.quit).toBe(false);
     });
 
     it("does nothing when the pull request opens once the dialog is down", () => {
@@ -1115,6 +1310,7 @@ describe("view-push", () => {
       session.finishTask("Pushed feature to origin.");
 
       session.quitForPullRequest(PULL_REQUEST);
+      session.completePullRequestQuit();
 
       expect(session.quit).toBe(false);
       expect(session.view().dialog?.title).toBe("Save Changes");
@@ -1130,6 +1326,7 @@ describe("view-push", () => {
       session.beginTask("Push", () => {});
       session.finishTask("Pushed feature to origin.");
       session.quitForPullRequest(PULL_REQUEST);
+      session.completePullRequestQuit();
 
       session.handleKey({ name: "c", char: "c" });
       session.handleKey({ name: "q", char: "q" });
@@ -1293,6 +1490,90 @@ describe("view-push", () => {
 
       expect(harness.exits).toEqual([143]);
       expect(harness.signals[0].aborted).toBe(true);
+    });
+
+    it("says which branch it pushes in the dialog before git prints anything", async () => {
+      const harness = pagerHarness(() => fakeIo().io);
+      const opened = harness.frame((text) => text.includes(" Push "));
+      const closable = harness.frame((text) => text.includes(" Close "));
+
+      await harness.run(["P", () => opened, () => closable, "c"]);
+
+      const first = harness.writes.find((text) => text.includes(" Push "))!;
+      expect(first).toContain("Pushing feature to origin.");
+      expect(first).not.toContain("Writing objects");
+    });
+
+    it("offers Retry push when the push fails or is aborted, which pushes again continuing the dialog's output", async () => {
+      for (const abort of [false, true]) {
+        let pushes = 0;
+        const harness = pagerHarness((signal) => ({
+          ...fakeIo().io,
+          run: () => {
+            if (pushes++ > 0) {
+              return Promise.resolve({ success: true, output: "" });
+            }
+            if (!abort) {
+              return Promise.resolve({
+                success: false,
+                output: "fatal: the remote end hung up unexpectedly\n",
+              });
+            }
+            return new Promise((resolve) =>
+              signal.addEventListener(
+                "abort",
+                () => resolve({ success: false, output: "" }),
+              )
+            );
+          },
+        }));
+        const running = harness.frame((text) => text.includes(" Abort "));
+        const failed = harness.frame((text) => text.includes("P Retry push"));
+        const pushed = harness.frame((text) =>
+          text.includes("Pushed feature to origin.")
+        );
+
+        await harness.run([
+          "P",
+          ...(abort ? [() => running, "a"] : []),
+          () => failed,
+          "p",
+          () => pushed,
+          "c",
+        ]);
+
+        expect(pushes).toBe(2);
+        const retrying = harness.writes.find((text) =>
+          text.includes(" Abort ") && text.includes("To retry")
+        )!;
+        expect(retrying).toContain(
+          abort
+            ? "Push aborted. To retry, press Retry push."
+            : "Pushing feature to origin failed. To retry, press Retry push.",
+        );
+        expect(retrying).toContain("Pushing feature to origin.");
+        expect(retrying).toContain(" Push ═");
+        const shown = harness.writes.find((text) =>
+          text.includes("Pushed feature to origin.")
+        )!;
+        expect(shown).not.toContain("P Retry push");
+      }
+    });
+
+    it("offers no retry when the server refused the push", async () => {
+      const harness = pagerHarness(() =>
+        fakeIo({
+          pushSucceeds: false,
+          pushOutput: " ! [rejected]        HEAD -> feature (stale info)\n",
+        }).io
+      );
+      const closable = harness.frame((text) => text.includes(" Close "));
+
+      await harness.run(["P", () => closable, "c"]);
+
+      const shown = harness.writes.find((text) => text.includes(" Close "))!;
+      expect(shown).toContain("Pushing feature to origin failed.");
+      expect(shown).not.toContain("Retry push");
     });
 
     it("reports a push whose operations cannot be set up", async () => {
@@ -1576,6 +1857,21 @@ describe("view-push", () => {
         expect(shown).toContain("Pushed feature to origin. Opened");
       });
 
+      it("reports the push as it went when git fails as the settings are read after a push the server offers no page for", async () => {
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: () => {
+            throw new Error("git is gone");
+          },
+        });
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain("Pushed feature to origin.");
+        expect(shown).not.toContain("git is gone");
+      });
+
       it("stops the watch of a push whose dialog closed in the same read that pushes again, though the second push fails", async () => {
         const relay = fakeRelay();
         let pushes = 0;
@@ -1750,6 +2046,37 @@ describe("view-push", () => {
         );
       });
 
+      it("gives the created pull request's address in the dialog, saying it is quitting, for half a second before it quits", async () => {
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(
+              { "cf-view.pullRequestTool": "api", ...QUITTING },
+              UPSTREAM,
+            ),
+            github: {
+              ...unusedGitHub,
+              create: () => Promise.resolve(OCTO_PULL_REQUEST),
+            },
+          },
+        );
+
+        await harness.run(["P", forever]);
+
+        const quitting = harness.writes.findIndex((text) =>
+          text.includes("Quitting…")
+        );
+        expect(quitting).toBeGreaterThan(-1);
+        expect(harness.writes[quitting]).toContain(
+          `Pull request: ${OCTO_PULL_REQUEST}`,
+        );
+        expect(harness.writes[quitting]).toContain(" Close ");
+        expect(harness.timers).toContain(500);
+        expect(harness.writes.at(-1)).toMatch(
+          new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
+        );
+      });
+
       it("creates it with touch-gate and the token the settings name, showing what the touch approves, and stays up while quitting is off", async () => {
         const tokens: string[] = [];
         const harness = pagerHarness(
@@ -1857,14 +2184,15 @@ describe("view-push", () => {
               tokens.push(token);
               return {
                 ...unusedGitHub,
-                create: () => Promise.reject(new Error("no such token")),
+                create: () =>
+                  Promise.reject(new Error(`no token named ${token}`)),
               };
             },
           },
         );
         const failed = harness.frame((text) => text.includes("P Create PR"));
         const refailed = harness.frame((text) =>
-          text.includes(" Create PR ═") && text.includes("P Create PR")
+          text.includes("no token named mine") && text.includes("P Create PR")
         );
         const declined = harness.frame((text) =>
           text.includes("The settings no longer create pull requests.")
@@ -1887,6 +2215,86 @@ describe("view-push", () => {
         ]);
 
         expect(tokens).toEqual(["typo", "mine"]);
+      });
+
+      it("keeps offering Create PR when git fails as a retry reads the settings", async () => {
+        const settingsGit = viewerGit(
+          { "cf-view.pullRequestTool": "api" },
+          UPSTREAM,
+        );
+        let broken = false;
+        let attempts = 0;
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: (args) => {
+              if (broken && args[0] === "config") {
+                throw new Error("git is gone");
+              }
+              return settingsGit(args);
+            },
+            github: {
+              ...unusedGitHub,
+              create: () =>
+                attempts++ === 0
+                  ? Promise.reject(new Error("timed out"))
+                  : Promise.resolve(OCTO_PULL_REQUEST),
+            },
+          },
+        );
+        const failed = harness.frame((text) => text.includes("P Create PR"));
+        const gitFailed = harness.frame((text) =>
+          text.includes("Git failed: git is gone") &&
+          text.includes("P Create PR")
+        );
+        const created = harness.frame((text) =>
+          text.includes(`Created ${OCTO_PULL_REQUEST}`)
+        );
+
+        await harness.run([
+          "P",
+          async () => {
+            await failed;
+            broken = true;
+          },
+          "p",
+          async () => {
+            await gitFailed;
+            broken = false;
+          },
+          "p",
+          () => created,
+          "c",
+        ]);
+
+        expect(attempts).toBe(2);
+      });
+
+      it("offers no Create PR when GitHub says the pull request cannot be created", async () => {
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              create: () =>
+                Promise.reject(
+                  new GitHubRefusal(
+                    422,
+                    JSON.stringify({ message: "Validation Failed" }),
+                  ),
+                ),
+            },
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain("Creating the pull request failed: GitHub");
+        expect(shown).toContain("answered 422: Validation Failed.");
+        expect(shown).not.toContain("Create PR");
       });
 
       it("says it created the pull request, in the service's words, when the service gives no address", async () => {
@@ -1976,9 +2384,13 @@ describe("view-push", () => {
         const shown = harness.writes.find((text) =>
           text.includes(`Created ${OCTO_PULL_REQUEST}`)
         )!;
-        expect(shown).toContain(" Create PR ═");
         expect(shown).not.toContain("P Create PR");
-        expect(shown).not.toContain("To retry");
+        expect(shown).toContain(" Push ═");
+        const retrying = harness.writes.filter((text) =>
+          text.includes(" Abort ")
+        ).at(-1)!;
+        expect(retrying).toContain("Creating the pull request failed: timed");
+        expect(retrying).toContain("Creating a pull request in octo/repo");
       });
 
       it("says the creation was aborted when Abort stops it", async () => {
@@ -2083,8 +2495,35 @@ describe("view-push", () => {
         await harness.run(["L", () => answered]);
 
         expect(asked).toEqual(["octo/repo fork:feature"]);
-        expect(harness.writes.join("")).toContain(
+        const shown = harness.writes.find((text) => text.includes("no open"))!;
+        expect(shown).toContain(" Land ");
+        expect(shown).toContain(
+          "Looking for the pull request of feature in octo/repo.",
+        );
+        expect(shown).toContain(
           "feature has no open pull request in octo/repo.",
+        );
+        expect(shown).toContain(" Close ");
+      });
+
+      it("says in the dialog why it cannot land, keeping the dialog up", async () => {
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(
+            { "cf-view.pullRequestTool": "api" },
+            { ...UPSTREAM, "remote get-url --push origin": null },
+          ),
+        });
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["L", () => closable, "c"]);
+
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain(" Land ");
+        expect(shown).toContain(
+          "Cannot land: origin is not a GitHub repository",
+        );
+        expect(harness.writes.at(-2)).toContain(
+          "Cannot land: origin is not a GitHub repository",
         );
       });
 
@@ -2191,6 +2630,289 @@ describe("view-push", () => {
         );
       });
 
+      it("offers Merge PR when the merge fails, which merges the same pull request again with the settings as they are then, continuing the dialog's output", async () => {
+        const config: Record<string, string> = {
+          "cf-view.pullRequestTool": "touch-gate",
+          "cf-view.touchGateToken": "mine",
+        };
+        const merged: Array<[string, MergeRequest]> = [];
+        let lookups = 0;
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(config, UPSTREAM),
+          pullRequestList: () => {
+            lookups++;
+            return Promise.resolve("octo/repo\tfeature\t7\n");
+          },
+          touchGate: () => ({
+            ...unusedGitHub,
+            merge: (request) => {
+              merged.push(["touch-gate", request]);
+              return Promise.reject(new Error("the key stopped answering"));
+            },
+          }),
+          github: {
+            ...unusedGitHub,
+            merge: (request) => {
+              merged.push(["api", request]);
+              return Promise.resolve(`Merged ${OCTO_PULL_REQUEST}`);
+            },
+          },
+        });
+        const failed = harness.frame((text) => text.includes("P Merge PR"));
+        const done = harness.frame((text) =>
+          text.includes(`Merged ${OCTO_PULL_REQUEST}`)
+        );
+
+        await harness.run([
+          "L",
+          async () => {
+            await failed;
+            config["cf-view.pullRequestTool"] = "api";
+          },
+          "p",
+          () => done,
+          "c",
+        ]);
+
+        const request = {
+          repository: "octo/repo",
+          number: 7,
+          method: "squash",
+          sha: "c0ffee",
+        };
+        expect(merged).toEqual([["touch-gate", request], ["api", request]]);
+        expect(lookups).toBe(1);
+        const shown = harness.writes.find((text) =>
+          text.includes(`Merged ${OCTO_PULL_REQUEST}`)
+        )!;
+        expect(shown).toContain(
+          "Landing failed: the key stopped answering. To retry, press Merge",
+        );
+        expect(shown).toContain(" Land ═");
+        expect(shown).not.toContain("P Merge PR");
+      });
+
+      it("offers Merge PR when GitHub's refusal could change, and not when it says the merge cannot succeed", async () => {
+        for (
+          const [status, offered] of [[502, true], [405, false]] as const
+        ) {
+          const harness = pagerHarness(() => fakeIo().io, {
+            git: viewerGit(
+              {
+                "cf-view.pullRequestTool": "touch-gate",
+                "cf-view.touchGateToken": "mine",
+              },
+              UPSTREAM,
+            ),
+            pullRequestList: () => Promise.resolve("octo/repo\tfeature\t7\n"),
+            touchGate: () => ({
+              ...unusedGitHub,
+              merge: () =>
+                Promise.reject(
+                  new GitHubRefusal(
+                    status,
+                    JSON.stringify({ message: "Merge already in progress" }),
+                  ),
+                ),
+            }),
+          });
+          const closable = harness.frame((text) => text.includes(" Close "));
+
+          await harness.run(["L", () => closable, "c"]);
+
+          const shown = harness.writes.find((text) =>
+            text.includes(" Close ")
+          )!;
+          expect(shown).toContain(
+            `Landing failed: GitHub answered ${status}: Merge already in`,
+          );
+          if (offered) expect(shown).toContain("P Merge PR");
+          else expect(shown).not.toContain("Merge PR");
+        }
+      });
+
+      it("says when the settings no longer merge pull requests as Merge PR is pressed", async () => {
+        const config: Record<string, string> = {
+          "cf-view.pullRequestTool": "touch-gate",
+          "cf-view.touchGateToken": "mine",
+        };
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(config, UPSTREAM),
+          pullRequestList: () => Promise.resolve("octo/repo\tfeature\t7\n"),
+          touchGate: () => ({
+            ...unusedGitHub,
+            merge: () => Promise.reject(new Error("refused")),
+          }),
+        });
+        const failed = harness.frame((text) => text.includes("P Merge PR"));
+        const declined = harness.frame((text) =>
+          text.includes("The settings no longer merge pull requests.")
+        );
+
+        await harness.run([
+          "L",
+          async () => {
+            await failed;
+            config["cf-view.pullRequestTool"] = "link";
+          },
+          "p",
+          () => declined,
+          "c",
+        ]);
+
+        expect(harness.writes.at(-2)).toContain(
+          "The settings no longer merge pull requests.",
+        );
+      });
+
+      it("asks whether to merge in the dialog that found the pull request, and merges in it, its output going on from the question", async () => {
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+          pullRequestList: () => Promise.resolve("octo/repo\tfeature\t7\n"),
+          github: {
+            ...unusedGitHub,
+            merge: () => Promise.resolve(`Merged ${OCTO_PULL_REQUEST}`),
+          },
+        });
+        const asking = harness.frame((text) => text.includes(" Merge "));
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["L", () => asking, "m", () => closable, "c"]);
+
+        const asked = harness.writes.find((text) => text.includes(" Merge "))!;
+        expect(asked).toContain(" Land ");
+        expect(asked).toContain("Looking for the pull request of feature");
+        expect(asked).toContain(
+          "Squash and merge pull request 7 of octo/repo,",
+        );
+        const merging = harness.writes.find((text) =>
+          text.includes("Merging pull request 7")
+        )!;
+        expect(merging).toContain("if its head is still c0ffee?");
+        expect(merging).toContain(" Land ");
+        expect(harness.writes.find((text) => text.includes(" Close ")))
+          .toContain(`Merged ${OCTO_PULL_REQUEST}`);
+      });
+
+      it("gives the merged pull request's address in the dialog, saying it is quitting, for half a second before it quits, when the settings say to", async () => {
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(
+            {
+              "cf-view.pullRequestTool": "touch-gate",
+              "cf-view.touchGateToken": "mine",
+              ...QUITTING,
+            },
+            UPSTREAM,
+          ),
+          pullRequestList: () => Promise.resolve("octo/repo\tfeature\t7\n"),
+          touchGate: () => ({
+            ...unusedGitHub,
+            merge: () => Promise.resolve("merged"),
+          }),
+        });
+
+        await harness.run(["L", forever]);
+
+        const quitting = harness.writes.find((text) =>
+          text.includes("Quitting…")
+        )!;
+        expect(quitting).toContain(" Land ");
+        expect(quitting).toContain(`Pull request: ${OCTO_PULL_REQUEST}`);
+        expect(harness.timers).toContain(500);
+        expect(harness.writes.at(-1)).toMatch(
+          new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
+        );
+      });
+
+      it("keeps quitting for the merged pull request after a key that leaves the dialog up, and stops once Close takes it down", async () => {
+        for (const close of [false, true]) {
+          const harness = pagerHarness(() => fakeIo().io, {
+            git: viewerGit(
+              {
+                "cf-view.pullRequestTool": "touch-gate",
+                "cf-view.touchGateToken": "mine",
+                ...QUITTING,
+              },
+              UPSTREAM,
+            ),
+            pullRequestList: () => Promise.resolve("octo/repo\tfeature\t7\n"),
+            touchGate: () => ({
+              ...unusedGitHub,
+              merge: () => Promise.resolve("merged"),
+            }),
+            holdTimers: true,
+          });
+          const quitting = harness.frame((text) => text.includes("Quitting…"));
+
+          await harness.run([
+            "L",
+            () => quitting,
+            close ? "c" : "\x1b[B",
+            () => {
+              harness.releaseTimers();
+              return Promise.resolve();
+            },
+            ...(close ? ["q"] : []),
+          ]);
+
+          const printed = new RegExp(
+            `\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`,
+          );
+          if (close) expect(harness.writes.at(-1)).not.toMatch(printed);
+          else expect(harness.writes.at(-1)).toMatch(printed);
+        }
+      });
+
+      it("watches the relay once it opens the pull request, and quits printing the address once a delivery says it merged", async () => {
+        const relay = fakeRelay();
+        let connectedBeforePage = false;
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(
+            { "cf-view.pullRequestTool": "browser", ...QUITTING },
+            UPSTREAM,
+          ),
+          pullRequestList: () => Promise.resolve("octo/repo\tfeature\t7\n"),
+          relay: (address) => address === RELAY ? relay.connect : undefined,
+          open: () => {
+            connectedBeforePage = relay.connections === 1;
+            return true;
+          },
+        });
+        const watching = harness.frame((text) =>
+          text.includes("Quitting when the pull request merges.")
+        );
+
+        await harness.run([
+          "L",
+          async () => {
+            await watching;
+            relay.deliver(
+              "pull_request",
+              mergedPayload({ repository: "octo/repo", number: 8 }),
+            );
+            relay.deliver(
+              "pull_request",
+              mergedPayload({
+                repository: "octo/repo",
+                url: OCTO_PULL_REQUEST,
+              }),
+            );
+            await relay.closed();
+          },
+          forever,
+        ]);
+
+        expect(connectedBeforePage).toBe(true);
+        const shown = harness.writes.find((text) =>
+          text.includes("Quitting when the pull request merges.") &&
+          text.includes(" Close ")
+        )!;
+        expect(shown).toContain(`Opened ${OCTO_PULL_REQUEST}`);
+        expect(harness.writes.at(-1)).toMatch(
+          new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
+        );
+      });
+
       it("says the merge was aborted when Abort stops it", async () => {
         const harness = pagerHarness(() => fakeIo().io, {
           git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
@@ -2247,7 +2969,7 @@ describe("view-push", () => {
         expect(harness.writes.join("")).not.toContain("no open pull request");
       });
 
-      it("stops looking on Cancel while the user's list is still being read", async () => {
+      it("stops looking on Abort while the user's list is still being read, saying so in the dialog", async () => {
         const asked: string[] = [];
         const reading = Promise.withResolvers<void>();
         const harness = pagerHarness(() => fakeIo().io, {
@@ -2264,10 +2986,14 @@ describe("view-push", () => {
             },
           },
         });
-        await harness.run(["L", () => reading.promise, "\x1b"]);
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["L", () => reading.promise, "\x1b", () => closable]);
 
         expect(asked).toEqual([]);
-        expect(harness.writes.at(-2)).not.toContain("Looking for");
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain("Looking for the pull request of feature");
+        expect(shown).toContain("Landing aborted.");
       });
 
       it("starts only the first of two tasks whose keys arrive in one read, the second key reaching its dialog", async () => {

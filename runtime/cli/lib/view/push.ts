@@ -19,6 +19,9 @@ export interface PushIo {
    * succeeded, and to everything it printed. */
   run(args: readonly string[]): Promise<{ success: boolean; output: string }>;
 
+  /** Shows `text` where git's output is shown. */
+  write(text: string): void;
+
   /** The canonical git directory named by an inherited `GIT_DIR`, which git
    * exports to a pager it starts when its own repository was named that way, or
    * null when there is none. */
@@ -55,9 +58,11 @@ export interface RealPushIoOptions {
  * refuses when `origin` names none. Once the push succeeds, calls
  * `onPushed` with the branch's name and the address of the page the server
  * offers for creating a pull request, or null when it offers none; by
- * default, it opens the page. Returns one line saying how it ended, which
- * ends with what `onPushed` returns, and says the push was aborted when it
- * failed after `signal` aborted; git's own output has been shown by then.
+ * default, it opens the page. When git fails, calls `onFailed` with what git
+ * printed. Says which branch it pushes, with `io`, before git starts.
+ * Returns one line saying how it ended, which ends with what `onPushed`
+ * returns, and says the push was aborted when it failed after
+ * `signal` aborted; git's own output has been shown by then.
  */
 export async function pushBranch(
   io: PushIo,
@@ -67,6 +72,7 @@ export async function pushBranch(
     url: string | null,
   ) => Promise<string> | string = (_, url) =>
     url === null ? "" : openPage(io, url),
+  onFailed: (output: string) => void = () => {},
 ): Promise<string> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return "This is not a git repository.";
@@ -96,6 +102,7 @@ export async function pushBranch(
       "branch.";
   }
   const pushed = `Pushed ${branch} to origin`;
+  io.write(`Pushing ${branch} to origin.\n`);
   const push = await io.run([
     "push",
     "--force-with-lease",
@@ -105,6 +112,7 @@ export async function pushBranch(
     `HEAD:refs/heads/${branch}`,
   ]);
   if (!push.success) {
+    onFailed(push.output);
     return signal?.aborted
       ? "Push aborted."
       : `Pushing ${branch} to origin failed.`;
@@ -117,6 +125,13 @@ export async function pushBranch(
  * sentence saying so, or giving its address when it cannot be opened. */
 export function openPage(io: Pick<PushIo, "open">, url: string): string {
   return io.open(url) ? `Opened ${url}` : `Create a pull request at ${url}`;
+}
+
+/** Whether git's output says the push was refused, as against failing to
+ * reach the server or to finish, so that pushing again would be refused
+ * again. */
+export function pushRefused(output: string): boolean {
+  return /^\s*! \[(remote )?rejected\]/m.test(output);
 }
 
 /**
@@ -208,6 +223,7 @@ export function realPushIo({
       ]);
       return { success: status.success, output };
     },
+    write,
     pagedGitDir: () =>
       env.GIT_DIR === undefined
         ? null

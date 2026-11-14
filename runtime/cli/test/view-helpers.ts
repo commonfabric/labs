@@ -198,6 +198,30 @@ export function fakeRelay() {
 }
 
 /**
+ * The payload of the `pull_request` event GitHub sends when a pull request
+ * closes: by default, pull request 7 of `commonfabric/labs`, merged.
+ */
+export function mergedPayload(
+  {
+    action = "closed",
+    merged = true,
+    number = 7,
+    repository = "commonfabric/labs",
+    url = "https://github.com/commonfabric/labs/pull/7",
+  } = {},
+) {
+  return {
+    action,
+    pull_request: {
+      html_url: url,
+      number,
+      merged,
+      base: { repo: { full_name: repository } },
+    },
+  };
+}
+
+/**
  * The payload of a `pull_request` delivery reporting `action` on the pull
  * request numbered 7 in `commonfabric/labs`, whose head is `commit` on
  * `branch` of the repository whose page is `repository`.
