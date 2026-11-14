@@ -1596,3 +1596,170 @@ numbers have gaps.
     T2) has 56 looser rows: the 8 more are array results of a `computed`
     whose only entries are of origin `structure`, which note 192 leaves
     out with the declared ones.
+208. **The patterns of a plan, and the pattern a node is written in** (PL
+    §1.1, §1.5, §3.2 "The atom of the pattern"). `Plan.patterns` lists
+    the pattern the plan is compiled from and each pattern compiled in,
+    in the order of its first site. A `derive` by expression code and a
+    `fold` hold `pattern` where the pattern is not entry 0. PL has the
+    hash of `{ module, binding }` as an entry, with the module's
+    identity in it. The crate has neither, so an entry is the
+    placeholder `unhashed:pattern/`, the path of the module, `#`, and
+    the binding: `unhashed:pattern/row.tsx#default`. For an inline
+    `pattern(...)` that no `const` names, PL forms the binding from the
+    enclosing pattern's, the `within` steps and the name of the site.
+    The crate writes the enclosing binding, `/`, and the line and column
+    of the inline pattern, which names the same pattern and is not PL's
+    form. The emitter makes a `derive` and a `fold` in functions that
+    hold no emitter state, so the pattern being evaluated is a
+    thread-local that the evaluation of a compiled-in pattern sets.
+209. **The atom of a kept output in the comparison** (PL §3.1 "An atom
+    that names code", §3.2 "Every kept output"; closes notes 202 and
+    197's `isEdited` row). The evaluator mints the atom of the pattern
+    for expression code and a `fold`, and adds the atom of entry 0 to
+    the label of every kept output, also beside no label. A body's atom
+    names the body's index. `compareLabels` counts atoms as before and
+    reports how many of the template's atoms name a pattern where the
+    runtime's label has an atom for other code: the template's atoms of
+    bodies are taken to correspond to the runtime's first, and the
+    pattern's to those that are left. A row that is not looser and has
+    such an atom is counted as "atom names the pattern". Since the
+    runtime stores no atom for a value a pattern passes on or for an
+    unlabeled value, every row that was equal is now tighter on
+    integrity, and no row of the corpus is equal. The report says for
+    each row what it was before the atom was added. The row `nick` of
+    the defaulted fixture (the fourth exception of PL §3.1) is now
+    incomparable on integrity: the template lacks the object's atom and
+    has the pattern's.
+210. **The label of an event slot** (PL §3.12 "The label of an event
+    slot", question 73; closes note 198). The harness gave an event
+    slot the label its schema declares. It now gives it no label, since
+    an event the harness sends arrives with none, and the handler
+    fixture's writes are equal on confidentiality. The crate took
+    `Slot.declared` of an event slot as a lower bound in
+    `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`,
+    `cfc-flow:writer-fit` and the write floor. It no longer does: the
+    slot keeps the member, and a check that would need it is not
+    decided. No corpus diagnostic changes.
+211. **Which entries are the static part** (PL §3.1 "Which entries are
+    the static part", question 70; changes note 192). The harness left
+    out the entries of origin `structure` with the `declared` ones. It
+    now leaves out the `declared` entries outside the argument's
+    document and the cells of the generated inputs, and no other. With
+    the small fixture, the container of each `map` (`titles`, `loud`) is
+    tighter on confidentiality with the static part and without it,
+    where it was equal without it: the clause of the elements is on the
+    container's `enumerate` and `shape` entries, which are `structure`
+    stamps. `ifElse(flag, secret, note)` is equal with the static part
+    where the labeled branch is selected and tighter where it is not,
+    and looser without the static part in both cases, as PL §3.5 says.
+    One corpus row is looser without the static part: `pinned` of
+    `dev/test/cfc-trusted-write/main.tsx`, a state cell whose own type
+    declares a clause. The slot's label has that clause, and the only
+    stored entry that holds it is the `declared` entry of the state
+    cell's own document, which PL's table counts as the static part
+    because it is a document on the way from the output to its value.
+    PL keeps the argument's document out of the static part because its
+    declared entries are the labels of inputs. The declared entry of a
+    state cell's document is the label of a slot in the same way, and PL
+    does not say so.
+212. **`Binding.result` and `Binding.eventSchema`** (PL §1.1, question
+    75; changes note 199). `Binding.result` is the list of the result
+    paths that hold the stream, the positions of a rendered tree
+    included: `["$UI", "children", "0", "props", "onClick"]`. PL has the
+    paths in source order. The emitter holds the members of a record by
+    name, so the paths are in the order of their segments.
+    `Binding.eventSchema` holds the schema of the type the handler's
+    event declares, for every binding of the handler, and a body has no
+    `eventSchema`. The corpus comparison now sends 226 events where it
+    sent 145.
+213. **The position of a tag that names a pattern** (PL §1.1: "the
+    entries of the enclosing rendered tree at the tag's position are
+    those of the callee's `[UI]`"). The run holds the callee's result at
+    the position, with its tree under `$UI`, so the paths the plan names
+    there held no value and 143 outputs were not compared. The harness
+    now reads a path below `$UI` where the run holds a result with
+    `$UI` that is no view node and the path goes on with a member of a
+    view node, or ends there. 123 more outputs are compared, and none is
+    looser. The crate has the callee's tree at the tag's position also
+    where the tag is the whole value of a result path
+    (`controls: <Controls>...</Controls>` of the catalog stories), and
+    PL says that a tag evaluates to what the pattern returns, as the
+    call does. Which the plan should hold there was not decided here.
+214. **The comparison over the corpus, after the rulings** (replaces the
+    table of note 207).
+
+    | | |
+    | --- | --- |
+    | modules attempted | 270 |
+    | modules run | 213 |
+    | not run: needs `wish` | 33 |
+    | not run: requests an effect | 14 |
+    | not run: the run's commit is refused | 10 |
+    | outputs compared | 1314 |
+    | equal | 0 |
+    | tighter | 1190: 1170 equal before the atom of a kept output is added, 20 tighter before |
+    | atom names the pattern | 124: 76 before the atom is added, 48 looser on integrity before (notes 202 and 203); 103 equal otherwise, 21 tighter in confidentiality |
+    | looser | 0 |
+    | incomparable | 0 |
+    | outputs whose label is a bound, counted apart | 124 |
+    | events sent | 226 |
+    | write edges compared | 61: 56 equal, 5 tighter |
+
+    Without the static part one output is looser (note 211). Not
+    compared, by reason: 269 write edges the event's run did not make;
+    174 rows that read a state cell of a per-element body; 113 at an
+    element of a collection no output entry names; 94 at an element slot
+    outside its collection; 89 below a child no pick chose; 53 outputs
+    the run holds no value at; 25 over a collection whose source is not
+    a stored slot; 24 with a slot of root `operation`; 12 outputs with
+    no template; 10 with a `dynamic` node; 18 write targets with no
+    stored cell. Of the selectors and picks the rows met, 12 were found
+    from a stored value, 216 from the slot of the condition or the key,
+    and 393 were not found. The runtime refuses the commit of 90 of the
+    226 events ("Event handler commit terminally rejected"), in 50
+    modules, and 207 of the 269 write edges not made are in those
+    modules. Why each is refused was not examined.
+215. **The outputs the run holds no value at.** The earlier run had 196.
+    143 were at the position of a tag that names a pattern, where the
+    run holds a value and its label below `$UI` (note 213): the harness
+    did not read them. The 26 of them whose template has a clause or was
+    not evaluated then are compared now, and are equal in
+    confidentiality. Of the 53 that remain: 26 are at a position the
+    run did not render, below a conditional that gave `null` or a
+    string, or beyond the end of an array, and nothing is stored there;
+    17 are a link to a cell that holds no value, 6 of them in a module
+    where an action of the run threw (the generated inputs, or a
+    `computed` that throws by design) and 11 where a `computed` returned
+    `undefined` or a state cell has no initial value; 9 hold a stored
+    value that does not read under the schema of the path, because the
+    generated input does not fit the type (a string where a view node is
+    declared, a record that refers to itself), which is a gap of the
+    generator; and 1 has a value once it is read on its own. In 13 of
+    the 53 the runtime's label is empty and the template has a clause or
+    was not evaluated. In all 13 the runtime stores nothing at the path:
+    6 where an action threw (5 with a clause in the template), 5 where a
+    cell holds nothing (template not evaluated), and 2 below a
+    conditional that rendered `null` (with a clause). A computation
+    that throws writes nothing, so the runtime stores no label for it,
+    and PL does not say what label the compiled path gives the output
+    of a body that throws. So "no output is looser in confidentiality"
+    holds for every output the run holds a value at, and for 7 outputs
+    with no value the template has a clause where the runtime stores no
+    label.
+216. **Note 203 is not closed** (PL §3.10, question 74). The three
+    rendered positions of `patterns/examples/cfc-spec-gallery/main.tsx`
+    are now in the category "atom names the pattern", tighter in
+    confidentiality by the caveat: the template has no clause, and the
+    runtime's label has the caveat the created cell's type declares. PL
+    assumes that a reader of the created cell follows the reference by
+    §3.10, so that its template holds the declared clause. In the plan
+    the reader is the body of `LabelDisclosureCard`, which observes the
+    reference at `arg0/value` as `identity` and passes it on in
+    `$value`; it does not follow it, so §3.10 gives it no `dynamic`
+    node. What follows the reference is a reader of the rendered
+    position. The plan has no record that says the result of
+    `makePromptInfluenceDisclosure` is the handle of the cell its
+    `createCell` site made: `BodyOutput.reference` names a reference
+    the body was given, and a created cell is none. The harness
+    dereferences an `identity` slot and has no address for this
+    reference. The crate is not changed.
