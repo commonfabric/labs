@@ -197,6 +197,8 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
                             "name": plan.name,
                             "line": plan.line,
                             "plan": plan.plan,
+                            "argumentSchema": plan.argument_schema,
+                            "resultSchema": plan.result_schema,
                             "unsupported": unsupported,
                         })
                     })

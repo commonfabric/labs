@@ -305,6 +305,10 @@ pub fn rewrite(id: &str) -> &'static str {
              writes what the first did, or move it into a `handler` or an `action`."
         }
         "mergeable-push:read-then-push" => "Push without reading the collection first.",
+        "cfc-flow:write-policy" => {
+            "Make the write in the handler the policy names, or name this writer in the \
+             policy of the path."
+        }
         _ => "",
     }
 }

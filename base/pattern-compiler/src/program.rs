@@ -401,6 +401,23 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         };
         let plans = crate::plan::emit_module(&resolver, module, &all_bodies, &all_records);
         for plan in &plans {
+            for (id, start, found) in &plan.flows {
+                let reported = check
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.id == *id && diagnostic.start == *start);
+                if reported {
+                    continue;
+                }
+                let position = parsed.lines.position(parsed.source, *start);
+                check.diagnostics.push(Diagnostic::new(
+                    id,
+                    &parsed.path,
+                    (*start, *start),
+                    position,
+                    format!("{found}. {}", messages::rewrite(id)),
+                ));
+            }
             for (start, cones) in &plan.cycles {
                 let position = parsed.lines.position(parsed.source, *start);
                 check.diagnostics.push(Diagnostic::new(

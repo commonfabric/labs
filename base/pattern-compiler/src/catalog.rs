@@ -464,7 +464,14 @@ pub const CATALOG: &[Entry] = &[
     retired("cfc-schema:recursive-alias-of-any"),
     footprint("cfc-flow:max-confidentiality", Error, LABEL_TEMPLATES),
     footprint("cfc-flow:required-integrity", Error, LABEL_TEMPLATES),
-    footprint("cfc-flow:write-policy", Error, LABEL_TEMPLATES),
+    part(
+        "cfc-flow:write-policy",
+        Error,
+        "decided for `WriteAuthorizedBy` on a path a body writes through a handle of a slot \
+         whose root has a declared type; the policies of `WritePolicyAnyOf` and of the \
+         trusted-action aliases are not read, and a write that is in another module than \
+         the pattern is reported at the start of the module",
+    ),
     footprint("cfc-flow:write-floor", Error, LABEL_TEMPLATES),
     footprint("cfc-flow:writer-fit", Error, LABEL_TEMPLATES),
     footprint("cfc-flow:ui-contract", Warning, LABEL_TEMPLATES),

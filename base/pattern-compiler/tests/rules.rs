@@ -590,6 +590,11 @@ const CASES: &[Case] = &[
         "const bump = lift((x: { count: Cell<number>; from: Cell<number> }) => { x.count.set(x.from.get() + 1); return 1; });",
     ),
     case(
+        "cfc-flow:write-policy",
+        "interface Note { body: WriteAuthorizedBy<string, typeof save> }\nconst save = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"body\").set(event.text); });\nconst other = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { /*!*/state.note.key(\"body\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ save: save({ note }), other: other({ note }) }));",
+        "interface Note { body: WriteAuthorizedBy<string, typeof save> }\nconst save = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"body\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ save: save({ note }) }));",
+    ),
+    case(
         "side-write:cycle",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { /*!*/x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: a }); return { one, two }; });",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number>; c: Cell<number> }>(({ a, b, c }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: c }); return { one, two }; });",

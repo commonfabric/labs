@@ -142,3 +142,42 @@ fn the_annotation_at_a_path_combines_every_node_from_the_root() {
         })
     );
 }
+
+#[test]
+fn a_pattern_has_the_schemas_of_its_argument_and_of_the_result_it_declares() {
+    // PL §1.1: a pattern has an argument schema and a result schema
+    // (`Child.argumentSchema`, `Child.resultSchema`), and a kept output is
+    // a path of the result.
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: r#"import { pattern, type Confidential } from "commonfabric";
+export const P = pattern<{ n: number }, { label: Confidential<string, ["secret"]>; n: number }>(({ n }) => {
+  return { label: "n=" + n, n };
+});
+"#
+        .to_string(),
+    }]);
+    let plan = &analysis.modules[0].plans[0];
+    assert_eq!(
+        plan.argument_schema,
+        Some(json!({
+            "type": "object",
+            "properties": { "n": { "type": "number" } },
+            "required": ["n"],
+        }))
+    );
+    assert_eq!(
+        plan.result_schema.as_ref().expect("a result schema")["properties"]["label"],
+        json!({ "type": "string", "ifc": { "confidentiality": ["secret"] } })
+    );
+    let label = plan.plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["path"] == json!(["label"]))
+        .expect("the output label");
+    assert_eq!(
+        label["schema"],
+        json!({ "type": "string", "ifc": { "confidentiality": ["secret"] } })
+    );
+}
