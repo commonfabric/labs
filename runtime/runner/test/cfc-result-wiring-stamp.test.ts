@@ -264,6 +264,48 @@ describe("cfc-result-wiring-stamp", () => {
     expect(existenceOf(cell)).toEqual([existence]);
   };
 
+  /**
+   * Adds to `cell`'s stored label map a derived value entry naming `atom` at
+   * `path`, as a write there by an earlier attempt would leave.
+   */
+  const plantDerived = async (
+    cell: Cell<unknown>,
+    path: readonly string[],
+    atom: string,
+  ): Promise<void> => {
+    const tx = runtime.edit();
+    const link = cell.getAsNormalizedFullLink();
+    const document: IMemorySpaceAddress = {
+      space: link.space,
+      scope: link.scope,
+      id: link.id,
+      path: [],
+    };
+    writeSeedEnvelopeDoc(tx, space);
+    const cfc = (storedFields(tx, document).cfc ?? {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: { version: 1, entries: [] },
+    }) as { labelMap: { entries: FabricValue[] } };
+    seedStoredEnvelope(tx, { ...document, path: ["cfc"] }, {
+      ...cfc,
+      labelMap: {
+        ...cfc.labelMap,
+        entries: [
+          ...cfc.labelMap.entries,
+          {
+            path: [...path],
+            label: { confidentiality: [atom] },
+            origin: "derived",
+            observes: "value",
+          },
+        ],
+      },
+    } as FabricValue);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).ok).toBeDefined();
+  };
+
   describe("a setup that reads another principal's data", () => {
     it("stamps it on the membership where the transaction read it before choosing the pattern", async () => {
       // What a transaction read before a setup began decided which pattern
@@ -361,6 +403,31 @@ describe("cfc-result-wiring-stamp", () => {
 
       expect(derivedOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([]);
+    });
+
+    it("replaces a derived entry below an unchanged result's root with the root's", async () => {
+      // A write of the root would drop what an earlier write left below it,
+      // so a reader there takes the re-derived root entry instead.
+
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-below", mixed);
+      await plantDerived(result, ["note"], CAROL);
+
+      await setUp("mixed-below", mixed, bobs);
+
+      expect(
+        entriesOf(result)
+          .filter((entry) => entry.origin === "derived")
+          .map((entry) => [entry.path, entry.label.confidentiality]),
+      ).toEqual([[[], [BOB]]]);
+      const tx = runtime.edit();
+      try {
+        result.withTx(tx).key("note" as never).get();
+        expect(deriveFlowJoin(tx).confidentiality).toEqual([BOB]);
+      } finally {
+        tx.abort("probe read");
+      }
     });
   });
 
