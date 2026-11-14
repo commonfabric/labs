@@ -676,6 +676,14 @@ as an assumption.
     question 36). *Assumed:* any read of the list in a body that calls
     `push` or `pushAll` on it, and not `addUnique`. This reports more
     sites than today's classifier.
+101. **How the cones of a plan are partitioned** (PL question 44).
+    *Assumed:* the partition the prototype chose.
+102. **A statically resolved pattern on a cycle of calls** (PL question
+    45; LS question 37). *Assumed:* refused. What the builder does today
+    is not verified.
+103. **How value code reads the child a dynamic key chose** (PL question
+    46). *Assumed:* it is handed every child. `execution-and-storage.md`
+    §2.2 gives `ConeHost.slot` no key, which disagrees with PL §3.18.
 
 ## Open, and not needing the owner
 
