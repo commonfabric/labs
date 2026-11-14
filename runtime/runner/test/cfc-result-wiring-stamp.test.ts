@@ -841,6 +841,7 @@ describe("cfc-result-wiring-stamp", () => {
 
       await setUp("name-carried-rewritten", named);
 
+      await result.sync();
       const read = runtime.edit();
       const stored = storedFields(read, {
         space: link.space,
