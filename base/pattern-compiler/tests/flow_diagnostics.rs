@@ -454,3 +454,35 @@ export const P = pattern<{{ {state}; n: Cell<number> }}>(({{ v, n }}) => ({{ gat
     let plan = &analysis.modules[0].plans[0].plan;
     assert_eq!(plan["constraints"], serde_json::json!([]));
 }
+
+// ----- the label of an event slot -----
+
+#[test]
+fn a_label_the_schema_of_an_event_declares_is_no_lower_bound_of_the_events_label() {
+    // PL §3.12, "The label of an event slot": "`Slot.declared` of a slot
+    // of root `event` is not a lower bound of the slot's label, and a
+    // compile-time check of section 4.4 does not take it as one." The
+    // same annotation on a path of the state is reported (`gate`, above).
+    let source = "const gate = handler<{ t: MaxConfidentiality<Sec<string>, readonly [\"public\"]> }, { n: Cell<number> }>((event, state) => {
+  if (event.t) state.n.set(1);
+});
+export const P = pattern<{ n: Cell<number> }>(({ n }) => ({ gate: gate({ n }) }));
+";
+    assert!(flows(source).is_empty());
+    // The slot keeps its `declared` member, and the constraint is in the
+    // plan for the runtime to decide.
+    let analysis = analysis(source);
+    let plan = &analysis.modules[0].plans[0].plan;
+    let slot = plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .find(|slot| slot["root"]["kind"] == "event")
+        .expect("an event slot");
+    assert_eq!(slot["declared"]["confidentiality"], json!(["secret"]));
+    assert!(plan["constraints"]
+        .as_array()
+        .expect("constraints")
+        .iter()
+        .any(|constraint| constraint["kind"] == "maxConfidentiality"));
+}

@@ -646,14 +646,14 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         const inputs: TemplateInputs = {
           slot: (slot, elements) => {
             const context = { ...scope, elements };
-            const { root, observes, declared } = plan.slots[slot];
-            // An event is not stored: the label of its slot is the one
-            // the event's schema declares at the path.
+            const { root, observes } = plan.slots[slot];
+            // An event is not stored. The label of its slot is the label
+            // the event arrived with, and an event the harness sends has
+            // none. A label the event's schema declares is not joined to
+            // it: `Slot.declared` is no lower bound there (PL §3.12, "The
+            // label of an event slot").
             if (root.kind === "event") {
-              return {
-                confidentiality: declared?.confidentiality ?? [],
-                integrity: declared?.integrity ?? [],
-              };
+              return { confidentiality: [], integrity: [] };
             }
             const cell = slotCell(slot, context);
             if (cell === undefined) {

@@ -6484,7 +6484,8 @@ fn input_failure(
             let ceiling = constraint["ceiling"].as_array()?;
             let mut inputs: Vec<(String, Vec<Value>)> = Vec::new();
             for slot in listed {
-                let declared = slots.get(slot.as_u64()? as usize)?["declared"]["confidentiality"]
+                let declared = crate::flow::declared_bound(slots.get(slot.as_u64()? as usize)?)?
+                    ["confidentiality"]
                     .as_array()?
                     .clone();
                 inputs.push((name(slot), declared));
@@ -6524,7 +6525,7 @@ fn input_failure(
             let mut minted = false;
             for slot in listed {
                 labels.push(
-                    slots.get(slot.as_u64()? as usize)?["declared"]["integrity"]
+                    crate::flow::declared_bound(slots.get(slot.as_u64()? as usize)?)?["integrity"]
                         .as_array()?
                         .clone(),
                 );

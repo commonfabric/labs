@@ -209,15 +209,14 @@ describe("the write edges of a handler against the labels its event's run stored
       ["record", 1, ["0"]],
     ]);
     for (const row of writes) {
-      // The run's join has the label of the input the handler read. The
-      // template also has the clause the event's schema declares for
-      // `text`, which the runtime's join does not hold (note 198).
+      // The run's join has the label of the input the handler read, and
+      // not the clause the event's schema declares for `text`. The label
+      // of an event slot is the label the event arrived with, which for
+      // an event the test sends is none: the declaration is no lower
+      // bound of it (PL §3.12, "The label of an event slot").
       expect(clauses(row.runtime.confidentiality)).toEqual(["alice"]);
-      expect(clauses(row.template.label.confidentiality)).toEqual([
-        "alice",
-        "erin",
-      ]);
-      expect(row.comparison.confidentiality).toBe("looser");
+      expect(clauses(row.template.label.confidentiality)).toEqual(["alice"]);
+      expect(row.comparison.confidentiality).toBe("equal");
       expect(row.comparison.integrity).toBe("equal");
       // The target of a write edge gets no atom of the pattern added
       // (PL §3.2, "What does not get the atom"): the atom of each side

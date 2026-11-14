@@ -226,6 +226,18 @@ fn union(into: &mut Vec<Value>, more: Vec<Value>) {
     }
 }
 
+/// The label a slot declares, where it bounds the slot's label. "The
+/// label of a slot of root `event` is the label the event arrived with",
+/// so "`Slot.declared` of a slot of root `event` is not a lower bound of
+/// the slot's label, and a compile-time check of section 4.4 does not
+/// take it as one" (PL §3.12).
+pub fn declared_bound(slot: &Value) -> Option<&Value> {
+    if slot["root"]["kind"] == "event" {
+        return None;
+    }
+    slot.get("declared")
+}
+
 /// The lower bound of `C(template)` on declared labels, where the
 /// template is evaluated: "`const` is empty, a `slot` is its declared
 /// list, a `derive` is the union of its inputs, and a `select` is the
@@ -233,9 +245,7 @@ fn union(into: &mut Vec<Value>, more: Vec<Value>) {
 pub fn confidentiality_bound(template: &Value, slots: &[Value]) -> Option<Vec<Value>> {
     match template["op"].as_str()? {
         "const" => Some(Vec::new()),
-        "slot" => slots
-            .get(template["slot"].as_u64()? as usize)?
-            .get("declared")?
+        "slot" => declared_bound(slots.get(template["slot"].as_u64()? as usize)?)?
             .get("confidentiality")?
             .as_array()
             .cloned(),
@@ -282,9 +292,7 @@ pub struct Integrity {
 pub fn integrity_of(template: &Value, slots: &[Value]) -> Option<Integrity> {
     match template["op"].as_str()? {
         "slot" => Some(Integrity {
-            atoms: slots
-                .get(template["slot"].as_u64()? as usize)?
-                .get("declared")?
+            atoms: declared_bound(slots.get(template["slot"].as_u64()? as usize)?)?
                 .get("integrity")?
                 .as_array()?
                 .clone(),
