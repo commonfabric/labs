@@ -691,7 +691,10 @@ kinds of callee, and they differ in what the compiler can do.
   definition imported by name or declared at module scope, or an inline
   `pattern(...)` expression. The compiler has its body. The call denotes an
   anonymous sub-pattern compiled into the surrounding instance, like the
-  body of a `map`.
+  body of a `map`. A call that is on a cycle of such calls, as where a
+  pattern calls itself in its own body, cannot be compiled in.
+  *Assumed* ([§13](#13-open-questions), question 37): the compiler
+  refuses it.
 - **A pattern factory value.** The callee is an expression whose type is a
   pattern factory type, such as a property of the pattern's input or the
   result of a conditional between patterns. The compiler does not have its
@@ -4443,3 +4446,15 @@ use, so that the other numbers stay as other documents cite them.
     sites than today. The alternative adds to the analysis a record of
     which reads a condition and a value derive from, and keeps today's
     two cases and its silence for an unrelated read.
+37. **A statically resolved pattern on a cycle of calls** (to the project
+    owner; from the prototype, and `plan-and-label-templates.md` §8,
+    question 45). A pattern that calls itself in tier R, directly or
+    through other statically resolved patterns, has no finite plan when
+    every such call is compiled in
+    ([§4.4.2](#442-patterns-and-handlers-as-callees)).
+    *Assumed:* the call is refused, and the catalog of §10.2 has no
+    entry for it yet. The alternative gives the call that closes the
+    cycle a child with a plan and a result cell of its own, as a call of
+    a factory value has, which changes what the call denotes at that one
+    place. The prototype compiles such calls in to a depth of eight and
+    counts the deeper ones.

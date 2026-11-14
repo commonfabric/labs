@@ -114,6 +114,15 @@ the producing expression at that path
 (`plan-and-label-templates.md` §3.9, "Computed inputs"). The runtime narrows
 both kinds of input to the entries.
 
+An input can be bound to an object or an array literal written in the
+reactive tier, as the argument of a call or as a captured value. Such a
+literal binds each member on its own. What an entry's path is bound to
+is found by following the path into the literal: an entry at or below a
+member that is a slot is a slot of `Body.reads`, with the member's root
+and path, and an entry at or below a member the instance computed is an
+entry of `Body.computed`. An entry at the literal itself is an entry of
+`Body.computed` with the literal's own template.
+
 ### 1.2 Which bodies it runs on
 
 | Body | Formal inputs | Notes |
@@ -1379,6 +1388,34 @@ the reference by identity, and the edge's `template`, which is the body's,
 applies where the check fails. The same holds for a path of a child's
 argument and of an effect's request.
 
+**The path of the edge.** The target's path is the path below the
+handle's cell at which the reference is written. `push`, `pushAll`, and
+`addUnique` write the elements they add (§6.1), so the edge for the
+added value has the path `*` below the container, and the edge for a
+path `p` of the added value has `*` followed by `p`.
+
+**A written value that differs between runs.** The written value can be
+alternatives of records the body built, or a record that has another
+record spread into it on some runs, as in
+`{ body, ...(reply === undefined ? {} : { replyTo: reply }) }`. Each path
+is then taken over all the alternatives.
+
+- Where every alternative that has the path holds the same one
+  projection there, and its path has no `*`, the edge names its entry as
+  `passes`. An alternative that lacks the path does not change that: the
+  existence of a written path that the target's schema does not require
+  has the body's template, which covers on which runs it is there.
+- Where the alternatives hold different projections at the path, or one
+  holds a projection and another a value the body computed, the edge
+  names, as `oneOf`, the entry of every projection some alternative
+  holds there, also where that is one entry. Which of them is written is
+  the body's choice, and where a computed value is written the check
+  fails and the body's template applies.
+
+The same holds for a path of a result (`BodyOutput.reference`, §3.8), of
+a child's argument, of an effect's request, and of a binding's state
+(§8.5).
+
 ### 6.6 Idempotency
 
 The idempotency contract of Scheduler v2 (§4.2) applies to every
@@ -1752,7 +1789,10 @@ There are three ways a body reaches another cell.
     reads are journaled with the reads of the entry it was found through.
     That entry's envelope admits the position as a handle, and what it
     admits below the position is the envelope of the reads through the
-    found handle (`plan-and-label-templates.md` §3.9, "Handles").
+    found handle (`plan-and-label-templates.md` §3.9, "Handles"). The
+    entry it was found through is the one of the handle at the position
+    before the first hop whose read is dynamic. A handle found through
+    a found handle is counted under that same entry.
 - **A link the type does not show.** A position declared with a data type
   can be stored as a link: a record that a handler wrote into a list is a
   document of its own, and the list holds a link to it
@@ -1791,7 +1831,9 @@ and has no static entry. There are three kinds of such site.
   same cell on every event.
 
 A read through the link or the cell such a site returns is dynamic, in a
-handler as in a computation. The site is an entry of `Body.handles` whose
+handler as in a computation. Such a read is a `get()`, a `sample()`, or,
+on the link to an instance, a property read of the instance's result.
+The site is an entry of `Body.handles` whose
 `handle` is `{ call }`, and its envelope admits what the body reads
 through what the site returns (`HandleReads` in
 `plan-and-label-templates.md` §1.1). The read is journaled and joins the
@@ -2159,6 +2201,10 @@ abstract value that arrives at the state path, with the rule
 - A container is **computed** when it arrives as a record or a list the
   body built, as a bag, or as a `Computed` value. It has no stored address,
   and the binding's state document is where it is stored.
+- A **scalar** is told from a container by the static type of the
+  expression that arrives at the state path, for a projection as for a
+  `Computed` value. A value an `action` or an inline event handler
+  captures is the abstract value the captured variable has at the site.
 - A `Created` value is a reference the body obtained at a runtime call. It
   stays a link and records nothing.
 - A handle or a container the body **found** below a hop whose read is
@@ -3122,11 +3168,25 @@ what it leaves out is after the list.
   is too broad to predict, so the body has a `handle` envelope over the
   children of `threadInfo` (§6.2).
 
-The plan's listing leaves out five things this analysis records, and
+The listing has the reference edges of the pushed value. The push writes
+at `*` below `messages`, so the edges are at `*/authorProfile`, which
+passes the resolved entry at `state.myProfile`, at `*/attachments/*`,
+which is one of `event.attachments/*`, and at `*/replyTo/thread` and
+`*/replyTo/quotes`. The `thread` and the `quotes` of the stored reply are
+the handles the journaled resolutions returned, and each edge names the
+plain entry, `e5` and `e6` there (§3.8, §6.5). `attachments` and
+`replyTo` are spread into the pushed record on some runs only, which
+leaves each edge as it is (§6.5). The `addUnique` on `threadInfo` writes
+at `*` too.
+
+The plan's listing leaves out four things this analysis records, and
 §6.2 there says what its listing leaves out.
 
-- **The `shape` entries at optional positions.** One is at a data
-  position, `event.target`. The others are in place, at the positions of
+- **The `shape` entries at optional positions.** Two are at data
+  positions, `event.target` and `event.attachments`. `attachmentsIn`
+  tests the list against `undefined` and asks for its length, and the
+  `enumeration` entry does not remove the `shape` entry at the same path
+  (§2.3). The others are in place, at the positions of
   the optional handles, among them `state.myProfile`, `state.joined`,
   `event.replyTo/thread`, and `event.replyTo/quotes`.
 - **Three dynamic reads of kind `link`,** through the entries `e3`, `e5`,
@@ -3135,11 +3195,6 @@ The plan's listing leaves out five things this analysis records, and
   on `reply.thread` and `reply.quotes` in a branch of `?:`. Each is
   conditional, so each is a journaled resolution (§7.1). The listing has
   the one through `b2`.
-- **Two reference edges.** The pushed value holds `replyTo`, whose
-  `thread` and `quotes` are the handles those journaled resolutions
-  returned. Each is a `WriteEdge` of its own, at `*/replyTo/thread` and
-  `*/replyTo/quotes`, whose `reference` names the plain entry, `e5` and
-  `e6` (§3.8, §6.5).
 - **The `enumeration` entry of `titles`.** `threadTitleOf` reads
   `titles[key]` on a record under a key that is not static, which is
   widening W1: `enumeration` at `titles` beside `value` at `titles/*`,
