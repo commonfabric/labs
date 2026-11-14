@@ -2634,3 +2634,66 @@ export const P = pattern<{ rows: string[]; url: string }>(({ rows, url }) => {
         "[argument url : identity]"
     );
 }
+
+#[test]
+fn each_declaration_of_an_element_callback_that_computes_is_a_cone() {
+    // PL §1.4, "The cones of an element body": "Each `const` declaration
+    // of the callback whose initializer computes is one cone, whose
+    // `entry` is the declaration's name. ... A declaration whose
+    // initializer only names a slot ... has no cone. The expression the
+    // callback returns is one cone ... Its `entry` is the name of the
+    // collection", and it is listed last.
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+export const P = pattern<{ rows: { title: string; n: number }[] }>(({ rows }) => {
+  const lines = rows.map((row) => {
+    const upper = row.title + "!";
+    const double = row.n * 2;
+    const name = row.title;
+    return upper + double + name;
+  });
+  const plain = rows.map((row) => row.title);
+  return { lines, plain };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let entries: Vec<&str> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .map(|cone| cone["entry"].as_str().expect("an entry"))
+        .collect();
+    assert_eq!(entries, ["upper", "double", "lines", "plain"]);
+    assert_eq!(cone_slots(&plan, "upper"), ["element title : value"]);
+    assert_eq!(cone_slots(&plan, "double"), ["element n : value"]);
+    assert_eq!(cone_slots(&plan, "lines"), ["element title : value"]);
+    assert_eq!(output_named(&plan, "upper")["cone"], 0);
+    assert_eq!(output_named(&plan, "upper")["kept"], false);
+    let outputs = plan["outputs"].as_array().expect("outputs");
+    let element = outputs
+        .iter()
+        .find(|output| output["path"] == json!(["lines", "*"]))
+        .expect("the per-element entry");
+    assert_eq!(element["cone"], 2);
+    assert_eq!(
+        template_line(&plan, &element["template"]),
+        "derive(expression) { derive(expression) { derive(expression) { [element title : value] const } derive(expression) { [element n : value] const } } [element title : value] }"
+    );
+    assert_eq!(output_named(&plan, "lines")["cone"], 2);
+    let edges: Vec<String> = plan["edges"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .map(|edge| {
+            let output = edge["via"]["output"].as_u64().expect("an output") as usize;
+            format!(
+                "{} -> {} {}",
+                edge["from"],
+                edge["to"],
+                plan["outputs"][output]["interim"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    assert_eq!(edges, ["0 -> 2 upper", "1 -> 2 double"]);
+}

@@ -2103,6 +2103,20 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(index) = parameters.get(1) {
             self.bind_pattern(&index.pattern, Place::Index(collection));
         }
+        // The cones of an element body (PL §1.4): each declaration of
+        // the callback that computes is a cone of its own, as in a
+        // pattern body, and the expression the callback returns is one
+        // cone, whether or not it computes.
+        let before = function.block_body().map(|statements| {
+            let end = statements
+                .iter()
+                .position(|statement| matches!(statement, Statement::ReturnStatement(_)))
+                .unwrap_or(statements.len());
+            &statements[..end]
+        });
+        if let Some(before) = before {
+            self.statements(before);
+        }
         let (cone, _) = self.computing(name, function.span().start);
         // The expression the callback returns, for the class a test of
         // its truthiness needs.
@@ -2121,13 +2135,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             (false, _) => "identity",
         };
         let (result, body) = self.one(class, |emitter| {
-            let result = match function.expression_body() {
-                Some(expression) => Some(emitter.eval(expression, name)),
-                None => function
-                    .block_body()
-                    .and_then(|statements| emitter.statements(statements)),
-            };
-            result.unwrap_or(Place::Const)
+            match returned {
+                Some(expression) => emitter.eval(expression, name),
+                None => Place::Const,
+            }
         });
         // The element as the source has it, passed through.
         let source_element = |emitter: &mut Self| {
