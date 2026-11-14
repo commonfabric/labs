@@ -383,12 +383,17 @@ A result document's value entry at a restatement (§8.9.1.3) implements
 [specs#88](https://github.com/commonfabric/specs/pull/88), ahead of its
 ruling. An asking setup that finds a result holding data beside its
 references unchanged re-derives the root's value entry from its transaction's
-flow join, as its write of the root would. A setup that is not asking, among
-them one the runtime starts on its own to repair a piece or to carry on with a
-pattern an earlier transaction chose (`runtimeStarted` in `runner.ts`),
-restates no unchanged result, so it leaves the entry as stored. The
-restatement mints no existence entry, and leaves the existence entry and the
-entries below the root as they are. It changes what is stored at strict, with
+flow join, as its write of the root would, and drops the derived value
+entries below the root as that write would. A setup that is not asking
+restates no unchanged result, and one the runtime starts on its own, to repair
+a piece or to carry on with a pattern an earlier transaction chose
+(`runtimeStarted` in `runner.ts`), takes no value entry, so both leave it as
+stored: for the value entry, labs' asking setup is exactly the ruling's. For
+the membership it is wider: a runtime-started setup handed a transaction
+counts as asking and re-mints an unchanged wiring's membership, a
+pre-existing under-taint the conformance statement's §9 records. The
+restatement mints no existence entry, and leaves the existence entry as it
+is. It changes what is stored at strict, with
 no default-off dial, so it does not satisfy step 4 above: it lowers a stale
 value stamp, and it can raise one from a restating setup's decision reads.
 Its three deciding sites carry the `SPEC-PENDING` marker. @danfuzz ruled that

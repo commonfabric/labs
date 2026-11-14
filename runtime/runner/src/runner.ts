@@ -2864,11 +2864,12 @@ export class Runner {
    * that decided it from an asking one that is committing or committed
    * (`#carriedStanding`).
    * A setup the runtime starts on its own and hands a transaction, a repair
-   * or a continuation, is added too, and is also one of
-   * `#runtimeStartedSetupTransactions`. Every other setup transaction, a
-   * repair's the runner makes itself or a swap's that no setup here staged,
-   * holds none of those reads, so re-minting the stored membership there
-   * would drop a clause they carried.
+   * or a continuation, is added too, though it holds none of those reads
+   * either, so its membership re-mint can drop a clause they carried; it is
+   * also one of `#runtimeStartedSetupTransactions`, which keeps the value of
+   * a result holding data out of that re-mint. Every other setup
+   * transaction, a repair's the runner makes itself or a swap's that no setup
+   * here staged, is not added, so it leaves the stored membership.
    */
   readonly #askingSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
