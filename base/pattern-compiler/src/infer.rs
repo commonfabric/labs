@@ -751,6 +751,15 @@ impl<'a> Resolver<'_, 'a> {
                             .element_of(*value)
                             .unwrap_or_else(|| self.add_unresolved()),
                     };
+                    // By ruling, `elementById` yields a handle of the
+                    // element type or `undefined`: the record for a key
+                    // may never have been written or may have been
+                    // cleared.
+                    let child = match (name, self.shape(child)) {
+                        ("elementById", Shape::Handle(..)) => child,
+                        ("elementById", _) => self.or_absent(child),
+                        _ => child,
+                    };
                     match self.shape(child) {
                         Shape::Handle(..) => Ok(child),
                         _ => self.of(Shape::Handle(handle_kind_of(&shape), child)),

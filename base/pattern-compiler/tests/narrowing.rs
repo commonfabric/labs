@@ -684,3 +684,48 @@ fn conditional_with_an_unknown_branch_is_unknown_and_a_kind_test_narrows_it() {
         ["unknown", "string", "string"]
     );
 }
+
+// By ruling: `elementById` yields a handle of the element type or
+// `undefined`.
+#[test]
+fn element_by_id_yields_a_handle_of_the_element_or_undefined() {
+    assert_eq!(
+        types(
+            "function f(rows: Cell<{ n: number }[]>, id: string) {\n\
+               const row = rows.elementById(id);\n\
+               /*?*/row; /*?*/(row.get()); /*?*/(rows.key(0));\n\
+             }\n"
+        ),
+        [
+            "Cell<{ n: number } | undefined>",
+            "{ n: number } | undefined",
+            "Cell<{ n: number }>"
+        ]
+    );
+}
+
+// By ruling: on a value of type `unknown` in a data position the only test
+// is against `undefined`.
+#[test]
+fn property_read_after_a_typeof_test_of_a_data_position_stays_refused() {
+    use pattern_compiler::program::analyze;
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: "import { handler } from \"commonfabric\";\n\
+               const save = handler<unknown, { note: unknown }>((event, state) => {\n\
+                 if (typeof state.note === \"string\") { state.note.length; }\n\
+                 if (typeof state.note === \"object\" && state.note !== null) { state.note.title; }\n\
+                 if (state.note !== undefined) { /*?*/(state.note); }\n\
+               });\n"
+            .to_string(),
+    }]);
+    let found: Vec<&str> = analysis.modules[0]
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.id)
+        .collect();
+    assert_eq!(
+        found,
+        ["schema:unknown-type-access", "schema:unknown-type-access"]
+    );
+}
