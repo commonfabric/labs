@@ -532,7 +532,9 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
 
 /**
  * Marks reads performed by the scheduler's dependency seeding
- * (populateDeclaredSchedulerReads and friends): they materialize declared
+ * (populateDeclaredSchedulerReads and friends) and by the resolution of a new
+ * action's declared inputs that certifies its static read set
+ * (`#collectStaticReadTargetsWithCompleteness`): they materialize declared
  * dependencies so the reactivity log covers them for subscriptions, but
  * they are scheduling machinery, not handler consumption (§8.10.1:
  * dependency-discovery reads must not count as consumed inputs). Flow-label

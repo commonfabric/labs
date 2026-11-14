@@ -134,6 +134,19 @@ projection it builds with the stored result (`#nextResultProjection` in
 is the design, with the unobservability argument under "Why the exclusion
 carries no label out" and the residual under "What it costs".
 
+**The scheduler-dependency marking sites:** dependency seeding
+(`#populateDeclaredSchedulerReads` in `runner.ts`), and the resolution of a
+new JavaScript action node's declared inputs that certifies its static read
+set for the scheduler (`#collectStaticReadTargetsWithCompleteness` in
+`runner.ts`, which carries `machineryRead` as well). What each finds goes into
+the scheduler's record of the action's dependencies and into nothing the
+transaction writes, and the action's own run reads the same cells as ordinary
+reads. §18.6.2 names no such class; the runtime reads §8.10.1's requirement
+that dependency discovery not count as consumed input as covering these reads
+inside a transaction that also commits, pending
+`TBD-static-read-targets` for the second site (`cfc-spec-correspondence.md`
+records it).
+
 **The wiring marking sites:** `runner.ts`, `pattern-binding.ts`, and under
 `builtins/` the collection builtins `map.ts`, `filter.ts`, `flatmap.ts`,
 `aggregate.ts`, `collection-index.ts`, `collection-index-membership.ts`,
