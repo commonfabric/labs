@@ -411,6 +411,26 @@ fn a_handler_is_held_to_no_idempotency_contract_and_a_read_then_push_is_counted(
     assert_eq!(all.read_then_push, 1);
 }
 
+// ----- §3.8: a bag at a result path -----
+
+#[test]
+fn a_bag_of_one_projection_passes_it_and_a_bag_of_alternatives_is_one_of_them() {
+    // FA §3.8: "a bag of one projection whose path has no `*` gives
+    // `passes` at `p/*`, and a bag of alternatives or of a projection
+    // whose path has a `*` gives `oneOf`."
+    let record = analyze(
+        "const f = lift((x: { a: Donut; b: Donut; list: Donut[] }) => ({ single: [x.a], two: [x.a, x.b], starred: x.list.map((d) => d) }));\n",
+    );
+    assert_eq!(
+        record.outputs,
+        [
+            "single/* : passes x.a",
+            "starred/* : oneOf x.list/*",
+            "two/* : oneOf x.a, x.b",
+        ]
+    );
+}
+
 // ----- §8.2: a constant cause -----
 
 #[test]

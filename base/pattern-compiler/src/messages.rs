@@ -289,7 +289,8 @@ pub fn rewrite(id: &str) -> &'static str {
         }
         "footprint:dynamic-read" => {
             "Read through one handle at a static key, ahead of any branch, where every path \
-             reads the cell."
+             reads the cell. Where the condition only tests that the handle is present, the \
+             optional chain on the handle, `h?.get()`, is the static form."
         }
         "footprint:materializer" => {
             "Write through a handle the body is given, at a static path, or move the write \

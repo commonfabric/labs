@@ -4124,7 +4124,11 @@ fn references(
             if every {
                 let mut at = path.clone();
                 at.push(Seg::Star);
-                found.push((at, false, sorted(members.iter().map(name).collect())));
+                // A bag of one projection whose path has no `*` passes
+                // it on; alternatives, or a member of a collection, are
+                // one of several (FA §3.8).
+                let passes = matches!(bag.as_slice(), [Val::Proj(proj)] if !proj.path.contains(&Seg::Star));
+                found.push((at, passes, sorted(members.iter().map(name).collect())));
             }
         }
         _ => {}
