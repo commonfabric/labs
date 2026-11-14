@@ -169,7 +169,7 @@ them.
 | `0` | Both servers started and became ready. |
 | `3` | A server could not bind because its port is already in use; retry on a different port offset. |
 | `4` | A requested port is one clients refuse to connect to; change the port offset. |
-| other non-zero | Any other startup failure (build error, crash, readiness timeout). |
+| other non-zero | Any other startup failure (build error, crash, an answer other than HTTP 200). |
 
 Code `3` is reported only when a server's actual bind fails, not from a port
 pre-check, so it carries no check-then-bind race. The toolshed and the shell dev
