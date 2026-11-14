@@ -431,7 +431,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some(cone) => (cone, false),
             None => {
                 self.cones.push(ConeOut {
-                    entry: name.to_string(),
+                    entry: written_at(name).to_string(),
                     at,
                     slots: BTreeSet::new(),
                     bodies: Vec::new(),
@@ -450,7 +450,7 @@ impl<'a> Emitter<'_, '_, 'a> {
     fn value(&mut self, name: &str, cone: usize) -> usize {
         let order = self.values.len();
         self.values.push(Computed {
-            name: name.to_string(),
+            name: written_at(name).to_string(),
             cone,
             kept: Vec::new(),
             collection: None,
@@ -891,7 +891,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     }
                                 },
                             };
-                            let member = self.eval(&property.value, &name);
+                            let member = self.eval(&property.value, &format!("@{name}"));
                             fields.insert(name, member);
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
@@ -989,7 +989,7 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// A state cell (`Plan.stateCells`), from a cell constructor.
     fn state_cell(&mut self, scope: &str, hint: &str) -> Place {
         self.state_cells.push(json!({
-            "name": hint,
+            "name": written_at(hint),
             "scope": scope,
             "within": self.within_json(),
         }));
@@ -1072,11 +1072,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         self.use_body(home, start, &name, &arguments, hint, at)
                     }
                     Some((home, start, DefKind::Pattern)) => {
-                        let name = if matches!(hint, "branch" | "operand" | "condition" | "child") {
-                            identifier.name.to_string()
-                        } else {
-                            hint.to_string()
-                        };
+                        let name = base_name(hint, identifier.name.as_str()).to_string();
                         self.inline_pattern(home, start, &name, &arguments, at)
                     }
                     _ => {
@@ -1113,9 +1109,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     "a cause that is not a string literal in the reactive tier",
                                     at,
                                 );
-                                hint.to_string()
+                                fallback_name(hint, "cell").to_string()
                             }
-                            _ => hint.to_string(),
+                            _ => fallback_name(hint, "cell").to_string(),
                         };
                         return self.state_cell(scope, &cause);
                     }
@@ -1127,7 +1123,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 match inner.arguments.first().and_then(FunctionLike::of_argument) {
                     Some(function) => {
                         let start = function.span().start;
-                        self.use_body(self.module, start, hint, &arguments, hint, at)
+                        let name = fallback_name(hint, "lift");
+                        self.use_body(self.module, start, name, &arguments, hint, at)
                     }
                     None => {
                         self.unsupported("a `lift` of a function not written in place", at);
@@ -1243,11 +1240,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         hint: &str,
         at: u32,
     ) -> Place {
-        let name = if matches!(hint, "branch" | "operand" | "condition" | "child") {
-            via
-        } else {
-            hint
-        };
+        let name = base_name(hint, via);
         // A scan (PL §3.13): the predicate is the body, the runtime
         // evaluates it in order, and a selector holds the position the
         // scan stopped at.
@@ -1374,7 +1367,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if self.record_at(self.module, start).is_some() {
                     // Not promoted: a body, with what it captures as its
                     // formal inputs.
-                    return self.use_body(self.module, start, hint, &[], hint, at);
+                    let name = fallback_name(hint, "computed");
+                    return self.use_body(self.module, start, name, &[], hint, at);
                 }
                 // Promoted: expression code.
                 match function.expression_body() {
@@ -1407,7 +1401,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
             "action" => match arguments.first().and_then(|first| FunctionLike::of(first)) {
-                Some(function) => self.bind_inline(function, BodyKind::Action, hint),
+                Some(function) => {
+                    self.bind_inline(function, BodyKind::Action, fallback_name(hint, "action"))
+                }
                 None => {
                     self.unsupported("an `action` of a function not written in place", at);
                     Place::Unknown
@@ -1431,7 +1427,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 self.operations.push(json!({
                     "kind": "effect",
                     "implementation": { "builtin": name },
-                    "name": hint,
+                    "name": base_name(hint, name),
                     "within": self.within_json(),
                 }));
                 let (cone, made) = self.computing(hint, at);
@@ -1562,7 +1558,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     self.bind_inline(function, BodyKind::InlineHandler, &name);
                                 }
                                 None => {
-                                    let place = self.eval(expression, &name);
+                                    let place = self.eval(expression, &format!("@{name}"));
                                     self.pass(&place);
                                 }
                             }
@@ -1821,6 +1817,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 "instantiate:order" | "instantiate:tag" => {
                     self.children.push(json!({
                         "name": call_name,
+                        "$of": [index, format!("/n{number}")],
                         "within": self.within_json(),
                     }));
                     child_of_call.insert(number, self.children.len() - 1);
@@ -1836,6 +1833,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 "createCell:cause (state)" => {
                     self.state_cells.push(json!({
                         "name": call_name,
+                        "$of": [index, format!("/n{number}")],
                         "scope": "space",
                         "within": self.within_json(),
                     }));
@@ -2234,11 +2232,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.cone = saved;
             self.state_entries(&mut Vec::new(), &place, Some(argument), &mut state);
         }
-        let name = if matches!(hint, "branch" | "operand" | "condition" | "child") {
-            name
-        } else {
-            hint
-        };
+        let name = base_name(hint, name);
         self.bindings.push(json!({
             "handler": { "body": body },
             "state": state,
@@ -2608,6 +2602,39 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 }
 
+/// Whether a hint names no declaration: the expression is an operand, a
+/// branch, a condition, or a JSX child.
+fn anonymous(hint: &str) -> bool {
+    matches!(hint, "branch" | "operand" | "condition" | "child")
+}
+
+/// A hint that starts with `@` is the property or the JSX attribute an
+/// expression is written at, and not a `const` it is assigned to.
+fn written_at(hint: &str) -> &str {
+    hint.strip_prefix('@').unwrap_or(hint)
+}
+
+/// The name of a declaration that has a base name (PL §1.3): the name of
+/// the `const` it is assigned to, and else the base name.
+fn base_name<'n>(hint: &'n str, base: &'n str) -> &'n str {
+    if hint.starts_with('@') || anonymous(hint) {
+        base
+    } else {
+        hint
+    }
+}
+
+/// The name of a declaration that has no base name (PL §1.3): the name
+/// of the `const`, else the property or the attribute it is written at,
+/// and else the name of the construct.
+fn fallback_name<'n>(hint: &'n str, construct: &'n str) -> &'n str {
+    if anonymous(hint) {
+        construct
+    } else {
+        written_at(hint)
+    }
+}
+
 /// The expression written at a member of an object or an array literal.
 fn member_written<'e, 'a>(written: &'e Expression<'a>, name: &str) -> Option<&'e Expression<'a>> {
     match unwrap(written) {
@@ -2715,27 +2742,57 @@ fn name_ordinals(plan: &mut Value) {
         "bodies",
         "bindings",
     ];
-    let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // A handler is one record however many bindings name it, and is not
+    // one more declaration of the name its bindings have: the names of
+    // the bodies are counted apart from the others.
+    let kind = |table: &str| table == "bodies";
+    let mut counts: BTreeMap<(bool, String, String), usize> = BTreeMap::new();
     for table in tables {
         for record in plan[table].as_array().into_iter().flatten() {
+            // A thing a site of a body makes is named from the body.
+            if record.get("$of").is_some() {
+                continue;
+            }
             if let Some(name) = record["name"].as_str() {
                 *counts
-                    .entry((record["within"].to_string(), name.to_string()))
+                    .entry((kind(table), record["within"].to_string(), name.to_string()))
                     .or_default() += 1;
             }
         }
     }
-    let mut ordinals: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut ordinals: BTreeMap<(bool, String, String), usize> = BTreeMap::new();
     for table in tables {
         for record in plan[table].as_array_mut().into_iter().flatten() {
+            if record.get("$of").is_some() {
+                continue;
+            }
             let Some(name) = record["name"].as_str().map(str::to_string) else {
                 continue;
             };
-            let key = (record["within"].to_string(), name.clone());
+            let key = (kind(table), record["within"].to_string(), name.clone());
             if counts.get(&key).copied().unwrap_or(0) > 1 {
                 let ordinal = ordinals.entry(key).or_default();
                 *ordinal += 1;
                 record["name"] = json!(format!("{name}#{ordinal}"));
+            }
+        }
+    }
+    // "A `Child` that a site of `Body.calls` instantiates has the body's
+    // `name`, `/n`, and the index of the site in `Body.calls`" (PL §1.3).
+    let bodies = plan["bodies"].clone();
+    for table in ["children", "stateCells"] {
+        for record in plan[table].as_array_mut().into_iter().flatten() {
+            let Some(record) = record.as_object_mut() else {
+                continue;
+            };
+            if let Some(of) = record.remove("$of") {
+                let body = of[0].as_u64().unwrap_or(0) as usize;
+                let name = format!(
+                    "{}{}",
+                    bodies[body]["name"].as_str().unwrap_or(""),
+                    of[1].as_str().unwrap_or("")
+                );
+                record.insert("name".to_string(), json!(name));
             }
         }
     }

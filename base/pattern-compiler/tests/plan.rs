@@ -282,9 +282,13 @@ export const Two = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => {
         .iter()
         .map(|binding| binding["name"].as_str().expect("a name"))
         .collect();
-    assert_eq!(names, ["onClick#1", "onClick#2"]);
-    // "A handler is one record however many bindings name it."
+    // "two bindings of a handler `save` are `save#1` and `save#2`": the
+    // handler's name comes before the attribute's.
+    assert_eq!(names, ["bump#1", "bump#2"]);
+    // "A handler is one record however many bindings name it." The body
+    // is not one more declaration of that name (SPEC-NOTES 113).
     assert_eq!(plan["bodies"].as_array().expect("bodies").len(), 1);
+    assert_eq!(plan["bodies"][0]["name"], "bump");
 }
 
 const WRITES: &str = r#"import { Cell, lift, pattern } from "commonfabric";
@@ -1279,4 +1283,101 @@ export const P = pattern<{ flag?: Cell<number>; box?: { n: number } }>(({ flag, 
             "argument flag : shape, inPlace",
         ]
     );
+}
+
+#[test]
+fn a_declaration_assigned_to_nothing_takes_its_base_name_before_the_place_it_is_written_at() {
+    // PL §1.3: "A declaration assigned to nothing takes a base name from
+    // what it is: the callee's name for a call site, a child, or a use of
+    // a body; the built-in's or the method's name for an operation and a
+    // collection; the handler's name for a binding of a named handler".
+    // "A declaration assigned to nothing that has no base name by the
+    // second rule takes the name of the place it is written at: the
+    // property of the object literal, or the JSX attribute."
+    let analysis = program(
+        r#"import { Cell, computed, handler, lift, pattern, UI } from "commonfabric";
+const add = handler<{ title: string }, { items: Cell<string[]> }>((event, state) => { state.items.push(event.title); });
+const size = lift((x: { title: string }) => x.title.length);
+const Row = pattern<{ title: string }>(({ title }) => {
+  const shout = title + "!";
+  return { shout, length: size({ title }) };
+});
+export const P = pattern<{ items: Cell<string[]>; title: string }>(({ items, title }) => {
+  const named = items.map((item) => item + "?");
+  return {
+    [UI]: <div onClick={add({ items })}>{title}</div>,
+    row: Row({ title }),
+    shown: items.map((item) => item + "."),
+    total: computed(() => { let n = 0; for (const item of items.get()) { n += item.length; } return n; }),
+    named,
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let names = |table: &str| -> Vec<String> {
+        plan[table]
+            .as_array()
+            .expect("a table")
+            .iter()
+            .map(|record| record["name"].as_str().expect("a name").to_string())
+            .collect()
+    };
+    assert_eq!(names("collections"), ["named", "map"]);
+    assert_eq!(names("bindings"), ["add"]);
+    // "That is the case for a `computed` ... whose function is an arrow
+    // written in place, which has no callee's name."
+    assert_eq!(names("bodies"), ["add", "size", "total"]);
+    // "A `site` step holds the name of its call by the same rules."
+    let shout = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .find(|cone| cone["entry"] == "shout")
+        .expect("the cone of the row");
+    assert_eq!(shout["entry"], "shout");
+    let output = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["path"] == json!(["row", "shout"]))
+        .expect("the kept output");
+    assert_eq!(output["kept"], json!(true));
+    assert_eq!(shout["at"]["start"].as_u64().is_some(), true);
+    assert!(plan.to_string().contains(r#"{"site":"Row"}"#), "{plan}");
+}
+
+#[test]
+fn a_child_a_body_instantiates_is_named_by_the_body_and_the_index_of_its_site() {
+    // PL §1.3: "A `Child` that a site of `Body.calls` instantiates has
+    // the body's `name`, `/n`, and the index of the site in `Body.calls`:
+    // `openRoom/n0`." The body's name is the one it has in the plan, with
+    // its ordinal.
+    let analysis = program(
+        r#"import { Cell, Writable, lift, pattern } from "commonfabric";
+const Row = pattern<{ title: string }>(({ title }) => { return { title }; });
+const make = lift((x: { title: string }) => {
+  const seen = new Cell<number>(0);
+  const row = Row({ title: x.title });
+  return { seen, row };
+});
+export const P = pattern<{ title: string }>(({ title }) => {
+  return { one: make({ title }), two: make({ title }) };
+});
+"#,
+    );
+    let plan = pattern_plan(&analysis, "P");
+    let bodies = plan["bodies"].as_array().expect("bodies");
+    assert_eq!(bodies[0]["name"], "make#1");
+    assert_eq!(bodies[1]["name"], "make#2");
+    for (body, expected) in bodies.iter().zip(["make#1/n1", "make#2/n1"]) {
+        let calls = body["calls"].as_array().expect("calls");
+        let site = calls
+            .iter()
+            .position(|call| call["kind"] == "instantiate")
+            .expect("an instantiate site");
+        assert_eq!(site, 1);
+        let child = calls[site]["child"].as_u64().expect("a child") as usize;
+        assert_eq!(plan["children"][child]["name"], expected);
+    }
 }
