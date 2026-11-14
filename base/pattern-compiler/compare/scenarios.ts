@@ -5,49 +5,47 @@
  * Regenerate one from `base/pattern-compiler` with
  * `cargo run --release -- plan compare/fixtures/<name>.tsx > compare/fixtures/<name>.plan.json`.
  */
-import {
-  compareScenario,
-  type Plan,
-  type Row,
-  type Run,
-  runScenario,
-} from "./harness.ts";
+import { type Plan, type Row, type Run, runScenario } from "./harness.ts";
 import { atomKey, type Label } from "./template.ts";
 
 const read = (name: string) =>
   Deno.readTextFile(new URL(`./fixtures/${name}`, import.meta.url));
 
-const compare = async (
+const run = async (
   name: string,
   argument: Record<string, unknown>,
-  selected: Record<number, number>,
-): Promise<Row[]> => {
+): Promise<Run> => {
   const [{ patterns }] = JSON.parse(await read(`${name}.plan.json`));
-  return compareScenario({
+  return runScenario({
     program: {
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: await read(`${name}.tsx`) }],
     },
     plan: patterns[0].plan as Plan,
     argument,
-    selected,
   });
 };
 
+const compare = async (
+  name: string,
+  argument: Record<string, unknown>,
+): Promise<Row[]> => (await run(name, argument)).rows;
+
+/**
+ * Runs `fixtures/small.tsx` with `flag`, with how the branch of each
+ * conditional was found.
+ */
+export const runSmall = (flag: boolean): Promise<Run> =>
+  run("small", {
+    secret: "s3cret",
+    note: "n",
+    flag,
+    items: [{ title: "a", done: false }, { title: "b", done: true }],
+  });
+
 /** Runs `fixtures/small.tsx` with `flag` and compares each of its outputs. */
-export const compareSmall = (flag: boolean): Promise<Row[]> =>
-  compare(
-    "small",
-    {
-      secret: "s3cret",
-      note: "n",
-      flag,
-      items: [{ title: "a", done: false }, { title: "b", done: true }],
-    },
-    // Selector 0 is the conditional of `chosen` and selector 1 that of
-    // `direct`, in the order the plan lists them. Both test `flag`.
-    { 0: flag ? 0 : 1, 1: flag ? 0 : 1 },
-  );
+export const compareSmall = async (flag: boolean): Promise<Row[]> =>
+  (await runSmall(flag)).rows;
 
 /**
  * Runs `fixtures/is-edited.tsx`, the `isEdited` of a FabriChat message row
@@ -63,8 +61,6 @@ export const compareIsEdited = (edited: boolean): Promise<Row[]> =>
         ...(edited ? { editedAt: 2 } : {}),
       },
     },
-    // `a && b` is `select(a, [b, a])`: branch 0 where `editedAt` is set.
-    { 0: edited ? 0 : 1 },
   );
 
 /**
@@ -76,7 +72,6 @@ export const compareDefaulted = (given: boolean): Promise<Row[]> =>
   compare(
     "defaulted",
     { profile: { name: "ada", ...(given ? { nick: "a" } : {}) } },
-    {},
   );
 
 /**

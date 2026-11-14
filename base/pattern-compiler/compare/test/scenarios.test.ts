@@ -6,6 +6,7 @@ import {
   compareIsEdited,
   compareSmall,
   runHandler,
+  runSmall,
 } from "../scenarios.ts";
 
 // The comparison of stage 3
@@ -209,5 +210,19 @@ describe("the write edges of a handler against the labels its event's run stored
         rows.map((row) => [row.path.join("/"), row.comparison.overall]),
       ),
     ).toEqual({ last: "equal", log: "equal", note: "equal" });
+  });
+});
+
+describe("the branch a selector took, found from the run", () => {
+  it("finds every branch of the small fixture from the stored values", async () => {
+    for (const flag of [true, false]) {
+      // `chosen` and `direct` each hold the value of one of two inputs.
+      expect((await runSmall(flag)).decided).toEqual({
+        byValue: 2,
+        byCondition: 0,
+        stated: 0,
+        unobserved: 0,
+      });
+    }
   });
 });

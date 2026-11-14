@@ -685,12 +685,32 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 }
               }
             }
+            // `a && b` is `select(a, [b, a])` and `a || b` is
+            // `select(a, [a, b])` (PL §3.5): one branch is the condition.
+            // The stored value is `a` where it converts to false under
+            // `&&`, and where it converts to true under `||`.
+            if (current?.template === node && node.branches.length === 2) {
+              const value = valueOf(at(output, current.path));
+              const same = node.branches.map((branch) =>
+                sameValue(branch, node.condition)
+              );
+              if (value !== NO_VALUE && same[0] !== same[1]) {
+                if (same[1]) return decide("byValue", value ? 0 : 1);
+                if (value) return decide("byValue", 0);
+              }
+            }
             // A condition that is one slot: the first branch is the one
-            // of a value that converts to true.
+            // of a value that converts to true, and for `??`, whose
+            // condition observes the slot's shape, of a value that is
+            // present.
             if (node.condition.op === "slot" && node.branches.length === 2) {
               const value = slotValue(node.condition.slot, context);
               if (value !== NO_VALUE) {
-                return decide("byCondition", value ? 0 : 1);
+                const first =
+                  plan.slots[node.condition.slot].observes === "shape"
+                    ? value !== undefined && value !== null
+                    : Boolean(value);
+                return decide("byCondition", first ? 0 : 1);
               }
             }
             return decide("unobserved");
