@@ -2340,6 +2340,62 @@ declares a cell, for example in
 `patterns/dev/default-app-ben/default-app-ben.tsx` and
 `patterns/system/quick-capture/quick-capture.tsx`.
 
+#### 7.5.4 Two refusals that follow from these rules
+
+Two arguments of the corpus are refused by the rules above and look
+intended by their authors. Both refusals are *assumed*
+([§13](#13-open-questions), question 38), and each has an alternative
+that accepts the argument.
+
+**A handle of `T | undefined` where an optional handle of `T` is declared.**
+`key` on an optional property that is not a handle yields a handle whose value
+type has `undefined` ([§4.7](#47-cell-and-handle-methods)): with
+`fileStoreRecord?: FileStoreRecord` declared,
+`container.key("fileStoreRecord")` is a `Cell<FileStoreRecord | undefined>`.
+Given in tier R where a handler declares the optional property
+`fileStore?: Writable<FileStoreRecord | Default<{}>>`, it is refused
+(`subset-type:mismatch`). The argument is a handle, so the fourth row of the
+table of §7.5.2 applies, which is §7.5.1 as it stands, and its third row
+requires the two value types to be the same. The point on `undefined` in §7.5.2
+removes `undefined` before the comparison where the callee declares the
+property optional, and it is stated for an argument that is a value, the second
+row. It does not reach a handle. So the same place named as a value path,
+`container.fileStoreRecord`, is accepted, and the handle `key` returns for it
+is refused. `patterns/system/fabrichat/room.tsx` has the site, in
+`FabriChatRoomCore`, where `ensureFileStore` is bound to `rootFileStore`. The
+correction under the assumption is to name the value path, or to declare the
+handle's value type with `undefined`. The alternative extends the point on
+`undefined` to the fourth row: where the callee declares the property optional,
+a handle of `T | undefined` is accepted for a declared `Cell<T>` or
+`Writable<T>`, with `undefined` removed before the comparison, for the reason
+the point gives for a value. The callee then holds a handle typed `T` to a
+place that may hold nothing, as it does under the point for a value.
+
+**An array of pattern results where a cell of an array is declared.**
+§7.5 makes the value a pattern instantiation returns assignable to
+every type the pattern's result type is assignable to, and to a cell of
+such a type. It says that of one such value and not of an array of
+them. So an array of the values `Note(...)` returns, given in a handler
+as the `notes` of `Notebook`, which declares
+`notes?: Writable<NotePiece[] | Default<[]>>`
+(`patterns/system/notes/schemas.tsx`), is refused
+(`subset-type:mismatch`): by the second row of §7.5.3 a
+`Cell` of the array's type has to be assignable to the declared handle,
+and by the third row of §7.5.1 the array of results and `NotePiece[]`
+are not the same type, since `NotePiece` is a narrower view of what
+`Note` returns. `createNotebookHandler` in
+`patterns/system/quick-capture/quick-capture.tsx` has the site. The
+correction under the assumption is for the callee to declare the type
+the stored list has, or for the caller to give each element as the
+record the callee declares. The alternative applies the rule for an
+instantiation result at each element: an array or a tuple whose
+elements are values pattern instantiations return is assignable to a
+cell of an array of every type the result type is assignable to. Each
+element is stored as a link to its instance, so the cell holds what a
+reader of the narrower view can read, and a write of a record of the
+narrower view through the cell would replace a link to an instance by
+a record that has the view's properties alone.
+
 ### 7.6 Inference and narrowing
 
 Types are inferred for variable initializers, for the return type of a
@@ -2827,7 +2883,8 @@ annotation whose key the contract's lowering rules give it.
 | `MaxConfidentiality<T, L>` | `maxConfidentiality: L` |
 | `WriteAuthorizedBy<T, typeof b>` | `writeAuthorizedBy`: the binding `b` |
 | `WritePolicyAnyOf<T, [P, ...]>` | `writePolicyAnyOf`: the list of writer policies |
-| `TrustedActionWrite<...>`, `TrustedActionWriteWithIntegrity<...>`, `TrustedActionUiContract<...>` | `writeAuthorizedBy` and `uiContract`, as the contract defines |
+| `TrustedActionWrite<...>`, `TrustedActionWriteWithIntegrity<...>` | `writeAuthorizedBy` and `uiContract`, as the contract defines |
+| `TrustedActionUiContract<...>` | `uiContract` alone (§8.5, "The value of a writer policy") |
 | `ExactCopy<T, P>`, `ProjectionPath<T, F, P>`, `ProjectionOf<T, P>`, `Projection<R>` | `exactCopyOf`, `projection` |
 | `Cfc<T, M>` | Each key of the record `M` |
 | `AnyOf<X>`, `PolicyOf<typeof rules>` | Not type constructors. They are terms of the label-argument language (§8.5) |
@@ -2933,10 +2990,11 @@ which the compiler evaluates itself.
   atoms or a spread of another label list.
 - An atom is a string, number, or boolean literal type, `null`, an object
   type literal whose property types are atoms or tuples of atoms,
-  `AnyOf<list>`, `PolicyOf<typeof rules>`, `CurrentPrincipal` and the other
-  marker types the API exports for atoms, a reference to an alias whose
-  body is an atom, or a constant reference `typeof NAME` whose value is
-  an atom (below).
+  `AnyOf<list>`, `PolicyOf<typeof rules>`, the marker type
+  `CurrentPrincipal`, a reference to an alias whose body is an atom, or
+  a constant reference `typeof NAME` whose value is an atom (below).
+  `CurrentPrincipal` is the one marker type for an atom:
+  `base/api/cfc.ts` declares no other.
 - An alias, with parameters or without, may stand for a list or an atom.
   A label argument that is a reference to an alias is replaced by the
   alias's body, with the type arguments substituted, before anything else
@@ -3034,7 +3092,7 @@ label, however each was written.
    the constant's initializer.
 3. **A spread `...L`** in a list is replaced by the elements of the
    list `L` evaluates to.
-4. **A marker type** is replaced by the record the API declares it as.
+4. **The marker type** is replaced by the record the API declares it as.
    `CurrentPrincipal` is `{ "__ctCurrentPrincipal": true }`
    (`base/api/cfc.ts`). The marker is a term the runtime binds to the
    acting principal, so an atom that holds it is compared at run time
@@ -3049,6 +3107,34 @@ label, however each was written.
 7. **A literal type** is its value, `null` is `null`, an object type
    literal is the record of its properties' values, and a tuple is the
    array of its elements' values.
+
+**The value of a writer policy.** The aliases that name a writer are
+read into the annotation keys as follows, and
+`plan-and-label-templates.md` §1.5 forms the constraints from the keys.
+
+- `WriteAuthorizedBy<T, typeof b>` is the key `writeAuthorizedBy` with
+  the binding `b`.
+- `TrustedActionWriteWithIntegrity<T, typeof b, A, P, I>` is
+  `writeAuthorizedBy` with the binding `b`, and `uiContract` with the
+  helper `UiAction`, the action `A`, the pattern `P` as
+  `trustedPattern`, and the list `I` as `requiredEventIntegrity`.
+- `TrustedActionWrite<T, typeof b, A, P>` is the same with the list
+  `[P]`: the required event integrity is the pattern alone
+  (`TrustedActionWrite` in `base/api/cfc.ts`).
+- `TrustedActionUiContract<T, A, P, I>` is `uiContract` alone, with no
+  `writeAuthorizedBy`. Where `I` is not written it is `[P]`.
+- `WritePolicyAnyOf<T, [P, ...]>` is `writePolicyAnyOf` with one policy
+  per member in order, each holding the `writeAuthorizedBy` and the
+  `uiContract` the member gives by the items above.
+
+`writeAuthorizedBy` and `writePolicyAnyOf` are two keys, so the rule of
+§8.3 that one key is declared alike on a path does not relate them. A
+path can combine a `writePolicyAnyOf` from one node and a
+`writeAuthorizedBy` from a node below it, and a write there has to
+satisfy both. One node that declares `writePolicyAnyOf` beside its own
+`writeAuthorizedBy` or `uiContract` is refused by the runtime, as the
+contract has it for `WritePolicyAnyOf`. This document names no
+diagnostic for it.
 
 The steps apply to the argument of every alias of §8.1 alike, to the
 members of `Cfc<T, M>` included. A label annotation reached through an
@@ -3078,7 +3164,9 @@ pattern.
 No alias of §8.1 is named for a write floor. *Assumed,* with
 `plan-and-label-templates.md` (§8, question 15): the floor of a write
 target is the `requiredIntegrity` annotation, written `RequiresIntegrity`,
-on a path a body writes.
+on the path written. The target is that of a write edge of a body or of
+expression code, or a kept output, where the annotation is in the result
+type the pattern declares (`plan-and-label-templates.md` §1.5).
 
 A cast cannot move a label. In `e as T`, annotations in `T` that differ from
 those of the type of `e` have no effect, and writing them draws a warning
@@ -3533,7 +3621,7 @@ none of the other seven.
 | `cfc-label:unread` | — | — | — | retired: replaced by `cfc-label:not-static` |
 | `cfc-schema:recursion-limit`, `cfc-schema:recursive-alias-of-any` | — | — | — | retired (§8.7) |
 | `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy` | error | A declared constraint that the declared labels of a template's slots cannot satisfy. The conditions are defined in `plan-and-label-templates.md` | The slot whose label violates the constraint, and the declaration to change | new (reserved here, specified there) |
-| `cfc-flow:write-floor` | error | The declared integrity of the value a write edge writes cannot satisfy the write floor of its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared integrity falls short, and the declaration to change: the integrity declared on the source, or the floor declared on the target. *Assumed* (§8.6): the floor is the `RequiresIntegrity` annotation on the path of the target that the body writes | new (reserved here, specified there) |
+| `cfc-flow:write-floor` | error | The declared integrity of the value a write edge or a kept output writes cannot satisfy the write floor of its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared integrity falls short, and the declaration to change: the integrity declared on the source, or the floor declared on the target. *Assumed* (§8.6): the floor is the `RequiresIntegrity` annotation on the written path of the target, a kept output included | new (reserved here, specified there) |
 | `cfc-flow:writer-fit` | error | The declared confidentiality of the value a write edge writes does not fit the confidentiality declared on its target. The condition is defined in `plan-and-label-templates.md` §4.4 | The write, the slot whose declared confidentiality exceeds the target's, and the declaration to change: declare the confidentiality on the target, or write a value that does not derive from that slot | new (reserved here, specified there) |
 | `cfc-flow:ui-contract` | warning | A handler whose write policy requires a UI contract is bound by elements of the pattern, and none of them sits under a surface that carries the pattern and integrity names the contract requires, so no event from this pattern's UI can satisfy the policy (`plan-and-label-templates.md` §4.4) | The handler, the contract, and the elements that bind it. Bind the handler on an element inside the surface the contract names, or name in the policy the handler that the surface's control does bind | new (reserved here, specified there) |
 | `default:not-static` | error | A `Default` value that is neither a literal-like type nor `typeof` of a module-scope constant with a static initializer (§8.8), or that is not assignable to its type. A constant whose initializer is a call or a `new` expression is such a value: `Default<typeof INITIAL>` with `const INITIAL = createInitial()` | Write the value as a literal of the declared type, in the type or as the initializer of the constant | changes (was the warning `schema-default:unresolved`) |
@@ -4542,3 +4630,17 @@ use, so that the other numbers stay as other documents cite them.
     a factory value has, which changes what the call denotes at that one
     place. The prototype compiles such calls in to a depth of eight and
     counts the deeper ones.
+38. **Two refusals that look intended** (to the project owner; from the
+    prototype). [§7.5.4](#754-two-refusals-that-follow-from-these-rules)
+    states both. A handle of `T | undefined`, which `key` on an
+    optional property yields, is refused where a callee declares an
+    optional `Writable<T>`, though the same place named as a value path
+    is accepted. An array of pattern results is refused where a cell of
+    an array of a type the result type is assignable to is declared,
+    though one such result is assignable to a cell of that type.
+    *Assumed:* both refused. The alternatives extend the point on
+    `undefined` of §7.5.2 to a handle, and the rule for an instantiation
+    result of §7.5 to an array of them. The corpus has one site of each,
+    in `patterns/system/fabrichat/room.tsx` and
+    `patterns/system/quick-capture/quick-capture.tsx`, and one module is
+    refused for each.

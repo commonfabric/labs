@@ -49,7 +49,7 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `3854df2c22`, on 426 corpus modules, it accepts 335
+  prototype commit `44515f9159`, on 426 corpus modules, it accepts 335
   without an error and reports 386 errors: `any` in a type (182), 75
   type mismatches, a function type in data from one declaration (35),
   and `patternTool` (31) are most of them. Footprint analysis covers
@@ -57,22 +57,37 @@ next.
   body, and finds 90 of 1,972 bodies widening (4.6%) where the
   document's script found 83 of 1,962. Its listing for FabriChat's
   `commitEdit` equals the one in §12.3. A `plan` command emits the
-  plan as JSON with label templates, slot schemas, declared labels,
-  and constraint records. It emits a plan with no unsupported
+  plan as JSON with label templates, schema documents, declared
+  labels, and constraint records. It emits a plan with no unsupported
   construct for 271 of the 288 accepted modules that hold a pattern;
   `patternTool` is the most frequent construct left. In those plans
-  9,051 of 9,100 outputs have a template, counting an entry per path of
-  a constructed value. The checker evaluates label arguments through
-  aliases, `typeof NAME`, and the writer-policy aliases: 11 slots have
-  a declared label, and 93 write edges carry a writer constraint, 51
-  of them in FabriChat's `room.tsx`. `cfc-flow:write-policy` reports
-  nothing, and each of the 93 edges is in a handler its policy names.
-  `side-write:cycle` reports nothing. Not built: the four `cfc-flow:*`
-  diagnostics that compare labels, `cfc-flow:ui-contract`, hashes, and
-  constraints at state, argument, created, and request targets. The
-  crate's `SPEC-NOTES.md` lists the places where it found the
-  documents ambiguous; notes 154 to 166 are not yet written into the
-  documents.
+  9,051 of 9,100 outputs have a template. Nine slots have a declared
+  label, and the accepted plans hold 52 writer constraints. All six
+  `cfc-flow:*` diagnostics are built. The five that are errors report
+  nothing in the corpus. `cfc-flow:ui-contract` reports twice, in the
+  lobby and in FabriChat, each for a sub-pattern whose trusted surface
+  is in the pattern that embeds it; by the document's rule for a
+  pattern written as a tag, the lobby's is not a report. A write-floor
+  or writer-fit constraint on a write a body makes through a handle is
+  never decided, because the template holds the handle's `identity`
+  slot, which has no declared label. Not built: hashes of code and schemas,
+  `$defs` for recursive types, and constraints at created and request
+  targets. A first comparison of template labels with the labels the
+  runtime computes exists at prototype commit `3fb804de12`, under
+  `base/pattern-compiler/compare/`: a template evaluator in TypeScript
+  and a harness over the runner's emulated storage, with no server and
+  no browser. On one small fixture and on FabriChat's `isEdited` the
+  templates are equal or tighter, except in two places. A conditional
+  inside a `computed` is looser in integrity: the runtime mints
+  `TransformedBy` for it as for any lift, and a `select` carries the
+  integrity of the selected branch alone. And `items.length` is looser
+  through a gap of the crate, which emits an `identity` slot where the
+  document has the collection's membership. The comparison also found
+  that the runtime joins the labels of a module's argument schema onto
+  its result document, which `plan-and-label-templates.md` §3.1 does
+  not describe. The crate's `SPEC-NOTES.md` lists the places where it
+  found the documents ambiguous; notes 177 to 186 are not yet written
+  into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -227,6 +242,23 @@ is relitigated.
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
   rule for a default that is read and not stored, and needs this one.
+- Integrity is anchored in an object as a whole. A read of a stored
+  object whole carries the object's integrity, also where a default
+  fills one of its properties. A read that selects one property follows
+  the rules for a selection, and a selected property that is a default
+  carries none.
+- `ifElse` and the container of a `map` are trusted in the sense that
+  their result does not join the labels of all their arguments. The
+  runtime joins the labels of a module's argument schema onto its
+  result document, which widens both. The templates do not, and the
+  comparison expects a template tighter than the runtime there.
+- A write through a handle bound to a value the instance computes is
+  refused. Where the value at the bound path is a reference to a stored
+  place, as an element that a `filter` in a `computed` passes on or a
+  handle that a `computed` returns, the handle resolves to that place
+  and the write lands there. An argument given to a pattern that a
+  function body instantiates is the initial value of the child's stored
+  argument, and the child writes it freely.
 - `elementById` yields a handle of the element type or `undefined`,
   because the record for a key may never have been written or may have
   been cleared.
@@ -648,22 +680,6 @@ as an assumption.
     such a handle.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
-95. **A write through a handle bound to a value the instance computes**
-    (PL question 42; LS question 28): a `computed` result or an operator
-    result given where a handler, a `lift`, or a compiled-in pattern
-    declares a writable handle. The corpus has 21 such arguments in the
-    reactive tier, of which 2 are written through (one is a test of this
-    behavior, one is in `topics/topic.tsx`), and 13 more given to a
-    pattern instantiated in a function body, all written through, in
-    `notebook.tsx`, `daily-journal.tsx`, and `weekly-calendar.tsx`.
-    *Assumed:* the runtime refuses the write. The alternative lets it
-    land and be replaced at the next evaluation, which is understood to
-    be what happens today.
-96. **The integrity of a slot that reads a stored object whole where a
-    default fills one of its properties** (PL question 43). *Assumed:*
-    the meet over the parts read, which is empty, so one defaulted
-    property removes the object's claims from a whole read. The
-    alternative keeps a label per path below the slot.
 97. **A default on a type that names `undefined`** (LS question 34).
     *Assumed:* the type keeps the named `undefined`.
 98. **A truthiness test on a value of type `unknown`.** *Assumed:*
@@ -727,6 +743,38 @@ as an assumption.
     an array of that pattern's result type is declared
     (`quick-capture.tsx`). *Assumed:* both refused, as
     `language-subset.md` §7.5 reads.
+112. **An input constraint on what expression code reads** (PL
+    question 59). *Assumed:* constrained as a body is.
+113. **Whether the compiler should decide write-floor and writer-fit
+    for a write through a handle.** With no declared label on an
+    `identity` slot (question 108), every such template has a term the
+    compiler cannot evaluate, so it decides these two for expression
+    code and for bodies that read values alone. *Assumed:* that stands,
+    and the runtime check covers the rest.
+114. **A UI contract whose surface is in the embedding pattern** (PL
+    question 61). The chain of enclosing elements continues through a
+    pattern written as a tag below the surface, and ends where a
+    pattern is called and its tree is placed through a computed value.
+    The second case occurs once, in FabriChat's thread composer.
+    *Assumed:* it is reported, as a warning. The alternative suppresses
+    the report for a pattern that is compiled into another.
+115. **What is hashed** (PL questions 62 and 63). *Assumed:* every hash
+    is the tagged value hash the runtime uses, with no tag for the kind
+    of record; only a recursive type gets a `$defs` entry, named by its
+    declared name; code is hashed as its source for a cone and as the
+    module and binding for a body.
+
+116. **A conditional inside a `computed` is looser in integrity than
+    today.** The runtime runs it as a lift and mints `TransformedBy`;
+    the template is a `select`, with the integrity of the selected
+    branch alone. It is not one of the three deliberate exceptions.
+    Either the template of a promoted conditional mints the atom, or
+    this becomes a fourth exception. Not assumed either way.
+117. **What the corpus comparison compares.** The runtime copies values
+    where the plan passes references. *Assumed:* the comparison is made
+    on dereferenced labels. The static part the runtime joins from a
+    module's argument schema is separated by its origin and expected
+    as a difference, by ruling.
 
 ## Open, and not needing the owner
 

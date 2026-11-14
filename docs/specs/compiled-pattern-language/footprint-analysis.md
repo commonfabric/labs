@@ -348,6 +348,36 @@ Three rules apply to every observation.
   path. When it has none, the test records `shape` at the tested path.
   Without that entry the narrowed argument would lack the path, and the
   test would come out the other way.
+
+  This rule governs the tables of [§3.1](#31-access) and
+  [§3.2](#32-tests-and-operators). Each row there that records `shape`
+  for a test of presence, a kind test, or a test of truthiness states
+  what the test records where the type does not decide it. Where the type
+  decides the test, the row records what this rule says: nothing, or
+  `shape` when no other entry is at or below the tested path. Three
+  points fix how the rule is applied.
+
+  - **The type is that of the tested expression,** as the checker gives
+    it. In `handle?.get() ?? fallback` the left operand of `??` has `undefined`
+    in its type, because the optional chain yields `undefined` where the
+    handle is absent. So the type does not decide the `??`, and it
+    records `shape` at the root of the cell the handle links to, whatever
+    the handle's value type admits.
+  - **The tested path is in the body's argument** where it is a path of
+    a formal input, an element of an array of the input included, and
+    where a static read through a handle reaches it
+    ([§7.2](#72-static-and-dynamic-reads)): the runtime materializes
+    both under the type the body declares.
+  - **The other entry can be of any class** but `labelMetadata`, an
+    `identity` entry at the tested position included.
+
+  So in `record?.root === undefined`, with `record` an element of an
+  array of records whose type admits neither `null` nor `undefined` and
+  declares `root` as a required handle, the type decides both tests: the
+  `?.` at the element and the comparison at `root`. A body that also
+  passes `record.root` on has an `identity` entry at `root`, which is at
+  the path of the second test and below the path of the first, so
+  neither test has a `shape` entry.
 - **`value` stops at a handle, and an `identity` entry takes over there.**
   A `value` observation at a container covers its subtree down to, and not
   through, each position of handle type, of reference type, or of factory
@@ -416,7 +446,7 @@ member returns, depend on it.
 | Construct | Result | Observations |
 | --- | --- | --- |
 | `v.k`, and `v[k]` where `k` is static in the sense of `language-subset.md` §4.3 and `v` has an object, a record, or a tuple type | The projection extended by `k` | None |
-| `v?.k` | The same | `shape` at `v` |
+| `v?.k` | The same | `shape` at `v`, unless the type of `v` decides the test (§2.2) |
 | `v[i]`, `v.at(i)` where `v` has an array type, an index that is a literal included | The projection `v/*` | `enumeration` at `v`; `value` at `i` where `i` is a projection |
 | `v[i]` where `v` has a tuple type and `i` is not static | The projection `v/*` | `value` at `i` |
 | `v[k]` where `v` has an object or record type and `k` is not static | The projection `v/*` | `enumeration` at `v`; `value` at `k`. Widening W1 |
@@ -450,9 +480,9 @@ path reaches, each with its own chain of links
 
 | Construct | Observations |
 | --- | --- |
-| `v === w`, `v !== w`, `==`, `!=` | For a scalar operand, `value`. Against a literal `undefined` or `null`, `shape`. Between two containers, handles, or references, `identity` at each |
-| `typeof v`, `v instanceof C`, `Array.isArray(v)` | `shape` |
-| `v ?? w` | `shape` at `v`. The result is the alternatives `{v, w}` |
+| `v === w`, `v !== w`, `==`, `!=` | For a scalar operand, `value`. Against a literal `undefined` or `null`, `shape`, unless the type of the other operand decides the test (§2.2). Between two containers, handles, or references, `identity` at each |
+| `typeof v`, `v instanceof C`, `Array.isArray(v)` | `shape`, unless the type of `v` decides the test (§2.2) |
+| `v ?? w` | `shape` at `v`, unless the type of `v` decides the test (§2.2). The result is the alternatives `{v, w}` |
 | `v && w`, `v \|\| w`, `!v`, `Boolean(v)`, and the condition of `if`, `while`, `for`, `do`, and `?:` | Truthiness of `v` by the table of §2.2. The result of `&&` and `\|\|` is the alternatives `{v, w}`; of `c ? a : b`, `{a, b}` |
 | `"k" in v`, `Object.hasOwn(v, "k")` | `shape` at `v.k` |
 | `k in v`, `Object.hasOwn(v, k)` with a key that is not static | `enumeration` at `v`; `value` at `k` |
