@@ -2264,8 +2264,9 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop's hosts and serving runtimes run in Web
-  Workers of the toolshed process, one worker per served space, instead of on
+- **Purpose.** The serving loop's hosts and serving runtimes run in worker
+  threads of the toolshed process, one worker per served space up to a cap and
+  shared past it, instead of on
   the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
@@ -2276,26 +2277,40 @@ the per-epic implementation notes).
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
-  The pool that places spaces on workers takes three more variables from the
+  The pool that places spaces on workers takes four more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
-  already serves one (default 16; `1` serves every space from one worker),
+  already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
+  serves every space from one worker),
   `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
-  of a placement (default 1 in the toolshed; `0` keeps none), and
+  of a placement (default 1 in the toolshed; `0` keeps none),
+  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, the largest each worker's heap may
+  grow before that worker alone is ended (default 2048 in the toolshed, 256
+  at least, and the literal `0` for none; a worker with a limit is a
+  `node:worker_threads` thread, and one without is a Deno `Worker`, as the
+  serving memory server tests build starts), and
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
   (default none). The serving memory server tests build reads the first.
+  Where the workers' runtimes compile takes two more:
+  `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
+  holds for every serving runtime (default 1), and
+  `SERVER_EXECUTION_COMPILE_CACHE_DIR`, the compiled-module cache directory
+  every toolshed on the host shares (default `compiled-modules` under
+  `CACHE_DIR`).
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-11-11.** Implemented, on by default in the toolshed over a
-  file store, with a worker per served space. Each worker's entry builds a
-  compiled-module byte cache for the spaces that worker serves, as the
-  main-thread loop builds one for its process. Run with the variable `true`,
+- **Status on 2026-11-14.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space up to the cap
+  (`SERVER_EXECUTION_MAX_WORKERS`, 4 by default), past which spaces share
+  workers. The workers compile in the
+  process's compile workers and share the host's compiled-module cache
+  directory, as the main-thread loop does. Run with the variable `true`,
   the pattern integration suites the `MultiRuntimeHarness` drives pass with a
-  worker per space;
+  worker per space under the runner's own cap of 16;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
   that way yet: in CI the workers run in the toolshed-backed lanes and the

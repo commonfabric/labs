@@ -247,6 +247,69 @@ describe("Blob Routes", () => {
     expect(post.status).toBe(413);
   });
 
+  it("rejects a streamed upload that grows past the limit with no declared length, and stops reading it", async () => {
+    const identity = await Identity.fromPassphrase(
+      "toolshed-blob-route-stream-too-large",
+    );
+    const chunk = new Uint8Array(1024 * 1024);
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const post = await app.request(`/${identity.did()}/blobs/image.png`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+
+    expect(post.status).toBe(413);
+    expect(await post.text()).toBe("Blob payload too large");
+    expect(cancelled).toBe(true);
+    // Ten full chunks fit; the eleventh crosses the limit and is the last.
+    expect(pulled).toBeLessThanOrEqual(12);
+  });
+
+  it("returns 400 for an upload with no body", async () => {
+    const identity = await Identity.fromPassphrase(
+      "toolshed-blob-route-no-body",
+    );
+
+    const post = await app.request(`/${identity.did()}/blobs/image.png`, {
+      method: "POST",
+    });
+
+    expect(post.status).toBe(400);
+    expect(await post.text()).toBe("Invalid blob payload");
+  });
+
+  it("returns 400 for a path whose space is not a DID, on upload and on read", async () => {
+    const contents = {
+      type: "image/png",
+      body: new FabricBytes(new Uint8Array([1, 2, 3])),
+    };
+    const hash = hashOf(contents).toString().slice("fid1:".length);
+
+    const post = await app.request("/not-a-did/blobs/image.png", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: encodeBlobPayload(contents),
+    });
+    const get = await app.request(`/not-a-did/blobs/${hash}.png`);
+
+    expect(post.status).toBe(400);
+    expect(await post.text()).toBe("Invalid space DID");
+    expect(get.status).toBe(400);
+    expect(await get.text()).toBe("Invalid space DID");
+  });
+
   it("serves unsafe blob MIME types as octet-stream", async () => {
     const identity = await Identity.fromPassphrase(
       "toolshed-blob-route-unsafe-mime",

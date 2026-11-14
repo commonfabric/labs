@@ -17,10 +17,19 @@ import {
   assert,
   equals,
   handler,
+  NAME,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import {
+  clickButton,
+  findNode,
+  findNodeByProp,
+  fireClick,
+  isButton,
+} from "../../tools/test-support/vnode-helpers.ts";
 import ProjectList, { toggleItem } from "./main.tsx";
 
 interface ProjectItem {
@@ -85,6 +94,18 @@ export default pattern(() => {
     held: heldItem,
   });
 
+  // An index past the end names no item, so the toggle leaves the list be.
+  const action_toggle_out_of_range = toggleItem({ index: 5, items: itemsCell });
+
+  // The view's controls: each "+ Label" button appends a numbered project,
+  // and a row's "x" removes that row.
+  const action_click_add = action(() => clickButton(list[UI], "+ Label"));
+
+  const action_click_remove_second = action(() => {
+    const row = findNodeByProp(list[UI], "label", "Second");
+    fireClick(findNode(row, isButton("x")), "the x in the Second row");
+  });
+
   // ==========================================================================
   // Assertions
   // ==========================================================================
@@ -122,6 +143,29 @@ export default pattern(() => {
     return cur.length === 1 && cur[0]?.title === "Second";
   });
 
+  const assert_out_of_range_ignored = assert(() => {
+    const cur = itemsCell.get();
+    return cur.length === 1 && cur[0]?.title === "Second" &&
+      cur[0]?.done === false;
+  });
+
+  const assert_named = assert(() => list[NAME] === "Project List");
+
+  // The added project is numbered after the one already listed, and the view
+  // shows a row for it.
+  const assert_project_added = assert(() => {
+    const cur = itemsCell.get();
+    return cur.length === 2 && cur[1]?.title === "Project 2" &&
+      cur[1]?.done === false &&
+      findNodeByProp(list[UI], "label", "Project 2") !== undefined;
+  });
+
+  const assert_second_removed = assert(() => {
+    const cur = itemsCell.get();
+    return cur.length === 1 && cur[0]?.title === "Project 2" &&
+      findNodeByProp(list[UI], "label", "Second") === undefined;
+  });
+
   // ==========================================================================
   // Test Sequence
   // ==========================================================================
@@ -146,6 +190,16 @@ export default pattern(() => {
 
       { action: action_remove_via_held },
       { assertion: assert_removed_via_held },
+
+      { action: action_toggle_out_of_range },
+      { assertion: assert_out_of_range_ignored },
+
+      // The view's own controls.
+      { assertion: assert_named },
+      { action: action_click_add },
+      { assertion: assert_project_added },
+      { action: action_click_remove_second },
+      { assertion: assert_second_removed },
     ],
     list,
   };

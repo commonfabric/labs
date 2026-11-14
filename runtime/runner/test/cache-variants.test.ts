@@ -7,6 +7,7 @@ import {
   moduleByteCacheRuntimeVersion,
   PATTERN_COVERAGE_CACHE_VARIANT,
   PERSISTED_CACHE_VARIANTS,
+  storedSourceByteCacheVersion,
 } from "../src/compilation-cache/cache-variants.ts";
 
 describe("cache-variants", () => {
@@ -48,6 +49,34 @@ describe("cache-variants", () => {
             ...plain,
             instanceNames: true,
           })!,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("storedSourceByteCacheVersion()", () => {
+    it("names a version no variant of a fresh compile has, for each of them", () => {
+      const fresh = PERSISTED_CACHE_VARIANTS.map((variant) =>
+        moduleByteCacheRuntimeVersion("v", variant)!
+      );
+      const stored = fresh.map(storedSourceByteCacheVersion);
+
+      expect(new Set([...fresh, ...stored]).size).toBe(fresh.length * 2);
+    });
+
+    it("leaves the coverage suffix where it is read", () => {
+      expect(
+        isPatternCoverageCacheRuntimeVersion(
+          storedSourceByteCacheVersion(
+            moduleByteCacheRuntimeVersion("v", both)!,
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        isPatternCoverageCacheRuntimeVersion(
+          storedSourceByteCacheVersion(
+            moduleByteCacheRuntimeVersion("v", plain)!,
+          ),
         ),
       ).toBe(false);
     });

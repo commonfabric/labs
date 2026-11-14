@@ -667,13 +667,13 @@ describe("plan", () => {
     });
 
     it("moves a leaf up as its lane's share of the suite grows, by what the `describe` around it adds", () => {
-      // The pattern unit suite runs its tests side by side, and its lane is
-      // charged the 100 seconds its longest unit takes. The leaf takes one
-      // second of its own and 45 with the hooks of the `describe` around
-      // it, and costs the lane 16; the stranger takes 50 and costs 20. The
-      // test growing the longest unit to 150 is the densest there is, and
-      // once it is in, the leaf costs 6 and the stranger 10. There is room
-      // left for one of the two, and the leaf is now the denser.
+      // The lane is charged the 100 seconds the suite's longest unit
+      // takes. The leaf takes one second of its own and 45 with the hooks
+      // of the `describe` around it, and costs the lane 16; the stranger
+      // takes 50 and costs 20. The test growing the longest unit to 150 is
+      // the densest there is, and once it is in, the leaf costs 6 and the
+      // stranger 10. There is room left for one of the two, and the leaf
+      // is now the denser.
       const pattern = (
         name: string,
         unit: string,
@@ -707,15 +707,14 @@ describe("plan", () => {
     });
 
     it("moves a suite's shorter tests up once its lane holds a longer one", () => {
-      // The pattern unit suite runs its tests side by side. A mandatory
-      // test puts it in the lane, so taking the long test opens nothing
-      // but its own file. The long test is the densest there is, and
-      // costs the lane 13.9 of the 25.4 seconds the density pass has. The
-      // short test alone would cost nine, and the stranger costs eight,
-      // so the stranger is denser to start with. Once the long test is
-      // in, the short one's own time fits under it and it costs 4.48,
-      // which is denser than the stranger. There is room for one of the
-      // two.
+      // A mandatory test puts the suite in the lane, so taking the long
+      // test opens nothing but its own file. The long test is the densest
+      // there is, and costs the lane 13.9 of the 25.4 seconds the density
+      // pass has. The short test alone would cost nine, and the stranger
+      // costs eight, so the stranger is denser to start with. Once the
+      // long test is in, the short one's own time fits under it and it
+      // costs 4.48, which is denser than the stranger. There is room for
+      // one of the two.
       const pattern = (name: string, cost: number, score = 0.05) =>
         test(name, `${name}.test.tsx`, { suite: "pattern-unit", cost, score });
       const tiny = pattern("tiny", 0.1);

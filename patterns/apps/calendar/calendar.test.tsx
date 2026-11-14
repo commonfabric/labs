@@ -9,11 +9,64 @@
  * - Empty/whitespace title rejection
  * - Update notes via piece action
  * - Removing events
+ * - The rendered list: date headers, the today badge, times, notes, and the
+ *   remove and Add controls
+ * - The new event's date: today until the user picks another, which then
+ *   stays
  *
  * Run: deno task cf test patterns/apps/calendar/calendar.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
-import Calendar from "./calendar.tsx";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  childNodes,
+  findNodeByProp,
+  fireEvent,
+  hasExactText,
+  innermostNode,
+  propsOf,
+  propValue,
+  styleOf,
+  typeInto,
+} from "../../tools/test-support/vnode-helpers.ts";
+import Calendar, { formatDate } from "./calendar.tsx";
+
+const isElementWithText = (text: string) => (node: unknown): boolean =>
+  propsOf(node) !== undefined && hasExactText(node, text);
+
+/** How many innermost elements under `node` show exactly `text`. */
+const countText = (node: unknown, text: string): number => {
+  const inner = childNodes(node).reduce<number>(
+    (sum, child) => sum + countText(child, text),
+    0,
+  );
+  return inner > 0 ? inner : isElementWithText(text)(node) ? 1 : 0;
+};
+
+/** The date the new-event date input shows. */
+const shownDate = (ui: unknown): unknown =>
+  propValue(findNodeByProp(ui, "type", "date"), "value");
+
+/** The color of the innermost element showing exactly `text`. */
+const colorOf = (root: unknown, text: string): unknown =>
+  styleOf(innermostNode(root, isElementWithText(text)), "color");
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The YYYY-MM-DD date `days` after `date`. */
+const shiftDate = (date: string, days: number): string =>
+  new Date(Date.parse(`${date}T12:00:00Z`) + days * DAY_MS).toISOString()
+    .slice(0, 10);
+
+/** Each event's title, date, time and notes, in stored order. */
+const fieldsOf = (
+  events: readonly {
+    title: string;
+    date: string;
+    time: string;
+    notes: string;
+  }[],
+): string =>
+  events.map((e) => [e.title, e.date, e.time, e.notes].join("|")).join(", ");
 
 export default pattern(() => {
   const cal = Calendar({});
@@ -132,9 +185,99 @@ export default pattern(() => {
   // Assertions - After Removing
   // ==========================================================================
 
-  const assert_has_two_after_remove = assert(() => cal.events.length === 2);
+  // Removing the first event leaves the others whole.
+  const assert_has_two_after_remove = assert(() =>
+    fieldsOf(cal.events) ===
+      "Lunch|2025-03-15|12:00|, Kickoff|2025-03-10|09:00|"
+  );
   const assert_has_one_after_remove = assert(() => cal.events.length === 1);
   const assert_back_to_empty = assert(() => cal.events.length === 0);
+
+  // ==========================================================================
+  // The Rendered List
+  // ==========================================================================
+
+  // The dates are eight days either side of the pattern's own today, read
+  // once by the seeding action and kept, so the headers stay distinct and the
+  // assertions compare against what was stored.
+  const seeded = new Writable({ past: "", today: "", future: "" });
+  const action_add_dated_events = action(() => {
+    const today = cal.todayDate;
+    const past = shiftDate(today, -8);
+    const future = shiftDate(today, 8);
+    seeded.set({ past, today, future });
+    cal.addEvent.send({ title: "Archive review", date: past, time: "" });
+    cal.addEvent.send({ title: "Backup", date: past, time: "10:00" });
+    cal.addEvent.send({ title: "Standup", date: today, time: "09:30" });
+    cal.addEvent.send({ title: "Launch", date: future, time: "08:00" });
+  });
+  const action_note_launch = action(() => {
+    cal.events.find((e) => e.title === "Launch")?.setNotes.send({
+      notes: "Liftoff checklist",
+    });
+  });
+  const action_type_title = action(() =>
+    typeInto(cal[UI], "Event title...", "Dentist")
+  );
+  const action_pick_future_date = action(() =>
+    fireEvent(findNodeByProp(cal[UI], "type", "date"), "oncf-change", {
+      detail: { value: seeded.get().future },
+    })
+  );
+
+  const assert_today_is_a_date = assert(() =>
+    /^\d{4}-\d{2}-\d{2}$/.test(cal.todayDate) &&
+    countText(cal[UI], cal.todayDate) === 1 &&
+    shownDate(cal[UI]) === cal.todayDate
+  );
+  const assert_empty_message = assert(() =>
+    countText(cal[UI], "No events yet. Add one below!") === 1
+  );
+  const assert_seeded = assert(() =>
+    seeded.get().today === cal.todayDate &&
+    seeded.get().past === shiftDate(cal.todayDate, -8) &&
+    seeded.get().future === shiftDate(cal.todayDate, 8)
+  );
+  const assert_summary_lists_sorted_events = assert(() =>
+    cal.summary ===
+      `${seeded.get().past} Archive review, ${seeded.get().past} 10:00 Backup, ${seeded.get().today} 09:30 Standup, ${seeded.get().future} 08:00 Launch`
+  );
+  // One header per date, however many events share it.
+  const assert_one_header_per_date = assert(() =>
+    countText(cal[UI], formatDate(seeded.get().past)) === 1 &&
+    countText(cal[UI], formatDate(seeded.get().today)) === 1 &&
+    countText(cal[UI], formatDate(seeded.get().future)) === 1
+  );
+  const assert_headers_shade_by_day = assert(() =>
+    colorOf(cal[UI], formatDate(seeded.get().past)) ===
+      "var(--cf-colors-gray-400)" &&
+    colorOf(cal[UI], formatDate(seeded.get().today)) ===
+      "var(--cf-colors-primary-500)" &&
+    colorOf(cal[UI], formatDate(seeded.get().future)) ===
+      "var(--cf-colors-gray-700)"
+  );
+  const assert_today_badge = assert(() => countText(cal[UI], "Today") === 1);
+  const assert_cards_show_time_and_notes = assert(() =>
+    countText(cal[UI], "09:30") === 1 &&
+    countText(cal[UI], "Liftoff checklist") === 1 &&
+    countText(cal[UI], "Archive review") === 1
+  );
+  // Removing an event from the middle leaves the ones after it whole.
+  const assert_backup_removed = assert(() =>
+    fieldsOf(cal.events) ===
+      `Archive review|${seeded.get().past}||, Standup|${seeded.get().today}|09:30|, Launch|${seeded.get().future}|08:00|Liftoff checklist`
+  );
+  const assert_future_date_picked = assert(() =>
+    shownDate(cal[UI]) === seeded.get().future
+  );
+  // The picked date stays through a removal and an add, and the add uses it.
+  const assert_dentist_added_on_picked_date = assert(() =>
+    cal.events.length === 4 &&
+    cal.events[3]?.title === "Dentist" &&
+    cal.events[3]?.date === seeded.get().future &&
+    cal.events[3]?.time === "" &&
+    shownDate(cal[UI]) === seeded.get().future
+  );
 
   // ==========================================================================
   // Test Sequence
@@ -177,6 +320,28 @@ export default pattern(() => {
       { assertion: assert_has_one_after_remove },
       { action: action_remove_first },
       { assertion: assert_back_to_empty },
+
+      // === The rendered list ===
+      { assertion: assert_today_is_a_date },
+      { assertion: assert_empty_message },
+      { action: action_add_dated_events },
+      { assertion: assert_seeded },
+      { action: action_note_launch },
+      { assertion: assert_summary_lists_sorted_events },
+      { assertion: assert_one_header_per_date },
+      { assertion: assert_headers_shade_by_day },
+      { assertion: assert_today_badge },
+      { assertion: assert_cards_show_time_and_notes },
+      { action: action_pick_future_date },
+      { assertion: assert_future_date_picked },
+      { press: cal[UI], control: "×", within: "Backup" },
+      { assertion: assert_backup_removed },
+      // With no title typed, Add does nothing.
+      { press: cal[UI], control: "Add" },
+      { assertion: assert_backup_removed },
+      { action: action_type_title },
+      { press: cal[UI], control: "Add" },
+      { assertion: assert_dentist_added_on_picked_date },
     ],
     cal,
   };

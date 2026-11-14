@@ -79,6 +79,10 @@ describe("normalizeSchemaForProvider", () => {
     assertEquals(normalizeSchemaForProvider(false), {});
   });
 
+  it("maps a top-level `undefined` schema to an empty-object schema", () => {
+    assertEquals(normalizeSchemaForProvider({ type: "undefined" }), {});
+  });
+
   it("drops the type of an `unknown` position and keeps its other keywords", () => {
     assertEquals(
       normalizeSchemaForProvider({

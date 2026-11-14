@@ -24,6 +24,16 @@ describe("prose", () => {
       expect(fitColumns([10, 30], [4, 4], [1, 1], 24)).toEqual([7, 17]);
     });
 
+    it("returns what rounding the shares down left over to the columns that want the most more", () => {
+      expect(fitColumns([10, 30], [4, 4], [1, 1], 25)).toEqual([7, 18]);
+      // Shares of 1.75, 7.58, and 4.67 leave two over.
+      expect(fitColumns([10, 30, 20], [4, 4, 4], [1, 1, 1], 26)).toEqual([
+        5,
+        12,
+        9,
+      ]);
+    });
+
     it("returns, when not even what each needs fits, all a column of short words needs, and the rest to the longer", () => {
       expect(fitColumns([5, 30], [5, 20], [1, 1], 15)).toEqual([5, 10]);
       expect(fitColumns([10, 10], [8, 8], [2, 2], 6)).toEqual([3, 3]);

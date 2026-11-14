@@ -18,17 +18,7 @@ import {
   readWebpage,
   searchWeb,
 } from "../../system/common-fabric/common-fabric.tsx";
-
-type ResearchResult = {
-  summary: string;
-  findings: {
-    title: string;
-    source: string;
-    content: string;
-  }[];
-  sources: string[];
-  confidence: "high" | "medium" | "low";
-};
+import { type ResearchResult, researchSections } from "./research-result.ts";
 
 const triggerGeneration = handler<
   unknown,
@@ -70,7 +60,7 @@ export default pattern<
     messages?: Writable<Array<BuiltInLLMMessage> | Default<[]>>;
     context?: { [id: string]: any };
   },
-  { result: any; [UI]: VNode }
+  { [NAME]: string; result: any; [UI]: VNode }
 >(({ situation, messages, context }) => {
   const systemPrompt = computed(
     () =>
@@ -101,6 +91,7 @@ When done, call presentResult with your structured findings.`,
   });
 
   const result = computed(() => dialogResult as ResearchResult | undefined);
+  const sections = computed(() => researchSections(result));
   const showRefine = new Writable(false);
 
   return {
@@ -122,27 +113,15 @@ When done, call presentResult with your structured findings.`,
           oncf-refine={showRefineInput({ showRefine })}
         />
         <div>
-          <h3>{computed(() => (result?.summary ? "Summary" : ""))}</h3>
-          <p>{computed(() => result?.summary ?? "")}</p>
+          <h3>{sections.summaryHeading}</h3>
+          <p>{sections.summary}</p>
           <p>
-            <em>
-              {computed(() =>
-                result?.confidence ? `Confidence: ${result.confidence}` : ""
-              )}
-            </em>
+            <em>{sections.confidence}</em>
           </p>
-          <h3>
-            {computed(() => (result?.findings?.length ? "Findings" : ""))}
-          </h3>
-          <p style="white-space:pre-wrap">
-            {computed(() =>
-              result?.findings?.map((f: any) =>
-                `${f.title}\n${f.content}\n(${f.source})`
-              ).join("\n\n") ?? ""
-            )}
-          </p>
-          <h3>{computed(() => (result?.sources?.length ? "Sources" : ""))}</h3>
-          <p>{computed(() => result?.sources?.join("\n") ?? "")}</p>
+          <h3>{sections.findingsHeading}</h3>
+          <p style="white-space:pre-wrap">{sections.findings}</p>
+          <h3>{sections.sourcesHeading}</h3>
+          <p>{sections.sources}</p>
         </div>
         <cf-prompt-input
           placeholder="Refine research..."

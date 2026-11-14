@@ -18,7 +18,7 @@
     "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
     "bench": {
       "description": "Run Cell benchmarks for performance analysis",
-      "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check test/*.bench.ts"
+      "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --v8-flags=--expose-gc --no-check test/*.bench.ts"
     },
     "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --no-check -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
   },
@@ -29,6 +29,7 @@
     // injected (03.3) source reads what the server attaches.
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@node/v8": "node:v8",
+    "@node/worker_threads": "node:worker_threads",
     "@node/vm": "node:vm",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@types/ws": "npm:@types/ws@^8.18.1",
@@ -74,6 +75,8 @@
     "./storage/cache.deno": "./src/storage/cache.deno.ts",
     "./local-program.deno": "./src/harness/local-program.deno.ts",
     "./module-compile-worker": "./src/harness/module-compile-worker.ts",
+    "./module-compiler-pool": "./src/harness/module-compiler-pool.ts",
+    "./compilation-cache/shared-compile-cache.deno": "./src/compilation-cache/shared-compile-cache.deno.ts",
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
@@ -96,7 +99,6 @@
     "./cfc/observation": "./src/cfc/observation.ts",
     "./cfc/observation-classes": "./src/cfc/observation-classes.ts",
     "./cfc/represents-principal": "./src/cfc/represents-principal.ts",
-    "./cfc/written-principal": "./src/cfc/written-principal.ts",
     "./executor/lifecycle-verb": "./src/executor/lifecycle-verb.ts",
     "./executor/host": "./src/executor/host.ts",
     "./executor/loopback-storage": "./src/executor/loopback-storage.ts",
@@ -108,6 +110,7 @@
     "./executor/space-server": "./src/executor/space-server.ts",
     "./executor/serving-worker-host": "./src/executor/serving-worker-host.ts",
     "./executor/serving-worker-main": "./src/executor/serving-worker-main.ts",
+    "./executor/serving-thread": "./src/executor/serving-thread.ts",
     "./executor/stats": "./src/executor/stats.ts",
     "./executor/watermark": "./src/executor/watermark.ts",
     "./cfc/migration-reason": "./src/cfc/migration-reason.ts",

@@ -57,6 +57,7 @@ interface Input {
 }
 
 export interface Output {
+  [NAME]: string;
   [UI]: VNode;
   tripName: string;
   stops: TripStop[];
@@ -118,6 +119,10 @@ const DEFAULT_AREAS: AreaOfInterest[] = [
   },
 ];
 
+// A fresh copy of a position. The center and each new area hold their own
+// copy, so the map writing the center as the user pans moves no stop or area.
+const copyOf = ({ lat, lng }: LatLng): LatLng => ({ lat, lng });
+
 // Handler for adding a new stop when map is clicked
 const addStopHandler = handler<
   { detail: { lat: number; lng: number } },
@@ -176,7 +181,7 @@ const addAreaHandler = handler<
   const colorIndex = currentAreas.length % colors.length;
   const currentCenter = center.get() ?? { lat: 37.6, lng: -122.2 };
   areas.set([...currentAreas, {
-    center: currentCenter,
+    center: copyOf(currentCenter),
     radius: 2000,
     title: `Area ${currentAreas.length + 1}`,
     description: "New area of interest",
@@ -422,7 +427,7 @@ export default pattern<Input, Output>(
                         color="neutral"
                         variant="ghost"
                         onClick={() => {
-                          center.set(stop.position);
+                          center.set(copyOf(stop.position));
                           zoom.set(14);
                         }}
                       >
@@ -490,7 +495,7 @@ export default pattern<Input, Output>(
                         color="neutral"
                         variant="ghost"
                         onClick={() => {
-                          center.set(area.center);
+                          center.set(copyOf(area.center));
                           zoom.set(13);
                         }}
                       >

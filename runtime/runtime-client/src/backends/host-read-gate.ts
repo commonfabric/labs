@@ -27,6 +27,7 @@ import {
   type RenderPolicy,
 } from "@commonfabric/html/worker";
 import { fabricAwareEqual, type FabricValue } from "@commonfabric/data-model";
+import type { DID } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   type Cancel,
@@ -329,9 +330,9 @@ export class HostReadGate {
    * Subscribes a host to `cell`, delivering each read as a cell update for
    * `ref`: its value, or the refusal that stands in its place, decided again
    * whenever the membership or a module policy its labels name changes. A
-   * read that finds the value and label the last update delivered sends
-   * nothing: the host holds them already, and a change elsewhere in what the
-   * read depends on is no change to it. Each change to a refused read
+   * read that finds the value, label and written principal the last update
+   * delivered sends nothing: the host holds them already, and a change
+   * elsewhere in what the read depends on is no change to it. Each change to a refused read
    * delivers a refusal of its own, so a host that listens only for change
    * still hears one, and the first value admitted after a refusal is
    * delivered whatever it holds. `inspect` sees each value as it was read,
@@ -339,45 +340,61 @@ export class HostReadGate {
    *
    * A stream holds no value: its sink delivers the events sent to it, which
    * no read consumed, so an event is decided on the labels of the stream's
-   * own document.
+   * own document, and carries no written principal.
+   *
+   * `includeCfcLabel` adds the cell's display label to each update, and
+   * `includeWrittenPrincipal` the principal the value's own cell represents
+   * (`writtenPrincipalAt()`), each read on the sink's transaction with the
+   * value.
    */
   subscribe(
     cell: Cell<unknown>,
     ref: CellRef,
-    options: { includeCfcLabel?: boolean },
+    options: { includeCfcLabel?: boolean; includeWrittenPrincipal?: boolean },
     inspect: (value: unknown) => void,
     deliver: (update: CellUpdateNotification) => void,
   ): Cancel {
     const includeCfcLabel = options.includeCfcLabel === true;
-    // Sends `value` with `label`, the display form of a label view.
+    const includeWrittenPrincipal = options.includeWrittenPrincipal === true;
+    const sinkOptions = { includeCfcLabel, includeWrittenPrincipal };
+    // Sends `value` with `label`, the display form of a label view, and
+    // `writtenPrincipal`.
     const sendUpdate = (
       value: FabricValue,
       label: CfcLabelView | undefined,
+      writtenPrincipal: DID | undefined,
     ): void =>
       deliver(decided({
         type: NotificationType.CellUpdate as const,
         cell: ref,
         value,
         ...(includeCfcLabel ? { cfcLabel: label } : {}),
+        ...(includeWrittenPrincipal ? { writtenPrincipal } : {}),
       }));
     // What the last update delivered, or `undefined` while none has, and
     // again after a refusal.
     let sent:
-      | { value: FabricValue; cfcLabel: CfcLabelView | undefined }
+      | {
+        value: FabricValue;
+        cfcLabel: CfcLabelView | undefined;
+        writtenPrincipal: DID | undefined;
+      }
       | undefined;
     const deliverValue = (
       value: FabricValue,
       cfcLabel: CfcLabelView | undefined,
+      writtenPrincipal: DID | undefined,
     ): void => {
       const label = includeCfcLabel ? displayLabel(cfcLabel) : undefined;
       if (
         sent !== undefined && fabricAwareEqual(sent.value, value) &&
-        fabricAwareEqual(sent.cfcLabel, label)
+        fabricAwareEqual(sent.cfcLabel, label) &&
+        sent.writtenPrincipal === writtenPrincipal
       ) {
         return;
       }
-      sent = { value, cfcLabel: label };
-      sendUpdate(value, label);
+      sent = { value, cfcLabel: label, writtenPrincipal };
+      sendUpdate(value, label, writtenPrincipal);
     };
     // An event is an occurrence, and two alike are two: each is sent as it
     // comes, compared with nothing.
@@ -385,14 +402,18 @@ export class HostReadGate {
       event: FabricValue,
       cfcLabel: CfcLabelView | undefined,
     ): void =>
-      sendUpdate(event, includeCfcLabel ? displayLabel(cfcLabel) : undefined);
+      sendUpdate(
+        event,
+        includeCfcLabel ? displayLabel(cfcLabel) : undefined,
+        undefined,
+      );
     const policy = this.#policy;
     if (policy === undefined) {
       const send = holdsEvents(cell) ? deliverEvent : deliverValue;
-      return cell.sink((value, cfcLabel) => {
+      return cell.sink((value, cfcLabel, _consumed, writtenPrincipal) => {
         inspect(value);
-        send(hostValueOf(value), cfcLabel);
-      }, { includeCfcLabel });
+        send(hostValueOf(value), cfcLabel, writtenPrincipal);
+      }, sinkOptions);
     }
     const refusedUpdate = (refusal: RenderLabelSummary) => {
       this.#report(refusal, policy);
@@ -434,7 +455,11 @@ export class HostReadGate {
     }
     const [cancel, addCancel] = useCancelGroup();
     let last:
-      | { value: FabricValue; cfcLabel: CfcLabelView | undefined }
+      | {
+        value: FabricValue;
+        cfcLabel: CfcLabelView | undefined;
+        writtenPrincipal: DID | undefined;
+      }
       | undefined;
     let consumed: SinkConsumedLabel | undefined;
     const decide = () => {
@@ -446,8 +471,9 @@ export class HostReadGate {
         this.#sources,
         watch,
       );
-      if (refusal === undefined) deliverValue(last.value, last.cfcLabel);
-      else deliver(refusedUpdate(refusal));
+      if (refusal === undefined) {
+        deliverValue(last.value, last.cfcLabel, last.writtenPrincipal);
+      } else deliver(refusedUpdate(refusal));
     };
     const watch: FitWatch = {
       watched: new Set<string>(),
@@ -457,11 +483,11 @@ export class HostReadGate {
     addCancel(sinkProjected(cell, (value) => {
       inspect(value);
       return hostValueOf(value);
-    }, (value, read, cfcLabel) => {
-      last = { value, cfcLabel };
+    }, (value, read, cfcLabel, writtenPrincipal) => {
+      last = { value, cfcLabel, writtenPrincipal };
       consumed = read;
       decide();
-    }, { includeCfcLabel }));
+    }, sinkOptions));
     return cancel;
   }
 

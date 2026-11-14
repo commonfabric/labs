@@ -7,7 +7,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import env from "@/env.ts";
 import { toolshedClientBuild } from "@/lib/build-info.ts";
 import { identity } from "@/lib/identity.ts";
-import { MeetingRooms } from "@/lib/meeting-rooms.ts";
+import { loomSpaceCreator, MeetingRooms } from "@/lib/meeting-rooms.ts";
 import { memoryEngineStoreUrl, memoryServer } from "@/routes/storage/memory.ts";
 import { createMeetingRoomRouter } from "./router.ts";
 
@@ -15,21 +15,11 @@ export default createMeetingRoomRouter({
   rooms: new MeetingRooms({
     path: fromFileUrl(new URL("meeting-rooms.sqlite", memoryEngineStoreUrl)),
     server: memoryServer,
-    createSpace: async (creator, root) => {
-      const storage = StorageManager.open({
-        memoryHost: new URL(env.MEMORY_URL),
-        as: identity,
-        clientBuild: toolshedClientBuild(),
-      });
-      try {
-        return await storage.createSpace({ [creator]: "OWNER" }, {
-          root,
-          spaceKind: "loom",
-        });
-      } finally {
-        await storage.close();
-      }
-    },
+    createSpace: loomSpaceCreator(StorageManager.open, {
+      memoryHost: new URL(env.MEMORY_URL),
+      as: identity,
+      clientBuild: toolshedClientBuild(),
+    }),
   }),
   host: env.API_URL,
   available: env.MEMORY_ROUTER_CONFIG_FILE === "",

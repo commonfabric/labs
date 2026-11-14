@@ -20,6 +20,7 @@ import {
   Reactive,
   Stream,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 import StoreMapper from "../store-mapper/store-mapper.tsx";
@@ -44,6 +45,8 @@ interface Input {
 
 /** Shopping list with AI-powered aisle sorting. #shoppingList */
 export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   items: ShoppingItem[];
   summary: string;
   totalCount: number;
@@ -226,7 +229,7 @@ const addItems = handler<
 });
 
 // Search sub-pattern for patternTool - filters items by query
-const searchItemsPattern = pattern<
+export const searchItemsPattern = pattern<
   { items: ShoppingItem[]; query: string },
   ShoppingItem[]
 >(({ items, query }) => {

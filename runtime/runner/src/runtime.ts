@@ -124,7 +124,7 @@ import {
 } from "./executor/wave.ts";
 import type { OwningRootAddress } from "./ensure-piece-running.ts";
 import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
-import type { CompileTurns } from "./harness/compile-interleave.ts";
+import type { CompileClaims } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { ModuleCompiler } from "./harness/module-compile.ts";
@@ -1026,12 +1026,14 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
-   * The turns at a cold compile this runtime takes with the other runtimes that
-   * share its {@link RuntimeOptions.moduleByteCache}, so that a compile that
-   * yields does not leave them to read a miss and compile the same modules.
+   * The turns at a cold compile this runtime takes, keyed by the modules it
+   * compiles, with whatever else shares its
+   * {@link RuntimeOptions.moduleByteCache}: the other runtimes of this realm,
+   * and where the cache is on disk, the other realms and processes that use
+   * it. Two that would compile the same modules at once then compile them once.
    * When unset, this runtime compiles without waiting for any other.
    */
-  compileTurns?: CompileTurns;
+  compileTurns?: CompileClaims;
 
   /**
    * Where this runtime's compiles run their type-check, transform and emit
@@ -1501,7 +1503,7 @@ export class Runtime {
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
-  readonly #compileTurns: CompileTurns | undefined;
+  readonly #compileTurns: CompileClaims | undefined;
   readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
@@ -1714,7 +1716,7 @@ export class Runtime {
   }
 
   /** See `RuntimeOptions.compileTurns`. */
-  get compileTurns(): CompileTurns | undefined {
+  get compileTurns(): CompileClaims | undefined {
     return this.#compileTurns;
   }
 

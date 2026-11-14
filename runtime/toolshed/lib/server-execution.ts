@@ -34,7 +34,8 @@ import {
   ServingWorkerPool,
   type ServingWorkerPoolOptions,
 } from "@commonfabric/runner/executor/serving-worker-host";
-import { ModuleCompileWorker } from "@commonfabric/runner/module-compile-worker";
+import { ModuleCompilerPool } from "@commonfabric/runner/module-compiler-pool";
+import { openSharedCompileCache } from "@commonfabric/runner/compilation-cache/shared-compile-cache.deno";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { Identity } from "@commonfabric/identity";
 import {
@@ -292,23 +293,58 @@ export function serverExecutionWorkerFromEnv(
 /** How many spare serving workers a toolshed keeps started unless told. */
 export const DEFAULT_SPARE_SERVING_WORKERS = 1;
 
+/**
+ * The largest a toolshed's serving worker's heap may grow unless told, in
+ * megabytes: well above what a worker serving one space holds, about 80 MB,
+ * and far below the 16 GiB each isolate of the toolshed's own process may
+ * reach, so a runaway space ends its own worker rather than the process.
+ */
+export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
+
+/**
+ * The least heap limit a toolshed takes from its environment, in megabytes:
+ * about twice the 110 MB a toolshed's serving worker holds before it serves
+ * anything. Under a limit its modules do not fit in, every worker would end
+ * as it started.
+ */
+export const MIN_SERVING_WORKER_HEAP_LIMIT_MB = 256;
+
+/**
+ * How many serving workers a toolshed places spaces on unless told, past
+ * which a space shares a worker. A host runs many toolsheds, Estuary 16, and
+ * each worker may grow to {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB}: at 4
+ * the workers of 16 toolsheds hold about 7 GB before any space grows and
+ * 128 GB if every one reaches its limit, where 16 per toolshed came to
+ * 512 GB. The pool goes past the cap only to give each space that shared a
+ * worker ended at its heap limit a worker of its own, until one of those
+ * closes.
+ */
+export const DEFAULT_MAX_TOOLSHED_SERVING_WORKERS = 4;
+
 /** The serving-worker pool's knobs a toolshed reads from its environment. */
 export type ServingWorkerPoolEnv = Pick<
   ServingWorkerPoolOptions,
-  "maxWorkers" | "spareWorkers" | "heapBudgetBytes"
+  "maxWorkers" | "spareWorkers" | "heapBudgetBytes" | "heapLimitMb"
 >;
 
 /**
  * Resolves the serving-worker pool's knobs from env (serving-loop.md §1,
- * "Workers"), each absent from the result where the pool's own default
- * stands:
+ * "Workers"); a knob absent from the result leaves the pool's own default:
  * - `SERVER_EXECUTION_MAX_WORKERS`, a positive integer: how many workers
  *   spaces are placed on at most, a space joining a worker that already
- *   serves another once that many are. `1` serves every space from one
- *   worker;
+ *   serves another once that many are. Default
+ *   {@link DEFAULT_MAX_TOOLSHED_SERVING_WORKERS}; `1` serves every space from
+ *   one worker;
  * - `SERVER_EXECUTION_SPARE_WORKERS`, a non-negative integer: how many
  *   workers are kept started ahead of a placement. Default
  *   {@link DEFAULT_SPARE_SERVING_WORKERS}; the literal `0` keeps none;
+ * - `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, an integer of
+ *   {@link MIN_SERVING_WORKER_HEAP_LIMIT_MB} or more: the largest each
+ *   worker's heap may grow, in megabytes, at which that worker alone is
+ *   ended (`ServingWorkerPoolOptions.heapLimitMb`). Default
+ *   {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB}; the literal `0` sets no
+ *   limit, and the workers are then Deno `Worker`s, one of which aborts the
+ *   process at the isolate's own limit;
  * - `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, a positive integer: how
  *   large the workers' heaps may be together, in megabytes, before workers
  *   holding only parked runtimes are closed. Default: no budget.
@@ -338,15 +374,22 @@ export function servingWorkerPoolFromEnv(
     );
     return undefined;
   };
-  const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 });
+  const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 }) ??
+    DEFAULT_MAX_TOOLSHED_SERVING_WORKERS;
   const spareWorkers = read("SERVER_EXECUTION_SPARE_WORKERS", { least: 0 }) ??
     DEFAULT_SPARE_SERVING_WORKERS;
+  const heapLimitMb = envGet("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB") === "0"
+    ? undefined
+    : read("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", {
+      least: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
+    }) ?? DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB;
   const heapBudgetMb = read("SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", {
     least: 1,
   });
   return {
-    ...(maxWorkers === undefined ? {} : { maxWorkers }),
+    maxWorkers,
     spareWorkers,
+    ...(heapLimitMb === undefined ? {} : { heapLimitMb }),
     ...(heapBudgetMb === undefined
       ? {}
       : { heapBudgetBytes: heapBudgetMb * 1024 * 1024 }),
@@ -375,6 +418,71 @@ export function ownerRoutingFromEnv(
     );
   }
   return true;
+}
+
+/** How many compile workers a toolshed's serving runtimes share unless told. */
+export const DEFAULT_SERVING_COMPILE_WORKERS = 1;
+
+/** Where a toolshed's serving runtimes compile, as its environment says. */
+export type ServingCompileEnv = {
+  /** How many compile workers the process's serving runtimes share. */
+  compileWorkers: number;
+
+  /**
+   * The compiled-module cache directory every process on the host shares, or
+   * `undefined` for a cache of this process's own, in memory.
+   */
+  compileCacheDir: string | undefined;
+};
+
+/**
+ * Resolves where the serving runtimes compile from env (serving-loop.md §1,
+ * "Workers"):
+ * - `SERVER_EXECUTION_COMPILE_WORKERS`, a positive integer: how many compile
+ *   workers the process keeps for every serving runtime it runs, in a worker
+ *   or on this thread, each started at its first compile. Default
+ *   {@link DEFAULT_SERVING_COMPILE_WORKERS}: a compile worker holds the
+ *   TypeScript compiler's heap, and a host runs a toolshed per port, so one
+ *   per process keeps that heap to one per process; a cold compile waits for
+ *   the one before it, and the shared cache makes cold compiles rare;
+ * - `SERVER_EXECUTION_COMPILE_CACHE_DIR`, a directory: the compiled-module
+ *   cache every toolshed on the host reads and puts compiled modules in, and
+ *   takes its turns at a cold compile through, so the same modules compile
+ *   once on the host. Default: `defaultCacheDir`, which a toolshed names
+ *   under its `CACHE_DIR`, so a toolshed always has one; a caller that
+ *   passes no default and sets no directory gets none, and each process then
+ *   keeps its own cache in memory.
+ *
+ * A count that is not a positive integer warns and takes the default.
+ */
+export function servingCompileFromEnv(
+  envGet: EnvReader,
+  defaultCacheDir: string | undefined,
+  warn: (message: string) => void = (message) => console.warn(message),
+): ServingCompileEnv {
+  const rawWorkers = envGet("SERVER_EXECUTION_COMPILE_WORKERS");
+  let compileWorkers = DEFAULT_SERVING_COMPILE_WORKERS;
+  if (rawWorkers !== undefined && rawWorkers !== "") {
+    const value = /^\d+$/.test(rawWorkers)
+      ? Number.parseInt(rawWorkers, 10)
+      : undefined;
+    if (value !== undefined && Number.isSafeInteger(value) && value >= 1) {
+      compileWorkers = value;
+    } else {
+      warn(
+        "Server-execution v2: ignoring SERVER_EXECUTION_COMPILE_WORKERS=" +
+          `${JSON.stringify(rawWorkers)} (expected an integer of 1 or more); ` +
+          `using ${DEFAULT_SERVING_COMPILE_WORKERS}`,
+      );
+    }
+  }
+  const rawDir = envGet("SERVER_EXECUTION_COMPILE_CACHE_DIR");
+  return {
+    compileWorkers,
+    compileCacheDir: rawDir === undefined || rawDir === ""
+      ? defaultCacheDir
+      : rawDir,
+  };
 }
 
 /**
@@ -412,6 +520,14 @@ export function startServerExecutionHost(options: {
    * route stays off whatever the knob says.
    */
   memoryUrl?: URL;
+
+  /**
+   * The shared compiled-module cache directory where
+   * `SERVER_EXECUTION_COMPILE_CACHE_DIR` names none
+   * ({@link servingCompileFromEnv}). With neither, each process keeps its
+   * own cache in memory.
+   */
+  compileCacheDir?: string;
 
   envGet?: EnvReader;
 }): ServingLoop | undefined {
@@ -496,6 +612,17 @@ export function startServerExecutionHost(options: {
     );
   }
   const fileStore = options.store?.protocol === "file:";
+  // One set of compile workers for every serving runtime of this process,
+  // and one cache for every process on the host.
+  const compile = servingCompileFromEnv(envGet, options.compileCacheDir);
+  const moduleCompiler = new ModuleCompilerPool(compile.compileWorkers);
+  console.log(
+    `Server-execution v2: ${compile.compileWorkers} compile worker(s) for ` +
+      "every serving runtime, compiled modules " +
+      (compile.compileCacheDir === undefined
+        ? "in each process's memory"
+        : `shared in ${compile.compileCacheDir}`),
+  );
   if (serverExecutionWorkerFromEnv(envGet, fileStore)) {
     const pool = servingWorkerPoolFromEnv(envGet);
     console.log(
@@ -504,14 +631,16 @@ export function startServerExecutionHost(options: {
           ? "by SERVER_EXECUTION_WORKER=true"
           : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
             "keeps it on the main thread)") +
-        (pool.maxWorkers === undefined
-          ? ""
-          : `, on ${pool.maxWorkers} worker(s) at most by ` +
-            "SERVER_EXECUTION_MAX_WORKERS") +
-        `, with ${pool.spareWorkers} spare`,
+        `, on ${pool.maxWorkers} worker(s) at most (more only while spaces ` +
+        "separated at a heap limit each hold one)" +
+        `, with ${pool.spareWorkers} spare, ` +
+        (pool.heapLimitMb === undefined
+          ? "no heap limit per worker by SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0"
+          : `each worker's heap limited to ${pool.heapLimitMb} MB`),
     );
-    // The workers' entry adds the lifecycle verbs, the self-directed fetch
-    // and the module cache itself (lib/serving-worker.ts).
+    // The workers' entry adds the lifecycle verbs and the self-directed fetch
+    // (lib/serving-worker.ts); they compile in this process's compile workers
+    // and share the host's cache.
     const worker = new ServingWorkerPool({
       server: options.server,
       identity: options.identity,
@@ -522,6 +651,10 @@ export function startServerExecutionHost(options: {
       experimental,
       ...pool,
       ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
+      moduleCompiler,
+      ...(compile.compileCacheDir === undefined
+        ? {}
+        : { compileCacheDir: compile.compileCacheDir }),
     });
     loop = {
       runLifecycleVerb: (space, verb) => worker.runLifecycleVerb(space, verb),
@@ -529,7 +662,12 @@ export function startServerExecutionHost(options: {
       diagnostics: () => worker.diagnostics(),
       collectedWorkerMemory: () => worker.collectedMemory(),
       host: undefined,
-      close: () => worker.close(),
+      // The compile workers close first, so a compile a worker still awaits
+      // fails at once rather than holding the pool's close.
+      close: () => {
+        moduleCompiler.close();
+        return worker.close();
+      },
     };
   } else {
     console.log(
@@ -538,9 +676,9 @@ export function startServerExecutionHost(options: {
           ? "by SERVER_EXECUTION_WORKER=false (default is a Worker)"
           : "(the memory store is not a file, which a Worker cannot open)"),
     );
-    // Keeps the type-check, transform and emit step of every compile off the
-    // thread that answers requests.
-    const moduleCompiler = new ModuleCompileWorker();
+    const shared = compile.compileCacheDir === undefined
+      ? undefined
+      : openSharedCompileCache(compile.compileCacheDir);
     const host = new ExecutorHost({
       policy,
       ensureSpaceRoots,
@@ -563,12 +701,18 @@ export function startServerExecutionHost(options: {
         apiUrl: options.apiUrl,
         ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
         experimental,
-        // One cache for every space this host serves. A space's root pattern
+        // One cache for every process on the host. A space's root pattern
         // compiles into that space's own storage closure, which a fresh space
         // never holds; the shared cache is what lets a later space's
-        // activation skip the transform-and-emit step for modules this
-        // process compiled.
-        moduleByteCache: new ProcessModuleByteCache(),
+        // activation, here or in another process, skip the transform-and-emit
+        // step for modules already compiled.
+        moduleByteCache: shared?.moduleByteCache ??
+          new ProcessModuleByteCache(),
+        ...(shared === undefined
+          ? {}
+          : { compileClaims: shared.compileClaims }),
+        // Keeps the type-check, transform and emit step of every compile off
+        // the thread that answers requests.
         moduleCompiler,
       }),
     });
