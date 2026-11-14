@@ -422,3 +422,78 @@ fn a_path_that_enters_a_recursive_type_again_widens_at_the_second_entry() {
     );
     assert_eq!(record.widenings, ["W6"]);
 }
+
+// ----- §12: the worked example -----
+
+#[test]
+fn commit_edit_has_the_footprint_of_section_12_3() {
+    // The listing of §12.3, over the source of the corpus. The classes of
+    // an entry are in the order of this crate's record.
+    let directory = format!(
+        "{}/../../patterns/system/fabrichat",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&directory).expect("the FabriChat sources") {
+        let path = entry.expect("a directory entry").path();
+        let name = path.to_string_lossy().to_string();
+        if name.ends_with(".tsx") || name.ends_with(".ts") {
+            let text = std::fs::read_to_string(&path).expect("a source file");
+            files.push(SourceFile { path: name, text });
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let record = footprints(&files)
+        .into_iter()
+        .find(|body| body.name.as_deref() == Some("commitEdit"))
+        .expect("commitEdit")
+        .record;
+    assert_eq!(
+        record.reads,
+        [
+            "cause.principal : value",
+            "event.body : value",
+            "event.message : identity, shape",
+            "event.target : shape",
+            "event.target/value : value",
+            "state.composer : identity",
+            "state.composer->editing : identity, shape",
+            "state.message : identity, shape",
+            "state.myProfile : identity (resolved), shape",
+            "state.myProfile-> : shape",
+            "state.room : identity",
+        ]
+    );
+    assert_eq!(
+        record.envelope,
+        [
+            "event.message-> : shape",
+            "event.message->attachments : enumeration, shape",
+            "event.message->body : shape",
+            "state.message-> : shape",
+            "state.message->attachments : enumeration, shape",
+            "state.message->body : shape",
+        ]
+    );
+    assert_eq!(
+        record.other_dynamic,
+        [
+            "labelMetadata",
+            "link: event.message, state.message",
+            "link: state.composer->editing",
+            "link: state.room",
+        ]
+    );
+    assert_eq!(
+        record.writes,
+        [
+            "event.message (resolved)->body",
+            "event.message (resolved)->editedAt",
+            "state.composer->editing",
+            "state.message (resolved)->body",
+            "state.message (resolved)->editedAt",
+        ]
+    );
+    assert!(record.calls.is_empty(), "{:?}", record.calls);
+    assert!(record.widenings.is_empty(), "{:?}", record.widenings);
+}

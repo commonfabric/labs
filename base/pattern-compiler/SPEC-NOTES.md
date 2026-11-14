@@ -239,12 +239,11 @@ numbers have gaps.
     §3.8, the array, object, `JSON`, `Map`, `Set`, and `console` rows of
     §3.4, the causes W1 to W5 of §5.2, the reads and the writes through
     handles of §6.1, §6.2, §7.1, and §7.2, and the read envelope of §7.3
-    as the entries below a dynamic hop. Not implemented: `labelMetadata`
-    and resolved `identity` entries (§7.1, "Resolutions"), the context
-    reads and the runtime calls of §8, `Body.outputs` and `Body.computed`
-    (§3.8, §1.1), the templates of written values (§6.5), the split of a
-    computation into static side-write and materializer (§6.3),
-    idempotency (§6.6), W6, and the `sampled` mark of §2.3.
+    as the entries below a dynamic hop. Notes 76 to 85 say what of §6.3 to §6.6, §7.1
+    ("Resolutions"), §8, `Body.outputs`, and W6 is implemented. Not
+    implemented: `Body.computed` (note 85), the templates of written
+    values (§6.5), the `identity` entries that accompany a `value` entry,
+    and the `sampled` mark of §2.3.
 65. **A summary is applied by evaluating the callee again** (FA §3.6). FA
     computes one summary per function and applies it at each call. The
     crate evaluates the callee's body at each call with the arguments'
@@ -252,9 +251,8 @@ numbers have gaps.
     does not call itself. A function that is being evaluated, and a call
     nested more than eight deep, is not followed: each argument that is a
     projection is read in full, and the site is counted as W7. FA's fixed
-    point over a group of recursive functions is not computed, and W6, the
-    cut on a recursive type, is not implemented, so a loop over a
-    recursive type records paths of the depth the body writes.
+    point over a group of recursive functions is not computed. W6 is
+    implemented as note 79 has it.
 66. **Control flow** (FA §3.7). The environment is not joined on the
     control-flow graph. An assignment under a condition joins the old and
     the new value of the binding, a loop body is evaluated twice, and a
@@ -294,7 +292,7 @@ numbers have gaps.
 72. **An expression that has no type** (FA §1.3). FA takes every
     expression as typed. Where the checker has none, the crate takes the
     position as a scalar, records `value`, and counts the observation
-    (`footprint:observations of an expression with no type`, 614 in the
+    (`footprint:observations of an expression with no type`, 604 in the
     corpus). A receiver with no type is taken as a handle where the call is
     one only a handle has: `get()`, `sample()`, `resolveAsCell()`,
     `key(k)`, `set(v)` with one argument, and five more writers.
@@ -314,3 +312,74 @@ numbers have gaps.
     path alone: for `order.note.text` it reads the declared type of `text`
     in the type the checker has for `order.note`, which a condition on
     `order` or on `order.note` may have narrowed.
+
+## The rest of footprint analysis (FA §6.3 to §6.6, §7.1, §8)
+
+76. **The `cause` entries** (FA §8.4). §12.3 lists `cause principal :
+    value` and no document names the entry `eventKey()` records. Chosen:
+    `cause.principal` and `cause.eventKey`, each of class `value`.
+77. **A static resolution** (FA §7.1). The relaxation for "a call that is
+    conditional only on the operand being present" is applied where the
+    test is the optional chain of the call itself, `p?.resolveAsCell()`,
+    and not where an `if` around the call tests the operand. A use of the
+    handle a static resolution returned records the resolved entry and no
+    plain one beside it, as §12.3 lists `state.myProfile`.
+    `writtenPrincipalOf`, which the table of §8.4 does not list, is
+    recorded as `principalOf` is.
+78. **A dynamic read of kind `space` or `link` is listed by its entries**
+    and not as a record of the plan. The crate lists, per resolution that
+    is journaled, the entries it starts from, and one line
+    `labelMetadata` where any observation of label metadata is journaled.
+79. **W6 follows the checker's cut** (FA §5.2). The checker's type of a
+    recursive type is cut at the first use of the type inside itself. The
+    analysis widens at a property read on a value whose type is the cut,
+    reached through a value whose type is the cut: the second time the
+    path enters the type. The widened entry is at the path with its
+    trailing `*` removed, as the example of §5.2 has it
+    (`box/children/*/children`). A destructuring and an element access
+    with a key are not counted as entering the type.
+80. **`Body.outputs`** (FA §3.8). A projection at a result path is a
+    reference where the record has an `identity` entry at it, as note 71
+    decides it for a member with no expression. A bag the body built gives
+    `path/* : oneOf` and its entries. `required` is not recorded, and an
+    entry is named by its path, since the `{ computed }` form needs the
+    use (note 85). A handle a static resolution returned is named by its
+    path, and not told apart from the plain entry.
+81. **An authored function has no tier** (FA §6.3, §8). FA holds an
+    authored function to the rules of the bodies that call it, and the
+    crate does not know which tier calls one. Chosen: its own record has
+    no tier, no shape of §6.6, and no `read-then-push`. A write in it
+    whose target is not static does make a computation that calls it a
+    materializer, and the hint is then reported at no site, because the
+    site is outside the computation's text.
+82. **`mergeable-push:read-then-push`** (LS §10.3). The condition is "a
+    handler reads a mergeable collection and then pushes to it". Chosen: a
+    `push`, `pushAll`, or `addUnique` in a `handler`, an `action`, or an
+    inline event handler, through a handle whose cell the body read with
+    `get()` or `sample()` earlier in the order of evaluation, at the path
+    pushed to, above it, or below it. Whether the pushed value depends on
+    the read is not decided.
+83. **Which runtime calls are sites** (FA §8). Recorded: a call of a
+    pattern or of a handler the module resolves by name, `.for(tag)` on
+    such an instantiation, `X.of(value)` and `X.for(cause)` with the three
+    scopes, `action(...)`, and the effect built-ins. Not recorded: a call
+    of a factory value held in an input, an inline event handler in JSX
+    the body builds, `new X(value)`, `inSpace` and `asScope`, the schema
+    and scope of a created cell, the `{ call }` entry of `Body.handles`
+    for a read through what a site returned, and the write edges of an
+    argument or a request. A binding copies by the handler's footprint in
+    FA §8.5; the crate applies the reference rule of §3.8 to the state
+    whatever the handler reads of it.
+84. **A constant cause** (FA §8.2) is a literal, a template with no
+    substitution, or a name whose value comes from no input and is not
+    computed in the body. The element of an enclosing element body is not
+    recognized as the element key, so a cell created under it counts as
+    created under data.
+85. **`Body.computed` is not implemented** (FA §1.1). The record is per
+    body. The split of the entries into `reads` and `computed` needs, for
+    each use, what each formal input is bound to, which
+    `origin_of_place` in `assign.rs` classifies for an argument of tier R
+    and no pass yet joins with the record. Until then every entry is
+    listed under `reads`, and the rules that journal a read, a
+    resolution, or an observation "whatever the conditions say" for a
+    computed input are not applied.
