@@ -919,7 +919,11 @@ expression is allowed, and their attribute values and children are tier-R
 expressions.
 
 - A lower-case tag is a host element. A tag that names a pattern is a pattern
-  instantiation with the attributes as its argument.
+  instantiation with the attributes as its argument. It is a call of the
+  pattern, and the rules of [§4.4.2](#442-patterns-and-handlers-as-callees)
+  apply to it: a tag that names a statically resolved pattern is compiled
+  into the enclosing pattern as such a call is, and a tag that names a
+  factory value instantiates a child (`plan-and-label-templates.md` §1.1).
 - An attribute whose name starts with `on` takes a stream, or an arrow
   function written in place. The arrow's body is tier F, and the form is
   equivalent to an `action`.

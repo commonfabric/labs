@@ -677,8 +677,19 @@ writes and reads and decides none of the three, because one function can be
 called from a computation and from a handler. A write, a read through a
 handle, or a widening that a summary brought into a body is reported at the
 call in the body's own text, and the message also names the position
-inside the function. Where calls nest, the call named is the outermost one,
-the one written in the body.
+inside the function. Where one function calls another, the call named is
+the one written in the body, and not a call inside a function. Where two
+calls are written in the body and one is an argument of the other, as in
+`f(g(x))`, each names what its own function does: what `g` brings in is
+reported at `g(x)`. One call is reported once per diagnostic, however
+many sites inside the function are behind it.
+
+A function has no record of its own unless it is itself a body of §1.2,
+as an authored function called from the reactive tier is. Its record
+then reports what is in its own text at the position there, as any body
+does. So a widening in a helper is reported at the helper where the
+helper is a body, and at the call in each body that calls it. A function
+that only other bodies call is reported at those calls alone.
 
 Summaries are computed over the program's call graph from the leaves. A
 group of mutually recursive functions is iterated to a fixed point, which
@@ -838,7 +849,11 @@ its index. A bag at a result path `p` has its member at `p/*`, and the
 member is treated by the list above: a bag of one projection whose path
 has no `*` gives `passes` at `p/*`, and a bag of alternatives or of a
 projection whose path has a `*` gives `oneOf`. A bag whose member joins a
-`Computed` value with projections gives no entry.
+`Computed` value with projections gives no entry. An analysis whose join
+does not keep `Computed` beside the projections may give such a bag the
+`oneOf` of the projections. The runtime's comparison fails for a member
+that is no reference the body was given, and the path then takes the
+body's template, so the entry costs a comparison and changes no label.
 
 `passes` names an entry whose path has no `*`, and an entry whose path has
 one is named in `oneOf`, alone or with others
@@ -2021,7 +2036,13 @@ depend on a run.
 A cause is constant when its expression is built from literals and module-scope
 constants alone: a literal, a template literal whose substitutions are
 constant, an operator over constants, or a local `const` whose initializer is
-constant. An expression that holds a projection, a `Computed` value, a `let`
+constant. The conditional operator and the logical operators are operators
+for this rule. A module-scope `const` is constant where its own
+initializer is, by the same rule, because the compiler has to know the
+value to form the name of the `StateCell`. A module-scope `const` whose
+initializer is a call, a member access, or an object or array literal is
+not constant, and neither is a name that a destructuring binds. An
+expression that holds a projection, a `Computed` value, a `let`
 binding, or a call is not constant. A cause that is the element of the
 enclosing element body, captured whole, is that element's key, and
 `plan-and-label-templates.md` §3.14 treats it as constant too.

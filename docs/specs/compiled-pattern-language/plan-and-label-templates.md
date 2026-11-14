@@ -241,7 +241,8 @@ export type Template =
 export interface Selector {
   /**
    * Number of branches. The value code reports an index below this. For
-   * the `through` of a `fold` it is 0.
+   * the `through` of a `fold` it is 0, and no `Cone.selectors` lists the
+   * selector, because no value function reports it.
    */
   readonly arity: number;
 }
@@ -256,17 +257,28 @@ export interface Pick {
    * Who supplies the choice. `runtime`: the runtime chooses an element of a
    * collection from per-element results, and knows the element's key.
    * `valueCode`: the value code reports the key of the child it chose in a
-   * container, or that it chose none.
+   * container, or that it chose none. A choice point with `runtime` is in
+   * no `Cone.picks`, because no value function reports it.
    */
   readonly chosenBy: "runtime" | "valueCode";
 }
 
-/** A collection the instance maps, filters, or folds over. */
+/**
+ * A collection the instance maps, filters, scans, or folds over. Each
+ * construct with a callback has a record of its own (sections 3.6, 3.7,
+ * 3.8, 3.13 and 3.17).
+ */
 export interface Collection {
   /** The name an `element` step refers to it by (section 1.3). */
   readonly name: string;
   readonly within: readonly WithinStep[];
-  /** The input collection, or what this one is derived from. */
+  /**
+   * The input collection, or what this one is derived from. The record of
+   * a scan, an aggregate, a `reduce` or an index names its receiver: a
+   * slot, a bucket, or an output, which for a receiver that is itself a
+   * collection of the plan is that collection's assembled output
+   * (section 3.13).
+   */
   readonly source:
     | { readonly slot: Index }
     | {
@@ -519,11 +531,17 @@ export interface WriteEdge {
     }
     /** The argument document of a child instance. */
     | { readonly kind: "argument"; readonly child: Index; readonly path: Path }
-    /** A cell the body creates at a `createCell` site (`Body.calls`). */
+    /**
+     * What a site of the body made (`Body.calls`): the cell of a
+     * `createCell` site, or the stream of a `bind` site, for an event the
+     * body sends on it (section 3.11).
+     */
     | { readonly kind: "created"; readonly call: Index; readonly path: Path }
     /**
      * The stored request of an effect: of an operation of the plan, or of
-     * an `effect` site of the body (`Body.calls`).
+     * an `effect` site of the body (`Body.calls`). For an operation of
+     * kind `wish`, the stored operands, and for one of kind `reduce`, the
+     * initial value at the path `initial` (sections 3.13 and 3.19).
      */
     | {
       readonly kind: "request";
@@ -583,7 +601,11 @@ export type WriteEnvelope =
     readonly path: Path;
     readonly resolved?: true;
   }
-  /** A cell a `createCell` site creates under a cause computed from data. */
+  /**
+   * A cell a `createCell` site creates under a cause computed from data,
+   * or a cell reached through the link an `instantiate` or an `effect`
+   * site returned (section 3.11).
+   */
   | { readonly kind: "created"; readonly call: Index };
 
 /** A set of reads resolved at run time. */
@@ -591,19 +613,35 @@ export interface DynamicReads {
   readonly why:
     /**
      * The links followed from a reference: the one at an `identity` slot,
-     * or one that reached a body in a value the instance computed.
+     * one that reached a body in a value the instance computed, or, for a
+     * call in the reactive tier, one that is an output of the instance
+     * (`Plan.outputs`, section 3.16).
      */
-    | { readonly kind: "link"; readonly through: Index | ComputedReference }
+    | {
+      readonly kind: "link";
+      readonly through: Index | ComputedReference | { readonly output: Index };
+    }
     /** Reads through an entry of that body's `handles`. */
     | { readonly kind: "handle"; readonly body: Index; readonly handle: Index }
     /**
      * The access list of the space an `identity` slot's target lives in, or
      * of the space a `value` slot names. For an operand that reached a body
      * in a value the instance computed, its entry of that body's `computed`.
+     * For an operand of a call in the reactive tier that the instance
+     * computed, its output (`Plan.outputs`, section 3.16).
      */
-    | { readonly kind: "space"; readonly of: Index | ComputedReference }
-    /** Candidates a search found through links (section 3.19). */
-    | { readonly kind: "search"; readonly body: Index }
+    | {
+      readonly kind: "space";
+      readonly of: Index | ComputedReference | { readonly output: Index };
+    }
+    /**
+     * The reads a `wish` made of what no slot names while it resolved its
+     * target: the links it followed, the tests of whether a target holds
+     * anything, and the name and schema of every candidate a search
+     * considered. `operation` is the wish (`Plan.operations`,
+     * section 3.19).
+     */
+    | { readonly kind: "search"; readonly operation: Index }
     /**
      * Label-metadata observations a body made of targets no slot names
      * (section 3.16).
@@ -686,7 +724,9 @@ export interface Output {
    * function returns it. `path` is the path of the collection itself,
    * `template` is the collection's membership template, and `cone` is the
    * last cone of the construct's body in the order of `Plan.cones`
-   * (section 1.4).
+   * (section 1.4). For a scan, the output is the scan's result, which
+   * the runtime produces from the per-element results, and `template` is
+   * the scan's template (section 3.13).
    */
   readonly collection?: Index;
   readonly template: Template;
@@ -715,8 +755,12 @@ export interface Cone {
    */
   readonly slots: readonly Index[];
   readonly bodies: readonly Index[];
+  /** The selectors whose branch the value function reports. */
   readonly selectors: readonly Index[];
-  /** The choice points of the `pick` nodes the cone evaluates. */
+  /**
+   * The choice points of the `pick` nodes the cone evaluates whose key the
+   * value function reports (`chosenBy: "valueCode"`).
+   */
   readonly picks: readonly Index[];
   /** Side-writes this cone performs besides its outputs. */
   readonly writes: readonly WriteEdge[];
@@ -778,6 +822,12 @@ export interface Operation {
     | "cache"
     | "materializer"
     /**
+     * A `wish`. It is structural: it has no request transaction and no
+     * egress check, and the runtime resolves it in the transaction that
+     * evaluates a reader of its result (section 3.19).
+     */
+    | "wish"
+    /**
      * A `sqliteDatabase` declaration. It has no request and no
      * transaction of its own, and its state is the database's handle
      * (section 3.14).
@@ -786,8 +836,10 @@ export interface Operation {
   /**
    * What implements it: a built-in; a body, which for a materializer is
    * the body whose `writes` and `envelopes` are its declared write envelope
-   * (section 3.11); or, for a forced cache, the cone whose outputs it
-   * stores.
+   * (section 3.11); for a forced cache, the cone whose outputs it
+   * stores; or, for a `reduce`, the cone of its step expression
+   * (section 3.13). An aggregate, an index, an effect and a `wish` name a
+   * built-in.
    */
   readonly implementation:
     | { readonly builtin: string }
@@ -796,7 +848,8 @@ export interface Operation {
   /**
    * The label of what the operation works from: for an effect, the join of
    * the templates of its request; for an aggregate, a `reduce` or an index,
-   * the folded input; for a cache, the join over the slots of the cached
+   * the folded input; for a `wish`, the join of the templates of its
+   * operands; for a cache, the join over the slots of the cached
    * cone; for a materializer, the template of its body; for a database,
    * `const`, because its table declarations are constants of the plan. It
    * is also the label of the operation's bookkeeping state (section 2.6).
@@ -809,6 +862,8 @@ export interface Operation {
    * `sqliteQuery` on a database in another space or with `readClearance`
    * do (`builtin-inventory.md`, "The requester of a request"): the
    * operation then has a unit per demanding principal or session. For a
+   * `wish`, `user` where its target can lie in the home space of the
+   * demanding principal (section 3.19). For a
    * database, the scope the declared type of the handle gives. Absent, the
    * operation has the scope of that cone instance, and a database has
    * `space`.
@@ -1036,6 +1091,15 @@ can see. Its slots, bodies and cones are entries of the enclosing plan, with
 see at the call, and any pattern a function body instantiates, is a `Child`
 with a plan of its own (section 3.15).
 
+A JSX tag that names a pattern is such a call: `<Row message={m} />` is
+`Row({ message: m })` (`language-subset.md` §4.5). Where the tag names a
+pattern the compiler can see, the pattern is compiled into the enclosing
+plan under a `site` step, and its attributes are the paths of its
+argument, bound place by place as below. Where the tag names a factory
+value, the instantiation is a `Child`. A pattern is one the compiler can
+see whichever module declares it and however that module exports it, a
+default export included.
+
 The argument of a pattern compiled into another is bound place by place.
 Each path of the callee's argument resolves to what the caller wrote
 there: a slot of the caller, an output of the caller, or a constant. So a
@@ -1100,7 +1164,12 @@ adding or removing a declaration does not rename another one's stored state.
   the callee's name for a call site, a child, or a use of a body; the
   built-in's or the method's name for an operation and a collection; the
   handler's name for a binding of a named handler; the attribute's name for
-  an inline event handler.
+  an inline event handler. The callee's name is the name the call is
+  written with, in the module that holds the call: the local name of an
+  import, and for a JSX tag the tag's name. A pattern that is the default
+  export of its module has no name there and takes the name it is
+  imported under. For a callee written as a member access, `ui.Row`, it
+  is the last name.
 - A declaration of the reactive tier written with `.for(cause)`, as
   `X.for(cause)` on a cell constructor or `h.for(cause)` on a handle,
   takes the cause in the place of the name the two rules above give it.
@@ -2170,6 +2239,19 @@ selector `i`:
 | `pick` | `C(choice) ⊔ C(body)` at the chosen child | `I(body)` at the chosen child |
 | `dynamic` | `⊔` of the labels the journaled reads consumed | `⊓` over those reads |
 
+**The inputs of a `derive`.** A join and a meet do not depend on the order
+of their operands or on how often one occurs, so `inputs` is a list for the
+sake of the canonical form alone (section 1.2), and the compiler fills it
+in one order.
+
+- For expression code, one input per operand, in source order. An operand
+  written twice is two inputs, and a constant operand is one `const` node
+  each time it is written.
+- For a body, the `slot` nodes of `Body.reads` in that order, then the
+  templates of `Body.computed` in that order, then one `dynamic` node per
+  entry of `Plan.dynamicReads` the use of the body made, in the order of
+  `Plan.dynamicReads`. Each occurs once.
+
 Notes on the integrity column:
 
 - **`slot` keeps every class of atom.** It is a pass-through, and §3.1.6.2
@@ -2212,6 +2294,47 @@ path `x` is the template of `e1`. The container's own `shape` and
 `enumeration` are `const` when the key set is static, and otherwise the
 template of whatever decides it (a spread of a labeled object, a conditional
 key).
+
+**A spread in an object literal.** `{ ...a, x: e }` has, at each path `p` that
+the type of `a` declares and no later member of the literal overwrites, the
+template of `a.p`. Where `a` is at a slot root the path is passed by
+reference, so the template is the `slot` node of the reference at `a.p`. A
+member written after the spread replaces the path. A member written before the
+spread is replaced where the type of `a` declares its path as required, and
+stays where the type does not declare the path. Where the type declares the
+path as optional, the result holds the member of `a` when `a` has one and the
+earlier member otherwise: the path is a `select` whose condition is the
+`shape` of `a.p`. The key set is `const` where the type of `a` is an object
+type with no index signature, joined with the `shape` of each optional
+property. Where the type of `a` is a record type, whose keys are data, the
+result's `enumeration` is that of `a`, and the template at `*` is the template
+of `a` at `*`, joined with the templates of the written members whose names
+the record's key type admits.
+
+**A spread in an array literal.** `[e0, ...xs, e1]` is an array the cone
+computes, and the positions after a spread are not known when the pattern
+is compiled. Its `enumeration` is `derive` by expression code over the
+`enumeration` of each spread operand. A member written before the first
+spread has its own path and the template of its expression. *Assumed*
+(section 8, question 51): every position from the first spread on is at
+the path `*`, and the template there is the join of the template of each
+spread operand at `*`, of the templates of the members written after the
+first spread, and of the array's `enumeration`, which says where each
+landed. An element that comes from a spread operand is passed by
+reference. A spread of a value of tuple type has static positions and is
+the members written out. A spread attribute and a spread child in JSX
+(`language-subset.md` §4.5) are a spread in the object literal of the
+attributes and in the array literal of the children.
+
+**A hole.** `[a, , b]` has a constant key set. The position of the hole
+holds nothing, has no template, and contributes nothing to a `fold` over
+the array (section 3.8). A collection over the array gives the position no
+element key and no cone instance (section 1.3).
+
+**A computed key.** A key that is static in the sense of
+`language-subset.md` §4.3 is the name it evaluates to. A key that is not
+static is refused there (`reactive:unsupported-expression`), so the plan
+has no record for one.
 
 **Today.** In a pattern body, a constructed object is structure: each member
 is a link to the node that computes it, and each node output is a document
@@ -2932,6 +3055,21 @@ The checks a write is subject to (section 4.4) are evaluated on the edge's
 template: the write floor on `I(template)`, writer-fit on `C(template)`, and
 the writer policy on the writing body's identity.
 
+**A write through what a site of the body returned.** A body can write
+through a handle that no slot and no entry of `Body.computed` names,
+because a runtime call of the body returned it (`Body.calls`).
+
+| The site | A write through what it returned |
+| --- | --- |
+| `createCell` | A `WriteEdge` with target `created`, or with target `state` where the cell is a `StateCell` (section 3.14). Under a cause computed from data in a `lift` or a `computed`, a `created` envelope |
+| `bind` | `stream.send(event)` on the stream the site returned is a `WriteEdge` with target `created` that names the `bind` site, with an empty path. The event carries the body's template, as an event sent on a stream the body was given does |
+| `instantiate`, `effect` | *Assumed* (section 8, question 52): a `WriteEnvelope` of kind `created` that names the site. The link leads to the result of an instance, or of an effect, and a write through it lands in a cell that a handle in that result links to, which the plan cannot name. The envelope bounds the write to the cells reached through what the site returned. A write that lands at a path the instance or the effect itself computes is refused, by the rule for a write to a value an instance computes (above) |
+
+A handle that a called function returned is the abstract value the
+function's summary returns (`footprint-analysis.md` §3.6), so it is one
+of the cases above or a handle the body was given. No other handle
+reaches a body.
+
 **Writes with no static target.** A write whose target depends on data the
 body read, or whose narrowest static path is a proper prefix of what is
 written, has no `WriteEdge`. The body lists a `WriteEnvelope` for it in
@@ -3061,6 +3199,45 @@ body is the matching element, passed through with its own label. When
 nothing matches the result is `undefined` and carries the choice, a fold
 over every element.
 
+**The record of a scan.** `some`, `every`, `findIndex` and `find` have the
+same record, which is the record of a `filter` with a result of another
+kind.
+
+- **A `Collection` of its own,** named as the method is (section 1.3).
+  Its `source` is the receiver: a slot, a bucket of an index, or an
+  output. For a receiver that is itself a collection of the plan, the
+  result of a `map`, a `filter` or a `flatMap`, the source is that
+  collection's assembled output (section 1.4), which the plan then has.
+  The source is not the form with `via`: `via` says how the elements of
+  a derived collection come from its source, and a scan has no elements
+  of its own. `membership` is the source's membership template, and
+  `bodyUses` is as for a `map`.
+- **The predicate** is the cones of the callback, by the rules of section
+  1.4, with slots of root `element` that name this collection. They are
+  evaluated per element key. What the callback returns is an output whose
+  path has `*`, and it is observed for truthiness, with the classes of
+  section 3.5.
+- **A `Selector` of arity 0,** which the `fold` names in `through`. It is
+  an entry of `Plan.selectors` and of no `Cone.selectors`: the runtime
+  supplies the position from its own scan.
+- **For `find`, a `Pick` with `chosenBy: "runtime"`,** an entry of
+  `Plan.picks` and of no `Cone.picks`. The `pick` node has
+  `from: { collection }` with this collection, its `choice` is the `fold`
+  with `through`, and its `body` is the `slot` nodes of the element.
+- **The result** is an `Output` with the member `collection`, which
+  names this collection. The runtime produces the value, a boolean, a
+  position, or the matching element, and no value function returns it.
+  Its `template` is the `fold` with `through`, whose rule joins the
+  membership (section 3.2), or for `find` the `pick`. Its `cone` is the
+  last cone of the predicate, as for an assembled result (section 1.4).
+  A cone that uses the result has an edge of kind `output` from that
+  cone.
+
+The runtime holds the position, and for `find` the chosen key, with the
+result, and instantiates the result's template from them (section 4.2). An
+aggregate with a callback, a `reduce`, and a collection index have a
+`Collection` of their own in the same way, with the receiver as its source.
+
 **`xs.reduce((acc, x) => expr, init)`**, where the callback is an
 expression.
 
@@ -3086,6 +3263,31 @@ expression.
   key changed are re-instantiated. The accumulator is a data type, so that
   this state can be stored (`language-subset.md` §4.4.1,
   `collection:reduce-accumulator`).
+- **The record.** *Assumed* (section 8, question 49), because the records
+  of section 1.1 name no form for a step that is an expression.
+  - The step is emitted as one cone, and
+    `Operation.implementation` is `{ cone }` with that cone. The runtime
+    evaluates it once per position, in order, and not once per element
+    key.
+  - The `reduce` has a `Collection` of its own, named `reduce`, whose
+    source is the receiver, as for a scan. The step cone reads the
+    element through slots of root `element` that name it, and
+    `bodyUses.index` says whether the step uses the index.
+  - The step cone reads the accumulator through a slot with root
+    `operation` that names the `reduce` itself, at the empty path. The
+    runtime binds it to the accumulator as it stands before the step.
+    The slot is in `Cone.slots`, so that the value function receives it,
+    and the step's template has `const` where the expression reads it,
+    by the rule above.
+  - The step's result is an output of the step cone whose path has `*`.
+    Its template is the template of `expr`.
+  - The cone the `reduce` is written in computes `init` and writes it
+    into the operation's state by a `WriteEdge` with target `request`,
+    at the path `initial`, with the template of `init`.
+  - `Operation.input` is the `fold` over the collection of the step's
+    template, joined with the template of `init`. The result is the
+    stored result of the operation and has that label, instantiated. A
+    cone that uses it reads a slot with root `operation`.
 
 **Today.** `reduce` and `findIndex` on a cell mint a `lift` inline
 (`reduce` and `findIndex` in `runtime/runner/src/cell.ts`), which reads the
@@ -3942,6 +4144,30 @@ runtime recorded while the body ran. A change of the label stored at an
 observed path makes the cone stale, as a change at a `labelMetadata`
 slot's address does.
 
+**A call in the reactive tier.** A call there is expression code: it is
+part of the cone it is written in, its slots are slots of that cone, and
+its template is a `derive` by expression code over them. An operand that
+is a slot of the instance gives the slot of its row. An operand that the
+instance computed has no slot. Its row then reads as follows.
+
+- Where the row has an `identity` slot, resolved or not, the template has
+  the operand's own template in the place of the slot, which is the label
+  of the reference it holds, and a `dynamic` node of kind `link` whose
+  `through` is `{ output }` with the operand's output, for the links the
+  call follows below that reference. `equalLinks` and `linksOf` follow
+  none and have no such node.
+- Where the row has a `dynamic` node of kind `space`, its `of` is
+  `{ output }` with the operand's output.
+- A label-metadata observation of such an operand reads the label the
+  operand's template instantiates to, as `inspectConfLabel` does (below).
+
+The operand is then an entry of `Plan.outputs`, interim where nothing keeps
+it, because a record of the plan refers to it (section 1.4). `eventKey()` and
+`currentPrincipal()` read a root that only a handler has and are refused in
+the reactive tier (`language-subset.md` §10.3). The debug formatters, and a
+call of a global function such as `String`, are expression code that reads
+each operand for `value` (`footprint-analysis.md` §3.4).
+
 **`equalLinks`.** The call compares the two references as they are stored
 and follows no link, so it has no journaled part: in a body as in the
 reactive tier, its record is the plain `identity` slot of each operand.
@@ -4158,26 +4384,120 @@ document as a `WriteEdge` with target `anchors`, and it joins the instance's
 static write targets. Today the built-in resolves the link and reads nothing
 (`runtime/runner/src/builtins/anchors-of.ts`). **Equal.**
 
-**The parsing half of `cellFromUrl`.** A reference whose identity is
-computed from values: its identity label is `derive` over the `value` slots
-of `url`, `hosts` and `spaceHost`. Content read through it is a followed
-link (section 3.10). Resolving a space name or a host is an effect and is
-not this operation.
+**`cellFromUrl`.** The call is one `Operation` of kind `effect` with
+`implementation: { builtin: "cellFromUrl" }`. A cone writes `url`, `hosts`
+and `spaceHost` into its state by write edges with target `request`, and
+a reader reads `pending` and `cell` through slots with root `operation`.
+The parsing half is the part of that operation that needs no resolution:
+`cell` holds a reference whose identity is computed from values, and its
+identity label is `Operation.input`, the `derive` over the templates of
+the three operands. Content read through it is a followed link: a slot
+whose path continues below `cell` crosses the link (sections 2.5 and
+3.10). Resolving a space name or a host is the effectful half
+(`builtin-inventory.md`, "`cellFromUrl`"). A URL that needs none settles
+in the operation's first request transaction, and nothing is sent.
 
-**`wish`.** It is one structural operation with four parts, and a constant
-query lets the compiler tell them apart.
+**`wish`.** It is structural, and one call is one record, whatever its
+query. *Assumed:* it is written in the reactive tier alone.
+`language-subset.md` §4.4 lists it among the calls of tier R, the corpus
+has no call in a function body (`builtin-inventory.md`, "Calls inside function
+bodies"), and `Body.calls` has no site for one.
 
-| Part | Template |
-| --- | --- |
-| A path or a well-known target | A reference whose identity label is the template of the query and path. A home-space target also depends on which user the instance is evaluated for, which is the instance's scope and not a label |
-| Hashtag search | A collection found through links. Its membership is a `dynamic` node of kind `search`: the name and schema of every candidate considered are journaled reads. The candidates are passed through |
-| The clock | A reference to a clock cell the runtime writes. Reading it is a slot with no input label. Each tick is a cause. The one-shot timestamp is a `StateCell` written once when empty |
-| A sidecar | A `Child` whose callee is one of the system patterns, with an identifier derived from the wish's cause |
+- **The operation.** An `Operation` of kind `wish`, with
+  `implementation: { builtin: "wish" }`, named by `name` and `within` as
+  any operation is (section 1.3).
+- **The operands.** The cone the call is written in computes the operands
+  the author wrote, among `query`, `path`, `schema`, `scope`, `context`
+  and `headless`, and writes each into the operation's state by a
+  `WriteEdge` with target `request`, at the path of the operand's name,
+  with the template of its expression. An operand that is a container or
+  a cell is held by reference, as in any request. `Operation.input` is
+  the join of those templates, and it is `const` for a call whose
+  operands are all constants.
+- **The result.** The stored result of the operation has the paths of
+  `WishState` (`base/api/index.ts`): `result`, `candidates`, `error`,
+  `errorCode` and `[UI]`. A reader has slots with root `operation` at the
+  paths it reads, and its template has the `slot` nodes. `result` and
+  each member of `candidates` hold a reference to what was found, and a
+  slot whose path continues below one crosses that link (section 2.5), so
+  the content has its own label.
+- **What the runtime does.** The built-in resolves the target in the
+  transaction that evaluates a reader of the result, and in a
+  transaction of the cause that changed something it read. It has no
+  request transaction, stages nothing that leaves the runtime, and no
+  egress ceiling is checked. What it creates, it creates under an
+  identifier derived from the operation's cause, so a second resolution
+  creates nothing.
+- **Its reads.** The plan has one entry of `Plan.dynamicReads` of kind
+  `search` that names the operation. It stands for the reads the
+  resolution made of what no slot names: the links it followed along a
+  path, the tests of whether a target holds anything, and the name and
+  the schema of every candidate a search considered, whether or not the
+  candidate matched. They are journaled with their trigger reads, as a
+  followed link is (section 3.10).
 
-A query computed at run time gets the join of all four, as
-`builtin-inventory.md` assumes (open question 2). Today the result is a
-reference and hashtag search joins every candidate it reads
-(`runtime/runner/src/builtins/wish.ts`). **Equal.**
+The label rule has one form for every query.
+
+```text
+C(a path of the result) = C(Operation.input) ⊔ C(dynamic, kind search)
+I(a path of the result) = empty
+```
+
+No integrity is minted, as today. The same label is the identity label of
+the reference at `result` and at each member of `candidates`: which
+target was found depends on the operands and on what the resolution read.
+The rest of the operation's state document has the label section 2.6
+gives the bookkeeping of an operation.
+
+The query decides what the `dynamic` node can hold, the scope, and which
+other records the plan has. Where the `query` operand is a constant, the
+compiler reads its key, the first segment as `parseWishTarget`
+(`runtime/runner/src/builtins/wish.ts`) splits it, and the plan has the
+row of that key.
+
+| The constant query | Part | What the plan has beside the operation |
+| --- | --- | --- |
+| `/`, `/a/b`, or a path below `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | A path or a well-known target of the current space | Nothing. The `dynamic` node holds the links followed along the path |
+| `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, `#chatManager`, `#profile`, `#profileName`, `#profileBio`, `#profileSpace`, with or without a path | A well-known target of the home space of the demanding principal | `Operation.scope` is `user`. For a profile target without `headless: true`, a `Child` for each of the two profile sidecars (below) |
+| `#now` with no path | The one-shot clock | A `StateCell` named from the operation's `name` with the suffix `/now`, with the operation's `within`. The runtime writes the coarsened time into it once, when it is empty, and `result` is a reference to it. The cell has no input label. The `dynamic` node holds nothing |
+| `#now/N` | The ticking clock, `N` whole seconds | Nothing. `result` is a reference to the clock cell of the space for that interval, which the runtime writes. The cell has no input label. Each tick is a commit of the runtime's, and it reaches a reader in a set of changes, as any change from storage does (Notation). The `dynamic` node holds nothing |
+| Any other `#tag` | A search by hashtag | `Operation.scope` is `user` unless the `scope` operand is a constant that names neither `"~"` nor `"profile"` (`wishTargetMayUseHomeSpace`). Without `headless: true`, a `Child` for the suggestion sidecar. The `dynamic` node holds the name and schema of every candidate considered |
+| `#profilePicture`, `#profileAvatar`, `#profile/picture`, `#profile/avatar` | None: the target is refused | Nothing. The result holds the error, with the label of `Operation.input` |
+| Any other string | A suggestion for the situation the query describes | `Operation.scope` is `user`, and a `Child` for the suggestion sidecar |
+
+A `path` operand is appended to the path the query names. It may be
+computed, except with the key `#now`, where it decides between the two
+clocks.
+
+**A sidecar** is a `Child` whose callee is one of three system patterns,
+`{ compiled }` with that pattern's content address: the suggestion
+pattern, the profile-creation pattern, and the profile picker
+(`launchSuggestionPattern`, `launchProfileCreatePattern` and
+`launchProfilePickerPattern` in `wish.ts`). Its `name` is the operation's
+`name`, `/`, and the sidecar's name, with the operation's `within`, so its
+identifier derives from the wish's cause. The built-in instantiates it on
+the runs that need it, writes its argument under the label of the result,
+and stores a link to its result at `[UI]`, or at `result` for a
+suggestion. The instance belongs to the operation: a resolution that no
+longer needs it tears it down, as a computation's instance is (section
+3.14).
+
+**A query that is not a constant.** The record is the same operation with
+the same label rule, since the `dynamic` node holds whatever the
+resolution read. The compiler cannot leave anything out: `Operation.scope`
+is `user`, the plan has the `StateCell` of the one-shot clock and a
+`Child` for each of the three sidecars, and a tick of a clock can make a
+reader stale.
+*Assumed,* with `builtin-inventory.md` (its open question 2; section 8,
+question 48): such a call compiles, with a hint that names the cost.
+
+**Today.** The result is a reference, the action's transaction joins the
+operands and every read the resolution made, and hashtag search joins
+every candidate it reads (`resolveBase` and `searchByHashtag` in
+`runtime/runner/src/builtins/wish.ts`). **Equal.** The 50 ms debounce has
+no counterpart (`builtin-inventory.md`, "Effectful built-ins"). *Assumed*
+(section 8, question 47): the record above, an operation of a kind of its
+own.
 
 ### 3.21 A handler factory received as a value
 
@@ -4309,7 +4629,7 @@ nothing to compare.
 | What an element body stores once per element key (section 2.6) | The join over the positions that hold the key | **Looser**, the third exception, where positions that hold an equal element resolve to different labels. To be revisited |
 | Handler factory value | The handler's own record, plus the factory's `identity` | New |
 | Context reads | `cause`, `labelMetadata`, `identity` slots; `dynamic` for access lists and journaled observations | Equal |
-| `anchorsOf`, `cellFromUrl` parsing, `wish` | References with computed identity; `dynamic` search | Equal |
+| `anchorsOf`, `cellFromUrl` parsing, `wish` | References with computed identity; for `wish`, an operation whose result joins its operands and a `dynamic` node of kind `search` | Equal |
 | Stored state that is not an output (section 2.6) | The operation's input, the cone-level join, or the output's label | New |
 
 Three things are looser, and all three are decided: the collection index, a
@@ -5352,6 +5672,9 @@ Slots, written `root path : class`:
 s0  argument  messages                 : identity
 s1  argument  myProfile                : identity
 s2  argument  threadInfo               : identity
+s3  argument  threadInfo               : enumeration
+s4  argument  threadInfo/*/root        : identity
+s5  argument  threadInfo/*/title       : value
 e0  event     body                     : value
 e1  event     target/value             : value
 e2  event     attachments              : enumeration
@@ -5377,7 +5700,9 @@ m6  element   (root)                   : identity, resolved
 
 `b1` is a slot whose path crosses a link: the handler's state holds a link
 at `myProfile`, and the slot observes whether the cell it leads to holds a
-value. `m2` to `m5` cross the element's link in the same way (section 2.5).
+value. `m2` to `m5` cross the element's link in the same way (section 2.5),
+and `s3` to `s5` cross the link at `threadInfo`: they observe the list
+the handle leads to.
 
 The listing is a slice. It leaves out the `shape` slots that footprint
 analysis records at optional positions (`footprint-analysis.md` §12.5).
@@ -5391,7 +5716,10 @@ entry at its path (`footprint-analysis.md` §2.3). The others are in place
 a handle, and the `identity` slot at the same position is listed. Where
 the position holds a handle, the slot in place resolves to the label of
 which reference it holds (section 2.5), which that `identity` slot joins
-already. All of them are in the footprint of `B0` and join `T_send`. With
+already. All of them are in the footprint of `B0` and join `T_send`. `B1`
+has four more: in place at `argument threadInfo` and at
+`threadInfo/*/root`, and, across the link, at the root of the list and at
+`threadInfo/*`. They join `T_titles`. With
 FabriChat's labels none changes an instantiated label.
 
 The listings of this section leave out three more things that the rules
@@ -5444,16 +5772,41 @@ B0  handler   commitSend
                  w6  handle b2  */replyTo/thread  passes e5
                  w7  handle b2  */replyTo/quotes  passes e6
       envelopes  handle b3  *
-B1  function  threadTitles
-      reads      s2
-      handles    h0  slot s2   threadInfo
+B1  function  threadTitles#1
+      reads      s2 s3 s4 s5
 B2  function  messageFacts
       reads      s0
       computed   titles/* : value   T_titles
       handles    h0  slot s0   messages
-B3  function  bodyText     reads m0 m1 m2 m4
-B4  function  viewKeyOf    reads m6
+B3  function  bodyText#1     reads m0 m1 m2 m4
+B4  function  viewKeyOf#1    reads m6
 ```
+
+The name of a body is the name of its use (section 1.3). `room.tsx`
+calls `threadTitles` twice in the room's body, and `message-row.tsx`
+calls `bodyText` and `viewKeyOf` twice each in the row's body, so each
+use has an ordinal, and the slice has the first of each. `messageFacts`
+is called once and has none.
+
+`B1` has no entry in `handles`. It reads `threadInfo?.get()`, which is
+conditional only on the handle being present, so the read is static
+(`footprint-analysis.md` §7.2), and what the body reads below the hop is
+slots whose paths cross the link: the list's enumeration (`s3`), the
+`root` handle of each record (`s4`), and each `title` (`s5`). `B1` passes
+each `root` to `viewKeyOf`, which resolves it. The operand's path has a
+`*`, so the resolution is journaled: `s4` is a plain `identity` slot, and
+the links followed below it are a `dynamic` node of kind `link`
+(`footprint-analysis.md` §7.1).
+
+`B2` records `titles/* : value`. The title leaves `B1` in a record the
+body built, and such a member is recorded by the type of the position
+its projection names, a string here, wherever in the body it was put
+into the record (`footprint-analysis.md` §3.8).
+
+`B4` has the one slot `m6`. `viewKeyOf` uses the handle that the static
+resolution returned and not `message` itself, so the body has the
+resolved `identity` entry and no plain entry beside it
+(`footprint-analysis.md` §7.1).
 
 What `B0` does with each handle:
 
@@ -5522,7 +5875,7 @@ T_send   = derive(by B0)  [ e0 e1 e2 e3 e4 e5 e6 e7 e8 b0 b1 b2 b3 b4
                             dynamic(handle B0.h3)
                             dynamic(link through b2) ]
 
-T_titles = derive(by B1)  [ s2  dynamic(handle B1.h0) ]
+T_titles = derive(by B1)  [ s2 s3 s4 s5  dynamic(link through s4) ]
 T_facts  = derive(by B2)  [ s0  T_titles  dynamic(handle B2.h0) ]
 
 T_empty  = derive(expression) [ T_facts, const ]
@@ -5543,6 +5896,13 @@ T_label  = select( condition: derive(expression) [ T_repl, const ],
                    branches:  [ const,
                                 derive(expression) [ const, T_repl ] ] )
 ```
+
+`FabriChatMessageRow` is written as a JSX tag in the callback of the
+`map`. A tag that names a pattern the compiler can see is a call compiled
+into the plan (section 1.1), so the row has no plan of its own: what it
+declares has the `within` steps `{ element: c1 }` and
+`{ site: FabriChatMessageRow }`, and its argument path `message` is the
+element, which is why `m0` to `m6` have the root `element`.
 
 The elements of `c1` are links to message cells, so each row's key is its
 message cell's identity (section 1.3), and a row keeps its cone instances
@@ -6419,3 +6779,69 @@ this document made.
     loads every child. The alternative gives the host a function that
     takes the choice point and the key and binds the child slots before
     it returns. `execution-and-storage.md` owns the host interface.
+47. **The record of `wish`.** Section 3.19 makes a `wish` one
+    `Operation` of a kind of its own: its operands are stored by write
+    edges with target `request`, its result is read through slots with
+    root `operation`, every path of the result has the label of the
+    operands joined with one `dynamic` node of kind `search` for the
+    reads the resolution made, and it has no request transaction and no
+    egress check. A sidecar is a `Child` named from the operation, and
+    the one-shot clock a `StateCell` named from it. *Assumed.* The
+    alternative gives each part a record of its own kind: a slot root
+    for a reference whose address is computed, a collection for a
+    search, and a `Child` written in the reactive tier for a sidecar.
+    That is tighter where a part reads less than the join, and it needs
+    a constant query for every call. Three smaller choices are assumed
+    with it: `wish` is written in the reactive tier alone, which
+    `language-subset.md` has to state; the result carries no integrity,
+    as today; and a sidecar's argument carries the label of the result.
+    The table of section 3.19 from a query to its part is read from
+    `parseWishTarget` and `getResolutionKind`. Which runs launch which
+    sidecar was read from the three `launch` functions and not traced
+    through every branch of the action.
+48. **A `wish` whose query is not a constant.** *Assumed,* with
+    `builtin-inventory.md` (its open question 2): it compiles, with
+    `Operation.scope` of `user`, the state cell of the one-shot clock,
+    and a `Child` for each sidecar, and the compiler reports a hint.
+    The label is the same as for a constant query, since it is the join
+    over what the resolution read. The alternative refuses a query that
+    is not a constant. The corpus has 79 calls in 40 modules, and the
+    prototype has to count the ones whose query is computed.
+49. **The record of `reduce`.** Section 3.13 emits the step expression
+    as a cone that `Operation.implementation` names, hands it the
+    accumulator through a slot with root `operation` that names the
+    `reduce` itself, and stores the initial value by a write edge with
+    target `request`. *Assumed.* The slot for the accumulator is in
+    `Cone.slots` and is `const` in the step's template, which is the
+    one place where a slot a cone receives is not a node of its
+    template. The alternative adds two members to the record: a slot
+    root for the accumulator, and a member of `Operation` for the
+    initial value.
+50. **The source of a scan over a collection of the plan.** Section 3.13
+    gives a scan a `Collection` of its own whose source is the
+    receiver's assembled output, which the plan then holds whether or
+    not anything else uses the collection as a value. *Assumed,* with
+    the prototype. The alternative adds a value to
+    `Collection.source.via` for a construct that has the elements of
+    its source, so that the element slots bind per position as those of
+    a `filter` result do and no assembled output is needed.
+51. **The positions after a spread in an array literal.** Section 3.4
+    gives every position from the first spread on the path `*` and one
+    template, the join over the spread operands and the members written
+    after it. *Assumed.* It is sound and coarser than a template per
+    member. Where today's builder stores each member of an array
+    written in a pattern body as a link to its own node, a member
+    written after a spread keeps its own label, and the assumed rule is
+    looser there. What the builder does with a spread in an array
+    literal was not verified against source. The
+    alternative has the runtime assemble the array, as it assembles a
+    `flatMap`, and bind each position to the member or the spread
+    element it came from, with the origin facts section 3.7 has.
+52. **A write through the link an `instantiate` or an `effect` site
+    returned.** Section 3.11 lists it by a `created` envelope that names
+    the site, and refuses a write that lands at a path the instance or
+    the effect computes. *Assumed.* A handler that instantiates a
+    pattern and then writes a cell the pattern exports is the case. The
+    envelope names no address until the instance exists, so it bounds
+    the write and gives nothing to order by. The alternative refuses
+    every such write and has the handler pass the cell in the argument.

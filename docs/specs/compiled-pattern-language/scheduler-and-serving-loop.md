@@ -859,7 +859,7 @@ beyond link structure.
    | `operation` | The result path of the operation's state document, named the same way. For an operation inside an element body, the element key is a step of `within` in the document's identifier (`execution-and-storage.md` §6). The result of a materializer is read through such a slot (section 7.1) |
    | `child` | The child's result cell, named the same way |
    | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to (`plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
-   | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves through `Binding.state` to a slot or an output of the instance. For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
+   | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves to what the member `place` of its entry of `Binding.state` names: a slot of the instance, an output of the instance, the stream of another binding, or a constant written at the binding (`plan-and-label-templates.md` §1.1). For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
    | `event`, `cause` | The event, for the length of its transaction. No index entry |
    | `element` | Per position, the address the element was read from, and for a linked element the cell it links to. Bound from the element table, not at load (below) |
 
@@ -1015,7 +1015,7 @@ kinds.
 | `link` | The links followed through a reference the plan cannot name a path for: a reference the instance computed, the further links of a `resolveAsCell()` or another resolution that some runs skip, and the links `resultOwnerOf` follows |
 | `handle` | The reads a body makes through an entry of `Body.handles`, each narrowed to the entry's read envelope: a read on some runs only, a read at a path the body computes, a read through a handle found by such a read, a read through a handle whose formal input is bound to a value the instance computed (`footprint-analysis.md` §7.2), and a read through the link of an instance an earlier evaluation of the same body made (section 2.7) |
 | `space` | The read of a space's access list |
-| `search` | The name and the schema of every candidate a search considered |
+| `search` | The reads a `wish` made while it resolved its target: the links it followed, the tests of whether a target holds anything, and the name and the schema of every candidate a search considered (`plan-and-label-templates.md` §3.19) |
 | `labelMetadata` | The label-metadata observations a body made of targets no slot names (`plan-and-label-templates.md` §3.16) |
 
 For these the scheduler does what it does for every read today.
@@ -1814,7 +1814,10 @@ was made (`plan-and-label-templates.md` §3.14).
 - **A binding of the reactive tier copies nothing.** The reactive tier is
   the pattern body and everything compiled in it, the body of a
   per-element callback included. Every path of the handler's state resolves
-  through `Binding.state` to a slot or an output of the instance. Where the
+  to what the member `place` of its entry of `Binding.state` names: a slot
+  of the instance, an output of the instance, the stream of another
+  binding of the reactive tier, or a constant written at the binding
+  (`plan-and-label-templates.md` §1.1). Where the
   path is an output, the cone instance that computes it is evaluated before
   the body when it is stale, and its value is materialized into the
   handler's argument when the event is delivered. The body therefore sees

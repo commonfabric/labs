@@ -49,30 +49,29 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `16246cceef`, on 426 corpus modules, it accepts 335
+  prototype commit `bf454a771d`, on 426 corpus modules, it accepts 335
   without an error and reports 384 errors: `any` in a type (182), 73
   type mismatches, a function type in data from one declaration (35),
   and `patternTool` (31) are most of them. Footprint analysis covers
   `footprint-analysis.md` §2 to §8, with the record of each use of a
   body, and finds 90 of 1,972 bodies widening (4.6%) where the
   document's script found 83 of 1,962. Its listing for FabriChat's
-  `commitEdit` equals the one in §12.3. A `plan` command emits slots,
-  state cells, collections, bodies per use, bindings, operations,
-  selectors, picks, cones, outputs, edges, and dynamic reads as JSON,
-  and the first label templates: `const`, `slot`, and `derive` by
-  expression code or by a body. It emits a plan with no unsupported
-  construct for 226 of the 288 accepted modules that hold a pattern.
-  Most of the rest use `wish` (79 sites in 40 modules) or `reduce`, for
-  which the documents define no record, or a spread. Not built: the
-  templates `select`, `pick`, and `fold`, the templates of collections,
-  write edges, operations, and bindings, hashes, constraints, and the
-  six `cfc-flow:*` diagnostics. The prototype differs from
-  `plan-and-label-templates.md` in the places that document's last
-  corrections name, among them the member `Binding.state[].place`, the
-  target of a write through a state cell, and how `inPlace` is decided.
-  The crate's `SPEC-NOTES.md` lists the places where it found the
-  documents ambiguous; notes 98 to 112 are not yet written into the
-  documents.
+  `commitEdit` equals the one in §12.3. A `plan` command emits the
+  plan as JSON with label templates of every kind
+  `plan-and-label-templates.md` defines, on outputs, computed inputs,
+  collection membership, write edges, operation inputs, and bindings.
+  It emits a plan with no unsupported construct for 226 of the 288
+  accepted modules that hold a pattern. In those plans 1,751 of 2,630
+  outputs have a template; nearly all the rest are rendered trees and
+  records used as one value, for which the document gives no paths.
+  Not built: `wish`, `reduce`, and spreads, a pattern used as a JSX tag
+  compiled in, a cone per declaration inside an element callback,
+  emitted schemas, hashes, constraints, and the six `cfc-flow:*`
+  diagnostics, which need the schemas. `side-write:cycle` fires nine
+  times, most from an edge of a cone to itself through a cell the body
+  writes and does not read. The crate's `SPEC-NOTES.md` lists the
+  places where it found the documents ambiguous; notes 113 to 129 are
+  not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -686,6 +685,21 @@ as an assumption.
 103. **How value code reads the child a dynamic key chose** (PL question
     46). *Assumed:* it is handed every child. `execution-and-storage.md`
     §2.2 gives `ConeHost.slot` no key, which disagrees with PL §3.18.
+104. **The plan record of `wish`** (PL questions 47 and 48). *Assumed:*
+    one operation of kind `wish`, whose result is read through slots
+    rooted at the operation and labeled with the request joined with
+    one dynamic entry for the search, with no integrity. A query that
+    is not a constant is assumed to take the widest part. `wish` in a
+    function body is assumed refused, and `language-subset.md` does not
+    yet say so.
+105. **The plan record of `reduce` in the reactive tier** (PL question
+    49). *Assumed:* an operation of kind `reduce` over a step cone and a
+    collection of its own, with the label a `fold` joined with the
+    initial value.
+106. **Three smaller records** (PL questions 50 to 52): the source of a
+    scan, the positions after an array spread, and a write through a
+    link that an instantiation or an effect returned. Each is assumed
+    as PL states it.
 
 ## Open, and not needing the owner
 
