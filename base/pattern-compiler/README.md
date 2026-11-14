@@ -79,7 +79,7 @@ implemented as written, with the reading this crate chose.
 evaluator of the templates of `plan-and-label-templates.md` §3.2
 (`compare/template.ts`), a harness that runs a pattern through the existing
 transformer and builder and reads the stored labels of its slots and outputs
-(`compare/harness.ts`), four fixtures, a generator of scenarios
+(`compare/harness.ts`), five fixtures, a generator of scenarios
 (`compare/generate.ts`), and a run over the corpus (`compare/corpus.ts`).
 The harness resolves a slot of root `argument`, `element`, `state`,
 `binding`, and `event`. It sends an event to the stream of a binding and
