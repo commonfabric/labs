@@ -169,7 +169,7 @@ struct Emitter<'r, 'm, 'a> {
     operands: Vec<Value>,
     opaque: bool,
     /// The entries of `Plan.dynamicReads` of each body of the plan.
-    body_dynamic: Vec<(usize, usize)>,
+    body_dynamic: Vec<Vec<usize>>,
     /// The declared type of each formal input of the body whose record
     /// is being written.
     formal_types: HashMap<String, TypeId>,
@@ -438,6 +438,17 @@ impl<'a> Emitter<'_, '_, 'a> {
             .rev()
             .find_map(FunctionLike::of_argument)?;
         Some((def.module, function.span().start))
+    }
+
+    /// An entry of `Plan.dynamicReads`: one entry for one set of reads.
+    fn dynamic(&mut self, read: Value) -> usize {
+        match self.dynamic_reads.iter().position(|other| *other == read) {
+            Some(index) => index,
+            None => {
+                self.dynamic_reads.push(read);
+                self.dynamic_reads.len() - 1
+            }
+        }
     }
 
     // ----- types -----
@@ -1566,9 +1577,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                             if let Some(cone) = emitter.cone {
                                 emitter.cones[cone].slots.insert(slot);
                             }
+                            let reads =
+                                emitter.dynamic(json!({ "why": { "kind": "space", "of": slot } }));
                             emitter
-                                .dynamic_reads
-                                .push(json!({ "why": { "kind": "space", "of": slot } }));
+                                .operands
+                                .push(json!({ "op": "dynamic", "reads": reads }));
                         }
                         Place::Const => {}
                         _ => emitter.unsupported(
@@ -1714,7 +1727,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             .map(|(input, _)| input.clone())
             .collect();
         let index = self.plan_bodies.len();
-        let dynamic_from = self.dynamic_reads.len();
+        let mut dynamic: Vec<usize> = Vec::new();
         let used: UseRecord = bind_use(record, &computed);
         let mut reads: Vec<usize> = Vec::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
@@ -1815,9 +1828,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             };
             match named {
                 Some(named) => {
-                    self.dynamic_reads.push(json!({
+                    dynamic.push(self.dynamic(json!({
                         "why": { "kind": "handle", "body": index, "handle": handles.len() },
-                    }));
+                    })));
                     handles.push(json!({ "handle": named }));
                 }
                 None => self.unsupported("a handle of a body the emitter cannot name", at),
@@ -1857,13 +1870,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         for link in through {
-            self.dynamic_reads
-                .push(json!({ "why": { "kind": "link", "through": link } }));
+            dynamic.push(self.dynamic(json!({ "why": { "kind": "link", "through": link } })));
         }
         if used.label_metadata {
-            self.dynamic_reads.push(json!({
+            dynamic.push(self.dynamic(json!({
                 "why": { "kind": "labelMetadata", "body": index },
-            }));
+            })));
         }
         // The reads of the access list of a space (PL §3.16): each names
         // the slot of its operand, or the operand's entry of `computed`.
@@ -1891,10 +1903,8 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         for of in spaces {
-            self.dynamic_reads
-                .push(json!({ "why": { "kind": "space", "of": of } }));
+            dynamic.push(self.dynamic(json!({ "why": { "kind": "space", "of": of } })));
         }
-        let dynamic_to = self.dynamic_reads.len();
         // `Body.calls`.
         let mut calls: Vec<Value> = Vec::new();
         let mut child_of_call: HashMap<usize, usize> = HashMap::new();
@@ -2097,7 +2107,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             "widenings": [],
         }));
         self.body_facts.push(fact);
-        self.body_dynamic.push((dynamic_from, dynamic_to));
+        self.body_dynamic.push(dynamic);
         // The bindings the body makes (PL §1.1, `Binding`): the handler
         // is a body of the plan, and each path of its state is copied or
         // holds a reference the binding body was given.
@@ -2234,9 +2244,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 inputs.push(template.clone());
             }
         }
-        let (from, to) = *self.body_dynamic.get(body)?;
-        for reads in from..to {
-            inputs.push(json!({ "op": "dynamic", "reads": reads }));
+        for reads in self.body_dynamic.get(body)? {
+            let node = json!({ "op": "dynamic", "reads": reads });
+            if !inputs.contains(&node) {
+                inputs.push(node);
+            }
         }
         Some(json!({ "op": "derive", "inputs": inputs, "by": { "body": body } }))
     }
@@ -2740,12 +2752,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Value::Object(slot)
             })
             .collect();
-        let mut dynamic_reads: Vec<Value> = Vec::new();
-        for read in std::mem::take(&mut self.dynamic_reads) {
-            if !dynamic_reads.contains(&read) {
-                dynamic_reads.push(read);
-            }
-        }
+        let dynamic_reads = std::mem::take(&mut self.dynamic_reads);
         let mut plan = json!({
             "version": 1,
             "slots": slots,
