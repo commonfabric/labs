@@ -177,10 +177,11 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
         read(paths)?
     };
     let analysis = analyze(&files);
-    if !corpus {
+    if !corpus || flags.contains(&"--json") {
         let modules: Vec<serde_json::Value> = analysis
             .modules
             .iter()
+            .filter(|module| !corpus || module.accepted())
             .map(|module| {
                 let patterns: Vec<serde_json::Value> = module
                     .plans

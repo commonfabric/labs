@@ -106,6 +106,11 @@ fn name_schemas(
             output.remove("schema");
         }
     }
+    for body in plan["bodies"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = body.get("eventSchema").cloned() {
+            body["eventSchema"] = name(&document);
+        }
+    }
     schemas
 }
 
@@ -5714,6 +5719,22 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         let dynamic_reads = std::mem::take(&mut self.dynamic_reads);
+        // The schema of a handler's event, where the emitter has the type
+        // its parameter declares. No record of PL §1.1 has it: the
+        // comparison of stage 3 generates an event from it.
+        let events: Vec<(usize, TypeId)> = self
+            .root_types
+            .iter()
+            .filter_map(|(root, ty)| match root {
+                Root::Event(index) => Some((*index, *ty)),
+                _ => None,
+            })
+            .collect();
+        for (index, ty) in events {
+            if let Some(body) = self.plan_bodies.get_mut(index) {
+                body["eventSchema"] = self.resolver.schema_of(ty);
+            }
+        }
         let mut plan = json!({
             "version": 1,
             "slots": slots,

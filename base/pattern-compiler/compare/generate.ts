@@ -1,0 +1,220 @@
+/**
+ * Generates a scenario for a plan with no hand-written one: an argument
+ * with a value of each type its schema declares, a confidentiality atom of
+ * its own for each top-level input, and one event for each handler.
+ */
+import type { LabeledInput, Plan } from "./harness.ts";
+
+/** A JSON schema as the crate's `plan` command prints it. */
+export type Schema = boolean | {
+  type?: string | string[];
+  properties?: Record<string, Schema>;
+  required?: string[];
+  items?: Schema;
+  anyOf?: Schema[];
+  oneOf?: Schema[];
+  enum?: unknown[];
+  const?: unknown;
+  $ref?: string;
+  $defs?: Record<string, Schema>;
+  asCell?: unknown;
+  ifc?: { confidentiality?: unknown[]; integrity?: unknown[] };
+  [key: string]: unknown;
+};
+
+/** The schemas of a plan, by the identifier a record names one with. */
+export type Schemas = { id: string; schema?: Schema }[];
+
+/** The marker of a value the generator has none for. */
+const NONE = Symbol("no value");
+
+// A value is generated to this depth, where an object and an array each
+// count as one level. Below it an array is empty and a property that is
+// not required is left out, which ends a type that refers to itself.
+const DEPTH = 3;
+
+const resolve = (schema: Schema, root: Schema): Schema => {
+  let current = schema;
+  for (let hops = 0; hops < 16; hops++) {
+    if (typeof current !== "object" || current.$ref === undefined) break;
+    const name = current.$ref.match(/^#\/\$defs\/(.+)$/)?.[1];
+    const target = typeof root === "object" && name !== undefined
+      ? root.$defs?.[name]
+      : undefined;
+    if (target === undefined) return true;
+    current = target;
+  }
+  return current;
+};
+
+const isStream = (schema: Schema): boolean =>
+  typeof schema === "object" && Array.isArray(schema.asCell) &&
+  schema.asCell.includes("stream");
+
+/**
+ * A value of `schema`. `name` makes each string distinct, so that a value
+ * the run stores can be told from another.
+ */
+export const generateValue = (
+  schema: Schema,
+  root: Schema,
+  name: string,
+  depth = 0,
+): unknown => {
+  const resolved = resolve(schema, root);
+  if (resolved === false) return NONE;
+  if (resolved === true) return `${name}-value`;
+  if (isStream(resolved)) return NONE;
+  if ("const" in resolved) return resolved.const;
+  if (resolved.enum !== undefined) return resolved.enum[0];
+  const variants = resolved.anyOf ?? resolved.oneOf;
+  if (variants !== undefined) {
+    // The first variant that has a value other than `null`.
+    for (const variant of variants) {
+      const inner = resolve(variant, root);
+      const type = typeof inner === "object" ? inner.type : undefined;
+      if (type === "null" || type === "undefined") continue;
+      const value = generateValue(variant, root, name, depth);
+      if (value !== NONE) return value;
+    }
+    return null;
+  }
+  const type = Array.isArray(resolved.type) ? resolved.type[0] : resolved.type;
+  switch (type) {
+    case "string":
+      return `${name}-text`;
+    case "number":
+    case "integer":
+      return 3;
+    case "boolean":
+      return true;
+    case "null":
+      return null;
+    case "array": {
+      if (depth >= DEPTH || resolved.items === undefined) return [];
+      const items = [0, 1].map((index) =>
+        generateValue(resolved.items!, root, `${name}-${index}`, depth + 1)
+      );
+      return items.includes(NONE) ? [] : items;
+    }
+    case "object":
+    case undefined: {
+      if (resolved.properties === undefined) {
+        return type === "object" ? {} : `${name}-value`;
+      }
+      const value: Record<string, unknown> = {};
+      for (const [key, property] of Object.entries(resolved.properties)) {
+        const required = resolved.required?.includes(key) ?? false;
+        if (depth >= DEPTH && !required) continue;
+        const inner = generateValue(
+          property,
+          root,
+          `${name}-${key}`,
+          depth + 1,
+        );
+        if (inner !== NONE) value[key] = inner;
+      }
+      return value;
+    }
+    default:
+      return NONE;
+  }
+};
+
+/** The confidentiality atom the generator gives the input `name`. */
+export const inputAtom = (name: string): string => `input:${name}`;
+
+/**
+ * The inputs of a generated scenario: for each property of the plan's
+ * argument schema, a value and the schema the harness writes it under. The
+ * schema is the property's own, with the labels it declares, and one more
+ * confidentiality atom at its root that no other input has.
+ */
+export const generateInputs = (
+  plan: Plan & { argumentSchema?: string },
+  schemas: Schemas,
+): Record<string, LabeledInput> => {
+  const root = schemas.find((entry) => entry.id === plan.argumentSchema)
+    ?.schema;
+  if (root === undefined) return {};
+  const argument = resolve(root, root);
+  if (typeof argument !== "object" || argument.properties === undefined) {
+    return {};
+  }
+  const inputs: Record<string, LabeledInput> = {};
+  for (const [name, property] of Object.entries(argument.properties)) {
+    const value = generateValue(property, root, name);
+    if (value === NONE) continue;
+    const resolved = resolve(property, root);
+    const own = typeof resolved === "object" ? { ...resolved } : {};
+    // The cell holds the value. Whether the pattern takes the input as a
+    // handle is the pattern's own declaration.
+    delete own.asCell;
+    inputs[name] = {
+      value,
+      schema: {
+        ...own,
+        ...(typeof root === "object" && root.$defs !== undefined
+          ? { $defs: root.$defs }
+          : {}),
+        ifc: {
+          ...own.ifc,
+          confidentiality: [
+            ...(own.ifc?.confidentiality ?? []),
+            inputAtom(name),
+          ],
+        },
+      },
+    };
+  }
+  return inputs;
+};
+
+/**
+ * One event for the handler of `binding`: a value of the type its event
+ * declares, and where the plan has no such type, an object with a value
+ * at each path the body reads of its event, of the type the slot's schema
+ * gives.
+ */
+export const generateEvent = (
+  plan: Plan,
+  schemas: Schemas,
+  binding: number,
+): unknown => {
+  const body = plan.bindings?.[binding]?.handler?.body;
+  // The whole declared type where the plan has it: the runtime reads an
+  // event under the schema of the authored type (PL §3.12), and an event
+  // without a required field it does not read is refused all the same.
+  const declared = schemas.find((entry) =>
+    entry.id === plan.bodies?.[body ?? -1]?.eventSchema
+  )?.schema;
+  if (declared !== undefined) {
+    const value = generateValue(declared, declared, "event");
+    if (value !== NONE && value !== null && typeof value === "object") {
+      return value;
+    }
+  }
+  let event: unknown = {};
+  for (const slot of plan.slots) {
+    if (slot.root.kind !== "event" || slot.root.handler !== body) continue;
+    if (slot.path.includes("*")) continue;
+    const schema = schemas.find((entry) => entry.id === slot.schema)?.schema ??
+      true;
+    const value = generateValue(schema, schema, `event-${slot.path.join("-")}`);
+    if (value === NONE) continue;
+    if (slot.path.length === 0) {
+      if (value !== null && typeof value === "object") event = value;
+      continue;
+    }
+    let at = event as Record<string, unknown>;
+    slot.path.forEach((key, index) => {
+      if (index === slot.path.length - 1) {
+        if (at[key] === undefined) at[key] = value;
+        return;
+      }
+      if (at[key] === null || typeof at[key] !== "object") at[key] = {};
+      at = at[key] as Record<string, unknown>;
+    });
+  }
+  return event;
+};

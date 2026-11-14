@@ -16,6 +16,7 @@ import { resolveLink } from "../../../runtime/runner/src/link-resolution.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { Cell } from "../../../runtime/runner/src/cell.ts";
+import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.ts";
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
@@ -80,7 +81,13 @@ export type Plan = {
     /** The result path that holds the binding's stream, where one does. */
     result?: string[];
   }[];
-  bodies?: { kind: string; name?: string; writes?: PlanWrite[] }[];
+  bodies?: {
+    kind: string;
+    name?: string;
+    writes?: PlanWrite[];
+    /** The schema of the event's declared type, where the plan has it. */
+    eventSchema?: string;
+  }[];
   stateCells?: { name: string; within?: unknown[] }[];
   selectors?: { arity: number }[];
 };
@@ -90,7 +97,12 @@ export type LabeledInput = { schema: unknown; value: unknown };
 
 /** One run of a pattern to compare. */
 export type Scenario = {
-  program: RuntimeProgram;
+  /**
+   * The program, or the path of its main module on disk and the directory
+   * its imports are resolved under, with the export to run where that is
+   * not the default one.
+   */
+  program: RuntimeProgram | { main: string; root: string; export?: string };
   plan: Plan;
   argument: Record<string, unknown>;
   /**
@@ -299,8 +311,18 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     cfcFlowLabels: "persist",
   });
   try {
+    const program = "files" in scenario.program
+      ? scenario.program
+      : await resolveLocalProgram(
+        (resolver) => runtime.harness.resolve(resolver),
+        {
+          main: scenario.program.main,
+          root: scenario.program.root,
+          mainExport: scenario.program.export,
+        },
+      );
     const compiled = await runtime.patternManager.compilePattern(
-      scenario.program,
+      program,
       { space },
     );
     const start = runtime.edit();
@@ -559,13 +581,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       // argument's own, and the cell of each input given through a link.
       const inputIds = new Set([
         argument.getAsNormalizedFullLink().id,
-        ...Object.keys(scenario.inputs ?? {}).map((name) =>
-          resolveLink(
-            runtime,
-            read,
-            at(argument, [name]).getAsNormalizedFullLink(),
-            "top",
-          ).id
+        ...Object.keys(scenario.inputs ?? {}).flatMap((name) =>
+          hops(at(argument, [name])).map((link) => link.id)
         ),
       ]);
       const byOrigin = (
