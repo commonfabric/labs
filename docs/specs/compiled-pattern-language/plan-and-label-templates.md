@@ -2388,20 +2388,31 @@ reader, a reader whose own schema declares no default included.
   the pattern that declares the place. It does not enter the reader's
   templates as a `const`, because the reader's plan does not hold it: it
   is what the slot read.
-- **The integrity.** By ruling, a read of a default carries no integrity.
-  The rule holds for a default of each of the three origins: the place's
-  declaration, the schema of a link of the chain, and the slot's own
-  schema (section 5.2).
-  - Where nothing is stored at the bound address, the slot has the empty
+- **The integrity.** By ruling, a read of a default carries no integrity, and
+  integrity is anchored in a stored object as a whole. The first rule holds for
+  a default of each of the three origins: the place's declaration, the schema of
+  a link of the chain, and the slot's own schema (section 5.2).
+
+  - **Nothing is stored at the bound address.** The slot has the empty
     integrity.
-  - Where an object is stored at the bound address and one of its
-    properties is absent and filled by a default, the defaulted part has
-    the empty integrity and not the claims of the stored object. A slot
-    bound at a property that is stored keeps the integrity of the
-    observation there.
-  - *Assumed* (section 8, question 43): a slot that reads the object
-    whole takes the meet over the parts it read, so its integrity is
-    empty where a part was filled by a default.
+
+  - **A read of a stored object whole.** A slot bound at the address of a stored
+    object carries the integrity of the observation at that address, also where
+    a property of the object is absent and a default fills it. The claims were
+    made about the object that is stored, and the slot reads that object. A
+    default among its properties removes none of them.
+
+  - **A selection of one property.** A path that selects a property is a slot of
+    its own, bound at the property's address (sections 2.1 and 3.3), and it
+    carries what a read at that address consumes (section 2.2). For each origin
+    of entry that is the entry stored at the property's path, and, where none is
+    stored there, the nearest entry above it that applies below its own path
+    (`labelForEntriesAtPath` in `runtime/runner/src/cfc/consumed-label.ts`). So
+    a selected property that is stored carries its own integrity where an entry
+    is stored for it, and the integrity of the object's entry where the object's
+    is the nearest. A selected property that is absent and that a default fills
+    carries the empty integrity, by the first rule: the object's claims are
+    about what is stored in it, and the selected value is not stored.
 
   The value of a default is not stored at the bound address, and no
   principal wrote it there. It comes from a schema, and a pointer
@@ -2434,10 +2445,13 @@ through `defaultForAbsentValue`), and the read of the path found empty is
 registered in the transaction, so the default carries the join that the
 read contributes. A binding a pattern makes is written as a link with the
 schema of the path it names (`unwrapOneLevelAndBindToDoc` in
-`runtime/runner/src/pattern-binding.ts`). The value and the
-confidentiality are **equal**. The integrity is **tighter**: today the
-read has the integrity of the observation at the bound address, and by
-the rule above it has none.
+`runtime/runner/src/pattern-binding.ts`). The value and the confidentiality are
+**equal**. The integrity of a slot that reads a stored object whole is
+**equal**. The integrity of a slot that reads as a default is **looser**: today
+the read has the integrity of the entries that resolve at the bound address, an
+entry of an enclosing object included, and by the rule above it has none. Fewer
+integrity atoms is looser by the definition of section 3.1. The difference is
+accepted by ruling, and section 3.1 lists it as the fourth exception.
 
 **A handle to a position that holds nothing.** An `identity` slot at a
 position of handle type yields a handle whether or not anything is stored
@@ -2679,24 +2693,74 @@ writes gets one label:
   ([CFC observation classes](../cfc-observation-classes.md) §6).
 - Integrity is the hereditary meet over the content observations, plus a
   `TransformedBy` atom minted by `mintTransformedBy`
-  (`runtime/runner/src/cfc/input-witness.ts`) when the writing implementation
-  is known and the join is not empty. The
-  [conformance statement](../cfc-conformance-statement.md) §4 records this as
-  the third stage of §8.9.3 with deviations.
+  (`runtime/runner/src/cfc/input-witness.ts`) when every write of the
+  transaction was made under one known implementation identity and the join
+  has a confidentiality clause or a hereditary atom (`deriveFlowJoinImpl`).
+  Beside that atom, which holds the identity alone, `mintTransformedBy`
+  mints one atom that holds the identity and an `inputWitness` for each
+  `TransformedBy` atom that every confidential location the transaction
+  read carries (`retainedInputWitnesses` and `meetInputWitnesses` in the
+  same file; [input witnesses](../cfc-transformed-by-input-witnesses.md)).
+  The [conformance statement](../cfc-conformance-statement.md) §4 records
+  this as the third stage of §8.9.3 with deviations.
 - Input gates (`verifyInputRequirements`) quantify over the reads before the
   last overlapping write
   ([write-prefix provenance](../cfc-write-prefix-provenance.md)); the join
   itself stays transaction-global
   ([value-level provenance](../cfc-value-level-provenance.md) §1).
+- **A static part, from declarations.** Beside the join of a run, the result of
+  a node carries the confidentiality that its inputs declare.
+  `createNodeFactory` (`runtime/runner/src/builder/module.ts`) joins the
+  confidentiality a module's argument schema declares onto the module's result
+  schema (`applyArgumentIfcToResult` in
+  `runtime/runner/src/builder/node-utils.ts`), and `connectInputAndOutputs` in
+  that file joins the confidentiality that the schemas of a node's input cells
+  declare onto the schemas of its outputs (`applyInputIfcToOutput`). The result
+  document holds that join as an entry of origin `declared`, beside the
+  `derived` entry of the transaction's join. It is fixed when the graph is built
+  and does not depend on what a run read. It applies to every node: a `lift`, a
+  `computed`, `ifElse`, and the result of `map`
+  (`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` states it for a
+  module). So the result of `ifElse` carries the declared confidentiality of the
+  condition and of both branches whichever branch is selected, and the container
+  of a `map` result carries the confidentiality its elements declare.
 
-So today the label of a written path is a function of *which transaction
-wrote it*, and precision comes from giving each node its own transaction. In
-the comparisons below, "today" means that per-node arrangement.
+So today the label of a written path is a function of *which transaction wrote
+it*, joined with that static part, and precision comes from giving each node its
+own transaction. In the comparisons below, "today" means that per-node
+arrangement.
+
+**The static part is not copied.** By ruling, a template does not join the
+labels that the arguments of an operation declare. `ifElse` and the container of
+a `map` are trusted in exactly this sense: their result does not join the labels
+of all their arguments. The static part is recorded as a finding against the
+runtime, which is wider there than its own `derived` entry, and the design does
+not reproduce it. A template is therefore **tighter** than today wherever the
+static part holds a clause that the template lacks. For a conditional and for
+the container of a `map` that is the one difference from today (sections 3.5 and
+3.6). For every other rule the comparison words of this section describe the
+template against the `derived` part, and the static part can narrow a template
+further without a rule saying so.
+
+**What is compared.** The two sides do not store the same thing at an output
+path. Today a result path holds a link to a document of the node that computed
+it, and a node that returns an input stores a copy of its value. A template for
+a value passed on is the `identity` slot of the input, and the plan stores a
+reference. *Assumed* (section 8, question 65): the comparison is made on
+dereferenced labels. For the runtime that is what a value read of the output
+path consumes with every link followed (`cfcLabelViewForResolvedCell` in
+`runtime/runner/src/cfc/label-view.ts`). For the template it is the label of
+section 3.2, with each `identity` slot joined with what a value read at the
+slot's path consumes. For an entry that names a collection, the runtime's side
+is what a read of the container's shape consumes. The runtime's entries are
+separated by origin: the `derived` entries are compared with the template, and a
+difference that the `declared` entries of the static part account for is
+expected.
 
 The comparison criterion is the overview's: a template label is **equal or
 tighter, never looser**. Tighter means fewer confidentiality clauses, or more
 integrity atoms. Each rule that is tighter says what the narrowing rests on.
-**There are three exceptions**, all deliberate.
+**There are four exceptions**, all deliberate.
 
 - **The collection index** (section 3.17). A bucket's membership label
   includes the key of every element, where the runtime today stores only
@@ -2721,9 +2785,18 @@ integrity atoms. Each rule that is tighter says what the narrowing rests on.
   positions that hold an equal element. This exception is accepted by
   ruling and is **to be revisited**: the alternative keys these as
   per-element state is keyed, by a cell's identity or with the position.
+- **The integrity of a default** (section 2.5). A slot that reads as a default
+  has the empty integrity, where today the read has the integrity of the entries
+  that resolve at the bound address. Fewer integrity atoms is looser. This
+  exception is by ruling: no principal wrote the value of a default at the
+  place, so no claim stored for the place describes it. A slot that reads a
+  stored object whole keeps the object's integrity and is not part of the
+  exception.
 
-The stage 3 comparison expects these three differences and no other in
-that direction (section 7.5).
+The stage 3 comparison expects these four differences and no other in that
+direction (section 7.5). One further difference in that direction is open, and
+is neither expected nor counted among the four: the integrity of a conditional
+written in a `computed` (section 3.5; section 8, question 64).
 
 ### 3.2 Template semantics
 
@@ -2833,6 +2906,24 @@ Notes on the integrity column:
 - **`const` is neutral.** A literal is not an observation, so it does not
   empty the meet. This matches the runtime, where a literal in a function
   body is not a read.
+- **When `derive` and `fold` mint.** *Assumed* (section 8, question 66): the
+  atom is minted where the label of the node has a confidentiality clause or a
+  hereditary atom, and not beside an empty label. That is the condition the
+  runtime applies (section 3.1), so the integrity is **equal**, and an output
+  whose inputs carry no label stores no entry. The alternative mints on every
+  `derive`, which is tighter and stores an entry for every kept output a
+  derivation writes.
+- **Witness-bearing atoms.** *Assumed* (section 8, question 67): a `derive` and
+  a `fold` mint, beside the atom that holds the identity alone, one atom with
+  the identity and an `inputWitness` for each `TransformedBy` atom that every
+  input with a confidentiality clause carries, by the functions the runtime uses
+  (section 3.1): the atoms `retainedInputWitnesses` keeps of each such input's
+  integrity, met across those inputs by `meetInputWitnesses`, to the nesting
+  depth `INPUT_WITNESS_MAX_DEPTH` allows. A node with no input that has a clause
+  mints no such atom. The inputs are the node's own, a slot or a nested template
+  each, where the runtime takes the locations a transaction read. Without these
+  atoms a `derive` over the result of a `derive` would carry one atom where the
+  runtime stores two, which is looser.
 - **`select` does not combine its branches.** The result *is* the selected
   branch's value, so integrity is that branch's. The condition contributes
   confidentiality only, which is the flow-path rule of §8.11.3
@@ -3071,8 +3162,31 @@ the result are functions of the condition and the selected branch alone.
 (`runtime/runner/src/builtins/forward-reference.ts`). It reads the
 condition's truthiness at its root (`readsTruthyAtRoot`), resolves only the
 selected input, and writes a link to it. The result slot's label is that
-transaction's join, which holds the condition's label; a reader that follows
-the link consumes the selected branch's label at its own document. **Equal.**
+transaction's join, which holds the condition's label; a reader that follows the
+link consumes the selected branch's label at its own document. That `derived`
+part is **equal**. The result document also holds the static part of section
+3.1: the declared confidentiality of the condition and of both branches,
+whichever branch is selected. By ruling the `select` does not join it, so the
+template is **tighter** where the unselected branch declares a clause that the
+selected branch and the condition lack, and the comparison expects that
+difference.
+
+**A conditional written in a `computed`: open.** `c ? a : b` in the body of a
+`computed` is part of a lift today. Its transaction reads the condition and both
+operands, writes a copy of the selected value, and mints `TransformedBy` under
+the condition of section 3.1. Where the `computed` is promoted
+(`language-subset.md` §6.1), the template is a `select` over the operands. Its
+confidentiality is equal where the selected branch carries every clause the
+other does, and tighter otherwise. Its integrity is the selected branch's alone,
+which holds no `TransformedBy` atom of the conditional, so the template has
+fewer atoms than today and is looser on integrity. This is none of the four
+exceptions of section 3.1, and the comparison reports it. The question is the
+project owner's and is not assumed either way (section 8, question 64). One
+alternative has the template of a conditional that a promoted `computed` holds
+mint the atom of its cone, which is equal to today and makes a promoted
+conditional carry an atom that the same conditional written in the reactive tier
+does not. The other keeps the `select` as it is and counts the difference as a
+fifth exception.
 
 ### 3.6 `map`
 
@@ -3134,13 +3248,19 @@ instance per element. The coordinator reads the list's membership and the
 per-slot references but no element value, and its membership read is declared
 onward (`listMembershipRead` in `list-coordinator-plan.ts`), so the container
 carries membership and each element result carries its own element's label
-plus its slot's
-([CFC observation classes](../cfc-observation-classes.md) §6.2). **Equal**
-for labels. The specification calls this arrangement decomposition and
+plus its slot's ([CFC observation classes](../cfc-observation-classes.md) §6.2).
+**Equal** for the `derived` part of the labels. The result container also holds
+the static part of section 3.1: the stage 3 comparison observed, for a list that
+has no label of its own and whose elements declare a clause, that the
+container's root resolves to that clause, on a covering entry and on its
+`enumerate` and `shape` entries. The template of the container is the source's
+`enumeration` slot, which does not carry it. By ruling the template does not
+join it, so the container is **tighter** than today, and the comparison expects
+that difference. The specification calls this arrangement decomposition and
 prefers it (§8.5.4.3): "Each **element op** runs in its own transaction that
 reads only its element." The template arrives at the same labels without the
-transactions. Within one element's body, a `computed` that returns several
-paths is **tighter** as in section 3.4.
+transactions. Within one element's body, a `computed` that returns several paths
+is **tighter** as in section 3.4.
 
 ### 3.7 `filter` and `flatMap`
 
@@ -3207,6 +3327,15 @@ constructs too; they depend on order and are in section 3.13.
 | `count(predicate)` | `fold` of the predicate's template, joined with membership |
 | `sum()`, `min()`, `max()` | `fold` of the element's `value`, joined with membership |
 | `minBy(keyFunction)`, `maxBy(keyFunction)` | `pick` (section 3.18): the winning element, with the choice labeled by a `fold` of the key function's template |
+
+`.length` reads the membership of the collection it is written on, and nothing
+else. Its template is the `enumeration` slot at the collection's path, or the
+`membership` of the collection's record where the instance computed the
+collection. It is not a slot at a path `length` below the collection, of any
+class: `length` is not a property the plan names a path for. That holds in
+expression code and in a function body alike (`footprint-analysis.md` §2.2
+and §3.4), so `computed(() => items.length)` has the `enumeration` slot at
+`items` and no entry at `items/length`.
 
 A predicate is observed for truthiness, with the classes of section 3.5. The
 callback of `minBy` and `maxBy` is called the **key function**: it returns
@@ -3374,7 +3503,7 @@ handle's declared schema reads.
 **A run that throws.** A slot for a read through a handle is in the body's
 template on every run. A run that throws before the read did not make it
 today, and its error state or failed outcome carries the slot's label all
-the same (section 5.2). This is the second of the three exceptions of
+the same (section 5.2). This is the second of the four exceptions of
 section 3.1.
 
 The same node covers every kind of body (`Body.kind`). An authored
@@ -3689,38 +3818,64 @@ journals, and the write goes to the cell it returns (`resolveWriteTarget`
 in `runtime/runner/src/cell.ts` states the difference between the two
 targets). **Equal.**
 
-**A write through a handle to a value the instance computes.** In the
-reactive tier an argument that is a value may stand where the callee
-declares a handle that can write (`language-subset.md` §7.5.2), and the
-value can be one the instance computes: the result of a `computed` or of
-an operator, an assembled collection, a literal. Where the write lands
-depends on what the callee is.
+**A write through a handle to a value the instance computes.** In the reactive
+tier an argument that is a value may stand where the callee declares a handle
+that can write (`language-subset.md` §7.5.2), and the value can be one the
+instance computes: the result of a `computed` or of an operator, an assembled
+collection, a literal. By ruling, what a write through such a handle does
+depends on what the bound path holds. The callee is a child of the reactive
+tier, a handler bound there, a `lift` result, or a pattern compiled into the
+enclosing instance, and the rule is the same for each.
 
-- **A child.** The enclosing plan writes a computed argument path into
-  the child's argument document (section 3.15), so the child's handle
-  names that path of its own argument document, and the write lands
-  there. Section 3.15 ("A handle to a path of the argument") has the
-  rule, and no rule is added for it.
-- **A handler bound in the reactive tier, a `lift` result, and a pattern
-  compiled into the enclosing instance.** The path resolves to an
-  `Output` of the instance (`Binding.state`). The records do not
-  determine the write. A `handle` target names a cell that a handle
-  links to, an output is not a cell, and an interim output is stored
-  nowhere. *Assumed* (section 8, question 42): the runtime refuses the
-  write, as it refuses a write that neither an edge nor an envelope of
-  the body covers (below). In a handler the refusal rejects the event's
-  transaction, and a cone whose write is refused fails, with the error
-  state of section 5.2. No label rule is needed, because nothing is
-  written. The refusal is decided by
-  what the path resolves to and reads no data.
+- **A value the instance produces.** The path holds the result of a `computed`
+  or of an operator, a member of a record or a collection the instance
+  assembled, or a literal, and no reference. The write is refused. The runtime
+  refuses it as it refuses a write that neither an edge nor an envelope of the
+  body covers (below). In a handler the refusal rejects the event's transaction,
+  and a cone whose write is refused fails, with the error state of section 5.2.
+  No label rule is needed, because nothing is written. The refusal is decided by
+  what the path holds and reads no data beyond the reference test. The compiler
+  reports the binding where it can decide that the path never holds a reference,
+  the callee declares a handle that can write, and the callee's record has a
+  write edge or a write envelope through that handle
+  (`binding:write-to-computed` in `language-subset.md` §10.2;
+  `footprint-analysis.md` §6.2 has the condition).
+- **A reference to a stored place.** The path holds a reference that the
+  producing code passed on: an element that a `filter`, or another construct
+  that passes elements on, yields (section 3.7); an element or a container that
+  a body read and returned unchanged, at a result path that `Body.outputs`
+  records as `passes` or `oneOf` and that the runtime verified by identity
+  (section 3.9); or a handle that a body returned. The handle resolves through
+  the reference to the place it links to, as a slot whose path crosses a stored
+  link does (section 2.5), and the write lands there under the template of the
+  writing edge. The target is named as "A handle from a computed input" names it
+  (below), and for a handler bound in the reactive tier it is the `identity`
+  slot of the state path, which resolves to the output that holds the reference.
+  The write-side checks are those of the place where the write lands. In
+  `patterns/apps/topics/topic.tsx`, `linksView` is a `computed` that filters the
+  stored list `links`, a `map` over `linksView` binds the handler
+  `retractProfileLink` to each element, and the handler's write of `removedAt`
+  through that element lands in the record of the stored list.
+- **The argument of a pattern that a function body instantiates.** This is not a
+  bound value. What the body gives is the initial value of the child's stored
+  argument, and the child writes it freely (section 3.15, "A handle to a path of
+  the argument").
 
-Today no refusal of this kind was found. A value a node computes is
-stored in a document of its own, a handle to it writes like any handle,
-and the node's next run writes its result over what was written. The one
-refusal by the kind of address is of a write to a `data:` or `snapshot:`
-address (`IReadOnlyAddressError` in
-`runtime/runner/src/storage/interface.ts`). The assumed rule is therefore
-narrower than today in what a program may do, and it changes no label.
+The runtime decides between the first two cases for each write, by whether the
+path holds a reference, because one path can hold a reference on one evaluation
+and a computed value on another: a conditional between the two, and a result
+path of a body whose returned reference the identity comparison did not confirm
+(section 3.9), which is then a computed value.
+
+Today no refusal of this kind was found. A value a node computes is stored in a
+document of its own, a handle to it writes like any handle, and the node's next
+run writes its result over what was written. The one refusal by the kind of
+address is of a write to a `data:` or `snapshot:` address
+(`IReadOnlyAddressError` in `runtime/runner/src/storage/interface.ts`). A value
+that a node read from an input and returned unchanged is stored as a link, and a
+write through a handle to it lands at the link's target, so the second case is
+**equal**. The first case is narrower than today in what a program may do, and
+it changes no label.
 
 **A handle from a computed input.** A body can write through a handle that
 reached it in a value the instance computed, such as a handle another body
@@ -4633,33 +4788,39 @@ set.
 the handle names follows from what the argument document holds there
 (section 2.5).
 
-- **The path holds a link**: the request gave a handle, or a value bound
-  by reference in the reactive tier, or a container a function body read
-  and passes on unchanged. The handle names the cell the link leads to,
-  and a write lands there (section 3.11).
-- **The path holds a value**: a value the enclosing instance computed, a
-  literal, or a scalar or a computed container a function body gave
-  (`language-subset.md` §7.5.3). The handle names that path of the
-  child's own argument document. A write through it is a `handle` target
-  of the child's plan, lands at that path, and carries the template of
-  the child's edge. It changes nothing the requester holds.
-- **The path holds nothing**: the handle names the path all the same
-  (section 2.5, "A handle to a position that holds nothing").
+- **The path holds a link**: the request gave a handle, or a value bound by
+  reference in the reactive tier, or a reference the enclosing instance
+  computed, or a container a function body read and passes on unchanged. The
+  handle names the cell the link leads to, and a write lands there (section
+  3.11).
+- **The path holds a value that a function body gave**: a scalar or a computed
+  container given where the body instantiates the child (`language-subset.md`
+  §7.5.3). By ruling this is the initial value of the child's stored argument,
+  and the child writes it freely. The handle names that path of the child's own
+  argument document. A write through it is a `handle` target of the child's
+  plan, lands at that path, and carries the template of the child's edge. It
+  changes nothing the requester holds.
+- **The path holds a value that a cone of the reactive tier wrote**: a value the
+  enclosing instance computed, or a literal, given to a child of the reactive
+  tier. By ruling a write through the child's handle is refused (section 3.11,
+  "A write through a handle to a value the instance computes"). The path has one
+  writer, the cone of the enclosing instance whose write edge with target
+  `argument` names it. The runtime knows such a path from that edge, and from
+  the value at the path being no link.
+- **The path holds nothing**: the handle names the path all the same (section
+  2.5, "A handle to a position that holds nothing").
 
-A path of the second kind has two writers: the child, through the handle,
-and the cone of the enclosing instance whose write edge with target
-`argument` names the path. The path holds what was written last, under
-the label of that write. An evaluation of the cone writes the path again,
-so it replaces what the child wrote. That is the case for a child of the
-reactive tier and for an instance a `lift` or a `computed` makes: each
-evaluation that names the instance writes its argument (section 3.14, "In
-a body that is re-evaluated"). An instance a handler made is not written
-again by a later event (section 3.14). The cone is evaluated when one of
-its inputs changed, so the child's write stays until then. The slots of
-the child that read the path resolve to the label stored there, whichever
-writer stored it. The error state of section 5.2 for a path of a child's
-argument is unchanged: a failed cone gives the path the error state,
-whatever the child wrote there.
+A path of the second kind can have two writers: the child, through the handle,
+and the body that instantiated the child. The path holds what was written last,
+under the label of that write. An instance a handler made is not written again
+by a later event (section 3.14), so there the child's write stays. An instance a
+`lift` or a `computed` makes is written by each evaluation that names it
+(section 3.14, "In a body that is re-evaluated"), so an evaluation replaces what
+the child wrote. The body is evaluated when one of its inputs changed, and the
+child's write stays until then. The slots of the child that read the path
+resolve to the label stored there, whichever writer stored it. The error state
+of section 5.2 for a path of a child's argument is unchanged: a failed cone
+gives the path the error state, whatever the child wrote there.
 
 **Labels inside.** The child's plan supplies its templates at run time. Its
 `argument` slots are bound to the argument document and resolve to the
@@ -5411,8 +5572,8 @@ nothing to compare.
 | --- | --- | --- |
 | Property access | Slot path extension | Equal |
 | Object, array construction | Template per path | Equal in pattern bodies; tighter in promoted expressions |
-| Conditional | `select` | Equal |
-| `map` | Element template; membership slot | Equal; tighter within an element as above |
+| Conditional | `select` | Equal to the `derived` part; tighter than the static part of section 3.1, by ruling. A conditional written in a `computed` is looser on integrity, which is open (question 64) |
+| `map` | Element template; membership slot | Equal to the `derived` part; the container tighter than the static part of section 3.1, by ruling; tighter within an element as above |
 | `filter` | Pass-through elements; membership `fold` of predicates | Equal |
 | `flatMap` | Element template; membership `fold` of segment lengths | Tighter (content of other segments excluded) |
 | `count`, `sum`, `min`, `max` | `fold` | Equal; `count` equal or tighter |
@@ -5426,6 +5587,8 @@ nothing to compare.
 | Sandboxed call | `derive` over slots, computed inputs and handles; references passed through | Equal or tighter; **looser**, the second exception, for a static read through a handle on a run that throws before it |
 | Link following | A slot whose path crosses the link; `identity` slot plus `dynamic` where the path is not named | Equal |
 | Static side-write | Template of the written expression | Equal or tighter |
+| Write through a handle bound to a value the instance computes | None where the path holds a produced value: the write is refused. Template of the written expression where the path holds a reference, and the write lands at the reference's target | Equal for a reference; a refused write changes no label |
+| A slot that reads as a default (section 2.5) | The slot's confidentiality; the empty integrity | **Looser** on integrity, the fourth exception, by ruling. A slot that reads a stored object whole is equal |
 | Write through a resolved reference | Template of the written expression, which holds the links the resolution follows; lands where the resolution ends | Equal |
 | Materializer | Today's join on every path it writes, its result included | Equal |
 | Handler | `derive` over event and state footprint | Equal or tighter (an authored event type is read whole today); the second exception applies |
@@ -5441,10 +5604,12 @@ nothing to compare.
 | `anchorsOf`, `cellFromUrl` parsing, `wish` | References with computed identity; for `wish`, an operation whose result joins its operands and a `dynamic` node of kind `search` | Equal |
 | Stored state that is not an output (section 2.6) | The operation's input, the cone-level join, or the output's label | New |
 
-Three things are looser, and all three are decided: the collection index, a
-slot for a read through a handle on a run that throws before the read, and
-what an element body stores once per element key, which is to be revisited
-(section 3.1). There is no fourth. Another way a compiled label could be
+Four things are looser, and all four are decided: the collection index, a slot
+for a read through a handle on a run that throws before the read, what an
+element body stores once per element key, which is to be revisited, and the
+integrity of a slot that reads as a default (section 3.1). A fifth is open and
+not decided: the integrity of a conditional written in a `computed` (section
+3.5; section 8, question 64). Another way a compiled label could be
 looser than today's is a static footprint standing in for reads that are
 dynamic today, and `handles` exclude it: a read a body makes through a cell
 on some runs only, or at a path it computes, stays journaled. A widening
@@ -5453,7 +5618,7 @@ argument, which the body's argument schema materializes today as well. A
 widening on a handle turns its reads into journaled ones under the handle's
 declared type, which is what the runtime records for them today. A read
 through a handle at a static place that is conditional stays dynamic for the
-same reason. A handler binding is not a fourth either: a binding made in a
+same reason. A handler binding is not a further one either: a binding made in a
 function body copies a scalar and a container the body computed, and binds a
 stored container by reference, as the runtime does today (section 3.14).
 
@@ -6432,9 +6597,11 @@ normally.
   (§13) relies on this for its strict `null` checks. Either outcome was
   decided by observing the stored value at that path, and its
   confidentiality is that of the slot, which the output's template already
-  contains. Where the slot reads as a default, the read has the empty
-  integrity, as every read of a default has (section 2.5, "A default
-  belongs to the place").
+  contains. Where the slot reads as a default, the read has the empty integrity,
+  as every read of a default has (section 2.5, "A default belongs to the
+  place"). A slot that reads a stored object whole, one of whose properties a
+  default fills, keeps the integrity of the object: by ruling, integrity is
+  anchored in the object as a whole.
 - **The label of an error state** is the label the output would have had: the
   output's template, instantiated with the selections taken up to the failure.
   A failed body contributes its whole footprint: the `reads` slots, the
@@ -7133,12 +7300,24 @@ to `T_facts`.
 
 | Output | Instantiated confidentiality | Instantiated integrity |
 | --- | --- | --- |
-| New message (computed fields) | `C(e0..e8) ⊔ C(b0..b4) ⊔ C(D(attachments/*)) ⊔ C(D(replyTo/thread)) ⊔ C(D(replyTo/quotes)) ⊔ C(D(threadInfo)) ⊔ C(D(links below messages))`, and what the journaled resolutions through `e3`, `e5` and `e6` consumed, which the listing of section 6.2 leaves out | Declared authorship atom; `⊓` over the same inputs; `TransformedBy(commitSend)` when the join is not empty |
+| New message (computed fields) | `C(e0..e8) ⊔ C(b0..b4) ⊔ C(D(attachments/*)) ⊔ C(D(replyTo/thread)) ⊔ C(D(replyTo/quotes)) ⊔ C(D(threadInfo)) ⊔ C(D(links below messages))`, and what the journaled resolutions through `e3`, `e5` and `e6` consumed, which the listing of section 6.2 leaves out | Declared authorship atom; `⊓` over the same inputs; `TransformedBy(commitSend)` |
 | `facts`, every path | `C(s0) ⊔ C(s2) ⊔ C(D(messages)) ⊔ C(D(threadInfo))` | `⊓` over the same; `TransformedBy(messageFacts)` |
 | `isEmpty` | Same as `facts` | `⊓` over the same; `TransformedBy(pattern)` |
 | Row `text` | `C(facts) ⊔ C(m2) ⊔ C(m4)` | `⊓` over the same; `TransformedBy(bodyText)` |
 | Row `isEdited` | `C(facts) ⊔ C(m5)`, and `C(m3)` as well when `editedAt` is present | from the selected branch: `⊓` over its inputs; `TransformedBy(pattern)` |
 | Row `threadLabel` | `C(facts) ⊔ C(m6)` | from the selected branch |
+
+Each `TransformedBy` atom of the table is minted under the condition of section
+3.2: where the label of the node has a clause or a hereditary atom.
+
+`C(m5)` is the label of a `shape` slot at `editedAt`, and it has no clause for a
+message that was not edited. The runtime stores a declared entry for a field
+where a value is written, as the stage 3 comparison observed, so no entry is
+stored at the path of an absent optional field, and the slot resolves to the
+entries above the path that apply below their own path (section 2.2). The value
+of `isEdited` for such a message says that the field is absent, and its template
+carries no clause of the message unless an entry of an enclosing path does.
+Section 8, question 68 has the assumption.
 
 **In the deployed configuration** every one of these confidentialities is
 empty, because FabriChat declares none and a room's messages, events and
@@ -7379,13 +7558,16 @@ clause any of its slots carries.
   with the labels the Lean evaluator computes from the same plan and inputs.
 - **Stage 3 of the overview** compares template labels with the labels the
   current runtime computes, over the whole corpus, before any template is
-  enforced. That comparison is the test of every row of section 3.22. It
-  expects equal or tighter labels everywhere except in the three cases of
-  section 3.1: for collection indexes it expects the wider membership label
-  of section 3.17, for a failed body it expects the labels of the
-  body's static reads through handles, including the ones the run did not
-  reach, and for what an element body stores once per element key it
-  expects the join over the positions that hold the key (section 2.6).
+  enforced. That comparison is the test of every row of section 3.22. It expects
+  equal or tighter labels everywhere except in the four cases of section 3.1:
+  for collection indexes it expects the wider membership label of section 3.17,
+  for a failed body it expects the labels of the body's static reads through
+  handles, including the ones the run did not reach, for what an element body
+  stores once per element key it expects the join over the positions that hold
+  the key (section 2.6), and for a slot that reads as a default it expects the
+  empty integrity (section 2.5). It compares dereferenced labels and separates
+  the runtime's entries by origin, so that the static part the runtime joins
+  from declarations is expected as a difference (section 3.1).
 
 ## 8. Open questions
 
@@ -7427,8 +7609,17 @@ to an instance that is not loaded through a stream index (2.6); a read of a cell
 whose writer is in an instance that is not loaded returns the stored value where
 the basis rows show it current, and loads the instance only where they show it
 stale (5.4); a default belongs to the stored place, and a reader bound by
-reference reads it through the schema the link holds (2.5); a read of a
-default carries no integrity (2.5, 5.2).
+reference reads it through the schema the link holds (2.5); a read of a default
+carries no integrity (2.5, 5.2); integrity is anchored in a stored object as a
+whole, so a slot that reads the object whole keeps its integrity where a default
+fills a property, and a selected property that is a default carries none (2.5);
+the integrity of a default is the fourth exception to "equal or tighter" (3.1);
+`ifElse` and the container of a `map` do not join the labels their arguments
+declare, and the comparison expects a template tighter than the runtime there
+(3.1, 3.5, 3.6); a write through a handle bound to a value the instance produces
+is refused, a write through one bound to a reference lands at the reference's
+target, and an argument a function body gives to a pattern it instantiates is
+the initial value of the child's stored argument (3.11, 3.15).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -7799,7 +7990,7 @@ this document made.
     of the other elements. *Assumed:* accepted as a residual (section
     5.5), and the element template does not join the collection's
     `enumeration` on that account. The alternative joins it into every
-    template that reads such a child, which would be a fourth exception
+    template that reads such a child, which would be a further exception
     to "equal or tighter".
 37. **Which instantiations put the position in the key.** The ruling
     names a per-element body that instantiates a child. *Assumed:* that
@@ -7843,30 +8034,23 @@ this document made.
     or of the slot's own schema. The entry keeps its number because
     other documents cite the entries around it by number.
 42. **A write through a handle to an output of the instance** (from
-    `language-subset.md` §13, question 28). A handler bound in the
-    reactive tier, a `lift` result, or a pattern compiled into the
-    enclosing instance can declare a handle that writes at a path that
-    resolves to a value the instance computes. *Assumed:* the runtime
-    refuses the write (section 3.11). The alternative lets the write land
-    at the path of a kept output, where the next evaluation of the
-    output's cone replaces it, as a write to a child's argument path is
-    replaced (section 3.15). It needs the output kept wherever such a
-    handle names it, a rule for the label memoized for the output
-    (sections 4.1 and 4.3), and a `WriteEdge` target that names an output from
-    another body. Today the write is understood to land and to be
-    replaced by the node's next run. The prototype has to count the
-    arguments that name a computed value where a writable handle is
+    `language-subset.md` §13, question 28). Not open: ruled, and sections 3.11
+    and 3.15 state it. A write through a handle bound to a value the instance
+    produces is refused, and the compiler reports the binding where it can
+    decide the case. Where the bound path holds a reference to a stored place,
+    the handle resolves to that place and the write lands there. An argument
+    that a function body gives to a pattern it instantiates is the initial value
+    of the child's stored argument, and the child writes it freely. The entry
+    keeps its number because other documents cite it. The prototype has to count
+    the arguments that name a computed value where a writable handle is
     declared.
-43. **The integrity of a slot that reads an object with a defaulted
-    part.** By ruling, the defaulted part of a stored object has the
-    empty integrity and not the claims of the object (section 2.5). The
-    ruling does not say what a `value` slot bound at the object has,
-    which reads the stored properties and the defaulted one together.
-    *Assumed:* the meet over the parts read, which is empty. The
-    alternative keeps a label per path below the slot, so that a
-    template that projects a stored property of the slot keeps that
-    property's claims; `footprint-analysis.md` would then have to
-    record such a projection as a slot of its own.
+43. **The integrity of a slot that reads an object with a defaulted part.** Not
+    open: ruled, and section 2.5 states it. Integrity is anchored in a stored
+    object as a whole: a slot that reads the object whole carries the object's
+    integrity, also where a default fills one of its properties. A slot that
+    selects one property carries what a read at the property's path consumes,
+    and the empty integrity where the property is a default. The entry keeps its
+    number because other documents cite the entries around it by number.
 44. **The partition into cones.** Section 1.4 fixes what any partition
     has to satisfy and then states one: a cone per declaration of the
     reactive tier that computes, with everything nested in its
@@ -8169,3 +8353,49 @@ this document made.
     identity. Whether a `TransformedBy` atom of the compiled path
     carries the hash or a record is for `execution-and-storage.md` and
     the specification change.
+64. **The integrity of a conditional written in a `computed`** (for the project
+    owner). Open, and not assumed either way. Today `c ? a : b` in a `computed`
+    is part of a lift, whose result carries a `TransformedBy` atom. The template
+    of a promoted `computed` is a `select`, with the integrity of the selected
+    branch alone (section 3.5), so it is looser on integrity than today, and
+    that is none of the four exceptions of section 3.1. Either the template of a
+    conditional that a promoted `computed` holds mints the atom of its cone, or
+    the difference is a fifth exception. The stage 3 comparison reports the
+    difference until the question is ruled.
+65. **What the stage 3 comparison compares** (for the project owner). The
+    runtime copies a value where the plan passes a reference, so the two sides
+    do not store the same thing at an output path. *Assumed:* the comparison is
+    made on dereferenced labels, as section 3.1 states, with the runtime's
+    entries separated by origin so that the static part joined from declarations
+    is an expected difference. The alternative compares the label of section 3.2
+    as written with what is stored at the output path, which differs wherever a
+    value is passed on.
+66. **A `TransformedBy` atom beside an empty label.** The table of section 3.2
+    gives a `derive` its atom without a condition, and the runtime mints it
+    where the join has a clause or a hereditary atom (section 3.1). *Assumed:*
+    the template mints under the runtime's condition, so the integrity is equal
+    and an output with no label stores no entry. The alternative mints on every
+    `derive`: tighter on integrity, and one stored entry for every kept output a
+    derivation writes.
+67. **Witness-bearing `TransformedBy` atoms.** The runtime mints, beside the
+    atom that holds the identity, one atom with an `inputWitness` per
+    `TransformedBy` atom that every confidential location read carries (section
+    3.1). *Assumed:* a `derive` and a `fold` mint them by the same functions,
+    over their inputs that have a confidentiality clause (section 3.2), so that
+    a derivation over the result of a derivation carries the atoms it carries
+    today. An input of a template is coarser than a location a transaction read,
+    so the meet can keep fewer witnesses than the runtime's, which under-claims.
+    The alternative leaves the witness-bearing atoms out of the templates, which
+    is looser than today and would be a further exception. Whether an exchange
+    rule of the compiled path matches these atoms is for the specification
+    change.
+68. **The label of a test for an absent optional field.** A `shape` slot at an
+    optional field that is absent resolves to the entries above its path that
+    apply below their own path, and to no label where there are none, because no
+    entry is stored for a field that was not written (section 6.4). *Assumed:*
+    the definition of section 2.2 stands, and the slot's label is what a `shape`
+    read at that path consumes today. A node that reads the whole record today
+    carries the clauses of the fields that are present, so the template is
+    tighter. The alternative joins the `shape` observation of the enclosing
+    object into a test of presence on one of its optional properties, since
+    which properties an object has is the object's shape.

@@ -209,7 +209,7 @@ reads that input in full. That is the widening cause W3 of
    into a static entry ([§7.2](#72-static-and-dynamic-reads)).
 
    A run that throws is outside the requirement. That is the second of the
-   three deliberate exceptions to the ruling
+   four deliberate exceptions to the ruling
    (`plan-and-label-templates.md` §3.1). A failed body's error state, and a
    failed handler's outcome, are labeled with the body's template over the
    whole footprint (`plan-and-label-templates.md` §5.2). So a failed run
@@ -1219,6 +1219,52 @@ A write target is classified by what the analysis knows of its address.
   was passed to an unresolved call (W4) or reached through an analysis
   limit (W7), so that the write can be bounded only by the handles the body
   holds.
+
+**A handle bound to a value the instance computed.** The analysis records a
+target or an envelope on the body alone. Where the body is used with the
+handle's formal input bound to a value the instance computed, what a write
+through the handle does follows from what the position holds, by ruling
+(`plan-and-label-templates.md` §3.11, "A write through a handle to a value the
+instance computes").
+
+- **The position holds a reference.** The producing code passed a reference on:
+  the position is a result path that `Body.outputs` of the producing body
+  records as `passes` or `oneOf` ([§3.8](#38-what-leaves-the-body)), an element
+  that a reactive `filter` or another construct that passes elements on yields,
+  or the position of a handle a body returned. The target names the handle's
+  `identity` entry of `Body.computed`, as the second case above has it, and the
+  write lands in the cell the reference links to. The reference is the one that
+  the reference rule of §3.8 is about: the runtime compares what the producing
+  body returned at the path with the references that body was given, and the one
+  it confirms is the one the write follows. So a body that returns
+  `links.get().filter(keep)` has `oneOf` at `*` of its result, naming the
+  `identity` entry of the elements of `links`, and a write through a handle
+  bound to an element of that result lands in the element of `links`. The same
+  holds for a reference recorded on a write edge: where a body writes an element
+  it passes on into a list, the edge's `reference` records it, the list stores a
+  link, and a handle bound to that position writes the original.
+- **The position holds a value the instance produced.** No reference is at the
+  position: the producing expression is an operator, a literal, or another
+  computation, or the producing body returned at that path a value it computed.
+  A returned reference that the comparison does not confirm is a computed value
+  too (§3.8). The runtime refuses the write.
+- **The compile-time report.** The compiler reports `binding:write-to-computed`
+  (`language-subset.md` §10.2) where three things hold: the callee declares a
+  handle that can write, the body's record has a target or an envelope through
+  that handle, and the position can hold no reference on any evaluation. The
+  third holds where the producing template at the position is a `const` or a
+  `derive` of expression code, and where a producing body has the abstract value
+  `Computed`, or a record or a list it built, at the path and `Body.outputs` has
+  no `reference` entry there. It does not hold for a path with a `reference`
+  entry, for a path the body found below a hop whose read is dynamic, for a bag
+  that joins `Computed` with projections, or for a conditional one of whose
+  operands can hold a reference. For those the runtime decides per write.
+
+An argument that a body gives where it instantiates a pattern is none of these
+cases. The body writes it through a write edge with target `argument`
+([§8.1](#81-instantiating-a-pattern)), and it is the initial value of the
+child's stored argument, which the child writes freely
+(`plan-and-label-templates.md` §3.15).
 
 For a dynamic target and for one that is too broad, the analysis records an
 **envelope**: the static prefix the write lies under. It is a

@@ -242,6 +242,8 @@ is relitigated.
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
   rule for a default that is read and not stored, and needs this one.
+  The read has less integrity than today, so it is the fourth
+  deliberate exception to "equal to or tighter".
 - Integrity is anchored in an object as a whole. A read of a stored
   object whole carries the object's integrity, also where a default
   fills one of its properties. A read that selects one property follows
@@ -764,17 +766,28 @@ as an assumption.
     declared name; code is hashed as its source for a cone and as the
     module and binding for a body.
 
-116. **A conditional inside a `computed` is looser in integrity than
-    today.** The runtime runs it as a lift and mints `TransformedBy`;
-    the template is a `select`, with the integrity of the selected
-    branch alone. It is not one of the three deliberate exceptions.
-    Either the template of a promoted conditional mints the atom, or
-    this becomes a fourth exception. Not assumed either way.
+116. **A promoted `computed` mints no `TransformedBy`** (PL question
+    64). Today a `computed` is a lift, and its result carries the atom
+    for its code. A promoted one is compiled as an expression of the
+    reactive tier: a conditional in it is a `select`, with the
+    confidentiality of the condition and the chosen branch and the
+    integrity of the chosen branch. *Assumed:* that stands, and the
+    comparison expects the difference. The alternative mints the atom
+    for a promoted expression. The corpus sites that require
+    `TransformedBy` of a promotable `computed` are not counted yet.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
     module's argument schema is separated by its origin and expected
     as a difference, by ruling.
+
+118. **A child in the reactive tier that writes an argument given as
+    a literal or a computed value.** By the ruling on writes through a
+    bound handle, `plan-and-label-templates.md` §3.15 refuses the write.
+    A pattern that is given `title: "x"` in a pattern body and edits
+    its own title is this case. *Assumed:* refused, as the ruling
+    reads. The corpus sites with a literal argument are not counted;
+    the earlier count had no category for a literal.
 
 ## Open, and not needing the owner
 
