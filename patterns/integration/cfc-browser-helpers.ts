@@ -850,29 +850,30 @@ export async function fillCfInput(
  * less its console tail, which follows as plain lines, one per entry with its
  * own line breaks escaped, so that neither a cut of the probe nor a rendering
  * that shortens long strings can reach it. The probe keeps at most 40 entries,
- * and the page keeps 400 characters of each.
+ * and the page keeps 400 characters of each. Where no probe could be read, or
+ * the page kept no tail, it says so.
  */
 export function fillFailureMessage(
   selector: string,
   value: string,
   probe: CfInputProbe | undefined,
 ): string {
-  const { consoleTail, ...rest } = probe ?? {};
-  const tailLines = Array.isArray(consoleTail)
-    ? consoleTail.map((entry) => {
-      const { t, method, text } = entry as {
-        t?: unknown;
-        method?: unknown;
-        text?: unknown;
-      };
-      return `  ${t} ${method} ${JSON.stringify(text)}`;
-    })
-    : [`  ${JSON.stringify(consoleTail)}`];
-  return `Timed out filling cf input "${selector}" with "${value}". ` +
-    debugStr`Last probe: $quote,indent,xlong${
-      probe === undefined ? probe : rest
-    }` +
-    `\nIts console tail, oldest first:\n${tailLines.join("\n")}`;
+  const head = `Timed out filling cf input "${selector}" with "${value}". `;
+  if (probe === undefined) return `${head}No probe of the page could be read.`;
+  const { consoleTail, ...rest } = probe;
+  const tail = Array.isArray(consoleTail)
+    ? `Its console tail, oldest first:\n${
+      consoleTail.map((entry) => {
+        const { t, method, text } = entry as {
+          t?: unknown;
+          method?: unknown;
+          text?: unknown;
+        };
+        return `  ${t} ${method} ${JSON.stringify(text)}`;
+      }).join("\n")
+    }`
+    : "The page kept no console tail.";
+  return head + debugStr`Last probe: $quote,indent,xlong${rest}` + `\n${tail}`;
 }
 
 /**

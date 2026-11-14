@@ -3234,6 +3234,24 @@ describe("CFC browser helpers", () => {
       expect(message).toContain('phase: "no-element"');
     });
 
+    it("says no probe was read where reading it failed", () => {
+      const message = fillFailureMessage("#absent-input", "Grace", undefined);
+
+      expect(message).toContain("No probe of the page could be read.");
+      expect(message).not.toContain("undefined");
+    });
+
+    it("says the page kept no console tail where the probe holds none", () => {
+      const message = fillFailureMessage(
+        "#absent-input",
+        "Grace",
+        absentProbe({}),
+      );
+
+      expect(message).toContain("The page kept no console tail.");
+      expect(message).not.toContain("undefined");
+    });
+
     it("dates a fill's first attempt and its latest, and starts the count again for the next fill", async () => {
       type Ledger = {
         attempts: number;

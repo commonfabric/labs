@@ -30,7 +30,9 @@ What the failure probe contains, and where each piece lives:
   `PRESENT_IDS_MAX`, with their count, so a missing field says how far the
   view around it rendered. The failure message renders this probe at `xlong`,
   and its console tail after it as plain lines, one per entry, so that no cut
-  of the probe reaches the tail.
+  of the probe reaches the tail. The tail is the page's last 40 console
+  entries, each cut to 400 characters by the page, so older entries are not
+  in it.
 - **Main-thread pending IPC** (`RuntimeClient.getPendingRequests()`,
   [`runtime-client.ts`](../../../runtime/runtime-client/src/runtime-client.ts))
   — the runtime-client requests still awaiting a worker response; works even
