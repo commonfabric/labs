@@ -132,12 +132,15 @@ fn footprint(paths: &[&str]) -> std::io::Result<bool> {
         if let Some(tier) = record.tier {
             println!("  tier: {tier}");
         }
-        let lists: [(&str, &[String]); 9] = [
+        let lists: [(&str, &[String]); 12] = [
             ("reads", &record.reads),
             ("read envelope of the dynamic reads", &record.envelope),
             ("dynamic reads", &record.dynamic_reads),
+            ("handles", &record.handles),
             ("other dynamic reads", &record.other_dynamic),
             ("writes", &record.writes),
+            ("write edges", &record.edges),
+            ("write envelopes", &record.envelopes),
             ("outputs", &record.outputs),
             ("calls", &record.calls),
             ("not idempotent", &record.not_idempotent),

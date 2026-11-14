@@ -81,6 +81,298 @@ pub struct Record {
     /// The number of pushes in a handler onto a collection the handler
     /// read before (`mergeable-push:read-then-push`).
     pub read_then_push: usize,
+    /// `Body.handles`: the position of each handle the body reads through
+    /// in a way no static entry covers, and `call n` and the index of the
+    /// site in `calls` for what a site made (FA §7.2, §8.1, §8.2).
+    pub handles: Vec<String>,
+    /// `Body.writes` (FA §6.2, §6.5): `handle` and the handle's position,
+    /// then the path below its cell; `created n`, `argument n` and
+    /// `request n` and the index of the site. A path that holds a
+    /// reference the body was given is an edge of its own that ends in
+    /// ` : passes entry` or ` : oneOf entry, entry`.
+    pub edges: Vec<String>,
+    /// `Body.envelopes` (FA §6.2), in the form of `edges`.
+    pub envelopes: Vec<String>,
+    /// The same record as data, for the plan.
+    pub detail: Detail,
+}
+
+/// One entry of a footprint: a path of a formal input and a class.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Entry {
+    pub input: String,
+    pub path: Vec<Seg>,
+    pub class: Class,
+}
+
+impl std::fmt::Display for Entry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} : {}",
+            display_path(&self.input, &self.path),
+            self.class.label()
+        )
+    }
+}
+
+/// What an entry of `Body.handles` names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HandleAt {
+    /// The `identity` entry at a position of a formal input.
+    Entry(String, Vec<Seg>),
+    /// For one use of the body: the index of the `identity` entry in
+    /// `Body.computed`.
+    Computed(usize),
+    /// The index of a site in `calls`.
+    Call(usize),
+}
+
+/// One entry of `Body.handles`, with the entries of its read envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandleRead {
+    pub at: HandleAt,
+    pub envelope: Vec<Entry>,
+}
+
+/// The target of a write edge or of a write envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteTarget {
+    Handle {
+        input: String,
+        path: Vec<Seg>,
+        resolved: bool,
+    },
+    Created(usize),
+    Argument(usize),
+    Request(usize),
+}
+
+/// The name of an `identity` entry a reference is, or is one of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefName {
+    pub input: String,
+    pub path: Vec<Seg>,
+    pub resolved: bool,
+}
+
+impl std::fmt::Display for RefName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}{}",
+            display_path(&self.input, &self.path),
+            if self.resolved { " (resolved)" } else { "" }
+        )
+    }
+}
+
+/// One write edge, or one write envelope where `fixed` is false.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteRec {
+    pub target: WriteTarget,
+    /// The path below the target.
+    pub path: Vec<Seg>,
+    pub fixed: bool,
+    /// Whether the reference is `passes`, and the entries it names.
+    pub reference: Option<(bool, Vec<RefName>)>,
+}
+
+impl std::fmt::Display for WriteRec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.target {
+            WriteTarget::Handle {
+                input,
+                path,
+                resolved,
+            } => write!(
+                formatter,
+                "handle {}{}",
+                display_path(input, path),
+                if *resolved { " (resolved)" } else { "" }
+            )?,
+            WriteTarget::Created(site) => write!(formatter, "created n{site}")?,
+            WriteTarget::Argument(site) => write!(formatter, "argument n{site}")?,
+            WriteTarget::Request(site) => write!(formatter, "request n{site}")?,
+        }
+        if !self.path.is_empty() {
+            write!(formatter, " {}", plain_path(&self.path))?;
+        }
+        if let Some((passes, names)) = &self.reference {
+            let names: Vec<String> = names.iter().map(RefName::to_string).collect();
+            write!(
+                formatter,
+                " : {} {}",
+                if *passes { "passes" } else { "oneOf" },
+                names.join(", ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// A path with no input before it, as `a/*/b`.
+pub fn plain_path(path: &[Seg]) -> String {
+    let segments: Vec<&str> = path
+        .iter()
+        .map(|segment| match segment {
+            Seg::Key(key) => key.as_str(),
+            Seg::Star => "*",
+            Seg::Hop => "->",
+        })
+        .collect();
+    segments.join("/")
+}
+
+/// The record of a body as data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Detail {
+    pub entries: Vec<Entry>,
+    pub envelope: Vec<Entry>,
+    pub handles: Vec<HandleRead>,
+    /// The write edges and the write envelopes.
+    pub edges: Vec<WriteRec>,
+    /// The entries each journaled resolution starts from.
+    pub links: Vec<Vec<(String, Vec<Seg>)>>,
+    pub label_metadata: bool,
+    /// `Body.outputs`: the result path, whether the reference is `passes`,
+    /// and the entries it names.
+    pub outputs: Vec<(Vec<Seg>, bool, Vec<RefName>)>,
+}
+
+/// The record of one use of a body (FA §1.1): the entries on an input
+/// bound to a slot root, and the entries on an input bound to a value the
+/// instance computed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UseRecord {
+    pub reads: Vec<Entry>,
+    pub computed: Vec<Entry>,
+    pub handles: Vec<HandleRead>,
+    /// The dynamic reads of kind `link`: the entries each starts from, a
+    /// computed one as `computed` and its index.
+    pub links: Vec<String>,
+    pub label_metadata: bool,
+}
+
+impl UseRecord {
+    pub fn read_lines(&self) -> Vec<String> {
+        self.reads.iter().map(Entry::to_string).collect()
+    }
+
+    pub fn computed_lines(&self) -> Vec<String> {
+        self.computed.iter().map(Entry::to_string).collect()
+    }
+
+    pub fn handle_lines(&self) -> Vec<String> {
+        self.handles.iter().map(|handle| handle.at.line()).collect()
+    }
+
+    /// The index in `computed` of the `identity` entry at a position.
+    pub fn computed_index(&self, input: &str, path: &[Seg]) -> Option<usize> {
+        self.computed.iter().position(|entry| {
+            entry.input == input && entry.path == path && entry.class == Class::Identity
+        })
+    }
+}
+
+impl HandleAt {
+    pub fn line(&self) -> String {
+        match self {
+            HandleAt::Entry(input, path) => display_path(input, path),
+            HandleAt::Computed(index) => format!("computed {index}"),
+            HandleAt::Call(index) => format!("call n{index}"),
+        }
+    }
+}
+
+/// The record of a body for one use of it, in which the formal inputs
+/// named in `computed` are bound to values the instance computed (FA
+/// §1.1). A read through a handle from such an input is dynamic, and a
+/// resolution and an observation of label metadata of one are journaled,
+/// whatever the conditions say (FA §7.2, §8.4).
+pub fn bind_use(record: &Record, computed: &BTreeSet<String>) -> UseRecord {
+    let detail = &record.detail;
+    let mut used = UseRecord {
+        label_metadata: detail.label_metadata,
+        ..UseRecord::default()
+    };
+    // The position of the handle a path first crosses the link of.
+    let position = |path: &[Seg]| -> Vec<Seg> {
+        let end = path
+            .iter()
+            .position(|segment| *segment == Seg::Hop)
+            .unwrap_or(path.len());
+        path[..end].to_vec()
+    };
+    let mut journaled: BTreeSet<(String, Vec<Seg>)> = BTreeSet::new();
+    let mut envelopes: BTreeMap<(String, Vec<Seg>), Vec<Entry>> = BTreeMap::new();
+    for entry in &detail.entries {
+        if !computed.contains(&entry.input) {
+            used.reads.push(entry.clone());
+            continue;
+        }
+        if entry.path.contains(&Seg::Hop) {
+            envelopes
+                .entry((entry.input.clone(), position(&entry.path)))
+                .or_default()
+                .push(entry.clone());
+            continue;
+        }
+        match entry.class {
+            Class::LabelMetadata => used.label_metadata = true,
+            Class::Resolved => {
+                journaled.insert((entry.input.clone(), entry.path.clone()));
+                used.computed.push(Entry {
+                    class: Class::Identity,
+                    ..entry.clone()
+                });
+            }
+            _ => used.computed.push(entry.clone()),
+        }
+    }
+    used.computed.sort_by_key(Entry::to_string);
+    used.computed.dedup();
+    for handle in &detail.handles {
+        match &handle.at {
+            HandleAt::Entry(input, path) if computed.contains(input) => {
+                envelopes
+                    .entry((input.clone(), position(path)))
+                    .or_default()
+                    .extend(handle.envelope.iter().cloned());
+            }
+            _ => used.handles.push(handle.clone()),
+        }
+    }
+    for ((input, path), mut envelope) in envelopes {
+        envelope.sort_by_key(Entry::to_string);
+        envelope.dedup();
+        let at = match used.computed_index(&input, &path) {
+            Some(index) => HandleAt::Computed(index),
+            None => HandleAt::Entry(input, path),
+        };
+        used.handles.push(HandleRead { at, envelope });
+    }
+    let name = |used: &UseRecord, input: &str, path: &[Seg]| {
+        if computed.contains(input) {
+            if let Some(index) = used.computed_index(input, path) {
+                return format!("computed {index}");
+            }
+        }
+        display_path(input, path)
+    };
+    let mut links: BTreeSet<String> = BTreeSet::new();
+    for starts in &detail.links {
+        let names: Vec<String> = starts
+            .iter()
+            .map(|(input, path)| name(&used, input, path))
+            .collect();
+        links.insert(names.join(", "));
+    }
+    for (input, path) in &journaled {
+        links.insert(name(&used, input, path));
+    }
+    used.links = links.into_iter().collect();
+    used
 }
 
 /// The footprint of one body.
@@ -95,7 +387,7 @@ pub struct BodyFootprint {
 
 /// One segment of a path (FA, "Notation").
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Seg {
+pub enum Seg {
     Key(String),
     /// Each element of an array or each child of a record.
     Star,
@@ -179,7 +471,7 @@ impl Proj {
     }
 }
 
-fn display_path(input: &str, path: &[Seg]) -> String {
+pub fn display_path(input: &str, path: &[Seg]) -> String {
     let mut text = input.to_string();
     let mut previous: Option<&Seg> = None;
     for segment in path {
@@ -202,7 +494,7 @@ fn display_path(input: &str, path: &[Seg]) -> String {
 
 /// The observation classes this module records (FA §2.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Class {
+pub enum Class {
     Enumeration,
     Identity,
     /// A resolved `identity` entry (FA §7.1, "Resolutions").
@@ -213,7 +505,7 @@ enum Class {
 }
 
 impl Class {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Class::Enumeration => "enumeration",
             Class::Identity => "identity",
@@ -257,6 +549,9 @@ enum Val {
     /// A function: the module and the start of its span.
     Func(usize, u32),
     Created,
+    /// What a site of a runtime call returned: a cell or an instance a
+    /// later invocation can find again (FA §7.2).
+    Site(usize, u32),
     Computed,
 }
 
@@ -289,6 +584,7 @@ impl Val {
                 (Val::Built(a), Val::Built(b)) => Rc::ptr_eq(a, b),
                 (Val::Func(a, b), Val::Func(c, d)) => a == c && b == d,
                 (Val::Created, Val::Created) => true,
+                (Val::Site(a, b), Val::Site(c, d)) => a == c && b == d,
                 _ => false,
             });
             if !seen {
@@ -373,6 +669,24 @@ struct Store {
     read_cells: BTreeSet<PathKey>,
     read_then_push: BTreeSet<(usize, u32)>,
     outputs: Vec<String>,
+    output_refs: Vec<(Vec<Seg>, bool, Vec<RefName>)>,
+    /// The handles the body reads through dynamically, and whether each
+    /// was found below a hop whose read is dynamic.
+    dynamic_handles: BTreeSet<(PathKey, bool)>,
+    /// The sites whose result the body reads through.
+    site_reads: BTreeSet<(usize, u32)>,
+    /// The writes, each with the value written.
+    pending: Vec<(Pending, Val, bool)>,
+    link_entries: BTreeSet<Vec<PathKey>>,
+}
+
+/// The target of a write the record is filled in for at the end.
+enum Pending {
+    /// A handle, and whether the write appends an element.
+    Handle(Proj, bool),
+    Created((usize, u32)),
+    Argument((usize, u32)),
+    Request((usize, u32)),
 }
 
 struct Frame {
@@ -424,6 +738,8 @@ struct Analyzer<'r, 'm, 'a> {
     /// function, which is held to the rules of the bodies that call it (FA
     /// §8).
     handler: bool,
+    /// How many bindings the body is analyzed below, for a bound handler.
+    depth: u32,
 }
 
 impl<'a> Analyzer<'_, '_, 'a> {
@@ -874,6 +1190,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
         }
         if !is_static && !names.is_empty() {
             self.store.links.insert(names.join(", "));
+            self.store
+                .link_entries
+                .insert(projections.iter().map(Proj::key).collect());
         }
         if results.is_empty() {
             return val.clone();
@@ -1631,9 +1950,13 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         &attribute.value
                     {
                         if let Some(expression) = container.expression.as_expression() {
-                            if FunctionLike::of(expression).is_some() {
+                            if let Some(function) = FunctionLike::of(expression) {
                                 // An inline event handler is a body of its
-                                // own (FA §1.2).
+                                // own (FA §1.2), and the element binds it
+                                // (FA §8.5).
+                                let site = self.site(expression.span().start);
+                                self.store.calls.insert(site, "bind".to_string());
+                                self.bind_captures(function, BodyKind::InlineHandler);
                                 continue;
                             }
                             let val = self.eval(expression);
@@ -1730,6 +2053,11 @@ impl<'a> Analyzer<'_, '_, 'a> {
             self.presence(&member.object, &object);
         }
         let name = member.property.name.as_str();
+        if let Val::Site(module, start) = object {
+            // A read through the link a site returned (FA §8.1).
+            self.store.site_reads.insert((module, start));
+            return object;
+        }
         if !object.has_projection() {
             return match &object {
                 Val::Built(built) => {
@@ -1985,11 +2313,31 @@ impl<'a> Analyzer<'_, '_, 'a> {
             None => {
                 // A cell constructor or a class of the API: the argument
                 // leaves the body (FA §8.2).
+                let creates = matches!(
+                    unwrap(&new.callee),
+                    Expression::Identifier(identifier)
+                        if crate::api::is_cell_type(identifier.name.as_str())
+                            && self
+                                .resolver
+                                .value_def(self.module(), identifier)
+                                .is_none()
+                );
+                let site = self.site(new.span.start);
+                if creates {
+                    self.create_cell(None, new.span.start);
+                }
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
+                    if creates {
+                        self.store.pending.push((Pending::Created(site), val, true));
+                    }
                 }
-                Val::Created
+                if creates {
+                    Val::Site(site.0, site.1)
+                } else {
+                    Val::Created
+                }
             }
         }
     }
@@ -2050,15 +2398,38 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     DefKind::Pattern => "instantiate:order",
                     _ => "bind",
                 };
+                let instantiates = kind == "instantiate:order";
                 self.store
                     .calls
                     .entry(site)
                     .or_insert_with(|| kind.to_string());
+                // A copy holds what the bound handler observes of it (FA
+                // §8.5).
+                let bound = if instantiates {
+                    None
+                } else {
+                    self.handler_record(module, identifier)
+                };
                 for argument in &arguments {
                     let val = self.eval(argument);
-                    self.leaves(argument, &val);
+                    match &bound {
+                        Some(record) => {
+                            let entries = entries_on(record, "state");
+                            self.bind_state(Some(argument), &val, &entries);
+                        }
+                        None => self.leaves(argument, &val),
+                    }
+                    if instantiates {
+                        self.store
+                            .pending
+                            .push((Pending::Argument(site), val, true));
+                    }
                 }
-                return Val::Created;
+                return if instantiates {
+                    Val::Site(site.0, site.1)
+                } else {
+                    Val::Created
+                };
             }
             // A function of an imported TypeScript module reads each
             // argument in full (FA §1.2, W3).
@@ -2190,6 +2561,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
             // body of its own. An `action` is a binding (FA §8.5).
             "action" => {
                 self.store.calls.insert(site, "bind".to_string());
+                if let Some(function) = first.and_then(FunctionLike::of) {
+                    self.bind_captures(function, BodyKind::Action);
+                }
                 Val::Created
             }
             "computed" | "lift" | "handler" | "pattern" | "assert" => Val::Created,
@@ -2213,12 +2587,16 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 ) {
                     self.store.calls.insert(site, format!("effect:{name}"));
                 }
+                let effect = self.store.calls.contains_key(&site);
                 for argument in arguments {
                     if FunctionLike::of(argument).is_some() {
                         continue;
                     }
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
+                    if effect {
+                        self.store.pending.push((Pending::Request(site), val, true));
+                    }
                 }
                 Val::Created
             }
@@ -2265,11 +2643,16 @@ impl<'a> Analyzer<'_, '_, 'a> {
             ) && self.resolver.value_def(self.module(), object).is_none();
             if is_constructor && matches!(name, "of" | "for") {
                 self.create_cell(arguments.first().copied().filter(|_| name == "for"), start);
+                let site = self.site(start);
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
+                    if name == "of" {
+                        // The initial value (FA §8.2).
+                        self.store.pending.push((Pending::Created(site), val, true));
+                    }
                 }
-                return Val::Created;
+                return Val::Site(site.0, site.1);
             }
         }
         let receiver = self.eval(&member.object);
@@ -2291,6 +2674,26 @@ impl<'a> Analyzer<'_, '_, 'a> {
         }
         if member.optional || call.optional {
             self.presence(&member.object, &receiver);
+        }
+        if let Val::Site(module, site_start) = receiver {
+            // A method of what a site returned: a read through it is
+            // dynamic (FA §7.2), and a write lands in what the site made.
+            if matches!(name, "get" | "sample") {
+                self.store.site_reads.insert((module, site_start));
+                return Val::Computed;
+            }
+            for argument in arguments {
+                if FunctionLike::of(argument).is_some() {
+                    continue;
+                }
+                let val = self.eval(argument);
+                self.leaves(argument, &val);
+            }
+            return if WRITERS.contains(&name) {
+                Val::Computed
+            } else {
+                receiver
+            };
         }
         let kinds = self.kinds(&member.object);
         let made = receiver.projections().iter().any(|proj| proj.made);
@@ -2684,6 +3087,19 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         self.store
                             .dynamic_reads
                             .insert(site, format!("{}: {reason}", names.join(", ")));
+                        for handle in &handles {
+                            let mut key = handle.key();
+                            if handle.made {
+                                // The handle read through is the one of
+                                // the cell the position is in.
+                                if let Some(hop) =
+                                    key.1.iter().rposition(|segment| *segment == Seg::Hop)
+                                {
+                                    key.1.truncate(hop);
+                                }
+                            }
+                            self.store.dynamic_handles.insert((key, handle.dynamic));
+                        }
                     }
                 }
                 let mut results = Vec::new();
@@ -2812,9 +3228,25 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     }
                 }
                 self.store.write_sites.insert(site, every_static);
+                let appends = matches!(name, "push" | "pushAll" | "addUnique");
+                let mut values = Vec::new();
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
+                    values.push(val);
+                }
+                if values.is_empty() {
+                    values.push(Val::Computed);
+                }
+                for handle in &handles {
+                    let dynamic = handle.path.contains(&Seg::Star) || handle.dynamic;
+                    for val in &values {
+                        self.store.pending.push((
+                            Pending::Handle(handle.clone(), appends),
+                            val.clone(),
+                            !dynamic,
+                        ));
+                    }
                 }
                 Val::Computed
             }
@@ -2838,77 +3270,376 @@ impl<'a> Analyzer<'_, '_, 'a> {
 
     /// `Body.outputs` (FA §3.8): the result paths that hold a reference
     /// the body was given.
-    fn outputs(&mut self, val: &Val, path: &str, depth: u32) {
-        let reference = |store: &Store, proj: &Proj| {
-            !proj.dynamic
-                && store.entries.get(&proj.key()).is_some_and(|classes| {
-                    classes.contains(&Class::Identity) || classes.contains(&Class::Resolved)
-                })
+    fn outputs(&mut self, val: &Val) {
+        let mut found = Vec::new();
+        references(&self.store, val, &mut Vec::new(), 0, &mut found);
+        for (path, passes, names) in found {
+            let shown = if path.is_empty() {
+                "(root)".to_string()
+            } else {
+                plain_path(&path)
+            };
+            let listed: Vec<String> = names
+                .iter()
+                .map(|name| display_path(&name.input, &name.path))
+                .collect();
+            self.store.outputs.push(format!(
+                "{shown} : {} {}",
+                if passes { "passes" } else { "oneOf" },
+                listed.join(", ")
+            ));
+            self.store.output_refs.push((path, passes, names));
+        }
+    }
+
+    /// The record as data: the entries, `Body.handles`, and the write
+    /// edges and envelopes with their references (FA §6.5).
+    fn detail(&self) -> Detail {
+        let store = &self.store;
+        let entries = normal_entries(&store.entries, store);
+        let envelope = normal_entries(&store.envelope, store);
+        // The handles: one the body was given, or the one a found handle
+        // was found through.
+        let given: BTreeSet<&PathKey> = store
+            .dynamic_handles
+            .iter()
+            .filter(|(_, found)| !*found)
+            .map(|(key, _)| key)
+            .collect();
+        let mut positions: BTreeSet<PathKey> = BTreeSet::new();
+        for ((input, path), found) in &store.dynamic_handles {
+            if !*found {
+                positions.insert((input.clone(), path.clone()));
+                continue;
+            }
+            let hops = path
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| **segment == Seg::Hop)
+                .map(|(index, _)| index);
+            let mut through: Option<usize> = None;
+            let mut first: Option<usize> = None;
+            for hop in hops {
+                first.get_or_insert(hop);
+                if given.contains(&(input.clone(), path[..hop].to_vec())) {
+                    through = Some(hop);
+                }
+            }
+            if let Some(hop) = through.or(first) {
+                positions.insert((input.clone(), path[..hop].to_vec()));
+            }
+        }
+        let mut handles: Vec<HandleRead> = positions
+            .into_iter()
+            .map(|(input, path)| {
+                let mut below = path.clone();
+                below.push(Seg::Hop);
+                HandleRead {
+                    envelope: envelope
+                        .iter()
+                        .filter(|entry| entry.input == input && entry.path.starts_with(&below))
+                        .cloned()
+                        .collect(),
+                    at: HandleAt::Entry(input, path),
+                }
+            })
+            .collect();
+        let site_index = |site: &(usize, u32)| store.calls.keys().position(|other| other == site);
+        for site in &store.site_reads {
+            // A site that makes something a later invocation can find
+            // again (FA §7.2, §8.1, §8.2).
+            let found_again = match store.calls.get(site).map(String::as_str) {
+                Some("instantiate:tag") => true,
+                Some("instantiate:order") => self.computation,
+                Some(kind) => kind.starts_with("createCell:cause"),
+                None => false,
+            };
+            if let (true, Some(index)) = (found_again, site_index(site)) {
+                handles.push(HandleRead {
+                    at: HandleAt::Call(index),
+                    envelope: Vec::new(),
+                });
+            }
+        }
+        let mut edges: Vec<WriteRec> = Vec::new();
+        for (pending, val, fixed) in &store.pending {
+            let (target, mut below) = match pending {
+                Pending::Handle(proj, appends) => {
+                    // The handle's position, and the path below its cell.
+                    let hop = proj
+                        .path
+                        .iter()
+                        .rposition(|segment| *segment == Seg::Hop)
+                        .filter(|_| proj.made);
+                    let (position, mut below) = match hop {
+                        Some(hop) => (proj.path[..hop].to_vec(), proj.path[hop + 1..].to_vec()),
+                        None => (proj.path.clone(), Vec::new()),
+                    };
+                    if *appends {
+                        below.push(Seg::Star);
+                    }
+                    let resolved =
+                        matches!(proj.resolved, Some((length, _)) if length == position.len());
+                    (
+                        WriteTarget::Handle {
+                            input: proj.input.clone(),
+                            path: position,
+                            resolved,
+                        },
+                        below,
+                    )
+                }
+                Pending::Created(site) => match site_index(site) {
+                    Some(index) => (WriteTarget::Created(index), Vec::new()),
+                    None => continue,
+                },
+                Pending::Argument(site) => match site_index(site) {
+                    Some(index) => (WriteTarget::Argument(index), Vec::new()),
+                    None => continue,
+                },
+                Pending::Request(site) => match site_index(site) {
+                    Some(index) => (WriteTarget::Request(index), Vec::new()),
+                    None => continue,
+                },
+            };
+            edges.push(WriteRec {
+                target: target.clone(),
+                path: below.clone(),
+                fixed: *fixed,
+                reference: None,
+            });
+            if !*fixed {
+                continue;
+            }
+            let mut found = Vec::new();
+            references(store, val, &mut below, 0, &mut found);
+            for (path, passes, names) in found {
+                edges.push(WriteRec {
+                    target: target.clone(),
+                    path,
+                    fixed: true,
+                    reference: Some((passes, names)),
+                });
+            }
+        }
+        edges.sort_by_key(WriteRec::to_string);
+        edges.dedup();
+        Detail {
+            entries,
+            envelope,
+            handles,
+            edges,
+            links: store
+                .link_entries
+                .iter()
+                .map(|starts| starts.to_vec())
+                .collect(),
+            label_metadata: store.label_metadata,
+            outputs: store.output_refs.clone(),
+        }
+    }
+
+    // ----- binding a handler (FA §8.5) -----
+
+    /// The record of the handler a module-scope name is defined as.
+    fn handler_record(
+        &mut self,
+        module: usize,
+        identifier: &IdentifierReference<'a>,
+    ) -> Option<Record> {
+        if self.depth >= MAX_BOUND {
+            return None;
+        }
+        let symbol = self.symbol(identifier)?;
+        let (home, symbol) = self.resolver.origin(module, symbol)?;
+        let parsed = self.resolver.parsed(home)?;
+        let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+        let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+        else {
+            return None;
         };
-        let shown = if path.is_empty() { "(root)" } else { path };
+        let Expression::CallExpression(call) = unwrap(declarator.init.as_ref()?) else {
+            return None;
+        };
+        let function = call
+            .arguments
+            .iter()
+            .rev()
+            .find_map(FunctionLike::of_argument)?;
+        analyze_body(
+            self.resolver,
+            home,
+            BodyKind::Handler,
+            function.span().start,
+            self.depth + 1,
+        )
+    }
+
+    /// Records what a value bound to a path of a handler's state leaves
+    /// the body as, by the table of FA §8.5. `entries` is the bound
+    /// handler's footprint at and below the path.
+    fn bind_state(
+        &mut self,
+        expression: Option<&Expression<'a>>,
+        val: &Val,
+        entries: &[(Vec<Seg>, Class)],
+    ) {
+        let below = |name: &str| -> Vec<(Vec<Seg>, Class)> {
+            entries
+                .iter()
+                .filter(|(path, _)| path.first() == Some(&Seg::Key(name.to_string())))
+                .map(|(path, class)| (path[1..].to_vec(), *class))
+                .collect()
+        };
+        let expression = expression.map(unwrap);
+        if let (Some(Expression::ObjectExpression(object)), Val::Built(built)) = (expression, val) {
+            // A record written at the site: each member by its own row.
+            let mut named = BTreeSet::new();
+            for property in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = property else {
+                    continue;
+                };
+                let Some(name) = static_key_name(&property.key).filter(|_| !property.computed)
+                else {
+                    continue;
+                };
+                let member = built.borrow().fields.get(name).cloned();
+                if let Some(member) = member {
+                    named.insert(name.to_string());
+                    self.bind_state(Some(&property.value), &member, &below(name));
+                }
+            }
+            let others: Vec<Val> = {
+                let built = built.borrow();
+                built
+                    .fields
+                    .iter()
+                    .filter(|(name, _)| !named.contains(*name))
+                    .map(|(_, member)| member.clone())
+                    .chain(built.bag.iter().cloned())
+                    .chain(built.spreads.iter().cloned())
+                    .collect()
+            };
+            for member in others {
+                self.leaves_untyped(&member, 0);
+            }
+            return;
+        }
         match val {
-            Val::Proj(proj) if reference(&self.store, proj) => {
-                let form = if proj.path.contains(&Seg::Star) {
-                    "oneOf"
-                } else {
-                    "passes"
+            Val::Proj(_) | Val::Alts(_) if val.has_projection() => {
+                // A scalar is copied, in the classes the handler has at
+                // the path. Anything else stays a link.
+                let scalar = match expression {
+                    Some(expression) => {
+                        let kinds = self.kinds(expression);
+                        !(kinds.container || kinds.handle || kinds.reference || kinds.factory)
+                    }
+                    None => {
+                        entries.iter().all(|(path, _)| path.is_empty())
+                            && entries
+                                .iter()
+                                .any(|(_, class)| matches!(class, Class::Value | Class::Shape))
+                    }
                 };
-                self.store.outputs.push(format!(
-                    "{shown} : {form} {}",
-                    display_path(&proj.input, &proj.path)
-                ));
-            }
-            Val::Alts(members) => {
-                let mut names = Vec::new();
-                for member in members {
-                    match member {
-                        Val::Proj(proj) if reference(&self.store, proj) => {
-                            names.push(display_path(&proj.input, &proj.path));
+                if scalar {
+                    for (path, class) in entries {
+                        if !path.is_empty() {
+                            continue;
                         }
-                        _ => return,
+                        match class {
+                            Class::Value => self.observe(val, Class::Value),
+                            Class::Shape => self.observe_shape(val, false),
+                            _ => {}
+                        }
+                    }
+                } else if let Some(expression) = expression {
+                    self.leaves(expression, val);
+                } else if !entries.is_empty() {
+                    for proj in val.projections() {
+                        self.use_handle(&proj);
                     }
                 }
-                names.sort();
-                self.store
-                    .outputs
-                    .push(format!("{shown} : oneOf {}", names.join(", ")));
             }
-            Val::Built(built) if depth < 6 => {
-                let (fields, bag) = {
+            Val::Built(built) => {
+                // A container the body computed: the copy holds the paths
+                // the handler observes.
+                let (fields, rest) = {
                     let built = built.borrow();
-                    (built.fields.clone(), built.bag.clone())
-                };
-                let join = |key: &str| {
-                    if path.is_empty() {
-                        key.to_string()
-                    } else {
-                        format!("{path}/{key}")
-                    }
-                };
-                for (name, member) in &fields {
-                    self.outputs(member, &join(name), depth + 1);
-                }
-                // Which member of a bag is at a position is a choice the
-                // body made.
-                let members: Vec<Proj> = bag.iter().flat_map(Val::projections).collect();
-                let every = !bag.is_empty()
-                    && bag
+                    let rest: Vec<Val> = built
+                        .bag
                         .iter()
-                        .all(|member| matches!(member, Val::Proj(_) | Val::Alts(_)))
-                    && members.iter().all(|proj| reference(&self.store, proj));
-                if every {
-                    let mut names: Vec<String> = members
-                        .iter()
-                        .map(|proj| display_path(&proj.input, &proj.path))
+                        .cloned()
+                        .chain(built.spreads.iter().cloned())
                         .collect();
-                    names.sort();
-                    names.dedup();
-                    self.store
-                        .outputs
-                        .push(format!("{} : oneOf {}", join("*"), names.join(", ")));
+                    (built.fields.clone(), rest)
+                };
+                let whole = entries.iter().any(|(path, class)| {
+                    path.is_empty() && matches!(class, Class::Value | Class::Identity)
+                });
+                if whole {
+                    self.observe_members(val, 0);
+                    return;
+                }
+                for (name, member) in &fields {
+                    self.bind_state(None, member, &below(name));
+                }
+                let starred: Vec<(Vec<Seg>, Class)> = entries
+                    .iter()
+                    .filter(|(path, _)| path.first() == Some(&Seg::Star))
+                    .map(|(path, class)| (path[1..].to_vec(), *class))
+                    .collect();
+                for member in &rest {
+                    self.bind_state(None, member, &starred);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Records what the values a function written in the body captures
+    /// leave the body as, where the function is bound as a handler: an
+    /// `action`, or an inline event handler.
+    fn bind_captures(&mut self, function: FunctionLike<'_, 'a>, kind: BodyKind) {
+        if self.depth >= MAX_BOUND {
+            return;
+        }
+        let module = self.module();
+        let span = function.span();
+        let Some(record) = analyze_body(self.resolver, module, kind, span.start, self.depth + 1)
+        else {
+            return;
+        };
+        let Some(parsed) = self.resolver.parsed(module) else {
+            return;
+        };
+        let scoping = parsed.semantic.scoping();
+        let mut seen = BTreeSet::new();
+        let mut captured: Vec<&'a IdentifierReference<'a>> = Vec::new();
+        for node in parsed.semantic.nodes().iter() {
+            let AstKind::IdentifierReference(identifier) = node.kind() else {
+                continue;
+            };
+            if !(span.start <= identifier.span.start && identifier.span.end <= span.end) {
+                continue;
+            }
+            let Some(symbol) = symbol_of(scoping, identifier) else {
+                continue;
+            };
+            let declared = scoping.symbol_span(symbol);
+            if span.start <= declared.start && declared.end <= span.end {
+                continue;
+            }
+            if seen.insert(symbol) {
+                captured.push(identifier);
+            }
+        }
+        for identifier in captured {
+            let entries = entries_on(&record, identifier.name.as_str());
+            if entries.is_empty() {
+                continue;
+            }
+            let val = self.lookup(identifier);
+            self.bind_state(None, &val, &entries);
         }
     }
 
@@ -3034,7 +3765,27 @@ impl<'a> Analyzer<'_, '_, 'a> {
         other_dynamic.extend(store.links.iter().map(|names| format!("link: {names}")));
         other_dynamic.extend(store.spaces.iter().map(|names| format!("space: {names}")));
         sites.sort();
+        let detail = self.detail();
+        let store = &self.store;
         Record {
+            handles: detail
+                .handles
+                .iter()
+                .map(|handle| handle.at.line())
+                .collect(),
+            edges: detail
+                .edges
+                .iter()
+                .filter(|edge| edge.fixed)
+                .map(WriteRec::to_string)
+                .collect(),
+            envelopes: detail
+                .edges
+                .iter()
+                .filter(|edge| !edge.fixed)
+                .map(WriteRec::to_string)
+                .collect(),
+            detail,
             calls: store.calls.values().cloned().collect(),
             other_dynamic,
             outputs: store.outputs.clone(),
@@ -3071,8 +3822,173 @@ impl<'a> Analyzer<'_, '_, 'a> {
     }
 }
 
+/// The paths of a value that hold a reference the body was given (FA
+/// §3.8, §6.5): the path, whether the reference is `passes`, and the
+/// entries it names.
+fn references(
+    store: &Store,
+    val: &Val,
+    path: &mut Vec<Seg>,
+    depth: u32,
+    found: &mut Vec<(Vec<Seg>, bool, Vec<RefName>)>,
+) {
+    let reference = |proj: &Proj| {
+        !proj.dynamic
+            && store.entries.get(&proj.key()).is_some_and(|classes| {
+                classes.contains(&Class::Identity) || classes.contains(&Class::Resolved)
+            })
+    };
+    let name = |proj: &Proj| RefName {
+        input: proj.input.clone(),
+        path: proj.path.clone(),
+        resolved: matches!(proj.resolved, Some((length, true)) if length == proj.path.len())
+            && store
+                .entries
+                .get(&proj.key())
+                .is_some_and(|classes| classes.contains(&Class::Resolved)),
+    };
+    let sorted = |mut names: Vec<RefName>| {
+        names.sort_by_key(|name| display_path(&name.input, &name.path));
+        names.dedup();
+        names
+    };
+    match val {
+        Val::Proj(proj) if reference(proj) => {
+            found.push((
+                path.clone(),
+                !proj.path.contains(&Seg::Star),
+                vec![name(proj)],
+            ));
+        }
+        Val::Alts(members) if members.iter().all(|member| matches!(member, Val::Built(_))) => {
+            // Alternatives the body built: a path holds the reference of
+            // the alternative that was taken, so the references of all of
+            // them are what it is one of.
+            let mut each = Vec::new();
+            for member in members {
+                references(store, member, path, depth + 1, &mut each);
+            }
+            let mut merged: Vec<(Vec<Seg>, bool, Vec<RefName>)> = Vec::new();
+            for (at, passes, names) in each {
+                match merged.iter_mut().find(|(other, _, _)| *other == at) {
+                    Some((_, other_passes, other_names)) => {
+                        *other_passes = false;
+                        other_names.extend(names);
+                        *other_names = sorted(std::mem::take(other_names));
+                    }
+                    None => merged.push((at, passes, names)),
+                }
+            }
+            found.extend(merged);
+        }
+        Val::Alts(members) => {
+            let mut names = Vec::new();
+            for member in members {
+                match member {
+                    Val::Proj(proj) if reference(proj) => names.push(name(proj)),
+                    _ => return,
+                }
+            }
+            found.push((path.clone(), false, sorted(names)));
+        }
+        Val::Built(built) if depth < 6 => {
+            let (fields, bag, spreads) = {
+                let built = built.borrow();
+                (
+                    built.fields.clone(),
+                    built.bag.clone(),
+                    built.spreads.clone(),
+                )
+            };
+            for (key, member) in &fields {
+                path.push(Seg::Key(key.clone()));
+                references(store, member, path, depth + 1, found);
+                path.pop();
+            }
+            // A record the body built and spread into this one holds its
+            // members at the same paths, on the runs that spread it.
+            for spread in &spreads {
+                let records: Vec<&Val> = match spread {
+                    Val::Alts(members) => members.iter().collect(),
+                    other => vec![other],
+                };
+                for record in records {
+                    if matches!(record, Val::Built(_)) {
+                        references(store, record, path, depth + 1, found);
+                    }
+                }
+            }
+            // Which member of a bag is at a position is a choice the
+            // body made.
+            let members: Vec<Proj> = bag.iter().flat_map(Val::projections).collect();
+            let every = !bag.is_empty()
+                && bag
+                    .iter()
+                    .all(|member| matches!(member, Val::Proj(_) | Val::Alts(_)))
+                && members.iter().all(reference);
+            if every {
+                let mut at = path.clone();
+                at.push(Seg::Star);
+                found.push((at, false, sorted(members.iter().map(name).collect())));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The entries of a record on one formal input, each with its path below
+/// the input: the static ones, those of the read envelopes, and an
+/// `identity` entry at each handle the body reads through.
+fn entries_on(record: &Record, input: &str) -> Vec<(Vec<Seg>, Class)> {
+    let detail = &record.detail;
+    detail
+        .entries
+        .iter()
+        .chain(&detail.envelope)
+        .filter(|entry| entry.input == input)
+        .map(|entry| (entry.path.clone(), entry.class))
+        .collect()
+}
+
+/// The deepest nesting of bindings whose handler is analyzed for what a
+/// copy holds (FA §8.5).
+const MAX_BOUND: u32 = 3;
+
+/// The entries in the normal form of FA §2.3.
+fn normal_entries(entries: &BTreeMap<PathKey, BTreeSet<Class>>, store: &Store) -> Vec<Entry> {
+    let mut found: Vec<Entry> = normal_map(entries, store)
+        .into_iter()
+        .flat_map(|((input, path), classes)| {
+            classes.into_iter().map(move |class| Entry {
+                input: input.clone(),
+                path: path.clone(),
+                class,
+            })
+        })
+        .collect();
+    found.sort_by_key(Entry::to_string);
+    found
+}
+
 /// The entries in the normal form of FA §2.3, as lines.
 fn normal_form(entries: &BTreeMap<PathKey, BTreeSet<Class>>, store: &Store) -> Vec<String> {
+    let kept = normal_map(entries, store);
+    let mut lines: Vec<String> = kept
+        .iter()
+        .filter(|(_, classes)| !classes.is_empty())
+        .map(|((input, path), classes)| {
+            let classes: Vec<&str> = classes.iter().map(|class| class.label()).collect();
+            format!("{} : {}", display_path(input, path), classes.join(", "))
+        })
+        .collect();
+    lines.sort();
+    lines
+}
+
+fn normal_map(
+    entries: &BTreeMap<PathKey, BTreeSet<Class>>,
+    store: &Store,
+) -> BTreeMap<PathKey, BTreeSet<Class>> {
     let mut kept = entries.clone();
     // A `value` entry removes the `value`, `shape`, and `enumeration`
     // entries at or below it in the same cell.
@@ -3117,16 +4033,7 @@ fn normal_form(entries: &BTreeMap<PathKey, BTreeSet<Class>>, store: &Store) -> V
             }
         }
     }
-    let mut lines: Vec<String> = kept
-        .iter()
-        .filter(|(_, classes)| !classes.is_empty())
-        .map(|((input, path), classes)| {
-            let classes: Vec<&str> = classes.iter().map(|class| class.label()).collect();
-            format!("{} : {}", display_path(input, path), classes.join(", "))
-        })
-        .collect();
-    lines.sort();
-    lines
+    kept
 }
 
 /// The formal-input name of each parameter of a body (FA §1.2).
@@ -3173,11 +4080,13 @@ pub fn analyze_module<'a>(
     let Some(parsed) = resolver.parsed(module) else {
         return Vec::new();
     };
-    let mut functions: Vec<FunctionLike<'a, 'a>> = Vec::new();
+    let mut starts: Vec<(u32, u32)> = Vec::new();
     for node in parsed.semantic.nodes().iter() {
         match node.kind() {
-            AstKind::ArrowFunctionExpression(arrow) => functions.push(FunctionLike::Arrow(arrow)),
-            AstKind::Function(function) => functions.push(FunctionLike::Function(function)),
+            AstKind::ArrowFunctionExpression(arrow) => {
+                starts.push((arrow.span.start, arrow.span.end))
+            }
+            AstKind::Function(function) => starts.push((function.span.start, function.span.end)),
             _ => {}
         }
     }
@@ -3188,52 +4097,70 @@ pub fn analyze_module<'a>(
         }
         // The function of the body: the outermost one inside its span.
         let (from, to) = body.span;
-        let function = functions
+        let function = starts
             .iter()
-            .filter(|function| from <= function.span().start && function.span().end <= to)
-            .min_by_key(|function| (function.span().start, u32::MAX - function.span().end))
+            .filter(|(start, end)| from <= *start && *end <= to)
+            .min_by_key(|(start, end)| (*start, u32::MAX - *end))
             .copied();
-        let Some(function) = function else {
+        let Some((start, _)) = function else {
             continue;
         };
-        let span = function.span();
-        let mut analyzer = Analyzer {
-            resolver,
-            functions: HashMap::new(),
-            frames: vec![Frame {
-                module,
-                env: HashMap::new(),
-                span: (span.start, span.end),
-            }],
-            store: Store::default(),
-            cond: 0,
-            returned: false,
-            active: Vec::new(),
-            closures: Vec::new(),
-            root: (module, (span.start, span.end)),
-            computation: !matches!(
-                body.kind,
-                BodyKind::Handler
-                    | BodyKind::Action
-                    | BodyKind::InlineHandler
-                    | BodyKind::AuthoredFunction
-            ),
-            handler: body.kind != BodyKind::AuthoredFunction,
-        };
-        let arguments = parameter_names(body.kind, function)
-            .into_iter()
-            .map(Proj::root)
-            .collect();
-        let result = analyzer.call_function(module, span.start, arguments, false);
-        // What an expression body returns leaves the body.
-        if let Some(expression) = function.expression_body() {
-            analyzer.leaves(expression, &result);
+        if let Some(record) = analyze_body(resolver, module, body.kind, start, 0) {
+            records.push((index, record));
         }
-        analyzer.outputs(&result, "", 0);
-        analyzer.store.outputs.sort();
-        records.push((index, analyzer.finish()));
     }
     records
+}
+
+/// The record of the body of kind `kind` whose function starts at `start`
+/// in module `module`.
+fn analyze_body<'a>(
+    resolver: &Resolver<'_, 'a>,
+    module: usize,
+    kind: BodyKind,
+    start: u32,
+    depth: u32,
+) -> Option<Record> {
+    let mut analyzer = Analyzer {
+        resolver,
+        functions: HashMap::new(),
+        frames: Vec::new(),
+        store: Store::default(),
+        cond: 0,
+        returned: false,
+        active: Vec::new(),
+        closures: Vec::new(),
+        root: (module, (start, start)),
+        computation: !matches!(
+            kind,
+            BodyKind::Handler
+                | BodyKind::Action
+                | BodyKind::InlineHandler
+                | BodyKind::AuthoredFunction
+        ),
+        handler: kind != BodyKind::AuthoredFunction,
+        depth,
+    };
+    let function = analyzer.function_at(module, start)?;
+    let span = function.span();
+    analyzer.root = (module, (span.start, span.end));
+    analyzer.frames.push(Frame {
+        module,
+        env: HashMap::new(),
+        span: (span.start, span.end),
+    });
+    let arguments = parameter_names(kind, function)
+        .into_iter()
+        .map(Proj::root)
+        .collect();
+    let result = analyzer.call_function(module, span.start, arguments, false);
+    // What an expression body returns leaves the body.
+    if let Some(expression) = function.expression_body() {
+        analyzer.leaves(expression, &result);
+    }
+    analyzer.outputs(&result);
+    analyzer.store.outputs.sort();
+    Some(analyzer.finish())
 }
 
 /// The footprint of every body of the program `files`.
