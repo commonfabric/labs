@@ -11,6 +11,10 @@ describe("normalizeRenderConfidentialityCeiling()", () => {
     expect(normalizeRenderConfidentialityCeiling(undefined)).toBeUndefined();
   });
 
+  it("returns undefined for `null`, a host's declaration of no ceiling", () => {
+    expect(normalizeRenderConfidentialityCeiling(null)).toBeUndefined();
+  });
+
   it("keeps the atoms and caveat kinds of a well-formed ceiling", () => {
     expect(
       normalizeRenderConfidentialityCeiling({
@@ -37,7 +41,6 @@ describe("normalizeRenderConfidentialityCeiling()", () => {
       const [name, value] of [
         ["a string", "medical"],
         ["a number", 1],
-        ["null", null],
         ["a boolean", true],
       ] as const
     ) {

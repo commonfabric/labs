@@ -1441,6 +1441,72 @@ describe("cell-handle", () => {
 
       await expect(cell.fields()).rejects.toThrow(CellReadRefusedError);
     });
+
+    describe("the message a refusal's error carries", () => {
+      const stored = {
+        refusedBy: "display-ceiling",
+        labelSource: "stored",
+      } as const;
+
+      for (const call of ["sync", "pull", "fields", "initialize"] as const) {
+        it(`names \`${call}()\` and the kind of label that refused its read`, async () => {
+          const cell = new CellHandle<Record<string, string>>(
+            makeRuntime({ refused: stored }),
+            ref,
+          );
+
+          await expect(
+            call === "initialize" ? cell.initialize({}) : cell[call](),
+          ).rejects.toThrow(
+            `The worker refused this read of a cell, through \`${call}()\` ` +
+              "(display-ceiling: a label stored at the cell or above it).",
+          );
+        });
+      }
+
+      it("names `get()` for the refusal the handle holds", () => {
+        const cell = new CellHandle<string>(makeRuntime(), ref);
+        cell[$onCellRefused]({
+          refusedBy: "display-ceiling",
+          labelSource: "consumed",
+        });
+
+        expect(() => cell.get()).toThrow(
+          "The worker refused this read of a cell, through `get()` " +
+            "(display-ceiling: a label the read consumed).",
+        );
+      });
+
+      it("names the ceiling alone for a refusal that names no kind of label", async () => {
+        const cell = new CellHandle<Record<string, string>>(
+          makeRuntime({ refused: refusal }),
+          ref,
+        );
+
+        await expect(cell.fields()).rejects.toThrow(
+          "The worker refused this read of a cell, through `fields()` " +
+            "(display-ceiling).",
+        );
+      });
+
+      for (
+        const [labelSource, phrase] of [
+          ["schema", "the label the cell's schema declares"],
+          ["unreadable", "labels that could not be read"],
+        ] as const
+      ) {
+        it(`names no method where none is given, and \`${labelSource}\` as ${phrase}`, () => {
+          expect(
+            new CellReadRefusedError({
+              refusedBy: "display-ceiling",
+              labelSource,
+            }).message,
+          ).toBe(
+            `The worker refused this read of a cell (display-ceiling: ${phrase}).`,
+          );
+        });
+      }
+    });
   });
 
   describe("CellHandle update change detection", () => {

@@ -153,6 +153,8 @@ unlabeled:
 | The display label view ([label-view.ts](../../runtime/runner/src/cfc/label-view.ts)) | Records the read as failed; the fail-closed variant merges a blocking entry into the view it hands back |
 | The label-introspection builtin ([label-introspection.ts](../../runtime/runner/src/cfc/label-introspection.ts)) | Declines to answer, the same as for a target it cannot observe — it discloses a label rather than reading a payload, so declining is the refusal, and a write the caller then makes still reaches the envelope at the gates above |
 | The label-erasure guard ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)) | Counts an uninterpretable envelope as a label map, so a root write replacing one with nothing records as an erasure |
+| A sink that decides on what its read consumed (`includeConsumedLabel`, [cell.ts](../../runtime/runner/src/cell.ts)) | Converts to no consumed labels and the projection of no value, which its consumer decides on as labels that could not be read; the sink stays subscribed, so a later write it can interpret runs it again |
+| The host read gate ([host-read-gate.ts](../../runtime/runtime-client/src/backends/host-read-gate.ts)) | Converts a one-shot read's failure to a refusal naming `unreadable`; a subscription's arrives through the sink above |
 
 Other code looks at the reserved position for purposes that produce no
 labels, and the rule does not reach it. The delivery seams read the

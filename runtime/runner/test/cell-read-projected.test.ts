@@ -88,6 +88,17 @@ async function holder(server?: MemoryV2Server.Server) {
     expect(committed.error).toBeUndefined();
     await runtime.idle();
   };
+  // The secret stored under an envelope of a version this build does not
+  // know, which no label can be read out of.
+  const writeUnreadableSecret = async (value: string) => {
+    const tx = runtime.edit();
+    seedStoredEnvelope(tx, { ...secret.getAsNormalizedFullLink(), path: [] }, {
+      value,
+      cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+    } as never);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+  };
   await writeSecret("first secret");
   const record = runtime.getCell(space, "record");
   const tx = runtime.edit();
@@ -107,6 +118,7 @@ async function holder(server?: MemoryV2Server.Server) {
     secret,
     writeSecret,
     writeLabel,
+    writeUnreadableSecret,
     async [Symbol.asyncDispose]() {
       await runtime.dispose();
       await storageManager.close();
@@ -289,6 +301,30 @@ describe("cell-read-projected", () => {
         }
       } finally {
         await server.close();
+      }
+    });
+
+    it("hands no labels and the projection of no value for a read reaching an envelope this build cannot interpret, and runs again once it can", async () => {
+      await using docs = await holder();
+      const runs: { value: unknown; read: unknown }[] = [];
+      const cancel = sinkProjected(docs.record, hostValueOf, (value, read) => {
+        runs.push({ value, read });
+      });
+      try {
+        await docs.writeUnreadableSecret("unreadable secret");
+        expect(runs.at(-1)).toEqual({ value: undefined, read: undefined });
+
+        await docs.writeSecret("readable secret");
+        expect(runs.at(-1)?.value).toEqual({
+          entry: { inner: "readable secret" },
+        });
+        expect(runs.at(-1)?.read).toEqual(
+          expect.objectContaining({
+            confidentiality: expect.arrayContaining([SECRET_ATOM]),
+          }),
+        );
+      } finally {
+        cancel();
       }
     });
 

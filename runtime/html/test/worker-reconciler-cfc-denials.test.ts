@@ -344,6 +344,53 @@ Deno.test("worker reconciler CFC denials", async (t) => {
       },
     );
 
+    // A ceiling denial of a cell whose schema cannot be walked for its labels
+    // reports a label that could not be read, not one the schema declares.
+    await t.step(
+      "names an unwalkable schema's label as unreadable when the ceiling blocks its cell",
+      async () => {
+        const collector = collectOps();
+        const said = await mounted({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [
+            unsignedText.asSchema({
+              anyOf: [{ type: "string" }, { $ref: "#/$defs/Undefined" }],
+            }) as never,
+          ],
+        }, { collector, ceiling: true, debug: true });
+        expect(collector.texts()).toContain("Content hidden by policy");
+        expect(said).toContain(CEILING_BLOCK);
+        expect(said).toContain('"labelSource":"unreadable"');
+      },
+    );
+
+    // A text-integrity denial reports the label it read as a ceiling denial
+    // does: a schema that cannot be walked for its labels is a label that
+    // could not be read, not one the schema declares.
+    await t.step(
+      "names an unwalkable schema's label as unreadable when integrity rejects its text",
+      async () => {
+        const said = await mounted({
+          type: "vnode",
+          name: "cf-cfc-authorship",
+          props: {
+            verifyTextIntegrity: true,
+            allowLiteralText: true,
+            requiredTextIntegrity: signedReleaseAtom,
+          },
+          children: [
+            unsignedText.asSchema({
+              anyOf: [{ type: "string" }, { $ref: "#/$defs/Undefined" }],
+            }) as never,
+          ],
+        }, { collector: collectOps(), debug: true });
+        expect(said).toContain(TEXT_BLOCK);
+        expect(said).toContain('"labelSource":"unreadable"');
+      },
+    );
+
     await t.step(
       "names the sink prop when integrity blocks a prop value rather than a child",
       async () => {

@@ -93,6 +93,8 @@ import {
   readRefusal,
   type RenderLabelSummary,
   rootRenderPolicyFor,
+  schemaLabelSummary,
+  UNREADABLE_LABELS,
 } from "./display-fit.ts";
 import { generateChildKeys } from "./keying.ts";
 import type {
@@ -2125,17 +2127,9 @@ export class WorkerReconciler {
     try {
       labelView = this.#resolveCellLabelView(cell);
     } catch {
-      return { labelSource: "unreadable", confidentiality: [], integrity: [] };
+      return UNREADABLE_LABELS;
     }
-    if (labelView === undefined) {
-      return {
-        labelSource: "schema",
-        confidentiality: confidentialityLabelsFromCellSchema(
-          cell,
-        ) as readonly CfcConfClause[],
-        integrity: [],
-      };
-    }
+    if (labelView === undefined) return schemaLabelSummary(cell);
     return {
       labelSource: "stored",
       confidentiality: confidentialityLabels(labelView),
