@@ -6226,7 +6226,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["Scrolling", ""],
     ["  mouse wheel", "scroll up / down"],
     ["  K / J", "line up / down"],
-    ["  H / L", "scroll left / right"],
+    ["  h / l", "scroll left / right"],
     ["  ↑ ↓ ← →", "scroll / pan the view"],
     ["  ⌥↑ ⌥↓ ⌥← ⌥→", "scroll / pan while editing"],
     ["  Space / PgUp", "page down / up"],
