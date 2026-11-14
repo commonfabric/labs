@@ -382,8 +382,10 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
  * {@link SpaceInviteError}: `invalid-link` for a malformed invitation or any
  * other {@link INVITE_LINK_SCHEME} URL, such as `fbrc://JOIN?…` or
  * `fbrc:join?…`; `invalid-link` too for a code given both in a fragment and in
- * `options.code`, or in `options.code` beside any form but `fbrc://join`. A
- * returned `inviter` is the link's unverified claim; see {@link InviteLink}.
+ * `options.code`, or in `options.code` beside a `/join` or `/open` invitation.
+ * A URL that is not an invitation returns undefined whatever `options.code`
+ * holds. A returned `inviter` is the link's unverified claim; see
+ * {@link InviteLink}.
  */
 export function parseInviteLink(
   link: string | URL,

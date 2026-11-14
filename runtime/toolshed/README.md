@@ -286,38 +286,38 @@ The reusable client is `SpaceInviteClient` from
 `/join?host&space&invite#code`, with an optional `inviter` DID key in the query;
 the parser refuses any other query key, and any fragment but the code.
 `parseInviteLink` accepts the same invitation in three more forms and returns
-the same result for each: `/open?…#code=…` on any origin, which a person reaches
-by asking to open the invitation in Weaver; `fbrc://join?…#code=…`, on the
-custom scheme every Weaver answers, where `join` is the URL's host and its path
-is empty; and that scheme form without a fragment, with the code passed
-separately as `parseInviteLink(url, { code })`, which is how Android delivers it
-(the code arrives as the intent's `S.code` extra). The result's `host` is always
-the service named in the query, never the link's own origin. Other paths, a
-`/join` or `/open` URL whose query names none of `host`, `space`, and `invite`,
-and `fbrc://setup?n=<nonce>` return `undefined`; the last is the reply a Weaver
-receives while making itself the browser's default for the scheme, and is never
-an invitation. Any other URL on the scheme throws `invalid-link`. `inviter` is a
-display hint that anyone holding the link can change; it is checked only
-syntactically and is not part of the code verifier. A recipient cannot read the
-space ACL before redeeming, and afterwards an ACL check can show at most that
-the DID is an owner, not that it issued the link. Like the space DID, it travels
-in the query, so it reaches the shell host's access logs. `issue` accepts a
-prepared request containing `inviteId`, `codeVerifier`, `access`, `ttlSeconds`,
-and optional `maxUses`, `suggestedProfile`, `spaceName` and `issuerName`. Retain
-the credentials before calling it so an uncertain response can be retried with
-the same ID. The convenience `create` accepts the same
-access/lifetime/limit/suggestion/name options and optional paired `inviteId` and
-`code`, and returns flat active metadata plus `code`. If the create request
-fails, `SpaceInviteCreateError` retains its credentials and original options in
-the frozen `retry` getter. Retry with `client.create(error.retry)` on the same
-client. The getter contains the bearer code: keep it private, and use it only to
-recover or retry this invitation. Ordinary error inspection and JSON
-serialization omit these credentials. The error preserves a structured refusal
-code; uncertain transport or response parsing failures use
-`create-outcome-unknown`. Validation failures before sending remain
-`SpaceInviteError` refusals. `redeem` and `preview` accept only `inviteId` and
-`code`, and `preview` always sends the signed HTTP request; `list` and
-`receipts` return arrays; `revoke` returns `{ "revoked": true }`.
+the same result for each: `/open?…#code=…` on any HTTPS origin, or loopback HTTP
+as for `/join`, which a person reaches by asking to open the invitation in
+Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver answers, where
+`join` is the URL's host and its path is empty; and that scheme form without a
+fragment, with the code passed separately as `parseInviteLink(url, { code })`,
+which is how Android delivers it (the code arrives as the intent's `S.code`
+extra). The result's `host` is always the service named in the query, never the
+link's own origin. Other paths, a `/join` or `/open` URL whose query names none
+of `host`, `space`, and `invite`, and `fbrc://setup?n=<nonce>` return
+`undefined`; the last is the reply a Weaver receives while making itself the
+browser's default for the scheme, and is never an invitation. Any other URL on
+the scheme throws `invalid-link`. `inviter` is a display hint that anyone
+holding the link can change; it is checked only syntactically and is not part of
+the code verifier. A recipient cannot read the space ACL before redeeming, and
+afterwards an ACL check can show at most that the DID is an owner, not that it
+issued the link. Like the space DID, it travels in the query, so it reaches the
+shell host's access logs. `issue` accepts a prepared request containing
+`inviteId`, `codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
+`suggestedProfile`, `spaceName` and `issuerName`. Retain the credentials before
+calling it so an uncertain response can be retried with the same ID. The
+convenience `create` accepts the same access/lifetime/limit/suggestion/name
+options and optional paired `inviteId` and `code`, and returns flat active
+metadata plus `code`. If the create request fails, `SpaceInviteCreateError`
+retains its credentials and original options in the frozen `retry` getter. Retry
+with `client.create(error.retry)` on the same client. The getter contains the
+bearer code: keep it private, and use it only to recover or retry this
+invitation. Ordinary error inspection and JSON serialization omit these
+credentials. The error preserves a structured refusal code; uncertain transport
+or response parsing failures use `create-outcome-unknown`. Validation failures
+before sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept
+only `inviteId` and `code`, and `preview` always sends the signed HTTP request;
+`list` and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
