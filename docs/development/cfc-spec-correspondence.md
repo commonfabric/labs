@@ -411,13 +411,15 @@ position, and a release may append an alternative whose writer's module it
 installs, where one stored alternative has the same keys and contract, a
 writer claim that differs from the appended one's only in the symbol it
 binds, and that module or one the space attests it succeeds. It admits more
-than the pin at
-strict, with no default-off dial, so it does not satisfy step 4 above. Its four
-deciding sites, the merge's matching and its append, and the keep rule's
-matching and its admission, carry the `SPEC-PENDING` marker, and their citations
-of sections the snapshot does not
-hold are exempted in `tasks/check-cfc-correspondence.ts`. @danfuzz directed
-landing it this way. The conformance statement's §10 records the gap.
+than the pin at strict, with no default-off dial, so it does not satisfy step 4
+above. Its four deciding sites, the merge's matching and its append, and the
+keep rule's matching and its admission, carry the `SPEC-PENDING` marker, and
+their citations of sections the snapshot does not hold are exempted in
+`tasks/check-cfc-correspondence.ts`. @danfuzz ruled that it lands at the strict
+default with no default-off dial, recorded here as a nonconforming semantic
+gap, pending [specs#96](https://github.com/commonfabric/specs/pull/96). His
+reason, in his words: "CFC is not a gate for chat". The conformance statement's
+§10 records the gap.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

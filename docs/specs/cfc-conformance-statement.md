@@ -858,8 +858,10 @@ yet, as `--check` compiles one, is derived from the modules this session
 evaluated it with, which leave out a module the program imports only for its
 types; there the check can refuse an appended writer the commit admits.
 
-This implements specs#96 ahead of its ruling, at strict and with no dial, at
-@danfuzz's direction. Against the pin it admits more: an appended writer, and a
+This implements specs#96 ahead of its ruling, at strict and with no dial:
+@danfuzz ruled that it lands at the strict default with no default-off dial,
+recorded in the correspondence procedure as a nonconforming semantic gap,
+pending specs#96. Against the pin it admits more: an appended writer, and a
 candidate listing the stored alternatives in another order, which the pin's
 general stability rules refuse. So it does not satisfy the correspondence
 procedure's step 4, which asks for a default-off dial for a change admitting
