@@ -26,6 +26,7 @@ import {
   equals,
   getEntityId,
   handler,
+  type HandlerState,
   isWellFormedDID,
   type JSONValue,
   NAME,
@@ -488,9 +489,9 @@ function inboxLinkOf(inbox: unknown): unknown {
 /**
  * Creates Home's own private inbox, in the space named
  * {@link PRIVATE_INBOX_SPACE_NAME} in Home's space, and returns the link Home
- * holds it by. Call it from a handler. The space grants every principal
- * `WRITE`, so a sender's write is admitted whether the sender's own runtime
- * makes it or the space's server does.
+ * holds it by. `createOwnIfNone()` is its one caller. The space grants every
+ * principal `WRITE`, so a sender's write is admitted whether the sender's own
+ * runtime makes it or the space's server does.
  */
 function createPrivateInbox(): Cell<PrivateInboxPiece> {
   return inboxLinkOf(
@@ -558,6 +559,20 @@ function retainOnce(
   retained.set([...earlier, inbox]);
 }
 
+/**
+ * Helper for {@link ensurePrivateInbox}, which records in `retained` that Home
+ * holds `inbox` again: an entry for it is dropped, since the list never holds
+ * the inbox Home holds.
+ */
+function releaseRetained(
+  retained: Writable<RetainedPrivateInboxes>,
+  inbox: Cell<PrivateInboxPiece>,
+): void {
+  const earlier = (retained.get() ?? []).filter((each) => each !== undefined);
+  if (!earlier.some((each) => equals(each, inbox))) return;
+  retained.set(earlier.filter((each) => !equals(each, inbox)));
+}
+
 /** What the host sends Home's `ensurePrivateInbox`. */
 export type EnsurePrivateInboxEvent = {
   /**
@@ -596,33 +611,49 @@ export type EnsurePrivateInboxEvent = {
 };
 
 /**
- * Gives Home the private inbox the host names, or one of its own when no
- * profile advertises one, then has each profile in Home's list that points at
- * no inbox point at Home's. Which inbox Home should hold is the host's
- * decision (`ensurePrivateInboxOf()` in `runtime/piece`), which this handler
- * checks rather than repeats. Home adopts the inbox the event names only when
- * the profile the event names is in Home's list and still points at that
- * inbox; an inbox Home held until then goes into `retainedPrivateInboxes`.
- * An event naming no inbox leaves Home with what it holds, and Home creates an
- * inbox only when it holds none and no profile points at an inbox. So when the
- * host vetted none, or names a profile that has since moved, Home keeps what it
+ * Gives Home the private inbox the host names, or its own when no profile
+ * advertises one, then has each profile in Home's list that points at no inbox
+ * point at Home's. Which inbox Home should hold is the host's decision
+ * (`ensurePrivateInboxOf()` in `runtime/piece`), which this handler checks
+ * rather than repeats. Home adopts the inbox the event names only when the
+ * profile the event names is in Home's list and still points at that inbox; an
+ * inbox Home held until then goes into `retainedPrivateInboxes`. An event
+ * naming no inbox leaves Home with what it holds, and Home takes its own inbox
+ * only when it holds none and no profile points at an inbox. So when the host
+ * vetted none, or names a profile that has since moved, Home keeps what it
  * holds, or holds none.
  *
  * An event naming inboxes to replace, ones Home did not make, gives each way to
- * an inbox of Home's own when Home holds it, or when the profile the event
- * names is in Home's list and still points at it: Home creates its own inbox
- * if it holds one of those or none, keeps the one it holds otherwise, and puts
- * each replaced inbox in `retainedPrivateInboxes`, so the offers delivered to
- * it stay readable. A profile pointing at an inbox Home retains is then pointed
- * at Home's, by the second step; a profile pointing at any other inbox keeps
- * its pointer. Running it again creates, re-points and retains nothing.
+ * Home's own inbox when Home holds it, or when the profile the event names is
+ * in Home's list and still points at it: Home takes its own inbox if it holds
+ * one of those or none, keeps the one it holds otherwise, and puts each
+ * replaced inbox in `retainedPrivateInboxes`, so the offers delivered to it
+ * stay readable. A profile pointing at an inbox Home retains is then pointed at
+ * Home's, by the second step; a profile pointing at any other inbox keeps its
+ * pointer. Taking its own inbox takes it out of `retainedPrivateInboxes`, which
+ * never holds the inbox Home holds. Running it again re-points and retains
+ * nothing.
+ *
+ * Home's own inbox is the one `ownPrivateInbox` holds, which only
+ * {@link createOwnPrivateInbox} creates. This handler creates none: it reads
+ * the owner's labeled state, the links Home's holder and the profiles keep
+ * among it, and an inbox created in a run that has read that would carry the
+ * owner's label to every sender that reads the inbox, which the write gate
+ * refuses. The host has Home's `createOwnPrivateInbox` create it first, and
+ * waits for that, when Home may need it. For a sender that has not, when Home
+ * has no inbox of its own, the event names none to adopt, and either the event
+ * names inboxes to replace or Home holds none, this handler does nothing but
+ * send the event to `createOwn`. That step creates Home's inbox and hands the
+ * event on to {@link ensurePrivateInboxOnly}, which decides as above. Whether
+ * to send depends only on the host's event, `ownPrivateInbox` and whether Home
+ * holds an inbox, never on which inbox Home or a profile names.
  *
  * `privateInboxRefusal` holds the host's refusal of the deciding profile's
  * inbox. A refusal the event names is recorded, in place of a different one
  * recorded before, under the same check as an adoption: the profile the event
  * names is in Home's list and still points at the refused inbox, which is not
- * the inbox Home holds. Otherwise the record is cleared when Home adopts or
- * creates an inbox, when it replaces the inbox the record names, when the
+ * the inbox Home holds. Otherwise the record is cleared when Home adopts an
+ * inbox or takes its own, when it replaces the inbox the record names, when the
  * profile the event names is in Home's list and points at the inbox Home
  * holds, and, on an event recording no refusal, when no profile in Home's list
  * points at the refused inbox. `replaceRefusedPrivateInbox` clears it too,
@@ -637,37 +668,73 @@ export type EnsurePrivateInboxEvent = {
  * Such an event can likewise record a refusal of any listed profile's inbox,
  * with any code, or clear the record.
  *
- * The inbox's space is named in Home's own space, so one identity gets one
- * such space however many times, and from however many runtimes, this runs.
- *
  * The list is bound as a value: the runner resolves it before the body runs,
  * and withdraws the dispatch until every profile it names has loaded, so an
  * unloaded profile is never taken for one that advertises no inbox.
  *
- * The pointing is a second step, queued behind this one. A profile is given
- * the inbox's own result document, which this handler's run may create, so the
- * profiles are pointed in an event of its own, once this run has committed.
+ * The pointing is a second step, queued behind this one, so that it points the
+ * profiles at the inbox this run leaves Home holding once the run has
+ * committed.
  */
 export const ensurePrivateInbox = handler<
   EnsurePrivateInboxEvent,
-  {
-    privateInbox: Writable<PrivateInboxHolder>;
-    retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
-    privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
-    profiles: PointTarget[];
-    pointProfiles: Stream<void>;
+  EnsurePrivateInboxState & {
+    /** Home's creating step, which hands the event on once it has run. */
+    createOwn: Stream<EnsurePrivateInboxEvent>;
   }
->((
-  event,
+>((event, state) => {
+  if (
+    state.ownPrivateInbox?.piece === undefined && event?.adopt === undefined &&
+    ((event?.replace ?? []).length > 0 ||
+      state.privateInbox.get()?.piece === undefined)
+  ) {
+    state.createOwn.send(event ?? {});
+    return;
+  }
+  decidePrivateInbox(event, state);
+});
+
+/**
+ * Decides what Home holds, as {@link ensurePrivateInbox} does once Home has an
+ * inbox of its own, and never has one created: while Home has no inbox of its
+ * own, it neither replaces an inbox nor takes one.
+ * {@link createOwnPrivateInbox} hands its event on to it. It binds no stream
+ * to send to, since a `Stream` a binding leaves out is still a stream inside
+ * the handler, and a send through it is dropped.
+ */
+export const ensurePrivateInboxOnly = handler<
+  EnsurePrivateInboxEvent,
+  EnsurePrivateInboxState
+>((event, state) => decidePrivateInbox(event, state));
+
+/** What {@link ensurePrivateInbox} and {@link ensurePrivateInboxOnly} bind. */
+type EnsurePrivateInboxState = {
+  privateInbox: Writable<PrivateInboxHolder>;
+  ownPrivateInbox: PrivateInboxHolder;
+  retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
+  privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
+  profiles: PointTarget[];
+  pointProfiles: Stream<void>;
+};
+
+/**
+ * Decides what Home holds, records or clears the host's refusal, and has the
+ * profiles pointed, as {@link ensurePrivateInbox} says.
+ */
+function decidePrivateInbox(
+  event: EnsurePrivateInboxEvent | undefined,
   {
     privateInbox,
+    ownPrivateInbox,
     retainedPrivateInboxes,
     privateInboxRefusal,
     profiles,
     pointProfiles,
-  },
-) => {
+  }: HandlerState<EnsurePrivateInboxState>,
+): void {
   const held = privateInbox.get()?.piece;
+  const own = ownPrivateInbox?.piece;
+  const adopt = event?.adopt;
   const advertised = advertisedInbox(profiles);
   // The deciding profile's pointer, when the event names a profile in the
   // list. Comparisons of links, which read only link shape in the inbox's
@@ -675,25 +742,27 @@ export const ensurePrivateInbox = handler<
   const deciding = event?.from !== undefined
     ? pointerOfListed(profiles, event.from)
     : undefined;
-  const adopt = event?.adopt;
   // The inbox Home holds once this run commits.
   let holding = held;
   let replaced = false;
   // An inbox Home holds, or one the profile the event names still points at,
-  // gives way to an inbox of Home's own, and Home keeps reading it.
-  const replacing = adopt !== undefined ? [] : (event?.replace ?? []).filter(
-    (each) =>
+  // gives way to Home's own, and Home keeps reading it. Without an inbox of
+  // its own, Home replaces none.
+  const replacing = adopt !== undefined || own === undefined
+    ? []
+    : (event?.replace ?? []).filter((each) =>
       each !== undefined &&
       ((held !== undefined && equals(held, each)) ||
-        (deciding !== undefined && equals(each, deciding))),
-  );
-  if (replacing.length > 0) {
+        (deciding !== undefined && equals(each, deciding)))
+    );
+  if (own !== undefined && replacing.length > 0) {
+    for (const each of replacing) retainOnce(retainedPrivateInboxes, each);
     if (held === undefined || replacing.some((each) => equals(held, each))) {
-      holding = createPrivateInbox();
-      privateInbox.set({ piece: holding });
+      holding = own;
+      privateInbox.set({ piece: own });
+      releaseRetained(retainedPrivateInboxes, own);
       replaced = true;
     }
-    for (const each of replacing) retainOnce(retainedPrivateInboxes, each);
   } else if (adopt !== undefined) {
     const pointer = event?.from !== undefined
       ? deciding
@@ -709,9 +778,12 @@ export const ensurePrivateInbox = handler<
       privateInbox.set({ piece: holding });
       replaced = true;
     }
-  } else if (held === undefined && advertised === undefined) {
-    holding = createPrivateInbox();
-    privateInbox.set({ piece: holding });
+  } else if (
+    own !== undefined && held === undefined && advertised === undefined
+  ) {
+    holding = own;
+    privateInbox.set({ piece: own });
+    releaseRetained(retainedPrivateInboxes, own);
     replaced = true;
   }
   const refused = event?.refused;
@@ -754,6 +826,71 @@ export const ensurePrivateInbox = handler<
     privateInboxRefusal.set({});
   }
   pointProfiles.send();
+}
+
+/**
+ * Creates Home's own private inbox when `ownPrivateInbox` holds none, and
+ * records it there. {@link createOwnPrivateInbox} and
+ * {@link createOwnPrivateInboxOnly} are its callers, and nothing else creates
+ * an inbox for Home.
+ *
+ * Before the creation the run reads nothing but `ownPrivateInbox`, which only
+ * these steps write, and its event, which carries no label. That is the point
+ * of the steps. The documents a creation writes take on the confidentiality its
+ * run has read, so after a read of the owner's labeled state, such as the
+ * links Home's holder and its profiles keep, the write gate refuses the
+ * creation; and an inbox carrying the owner's label would pass it into the run
+ * of every sender that reads the inbox.
+ *
+ * Two runs racing to create the inbox both read `ownPrivateInbox` empty, and
+ * the one that commits second finds its commit stale, runs again, and creates
+ * nothing. What its first attempt wrote in the inbox's space, which commits
+ * before Home's, may be left there: an empty inbox no profile and nothing of
+ * Home's names.
+ *
+ * The inbox's space is named in Home's own space, so one identity gets one such
+ * space however many times, and from however many runtimes, this runs.
+ */
+function createOwnIfNone(ownPrivateInbox: Writable<PrivateInboxHolder>): void {
+  if (ownPrivateInbox.get()?.piece === undefined) {
+    ownPrivateInbox.set({ piece: createPrivateInbox() });
+  }
+}
+
+/**
+ * Creates Home's own private inbox, as `createOwnIfNone()` says, and hands
+ * `event` on to `ensure`, Home's {@link ensurePrivateInboxOnly}, which decides
+ * what Home holds now that it has an inbox of its own.
+ * {@link ensurePrivateInbox} sends it its event when Home may need an inbox
+ * and has none of its own, for a sender of the ensure that has not had one
+ * created first, such as `requestPrivateInbox`. Nothing waits for it: a sender
+ * of the ensure learns of the ensure's own run, not of this one.
+ */
+export const createOwnPrivateInbox = handler<
+  EnsurePrivateInboxEvent,
+  {
+    ownPrivateInbox: Writable<PrivateInboxHolder>;
+    ensure: Stream<EnsurePrivateInboxEvent>;
+  }
+>((event, { ownPrivateInbox, ensure }) => {
+  createOwnIfNone(ownPrivateInbox);
+  ensure.send(event ?? {});
+});
+
+/**
+ * Creates Home's own private inbox, as `createOwnIfNone()` says, and does
+ * nothing else. Home binds it as its `createOwnPrivateInbox` stream, which the
+ * host sends when its vetting finds that Home may need an inbox of its own and
+ * has none, and waits for the run to commit before it sends the ensure, so a
+ * creation that fails fails the host's ensure, and the next bring-up tries
+ * again. It binds no stream to hand on to: a `Stream` binding a handler leaves
+ * out is still a stream, and a send through it is dropped.
+ */
+export const createOwnPrivateInboxOnly = handler<
+  EnsurePrivateInboxEvent,
+  { ownPrivateInbox: Writable<PrivateInboxHolder> }
+>((_event, { ownPrivateInbox }) => {
+  createOwnIfNone(ownPrivateInbox);
 });
 
 /**
@@ -803,7 +940,7 @@ export type PrivateInboxRequest = {
  * Where a request for Home's private inbox stands, for the profile it names:
  *
  * - `pending` while Home is giving the profile its inbox: Home holds an inbox
- *   the profile does not point at yet, or holds none and is creating one.
+ *   the profile does not point at yet, or holds none and is taking its own.
  * - `ensured` once the profile points at the inbox Home holds.
  * - `unlisted` when the request names no profile in Home's list, which Home
  *   never points.
@@ -811,7 +948,7 @@ export type PrivateInboxRequest = {
  *   points it.
  * - `not-held` when the profile advertises an inbox other than the one Home
  *   holds, as when something other than Home sets its pointer first, which
- *   Home never replaces, or Home holds none and creates none, because a
+ *   Home never replaces, or Home holds none and takes none, because a
  *   profile advertises an inbox that awaits the host's vetting.
  */
 export type PrivateInboxAnswerStatus =
@@ -825,9 +962,9 @@ export type PrivateInboxAnswerStatus =
 export type PrivateInboxAnswer = {
   /**
    * Where the request stands. Once it is `ensured`, the inbox is the one the
-   * profile's own pointer names. The answer holds no link to it, which would
-   * carry the label the inbox gives its offers into Home's answers, and so
-   * into every run that reads them.
+   * profile's own pointer names. The answer holds no link to it, which a run
+   * reading Home's answers could follow, untyped, into the label the inbox
+   * gives its offers.
    */
   status: PrivateInboxAnswerStatus;
 };
@@ -904,7 +1041,7 @@ export function profileKeyOf(profile: unknown): string | undefined {
  *   holds none: `not-held`, since Home points only a profile that points at
  *   none.
  * - The profile points at no inbox, Home holds none, and another profile
- *   advertises one, so Home creates none: `not-held`.
+ *   advertises one, so Home takes none: `not-held`.
  */
 export function privateInboxAnswersOf(
   held: Cell<PrivateInboxPiece> | undefined,
@@ -981,7 +1118,7 @@ export const PrivateInboxAnswering = pattern<
  * Has Home ensure its private inbox, as an event naming nothing has
  * {@link ensurePrivateInbox} do, and answers with Home's answer for the
  * profile the request names, which is `ensured` once that profile points at
- * the inbox Home holds. Home keeps the inbox it holds, creates one when it
+ * the inbox Home holds. Home keeps the inbox it holds, takes its own when it
  * holds none and no profile advertises one, and points each profile in its
  * list that points at no inbox at its own; it adopts nothing, since adopting
  * an inbox a profile advertises waits on the host's vetting.
@@ -1034,12 +1171,20 @@ export const requestPrivateInbox = handler<
 /**
  * Replaces the inbox Home's refusal record names, for the owner, from the
  * button Home's refusal notice carries: Home keeps the inbox it holds, or
- * creates its own when it holds none, clears the refusal, records it as
- * replaced in `privateInboxReplacement`, and then has each profile in Home's
- * list that points at the refused inbox point at Home's instead. Profiles
- * pointing at any other inbox, or at none, are left to the ensure. Does nothing
- * while Home records no refusal. The refused inbox does not go into
+ * takes its own when it holds none, clears the refusal, records it as replaced
+ * in `privateInboxReplacement`, and then has each profile in Home's list that
+ * points at the refused inbox point at Home's instead. Profiles pointing at any
+ * other inbox, or at none, are left to the ensure. Does nothing while Home
+ * records no refusal. The refused inbox does not go into
  * `retainedPrivateInboxes`: Home never held it.
+ *
+ * It creates no inbox, for the reason {@link createOwnPrivateInbox} gives:
+ * this run reads the refusal record first. {@link ensurePrivateInbox} has
+ * Home's own created whenever Home holds none, which is when a refusal leaves
+ * Home without one, so the notice's button finds it. While Home holds none and
+ * has none of its own, this does nothing, and the refusal stays recorded for
+ * the next click, after the next ensure; nor does it take Home's own when that
+ * is the refused inbox, and Home's notice offers no button then.
  *
  * `privateInboxReplacement` admits a write only from this handler, and only
  * for an event the renderer marks as a click on
@@ -1053,6 +1198,7 @@ export const replaceRefusedPrivateInbox = handler<
   void,
   {
     privateInbox: Writable<PrivateInboxHolder>;
+    ownPrivateInbox: PrivateInboxHolder;
     privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
     privateInboxReplacement: Writable<PrivateInboxReplacementRecord>;
     repointProfiles: Stream<void>;
@@ -1061,6 +1207,7 @@ export const replaceRefusedPrivateInbox = handler<
   _event,
   {
     privateInbox,
+    ownPrivateInbox,
     privateInboxRefusal,
     privateInboxReplacement,
     repointProfiles,
@@ -1069,7 +1216,11 @@ export const replaceRefusedPrivateInbox = handler<
   const refusal = privateInboxRefusal.get()?.refusal;
   if (refusal === undefined) return;
   if (privateInbox.get()?.piece === undefined) {
-    privateInbox.set({ piece: createPrivateInbox() });
+    const own = ownPrivateInbox?.piece;
+    // By the stored links, which `equalLinks()` does not resolve: the run
+    // reads nothing of the refused inbox before it writes Home's holder.
+    if (own === undefined || Writable.equalLinks(own, refusal.inbox)) return;
+    privateInbox.set({ piece: own });
   }
   privateInboxRefusal.set({});
   // TODO(danfuzz): With server execution off, a runtime of the owner's started

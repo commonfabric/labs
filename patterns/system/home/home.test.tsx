@@ -86,6 +86,17 @@ function offersReplacementIn(ui: unknown, replace: Stream<void>): boolean {
     hasText(notice, "Use a new inbox");
 }
 
+/**
+ * The `display` the refusal notice in the rendering `ui` gives its node `id`,
+ * which the notice's markup keeps and its styles show or hide.
+ */
+function displayIn(ui: unknown, id: string): unknown {
+  const style = propValue(findNodeById(refusalNoticeIn(ui), id), "style");
+  return typeof style === "object" && style !== null
+    ? (style as { display?: unknown }).display
+    : undefined;
+}
+
 /** An inbox's result, as the link a refusal record keeps. */
 function linkOf(inbox: unknown): Cell<PrivateInboxPiece>;
 function linkOf(inbox: unknown): unknown {
@@ -350,6 +361,31 @@ export default pattern(() => {
       !hasText(refusalNoticeIn(home[UI]), fragment)
     )
   );
+  // While Home holds no inbox and the refused inbox is its own, which the
+  // button's click never takes, the notice says so and hides the button.
+  const action_refuse_homes_own_inbox = action(() => {
+    home.ownPrivateInbox.set({ piece: linkOf(refusedInbox) });
+    home.privateInboxRefusal.set({
+      refusal: {
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: linkOf(refusedInbox),
+        refusedAt: REFUSED_AT,
+      },
+    });
+  });
+  const assert_own_refused_offers_no_button = assert(() =>
+    hasText(refusalNoticeIn(home[UI]), "The refused inbox is Home's own") &&
+    displayIn(home[UI], "home-private-inbox-own-refused") === "inline" &&
+    displayIn(home[UI], "home-private-inbox-replace-offer") === "none"
+  );
+  const action_forget_homes_own_inbox = action(() => {
+    home.ownPrivateInbox.set({});
+  });
+  const assert_notice_offers_the_button_again = assert(() =>
+    offersReplacementIn(home[UI], home.replaceRefusedPrivateInbox) &&
+    displayIn(home[UI], "home-private-inbox-replace-offer") === "flex" &&
+    displayIn(home[UI], "home-private-inbox-own-refused") === "none"
+  );
   const action_clear_refusal = action(() => {
     home.privateInboxRefusal.set({});
   });
@@ -398,6 +434,10 @@ export default pattern(() => {
       { assertion: assert_codeless_refusal_says_none_given },
       { action: action_record_unknown_refusal },
       { assertion: assert_unknown_code_shown_as_given },
+      { action: action_refuse_homes_own_inbox },
+      { assertion: assert_own_refused_offers_no_button },
+      { action: action_forget_homes_own_inbox },
+      { assertion: assert_notice_offers_the_button_again },
       { action: action_clear_refusal },
       { assertion: assert_no_refusal_notice },
     ],

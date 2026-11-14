@@ -4333,7 +4333,9 @@ describe("runtime-processor", () => {
      * adoption run for real. Its `ensurePrivateInbox` is a real stream, whose
      * handler records the event and runs `onEnsurePrivateInbox`, so a throw
      * from that is a failure of Home's handling, which the host's ensure
-     * waits for and reports. Each
+     * waits for and reports. Its `createOwnPrivateInbox` is a real stream too,
+     * whose handler records the event; Home holds no inbox and none of its
+     * own, so the host's ensure has it create one first. Each
      * read the inbox ensure makes of Home waits for `inboxReadable`. Home
      * lists no profiles, so the profile root repair has none to repair. The
      * share intake's subscriptions to Home are recorded, and `onSubscribe` runs
@@ -4362,12 +4364,17 @@ describe("runtime-processor", () => {
       const sent: { stream: string; event: unknown }[] = [];
       const subscribed: string[] = [];
       const unsubscribed: string[] = [];
-      const streams = runtime.getCell<{ ensurePrivateInbox: unknown }>(
+      const streams = runtime.getCell<
+        { ensurePrivateInbox: unknown; createOwnPrivateInbox: unknown }
+      >(
         signer.did(),
         "home-worker-streams",
       );
       await runtime.editWithRetry((tx) =>
-        streams.withTx(tx).setRaw({ ensurePrivateInbox: { $stream: true } })
+        streams.withTx(tx).setRaw({
+          ensurePrivateInbox: { $stream: true },
+          createOwnPrivateInbox: { $stream: true },
+        })
       );
       const ensurePrivateInbox = streams.key("ensurePrivateInbox");
       const cancelEnsureHandler = runtime.scheduler.addEventHandler(
@@ -4376,6 +4383,13 @@ describe("runtime-processor", () => {
           onEnsurePrivateInbox();
         },
         ensurePrivateInbox.getAsNormalizedFullLink(),
+      );
+      const createOwnPrivateInbox = streams.key("createOwnPrivateInbox");
+      const cancelCreateOwnHandler = runtime.scheduler.addEventHandler(
+        (_tx, event: unknown) => {
+          sent.push({ stream: "createOwnPrivateInbox", event });
+        },
+        createOwnPrivateInbox.getAsNormalizedFullLink(),
       );
       const home = {
         // Home's space, whose allocation record the inbox ensure reads for
@@ -4395,6 +4409,8 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : name === "ensurePrivateInbox"
             ? ensurePrivateInbox
+            : name === "createOwnPrivateInbox"
+            ? createOwnPrivateInbox
             : field(name),
       };
       // Any other field of Home's, as the inbox ensure, the profile root
@@ -4469,10 +4485,17 @@ describe("runtime-processor", () => {
         sent,
         /** What was sent to the streams that change the space list. */
         spaceListSends: () =>
-          sent.filter(({ stream }) => stream !== "ensurePrivateInbox"),
+          sent.filter(({ stream }) =>
+            stream !== "ensurePrivateInbox" &&
+            stream !== "createOwnPrivateInbox"
+          ),
         /** How many events were sent to `ensurePrivateInbox`. */
         privateInboxSends: () =>
           sent.filter(({ stream }) => stream === "ensurePrivateInbox").length,
+        /** How many events were sent to `createOwnPrivateInbox`. */
+        ownInboxCreations: () =>
+          sent.filter(({ stream }) => stream === "createOwnPrivateInbox")
+            .length,
         /** The Home fields the share intake has subscribed to, in order. */
         subscribed,
         /** The Home fields whose subscriptions the share intake has ended. */
@@ -4486,6 +4509,7 @@ describe("runtime-processor", () => {
         rootEnsures: () => ensure.calls.length,
         async [Symbol.asyncDispose]() {
           cancelEnsureHandler();
+          cancelCreateOwnHandler();
           ensure.restore();
           stored.restore();
           // A space context's first sync, unfinished at disposal, is logged
@@ -4630,6 +4654,16 @@ describe("runtime-processor", () => {
         stream: "ensurePrivateInbox",
         event: {},
       });
+      // Home holds no inbox and none of its own, so the host has it create
+      // its own first, once.
+      expect(worker.ownInboxCreations()).toBe(1);
+      expect(
+        worker.sent.findIndex(({ stream }) =>
+          stream === "createOwnPrivateInbox"
+        ),
+      ).toBeLessThan(
+        worker.sent.findIndex(({ stream }) => stream === "ensurePrivateInbox"),
+      );
     });
 
     it("opens Home when Home's handling of the private inbox ensure fails, and sends it again on the next ensure", async () => {
@@ -4695,6 +4729,7 @@ describe("runtime-processor", () => {
       await ensured;
 
       expect(worker.privateInboxSends()).toBe(0);
+      expect(worker.ownInboxCreations()).toBe(0);
     });
 
     it("disposes without waiting for a private inbox ensure still reading, and reports nothing when it then fails", async () => {

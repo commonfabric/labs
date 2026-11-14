@@ -133,17 +133,25 @@ const pointerSchema = {
  * one to replace; a profile and nothing else Home takes as the end of a
  * refusal it recorded. When no profile advertises an inbox, the event names
  * the inbox Home holds when it is one to replace, and nothing otherwise, and
- * Home creates an inbox only if it holds none. A Home without the stream is
- * left as it is.
+ * Home takes an inbox of its own only if it holds none. A Home without the
+ * stream is left as it is.
+ *
+ * Before the event, when Home may need an inbox of its own for it and has
+ * none, which is when the event names nothing to adopt and either names
+ * inboxes to replace or Home holds none, sends Home's `createOwnPrivateInbox`,
+ * whose run creates one reading nothing labeled, and waits for that run to
+ * commit. Home's ensure would otherwise hand its event on to that step in a
+ * run nothing waits for, as it does for a Home without the stream.
  *
  * Resolves once Home's handler has run on the event and its run has
  * committed, on the server that runs it under server execution, so that a
  * caller waiting on the ensure waits for Home's handling of it too. Rejects
- * when that handling fails.
- * Rejects, sending nothing, when a profile ordered ahead of the deciding one
- * cannot be loaded, since which profile decides is then unknown. Sends
- * nothing, and returns `abandoned`, when `signal` has aborted or `runtime`
- * has begun disposal by the time the reads are done, so that an ensure its
+ * when that handling fails, or when the creation it waited for first failed,
+ * having then sent no event. Rejects, sending nothing, when a profile ordered
+ * ahead of the deciding one cannot be loaded, since which profile decides is
+ * then unknown. Sends nothing more, and returns `abandoned`, when `signal` has
+ * aborted or `runtime` has begun disposal by the time the reads are done, or
+ * by the time the creation it waited for has committed, so that an ensure its
  * caller has stopped waiting for sends no event after teardown.
  */
 export async function ensurePrivateInboxOf(
@@ -155,9 +163,7 @@ export async function ensurePrivateInboxOf(
   const ensure = home.key("ensurePrivateInbox");
   if (ensure.getRaw() === undefined) return { outcome: "unavailable" };
   const found = await vetAdvertisedInbox(runtime, home, identity);
-  if (signal?.aborted || runtime.writeTeardownSignal.aborted) {
-    return { outcome: "abandoned" };
-  }
+  if (stopped(runtime, signal)) return { outcome: "abandoned" };
   const refusal = found.outcome === "refused"
     ? found
     : found.outcome === "replace"
@@ -169,15 +175,59 @@ export async function ensurePrivateInboxOf(
       refusal.inbox.getAsNormalizedFullLink(),
     ]);
   }
-  await new Promise<void>((resolve, reject) =>
-    sendEvent(ensure, ensureEventOf(found), (tx) => {
+  const createOwn = home.key("createOwnPrivateInbox");
+  const createFirst = createOwn.getRaw() !== undefined &&
+    await needsOwnInbox(home, found);
+  if (stopped(runtime, signal)) return { outcome: "abandoned" };
+  if (createFirst) {
+    await handled(createOwn, {});
+    if (stopped(runtime, signal)) return { outcome: "abandoned" };
+  }
+  await handled(ensure, ensureEventOf(found));
+  return found;
+}
+
+/**
+ * Whether an ensure is to send nothing more: `signal` has aborted, or
+ * `runtime` has begun disposal.
+ */
+function stopped(runtime: Runtime, signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true || runtime.writeTeardownSignal.aborted;
+}
+
+/**
+ * Sends `event` to `stream`, and resolves once the handler's run has
+ * committed, on the server that runs it under server execution; rejects when
+ * that run fails.
+ */
+function handled(stream: Cell<unknown>, event: unknown): Promise<void> {
+  return new Promise<void>((resolve, reject) =>
+    sendEvent(stream, event, (tx) => {
       const status = tx.status();
       if (status.status === "error") {
         reject(new Error(transactionFailureMessage(status.error)));
       } else resolve();
     })
   );
-  return found;
+}
+
+/**
+ * Whether Home may need an inbox of its own for the event sent for what the
+ * host `found`, and has none: Home's `ownPrivateInbox` holds none, the event
+ * names nothing to adopt, and it names inboxes to replace or Home holds none.
+ * This is the test Home's ensure applies before handing its event on to the
+ * step that creates one.
+ */
+async function needsOwnInbox(
+  home: Cell<unknown>,
+  found: Exclude<PrivateInboxEnsure, { outcome: "unavailable" | "abandoned" }>,
+): Promise<boolean> {
+  if (found.outcome === "adopt") return false;
+  if (await storedPointer(home.key("ownPrivateInbox")) !== undefined) {
+    return false;
+  }
+  return found.outcome === "replace" ||
+    await storedPointer(home.key("privateInbox")) === undefined;
 }
 
 /**
@@ -186,7 +236,7 @@ export async function ensurePrivateInboxOf(
  * links as the profile's pointer does; `unlisted` when that profile is not in
  * Home's list; `unpointable` when it has no `setInbox`, so Home never points
  * it; `not-held` when it points at an inbox Home does not hold, or Home holds
- * none and creates none because another profile advertises one.
+ * none and takes none because another profile advertises one.
  * `unavailable` is a Home without the stream, which is sent nothing, and
  * `abandoned` a request whose caller stopped waiting before Home answered.
  */
@@ -210,8 +260,9 @@ const answerSchema = {
  * arrives only once `profile` points at the inbox Home holds. `home` is a Home
  * result, and `profile` the profile the caller finds the owner by, the one
  * `#profile` answers with. Home ensures its inbox as an event naming nothing
- * has its `ensurePrivateInbox` do, so it creates one only when it holds none
- * and no profile advertises one, and adopts none.
+ * has its `ensurePrivateInbox` do, so it has an inbox of its own created
+ * whenever it holds none and has none of its own, takes that inbox only when
+ * no profile advertises one, and adopts none.
  *
  * Home answers in the handling's receipt, whose address the send's completion
  * carries: a final answer, or a link to Home's answer for the profile, which

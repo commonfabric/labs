@@ -2537,25 +2537,28 @@ export class PiecesController<T = unknown> {
 
   /**
    * Gives the identity's Home the private inbox its profiles advertise, and has
-   * it point each of the identity's profiles that points at no inbox at it, by
-   * sending Home's `ensurePrivateInbox` as `ensurePrivateInboxOf()` does: Home
-   * keeps an inbox it holds while the deciding profile, the first in `#profile`
-   * order that points at an inbox, advertises it or no profile advertises any,
-   * and otherwise adopts the deciding profile's inbox when it passes vetting,
-   * retaining the one it held. It creates one when it holds none and
-   * no profile advertises one, and otherwise keeps what it holds or holds
-   * none, with the refusal logged and sent for Home to record in its
-   * `privateInboxRefusal`. Sending it again creates, re-points and retains
-   * nothing. A Home pattern without that stream is left as it is. This
-   * controller must be over the identity's Home space.
+   * it point each of the identity's profiles that points at no inbox, or at one
+   * Home gave up, at it, by sending Home's `ensurePrivateInbox` as
+   * `ensurePrivateInboxOf()` does. The deciding profile is the first, in
+   * `#profile` order, that points at an inbox. Home adopts that profile's inbox
+   * when it passes vetting and is one Home made, retaining the one it held;
+   * takes an inbox of its own in place of one it did not make, the one it holds
+   * or the deciding profile's when that passes vetting, retaining it; takes its
+   * own when it holds none and no profile advertises one; and otherwise keeps
+   * what it holds or holds none, with a refusal logged and sent for Home to
+   * record in its `privateInboxRefusal`. Home's own inbox is created first,
+   * when Home may need it and has none. Sending it again creates, re-points
+   * and retains nothing. A Home pattern without that stream is left as it is.
+   * This controller must be over the identity's Home space.
    *
    * Resolves once Home's handler has run on the event and its run has
    * committed, on the server that runs it under server execution. It rejects
    * when Home cannot be brought up, when reading Home's or its profiles'
    * pointers or loading the inbox documents they name fails, when a profile
-   * ordered ahead of the deciding one cannot be read, when vetting or the send
-   * itself throws, or when Home's handling of the event fails. Once `signal`
-   * aborts, or the runtime begins disposal, it sends nothing.
+   * ordered ahead of the deciding one cannot be read, when vetting or a send
+   * itself throws, or when Home's creation of its own inbox or its handling of
+   * the event fails. Once `signal` aborts, or the runtime begins disposal, it
+   * sends nothing more.
    */
   async ensurePrivateInbox(signal?: AbortSignal): Promise<void> {
     this.#assertHomeSpace("ensure a private inbox");
