@@ -1214,3 +1214,39 @@ export const Room = pattern<{ messages: Cell<Message[]>; info: Cell<Record<strin
         assert_eq!(template_line(&plan, &input["template"]), t_titles);
     }
 }
+
+// ----- bringing the records in line with PL as corrected -----
+
+const STATE_WRITE: &str = r#"import { Cell, Writable, lift, pattern } from "commonfabric";
+const note = lift((x: { seen: Cell<{ n: number }>; n: number }) => { x.seen.key("n").set(x.n); return 0; });
+const show = lift((x: { seen: { n: number } }) => x.seen.n + 1);
+export const P = pattern<{ n: number }>(({ n }) => {
+  const seen = Writable.of({ n: 0 });
+  const noted = note({ seen, n });
+  const shown = show({ seen });
+  return { noted, shown };
+});
+"#;
+
+#[test]
+fn a_write_through_a_state_cell_has_a_target_of_kind_state() {
+    // FA §6.2: "Where the body is used with a state cell of the instance
+    // as the handle, the target has the kind `state`." PL §1.1,
+    // `WriteEdge.target`: `{ kind: "state"; cell: Index; path: Path }`.
+    let plan = plan_of(&program(STATE_WRITE), "P");
+    let body = body_named(&plan, "note");
+    assert_eq!(
+        body["writes"][0]["target"],
+        json!({ "kind": "state", "cell": 0, "path": ["n"] })
+    );
+    // PL §3.11: "For a target with root `state` the rule is the same with
+    // the cell's root in the place of the handle's path".
+    let edges = plan["edges"].as_array().expect("edges");
+    assert!(
+        edges.contains(&json!({
+            "from": 0, "to": 1,
+            "via": { "kind": "state", "cell": 0, "path": ["n"] },
+        })),
+        "{edges:?}"
+    );
+}

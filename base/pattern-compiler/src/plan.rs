@@ -1895,12 +1895,24 @@ impl<'a> Emitter<'_, '_, 'a> {
                     let handle = name_of(&names, input, position, *resolved);
                     let mut target = Map::new();
                     target.insert("kind".to_string(), json!("handle"));
+                    let mut state_cell = None;
                     match &handle {
                         Some(Value::Number(slot)) => {
                             target.insert("slot".to_string(), json!(slot));
                             let slot = slot.as_u64().unwrap_or(0) as usize;
+                            let (root, slot_at, ..) = self.slots[slot].clone();
+                            // A write with a static target through a
+                            // state cell of the instance (FA §6.2).
+                            if let (Root::State(cell), true) = (&root, *fixed) {
+                                let mut path = slot_at.clone();
+                                path.extend(below.iter().cloned());
+                                state_cell = Some(json!({
+                                    "kind": "state",
+                                    "cell": cell,
+                                    "path": path,
+                                }));
+                            }
                             if *fixed && named.is_none() {
-                                let (root, slot_at, ..) = self.slots[slot].clone();
                                 fact.targets
                                     .push((slot, root, slot_at, below.clone(), *resolved));
                             }
@@ -1920,7 +1932,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if *resolved {
                         target.insert("resolved".to_string(), json!(true));
                     }
-                    Value::Object(target)
+                    state_cell.unwrap_or(Value::Object(target))
                 }
                 WriteTarget::Created(call) => {
                     json!({ "kind": "created", "call": call, "path": below })
