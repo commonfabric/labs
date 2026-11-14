@@ -176,9 +176,13 @@ export function serveFromPort(
         return options.runLifecycleVerb(host, space, verb, identity);
       },
       close: async () => {
-        // The compile worker closes first, so a compile an activation still
-        // awaits fails at once rather than holding the host's close.
+        // The compiles end first, in a compile worker of its own or in the
+        // ones the process shares, so a compile an activation still awaits
+        // fails at once rather than holding the host's close. An activation
+        // waiting for its turn at a compile another process holds waits for
+        // that turn, which ends with the holder's compile or its process.
         ownCompiler?.close();
+        plane.stopCompiling();
         try {
           await host.close();
         } finally {

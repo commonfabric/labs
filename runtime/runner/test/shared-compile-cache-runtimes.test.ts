@@ -7,8 +7,10 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
 import { CompilerError } from "@commonfabric/js-compiler/errors";
 
+import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import { openSharedCompileCache } from "../src/compilation-cache/shared-compile-cache.deno.ts";
 import type { ModuleCompiler } from "../src/harness/module-compile.ts";
 import { ModuleCompileWorker } from "../src/harness/module-compile-worker.ts";
@@ -56,9 +58,12 @@ describe("runtimes on one shared compiled-module cache", () => {
    * A runtime with a shared cache of its own over `dir`, as a serving worker
    * or another process has, compiling on the counted compiler.
    */
-  function runtimeOnSharedCache(): Runtime {
-    const storageManager = StorageManager.emulate({ as: signer });
-    storageManagers.push(storageManager);
+  function runtimeOnSharedCache(
+    storageManager = StorageManager.emulate({ as: signer }),
+  ): Runtime {
+    if (!storageManagers.includes(storageManager)) {
+      storageManagers.push(storageManager);
+    }
     const { moduleByteCache, compileClaims } = openSharedCompileCache(dir);
     const built = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -137,5 +142,56 @@ describe("runtimes on one shared compiled-module cache", () => {
         expect(outcome.reason).toBeInstanceOf(CompilerError);
       }
     }
+  });
+
+  it("recompiles a stored program once for the runtimes that reload it after a release, and not for a compile of the same source afresh", async () => {
+    // Two spaces of one store hold the program as an earlier release
+    // compiled it, so each reload after the release compiles from the stored
+    // source.
+    const storage = StorageManager.emulate({ as: signer });
+    const spaces = [
+      signer.did(),
+      (await Identity.fromPassphrase("shared compile cache, second space"))
+        .did(),
+    ];
+    let entryIdentity: string | undefined;
+    const restore = setCompileCacheRuntimeVersionForTesting(
+      "an-earlier-release",
+    );
+    try {
+      const writer = runtimeOnSharedCache(storage);
+      for (const space of spaces) {
+        const stored = await writer.patternManager.compilePattern(PROGRAM, {
+          space,
+        });
+        entryIdentity = writer.patternManager.getArtifactEntryRef(stored)
+          ?.identity;
+      }
+      await writer.patternManager.flushCompileCacheWrites();
+    } finally {
+      restore();
+    }
+    expect(entryIdentity).toBeDefined();
+    compiles = 0;
+
+    for (const space of spaces) {
+      const reloading = runtimeOnSharedCache(storage);
+      expect(
+        await reloading.patternManager.loadPatternByIdentity(
+          entryIdentity!,
+          "default",
+          space,
+        ),
+      ).toBeDefined();
+      await reloading.patternManager.flushCompileCacheWrites();
+      expect(compiles).toBe(1);
+    }
+
+    // A compile of stored source reports as warnings what a compile of fresh
+    // source refuses, so the fresh one takes none of its modules for a hit.
+    await runtimeOnSharedCache().patternManager.compileAndRegisterModules(
+      PROGRAM,
+    );
+    expect(compiles).toBe(2);
   });
 });

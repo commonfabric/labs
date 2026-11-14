@@ -203,9 +203,16 @@ that grows. The serving workers compile in compile workers the toolshed holds,
 TypeScript compiler's heap once it has compiled, and every toolshed on the
 host reads and puts compiled modules in one directory,
 `SERVER_EXECUTION_COMPILE_CACHE_DIR` (default `compiled-modules` under
-`CACHE_DIR`), so a program compiles once on the host. That directory holds
-code the serving runtimes run, so it belongs to the user the toolsheds run as
-and to no one else.
+`CACHE_DIR`), so a program compiles once on the host for each release the
+host runs: the cache is keyed by the runtime version, and a new release
+compiles each program again, once. Toolsheds share the directory only where
+they are given the same one, so the toolsheds of a host take the same
+`CACHE_DIR`, an absolute path, since the default `./cache` is each one's
+working directory. That directory holds code the serving runtimes run, so it
+belongs to the user the toolsheds run as and to no one else. A compiled
+module that cannot be written there is logged
+(`shared-compile-cache-write-failed`) and compiled again by the next runtime
+that needs it; it fails no compile.
 
 A worker that reaches the limit takes its process down. Events still queued
 survive that, and the restarted process handles them.

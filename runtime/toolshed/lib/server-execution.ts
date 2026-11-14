@@ -407,8 +407,9 @@ export type ServingCompileEnv = {
  *   cache every toolshed on the host reads and puts compiled modules in, and
  *   takes its turns at a cold compile through, so the same modules compile
  *   once on the host. Default: `defaultCacheDir`, which a toolshed names
- *   under its `CACHE_DIR`; with neither, each process keeps its own cache in
- *   memory.
+ *   under its `CACHE_DIR`, so a toolshed always has one; a caller that
+ *   passes no default and sets no directory gets none, and each process then
+ *   keeps its own cache in memory.
  *
  * A count that is not a positive integer warns and takes the default.
  */

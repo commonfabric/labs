@@ -599,7 +599,14 @@ the lease:
   (`openSharedCompileCache()`), so one program compiles once on the host however
   many workers and processes load it at the same time, and the others read what
   it put. A turn whose holder ends, however it ends, passes to the next. A
-  compile that fails puts nothing, and the next turn compiles again. A compile
+  compile that fails puts nothing, and the next turn compiles again. A reload
+  from stored source puts its modules once their evaluation has verified them,
+  under a version of its own that a compile of fresh source never reads: it
+  reports as warnings some of what a fresh compile refuses, and a fresh
+  compile that took its modules for a hit would skip those checks. A module
+  file that does not hold its module, as one cut short when its host lost
+  power, is removed and compiled again, and a module that cannot be written
+  is logged and fails no compile. A compile
   worker that dies fails the compiles
   it held as failures of where they ran, never as deterministic compile
   failures, and the next compile starts a fresh one.

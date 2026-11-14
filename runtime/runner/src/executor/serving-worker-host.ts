@@ -502,8 +502,9 @@ export class ServingWorkerPool {
   /**
    * What the workers' realms logged, as of now, once those that are
    * starting serve, taken together with what the realm of each host that
-   * closed in order had logged. A worker that fails takes what its realm
-   * logged with it. Rejects once the pool is closed.
+   * closed in order had logged, and with the latest snapshots of the compile
+   * workers the process shares (`moduleCompiler`). A worker that fails takes
+   * what its realm logged with it. Rejects once the pool is closed.
    */
   async diagnostics(): Promise<ServingLoopDiagnostics> {
     const workers = await this.#startedWorkers();

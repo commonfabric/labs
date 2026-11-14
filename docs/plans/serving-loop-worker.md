@@ -154,9 +154,12 @@ never older than a counters post before it, replaces the merged counters
 with everything else. The loop's own
 logger counts and timing statistics are each worker realm's own, so they
 cross on request (`ServingLoopHandle.diagnostics()`), each serving worker's
-with those of the compile worker it starts under `compile-worker:` logger
-names (`servingLoopDiagnostics()`, a snapshot read without waiting on the
-compile worker), added up across the serving workers (`diagnostics-merge.ts`:
+with those of a compile worker of its own, where it starts one, under
+`compile-worker:` logger names (`servingLoopDiagnostics()`, a snapshot read
+without waiting on the compile worker), added up across the serving workers
+and with the snapshots of the compile workers the process shares, which the
+server's thread holds (`ModuleCompilerPool.diagnostics()`;
+`diagnostics-merge.ts`:
 counts add, and a timing key's distribution is the mixture of the workers'
 distributions), and a request waits for each serving worker's turn:
 `/api/health/serving-loop-realm` is the route that asks, kept apart from

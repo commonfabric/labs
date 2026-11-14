@@ -614,8 +614,14 @@ export class ServingPlane {
   #nextTransport = 1;
   #closed = false;
 
+  /** Rejects once `stopCompiling()` is called; never resolves. */
+  readonly #compilerStopped = Promise.withResolvers<never>();
+
   constructor(endpoint: ServingPlaneEndpoint) {
     this.#endpoint = endpoint;
+    // A plane that stops compiling with no compile awaited rejects nothing
+    // anyone handles.
+    this.#compilerStopped.promise.catch(() => {});
     this.#server = new PlaneMemoryServer(
       this,
       endpoint,
@@ -680,11 +686,15 @@ export class ServingPlane {
    */
   get compiler(): ModuleCompiler {
     const endpoint = this.#endpoint;
+    const stopped = this.#compilerStopped.promise;
     return {
       async compile(request) {
         let answer;
         try {
-          answer = await endpoint.request("compiler.compile", { request });
+          answer = await Promise.race([
+            endpoint.request("compiler.compile", { request }),
+            stopped,
+          ]);
         } catch (error) {
           // The port, not the compile, failed.
           throw markPlaceCompileFailure(
@@ -696,6 +706,19 @@ export class ServingPlane {
         throw answer.place ? markPlaceCompileFailure(error) : error;
       },
     };
+  }
+
+  /**
+   * Fails every compile {@link compiler} still awaits, and each asked of it
+   * from here on, as a failure of the place it was to run. A worker's host
+   * calls this ahead of its close, so that an activation waiting for a
+   * compile fails at once rather than holding the close. The server's thread
+   * finishes a compile it had started; its answer is dropped.
+   */
+  stopCompiling(): void {
+    this.#compilerStopped.reject(
+      new Error("the serving worker stopped compiling"),
+    );
   }
 
   /**

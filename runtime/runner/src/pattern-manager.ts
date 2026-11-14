@@ -26,6 +26,7 @@ import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
 import {
   isPatternCoverageCacheRuntimeVersion,
   moduleByteCacheRuntimeVersion,
+  storedSourceByteCacheVersion,
 } from "./compilation-cache/cache-variants.ts";
 import {
   buildSourceDocs,
@@ -2624,7 +2625,14 @@ export class PatternManager {
     const endTurn = await compileTurns.take(
       compileTurnKey(runtimeVersion, identities),
     );
-    const bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    let bodies;
+    try {
+      bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    } catch (error) {
+      // The caller is handed the turn only on a return.
+      endTurn();
+      throw error;
+    }
     if (bodies === undefined) return { bodies, endTurn };
     endTurn();
     return { bodies };
@@ -3753,7 +3761,10 @@ export class PatternManager {
    * bytes in every space that verifies it; `input.space` only decides where
    * its fabric imports are resolved. Where this runtime shares a byte cache,
    * the compile takes its modules from there when it holds them all, takes
-   * its turn for them otherwise, and puts what it compiled.
+   * its turn for them otherwise, and puts what it compiled once the
+   * evaluation has verified it. It reads and puts under the stored-source
+   * version (`storedSourceByteCacheVersion()`), which a compile of fresh
+   * source never reads.
    */
   async #compileAndEvaluateClosure(
     input: ColdCompilationInput,
@@ -3762,15 +3773,17 @@ export class PatternManager {
     const harness = this.#runtime.harness;
     const { entryIdentity, sourceFiles, dataFiles, patternCoverage } = input;
     const byteCache = this.#runtime.moduleByteCache;
-    const runtimeVersion = byteCache === undefined
+    const ownVersion = byteCache === undefined
       ? undefined
       : await this.compileCacheRuntimeVersion({
         patternCoverage: patternCoverage !== undefined,
       });
+    const runtimeVersion = ownVersion === undefined
+      ? undefined
+      : storedSourceByteCacheVersion(ownVersion);
     let endCompileTurn: (() => void) | undefined;
-    let compiled;
     try {
-      compiled = await harness.compileResolvedToRecordGraph(
+      const compiled = await harness.compileResolvedToRecordGraph(
         sourceFiles,
         input.entryFilename,
         {
@@ -3789,47 +3802,51 @@ export class PatternManager {
           }),
         },
       );
+      if (compiled.entryIdentity !== entryIdentity) {
+        throw deterministicCompileError(
+          `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
+        );
+      }
+      onCompiled();
+      const cachedModules: CachedCompiledModule[] = compiled.modules.map(
+        (module) => ({
+          identity: module.identity,
+          filename: module.filename,
+          code: module.js,
+          ...(module.isData ? { isData: true } : {}),
+          ...(module.sourceMap !== undefined
+            ? { sourceMap: module.sourceMap as never }
+            : {}),
+          // The spans naming the lines this body's coverage probes stand for.
+          ...(module.patternCoverageSpans !== undefined
+            ? { patternCoverageSpans: module.patternCoverageSpans }
+            : {}),
+          ...(module.builderSourceSites !== undefined
+            ? { builderSourceSites: module.builderSourceSites }
+            : {}),
+          imports: module.imports,
+        }),
+      );
+      const result = await harness.evaluateCachedModules(
+        cachedModules,
+        entryIdentity,
+        {
+          sourceFiles,
+          ...(dataFiles.length === 0 ? {} : { dataFiles }),
+          ...(patternCoverage ? { patternCoverage } : {}),
+        },
+      );
+      // Put only now, so that the cache holds no body a verifier has not
+      // passed: the evaluation above verified each one before running it. The
+      // turn is held until they are put, so a compile that waited for it
+      // finds them.
       if (byteCache !== undefined && runtimeVersion !== undefined) {
         byteCache.putAll(runtimeVersion, compiled.modules);
       }
+      return { modules: compiled.modules, result };
     } finally {
       endCompileTurn?.();
     }
-    if (compiled.entryIdentity !== entryIdentity) {
-      throw deterministicCompileError(
-        `source closure recompiled to ${compiled.entryIdentity}, expected ${entryIdentity}`,
-      );
-    }
-    onCompiled();
-    const cachedModules: CachedCompiledModule[] = compiled.modules.map(
-      (module) => ({
-        identity: module.identity,
-        filename: module.filename,
-        code: module.js,
-        ...(module.isData ? { isData: true } : {}),
-        ...(module.sourceMap !== undefined
-          ? { sourceMap: module.sourceMap as never }
-          : {}),
-        // The spans naming the lines this body's coverage probes stand for.
-        ...(module.patternCoverageSpans !== undefined
-          ? { patternCoverageSpans: module.patternCoverageSpans }
-          : {}),
-        ...(module.builderSourceSites !== undefined
-          ? { builderSourceSites: module.builderSourceSites }
-          : {}),
-        imports: module.imports,
-      }),
-    );
-    const result = await harness.evaluateCachedModules(
-      cachedModules,
-      entryIdentity,
-      {
-        sourceFiles,
-        ...(dataFiles.length === 0 ? {} : { dataFiles }),
-        ...(patternCoverage ? { patternCoverage } : {}),
-      },
-    );
-    return { modules: compiled.modules, result };
   }
 
   /**
