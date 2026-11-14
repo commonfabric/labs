@@ -49,7 +49,6 @@ import {
   fabricValueOfTextWithMods,
   type FixtureJson,
   fixtureTextOf,
-  type JsonCodecClassName,
   plainJsonTextOf,
   probedPathsOf,
   probesOf,
@@ -1065,8 +1064,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
-  readonly [Name in JsonCodecClassName<FabricPrimitiveClassesByName>]:
-    ClassCaseNotes;
+  readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
 } = {
   FabricBytes: { section: "3-json-encoding.md section 3, `Bytes@1`" },
   FabricDurationDay: {

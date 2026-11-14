@@ -93,7 +93,7 @@ describe("cfc-stored-envelope", () => {
           '{"/Bytes@1":""}',
           '{"/Bytes@1":"AQID"}',
           '{"/EpochNsec@1":"AA"}',
-          '{"/RegExp@1":{"flags":"","flavor":"es2025","source":"x"}}',
+          '{"/Future@2":{"a":"x"}}',
         ]
       ) {
         const label = decoded(wire);
