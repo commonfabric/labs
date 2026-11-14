@@ -32,6 +32,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   fabricAwareEqual,
+  hashStringOf,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
 import {
@@ -616,6 +617,8 @@ const comparableIfc = (ifc: unknown): unknown => {
       continue;
     }
     if (role === "writerAlternatives" && Array.isArray(value)) {
+      // The alternatives are a set, whose order carries no meaning, so they
+      // are compared in an order their contents decide.
       const normalized = value.map((policy) => {
         if (!isObjectNotArray(policy)) return policy;
         const writer = writerClaimWithoutVolatileIdentity(
@@ -624,7 +627,9 @@ const comparableIfc = (ifc: unknown): unknown => {
         return writer === policy.writeAuthorizedBy
           ? policy
           : { ...policy, writeAuthorizedBy: writer };
-      });
+      }).map((policy) => ({ policy, order: hashStringOf(policy) }))
+        .sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : 0)
+        .map(({ policy }) => policy);
       if (normalized.some((policy, index) => policy !== value[index])) {
         changed = true;
       }

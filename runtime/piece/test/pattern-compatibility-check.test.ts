@@ -1275,6 +1275,49 @@ describe("setsrc compatibility preflight", () => {
         (error: unknown) => (error as { message?: string })?.message,
       );
 
+    describe("the contract check", () => {
+      // An update `setsrc` makes without the override is held to the
+      // contract it replaces: a policy listing the same writers in another
+      // order is the same contract, and one adding a writer is not.
+
+      it("reports no contract issue for a candidate listing the policy's writers in another order", async () => {
+        const piece = await postedPiece();
+        const program = policyProgram();
+        const reordered: RuntimeProgram = {
+          ...program,
+          files: program.files.map((file) =>
+            file.name !== "/main.tsx" ? file : {
+              ...file,
+              contents: file.contents.replace(
+                [
+                  "  TrustedActionWrite<unknown, typeof post, 'Post', 'Notes'>,",
+                  "  TrustedActionWrite<unknown, typeof amend, 'Amend', 'Notes'>,",
+                ].join("\n"),
+                [
+                  "  TrustedActionWrite<unknown, typeof amend, 'Amend', 'Notes'>,",
+                  "  TrustedActionWrite<unknown, typeof post, 'Post', 'Notes'>,",
+                ].join("\n"),
+              ),
+            }
+          ),
+        };
+        expect(reordered).not.toEqual(program);
+
+        const report = await piece.checkPattern(reordered);
+
+        expect(report.issues.schema).toBe(undefined);
+        expect(report.issues.cfc).toBe(undefined);
+      });
+
+      it("reports a contract issue for a candidate adding a writer", async () => {
+        const piece = await postedPiece();
+
+        const report = await piece.checkPattern(rewriteProgram("Post"));
+
+        expect(report.issues.schema).toContain("argument.notes[]: ifc changed");
+      });
+    });
+
     it("clears a candidate adding a writer of an artifact the policy pairs with its gesture, which the apply commits", async () => {
       const piece = await postedPiece();
       const candidate = rewriteProgram("Post");

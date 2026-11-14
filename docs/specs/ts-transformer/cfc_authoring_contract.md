@@ -352,9 +352,10 @@ Normative behavior:
    lands ahead of its ruling, specs#96, as the
    [conformance statement](../cfc-conformance-statement.md) §10 records. The
    pattern contract check an update runs before its commit compares a declared
-   list as written, its order included, so an update reaches the commit with
-   an added or reordered member only as a `system:` release, which that check
-   does not gate, or under `dangerouslyAllowIncompatibleSchema`. A
+   list as a set too, so it passes a reordered list, but it holds the update
+   to the contract it replaces: an update reaches the commit with an added
+   member only as a `system:` release, which that check does not gate, or
+   under `dangerouslyAllowIncompatibleSchema`. A
    refusal is terminal where the stored schema it compared against is one the
    transaction holds: the commit is refused as `CfcCommitRefusalError` and is
    not retried. Each member's claim is stamped with its module identity where

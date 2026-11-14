@@ -257,9 +257,9 @@ writer only when the update that installs it is a release of the piece, the
 new writer is in the same module as a writer already listed (or its updated
 successor), and it names an action that writer's member already names; a
 writer of any other module, or a new action, cannot join the list. The check
-of a pattern's contract that `cf piece setsrc` runs still compares the list as
-written, its order included, so such an addition, or a reordering, reaches a
-piece by a release of a `system:` pattern, which that check does not gate. So
+of a pattern's contract that `cf piece setsrc` runs holds an update to the
+contract it replaces, so such an addition reaches a piece by a release of a
+`system:` pattern, which that check does not gate; a reordering it passes. So
 keep a retired writer in the list, and settle the module and the actions
 before the record holds data that matters.
 `AuthoredByCurrentUser` combines with it as with a lone writer: every member
