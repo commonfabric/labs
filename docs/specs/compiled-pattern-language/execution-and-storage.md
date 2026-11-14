@@ -1953,11 +1953,17 @@ label entry, a provenance record and a split point of section 4.10 are
 named by. `Binding.result` of that document's §1.1 names by the same
 paths the positions at which the instance stores a link to a binding's
 stream: an event attribute of the first child of the root is
-`$UI/children/0/props/onClick`. A child position whose value is the
-result of a pattern compiled into the plan holds the callee's tree in
-place, with no `$UI` level between the position and the tree's paths
-(its §1.1). That document assumes them (its §8, question 53: how fine the
-entries are, and that the paths of a view node are part of the plan),
+`$UI/children/0/props/onClick`. For a binding in an element body the
+path has `*` at the position of each enclosing collection, as
+`$UI/children/*/props/onClick` for a row of a `map` spread into the
+root's children, and the link stored at each position is to the stream
+of the element key there (that document's §1.1, "The result paths of a
+binding in an element body", assumed there under its question 78). A
+child position whose value is the result of a pattern compiled into the
+plan holds the callee's tree in place, with no `$UI` level between the
+position and the tree's paths (its §1.1). That document assumes them
+(its §8, question 53: how fine the entries are, and that the paths of a
+view node are part of the plan),
 and this document assumes the same paths with it. The alternative there
 keeps one entry per constructed value and changes the records, not the
 stored paths.
@@ -4196,7 +4202,9 @@ the cone of `facts` is stale. It is not evaluated in this transaction.
 
 *Preparation.* The write edges of `B0` are instantiated: `T_send` once, for
 the message's computed fields and the reactions list. The `authorProfile`
-link carries the label of the reference the handler was given. The
+link carries the label of the reference the handler was given, joined with
+`T_send`, and nothing of the profile cell's own label
+(`plan-and-label-templates.md` §3.9, "A handle a body passes on"). The
 constraints are then checked. `k0`: the writer is `commitSend`, which the
 policy names, and the event satisfies the alternative's UI contract. `k1`:
 writer-fit. Both pass. Both guard what the handler itself writes, so had

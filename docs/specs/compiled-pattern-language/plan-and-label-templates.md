@@ -599,7 +599,9 @@ export interface WriteEdge {
   /**
    * The value written at the target is a reference the body was given, as
    * `BodyOutput.reference` says of a result path. The runtime verifies it
-   * by identity, and `template` applies where the check fails.
+   * by identity, and `template` applies where the check fails. In a
+   * handler the link written carries `template` joined with the
+   * reference's own label also where the check holds (section 3.9).
    */
   readonly reference?:
     | { readonly passes: GivenReference }
@@ -1092,7 +1094,10 @@ export interface Binding {
   /**
    * The paths of the result at which the instance stores a link to the
    * stream, in source order. Absent where the result holds none
-   * (section 8, question 75).
+   * (section 8, question 75). For a binding in an element body, a path
+   * has `*` at the position of each enclosing collection, as the path of
+   * a per-element output has (section 1.4), and stands for one position
+   * per element (below; section 8, question 78).
    */
   readonly result?: readonly Path[];
 }
@@ -1194,6 +1199,48 @@ pattern that is on a cycle of such calls, a pattern that calls itself in
 its reactive tier included, cannot be compiled in this way, because the
 plan would not end. *Assumed* (section 8, question 45): the compiler
 refuses such a call.
+
+**The result paths of a binding in an element body.** A binding whose
+`within` has an `element` step is made once per element key, and each of
+its streams is stored at a position inside one element of the assembled
+collection. `Binding.result` names those positions by one path, formed as
+the path of a per-element output is (section 1.4): the path of what the
+callback returns, with `*` at the position of each enclosing collection.
+The path has one `*` for each `element` step of `within` whose collection
+the path passes through, in the order of the steps, outermost first. A
+`site` step adds no segment, because the callee's tree is in place at the
+call (above). For a row rendered as
+`<ul>{items.map((item) => <li onClick={select({ item })} />)}</ul>` at the
+root of the tree, the path is
+`["$UI", "children", "*", "props", "onClick"]`: the assembled array is a
+spread child, and the positions from a spread on are at `children/*`
+(section 3.4).
+
+*Assumed* (section 8, question 78), since no other rule of the documents
+says how such a path is resolved to one stream:
+
+- **From a path to a position.** A reader that wants the stream of one
+  element chooses, for each `*`, a position of the collection that the
+  matching `element` step names. The stored path has the index of that
+  position in the stored array in the place of the `*`: the position in
+  the collection, plus the number of children stored before the spread
+  where the array is the children of a view node. Where two collections
+  are spread into one array, the `*` of each binding's path stands for
+  the positions of its own collection alone, which the runtime knows from
+  how it assembled the array (section 3.6).
+- **From a position to a stream.** The link stored there is to the stream
+  of the binding for the element key at that position: the stream named
+  by the binding's `name` and `within`, with that key at the `element`
+  step (section 1.3). Positions that hold one key hold a link to one
+  stream.
+- **An event for that stream** is handled with each slot of root `element`
+  of the handler's state bound to that key, and where several positions
+  hold the key, resolved to the join over them (section 2.6).
+- **Where the result holds none.** A binding of an element body whose
+  stream is at no path of what the callback returns, or whose collection
+  is not a kept part of the result, has no `result` path. An event
+  reaches such a stream only through a link stored elsewhere, such as a
+  child's argument.
 
 This document defines the footprint *record* (`Body.reads`, `computed`,
 `handles`, `writes`, `envelopes`, `outputs`, `calls`, `widenings`). The
@@ -1749,7 +1796,7 @@ The type each member is the schema of:
 | `Plan.argumentSchema`, `Plan.resultSchema` | The argument type and the result type the pattern declares, or the checker infers |
 | `StateCell.schema`, and `schema` of a `createCell` site | The value type of the cell constructor |
 | `Child.argumentSchema`, `Child.resultSchema` | The types the callee's type declares: for a compiled callee, its `Plan.argumentSchema` and `Plan.resultSchema` |
-| `Binding.eventSchema`, `Binding.stateSchema` | The event type and the state type of the handler, or of the factory's type |
+| `Binding.eventSchema`, `Binding.stateSchema` | The event type and the state type of the handler, or of the factory's type. The event type of a `handler(...)` is its first type argument or the annotation of its event parameter. That of an `action` is its first type argument or the annotation of its parameter, as in `action<{ index: number }>(...)`. That of an inline event handler is the type the checker gives its parameter |
 | `Slot.schema` | The type under which the slot's reader observes the path (below) |
 | `HandleReads.envelope` | The read envelope `footprint-analysis.md` §7.3 defines: the handle's value type, narrowed to the paths and classes some read through the handle may observe, with the label annotations of the paths it admits |
 
@@ -2132,6 +2179,50 @@ definition is what the precision comparison in section 3 rests on. A template
 joins the labels of a set of slots, and each of those labels is the label one
 read contributes to the per-transaction join today.
 
+**The label of an `identity` slot.** By ruling, a handle that a body passes
+on without reading through it adds nothing of the label of its cell to what
+the body writes. The label stays at the cell and reaches only a reader that
+follows the handle. The definition above gives that rule, read as follows.
+
+- **It is the label of the link.** The slot's label is what a `followRef`
+  read consumes at the position that holds the reference: the path of the
+  document the body was given the handle from, such as a path of the
+  argument document or of a binding's state document, and each link crossed
+  before that position (section 2.5). The entries a `followRef` read
+  consumes are those of class `followRef`, which are the label a link was
+  written with: the `link` entry of the stored link, and the stamp of the
+  run that wrote the link at that position (section 3.1). An entry that a
+  schema declares with the class `followRef` at the position is a label
+  declared for the reference itself, and it is consumed with them. The
+  label says which cell the handle names, and under what label that was
+  decided.
+- **Nothing of the target document is in it.** The slot is not resolved to
+  the cell the reference leads to, and no entry of that cell's document
+  joins it: not the `declared` entries that the cell's own type gives it,
+  and not the `derived` and `structure` entries of what is written in the
+  cell. A `declared` entry with no class of its own is one that a read of
+  content consumes. A `followRef` read does not consume it, at the target
+  or at the position (`readConsumesEntry` in
+  `runtime/runner/src/cfc/observation-classes.ts`).
+- **A `resolved` slot** joins the `followRef` entries of each further link
+  that resolution follows (section 2.5), and nothing of the cell where
+  resolution ends.
+- **What brings the target's label in** is a read through the handle: a
+  slot whose path continues past the reference, or a `dynamic` node
+  (sections 2.5 and 3.10). A body that holds a handle in order to pass it
+  on, to compare it, or to write through it has the `identity` slot in its
+  template and no such read.
+
+This is **equal** to today. A probe of a reference that the transaction
+does not follow is a `followRef` observation, which consumes the entries of
+that class at the probed position and none of the target
+(`forEachFlowObservation` in `runtime/runner/src/cfc/prepare.ts`). The stage
+3 comparison observed it in
+`patterns/showcase/battleship/multiplayer/repro-minimal.tsx`: the handler
+`joinAsP1` writes one input and passes the handles of that input and of a
+second one to a child, and what the runtime stored for the write holds no
+clause of the second input.
+
 Three consequences of the mapping:
 
 - **`shape` and `enumeration` resolve alike.** The runtime has no entry class
@@ -2154,10 +2245,11 @@ Three consequences of the mapping:
   are entries of `Body.computed`, and `Widening.computed` names them. This
   is the over-approximation the overview allows.
 - **`identity` never reaches the target.** It observes which reference sits
-  at the path. What the reference refers to is read at a path that
-  continues past it: by a slot whose path crosses the link, where the plan
-  names the path (section 2.5), and by a `dynamic` template where it does
-  not (section 3.10).
+  at the path, and its label is the label of the link there ("The label of
+  an `identity` slot", above). What the reference refers to is read at a
+  path that continues past it: by a slot whose path crosses the link, where
+  the plan names the path (section 2.5), and by a `dynamic` template where
+  it does not (section 3.10).
 
 ### 2.3 The stored form of an instantiated label
 
@@ -2821,12 +2913,19 @@ reference. *Assumed* (section 8, question 65): the comparison is made on
 dereferenced labels. For the runtime that is what a value read of the output
 path consumes with every link followed (`cfcLabelViewForResolvedCell` in
 `runtime/runner/src/cfc/label-view.ts`). For the template it is the label of
-section 3.2, with each `identity` slot joined with what a value read at the
-slot's path consumes. For an entry that names a collection, the runtime's side
+section 3.2, with each `identity` slot that stands for the reference the
+output passes on joined with what a value read at the slot's path consumes:
+the `slot` node that is the output's template, or the selected branch of a
+`select` or the chosen child of a `pick` that is one. An `identity` slot
+that is an input of a `derive` is not dereferenced. It has the label of
+section 2.2, the label of the link, because the body that holds the handle
+did not read through it, and by ruling the label of the handle's cell is
+not in what the body writes. For an entry that names a collection, the
+runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Nine more rules fix what a row of the comparison is.
+expected. Ten more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -2892,6 +2991,36 @@ expected. Nine more rules fix what a row of the comparison is.
   that a failed cone takes a labeled error state. *Assumed* (section 8,
   question 76): the template's clauses at such an output are not counted
   as looser than today, and the output is no further exception.
+- **A write edge of a handler.** A write edge is a row where the scenario
+  sent the handler an event, the event's transaction committed, and the run
+  wrote the edge's target. The runtime's side is what a value read of the
+  written path consumes after the event, with every link followed, as for
+  an output. The template's side is the edge's template, beside the label
+  that the target's own type declares for the written path, which is
+  stored there on both sides (section 3.12). In the template each slot of
+  root
+  `event` has the label the event arrived with (section 3.12), each slot of
+  root `binding` resolves through the binding the event was sent to, and
+  each `identity` slot among the inputs of the body's `derive` has the
+  label of the link and is not dereferenced (section 2.2). Only an edge
+  with a `reference` member, whose written value is the reference, is
+  joined with what a value read through the stored link consumes, so that
+  both sides read one target. An event whose transaction did not commit
+  gives no row, and neither does a write that the run did not make. The
+  outcome is read from the event's transaction and not from a log: the
+  runtime reports it once per event (`sendEvent` in
+  `runtime/runner/src/cell.ts`, with a callback that
+  `runFinalCommitCallback` and `notifyEventDropped` in
+  `runtime/runner/src/scheduler/events.ts` call), and a handler that threw
+  logs no refusal. Such events are counted apart by their reason. A
+  scenario has to give its inputs labels under which the events commit:
+  writer-fit measures what a handler read against the ceiling of each
+  store it writes (section 4.4), so a generated clause on an input has to
+  be one that every store of the scenario's space admits, and an input is
+  stored under the schema the runtime's argument schema has for it
+  (section 8, question 80). A member of an event that is declared as a
+  handle is given a handle or left out, because a plain value there reads
+  as a handle that cannot be written.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -3933,13 +4062,16 @@ and `Body.outputs` records them:
 
 - **A reference passed through.** When the reference at a result path is
   always the reference the body received at one `identity` slot, the path's
-  template is that `slot` and nothing else. The reference acquires no label
-  from the body: it is the same reference, and what it refers to was never
-  read. This is the pass-through of §8.2.1
-  (`08-02-pass-through-via-references.md`), and the content it refers to keeps
-  its own label at the target. For a slot with `resolved` the reference is
-  the resolved one, which is what `resolveAsCell()` returns for the handle
-  at that slot.
+  template is that `slot` and nothing else. The link stored at the path
+  carries the slot's label, which is the label of the link the body was
+  given the handle through (section 2.2). It acquires no further label from
+  the body: it is the same reference on every evaluation that returns
+  normally, and what it refers to was never read. This is the pass-through
+  of §8.2.1 (`08-02-pass-through-via-references.md`), and the content it
+  refers to keeps its own label at the target. For a slot with `resolved`
+  the reference is the resolved one, which is what `resolveAsCell()` returns
+  for the handle at that slot. In a handler the path takes the body's
+  template as well ("A handle a body passes on", below).
 - **A reference chosen among inputs.** When the reference at a result path is
   always one of several input references, its template is the `slot` of the
   one actually returned, joined with the body's `derive` template as the
@@ -3959,6 +4091,49 @@ and `Body.outputs` records them:
   `value` carries the `derive` template. A body that fails to produce a
   required path is a failed body (section 5), and its error state occupies
   the path, so existence stays constant.
+
+**A handle a body passes on.** By ruling, a handle that a body passes on
+without reading through it adds nothing of the label of its cell to what
+the body writes. The label stays at the cell, as it does for a handle to a
+cell the body created (below), and reaches only a reader that follows the
+handle. Two things follow, and the second is the owner's addition to the
+ruling: the link itself carries the label of at least the event.
+
+- **What the handle adds to the body's other writes.** The body has the
+  handle's `identity` slot in its footprint, so its `derive` template joins
+  the slot. That is the label of the link the body was given the handle
+  through, and nothing of the cell (section 2.2). A handler that sets one
+  cell and passes on the handle of a second writes the first under a label
+  with no clause of the second.
+- **What the written link carries.** Where a body puts the handle at a
+  path, what is stored there is a link, and a run wrote it. The link is
+  labeled with what that run depends on. It is never unlabeled on the
+  ground that the cell was not read.
+
+  | Where the handle is passed on | The label of the link stored |
+  | --- | --- |
+  | By a `handler`, an `action`, or an inline event handler: at a written path, a path of a child's argument or of a request, or a state path of a binding the handler makes | The slot joined with the body's `derive` template. The template holds the event slots, so the link carries the label of the event, and with it what else the run read: the state slots, the `dynamic` nodes, and the link each handle was given through |
+  | By a `lift`, a `computed`, or an authored function the reactive tier calls: at a result path, or at a path of the kinds above | The slot alone for `passes`, and the slot joined with the body's `derive` template for `oneOf`, by the two rules above. The existence of a written path that the target's schema does not require has the body's template |
+  | By expression code of the reactive tier: an output path, a path of a child's argument, a state path of a binding of the reactive tier | The `slot` template, or the `select` or `pick` that chose it (sections 3.5 and 3.18). A kept output adds the pattern's atom on the link (section 3.2) |
+
+  A handler's write happens because an event arrived and because the run
+  reached the write. Which reference is written can be the same on every
+  run, and that the link is there still depends on the event and on
+  everything that decided the run's course. In a handler, `passes`
+  therefore narrows no label. It records that the stored value is a link to
+  the original, which the runtime verifies by identity, and it keeps the
+  target's label out. *Assumed* (section 8, question 79): the link carries
+  the body's whole template. The ruling says "at least the event", and a
+  narrower rule would join the event slots and the slot of the reference
+  alone. A body that is evaluated again puts the same reference at a
+  required result path on every evaluation that returns normally, whatever
+  it read, so the slot alone is the label of the link there.
+- **Today.** The transaction of a handler stamps the slot of a link it
+  writes with its join, as an entry of class `followRef` (section 3.1), and
+  the join holds the event and state reads and no read of the cell behind a
+  handle that was only passed on. **Equal** for a handler. **Tighter** for a
+  re-evaluated body and for expression code, where the runtime stamps the
+  join of the whole run.
 
 **A reference from a computed input.** A handle or a container that
 reached the body in a value the instance computed has no slot. `passes`,
@@ -4156,7 +4331,13 @@ the instance computed, with its `identity` entry of `Body.computed` in the
 place of the slot, and so for a handle that a site of a body made and the
 body returned (section 3.9, "A reference a site of the body made"): a path
 that passes such a handle on has no `dynamic` node, and the label of the
-cell it leads to stays at the cell.
+cell it leads to stays at the cell. By ruling the same holds for every
+handle a body passes on without reading through it: the `identity` slot is
+the label of the link the body was given the handle through (section 2.2),
+and it adds nothing of the cell's label to what the body writes. The link a
+body stores when it passes the handle on is labeled all the same, with the
+slot and, in a handler, with the body's template, which holds the label of
+the event (section 3.9, "A handle a body passes on").
 
 **Today.** The probe of the followed slot is a `followRef` observation and
 the target's content arrives through ordinary reads journaled at the target
@@ -4173,6 +4354,19 @@ A cone that writes through a cell it was passed has a `WriteEdge` for each
 statically known target. The label of the written value is the edge's
 template, which is the template of the written expression: the body's
 template when a sandboxed body performs the write.
+
+**A handle in the template.** A body that writes through a handle, or that
+holds a handle it passes on, has the handle's `identity` slot among the
+inputs of its template. The slot is the label of the link the body was
+given the handle through, and holds nothing of the label of the cell the
+handle names (section 2.2). So a write through one handle does not carry
+the label of the cell behind another handle of the body, and a write
+through a handle does not carry the label of what the written cell held.
+Where the written value is itself a reference the body passes on, the
+edge's `reference` member records it, and the link written carries the
+label section 3.9 gives it ("A handle a body passes on"): in a handler the
+edge's template joined with the slot, and in a re-evaluated body the slot
+for `passes`.
 
 **Targets.** A static target is a state cell of the instance (`state`), a cell
 created under a constant cause, which is a `StateCell` too and whose edge has
@@ -4513,7 +4707,12 @@ A handler is a sandboxed body with an `event` root. Its state is the slots with
 root `binding`, which resolve through the binding it was invoked for (section
 3.14). Its template is the `derive` of section 3.9 over its event slots, its
 state slots, its handles, and its journaled context reads. Every path it writes
-has that template, apart from the references of section 3.9. The schema's
+has that template. A path that holds a reference the body passes on has it
+too, joined with the reference's slot: the link is written because the event
+arrived, and by ruling it carries the label of at least the event (section
+3.9, "A handle a body passes on"). The cell such a reference leads to keeps
+its own label, and the handle's `identity` slot adds none of it to the
+template (section 2.2). The schema's
 declared integrity for the written path, such as an authorship atom for the
 acting principal, is a declared entry and is added as it is today.
 
@@ -4702,8 +4901,12 @@ section 3.16. The other four create something, and `Body.calls` records the
 sites. Section 1.3 says how an occurrence is identified.
 
 In a sandboxed body every computed value has the body's `derive` template,
-written `T_b` here. The rules below say what `T_b` attaches to, and where the
-reference rules of section 3.9 keep it off.
+written `T_b` here. The rules below say what `T_b` attaches to, and what the
+reference rules of section 3.9 give a path that holds a reference the body
+passes on: in a handler `T_b` joined with the reference's own label, and in
+a re-evaluated body the reference's own label where the record has
+`passes`. In both, the label of the cell behind the reference stays at the
+cell.
 
 **Instantiating a pattern** (`instantiate`, legal in every function body).
 The call records a request and returns a link. The callee is a pattern the
@@ -5138,8 +5341,10 @@ handle or a container that reached the body in a value the instance
 computed, its `identity` entry of `Body.computed`. The runtime verifies it
 by identity, as it verifies a reference a body writes. The link the
 binding stores carries the label the reference rules give the path: the
-label of the slot, or the entry's template, instantiated. That is the
-pointer label a `binding` slot joins when its path crosses the link.
+label of the slot, or the entry's template, instantiated, and joined with
+`T_b` where a handler makes the binding (section 3.9, "A handle a body
+passes on"). That is the pointer label a `binding` slot joins when its
+path crosses the link.
 
 **How much a copy holds.** A copied path holds what the bound handler
 observes of it and no more. `Binding.state` records no observation class
@@ -5182,7 +5387,7 @@ kind of run and the salted value on the second.
 
 | Part | Label |
 | --- | --- |
-| The stream returned | A reference whose identity derives from the enclosing instance, the handler, the copied values, the identities of the linked cells, and the addresses of the containers bound by reference. A copied value is salted before it enters the identifier, as an element key is (section 1.3). The identity label is the join of the templates of the state paths, which is `T_b` unless every path is a reference the body passes on. For a handler received as a factory value, the label of the `identity` slot of the factory joins it (section 3.21) |
+| The stream returned | A reference whose identity derives from the enclosing instance, the handler, the copied values, the identities of the linked cells, and the addresses of the containers bound by reference. A copied value is salted before it enters the identifier, as an element key is (section 1.3). The identity label is the join of the templates of the state paths, which is `T_b` unless a re-evaluated body makes the binding and every path is a reference it passes on. For a handler received as a factory value, the label of the `identity` slot of the factory joins it (section 3.21) |
 | The bound handler's state | Slots with root `binding`. A copied path resolves to the binding's state document. A path bound by reference crosses the link the binding holds (section 2.5): the handler reads the cell or the container when an event arrives, in the event's transaction, and the slot's label joins the pointer label with the observation at the target. A path of a binding of the reactive tier resolves to the slot or the output it names. When an event arrives, the handler's own template is over those slots and its event |
 
 A handler that passes on a container it was bound to by reference passes
@@ -5218,7 +5423,9 @@ has an identifier a client derives, unless an element key among its
 frame, and the runner turns the frame into a synthesized pattern after the
 body returns (`patternFromFrame` in `runtime/runner/src/builder/pattern.ts`).
 What the body's transaction writes carries its join, which is `T_b`.
-**Equal**, and **tighter** for references the body passes on.
+**Equal**, and **tighter** for references that a re-evaluated body passes
+on. A link that a handler writes for a reference it passes on carries
+`T_b`, which is equal.
 
 - **An instance made by a computation.** The frame of a `lift` or a
   `computed` that called a pattern is such a synthesized pattern
@@ -6102,7 +6309,7 @@ nothing to compare.
 | Write through a resolved reference | Template of the written expression, which holds the links the resolution follows; lands where the resolution ends | Equal |
 | Materializer | Today's join on every path it writes, its result included | Equal |
 | Handler | `derive` over event and state footprint | Equal or tighter (an authored event type is read whole today); the second exception applies |
-| Calls in a body | The body's template on what it creates; the egress ceiling on a request and the content it holds by reference, sent or only hashed, and on each later send | Equal; tighter for passed references. The check on a later send is new |
+| Calls in a body | The body's template on what it creates; the egress ceiling on a request and the content it holds by reference, sent or only hashed, and on each later send | Equal; tighter for references a re-evaluated body passes on. The check on a later send is new |
 | Instance made by a `lift` or a `computed` | The body's template on the argument, written by each evaluation; the instance named by the site and an ordinal, or by an explicit cause | Equal |
 | Handler binding | Nothing copied in the reactive tier; in a body, a scalar and a computed container copied with the body's template, a handle and a stored container bound by reference | Equal or tighter: the body that makes the binding does not read a container it binds by reference |
 | Child instance | Argument templates in; `child` slots out | Equal |
@@ -7759,8 +7966,10 @@ k1  writerFit
 ```
 
 The stored `authorProfile` link carries the label of `b0`, the pointer
-labels of the links from the handler's state to the profile cell, and
-nothing from the event. An attachment link carries its own label plus the
+labels of the links from the handler's state to the profile cell, joined
+with `T_send`: a handler wrote the link, so it carries the label of the
+event (section 3.9, "A handle a body passes on"). Nothing of the profile
+cell's own label is in it. An attachment link carries its own label plus the
 handler's template as the label of having been chosen. `body`, `sentAt` and
 `reactions` are required by the message schema, so their existence is
 constant.
@@ -8115,7 +8324,9 @@ clause any of its slots carries.
   that names the pattern where the runtime's names the callback, and for a
   value that a pattern passes on to a kept output it expects the pattern's
   atom where the runtime stores none (section 3.2). It compares dereferenced
-  labels and
+  labels, with one limit: the slot of a handle that a body holds and does
+  not read through is taken at the label of the link and is not
+  dereferenced (sections 2.2 and 3.1). It
   separates the runtime's entries by origin, so that the static part the runtime
   joins from declarations is expected as a difference (section 3.1). For a
   conditional it compares with the static part included (section 3.5; section
@@ -8171,7 +8382,10 @@ declare, and the comparison expects a template tighter than the runtime there
 (3.1, 3.5, 3.6); a write through a handle bound to a value the instance produces
 is refused, a write through one bound to a reference lands at the reference's
 target, and an argument a function body gives to a pattern it instantiates is
-the initial value of the child's stored argument (3.11, 3.15).
+the initial value of the child's stored argument (3.11, 3.15); a handle that a
+body passes on without reading through it adds nothing of the label of its
+cell to what the body writes, and the link the body writes carries the label
+of at least the event (2.2, 3.9, 3.10).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -9110,3 +9324,54 @@ this document made.
     label would stay the `derive` template, and the member would only name
     the site. The runtime would verify the member by identity, as it
     verifies `passes`.
+78. **How a result path of a binding names a position inside an element.**
+    A binding of an element body has a stream per element key, and
+    `Binding.result` has to say where each is stored. *Assumed,* as
+    section 1.1 has it: the path has `*` at the position of each enclosing
+    collection, as the path of a per-element output has; a reader chooses
+    a position of each collection, and the stored path has the index of
+    that position in the stored array, counted after the children stored
+    before a spread; the link there is to the stream of the element key
+    at that position; and a binding whose stream is at no kept path of
+    what the callback returns has no `result` path. Section 1.4 and the
+    view-node paths of section 3.4 give the form of the path. What is
+    assumed is the resolution, in particular where two collections are
+    spread into one array of children, where the path alone does not say
+    which positions are whose. The alternative gives the path a segment
+    that names the collection, in the place of `*`.
+    `execution-and-storage.md` and `scheduler-and-serving-loop.md` have to
+    agree, since a client resolves the same path to send an event. Not
+    verified: that the prototype can form the address of the state cells
+    of an element body, which a write row of a per-element handler needs
+    as well.
+79. **How much of a handler's template is on a link it writes** (for the
+    project owner). By ruling, a handle that a body passes on adds nothing
+    of the label of its cell, and the link itself carries the label of at
+    least the event. *Assumed,* as section 3.9 has it: in a handler the
+    link carries the body's whole `derive` template joined with the label
+    of the reference, which is equal to what the runtime stamps on a link
+    write today. The alternative joins the event slots and the slot of the
+    reference alone, which is tighter, and leaves out the state the handler
+    read on the way to the write. That needs a template of its own for
+    such a path, and it is sound only where no read of the body decides
+    whether the write is reached. For a `lift` or a `computed` the link at
+    a path recorded as `passes` keeps the slot alone. *Assumed* as well:
+    an entry that a schema declares with the class `followRef` at the
+    position of a link is part of the label of an `identity` slot, as a
+    label declared for the reference and not for the cell (section 2.2).
+80. **A schema of the plan and the schema the runtime stores an input
+    under.** The stage 3 comparison stores each input of a scenario in a
+    cell, and a handler writes that cell under the schema of its own
+    type. The runtime refuses a write that declares fewer clauses at a
+    path than the store declares there, so the input has to be stored
+    under the schema the runtime's own argument schema has for it. A
+    schema of the plan is not that schema wherever a label annotation
+    names a policy: the prototype's schema names the policy by the module
+    and the binding the annotation refers to, and the runtime's schema
+    holds the policy's atom, with the module's identity, the symbol and
+    the policy's digest. This document does not say how a schema of the
+    plan names a policy. *Assumed:* the comparison stores inputs under
+    the runtime's schema, and the plan's schema is not required to be
+    equal to it. Which form a compiled instance stores in a document's
+    declared entries is for `execution-and-storage.md`. Not verified
+    here: the two forms, which are the prototype's observation.
