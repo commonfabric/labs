@@ -174,7 +174,9 @@ const viewSettledReady = (): boolean =>
 // field is filled once and verified.
 //
 // Each invocation keeps a progress ledger on `globalThis.__cfFillDiag`
-// (per selector): which phase it reached and when. waitForCondition never
+// (per selector): which phase it reached and when, how many attempts the fill
+// `fillId` names has made, and when its first and its latest began.
+// waitForCondition never
 // re-enters a predicate whose promise is still pending, so if one of the
 // awaits below stalls (typically `commit()` waiting on a stuck cell
 // round-trip), the ledger's `phase` names the exact await the fill died in —
@@ -183,23 +185,34 @@ const fillAndVerify = async (
   probe: ProbeApi,
   selector: string,
   nextValue: string,
+  fillId: string,
 ): Promise<boolean> => {
   type FillDiag = {
+    fillId: string;
     attempts: number;
     phase: string;
     phaseAt: number;
-    startedAt: number;
+    firstAttemptAt: number;
+    lastAttemptAt: number;
     commitStartedAt?: number;
     lastInputValue?: string;
   };
   const registry = ((globalThis as typeof globalThis & {
     __cfFillDiag?: Record<string, FillDiag>;
   }).__cfFillDiag ??= {});
+  const now = Date.now();
+  // An earlier fill of the same selector left its own ledger, which this fill's
+  // first attempt replaces.
+  const earlier = registry[selector]?.fillId === fillId
+    ? registry[selector]
+    : undefined;
   const diag: FillDiag = {
-    attempts: (registry[selector]?.attempts ?? 0) + 1,
+    fillId,
+    attempts: (earlier?.attempts ?? 0) + 1,
     phase: "settling",
-    phaseAt: Date.now(),
-    startedAt: Date.now(),
+    phaseAt: now,
+    firstAttemptAt: earlier?.firstAttemptAt ?? now,
+    lastAttemptAt: now,
   };
   registry[selector] = diag;
   const phase = (name: string) => {
@@ -824,17 +837,27 @@ export async function fillCfInput(
       await presentation.typeIntoCfInput(selector, value);
     } else {
       await waitForCondition(page, fillAndVerify, {
-        args: [selector, value],
+        args: [selector, value, crypto.randomUUID()],
       });
     }
   } catch (cause) {
     const probe = await readCfInputProbe(page, selector).catch(() => undefined);
-    throw new Error(
-      `Timed out filling cf input "${selector}" with "${value}". ` +
-        debugStr`Last probe: $quote,indent,long${probe}`,
-      { cause },
-    );
+    throw new Error(fillFailureMessage(selector, value, probe), { cause });
   }
+}
+
+/**
+ * The message `fillCfInput` fails with, rendering `probe` at `xlong`: the
+ * page-level context, the console tail last, follows the field's own state and
+ * the IPC counts, and a shorter cut drops it.
+ */
+export function fillFailureMessage(
+  selector: string,
+  value: string,
+  probe: unknown,
+): string {
+  return `Timed out filling cf input "${selector}" with "${value}". ` +
+    debugStr`Last probe: $quote,indent,xlong${probe}`;
 }
 
 /**
@@ -3055,13 +3078,30 @@ type CfInputProbe = {
 
   /** Bounded tail of the page's console messages (see Page wrapper). */
   consoleTail?: unknown;
+
+  /**
+   * Where nothing matches the selector: the ids of the elements the page
+   * holds, through shadow roots, sorted, at most {@link PRESENT_IDS_MAX} of
+   * them. They say how far the view around the missing field rendered.
+   */
+  presentIds?: string[];
+
+  /** Where nothing matches the selector: how many distinct ids the page holds. */
+  presentIdCount?: number;
 };
 
-async function readCfInputProbe(
+/** The most ids a probe that finds no match reports. */
+export const PRESENT_IDS_MAX = 100;
+
+/**
+ * What the page holds for the cf input `selector` names, read once, for a
+ * failure report.
+ */
+export async function readCfInputProbe(
   page: Page,
   selector: string,
 ): Promise<CfInputProbe> {
-  return await page.evaluate((targetSelector) => {
+  return await page.evaluate((targetSelector, presentIdsMax) => {
     function collect(root: Document | ShadowRoot, result: Element[]): void {
       for (const element of root.querySelectorAll("*")) {
         try {
@@ -3137,6 +3177,14 @@ async function readCfInputProbe(
     collect(document, matches);
     const element = matches[0];
     if (!element) {
+      const ids = new Set<string>();
+      const collectIds = (root: Document | ShadowRoot): void => {
+        for (const present of root.querySelectorAll("*")) {
+          if (present.id !== "") ids.add(present.id);
+          if (present.shadowRoot) collectIds(present.shadowRoot);
+        }
+      };
+      collectIds(document);
       return {
         selector: targetSelector,
         found: false,
@@ -3146,6 +3194,8 @@ async function readCfInputProbe(
         visible: false,
         hostTagName: "",
         ...context,
+        presentIds: [...ids].sort().slice(0, presentIdsMax),
+        presentIdCount: ids.size,
       };
     }
     const input = element instanceof HTMLInputElement
@@ -3213,7 +3263,7 @@ async function readCfInputProbe(
       hostValueBinding,
       ...context,
     };
-  }, { args: [selector] });
+  }, { args: [selector, PRESENT_IDS_MAX] });
 }
 
 async function readDisabledProbe(

@@ -20,7 +20,10 @@ import {
   clickTrustedAction,
   collectBrowserLoadSummary,
   fillCfInput,
+  fillFailureMessage,
   installSenderEchoProbe,
+  PRESENT_IDS_MAX,
+  readCfInputProbe,
   readSenderEchoReport,
   submitViaEnter,
   waitForSettledText,
@@ -3068,5 +3071,154 @@ describe("CFC browser helpers", () => {
     } finally {
       await echoPage.close();
     }
+  });
+  describe("a fill's failure report", () => {
+    it("lists the ids the page holds, through shadow roots, where nothing matches", async () => {
+      const probePage = await browser.newPage();
+      try {
+        await probePage.evaluate(() => {
+          const light = document.createElement("div");
+          light.id = "b-light";
+          const host = document.createElement("div");
+          host.id = "a-host";
+          const root = host.attachShadow({ mode: "open" });
+          const shadowed = document.createElement("span");
+          shadowed.id = "c-shadowed";
+          const nestedHost = document.createElement("div");
+          const nestedRoot = nestedHost.attachShadow({ mode: "open" });
+          const nested = document.createElement("span");
+          nested.id = "d-nested";
+          nestedRoot.append(nested);
+          // A second element under an id already listed, and one with none.
+          const repeated = document.createElement("span");
+          repeated.id = "b-light";
+          root.append(shadowed, nestedHost, repeated);
+          document.body.replaceChildren(
+            light,
+            host,
+            document.createElement("p"),
+          );
+        });
+
+        const probe = await readCfInputProbe(probePage, "#absent-input");
+
+        expect(probe.found).toBe(false);
+        expect(probe.presentIds).toEqual([
+          "a-host",
+          "b-light",
+          "c-shadowed",
+          "d-nested",
+        ]);
+        expect(probe.presentIdCount).toBe(4);
+      } finally {
+        await probePage.close();
+      }
+    });
+
+    it("lists at most its maximum of ids, the first in sorted order, and counts them all", async () => {
+      const probePage = await browser.newPage();
+      try {
+        const total = PRESENT_IDS_MAX + 50;
+        await probePage.evaluate((count: number) => {
+          const elements = [];
+          // Appended in reverse, so the order reported is the sort's.
+          for (let i = count - 1; i >= 0; i--) {
+            const element = document.createElement("span");
+            element.id = `id-${String(i).padStart(3, "0")}`;
+            elements.push(element);
+          }
+          document.body.replaceChildren(...elements);
+        }, { args: [total] });
+
+        const probe = await readCfInputProbe(probePage, "#absent-input");
+
+        expect(probe.presentIds).toEqual(
+          Array.from(
+            { length: PRESENT_IDS_MAX },
+            (_, i) => `id-${String(i).padStart(3, "0")}`,
+          ),
+        );
+        expect(probe.presentIdCount).toBe(total);
+      } finally {
+        await probePage.close();
+      }
+    });
+
+    it("keeps the end of a probe longer than fifty lines", () => {
+      const probe = {
+        selector: "#absent-input",
+        found: false,
+        completedIpc: Object.fromEntries(
+          Array.from({ length: 80 }, (_, i) => [`ipc/kind-${i}`, {
+            count: i,
+            maxMs: i,
+          }]),
+        ),
+        consoleTail: ["the last console line"],
+      };
+
+      const message = fillFailureMessage("#absent-input", "Grace", probe);
+
+      expect(message).toContain("the last console line");
+      expect(message).not.toContain("... lines:");
+    });
+
+    it("dates a fill's first attempt and its latest, and starts the count again for the next fill", async () => {
+      type Ledger = {
+        attempts: number;
+        firstAttemptAt: number;
+        lastAttemptAt: number;
+      };
+      const ledger = () =>
+        page.evaluate(() =>
+          (globalThis as typeof globalThis & {
+            __cfFillDiag: Record<string, Ledger>;
+          }).__cfFillDiag["#late-ledger-input"]
+        );
+      await page.evaluate(() => {
+        let settleCalls = 0;
+        (globalThis as typeof globalThis & {
+          commonfabric: { viewSettled: () => Promise<void> };
+        }).commonfabric = {
+          viewSettled: () => {
+            // The field renders on the second settle, so the first attempt
+            // finds nothing.
+            settleCalls++;
+            if (
+              settleCalls === 2 && !document.querySelector("#late-ledger-input")
+            ) {
+              const host = document.createElement("div");
+              host.id = "late-ledger-input";
+              Object.assign(host.style, {
+                display: "block",
+                height: "40px",
+                width: "240px",
+              });
+              const root = host.attachShadow({ mode: "open" });
+              const input = document.createElement("input");
+              Object.assign(input.style, {
+                display: "block",
+                height: "32px",
+                width: "200px",
+              });
+              root.append(input);
+              document.body.append(host);
+            }
+            return Promise.resolve();
+          },
+        };
+      });
+
+      await fillCfInput(page, "#late-ledger-input", "Bob");
+      const first = await ledger();
+      await fillCfInput(page, "#late-ledger-input", "Carol");
+      const second = await ledger();
+
+      expect(first.attempts).toBeGreaterThan(1);
+      expect(first.lastAttemptAt).toBeGreaterThan(first.firstAttemptAt);
+      expect(second.attempts).toBe(1);
+      expect(second.firstAttemptAt).toBe(second.lastAttemptAt);
+      expect(second.firstAttemptAt).toBeGreaterThanOrEqual(first.lastAttemptAt);
+    });
   });
 });
