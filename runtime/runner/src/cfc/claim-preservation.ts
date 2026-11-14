@@ -46,7 +46,7 @@ const CLAIMS: Readonly<
   writePolicyAnyOf: (stored, merged) =>
     Array.isArray(stored) && Array.isArray(merged) &&
     stored.every((policy) =>
-      merged.some((other) => keepsWritePolicyAlternative(policy, other))
+      merged.some((other) => mergedAlternativeKeepsStored(policy, other))
     ),
   // A floor may rise, never fall.
   requiredIntegrity: (stored, merged) => containsAll(merged, stored),
@@ -101,7 +101,7 @@ const keepsWriterClaim = (stored: unknown, merged: unknown): boolean => {
 
 // Whether the merged write-policy alternative `merged` keeps the stored
 // alternative `stored`: the same contract, and the writer claim kept.
-const keepsWritePolicyAlternative = (
+const mergedAlternativeKeepsStored = (
   stored: unknown,
   merged: unknown,
 ): boolean =>
@@ -124,7 +124,7 @@ const appendedWritePolicyRefusal = (
   if (!Array.isArray(stored) || !Array.isArray(merged)) return undefined;
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const appended = merged.filter((other) =>
-    !stored.some((policy) => keepsWritePolicyAlternative(policy, other))
+    !stored.some((policy) => mergedAlternativeKeepsStored(policy, other))
   );
   return appended.every((other) =>
       release !== undefined &&

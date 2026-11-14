@@ -849,8 +849,12 @@ in that predicate passes both. `piece setsrc --check` and the
 origin-following review merge in dry run through a transaction pinned to the
 delegations the update would propose
 (`PatternManager.proposedSourceUpdateDelegations`,
-`Runtime.readTxProposingDelegations`), so the check and the commit give one
-verdict.
+`Runtime.readTxProposingDelegations`), derived from the same verified source
+closures as the update's own where the space holds the candidate's, so the
+check and the commit give one verdict. A candidate the space does not hold
+yet, as `--check` compiles one, is derived from the modules this session
+evaluated it with, which leave out a module the program imports only for its
+types; there the check can refuse an appended writer the commit admits.
 
 This implements specs#96 ahead of its ruling, at strict and with no dial, at
 @danfuzz's direction. Against the pin it admits more: an appended writer, and a
@@ -858,7 +862,8 @@ candidate listing the stored alternatives in another order, which the pin's
 general stability rules refuse. So it does not satisfy the correspondence
 procedure's step 4, which asks for a default-off dial for a change admitting
 more. Its four deciding sites, the merge's matching and its append, and the
-keep rule's matching and its admission, carry its `SPEC-PENDING` marker, and the kernel manifest carries no row for
+keep rule's matching and its admission, carry its `SPEC-PENDING` marker, and the
+kernel manifest carries no row for
 `mergeWritePolicy` until a regenerated snapshot defines it.
 
 **Residuals.**

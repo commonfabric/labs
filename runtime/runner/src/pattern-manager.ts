@@ -2370,12 +2370,14 @@ export class PatternManager {
   /**
    * The writer-authority delegations an update in `space` from the program
    * `previousEntryIdentity` names to the program `entryIdentity` names would
-   * propose, for a review to judge the update by before it is prepared:
-   * what `prepareSourceUpdate()` derives, with the candidate's modules as
-   * this session evaluated it rather than from its source documents, which
-   * the update stores only once it runs. `undefined` where the candidate has
-   * not been evaluated as a program's main module this session, or the
-   * previous program's source closure does not verify in `space`, which
+   * propose, for a review to judge the update by before it is prepared: what
+   * `prepareSourceUpdate()` derives, from the same verified source closures
+   * where `space` holds the candidate's. Where it does not yet, as for a
+   * candidate compiled without being stored, the candidate's modules are the
+   * ones this session evaluated it with, which leave out a module the
+   * program imports only for its types, so the review can then miss a
+   * delegation the update proposes. `undefined` where neither is at hand, or
+   * the previous program's source closure does not verify in `space`, which
    * leaves an update nothing to propose.
    */
   async proposedSourceUpdateDelegations(
@@ -2383,8 +2385,6 @@ export class PatternManager {
     previousEntryIdentity: string,
     entryIdentity: string,
   ): Promise<ModuleDelegationMap | undefined> {
-    const candidate = this.#programModules.get(entryIdentity);
-    if (candidate === undefined) return undefined;
     const tx = this.#runtime.edit();
     try {
       const previous = await loadVerifiedSourceClosure(
@@ -2394,14 +2394,29 @@ export class PatternManager {
         tx,
       );
       if (!previous?.has(previousEntryIdentity)) return undefined;
-      return deriveModuleDelegations(
-        previous,
-        [...candidate.identities].flatMap((identity) => {
-          const filename = candidate.filenames.get(identity);
-          return filename === undefined ? [] : [{ identity, filename }];
-        }),
-        { previous: previousEntryIdentity, next: entryIdentity },
+      const stored = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        entryIdentity,
+        tx,
       );
+      const evaluated = this.#programModules.get(entryIdentity);
+      const candidate = stored?.has(entryIdentity)
+        ? [...stored].map(([identity, doc]) => ({
+          identity,
+          filename: doc.filename,
+        }))
+        : evaluated === undefined
+        ? undefined
+        : [...evaluated.identities].flatMap((identity) => {
+          const filename = evaluated.filenames.get(identity);
+          return filename === undefined ? [] : [{ identity, filename }];
+        });
+      if (candidate === undefined) return undefined;
+      return deriveModuleDelegations(previous, candidate, {
+        previous: previousEntryIdentity,
+        next: entryIdentity,
+      });
     } finally {
       tx.abort("source update proposal derived");
     }

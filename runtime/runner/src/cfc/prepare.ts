@@ -10898,12 +10898,15 @@ export const releaseMergeOptions = (
   // The modules of the program the release installs (see
   // `PatternManager.programModuleIdentities`).
   programModules: Iterable<string>,
+  // The stored document's foreign positions, where the caller has found them.
+  foreign: ForeignPositions = storedForeignPositions(
+    storedValuesAt(tx, target),
+    storedSchema,
+  ),
 ): ReleaseMergeOptions => {
   const modules = new Set(programModules);
   return {
-    beneathStoredLink: beneathForeignPosition(
-      storedForeignPositions(storedValuesAt(tx, target), storedSchema),
-    ),
+    beneathStoredLink: beneathForeignPosition(foreign),
     adoptsStamp: (claim) => {
       const stamp = writerClaimStamp(claim);
       return stamp !== undefined && modules.has(stamp.moduleIdentity);
@@ -12886,22 +12889,25 @@ export function* prepareBoundaryCommitSteps(
         stored.status === "loaded" ? stored.schema : undefined,
       )
       : undefined;
-    // What a release may do to the stored envelope; nothing outside one.
-    const release = foreignPositions !== undefined && stored.status === "loaded"
-      ? releaseMergeOptions(
-        tx,
-        { space, id, scope },
-        stored.schema,
-        releaseProgramModules(tx, { space, id, scope }),
-      )
-      : undefined;
     let storedSchema: JSONSchema | undefined;
     let mergedSchema = schema;
+    // What a release may do to the stored envelope, where it merges one;
+    // nothing outside one.
+    let release: ReleaseMergeOptions | undefined;
     if (stored.status === "loaded" && undefinedCandidate) {
       storedSchema = stored.schema;
       mergedSchema = storedSchema;
     } else if (stored.status === "loaded") {
       storedSchema = stored.schema;
+      release = foreignPositions === undefined
+        ? undefined
+        : releaseMergeOptions(
+          tx,
+          { space, id, scope },
+          storedSchema,
+          releaseProgramModules(tx, { space, id, scope }),
+          foreignPositions,
+        );
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),

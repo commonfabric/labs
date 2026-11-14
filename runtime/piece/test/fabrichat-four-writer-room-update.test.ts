@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   type Cell,
@@ -166,6 +167,7 @@ describe("fabrichat-four-writer-room-update", () => {
   let controller: PiecesController;
   let roomController: PiecesController;
   let room: Cell<unknown>;
+  let roomSpace: MemorySpace;
   let previousIdentity: string | undefined;
   let releasedIdentity: string;
   let storedBefore: { writer: string; module: unknown }[];
@@ -247,6 +249,7 @@ describe("fabrichat-four-writer-room-update", () => {
     // The room's space, whose access list makes its creator an OWNER, as a
     // manager's room's does.
     const space = await runtime.createSpace();
+    roomSpace = space;
     roomController = new PiecesController(
       createSession({ identity: owner, spaceDid: space }),
       runtime,
@@ -401,6 +404,35 @@ describe("fabrichat-four-writer-room-update", () => {
       "commitReply",
     ]);
     expect(after[4].module).not.toBe(storedBefore[0].module);
+  });
+
+  it("proposes for the review the delegations the update's own preparation derives", async () => {
+    // The review a `setsrc --check` runs judges an appended writer by the
+    // delegations it derives from this session's evaluation of the candidate;
+    // the update's setup, by those `prepareSourceUpdate()` derives from the
+    // candidate's stored source. For this room they are the same.
+
+    const sorted = (delegations: ReadonlyMap<string, ReadonlySet<string>>) =>
+      [...delegations].map(([identity, predecessors]) =>
+        [identity, [...predecessors].sort()] as const
+      ).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    const proposed = await runtime.patternManager
+      .proposedSourceUpdateDelegations(
+        roomSpace,
+        previousIdentity!,
+        releasedIdentity,
+      );
+    const prepared = runtime.patternManager.sourceUpdateDelegations(
+      await runtime.patternManager.prepareSourceUpdate(
+        roomSpace,
+        previousIdentity!,
+        releasedIdentity,
+      ),
+    );
+
+    expect(proposed).toBeDefined();
+    expect(sorted(proposed!)).toEqual(sorted(prepared.delegations));
+    expect(prepared.delegations.size).toBeGreaterThan(0);
   });
 
   it("keeps the session's windows where the room's result linked them", () => {

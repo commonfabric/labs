@@ -393,7 +393,7 @@ export interface WritePolicyRelease {
  * reconcile as two lone `writeAuthorizedBy` claims do, which is how an
  * alternative gains its stamp.
  */
-const keptWritePolicyAlternative = (
+const mergedStoredAlternative = (
   stored: unknown,
   candidate: unknown,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
@@ -458,14 +458,14 @@ const mergeWritePolicyAnyOf = (
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const kept = existing.map((policy) => {
     for (const other of candidate) {
-      const merged = keptWritePolicyAlternative(policy, other, adoptsStamp);
+      const merged = mergedStoredAlternative(policy, other, adoptsStamp);
       if (merged !== undefined) return merged;
     }
     throw unstable("the candidate drops a stored alternative");
   });
   const added = candidate.filter((other) =>
     !existing.some((policy) =>
-      keptWritePolicyAlternative(policy, other, adoptsStamp) !== undefined
+      mergedStoredAlternative(policy, other, adoptsStamp) !== undefined
     )
   );
   if (added.length === 0) return kept;
@@ -491,7 +491,8 @@ const mergeWritePolicyAnyOf = (
  * when ONE stored alternative pairs the contract `added` names (or names none
  * where `added` names none) with a stamped artifact whose lineage includes the
  * one `added` is stamped with, and the release installs that artifact: the
- * same module, or one the space attests succeeds it. The appended alternative then differs from that stored
+ * same module, or one the space attests succeeds it. The appended alternative
+ * then differs from that stored
  * one only in its symbol, so every write it admits is one the same artifact,
  * on the same gesture, could already make through the stored one. Asking the
  * two conditions of two different stored alternatives would let an artifact
