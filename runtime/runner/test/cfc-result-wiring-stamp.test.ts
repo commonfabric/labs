@@ -1069,6 +1069,32 @@ describe("cfc-result-wiring-stamp", () => {
       expect(derivedOf(result)).toContain(BOB);
     });
 
+    it("stays where a setup the runtime starts on its own finds the result unchanged", async () => {
+      // A repair or a continuation hands setup a transaction that holds none
+      // of the reads that chose the pattern (`runtimeStarted`), so it is not
+      // an asking one, and restates nothing.
+
+      const { mixed, sameMixed } = patterns();
+      const result = await setUp("runtime-started", mixed);
+      await plantValueStamp(result, BOB);
+
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell(
+        space,
+        "runtime-started",
+        undefined,
+        tx,
+      );
+      await runtime.setup(tx, sameMixed, { x: 1 }, resultCell, {
+        runtimeStarted: true,
+      });
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+
+      expect(derivedOf(result)).toContain(BOB);
+    });
+
     it("stays where the setup carries over the stored name, whose read takes the stamp", async () => {
       // The setup reads the name it carries over from the stored result, and
       // that read consumes the stamp at the root above it, so the attempt's
