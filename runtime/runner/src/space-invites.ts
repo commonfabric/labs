@@ -25,6 +25,7 @@ export {
   buildInviteLink,
   createInviteCredentials,
   INVITE_ACCESS,
+  INVITE_LINK_SCHEME,
   inviteCodeVerifier,
   isInviteAccess,
   isInviteName,
