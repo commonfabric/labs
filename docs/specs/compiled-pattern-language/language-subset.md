@@ -1012,7 +1012,7 @@ to the handle's cell: reads its value, writes it, or neither.
 | `get()` | `Cell`, `ReadonlyCell` | R, F | Reads the value |
 | `sample()` | `Cell`, `ReadonlyCell` | F | Reads the value without making the body depend on the cell for recomputation. The read is still part of the footprint, for the label |
 | `key(k)` | `Cell`, `ReadonlyCell`, `WriteonlyCell`, `ComparableCell`, `OpaqueCell` | R, F | Neither. Yields a handle of the same kind for the property. Where the property is declared as a handle, it yields that handle: `key` flattens (note below) |
-| `elementById(idKey)` | `Cell`, `ReadonlyCell`, `WriteonlyCell`, `ComparableCell` | R, F | Neither. Yields a handle for the keyed element |
+| `elementById(idKey)` | `Cell`, `ReadonlyCell`, `WriteonlyCell`, `ComparableCell` | R, F | Neither. On a handle of `U[]`, yields a handle of the same kind of `U \| undefined` for the keyed element (note below) |
 | `resolveAsCell()` | `Cell` | R, F | Neither. Follows the links from the handle until it reaches a cell whose value is not a link, and yields the handle of that cell. It observes the reference where the resolution ends, the links followed included, and reads no content |
 | `getArgumentCell()` | `Cell` | F | Neither. Yields the handle of the argument of the piece the cell belongs to |
 | `equals(other)`, `equalLinks(other)` | `Cell`, `ReadonlyCell`, `ComparableCell` | R, F | Neither. Compares identity |
@@ -1081,9 +1081,9 @@ Twelve notes on the table.
   `Cell<Cell<T>>`, and `box.key("add")` on a
   `Cell<{ add: Stream<Donut> }>` is the `Stream<Donut>`. A chain of `key`
   calls flattens at each step, and `key` with several keys is the chain
-  of the calls with one. A `?` on the property does not change the
-  result: it is a modifier of the property and not a member of its type
-  ([§8.4](#84-composition)). The checker gives `key` this type itself, so
+  of the calls with one. A `?` on a property declared as a handle does
+  not change the result: it is a modifier of the property and not a
+  member of its type ([§8.4](#84-composition)). The checker gives `key` this type itself, so
   a pattern states it with no overload and no cast
   ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)).
 
@@ -1094,13 +1094,43 @@ Twelve notes on the table.
   in the inner cell and does not replace the link at `a`. To replace the
   link, the author writes the outer cell: `h.update({ a: other })`.
 
-  Three points are *assumed* ([§13](#13-open-questions), question 22).
+  Two points are *assumed* ([§13](#13-open-questions), question 22).
   The flattened handle has the kind the inner handle is declared with,
   whatever the kind of the outer handle. A property whose type is a union
   of a handle type and anything but `null` and `undefined` is not
   flattened: `key` yields a handle of that union, and `get()` on it
-  returns the inner handle or the other member. And `elementById` does
-  not flatten: on a `Cell<Cell<T>[]>` it yields a `Cell<Cell<T>>`.
+  returns the inner handle or the other member.
+
+  For a property that is not declared as a handle, the result keeps the
+  `undefined` a `?` adds to a read of it: `key("a")` on a
+  `Cell<{ a?: string }>` is a `Cell<string | undefined>`, because
+  `get()` through it can find nothing stored. The `?` changes nothing
+  for a property declared as a handle, by step 3: `key("a")` on a
+  `Cell<{ a?: Cell<T> }>` is the `Cell<T>`.
+- **`elementById` yields a handle of the element type or `undefined`.**
+  By ruling, `h.elementById(k)` on a handle of `U[]` has the type of a
+  handle, of the kind of `h`, of `U | undefined`. The record for a key
+  may never have been written, and it may have been cleared with
+  `set(undefined)`, so a `get()` through the handle has to handle
+  `undefined`, and a write of `undefined` through a handle that can
+  write is accepted:
+
+  ```ts
+  // Shown for illustration only.
+  function clearPin(pins: Writable<Pin[]>, key: string): void {
+    const pin: Writable<Pin | undefined> = pins.elementById(key);
+    pin.set(undefined);
+  }
+  ```
+
+  The result is not assignable to a declared `Writable<Pin>`, because
+  `Cell<T | undefined>` is not assignable to `Cell<T>`
+  ([§7.5.1](#751-handles)). `elementById` does not flatten: on a
+  `Cell<Cell<T>[]>` it yields a `Cell<Cell<T> | undefined>`. The
+  declaration in `base/api/index.ts` today gives the result the element
+  type without `undefined` (`elementById` of `IKeyable`), and it is
+  published with this type when the declaration of `key` is
+  ([§8.6.1](#861-the-published-typings)).
 - **`resolveAsCell`** observes a reference and not a value. In tier R, and
   in a function body where the call is static in the sense of
   `footprint-analysis.md` §7.1, the plan records it as an `identity`
@@ -1994,6 +2024,20 @@ through a view is declared `ReadonlyCell` of the view,
 `quotes?: ReadonlyCell<RepliedMessage>`. A body that also writes through
 the link declares the type the cell has.
 
+**A writable view wider than the declaration.** A `Cell<U>` whose value
+type admits more than the declared type of the place does is refused in
+the same way, by the third row and by ruling: a `Cell<TopicAuthor>` is
+not assignable to a `Cell<Partial<TopicAuthor>>`, nor to a
+`Cell<TopicAuthor | undefined>`. There is no exception for code that
+migrates stored data. An input whose stored data has an older or a
+partial shape declares that shape, `createdBy?: Partial<TopicAuthor>`,
+so that every reader and writer of the place agrees on what it may
+hold, and the pattern exposes the complete form as an output it
+computes from the input. A key that older data holds and that code
+reads as a string is declared `string`
+([§7.8](#78-any-and-unknown)). The one wider target the kind rule and
+the table admit is `unknown` itself, below.
+
 **A handle of `unknown`.** A handle of `T` is assignable
 to a handle of `unknown` of a kind the kind rule admits, whatever the
 row: `Cell<Donut>` to `Cell<unknown>`, and `Stream<Donut>` to
@@ -2063,7 +2107,32 @@ each position one of four cases applies.
 | A handle of `T` that can be read: `Cell`, `Writable`, or `ReadonlyCell` | A value type `U` | `T` is assignable to `U` | The value the cell holds, as `h.get()` written at the position would give it. The callee depends on the value and is evaluated again when it changes |
 | A handle | A handle | [§7.5.1](#751-handles) | The handle |
 
-Seven points complete the table.
+Eight points complete the table.
+
+- **The type of an argument that is a value is the declared type of its
+  path.** By ruling, where the second row applies, the handle the callee
+  gets has the declared type of the place the expression names, and
+  that type is the `T` of the row. Narrowing describes the value at the
+  time of a test and does not narrow the place: under a condition, the
+  right operand of `&&`, or a branch of `?:`, the argument has the type
+  its path declares. So `ann.status`, with `status?: AnnotationStatus`
+  declared, binds a handle of `AnnotationStatus | undefined` also under
+  `ann.status === "open"`, and is refused where the callee declares a
+  required `Writable<AnnotationStatus>`. A non-null assertion does not
+  change the type of a place either: `ann.status!` names the same place
+  and binds the same handle. The callee declares
+  `Writable<AnnotationStatus | undefined>`, or declares the property
+  optional (the point on `undefined` below). The first row is not
+  affected: where the callee declares a value, the narrowed type of the
+  argument is compared, because the callee gets the value. An argument
+  that is an optional property of a pattern's input whose type declares
+  a default has the declared type without `undefined`
+  ([§7.6.1](#761-optional-properties-of-an-input)).
+- **`AnyCell` and a value.** `AnyCell` is not among the handles of the
+  second row. It declares a handle of a kind the type does not state
+  ([§7.2](#72-api-types)), so the checker cannot say which handle a
+  value would stand for, and a value is refused where an `AnyCell` is
+  declared.
 
 - **A literal where a cell is declared** is checked part by part against
   the value type of the declared cell, as a literal is wherever a type is
@@ -2184,15 +2253,17 @@ this rule does not cover, was not measured.
 
 #### 7.5.3 The argument of an instantiation in a function body
 
-A pattern instantiated in a function body gets an argument document of
-its own, which the request writes path by path
+A pattern instantiated in a function body, by a call or by a JSX tag
+that names the pattern, gets an argument document of its own, which the
+request writes path by path
 (`plan-and-label-templates.md`, §3.14, "Instantiating a pattern", and
 §3.15). What the body gives at a path is a JavaScript value or a handle,
 and the callee declares a value or a handle there. The four cases of
 [§7.5.2](#752-arguments-bound-by-reference-in-tier-r) are accepted under
 the same conditions, the points on a literal and on `undefined`
-included. What two of them mean differs, because a value of a function
-body has no place of its own.
+included. The attributes of a JSX tag that names a pattern are checked
+as the properties of the argument are. What two of them mean differs,
+because a value of a function body has no place of its own.
 
 | The body gives | The callee declares | What the argument document holds at the path | What the callee has |
 | --- | --- | --- | --- |
@@ -2267,6 +2338,10 @@ predicate, and on an assignment to a `let`.
   after `"id" in x && "name" in x` the type is
   `{ id: unknown; name: unknown }`. The false branch leaves the type as
   it was.
+- Where `x` is a union of `object` with `null` or `undefined`, which is
+  what `typeof x === "object"` gives, the true branch removes `null` and
+  `undefined` and adds the property to `object`, since `in` throws on
+  either.
 - The property so added is an ordinary value typed `unknown`, and a
   kind test on the path narrows it: after `typeof x.id === "string"`,
   `x.id` is a `string`.
@@ -2285,9 +2360,19 @@ function idOf(parsed: unknown): string | undefined {
 
 `typeof x === "object"` narrows an ordinary `unknown` to `object | null`.
 On a data position typed `unknown` or `object`, `in` narrows nothing, as
-a kind test does not ([§7.8](#78-any-and-unknown)).
+a kind test does not ([§7.8](#78-any-and-unknown)). On a data position
+typed with an object type that does not declare `k`, `in` adds no
+property either: the type of a data position is the schema the position
+is read under, and a property the schema does not declare is not loaded.
+The author declares the property.
 
 The variable of a `catch` clause has type `unknown`.
+
+**Narrowing describes a value and not a place.** A test narrows what a
+later read of the expression returns. It does not change the declared
+type of the place the expression names, so a handle to that place has
+the declared type, whatever tests surround the expression that names it
+([§7.5.2](#752-arguments-bound-by-reference-in-tier-r)).
 
 **A value that may be absent.** A read of an optional property has the
 property's type or `undefined`. The `?` is no member of the declared
@@ -2331,7 +2416,12 @@ Four rules complete the table.
 
 - **Where it holds.** The first two rows hold for the properties of the
   input type of a `pattern` itself, read from the parameter or from its
-  destructuring pattern ([§4.1](#41-pattern-callback)). They do not hold
+  destructuring pattern ([§4.1](#41-pattern-callback)). The input type
+  has to be one object type, which an intersection of object types is
+  once it is merged ([§7.4](#74-intersections)). Where it is a union of
+  object types, the rows do not hold, and a read of an optional property
+  has `undefined`: the members can declare different defaults, or none.
+  They do not hold
   for a property of a nested object type, for the state or the event of
   a `handler`, or for the argument of a `lift`: there a read of an
   optional property has `undefined`, whatever the property's type
@@ -2365,6 +2455,11 @@ Four rules complete the table.
   The rule does not reach a copy: a scalar that a binding made in a
   function body copies is copied as what the body read, which is the
   default ([§5.2](#52-runtime-calls), "What a binding holds").
+- **A default on a type that names `undefined`.** The first two rows
+  remove the `undefined` that the `?` adds. *Assumed:* an `undefined`
+  that the value type itself names stays, so
+  `glaze?: Default<string | undefined, "plain">` is read as
+  `string | undefined` ([§13](#13-open-questions), question 34).
 - **A parameter default is still refused**
   (`pattern-context:parameter-form`, §4.1). The default is declared in
   the type ([§12.7](#127-declare-defaults-in-types-not-in-the-parameter)).
@@ -2400,7 +2495,10 @@ gives one to a callee that requires it in 223 arguments (prototype).
   assignable to the other, ignoring annotations. It asserts the type and
   changes no value.
 - `e as const` is allowed on literals.
-- `e!` removes `null` and `undefined`.
+- `e!` removes `null` and `undefined` from the type of the value. It
+  does not change the type of the place `e` names, so an argument bound
+  by reference to that place has the declared type
+  ([§7.5.2](#752-arguments-bound-by-reference-in-tier-r)).
 - `e satisfies T` checks assignability and keeps the type of `e`.
 - A cast through `unknown` to an unrelated type is refused
   (`cast-validation:double-unknown`), as today.
@@ -2422,36 +2520,47 @@ that is not read, and in code it forces a narrowing before use.
 
 The two uses meet where a body receives a data position typed `unknown`.
 The body is handed a reference there, whatever is stored behind it. It can
-test the reference for presence, compare it with `equals`, and pass it on,
-and it cannot read through it.
+test the reference against `undefined`, compare it with `equals`, and pass
+it on, and it cannot read through it. By ruling, the test against
+`undefined` is the only test of such a position.
 
-- **A test of presence** (`=== undefined`, `??`, truthiness, and the test
-  `?.` makes of its receiver) returns whether something is stored at the
-  position. A stored `0`, `""`, `false`, or `null` is something, so the
-  position is truthy.
+- **A test against `undefined`** (`=== undefined`, `!== undefined`, and
+  `??`) returns whether something is stored at the position. A stored
+  `0`, `""`, `false`, or `null` is something. A test of truthiness
+  gives the same answer, since a reference is truthy, and tells the
+  body nothing more.
 - **A property read is refused.** `x.name` and `x?.name` both read the
   property `name` of a position typed `unknown`, and both are refused
   (`schema:unknown-type-access`), in every tier: the `?.` tests the
   receiver and then reads through it. The position is declared with a
   type that has the property.
-- **A kind test** (`typeof`, `Array.isArray`, `instanceof`, `"k" in x`)
-  sees the reference and not the kind of what is stored behind
-  it. A stored string
-  and a stored record give the same result, so a kind test does not narrow
-  such a position to the stored type. A body that needs the value declares
-  the position with the type it reads.
+- **A kind test narrows nothing.** `typeof`, `Array.isArray`,
+  `instanceof`, and `"k" in x` see the reference and not the kind of
+  what is stored behind it. A stored string and a stored record give
+  the same result. After `typeof x === "string"` the position is still
+  typed `unknown`, a string method on it is refused, and a property
+  read after any such test is still `schema:unknown-type-access`. A
+  body that needs the value declares the position with the type it
+  reads.
+- **A key of older data that code reads as a string is declared
+  `string`,** and optional where it may be absent. A stored value of
+  another type then reads as `undefined`, by the rule for stored data
+  that does not match its declared type
+  (`plan-and-label-templates.md`, §5.2), and the body tests the read
+  against `undefined` and not with `typeof`.
 - **A conversion to a string** (`String(x)`, a template literal) converts
   the reference. The string is a function of the reference alone and holds
   nothing of the content.
 
-`footprint-analysis.md` (§2.2) records a test of presence or kind there as
+`footprint-analysis.md` (§2.2) records a test against `undefined`, of
+truthiness, or of kind there as
 an observation of the position's shape, and a conversion as an observation
 of the reference's identity. That a kind test sees no more than presence is
 how the runtime reads such a position today: it hands the body an empty
 object that carries the address and nothing else (`createOpaqueReference`
 in `runtime/runner/src/schema.ts`;
-[`unknown`](../../common/concepts/types-and-schemas/unknown.md)). *Assumed:*
-it stays so ([§13](#13-open-questions), question 13). A value typed
+[`unknown`](../../common/concepts/types-and-schemas/unknown.md)). By
+ruling it stays so. A value typed
 `unknown` that the body computed, such as the result of `JSON.parse` or the
 variable of a `catch` clause, is an ordinary value, and a kind test narrows
 it (§7.6).
@@ -2492,7 +2601,7 @@ that is open ([§13](#13-open-questions), question 29).
 
 - **Walk.** `key(name)` takes any string and yields a `Cell<unknown>`.
 - **Read.** `get()` returns a data position typed `unknown`: a
-  reference, with the three rules above.
+  reference, with the rules above.
 - **Compare and pass on.** `equals`, `equalLinks`, and giving the handle
   to a callee, a binding, or a stored value.
 - **Write.** `set(value)`, `update(partial)`, and the array writes take
@@ -3291,7 +3400,7 @@ construct found and the replacement given here.
 | `cast-validation:double-unknown` | error | A cast through `unknown` to an unrelated type | Declare the value with the type it has, or narrow it with a type predicate | carries |
 | `cast-validation:forbidden-cast` | error | A cast to `Reactive<T>` | Remove the cast | carries |
 | `cast-validation:cell-cast` | error | A cast to a cell type | Declare the cell type where the value is received (the pattern input or the handler state) | carries |
-| `schema:unknown-type-access` | error | A body of any tier, a pattern callback included, reads a property of a data position typed `unknown` (§7.8), with `.` or with `?.`, or of an unbound type parameter | Replace `unknown` with a type that declares the properties read | changes (now also reported in tier R, and for `?.`) |
+| `schema:unknown-type-access` | error | A body of any tier, a pattern callback included, reads a property of a data position typed `unknown` (§7.8), with `.` or with `?.`, after a kind test such as `typeof x === "object"` included, or of an unbound type parameter | Replace `unknown` with a type that declares the properties read. For a key of older data read as a string, declare it `string` and test the read against `undefined` | changes (now also reported in tier R, and for `?.`) |
 | `schema:path-not-in-type` | error | A function body reads a property its parameter's type does not declare | Add the property to the type | carries (now an ordinary type error with this identifier) |
 | `pattern:any-result-schema` | error | A pattern's inferred result is `any` or `unknown` at the top level | Declare the result: `pattern<Input, Output>(...)` | carries |
 | `pattern-result:unknown-type` | error | A field of an inferred, unnamed result type is `unknown` | Annotate the value that produces the field, or declare the result type | carries |
@@ -3403,6 +3512,8 @@ and 2 local type declarations, and nothing else.
 | A function type in a type used as data | 1 declaration, 35 uses in 10 modules (prototype) | `MentionablePiece` in `patterns/system/backlinks-index/backlinks-index.tsx`, whose property `mentionable` is declared `MentionablePiece[] \| { get?: () => MentionablePiece[] }`. The type is a pattern input, a cell value, and a handler state | Rewrite: the declaration says what the value is, a list or a cell of one (`subset-type:function-in-data`, §7.9) |
 | A cell passed to a parameter declared with a structural type | About 25 arguments (prototype) | Declarations of the kind are `roster: { get(): ... }` in `patterns/system/loom/participants.tsx` and `sources` in `patterns/apps/topics/main.tsx` | Rewrite: declare the parameter `ReadonlyCell<T>`, which accepts every cell the structural type was written to accept (§7.5.1) |
 | A cell of `T` given where a cell of a view of `T` is declared | 13 arguments (prototype) | `Cell<Message>` where `quotes?: Cell<RepliedMessage>` is declared, in `patterns/system/fabrichat/room-records.tsx` | Rewrite: declare `ReadonlyCell` of the view where the link is read, and the type the cell has where it is written (§7.5.1) |
+| A writable view wider than the declaration, and a kind test on a key of older data typed `unknown` | 18 errors of one cause (1) (prototype) | `patterns/apps/topics/topic.tsx`: the pattern that repairs stored topics declares `createdBy: Writable<Partial<TopicAuthor> \| undefined>` over a place declared `TopicAuthor`, and narrows `createdByName` and the `authorName` of a comment, both typed `unknown`, with `typeof` | Rewrite: the input declares the shape the stored data has, `createdBy?: Partial<TopicAuthor>`, and each such key as `string`, and the pattern exposes the complete form as an output (§7.5.1, §7.8) |
+| A narrowed optional value given where a writable cell of the narrowed type is declared | 3 arguments (1) (prototype) | `ann.status` in `patterns/apps/annotation-manager/annotation-manager.tsx`, given to three handlers whose state declares `status: Writable<AnnotationStatus>` | Rewrite: the three handlers declare `Writable<AnnotationStatus \| undefined>`, the declared type of the place (§7.5.2) |
 | A type name of the DOM library | 4 (3) (prototype) | `Event` in `patterns/apps/annotation/annotation.tsx` and `patterns/examples/form-demo/form-demo.tsx`; `CustomEvent` in `patterns/dev/catalog/stories/cf-chat-story.tsx` | Rewrite: declare the shape of the event the handler reads (`stdlib:unsupported-member`, §7.10) |
 | `.get()` on a stream reached through `key` | 1 (1) (prototype) | `takesOffers` in `patterns/system/fabrichat/manager.tsx` | Rewrite: test presence through a view typed `unknown` ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)) |
 | A default named by `typeof` of a constant whose initializer is a call | 1 (1) (prototype) | `Default<typeof INITIAL_SHOTS>` in `patterns/showcase/battleship/multiplayer/schemas.tsx`, where `INITIAL_SHOTS = createInitialShots()` | Rewrite: write the value as a literal (`default:not-static`, §8.8) |
@@ -3958,7 +4069,18 @@ Decided by the project owner:
 - a default belongs to the stored place: a callee bound by reference gets
   a link, the link carries the schema with the default, and the callee
   reads the default where nothing is stored, whatever its own type
-  declares (§7.5.2, §7.6.1).
+  declares (§7.5.2, §7.6.1);
+- `elementById` on a handle of `U[]` yields a handle of the same kind of
+  `U | undefined`, and does not flatten (§4.7);
+- an argument bound by reference has the declared type of its path:
+  narrowing and `!` do not change the type of a place (§7.5.2, §7.6,
+  §7.7);
+- on a data position typed `unknown` the only test is against
+  `undefined`, a kind test narrows nothing, and a key of older data that
+  code reads as a string is declared `string` (§7.8);
+- a writable view wider than the declaration of a place is refused, with
+  no exception for migration code: an input whose stored data has an
+  older or a partial shape declares that shape (§7.5.1).
 
 Decided by `plan-and-label-templates.md`: a dynamic key is a chosen child
 that does not observe the container's enumeration (its §3.18); `reduce` and
@@ -3970,12 +4092,12 @@ the type admits `undefined` or declares a default, and otherwise fails the
 cone that reads it (§5.2). The last is what keeps the strict `null` checks
 of §7 sound: value code never sees a value its type excludes.
 
-Questions 15, 16, 17, 21, 25, 26, and 29 need a decision from the
+Questions 15, 16, 17, 21, 25, 26, 29, and 34 need a decision from the
 project owner. The
 [continuation plan](../../plans/compiled-pattern-language.md) lists the
 first three as its questions 49 with 60, 28, and 59. It lists 21, 25,
-26, and 29 as its questions 72, 82, 78, and 93. The
-others do not need the owner. Each names
+26, and 29 as its questions 72, 82, 78, and 93, and does not list 34.
+The others do not need the owner. Each names
 the document it is addressed to. The numbers 9, 14, 19, 30, and 33 are not in
 use, so that the other numbers stay as other documents cite them.
 
@@ -4054,14 +4176,11 @@ use, so that the other numbers stay as other documents cite them.
     the comparison where the type excludes `undefined`. The prototype has
     to measure how many cells the idiom is used on.
 13. **What a kind test sees at a data position typed `unknown`** (from
-    `footprint-analysis.md`, request 17; to `execution-and-storage.md` and
-    the prototype). §7.8 has a body handed a reference at such a position,
-    whatever is stored behind it, so that a kind test sees presence and no
-    more and a conversion to a string yields nothing of the content.
-    *Assumed:* it stays so, as the runtime reads such a position today. If
-    a kind test could see the stored kind, a position narrowed by it would
-    be read under the narrowed type, and `unknown` would no longer declare
-    a reference that is not read.
+    `footprint-analysis.md`, request 17). Not open: ruled. The only test
+    of such a position is against `undefined`, a kind test sees the
+    reference and narrows nothing, and a conversion to a string yields
+    nothing of the content (§7.8). The entry keeps its number because
+    other documents cite the entries after it by number.
 
 <!-- The list restarts so that the numbers below stay as cited. -->
 
@@ -4125,16 +4244,18 @@ use, so that the other numbers stay as other documents cite them.
     is reported as a state cell of the body.
 22. **What `key` flattens beyond the ruled case** (to the prototype and
     to `plan-and-label-templates.md`). The ruling gives `key("a")` on a
-    `Cell<{ a: Cell<T> }>` the type `Cell<T>`. §4.7 assumes three points
+    `Cell<{ a: Cell<T> }>` the type `Cell<T>`. §4.7 assumes two points
     it does not state. The flattened handle has the kind the inner handle
     is declared with, also where the outer handle is one that cannot be
     read (`WriteonlyCell`, `ComparableCell`, `OpaqueCell`); the
     alternative gives it the capabilities both declare. A property whose
     type is a union of a handle type and a member other than `null` and
-    `undefined` is not flattened. And `elementById` does not flatten.
-    What a read returns through the flattened handle of an optional
-    property that is absent is the matter of question 12. The published
-    declaration of `key` has to change with the rule (§8.6.1).
+    `undefined` is not flattened. That `elementById` does not flatten,
+    and that it yields a handle of the element type or `undefined`, is
+    ruled (§4.7). What a read returns through the flattened handle of
+    an optional property that is absent is the matter of question 12.
+    The published declarations of `key` and of `elementById` have to
+    change with the rules (§8.6.1).
 23. **A cell handle is not assignable to a structural object type** (to
     the prototype). §7.5 refuses a `Cell<T>` where a `{ get(): T }` is
     declared, on the ruling that a declaration says whether a value is a
@@ -4226,14 +4347,17 @@ use, so that the other numbers stay as other documents cite them.
     directly through a handle of `unknown`. This document does not
     design the alternative.
 31. **What the by-reference rule leaves refused** (to the prototype).
-    §7.5.2 is narrower than the published typings in four places. Two
+    §7.5.2 is narrower than the published typings in six places. Two
     are ruled: an argument of an authored function called in tier R is
     not bound by reference, and a value of `T` is refused where
     `Cell<T | undefined>` is declared, and the reverse, unless the
-    declared property is optional. Two are decided in this document: a
-    handle that cannot be read is refused where a value is declared,
-    and the state of a handler binding made in a function body is
-    checked by §7.5 alone (§7.5.3). The prototype has to count the
+    declared property is optional. A third is ruled too: an argument
+    that is a value has the declared type of its path where a handle is
+    declared, whatever narrowing surrounds it. Three are decided in
+    this document: a handle that cannot be read is refused where a
+    value is declared, a value is refused where an `AnyCell` is
+    declared, and the state of a handler binding made in a function
+    body is checked by §7.5 alone (§7.5.3). The prototype has to count the
     sites of each among the remaining mismatches.
 32. **The event types of host elements** (to `builtin-inventory.md`).
     §7.10 refuses the type names of the DOM library, and a handler
@@ -4243,3 +4367,19 @@ use, so that the other numbers stay as other documents cite them.
     The alternative has `builtin-inventory.md` list, for each host
     element, the event types it delivers as object types of the API,
     such as one for the event of `cf-input`.
+
+<!-- The list restarts so that the numbers below stay as cited. -->
+
+34. **A default on a type that names `undefined`** (to the project
+    owner; from the prototype). The table of §7.6.1 gives the body's
+    read of an optional property whose type declares a default as the
+    value type without `undefined`. It does not say what the read is
+    where the value type itself names `undefined`, as in
+    `glaze?: Default<string | undefined, "plain">`. *Assumed:* the
+    checker removes the `undefined` the `?` adds and keeps the one the
+    type names, so the read is `string | undefined`. The published
+    typings remove both (`RequireDefaults` in `base/api/index.ts`), so
+    under the assumption the checker reports a use that an editor
+    accepts. The alternative removes both, and then the declaration
+    says something the body's type does not: that `undefined` can be
+    stored at a place that has a default.

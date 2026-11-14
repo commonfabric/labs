@@ -133,6 +133,14 @@ collection method in the reactive tier is compiled against an element slot
 and has label rules of its own. A callback passed to a standard-library method
 inside a body is part of that body. A pattern callback is the reactive tier.
 
+A function written inside a body is part of that body where it is a
+closure ([§3.6](#36-functions)). It is a body of its own where it is a
+row of the table: an inline event handler or an `action` written in a
+function body is a handler whose state is its captures, and the
+enclosing body records the binding ([§8.5](#85-binding-a-handler)). An
+observation belongs to the innermost body around the expression that
+makes it, and to no enclosing one.
+
 **Imported TypeScript.** The compiler reads the signature of an imported
 function and nothing else (`language-subset.md` §5.5). Its record has kind
 `imported` and is fixed by the signature:
@@ -268,18 +276,25 @@ the static type of the position it is applied to.
 | Compares references: `equals`, `===` between two containers or handles | Not applicable | `identity` | `identity` | `identity` |
 
 A position whose type is a union takes the row of each member, so a test of
-truthiness on `string | Donut` records `value` and `shape`.
+truthiness on `string | Donut` records `value` and `shape`. The normal form
+of [§2.3](#23-the-footprint-is-one-set-per-body) then removes the `shape`
+entry, because a `value` entry is at the same path. *Assumed:* the record
+holds `value` alone at the path, which covers the subtree of the `Donut`
+member as a `value` entry over a container does. A path has no class
+for "the value of the scalar members and the shape of the others"
+([§13](#13-open-questions), request 24).
 
 **A reference.** A position typed `unknown` holds a reference that the body
-can test for presence, compare, and pass on, and whose target it cannot
-read. A test of truthiness there is a test of presence, whatever is stored
-behind the reference
-([`unknown`](../../common/concepts/types-and-schemas/unknown.md)). The
-checker allows nothing that consumes content without a narrowing. A
-conversion to a string is typed, and what it converts is the reference, so
-it records `identity`. A position the checker narrowed from `unknown` is used
-under the narrowed type and takes that type's column at the same path
-([§13](#13-open-questions), request 17).
+can test against `undefined`, compare, and pass on, and whose target it
+cannot read. A test of truthiness there is a test of presence, whatever is
+stored behind the reference
+([`unknown`](../../common/concepts/types-and-schemas/unknown.md)). By
+ruling, no test narrows such a position: a kind test sees the reference
+and records `shape`, and the position stays typed `unknown` after it
+(`language-subset.md` §7.8). So the checker allows nothing that consumes
+content there. A conversion to a string is typed, and what it converts is
+the reference, so it records `identity`. A value typed `unknown` that the
+body computed is `Computed`, and narrowing it records nothing.
 
 **A factory.** A position of factory type holds a pattern factory value or
 a handler factory value, which is a reference to a compiled definition
@@ -304,7 +319,20 @@ Three rules apply to every observation.
   `typeof name` where `name` has type `string`, and of `donut?.glaze` where
   `donut` cannot be `null` or `undefined`, is fixed by the type, provided
   the tested path is in the body's argument: a body never receives a value
-  outside its input's type at a path the runtime materialized (§1.3). The
+  outside its input's type at a path the runtime materialized (§1.3).
+  Which tests the type decides depends on the test:
+
+  - a test of presence (`=== undefined`, `=== null`, `?.`, `??`) is
+    decided where the type admits neither `null` nor `undefined`;
+  - a kind test (`typeof`, `Array.isArray`, `instanceof`, `in`) is
+    decided where the type is of one kind, admits neither `null` nor
+    `undefined`, and is not `unknown`;
+  - a test of truthiness of a container, a handle, a reference, or a
+    factory is decided under the condition for a test of presence;
+  - a test of truthiness of a scalar is never decided, since it depends
+    on the value, and it records `value` by the table.
+
+  The
   runtime materializes a path when the footprint has an entry at or below
   it, other than a `labelMetadata` entry. So such a test records nothing
   when the body's footprint has another such entry at or below the tested
@@ -378,9 +406,9 @@ member returns, depend on it.
 
 | Construct | Result | Observations |
 | --- | --- | --- |
-| `v.k`, and `v[k]` where `k` is static in the sense of `language-subset.md` §4.3 | The projection extended by `k` | None |
+| `v.k`, and `v[k]` where `k` is static in the sense of `language-subset.md` §4.3 and `v` has an object, a record, or a tuple type | The projection extended by `k` | None |
 | `v?.k` | The same | `shape` at `v` |
-| `v[i]`, `v.at(i)` where `v` has an array type | The projection `v/*` | `enumeration` at `v`; `value` at `i` |
+| `v[i]`, `v.at(i)` where `v` has an array type, an index that is a literal included | The projection `v/*` | `enumeration` at `v`; `value` at `i` where `i` is a projection |
 | `v[i]` where `v` has a tuple type and `i` is not static | The projection `v/*` | `value` at `i` |
 | `v[k]` where `v` has an object or record type and `k` is not static | The projection `v/*` | `enumeration` at `v`; `value` at `k`. Widening W1 |
 | `text[i]` where `text` is a string | `Computed` | `value` at `text` and at `i` |
@@ -395,7 +423,11 @@ member returns, depend on it.
 
 An index into an array is not a widening. The analysis does not track which
 element an index names, so `rows[i].price` is `rows/*/price`: the body may
-read the `price` of any row. That is the path iteration over the array
+read the `price` of any row. A literal index is treated in the same way,
+so `rows[0].price` is `rows/*/price` too, with `enumeration` at `rows`:
+whether an array has an element at a position depends on its length. A
+literal index extends the path by that index on a tuple type alone, where
+the type declares the position. That is the path iteration over the array
 produces too, so indexing loses nothing against `for...of`. The index is
 consumed: in `rows[event.position].price` the body reads `event.position`
 for its value, since which row it reads depends on it.
@@ -718,7 +750,7 @@ read, and whatever reads it later does so under a schema of its own.
 | --- | --- |
 | A projection of scalar type | `value` |
 | A projection of container, handle, reference, or factory type, whole | `identity`. The content is not read |
-| A record or list the body built | Nothing for the value itself. Each member is treated by this table |
+| A record or list the body built | Nothing for the value itself. Each member is treated by this table, by the type of the position its projection names, wherever in the body the member was put into the record |
 | A bag | The member, by this table |
 | `Computed`, `Created` | Nothing |
 
@@ -1361,7 +1393,7 @@ The methods are those of `language-subset.md` §4.7. For a handle `h`:
 | --- | --- | --- |
 | `h.get()`, `h.sample()` | The projection `h->`, the root of the cell `h` links to | `identity` at `h`. What is done with the result is recorded below the hop |
 | `h.key("k")` | The handle `h` with `k` added to the path below its hop. Where the path passes through a position of handle type, the result is the handle at that position (below, "A handle that holds a handle") | Nothing |
-| `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
+| `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored. `h.elementById(id)` on a handle of `U[]` has the type of a handle of the same kind of `U \| undefined`, and does not flatten (`language-subset.md` §4.7) | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
 | `h.resolveAsCell()` | `h`, resolved: reads through it are reads at `h->`, and a write through it lands where the resolution ends ([§6.2](#62-targets)) | A resolution of `h` (below) |
 | `h.for(cause)` | `h` | The cause, by the reference rule of [§3.8](#38-what-leaves-the-body) |
 | `h.getArgumentCell()` | A handle that is not anchored | `identity` at `h` |
@@ -3273,13 +3305,13 @@ asked.
       `identifiedBy: "tag"` in a handler, and a `createCell` site with an
       explicit cause (§7.5).
 17. **What a body sees at an `unknown` position** (to `language-subset.md`
-    and `execution-and-storage.md`). §2.2 records `shape` for a test of
-    presence or kind at such a position and `identity` for a conversion to
-    a string. *Assumed:* as today, the body is handed a reference there,
-    whatever is stored behind it, so a kind test sees presence and no more,
-    and the string a conversion yields is a function of the reference
-    alone. If a kind test can see the stored kind, a position narrowed by
-    it is read under the narrowed type, which §2.2 covers.
+    and `execution-and-storage.md`). Not open: ruled. The body is handed
+    a reference there, whatever is stored behind it. The only test of it
+    is against `undefined`, a kind test sees presence and narrows
+    nothing, and the string a conversion yields is a function of the
+    reference alone (§2.2; `language-subset.md` §7.8). The entry keeps
+    its number because other documents cite the entries around it by
+    number.
 18. **The identity of an instance a computation makes** (to
     `plan-and-label-templates.md`). Met by §1.3 and §3.14 there: the
     enclosing instance, the body's `name` and `within`, the site, and the
@@ -3383,3 +3415,14 @@ asked.
       is, so the body records `identity` and the binding holds the
       factory value (§3.9 there, "A factory value passed on", and the
       binding table of §3.14; §8.5).
+24. **A truthiness test of a union of a scalar and a container** (to
+    `plan-and-label-templates.md` and the prototype). The table of §2.2
+    gives such a test `value` for the scalar member and `shape` for the
+    container member, and the normal form of §2.3 keeps the `value`
+    entry alone. *Assumed:* the record holds `value` at the path, the
+    runtime materializes the subtree of the container member, and the
+    site is not reported as a widening, since no cause of §5.2 names
+    it. The alternative needs a slot that is
+    read for its value where the stored kind is a scalar and for its
+    shape otherwise, which `plan-and-label-templates.md` §2.1 does not
+    have. The prototype has to count the sites.
