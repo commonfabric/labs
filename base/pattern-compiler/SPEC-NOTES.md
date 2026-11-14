@@ -162,12 +162,11 @@ numbers have gaps.
 
 ## Narrowing and data positions (§7.6, §7.8)
 
-52. **Narrowing** (§7.6). Implemented for every test the section lists. An
-    assignment to a `let` narrows a reference where it is the last assignment
-    written before the reference, is a statement of a block around it, and no
-    loop around the reference assigns the binding outside that statement. The
-    crate computes no join: after an `if` that assigns in one branch, the
-    binding has its declared type. A binding assigned in another function
+52. **Narrowing** (§7.6). Implemented for every test the section lists. The
+    type of a `let` at a reference is a join that is computed, and it is
+    over-approximated: it is taken over every assignment written between
+    the last assignment that definitely runs before the reference and the
+    reference itself, whether or not each of them can reach it. A binding assigned in another function
     than the one that reads it is not narrowed. Three cases narrow less than
     TypeScript does: the `default` case of a `switch`, a case another case can
     fall into, and a path such as `order.note` of a binding that is assigned.
@@ -214,15 +213,6 @@ numbers have gaps.
     for, and `AnyCell` is not one of them. §7.2 calls it "a handle of a
     kind the type does not state". Chosen: a value is refused where an
     `AnyCell` is declared, in tier R too.
-60. **The narrowed type of an argument bound by reference** (§7.5.2). The
-    second row asks whether a `Cell<T>` of the argument's type would be
-    assignable to the declared handle. Where a condition has narrowed the
-    argument, `ann.status` under `ann.status === "open"`, its type is
-    narrower than the type of the place it denotes, and the binding is to
-    the place. Chosen: the narrowed type is compared, so the argument is
-    refused where a `Writable` of the declared type is expected (3
-    arguments in `patterns/apps/annotation-manager/`). The alternative
-    compares the declared type of the place.
 61. **`key` on an optional property that is not a handle** (§4.7). "A `?`
     on the property does not change the result" is written after the
     flattening rule and reads as general. Chosen: `key("a")` on a
@@ -318,4 +308,9 @@ numbers have gaps.
     The measurement counts a site once, for the innermost body around it.
     A `computed` is a body where the typed promotion criterion does not
     promote it, which FA §11 decides by syntax.
-
+75. **The declared type of an argument bound by reference** (LS §7.5.2,
+    ruling "An argument bound by reference takes the declared type of its
+    path"). The crate takes the declared type at the outermost step of the
+    path alone: for `order.note.text` it reads the declared type of `text`
+    in the type the checker has for `order.note`, which a condition on
+    `order` or on `order.note` may have narrowed.
