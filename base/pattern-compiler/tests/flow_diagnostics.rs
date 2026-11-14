@@ -386,3 +386,22 @@ fn ui_contract_follows_a_pattern_written_as_a_tag_under_the_surface() {
         ["cfc-flow:ui-contract"]
     );
 }
+
+#[test]
+fn a_body_that_writes_nothing_has_no_constraint_from_its_inputs() {
+    // PL §1.5: "A body with no write edge, and with no output whose
+    // template has a `derive` by it, has no constraint from its inputs:
+    // none is emitted, and no compile-time check is made."
+    let state = "v: MaxConfidentiality<Sec<string>, readonly [\"public\"]>";
+    let snippet = format!(
+        "const gate = handler<{{ t: string }}, {{ {state}; n: Cell<number> }}>((event, state) => {{
+  if (state.v) {{ return; }}
+}});
+export const P = pattern<{{ {state}; n: Cell<number> }}>(({{ v, n }}) => ({{ gate: gate({{ v, n }}) }}));
+"
+    );
+    assert!(flows(&snippet).is_empty());
+    let analysis = analysis(&snippet);
+    let plan = &analysis.modules[0].plans[0].plan;
+    assert_eq!(plan["constraints"], serde_json::json!([]));
+}

@@ -5797,10 +5797,26 @@ impl<'a> Emitter<'_, '_, 'a> {
                 None => self.body_facts.get(number).map_or(0, |fact| fact.at),
             }
         };
+        // "A body with no write edge, and with no output whose template
+        // has a `derive` by it, has no constraint from its inputs" (PL
+        // §1.5, "A body that writes nothing").
+        let mut writers: Vec<usize> = Vec::new();
+        for output in plan["outputs"].as_array().into_iter().flatten() {
+            derived_by(&output["template"], &mut writers);
+        }
+        for (number, body) in bodies.iter().enumerate() {
+            let writes = ["writes", "envelopes"]
+                .iter()
+                .any(|list| body[*list].as_array().is_some_and(|list| !list.is_empty()));
+            if writes && !writers.contains(&number) {
+                writers.push(number);
+            }
+        }
         let guards: Vec<Vec<usize>> = (0..bodies.len())
             .map(|number| {
                 self.body_guards
                     .get(number)
+                    .filter(|_| writers.contains(&number))
                     .into_iter()
                     .flatten()
                     .map(|guard| index_of(&mut constraints, guard.clone()))
