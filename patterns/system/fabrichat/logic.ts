@@ -1,8 +1,8 @@
 /**
  * FabriChat's rules that need no runtime: what counts as a single emoji, how
  * the two views of a conversation are derived from replies, where a window
- * falls in a view, and how a thread's title reads when no member has set one. The room applies them to
- * its records; `logic.test.ts` states them directly.
+ * falls in a view, and how a thread's title reads when no member has set one.
+ * The room applies them to its records; `logic.test.ts` states them directly.
  */
 
 /**

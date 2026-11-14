@@ -42,6 +42,7 @@ const CLAIMS: Readonly<
   // Every stored alternative, each kept by a merged one wherever it is in the
   // list. A merged alternative keeping none of them is held to
   // `appendedWritePolicyRefusal()`.
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   writePolicyAnyOf: (stored, merged) =>
     Array.isArray(stored) && Array.isArray(merged) &&
     stored.every((policy) =>

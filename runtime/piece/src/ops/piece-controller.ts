@@ -4741,7 +4741,7 @@ export class PieceController<T = unknown> {
       candidate,
       this.#cell,
       this.#pieces,
-      { gatedRelease },
+      { gatedRelease, baseline: prepared.baseline },
     );
     await this.#refuseUnusableArgument(
       review,
@@ -4958,7 +4958,7 @@ export class PieceController<T = unknown> {
         candidate,
         this.#cell,
         this.#pieces,
-        { gatedRelease },
+        { gatedRelease, baseline: confirmed.baseline },
       );
       reviewed = currentReview;
       await this.#refuseUnusableArgument(
@@ -5159,7 +5159,7 @@ export class PieceController<T = unknown> {
           candidate,
           this.#cell,
           this.#pieces,
-          { gatedRelease },
+          { gatedRelease, baseline: prepared.baseline },
         );
         await this.#refuseUnusableArgument(
           review,
@@ -5931,9 +5931,22 @@ async function pieceSourceCompatibilityReview(
   candidate: Pattern,
   piece: Cell<unknown>,
   pieces: PiecesController,
-  options: { gatedRelease: boolean },
+  options: { gatedRelease: boolean; baseline?: PieceSourceTransitionBaseline },
 ): Promise<NonNullable<PreparedPieceSourceChange["review"]>> {
   const issues: PieceSourceCompatibilityIssues = {};
+  // The delegations the update would propose, derived before the reads below
+  // so that nothing they load waits on another `await` before it is read. An
+  // update whose baseline does not retain the current source proposes none.
+  const patternManager = pieces.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(candidate);
+  const proposal =
+    entry === undefined || options.baseline?.kind === "unavailable"
+      ? undefined
+      : await patternManager.proposedSourceUpdateDelegations(
+        piece.space,
+        previous.ref.identity,
+        entry.identity,
+      );
   let schema: string | undefined;
   if (previous.pattern === undefined) {
     schema = `the piece's current pattern ` +
@@ -5974,12 +5987,12 @@ async function pieceSourceCompatibilityReview(
     issues.retainedLinks = describeFailure(error);
   }
 
-  const cfc = await pieceSourceCfcEnvelopeIssue(
+  const cfc = pieceSourceCfcEnvelopeIssue(
     piece,
     argumentCell,
-    previous.ref.identity,
     candidate,
     pieces,
+    proposal,
   );
   if (cfc !== undefined) issues.cfc = cfc;
 
@@ -6026,65 +6039,63 @@ async function pieceSourceCompatibilityReview(
  * `storedCfcEnvelopeMergeIssue` — the fast paths the commit takes before it
  * merges and then the merge itself — so the two cannot disagree about what
  * merges. The commit's transaction is pinned to the delegations the update
- * proposes, from the piece's current program (`previousIdentity`) to the
- * candidate's, which decide whether a release may extend a stored write
- * policy; the review reads through a transaction pinned to the same ones.
+ * proposes (`proposal`, from the piece's current program to the candidate's),
+ * which decide whether a release may extend a stored write policy; the review
+ * reads through a transaction pinned to the same ones.
  */
-async function pieceSourceCfcEnvelopeIssue(
+function pieceSourceCfcEnvelopeIssue(
   piece: Cell<unknown>,
   argumentCell: Cell<unknown>,
-  previousIdentity: string,
   candidate: Pattern,
   pieces: PiecesController,
-): Promise<string | undefined> {
+  proposal: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+): string | undefined {
   // The modules the release would install, as setup names them.
   const patternManager = pieces.runtime.patternManager;
   const entry = patternManager.getArtifactEntryRef(candidate);
   const programModules = entry === undefined
     ? []
     : patternManager.programModuleIdentities(entry.identity) ?? [];
-  const proposal = entry === undefined
-    ? undefined
-    : await patternManager.proposedSourceUpdateDelegations(
-      piece.space,
-      previousIdentity,
-      entry.identity,
-    );
   // Neither transaction can write, so the two dry runs stay dry runs; a piece
   // read as one principal's instance is reviewed as that principal's.
   const instance = instanceTx(piece);
   const tx = proposal === undefined
     ? pieces.runtime.readTx(instance)
-    : pieces.runtime.readTxProposingDelegations(piece.space, proposal);
-  if (proposal !== undefined && instance !== undefined) {
-    tx.tx.scopeKeyIdentity = instance.tx.scopeKeyIdentity;
-  }
-  const issues = [
-    pieceDocumentCfcEnvelopeIssue(
-      "argument",
-      argumentCell,
-      candidate.argumentSchema,
-      {},
-      tx,
-      programModules,
-    ),
-    // Setup writes the result projection, and with it the schema input the
-    // commit merges, only where the candidate's projection differs from the
-    // stored one. A candidate that changes nothing the projection carries
-    // takes no merge at commit, so the review asks setup's own question
-    // first rather than refusing over an envelope the commit never touches.
-    pieces.runtime.runner.setupRewritesResultProjection(tx, candidate, piece)
-      ? pieceDocumentCfcEnvelopeIssue(
-        "result",
-        piece,
-        candidate.resultSchema,
-        { generatedOutputPaths: [[]] },
+    : pieces.runtime.readTxProposingDelegations(
+      piece.space,
+      proposal,
+      instance?.tx.scopeKeyIdentity,
+    );
+  try {
+    const issues = [
+      pieceDocumentCfcEnvelopeIssue(
+        "argument",
+        argumentCell,
+        candidate.argumentSchema,
+        {},
         tx,
         programModules,
-      )
-      : undefined,
-  ].filter((issue): issue is string => issue !== undefined);
-  return issues.length === 0 ? undefined : issues.join("\n");
+      ),
+      // Setup writes the result projection, and with it the schema input the
+      // commit merges, only where the candidate's projection differs from the
+      // stored one. A candidate that changes nothing the projection carries
+      // takes no merge at commit, so the review asks setup's own question
+      // first rather than refusing over an envelope the commit never touches.
+      pieces.runtime.runner.setupRewritesResultProjection(tx, candidate, piece)
+        ? pieceDocumentCfcEnvelopeIssue(
+          "result",
+          piece,
+          candidate.resultSchema,
+          { generatedOutputPaths: [[]] },
+          tx,
+          programModules,
+        )
+        : undefined,
+    ].filter((issue): issue is string => issue !== undefined);
+    return issues.length === 0 ? undefined : issues.join("\n");
+  } finally {
+    if (proposal !== undefined) tx.abort("source review complete");
+  }
 }
 
 /**

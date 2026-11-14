@@ -350,7 +350,11 @@ Normative behavior:
    when one stored member names the same contract with a writer of that module
    or of one the space attests the installed module succeeds. That carve-out
    lands ahead of its ruling, specs#96, as the
-   [conformance statement](../cfc-conformance-statement.md) §10 records. A
+   [conformance statement](../cfc-conformance-statement.md) §10 records. The
+   pattern contract check an update runs before its commit compares a declared
+   list as written, its order included, so an update reaches the commit with
+   an added or reordered member only as a `system:` release, which that check
+   does not gate, or under `dangerouslyAllowIncompatibleSchema`. A
    refusal is terminal where the stored schema it compared against is one the
    transaction holds: the commit is refused as `CfcCommitRefusalError` and is
    not retried. Each member's claim is stamped with its module identity where

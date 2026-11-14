@@ -765,6 +765,84 @@ describe("cfc-write-policy-any-of", () => {
     });
   });
 
+  describe("a write appending an alternative under a release marker", () => {
+    // The stored policy names `send` and `edit`, of `MODULE`. Each case
+    // writes under a schema appending `reply`, of the same module, through
+    // `send`'s action, beside a release marker naming `MODULE`, and then has
+    // `reply` write.
+
+    const EXTENDED: JSONSchemaObj = {
+      type: "string",
+      ifc: {
+        writePolicyAnyOf: [
+          ...SCHEMA.ifc!.writePolicyAnyOf!,
+          policy("reply", "Send"),
+        ],
+      },
+    };
+
+    /** Records the release marker over the protected cell's document. */
+    const markRelease = (
+      runtime: Runtime,
+      tx: IExtendedStorageTransaction,
+      authorized: boolean,
+    ) => {
+      const target = runtime.getCell(signer.did(), "protected-value")
+        .getAsNormalizedFullLink();
+      const input = {
+        kind: "release-program" as const,
+        target: {
+          space: target.space,
+          id: target.id,
+          scope: target.scope,
+          path: [],
+        },
+        modules: [MODULE],
+      };
+      if (authorized) {
+        tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
+      } else {
+        tx.recordCfcWritePolicyInput(input);
+      }
+    };
+
+    it("stores the alternative when the runtime records the marker, and its writer then writes", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema: EXTENDED },
+          (tx) => markRelease(f.runtime, tx, true),
+        );
+        expect(error).toBeUndefined();
+
+        expect(
+          await f.write("reply", "Send", { schema: EXTENDED, value: "again" }),
+        ).toBeUndefined();
+      });
+    });
+
+    it("refuses the write when the marker is recorded without the runtime's authorization", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema: EXTENDED },
+          (tx) => markRelease(f.runtime, tx, false),
+        );
+
+        expect(error?.message).toContain(
+          "writePolicyAnyOf must remain stable",
+        );
+        expect(await f.write("reply", "Send", { value: "again" })).toContain(
+          "writePolicyAnyOf",
+        );
+      });
+    });
+  });
+
   describe("a release appending alternatives", () => {
     // The stored policy's writers are of the module `old`, which the release
     // succeeds with `new`, the module it installs. `other` is installed too,

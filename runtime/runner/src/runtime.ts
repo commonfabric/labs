@@ -4614,18 +4614,23 @@ export class Runtime {
   /**
    * A transaction that cannot write, pinned for `space` to the published
    * delegations with `delegations` layered over them, as the setup
-   * transaction of a source update proposing them is (see `edit()`). A review
+   * transaction of a source update proposing them is (see `edit()`), and
+   * reading as `scopeKeyIdentity`'s instance where it names one. A review
    * reads through it to judge a candidate as that update's commit will; being
    * unable to write, it authorizes nothing.
    */
   readTxProposingDelegations(
     space: MemorySpace,
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
+    scopeKeyIdentity?: ScopeKeyIdentity,
   ): IExtendedStorageTransaction {
     const tx = this.#newTransaction(
       undefined,
       this.#moduleDelegations.snapshotWith(space, delegations),
     );
+    if (scopeKeyIdentity !== undefined) {
+      tx.tx.scopeKeyIdentity = scopeKeyIdentity;
+    }
     tx.setReadOnly("runtime.readTxProposingDelegations()");
     return tx;
   }

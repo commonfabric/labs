@@ -841,9 +841,11 @@ attests the installed module succeeds. The commit site in
 modules from it (`releaseProgramModules`), and reads succession from the
 delegations the transaction is pinned to (`moduleSucceeds`), which for a
 source update's setup include the ones the update proposes. `droppedStoredClaim`
-in `cfc/claim-preservation.ts` holds the merged envelope to the same rule
-independently: every stored alternative kept, wherever it sits, and every other
-one admitted by the same predicate. `piece setsrc --check` and the
+in `cfc/claim-preservation.ts` checks the merged envelope again, reading it
+independently of how the merge built it: every stored alternative kept,
+wherever it sits. It shares the merge's admission predicate,
+`writePolicyAlternativeAdmissible`, for every other alternative, so a defect
+in that predicate passes both. `piece setsrc --check` and the
 origin-following review merge in dry run through a transaction pinned to the
 delegations the update would propose
 (`PatternManager.proposedSourceUpdateDelegations`,
@@ -855,8 +857,8 @@ This implements specs#96 ahead of its ruling, at strict and with no dial, at
 candidate listing the stored alternatives in another order, which the pin's
 general stability rules refuse. So it does not satisfy the correspondence
 procedure's step 4, which asks for a default-off dial for a change admitting
-more. The two deciding sites, the merge's append and the keep rule's, carry
-its `SPEC-PENDING` marker, and the kernel manifest carries no row for
+more. Its four deciding sites, the merge's matching and its append, and the
+keep rule's matching and its admission, carry its `SPEC-PENDING` marker, and the kernel manifest carries no row for
 `mergeWritePolicy` until a regenerated snapshot defines it.
 
 **Residuals.**

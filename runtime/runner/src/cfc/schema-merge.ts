@@ -451,6 +451,10 @@ const mergeWritePolicyAnyOf = (
   // which the room's `SentReaction` does not list, and its `openWindow` over
   // such messages. Keep the stored alternative instead once a ruling lets a
   // later schema omit one.
+  //
+  // Each stored alternative is matched by content, wherever the candidate
+  // lists it, which accepts a candidate listing them in another order.
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const kept = existing.map((policy) => {
     for (const other of candidate) {
       const merged = keptWritePolicyAlternative(policy, other, adoptsStamp);
@@ -482,11 +486,11 @@ const mergeWritePolicyAnyOf = (
 
 /**
  * Whether a release may append the write-policy alternative `added` to the
- * stored alternatives `stored`, as `admissible` in §8.15.13 states it. It may when ONE stored alternative pairs the
- * contract `added` names (or names none where `added` names none) with a
- * stamped artifact whose lineage includes the one `added` is stamped with,
- * and the release installs that artifact: the same module, or one the space
- * attests succeeds it. The appended alternative then differs from that stored
+ * stored alternatives `stored`, as `admissible` in §8.15.13 states it. It may
+ * when ONE stored alternative pairs the contract `added` names (or names none
+ * where `added` names none) with a stamped artifact whose lineage includes the
+ * one `added` is stamped with, and the release installs that artifact: the
+ * same module, or one the space attests succeeds it. The appended alternative then differs from that stored
  * one only in its symbol, so every write it admits is one the same artifact,
  * on the same gesture, could already make through the stored one. Asking the
  * two conditions of two different stored alternatives would let an artifact
