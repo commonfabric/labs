@@ -935,3 +935,59 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
         .expect("picks")
         .contains(&json!({ "chosenBy": "valueCode" })));
 }
+
+#[test]
+fn a_binding_made_in_a_body_names_its_handler_and_what_each_path_of_the_state_holds() {
+    // PL §1.1, `Binding.state`: "`link`: the path is bound by reference.
+    // It holds a cell handle ... `copy`: a scalar, or a container the body
+    // computed". "For a path bound by reference in a function body: the
+    // reference the binding holds". "For a binding made in a function
+    // body, `within` is where the `bind` site's body sits".
+    let analysis = program(
+        r#"import { Cell, handler, pattern } from "commonfabric";
+const inc = handler<{ by: number }, { count: Cell<number>; step: number }>((event, state) => {
+  state.count.set(state.count.get() + event.by * state.step);
+});
+const make = handler<{ n: number }, { count: Cell<number>; out: Cell<unknown> }>((event, state) => {
+  state.out.set(inc({ count: state.count, step: event.n }));
+});
+export const Maker = pattern<{ count: Cell<number>; out: Cell<unknown> }>(({ count, out }) => {
+  return { maker: make({ count, out }) };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Maker");
+    let make = body_named(&plan, "make");
+    let inc = plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .position(|body| body["name"] == "inc")
+        .expect("the bound handler is a body of the plan");
+    let binding = make["calls"][0]["binding"].as_u64().expect("a binding") as usize;
+    assert_eq!(make["calls"][0]["kind"], "bind");
+    let record = &plan["bindings"][binding];
+    assert_eq!(record["handler"], json!({ "body": inc }));
+    assert_eq!(record["within"], json!([]));
+    assert!(record.get("name").is_none());
+    let state: Vec<String> = record["state"]
+        .as_array()
+        .expect("state")
+        .iter()
+        .map(|entry| {
+            let mut line = format!(
+                "{} {}",
+                entry["path"][0].as_str().expect("a path"),
+                entry["capture"].as_str().expect("a capture")
+            );
+            if let Some(passes) = entry["reference"].get("passes") {
+                line.push_str(&format!(" passes [{}]", slot_line(&plan, passes)));
+            }
+            line
+        })
+        .collect();
+    assert_eq!(
+        state,
+        ["count link passes [binding count : identity]", "step copy"]
+    );
+}

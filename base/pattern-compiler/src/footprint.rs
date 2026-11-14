@@ -248,6 +248,29 @@ pub struct Detail {
     /// `Body.outputs`: the result path, whether the reference is `passes`,
     /// and the entries it names.
     pub outputs: Vec<(Vec<Seg>, bool, Vec<RefName>)>,
+    /// The bindings the body makes (FA §8.5), by the number of the `bind`
+    /// site among the body's calls.
+    pub binds: Vec<BindRec>,
+}
+
+/// One `bind` site of a body: the handler it binds, and what each path of
+/// the handler's state holds (PL §1.1, `Binding.state`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindRec {
+    pub call: usize,
+    /// The module and the start of the handler's function.
+    pub handler: (usize, u32),
+    pub action: bool,
+    pub state: Vec<BindPath>,
+}
+
+/// One path of a bound state: copied, or bound by reference, and then
+/// the references it is, as `Body.outputs` names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindPath {
+    pub path: Vec<Seg>,
+    pub copy: bool,
+    pub reference: Option<(bool, Vec<RefName>)>,
 }
 
 /// The record of one use of a body (FA §1.1): the entries on an input
@@ -689,6 +712,9 @@ struct Store {
     pending: Vec<(Pending, Val, bool)>,
     link_entries: BTreeSet<Vec<PathKey>>,
     space_entries: BTreeSet<Vec<PathKey>>,
+    /// The bindings: the site, the handler's function, whether it is an
+    /// action, and each path with whether it is copied and its value.
+    binds: BTreeMap<(usize, u32), BoundState>,
 }
 
 /// The target of a write the record is filled in for at the end.
@@ -726,6 +752,8 @@ const WRITERS: [&str; 12] = [
 /// The deepest nesting of calls the analysis follows.
 const MAX_INLINE: usize = 8;
 
+type BoundState = ((usize, u32), bool, Vec<(Vec<Seg>, bool, Val)>);
+
 struct Analyzer<'r, 'm, 'a> {
     resolver: &'r Resolver<'m, 'a>,
     functions: HashMap<usize, HashMap<u32, FunctionLike<'a, 'a>>>,
@@ -754,6 +782,10 @@ struct Analyzer<'r, 'm, 'a> {
     /// The calls written in the body's own text that are being evaluated,
     /// innermost last.
     calls_in_text: Vec<u32>,
+    /// The path of the state being bound, and what was found at each
+    /// path, while a `bind` site is evaluated.
+    bind_path: Vec<Seg>,
+    bind_out: Vec<(Vec<Seg>, bool, Val)>,
     /// A site outside the body's text, and the call in the body's text
     /// whose evaluation reached it.
     reached: RefCell<BTreeMap<(usize, u32), u32>>,
@@ -2088,7 +2120,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                                 // (FA §8.5).
                                 let site = self.site(expression.span().start);
                                 self.store.calls.insert(site, "bind".to_string());
-                                self.bind_captures(function, BodyKind::InlineHandler);
+                                self.bind_captures(function, BodyKind::InlineHandler, site);
                                 continue;
                             }
                             let val = self.eval(expression);
@@ -2572,6 +2604,8 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 } else {
                     self.handler_record(module, identifier)
                 };
+                let saved = std::mem::take(&mut self.bind_out);
+                let saved_path = std::mem::take(&mut self.bind_path);
                 for argument in &arguments {
                     let val = self.eval(argument);
                     match &bound {
@@ -2585,6 +2619,13 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         self.store
                             .pending
                             .push((Pending::Argument(site), val, true));
+                    }
+                }
+                let state = std::mem::replace(&mut self.bind_out, saved);
+                self.bind_path = saved_path;
+                if bound.is_some() {
+                    if let Some(handler) = self.handler_function(module, identifier) {
+                        self.store.binds.insert(site, (handler, false, state));
                     }
                 }
                 return if instantiates {
@@ -2727,7 +2768,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
             "action" => {
                 self.store.calls.insert(site, "bind".to_string());
                 if let Some(function) = first.and_then(FunctionLike::of) {
-                    self.bind_captures(function, BodyKind::Action);
+                    self.bind_captures(function, BodyKind::Action, site);
                 }
                 Val::Created
             }
@@ -3608,6 +3649,37 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .collect(),
             label_metadata: store.label_metadata,
             outputs: store.output_refs.clone(),
+            binds: store
+                .binds
+                .iter()
+                .filter_map(|(site, (handler, action, state))| {
+                    let call = site_index(site)?;
+                    let state = state
+                        .iter()
+                        .map(|(path, copy, val)| {
+                            let mut found = Vec::new();
+                            if !*copy {
+                                references(store, val, &mut Vec::new(), 0, &mut found);
+                            }
+                            let reference = found
+                                .into_iter()
+                                .find(|(at, _, _)| at.is_empty())
+                                .map(|(_, passes, names)| (passes, names));
+                            BindPath {
+                                path: path.clone(),
+                                copy: *copy,
+                                reference,
+                            }
+                        })
+                        .collect();
+                    Some(BindRec {
+                        call,
+                        handler: *handler,
+                        action: *action,
+                        state,
+                    })
+                })
+                .collect(),
         }
     }
 
@@ -3622,6 +3694,23 @@ impl<'a> Analyzer<'_, '_, 'a> {
         if self.depth >= MAX_BOUND {
             return None;
         }
+        let (home, start) = self.handler_function(module, identifier)?;
+        analyze_body(
+            self.resolver,
+            home,
+            BodyKind::Handler,
+            start,
+            self.depth + 1,
+        )
+    }
+
+    /// The module and the start of the function of the handler a name
+    /// denotes.
+    fn handler_function(
+        &self,
+        module: usize,
+        identifier: &IdentifierReference<'a>,
+    ) -> Option<(usize, u32)> {
         let symbol = self.symbol(identifier)?;
         let (home, symbol) = self.resolver.origin(module, symbol)?;
         let parsed = self.resolver.parsed(home)?;
@@ -3638,13 +3727,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
             .iter()
             .rev()
             .find_map(FunctionLike::of_argument)?;
-        analyze_body(
-            self.resolver,
-            home,
-            BodyKind::Handler,
-            function.span().start,
-            self.depth + 1,
-        )
+        Some((home, function.span().start))
     }
 
     /// Records what a value bound to a path of a handler's state leaves
@@ -3678,7 +3761,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 let member = built.borrow().fields.get(name).cloned();
                 if let Some(member) = member {
                     named.insert(name.to_string());
+                    self.bind_path.push(Seg::Key(name.to_string()));
                     self.bind_state(Some(&property.value), &member, &below(name));
+                    self.bind_path.pop();
                 }
             }
             let others: Vec<Val> = {
@@ -3699,6 +3784,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
         }
         match val {
             Val::Proj(_) | Val::Alts(_) if val.has_projection() => {
+                let at = self.bind_path.clone();
                 // A scalar is copied, in the classes the handler has at
                 // the path. Anything else stays a link.
                 let scalar = match expression {
@@ -3713,6 +3799,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                                 .any(|(_, class)| matches!(class, Class::Value | Class::Shape))
                     }
                 };
+                self.bind_out.push((at, scalar, val.clone()));
                 if scalar {
                     for (path, class) in entries {
                         if !path.is_empty() {
@@ -3749,29 +3836,49 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     path.is_empty() && matches!(class, Class::Value | Class::Identity)
                 });
                 if whole {
+                    self.bind_out
+                        .push((self.bind_path.clone(), true, Val::Computed));
                     self.observe_members(val, 0);
                     return;
                 }
                 for (name, member) in &fields {
+                    self.bind_path.push(Seg::Key(name.clone()));
                     self.bind_state(None, member, &below(name));
+                    self.bind_path.pop();
                 }
                 let starred: Vec<(Vec<Seg>, Class)> = entries
                     .iter()
                     .filter(|(path, _)| path.first() == Some(&Seg::Star))
                     .map(|(path, class)| (path[1..].to_vec(), *class))
                     .collect();
+                self.bind_path.push(Seg::Star);
                 for member in &rest {
                     self.bind_state(None, member, &starred);
                 }
+                self.bind_path.pop();
             }
-            _ => {}
+            // A handle or a link the body made is bound by reference, and
+            // anything else it computed is copied.
+            Val::Created | Val::Site(..) => {
+                self.bind_out
+                    .push((self.bind_path.clone(), false, Val::Computed));
+            }
+            _ => {
+                self.bind_out
+                    .push((self.bind_path.clone(), true, Val::Computed));
+            }
         }
     }
 
     /// Records what the values a function written in the body captures
     /// leave the body as, where the function is bound as a handler: an
     /// `action`, or an inline event handler.
-    fn bind_captures(&mut self, function: FunctionLike<'_, 'a>, kind: BodyKind) {
+    fn bind_captures(
+        &mut self,
+        function: FunctionLike<'_, 'a>,
+        kind: BodyKind,
+        site: (usize, u32),
+    ) {
         if self.depth >= MAX_BOUND {
             return;
         }
@@ -3805,14 +3912,23 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 captured.push(identifier);
             }
         }
+        let saved = std::mem::take(&mut self.bind_out);
+        let saved_path = std::mem::take(&mut self.bind_path);
         for identifier in captured {
             let entries = entries_on(&record, identifier.name.as_str());
             if entries.is_empty() {
                 continue;
             }
             let val = self.lookup(identifier);
+            self.bind_path = vec![Seg::Key(identifier.name.to_string())];
             self.bind_state(None, &val, &entries);
         }
+        let state = std::mem::replace(&mut self.bind_out, saved);
+        self.bind_path = saved_path;
+        self.store.binds.insert(
+            site,
+            ((module, span.start), kind == BodyKind::Action, state),
+        );
     }
 
     // ----- the record -----
@@ -4367,6 +4483,8 @@ fn analyze_body<'a>(
         handler: kind != BodyKind::AuthoredFunction,
         depth,
         calls_in_text: Vec::new(),
+        bind_path: Vec::new(),
+        bind_out: Vec::new(),
         reached: RefCell::new(BTreeMap::new()),
     };
     let function = analyzer.function_at(module, start)?;

@@ -21,8 +21,8 @@ use oxc_span::GetSpan;
 use serde_json::{json, Map, Value};
 
 use crate::footprint::{
-    bind_use, body_functions, parameter_names, Class, Entry, HandleAt, Record, RefName, Seg,
-    UseRecord, WriteRec, WriteTarget,
+    bind_use, body_functions, parameter_names, BindRec, Class, Entry, HandleAt, Record, RefName,
+    Seg, UseRecord, WriteRec, WriteTarget,
 };
 use crate::module::{symbol_of, Binding, DefKind};
 use oxc_syntax::symbol::SymbolId;
@@ -1734,6 +1734,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         // `Body.calls`.
         let mut calls: Vec<Value> = Vec::new();
         let mut child_of_call: HashMap<usize, usize> = HashMap::new();
+        let mut binds: Vec<(usize, BindRec, String)> = Vec::new();
         for (number, call) in record.calls.iter().enumerate() {
             let call_name = format!("{name}/n{number}");
             calls.push(match call.as_str() {
@@ -1766,12 +1767,18 @@ impl<'a> Emitter<'_, '_, 'a> {
                     })
                 }
                 "bind" => {
-                    self.unsupported(
-                        "a binding made in a function body: its handler and state",
-                        at,
-                    );
+                    // The binding holds its place among the bindings now,
+                    // and is filled in once the handler is a body.
                     self.bindings.push(json!({ "within": self.within_json() }));
-                    json!({ "kind": "bind", "binding": self.bindings.len() - 1 })
+                    let binding = self.bindings.len() - 1;
+                    match record.detail.binds.iter().find(|bind| bind.call == number) {
+                        Some(bind) => binds.push((binding, bind.clone(), call_name.clone())),
+                        None => self.unsupported(
+                            "a binding made in a function body: its handler and state",
+                            at,
+                        ),
+                    }
+                    json!({ "kind": "bind", "binding": binding })
                 }
                 other => match other.strip_prefix("effect:") {
                     Some(builtin) => json!({ "kind": "effect", "builtin": builtin }),
@@ -1884,6 +1891,42 @@ impl<'a> Emitter<'_, '_, 'a> {
             "widenings": [],
         }));
         self.body_facts.push(fact);
+        // The bindings the body makes (PL §1.1, `Binding`): the handler
+        // is a body of the plan, and each path of its state is copied or
+        // holds a reference the binding body was given.
+        for (binding, bind, call_name) in binds {
+            let (home, start) = bind.handler;
+            let kind = if bind.action { "action" } else { "handler" };
+            let name = self
+                .body_starts
+                .get(&home)
+                .and_then(|starts| starts.get(&start))
+                .and_then(|body| self.bodies[home][*body].name.clone())
+                .unwrap_or(call_name);
+            let Some(handler) = self.handler_body(home, start, &name, kind) else {
+                self.unsupported("a handler that has no footprint record", at);
+                continue;
+            };
+            let mut state: Vec<Value> = Vec::new();
+            for entry in &bind.state {
+                let mut item = Map::new();
+                item.insert("path".to_string(), json!(slot_path(&[], &entry.path)));
+                let capture = if entry.copy { "copy" } else { "link" };
+                item.insert("capture".to_string(), json!(capture));
+                if let Some((passes, listed)) = &entry.reference {
+                    if let Some(reference) = reference_json(&names, *passes, listed) {
+                        item.insert("reference".to_string(), reference);
+                    }
+                }
+                state.push(Value::Object(item));
+            }
+            let within = self.bindings[binding]["within"].clone();
+            self.bindings[binding] = json!({
+                "handler": { "body": handler },
+                "state": state,
+                "within": within,
+            });
+        }
         if computation && record.tier == Some("materializer") {
             self.operations.push(json!({
                 "kind": "materializer",
