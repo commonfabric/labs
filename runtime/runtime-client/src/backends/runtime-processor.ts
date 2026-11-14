@@ -592,8 +592,9 @@ function renderAudienceOf(runtime: Runtime, identity: Identity): string {
  * from the ceiling the host declared (spec §8.10.6). A host that declares none
  * is given the default display ceiling for `audience`, which a display
  * boundary no authored policy covers is fitted against. `null` is a host's
- * declaration that it wants no ceiling, so that nothing is gated. Any other
- * value is normalized, a malformed one to the empty ceiling.
+ * declaration that it wants no root ceiling, so that none gates its reads or
+ * renders, while an authored boundary still applies its own. Any other value
+ * is normalized, a malformed one to the empty ceiling.
  */
 export function renderCeilingFor(
   declared: unknown,
@@ -633,8 +634,8 @@ export function renderCeilingFor(
  * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
  * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
  * and service principals — which rarely render — fail closed. Returns
- * undefined where no ceiling is in force, as for a host that declares `null`
- * (see {@link renderCeilingFor}): nothing is gated.
+ * undefined where no root ceiling is in force, as for a host that declares
+ * `null` (see {@link renderCeilingFor}), when the root resolves no label.
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,

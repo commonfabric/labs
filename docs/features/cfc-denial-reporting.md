@@ -102,11 +102,12 @@ is a value returned to the caller that asked for the commit; the log is read by
 whoever holds the console, which in a worker is the page whose content the gate
 scrubbed and on a server is a file spanning every space it serves.
 
-Nothing else travels. The placeholder carries `data-cfc-blocked` and
-`data-cfc-blocked-reason`. A prop feeding one of the text-integrity sinks is
-turned away a third way — its value is replaced and the node is stamped
-`data-cfc-blocked-props` naming the prop — and the report names that prop in
-its inputs.
+Nothing else travels but one input, the kind of label a host's refused read was
+decided on, which the refusal returns as `labelSource`. The placeholder carries
+`data-cfc-blocked` and `data-cfc-blocked-reason`. A prop feeding one of the
+text-integrity sinks is turned away a third way — its value is replaced and the
+node is stamped `data-cfc-blocked-props` naming the prop — and the report names
+that prop in its inputs.
 
 No identifier ties a report to the surface it explains. Reports are addressed
 by their content, so an identifier stable enough to look one up is a function
@@ -168,7 +169,8 @@ value, or a path.
 
 The inputs may name labels, policies, and values freely, because they reach
 only debug and a denial listener. Nothing derived from them may reach the
-surface the denial produced.
+surface the denial produced, but for `labelSource`, which names a kind and
+carries nothing of a label, and which a host's refused read returns.
 
 Report the decision's inputs rather than a conclusion drawn from them. Which
 input decided is the gate's business, and a gate reads them together: the

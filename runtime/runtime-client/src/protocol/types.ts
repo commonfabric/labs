@@ -1078,7 +1078,8 @@ export type InitializationData = {
    * `caveatKinds` a display admits. Absent means the default display ceiling
    * for the principal the runtime acts as (spec §8.10.6), which admits that
    * principal's own identity atoms and the prompt-caveat family. `null` means
-   * no ceiling: no display sink and no host read is gated.
+   * no root ceiling: no host read is gated, and a render is gated only by the
+   * authored boundaries around it.
    */
   renderConfidentialityCeiling?: null | {
     /**
