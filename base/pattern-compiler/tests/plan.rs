@@ -3038,3 +3038,73 @@ fn a_derive_and_a_fold_name_the_pattern_their_source_is_written_in() {
         json!({ "expression": true, "pattern": 1 })
     );
 }
+
+#[test]
+fn a_binding_lists_the_result_paths_that_hold_its_stream_and_the_schema_of_its_event() {
+    // PL §1.1, `Binding.result`: "The paths of the result at which the
+    // instance stores a link to the stream ... Absent where the result
+    // holds none"; question 75: "it lists the positions of the rendered
+    // tree that hold the stream as well as the other paths of the
+    // result", and "a body has no `eventSchema` member:
+    // `Binding.eventSchema` holds it for every binding of the handler".
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+const bump = handler<{ by: number }, { n: Writable<number> }>((event, state) => {
+  state.n.set(event.by);
+});
+const idle = handler<{ by: number }, { n: Writable<number> }>((event, state) => {
+  state.n.set(event.by);
+});
+export const P = pattern<{ n: Writable<number> }>(({ n }) => {
+  const inc = bump({ n });
+  const unused = idle({ n });
+  return {
+    [UI]: <div><button onClick={inc}>+</button><span onClick={bump({ n })}>x</span></div>,
+    inc,
+    again: inc,
+  };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    let plan = &found.plan;
+    let binding = |name: &str| {
+        plan["bindings"]
+            .as_array()
+            .expect("bindings")
+            .iter()
+            .find(|binding| binding["name"] == name)
+            .unwrap_or_else(|| panic!("no binding {name}"))
+    };
+    assert_eq!(
+        binding("inc")["result"],
+        json!([
+            ["$UI", "children", "0", "props", "onClick"],
+            ["again"],
+            ["inc"]
+        ])
+    );
+    assert_eq!(
+        binding("bump")["result"],
+        json!([["$UI", "children", "1", "props", "onClick"]])
+    );
+    assert!(binding("unused").get("result").is_none());
+    // The schema is beside the plan, and each binding names it.
+    let schema = binding("inc")["eventSchema"].as_str().expect("a schema");
+    assert_eq!(binding("bump")["eventSchema"], json!(schema));
+    let document = &found
+        .schemas
+        .iter()
+        .find(|(name, _)| name == schema)
+        .expect("the document")
+        .1;
+    assert_eq!(document["properties"]["by"]["type"], "number");
+    for body in plan["bodies"].as_array().expect("bodies") {
+        assert!(body.get("eventSchema").is_none(), "{body}");
+    }
+}

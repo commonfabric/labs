@@ -69,6 +69,7 @@ pub struct PatternPlan {
 }
 
 /// Moves the schema documents of a plan beside it: `Slot.schema`,
+/// `Binding.eventSchema`,
 /// `Plan.argumentSchema` and `Plan.resultSchema` hold the identifier of
 /// the document, and an output has no schema member (PL §1.1).
 fn name_schemas(
@@ -106,9 +107,9 @@ fn name_schemas(
             output.remove("schema");
         }
     }
-    for body in plan["bodies"].as_array_mut().into_iter().flatten() {
-        if let Some(document) = body.get("eventSchema").cloned() {
-            body["eventSchema"] = name(&document);
+    for binding in plan["bindings"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = binding.get("eventSchema").cloned() {
+            binding["eventSchema"] = name(&document);
         }
     }
     schemas
@@ -255,6 +256,9 @@ struct Computed {
     step: bool,
     /// What the value holds, where the emitter decided it (ruling T3).
     origin: Option<Declared>,
+    /// For a rendered tree: the paths below the value that hold the
+    /// stream of a binding, and the binding (PL §1.1, `Binding.result`).
+    streams: Vec<(Vec<String>, usize)>,
     order: usize,
 }
 
@@ -887,6 +891,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             step: false,
             referred: false,
             origin: None,
+            streams: Vec::new(),
             order,
         });
         order
@@ -2109,6 +2114,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if placed {
                     self.ui_chain.push(None);
                 }
+                let mut streams = Vec::new();
                 let built = self.build(hint, at, |emitter, _| {
                     let tree = match expression {
                         Expression::JSXElement(element) => emitter.jsx_element(element),
@@ -2117,8 +2123,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         _ => Place::Const,
                     };
+                    stream_paths(&tree, &mut Vec::new(), &mut streams);
                     emitter.constructed(&tree)
                 });
+                if let Place::Value(value, _) = &built {
+                    self.values[*value].streams = streams;
+                }
                 if placed {
                     self.ui_chain.pop();
                 }
@@ -5381,7 +5391,17 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     fn keep(&mut self, path: &mut Vec<String>, place: &Place) {
         match place {
-            Place::Value(value, _) => self.values[*value].kept.push(path.clone()),
+            Place::Value(value, below) => {
+                self.values[*value].kept.push(path.clone());
+                // The positions of a rendered tree that hold a stream.
+                if below.is_empty() {
+                    for (position, binding) in self.values[*value].streams.clone() {
+                        let mut at = path.clone();
+                        at.extend(position);
+                        self.stream_at(binding, &at);
+                    }
+                }
+            }
             Place::Record(fields) => {
                 for (name, member) in fields {
                     path.push(name.clone());
@@ -5407,17 +5427,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cone = None;
                 }
             }
-            // Where the result holds the stream of a binding, the binding
-            // names the path. No record of PL §1.1 has it: the comparison
-            // of stage 3 finds the stream of a run by it.
-            Place::Stream(binding) => {
-                if let Some(record) = self.bindings.get_mut(*binding) {
-                    if record.get("result").is_none() {
-                        record["result"] = json!(path);
-                    }
-                }
-            }
+            Place::Stream(binding) => self.stream_at(*binding, path),
             Place::Index(_) | Place::Accumulator(..) | Place::Const | Place::Unknown => {}
+        }
+    }
+
+    /// Where the result holds the stream of a binding, the binding names
+    /// the path (PL §1.1, `Binding.result`). PL has the paths in source
+    /// order. The emitter holds the members of a record by name, so the
+    /// paths are in the order of their segments.
+    fn stream_at(&mut self, binding: usize, path: &[String]) {
+        let Some(record) = self.bindings.get_mut(binding) else {
+            return;
+        };
+        if record.get("result").is_none() {
+            record["result"] = json!([]);
+        }
+        if let Some(paths) = record["result"].as_array_mut() {
+            if !paths.contains(&json!(path)) {
+                paths.push(json!(path));
+                paths.sort_by_key(|path| path.to_string());
+            }
         }
     }
 
@@ -5840,8 +5870,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         let dynamic_reads = std::mem::take(&mut self.dynamic_reads);
         // The schema of a handler's event, where the emitter has the type
-        // its parameter declares. No record of PL §1.1 has it: the
-        // comparison of stage 3 generates an event from it.
+        // its parameter declares: `Binding.eventSchema` of every binding
+        // of the handler (PL §1.1; section 8, question 75).
         let events: Vec<(usize, TypeId)> = self
             .root_types
             .iter()
@@ -5851,8 +5881,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             })
             .collect();
         for (index, ty) in events {
-            if let Some(body) = self.plan_bodies.get_mut(index) {
-                body["eventSchema"] = self.resolver.schema_of(ty);
+            let schema = self.resolver.schema_of(ty);
+            for binding in &mut self.bindings {
+                if binding["handler"]["body"] == json!(index) {
+                    binding["eventSchema"] = schema.clone();
+                }
             }
         }
         let patterns: Vec<Value> = self
@@ -6580,6 +6613,21 @@ fn join(inputs: Vec<Value>) -> Value {
             "inputs": inputs,
             "by": { "expression": true, "pattern": pattern },
         }),
+    }
+}
+
+/// The paths of a rendered tree that hold the stream of a binding.
+fn stream_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<(Vec<String>, usize)>) {
+    match place {
+        Place::Stream(binding) => found.push((path.clone(), *binding)),
+        Place::Record(fields) => {
+            for (name, member) in fields {
+                path.push(name.clone());
+                stream_paths(member, path, found);
+                path.pop();
+            }
+        }
+        _ => {}
     }
 }
 

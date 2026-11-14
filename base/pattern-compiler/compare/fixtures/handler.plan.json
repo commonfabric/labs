@@ -9,12 +9,15 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
+              "eventSchema": "unhashed:schema/7",
               "handler": {
                 "body": 0
               },
               "name": "record",
               "result": [
-                "record"
+                [
+                  "record"
+                ]
               ],
               "state": [
                 {
@@ -65,7 +68,6 @@
               "calls": [],
               "computed": [],
               "envelopes": [],
-              "eventSchema": "unhashed:schema/7",
               "handles": [],
               "kind": "handler",
               "name": "record",

@@ -80,15 +80,18 @@ export type Plan = {
     handler?: { body?: number };
     state?: PlanStateEntry[];
     within?: unknown[];
-    /** The result path that holds the binding's stream, where one does. */
-    result?: string[];
+    /**
+     * The result paths that hold a link to the binding's stream (PL §1.1,
+     * `Binding.result`).
+     */
+    result?: string[][];
+    /** The schema of the event's declared type, where the plan has it. */
+    eventSchema?: string;
   }[];
   bodies?: {
     kind: string;
     name?: string;
     writes?: PlanWrite[];
-    /** The schema of the event's declared type, where the plan has it. */
-    eventSchema?: string;
   }[];
   stateCells?: { name: string; within?: unknown[] }[];
   selectors?: { arity: number }[];
@@ -1098,7 +1101,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     for (const { binding, event } of scenario.events ?? []) {
       const record = plan.bindings?.[binding];
       const name = `event of ${record?.name ?? binding}`;
-      if (record?.result === undefined) {
+      const [streamPath] = record?.result ?? [];
+      if (streamPath === undefined) {
         skipped.push({
           what: name,
           reason: "a binding whose stream the result does not hold",
@@ -1106,7 +1110,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         continue;
       }
       const before = await reading((within) => within.writeTargets(binding));
-      const stream = record.result.reduce(
+      const stream = streamPath.reduce(
         (cell, key) => cell.key(key as never) as AnyCell,
         result as AnyCell,
       );

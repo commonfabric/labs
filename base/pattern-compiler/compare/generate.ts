@@ -189,7 +189,7 @@ export const generateEvent = (
   // event under the schema of the authored type (PL §3.12), and an event
   // without a required field it does not read is refused all the same.
   const declared = schemas.find((entry) =>
-    entry.id === plan.bodies?.[body ?? -1]?.eventSchema
+    entry.id === plan.bindings?.[binding]?.eventSchema
   )?.schema;
   if (declared !== undefined) {
     const value = generateValue(declared, declared, "event");
