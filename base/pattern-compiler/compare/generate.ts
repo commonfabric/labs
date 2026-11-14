@@ -56,10 +56,10 @@ const isHandle = (schema: Schema): boolean =>
 
 /**
  * A value of `schema`. `name` makes each string distinct, so that a value
- * the run stores can be told from another. With `handles` false there is
- * no value for a schema that declares a handle: a plain value sent in an
- * event where a handle is declared is read as a handle that cannot be
- * written.
+ * the run stores can be told from another. With `handles` false an object
+ * has no member that is declared as a handle and is not required: a plain
+ * value sent in an event where a handle is declared is read as a handle
+ * that cannot be written, and a handler that sets it throws.
  */
 export const generateValue = (
   schema: Schema,
@@ -72,7 +72,6 @@ export const generateValue = (
   if (resolved === false) return NONE;
   if (resolved === true) return `${name}-value`;
   if (isStream(resolved)) return NONE;
-  if (!handles && isHandle(resolved)) return NONE;
   if ("const" in resolved) return resolved.const;
   if (resolved.enum !== undefined) return resolved.enum[0];
   const variants = resolved.anyOf ?? resolved.oneOf;
@@ -123,6 +122,9 @@ export const generateValue = (
       for (const [key, property] of Object.entries(resolved.properties)) {
         const required = resolved.required?.includes(key) ?? false;
         if (depth >= DEPTH && !required) continue;
+        if (!handles && !required && isHandle(resolve(property, root))) {
+          continue;
+        }
         const inner = generateValue(
           property,
           root,

@@ -85,15 +85,18 @@ describe("generateValue", () => {
 });
 
 describe("generateEvent", () => {
-  it("leaves out a member the event's type declares as a handle", () => {
+  it("leaves out a member the event's type declares as a handle and does not require", () => {
     // A handler that is sent a plain value where its event declares a
-    // handle gets a handle it cannot write, and its `set` throws.
+    // handle gets a handle it can read and cannot write, and its `set`
+    // throws.
     const schema: Schema = {
       type: "object",
       properties: {
         text: { type: "string" },
+        source: { asCell: ["cell"], type: "string" },
         result: { asCell: ["cell"], type: "string" },
       },
+      required: ["source"],
     };
     const plan = {
       slots: [],
@@ -103,6 +106,7 @@ describe("generateEvent", () => {
 
     expect(generateEvent(plan, [{ id: "event", schema }], 0)).toEqual({
       text: "event-text-text",
+      source: "event-source-text",
     });
   });
 });
