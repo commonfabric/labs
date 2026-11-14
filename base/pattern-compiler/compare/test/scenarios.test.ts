@@ -134,3 +134,41 @@ describe("an object with a declared integrity atom and a defaulted property (rul
     });
   });
 });
+
+describe("the runtime's labels read by origin (ruling T2)", () => {
+  const overall = async (flag: boolean) =>
+    Object.fromEntries(
+      (await compareSmall(flag)).map((row) => [
+        row.path.join("/"),
+        `${row.comparison.overall}, ${row.comparisonWithoutStatic.overall}`,
+      ]),
+    );
+
+  it("reads the same clauses by origin as the label view has", async () => {
+    for (const row of await compareSmall(false)) {
+      const clauses = (atoms: unknown[]) => [...new Set(atoms)].sort();
+
+      expect(clauses(row.runtimeByOrigin.all.confidentiality)).toEqual(
+        clauses(row.runtime.confidentiality),
+      );
+    }
+  });
+
+  it("has the container of a map tighter with the static part and equal without it", async () => {
+    for (const flag of [true, false]) {
+      const rows = await overall(flag);
+
+      expect(rows.titles).toBe("tighter, equal");
+      expect(rows.loud).toBe("tighter, equal");
+    }
+  });
+
+  it("has an ifElse without the condition's label once the static part is left out", async () => {
+    // The document of an `ifElse` result stores one entry, of origin
+    // `declared`. The label of the condition reaches a reader through that
+    // entry alone, so without it the template, which has the condition's
+    // label, is the wider one.
+    expect((await overall(true)).direct).toBe("equal, looser");
+    expect((await overall(false)).direct).toBe("tighter, looser");
+  });
+});

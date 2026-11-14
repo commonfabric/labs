@@ -9,7 +9,12 @@ import { Identity } from "@commonfabric/identity";
 
 import { atomPropagationClass } from "../../../runtime/runner/src/cfc/atom-classes.ts";
 import type { CfcLabelView } from "../../../runtime/runner/src/cfc/label-view-core.ts";
+import { cfcLabelViewFromMetadata } from "../../../runtime/runner/src/cfc/label-view-state.ts";
 import { cfcLabelViewForResolvedCell } from "../../../runtime/runner/src/cfc/label-view.ts";
+import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
+import { resolveLink } from "../../../runtime/runner/src/link-resolution.ts";
+import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
+import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { Cell } from "../../../runtime/runner/src/cell.ts";
 import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
@@ -59,6 +64,18 @@ export type Row = {
    */
   reached: Evaluated;
   comparison: Comparison;
+  /**
+   * The runtime's label read by origin (ruling T2): the entries of each
+   * document on the way from the output to its value, without the entries of
+   * origin `declared` that a module's result document carries, and without
+   * the entries of origin `structure` the runtime makes from them for a
+   * container. Those are the join of the labels the module's argument schema
+   * declares, which does not depend on what the run read. The argument's own
+   * document keeps its declared entries: they are the labels of the inputs.
+   */
+  runtimeByOrigin: { all: Label; withoutStatic: Label };
+  /** `reached` against `runtimeByOrigin.withoutStatic`. */
+  comparisonWithoutStatic: Comparison;
 };
 
 type AnyCell = Cell<unknown>;
@@ -193,6 +210,51 @@ export const compareScenario = async (scenario: Scenario): Promise<Row[]> => {
         return filledByDefault(slot) ? { ...label, integrity: [] } : label;
       };
 
+      // The documents on the way from `cell` to the value it reads: the one
+      // its path is in, and the one each link stored at the path leads to.
+      const hops = (cell: AnyCell): NormalizedFullLink[] => {
+        const found: NormalizedFullLink[] = [];
+        let link = cell.getAsNormalizedFullLink();
+        for (let depth = 0; depth < 32; depth++) {
+          link = resolveLink(runtime, read, link, "top");
+          found.push(link);
+          const next = parseLink(read.readValueOrThrow(link), link);
+          if (next === undefined) break;
+          link = next as NormalizedFullLink;
+        }
+        return found;
+      };
+      const argumentId = argument.getAsNormalizedFullLink().id;
+      const byOrigin = (
+        cell: AnyCell,
+        observes: "value" | "shape",
+        withStatic: boolean,
+      ): Label => {
+        const way = hops(cell);
+        return join(way.map((link, index) => {
+          const metadata = readStoredCfcMetadata(read, link);
+          if (metadata === undefined) return consumed(undefined, observes);
+          const kept = withStatic || link.id === argumentId
+            ? metadata
+            : {
+              ...metadata,
+              labelMap: {
+                ...metadata.labelMap,
+                entries: metadata.labelMap.entries.filter((entry) =>
+                  entry.origin !== "declared" && entry.origin !== "structure"
+                ),
+              },
+            };
+          const view = cfcLabelViewFromMetadata(kept, link.path);
+          // A document the way passes through contributes the
+          // confidentiality of its entries at the link, which a read through
+          // the link retains, and the last one what the read consumes.
+          return index === way.length - 1
+            ? consumed(view, observes)
+            : { ...consumed(view, "value"), integrity: [] };
+        }));
+      };
+
       const inputsFor = (dereference: boolean): TemplateInputs => ({
         slot: (slot, elements) => {
           const cell = slotCell(slot, elements);
@@ -274,12 +336,23 @@ export const compareScenario = async (scenario: Scenario): Promise<Row[]> => {
             inputsFor(true),
             elements,
           );
+          const observes = entry.collection === undefined ? "value" : "shape";
+          const cell = at(output, path);
+          const withoutStatic = byOrigin(cell, observes, false);
           rows.push({
             path,
             runtime: runtimeLabel,
             stored,
             reached,
             comparison: compareLabels(reached.label, runtimeLabel),
+            runtimeByOrigin: {
+              all: byOrigin(cell, observes, true),
+              withoutStatic,
+            },
+            comparisonWithoutStatic: compareLabels(
+              reached.label,
+              withoutStatic,
+            ),
           });
         }
       }

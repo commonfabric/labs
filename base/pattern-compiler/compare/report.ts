@@ -17,17 +17,17 @@ import type { Row } from "./harness.ts";
 const table = (title: string, rows: Row[]) => {
   console.log(`\n${title}\n`);
   console.log(
-    "| path | runtime | template | template, as stored | C | I | overall |",
+    "| path | runtime | runtime, without the static part | template | C | I | overall | without the static part |",
   );
-  console.log("| --- | --- | --- | --- | --- | --- | --- |");
+  console.log("| --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const row of rows) {
     const { confidentiality, integrity, overall } = row.comparison;
     console.log(
       `| ${row.path.join("/")} | ${showLabel(row.runtime)} | ${
-        showLabel(row.reached.label)
+        showLabel(row.runtimeByOrigin.withoutStatic)
       } | ${
-        showLabel(row.stored.label)
-      } | ${confidentiality} | ${integrity} | ${overall} |`,
+        showLabel(row.reached.label)
+      } | ${confidentiality} | ${integrity} | ${overall} | ${row.comparisonWithoutStatic.overall} |`,
     );
   }
 };
