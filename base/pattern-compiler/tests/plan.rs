@@ -2451,3 +2451,86 @@ fn cell_from_url_and_a_query_on_a_database_are_operations_of_kind_effect() {
         ]
     );
 }
+
+const TAGS: &str = r#"import { PatternFactory, Writable, pattern, UI } from "commonfabric";
+interface Message { body: string }
+const Row = pattern<{ message: Message; tone: string }>(({ message, tone }) => {
+  const open = Writable.of(false);
+  const shout = message.body + tone;
+  return { [UI]: <span>{shout}</span>, shout };
+});
+export const Room = pattern<{ messages: Message[]; tone: string; View: PatternFactory<{ text: string }, unknown> }>(
+  ({ messages, tone, View }) => {
+    return {
+      [UI]: <div>
+        {messages.map((message) => <Row message={message} tone={tone} />)}
+        <View text={tone} />
+      </div>,
+    };
+  },
+);
+"#;
+
+#[test]
+fn a_tag_that_names_a_visible_pattern_is_compiled_in_under_a_site_step() {
+    // PL §1.1: "A JSX tag that names a pattern is such a call ... Where
+    // the tag names a pattern the compiler can see, the pattern is
+    // compiled into the enclosing plan under a `site` step, and its
+    // attributes are the paths of its argument". §6.2: "what it declares
+    // has the `within` steps `{ element: c1 }` and
+    // `{ site: FabriChatMessageRow }`, and its argument path `message` is
+    // the element, which is why `m0` to `m6` have the root `element`."
+    let plan = plan_of(&program(TAGS), "Room");
+    let row = collection_named(&plan, "map");
+    let collection = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .position(|other| other == row)
+        .expect("the collection");
+    assert_eq!(
+        plan["stateCells"],
+        json!([{
+            "name": "open",
+            "scope": "space",
+            "within": [{ "element": collection }, { "site": "Row" }],
+        }])
+    );
+    assert_eq!(
+        interim_template(&plan, "shout"),
+        "derive(expression) { [element body : value] [argument tone : value] }"
+    );
+}
+
+#[test]
+fn a_tag_that_names_a_factory_value_is_a_child() {
+    // PL §1.1: "Where the tag names a factory value, the instantiation
+    // is a `Child`", whose callee is "a factory value, named by its
+    // `identity` slot".
+    let plan = plan_of(&program(TAGS), "Room");
+    let children = plan["children"].as_array().expect("children");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0]["name"], json!("View"));
+    assert_eq!(children[0]["within"], json!([]));
+    assert_eq!(
+        slot_line(&plan, &children[0]["callee"]["factory"]["slot"]),
+        "argument View : identity"
+    );
+    // Its argument is the write edges with target `argument`.
+    let writes: Vec<&Value> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .flat_map(|cone| cone["writes"].as_array().expect("writes"))
+        .filter(|write| write["target"]["kind"] == json!("argument"))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(
+        writes[0]["target"],
+        json!({ "kind": "argument", "child": 0, "path": ["text"] })
+    );
+    assert_eq!(
+        template_line(&plan, &writes[0]["template"]),
+        "[argument tone : identity]"
+    );
+}

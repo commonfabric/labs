@@ -1097,6 +1097,18 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some(argument) => self.eval(argument, name),
             None => Place::Const,
         };
+        self.inline_argument(home, start, name, argument, at)
+    }
+
+    /// The same, with the argument as the place it is bound to.
+    fn inline_argument(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        argument: Place,
+        at: u32,
+    ) -> Place {
         let sites = self
             .within
             .iter()
@@ -2707,7 +2719,164 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     // ----- JSX -----
 
+    /// The argument a tag gives the pattern it names: its attributes are
+    /// the paths of the argument, and its children the path `children`
+    /// (PL §1.1, `language-subset.md` §4.5).
+    fn tag_argument(&mut self, element: &JSXElement<'a>) -> Place {
+        let mut fields: BTreeMap<String, Place> = BTreeMap::new();
+        for attribute in &element.opening_element.attributes {
+            match attribute {
+                JSXAttributeItem::Attribute(attribute) => {
+                    let name = match &attribute.name {
+                        JSXAttributeName::Identifier(identifier) => identifier.name.to_string(),
+                        JSXAttributeName::NamespacedName(name) => name.name.name.to_string(),
+                    };
+                    let place = match &attribute.value {
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(expression) => match FunctionLike::of(expression) {
+                                    Some(function) => {
+                                        self.bind_inline(function, BodyKind::InlineHandler, &name)
+                                    }
+                                    None => self.eval(expression, &format!("@{name}")),
+                                },
+                                None => Place::Const,
+                            }
+                        }
+                        Some(JSXAttributeValue::Element(element)) => {
+                            let at = element.span.start;
+                            self.build(&format!("@{name}"), at, |emitter, _| {
+                                emitter.jsx_element(element);
+                                None
+                            })
+                        }
+                        _ => Place::Const,
+                    };
+                    fields.insert(name, place);
+                }
+                JSXAttributeItem::SpreadAttribute(spread) => {
+                    // "A spread attribute ... [is] a spread in the object
+                    // literal of the attributes" (PL §3.4).
+                    let place = self.eval(&spread.argument, "spread");
+                    let declared = self.declared_members(&spread.argument);
+                    match (place, declared) {
+                        (Place::Record(members), _) => fields.extend(members),
+                        (Place::Const, _) => {}
+                        (place, Some(declared)) => {
+                            for (name, _) in declared {
+                                let member = Self::extend(&place, &name);
+                                fields.insert(name, member);
+                            }
+                        }
+                        _ => self.unsupported(
+                            "a spread into a record in the reactive tier",
+                            spread.span.start,
+                        ),
+                    }
+                }
+            }
+        }
+        let written = element
+            .children
+            .iter()
+            .any(|child| !matches!(child, JSXChild::Text(text) if text.value.trim().is_empty()));
+        if written {
+            let at = element.span.start;
+            let children = self.build("@children", at, |emitter, _| {
+                for child in &element.children {
+                    emitter.jsx_child(child);
+                }
+                None
+            });
+            fields.insert("children".to_string(), children);
+        }
+        Place::Record(fields)
+    }
+
+    /// A tag that names a pattern is a call of it (PL §1.1): compiled in
+    /// under a `site` step where the compiler can see the pattern, and a
+    /// `Child` where the tag names a factory value. `false` for any other
+    /// tag.
+    fn jsx_pattern(&mut self, element: &JSXElement<'a>) -> bool {
+        let JSXElementName::IdentifierReference(identifier) = &element.opening_element.name else {
+            return false;
+        };
+        let at = element.span.start;
+        let name = identifier.name.to_string();
+        if let Some(factory @ (Place::Slot(..) | Place::Value(..))) = self.env.get(&name).cloned() {
+            let argument = self.tag_argument(element);
+            let child = self.children.len();
+            let callee = match &factory {
+                Place::Slot(root, path) => {
+                    let slot = self.slot(root, path, "identity");
+                    if let Some(cone) = self.cone {
+                        self.cones[cone].slots.insert(slot);
+                    }
+                    json!({ "factory": { "slot": slot } })
+                }
+                _ => {
+                    self.pass(&factory);
+                    json!({ "factory": {} })
+                }
+            };
+            self.children.push(json!({
+                "callee": callee,
+                "name": name,
+                "within": self.within_json(),
+            }));
+            // The argument: one write edge with target `argument` per
+            // path, with the template of what is written there.
+            let (cone, made) = self.computing(&name, at);
+            let mut paths = Vec::new();
+            request_paths(&argument, &mut Vec::new(), &mut paths);
+            for (path, member) in paths {
+                let template = self.one("identity", |_| member).1;
+                let mut write = Map::new();
+                write.insert(
+                    "target".to_string(),
+                    json!({ "kind": "argument", "child": child, "path": path }),
+                );
+                if let Some(template) = template {
+                    write.insert("template".to_string(), template);
+                }
+                write.insert("constraints".to_string(), json!([]));
+                self.cones[cone].writes.push(Value::Object(write));
+            }
+            if made {
+                self.cone = None;
+            }
+            return true;
+        }
+        let Some((home, start, DefKind::Pattern)) = self.def_function(identifier) else {
+            return false;
+        };
+        let argument = self.tag_argument(element);
+        // What the pattern declares is in cones of its own, as the
+        // declarations of a call written as a statement are.
+        let saved_cone = self.cone.take();
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let result = self.inline_argument(home, start, &name, argument, at);
+        self.cone = saved_cone;
+        self.operands = saved.0;
+        self.opaque = saved.1;
+        // The enclosing tree holds what the pattern renders.
+        match &result {
+            Place::Record(fields) => match fields.get("$UI") {
+                Some(rendered) => self.pass(&rendered.clone()),
+                None => self.pass(&result),
+            },
+            other => self.pass(other),
+        }
+        true
+    }
+
     fn jsx_element(&mut self, element: &JSXElement<'a>) {
+        if self.jsx_pattern(element) {
+            return;
+        }
         for attribute in &element.opening_element.attributes {
             match attribute {
                 JSXAttributeItem::Attribute(attribute) => {
