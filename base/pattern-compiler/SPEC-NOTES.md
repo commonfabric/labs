@@ -478,3 +478,101 @@ numbers have gaps.
     callback other than `map`, `filter`, and `flatMap`, an element
     construct over a constant, a spread in the reactive tier, a dynamic
     read of kind `space`, and a call of a name it does not resolve.
+
+## Bringing the crate in line with the documents, and more of the plan
+
+98. **What a called function brings into a body** (FA §3.6, "A summary
+    has no tier"). The crate reports a dynamic read, a widening, a write
+    with no static target, a write that is not idempotent, and a read and
+    a push at the call in the body's text, with the position inside the
+    function in the message. "The call" is the innermost call written in
+    the body's text whose evaluation reached the site, so for `f(g(x))`
+    what `g` does is reported at `g(x)`. One call is reported once per
+    diagnostic, whatever the number of sites behind it. FA does not say
+    whether the function's own record still reports a widening or a
+    dynamic read at the site inside it; the crate reports both, so a
+    widening in a helper is a hint at the helper and at each call.
+99. **A bag whose member joins a `Computed` value with projections** (FA
+    §3.8) cannot be told from a bag of the projections alone, because the
+    join of abstract values drops `Computed`. Such a bag gets an entry.
+    A bag of one projection whose path has no `*` gives `passes`.
+100. **A constant cause** (FA §8.2). The conditional operator counts as
+    an operator over constants, and so does a logical one. A module-scope
+    `const` whose initializer is a call, a member access, or an object is
+    not constant, and neither is a name a destructuring binds. This
+    replaces note 84.
+101. **W6 and a destructuring with no type** (FA §5.2). A destructuring
+    in a declaration or in a `for...of` has the type of its initializer.
+    A destructuring in a parameter list has none, and counts as entering
+    a recursive type only where the value was reached through one
+    already. This replaces the last sentence of note 79.
+102. **`mergeable-push:read-then-push`** follows LS §10.3 and question
+    36 as assumed: `push` and `pushAll`, any earlier read of the list.
+    This replaces note 82.
+103. **The catalog table** (LS §10). §10 now has a second table whose
+    rows start with an identifier, "What a diagnostic is computed from".
+    The catalog test takes a row as a catalog entry only where its
+    second cell is a severity or `—`.
+104. **PL §6.2 against the crate, `B1` to `B4`.** Four differences. (a)
+    `B1` reads `threadInfo?.get()`, which FA §7.1 makes static, so the
+    crate has the slot `threadInfo : value` and no handle, where the
+    listing has `handles h0 slot s2`. (b) `B2` has `titles/* : identity`
+    where the listing has `value`, by note 71: the title leaves in a
+    record a helper built, which has no expression to take a type from.
+    (c) `B4` lists `identity` beside `identity, resolved`. (d) The source
+    calls `threadTitles`, `bodyText` and `viewKeyOf` more than once, so
+    their uses have ordinals.
+105. **A pattern used as a JSX tag** (PL §1.1, §6.2). The listing has
+    the row's slots at the root `element`, so the row is compiled into
+    the room. The crate compiles in a pattern that is called, and gives
+    a pattern used as a tag a plan of its own, with its attributes passed
+    by reference. No document says that a tag is a call for this purpose.
+106. **`wish` is not planned** (PL §3.19, BI "`wish`"). PL gives the
+    templates of four parts and says a constant query tells them apart.
+    Three things are missing for a record. No document has the table from
+    a query to its part (`#profile`, `#now`, `#now/300`, a path). A path
+    or a well-known target is "a reference", and `SlotRoot` has no root
+    for it; a read through it in the reactive tier would be a `dynamic`
+    node of kind `link`, whose `through` is a slot or an entry of a
+    body's `computed`, and expression code is neither. A search is a
+    `DynamicReads` of kind `search`, which names a body.
+107. **A scan** (PL §3.13, §1.1). PL gives the templates of `some`,
+    `every`, `findIndex` and `find` and not their records. Chosen: a
+    `Collection` of its own, named as the construct is, whose source is
+    the receiver (a slot, or an output, the assembled output for a
+    receiver that is a collection, because `via` has no value for a
+    scan); the predicate as the cone of its body, whose result is read
+    for `value`; a `Selector` of arity 0 for the `through`; for `find` a
+    `Pick` with `chosenBy: "runtime"`; and an `Output` with the member
+    `collection`, as for an assembled result, since the runtime produces
+    the value. The selector and the pick are in no `Cone.selectors` or
+    `Cone.picks`, because no value function reports them. PL does not say
+    which cone lists them. `reduce` stays unsupported: PL makes it an
+    `Operation` of kind `reduce`, and `Operation.implementation` has no
+    form for an expression.
+108. **An array written in the reactive tier as the source of a
+    collection** (PL §1.1, `Collection.source`). `[a, b].map(...)` and
+    `["x", "y"].map(...)` have no slot. Chosen: the array is "an array
+    the instance computed", made by a cone of its own that passes each
+    member by reference, and the source is its output. For an array of
+    constants that cone has no slot. A collection over a path of a
+    computed value, as `facts.main`, has an interim output at that path
+    beside the output of the whole value.
+109. **Context reads and library calls in the reactive tier** (PL
+    §3.16). `spaceOf`, `equals`, `principalOf`, `principalsOf`,
+    `profileOwnerOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`,
+    `spaceDeleted`, and `linksOf` have the slots of the table, in a cone
+    of expression code. `a.equals(b)`, `X.equals(a, b)` and `equalLinks`
+    are the method forms (LS §4.7). A dynamic read of kind `space` whose
+    operand is a value the instance computed is unsupported in the
+    reactive tier: `of` would name an entry of a body's `computed`, and
+    there is no body. The debug strings and a call of a global function
+    such as `String` are expression code that reads each operand for
+    `value`. `writtenPrincipalOf` and `resultOwnerOf` in the reactive
+    tier stay unsupported.
+110. **A pattern that is a default export** has no name in its module.
+    Compiled in, its site takes the name of the `const` the call is
+    assigned to, as any call does (PL §1.3). The offsets of the
+    unsupported constructs of a pattern compiled in from another module
+    are offsets in that module, and the plan lists them without the
+    module.
