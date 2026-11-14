@@ -19,6 +19,15 @@ import {
   startRawCellView,
 } from "./test/fixture.ts";
 
+/** The top-level cells the "Raw data" tab links a raw-data view for. */
+const RAW_CELL_LABELS = [
+  "Health",
+  "Recent session index",
+  "Complete session index",
+  "Commands",
+  "Receipts",
+];
+
 export default pattern(() => {
   const fixture = DebugViewFixture();
   const view = fixture.view;
@@ -176,19 +185,12 @@ export default pattern(() => {
   // starts, then the stored value of the cell it names.
   const assert_raw_cells_loading = assert(() =>
     rawCellView(view[UI], "Health")[NAME] === "Health — raw data" &&
-    rawCellJson(view[UI], "Health") === RAW_CELL_LOADING_TEXT &&
-    rawCellJson(view[UI], "Receipts") === RAW_CELL_LOADING_TEXT
+    RAW_CELL_LABELS.every((label) =>
+      rawCellJson(view[UI], label) === RAW_CELL_LOADING_TEXT
+    )
   );
   const action_open_raw_cells = action(() => {
-    for (
-      const label of [
-        "Health",
-        "Recent session index",
-        "Complete session index",
-        "Commands",
-        "Receipts",
-      ]
-    ) {
+    for (const label of RAW_CELL_LABELS) {
       startRawCellView(view[UI], label);
     }
   });

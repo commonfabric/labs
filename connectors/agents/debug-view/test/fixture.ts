@@ -128,14 +128,6 @@ export function setForce(root: unknown, next: boolean): void {
   setBinding(checkbox, "$checked", next, "the force checkbox");
 }
 
-/** Opens the composer on the first session's command target. */
-export function selectCommandTarget(root: unknown): void {
-  fireClick(
-    findElementByText(root, "cf-button", "Command"),
-    "the session's Command button",
-  );
-}
-
 /** Types `PROMPT_TEXT` into the composer's prompt. */
 export function enterPrompt(root: unknown): void {
   setBinding(
