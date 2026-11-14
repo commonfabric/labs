@@ -15,6 +15,7 @@ import {
   promptText,
 } from "./view-helpers.ts";
 import { highlightDocument } from "../lib/view/languages/typescript/parse.ts";
+import { renderFrame } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import type { Key } from "../lib/view/keys.ts";
 import {
@@ -86,12 +87,11 @@ Deno.test("editor: e reveals the cursor, a bare arrow scrolls, ESC hides it", ()
   assertEquals(s.view().cursor, null, "ESC hides it again");
 });
 
-Deno.test("editor: revealing the cursor forces the first display mode", () => {
+Deno.test("editor: revealing the cursor forces the pictures display mode", () => {
   const { src } = memSource();
   const s = editSession("hello\nworld\n", src);
-  // Switch to a mode that hides/collapses non-printables, breaking the 1:1
-  // column mapping the editor relies on.
-  press(s, "c");
+  // The initial mode hides color sequences, breaking the 1:1 column mapping
+  // the editor relies on.
   assertEquals(s.view().displayMode, "ansi");
   press(s, "e"); // reveal the text cursor
   assert(s.view().cursor !== null, "cursor revealed");
@@ -99,6 +99,23 @@ Deno.test("editor: revealing the cursor forces the first display mode", () => {
     s.view().displayMode,
     "pictures",
     "edit mode resets to pictures",
+  );
+  assertEquals(s.view().message, "", "nothing visible changed");
+});
+
+Deno.test("editor: revealing the cursor reports control pictures replacing color", () => {
+  const { src } = memSource();
+  const s = editSession("\x1b[31mred\x1b[0m\n", src);
+  assertEquals(renderFrame(s.displayDoc(), s.view())[0].trimEnd(), "red");
+  press(s, "e");
+  assertEquals(
+    s.view().message,
+    "Non-printables shown as control pictures for editing.",
+  );
+  assertEquals(
+    renderFrame(s.displayDoc(), s.view())[0].trimEnd(),
+    "␛[31mred␛[0m",
+    "each source column is one screen column",
   );
 });
 
@@ -114,6 +131,30 @@ Deno.test("editor: revealing the cursor turns line wrapping off", () => {
   assertEquals(s.view().cursor, { line: 0, col: 39 });
   assertEquals(s.view().left, 39, "the visible continuation stays at the left");
   assertEquals(s.view().message, "Line wrapping turned off for editing.");
+});
+
+Deno.test("editor: revealing the cursor reports control pictures only if they differ", () => {
+  const { src } = memSource();
+  const bell = editSession("ring\x07\n", src);
+  press(bell, "e");
+  assertEquals(bell.view().displayMode, "pictures");
+  assertEquals(bell.view().message, "", "a bell draws as ␇ in ANSI color mode");
+
+  const hiddenBell = editSession("ring\x07\n", src);
+  press(hiddenBell, "c", "e");
+  assertEquals(
+    hiddenBell.view().message,
+    "Non-printables shown as control pictures for editing.",
+    "hidden mode draws the bell as an ellipsis",
+  );
+
+  const tab = editSession(`a\t${"x".repeat(90)}`, src, 3);
+  press(tab, "\\", "e");
+  assertEquals(
+    tab.view().message,
+    "Line wrapping turned off; non-printables shown as control pictures " +
+      "for editing.",
+  );
 });
 
 Deno.test("editor: a pipe rejects the cursor with a reason", () => {
