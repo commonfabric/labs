@@ -1924,6 +1924,24 @@ the document that stores the path holds one of four things.
 | A reference passed through: a state cell, a part of the argument, a cell an element links to, a child's result, a stream | A link to that address |
 | An output of narrower scope than this scope instance | A storage link to the same document and path in the narrower declared scope (below) |
 
+**The paths of the rendered tree.** The rendered tree is stored under
+the key `$UI` of the result, the string the API's `UI` constant holds
+(`base/api/index.ts`). A node of it is a view node, the record the JSX
+factory returns (`h` in `runtime/runner/src/builder/h.ts`), and it is
+stored with the paths of that record: `type` and `name`, which are
+constants, `props/<attribute>` for the value of each attribute, and
+`children/<n>` for the child at position `n`. A child that is an array,
+the assembled result of a `map` among them, is flattened into the
+children, so the positions from it on are data and their path is
+`children/*`. These are the paths `plan-and-label-templates.md` §3.4
+gives the entries of `Plan.outputs` for a JSX element, and the paths a
+label entry, a provenance record and a split point of section 4.10 are
+named by. That document assumes them (its §8, question 53: how fine the
+entries are, and that the paths of a view node are part of the plan),
+and this document assumes the same paths with it. The alternative there
+keeps one entry per constructed value and changes the records, not the
+stored paths.
+
 A reader of a computed kept output names the result cell and the output's
 path, whichever document stores the path
 (`plan-and-label-templates.md` §2.3). There is no document per kept output:
