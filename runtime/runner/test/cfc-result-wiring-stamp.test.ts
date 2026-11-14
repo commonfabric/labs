@@ -851,6 +851,41 @@ describe("cfc-result-wiring-stamp", () => {
         tx.abort("stored result read");
       }
     });
+
+    it("is written again without a name stored beside its sigil", async () => {
+      // A `NAME` beside the sigil makes the stored result no reference, so
+      // resolving through the piece's result fails until a setup writes the
+      // reference alone.
+
+      const { forwarding } = patterns();
+      const result = await setUp("forwarding-named", forwarding);
+      const link = result.getAsNormalizedFullLink();
+      const read = (): FabricValue => {
+        const tx = runtime.edit();
+        try {
+          return tx.readValueOrThrow({ ...link, path: [] });
+        } finally {
+          tx.abort("stored result read");
+        }
+      };
+      const reference = read();
+      const tx = runtime.edit();
+      tx.writeValueOrThrow({ ...link, path: [] }, {
+        [NAME]: {
+          "/": {
+            "link@1": { id: "of:fid1:named", path: [], space, scope: "space" },
+          },
+        },
+        ...(reference as Record<string, FabricValue>),
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      expect(isCellLink(read())).toBe(false);
+
+      await setUp("forwarding-named", forwarding);
+
+      expect(read()).toEqual(reference);
+    });
   });
 
   describe("a stamp a setup that writes nothing would keep", () => {
