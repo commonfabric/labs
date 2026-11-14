@@ -439,19 +439,6 @@ describe("hash-conformance", () => {
       ).toThrow("a and b: their hashes are equal, but neither names the other");
     });
 
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = soleEntryOf([
-        {
-          name: "flavored",
-          section: "s",
-          make: () => "a",
-          requires: { flavors: ["es2025"] },
-        },
-      ]);
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
-    });
-
     it("returns an entry requiring the member count of a record past the floor", () => {
       const count = SIZE_FLOORS_FOR_TESTING_ONLY.propertyCount + 1;
       const entry = soleEntryOf([

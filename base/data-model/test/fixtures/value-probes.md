@@ -155,18 +155,11 @@ to apply to it. A reader that does not meet every requirement an entry names
 skips the entry: the case is not applicable to it, which is neither a pass nor a
 divergence. An entry with no `requires` applies to every reader.
 
-`flavors` is a list of regular-expression flavors whose patterns the reader must
-construct, as section 3 of
+Each field needs a guarantee of at least the figure given, by one of the
+measures section 12 of
 [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
-describes for `RegExp@1`. It marks a case whose outcome depends on constructing
-one, such as a pattern that fails to construct: the format requires no flavor,
-and a reader that does not construct one stores its patterns unvalidated, so the
-outcome differs. Cases are marked by hand.
-
-The other fields each need a guarantee of at least the figure given, by one of
-the measures section 12 of `3-json-encoding.md` defines. A reader whose stated
-guarantee by that measure is below the figure skips the entry, whether or not it
-would in fact handle the value:
+defines. A reader whose stated guarantee by that measure is below the figure
+skips the entry, whether or not it would in fact handle the value:
 
 - `arrayLength`: the length of the longest array, counting each hole a run
   stands for.

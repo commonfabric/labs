@@ -317,22 +317,6 @@ describe("fvj1-conformance", () => {
       });
     });
 
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = JSON.parse(
-        fvj1ConformanceFixtureTextForTestingOnly([
-          {
-            name: "unconstructed",
-            section: "s",
-            text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025",' +
-              '"source":"("}}',
-            requires: { flavors: ["es2025"] },
-          },
-        ]),
-      ).cases[0];
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
-    });
-
     it("returns an entry requiring the length of an array past the floor", () => {
       const length = SIZE_FLOORS_FOR_TESTING_ONLY.arrayLength + 1;
       const entry = JSON.parse(

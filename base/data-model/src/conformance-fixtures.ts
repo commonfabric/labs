@@ -31,7 +31,6 @@ import {
   FabricMap,
   FabricSet,
 } from "@/fabric-instances";
-import { FabricRegExp } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import {
@@ -130,13 +129,12 @@ export type SizeMeasure =
 
 /**
  * What a reader must support to read a fixture entry, a reader that does not
- * skipping the entry: the flavors of regular expression whose patterns it must
- * construct, and by each measure the guarantee it must state at least, given
- * only where that is past the measure's floor.
+ * skipping the entry: by each measure the guarantee it must state at least,
+ * given only where that is past the measure's floor.
  */
-export type FixtureRequirements =
-  & { readonly flavors?: readonly string[] }
-  & { readonly [Measure in SizeMeasure]?: number };
+export type FixtureRequirements = {
+  readonly [Measure in SizeMeasure]?: number;
+};
 
 /**
  * The names in `ClassesByName` of the classes that bind a JSON codec, which
@@ -325,21 +323,15 @@ const PRIMITIVE_TAGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Returns what a reader must support to read the entry for `stated`: `flavors`,
- * which a case marks by hand, and by each measure the size of the value its
- * text writes, where that is past the measure's floor. Returns `undefined`
- * where a reader need support nothing beyond the floors.
+ * Returns what a reader must support to read the entry for `stated`: by each
+ * measure the size of the value its text writes, where that is past the
+ * measure's floor. Returns `undefined` where a reader need support nothing
+ * beyond the floors.
  */
 export function requirementsOf(
   stated: TextWithMods,
-  flavors?: readonly string[],
 ): FixtureRequirements | undefined {
-  const requires:
-    & { flavors?: readonly string[] }
-    & { -readonly [Measure in SizeMeasure]?: number } = {};
-  if (flavors !== undefined) {
-    requires.flavors = flavors;
-  }
+  const requires: { -readonly [Measure in SizeMeasure]?: number } = {};
   const sizes = sizesOf(stated);
   for (const measure of SIZE_MEASURES) {
     if (sizes[measure] > SIZE_FLOORS[measure]) {
@@ -350,10 +342,8 @@ export function requirementsOf(
 }
 
 /**
- * Indicates whether this package meets `requires`: that it constructs each
- * flavor named, which it does for exactly the flavors a `FabricRegExp` can
- * give a JavaScript `RegExp` of, and that its guarantee by each measure named
- * is at least the size named.
+ * Indicates whether this package meets `requires`: that its guarantee by each
+ * measure named is at least the size named.
  */
 export function meetsRequirements(
   requires: FixtureRequirements | undefined,
@@ -361,18 +351,9 @@ export function meetsRequirements(
   if (requires === undefined) {
     return true;
   }
-  const constructs = (flavor: string) => {
-    try {
-      new FabricRegExp(flavor, "", "").value;
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  return (requires.flavors ?? []).every(constructs) &&
-    SIZE_MEASURES.every((measure) =>
-      (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
-    );
+  return SIZE_MEASURES.every((measure) =>
+    (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
+  );
 }
 
 /**

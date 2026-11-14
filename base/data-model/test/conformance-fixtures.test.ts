@@ -877,15 +877,6 @@ describe("conformance-fixtures", () => {
       });
     });
 
-    it("returns the flavors given, beside the sizes past their floors", () => {
-      const text = `fvj1:[{"/hole":${floors.arrayLength + 1}}]`;
-
-      expect(requirementsOfForTestingOnly({ text }, ["es2025"])).toEqual({
-        flavors: ["es2025"],
-        arrayLength: floors.arrayLength + 1,
-      });
-    });
-
     it("counts a malformed hole run as no element", () => {
       const text = `fvj1:[{"/hole":${floors.arrayLength + 1.5}}]`;
 
@@ -903,7 +894,6 @@ describe("conformance-fixtures", () => {
       expect(meetsRequirementsForTestingOnly(undefined)).toBe(true);
       expect(
         meetsRequirementsForTestingOnly({
-          flavors: ["es2025"],
           arrayLength: 2 ** 26,
           propertyCount: 2 ** 30,
           stringLength: 2 ** 26,
@@ -913,11 +903,6 @@ describe("conformance-fixtures", () => {
           bigintBytes: 2 ** 26,
         }),
       ).toBe(true);
-    });
-
-    it("returns `false` for a flavor this package does not construct", () => {
-      expect(meetsRequirementsForTestingOnly({ flavors: ["es2025", "other"] }))
-        .toBe(false);
     });
 
     it("returns `false` for a size past any of this package's guarantees", () => {

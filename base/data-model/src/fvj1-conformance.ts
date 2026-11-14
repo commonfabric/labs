@@ -48,7 +48,6 @@ import {
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
-  type FixtureRequirements,
   fixtureTextOf,
   type JsonCodecClassName,
   plainJsonTextOf,
@@ -92,9 +91,6 @@ export type Fvj1Outcome =
  * decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
- * `requires` names the flavors of regular expression whose construction the
- * case's outcome depends on; the fixture entry adds the guarantees of size the
- * case needs past the floors.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
  * value, it is the value's own probes, and the text {@link plainJsonTextOf}
@@ -109,7 +105,6 @@ export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
-    readonly requires?: Pick<FixtureRequirements, "flavors">;
     readonly divergence?: string;
   }
   & (
@@ -621,7 +616,8 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: 'fvj1:[{"/Abc123@1234":null}]',
   },
   {
-    name: 'unknown tag "RegExp@1"',
+    name: 'unknown tag "RegExp@1", no longer a defined type, for alignment ' +
+      "among implementations that once recognized it",
     section: SECTION_UNKNOWN,
     text: 'fvj1:{"/RegExp@1":{"flags":"g","flavor":"es2025","source":"a"}}',
   },
@@ -1324,7 +1320,7 @@ function fixtureEntryOf(
     }
   }
 
-  const requires = requirementsOf(stated, conformanceCase.requires?.flavors);
+  const requires = requirementsOf(stated);
   const entry: Record<string, FixtureJson> = {
     name,
     section,
