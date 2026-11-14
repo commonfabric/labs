@@ -2280,7 +2280,8 @@ the per-epic implementation notes).
   The pool that places spaces on workers takes four more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
-  already serves one (default 16; `1` serves every space from one worker),
+  already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
+  serves every space from one worker),
   `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
   of a placement (default 1 in the toolshed; `0` keeps none),
   `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, the largest each worker's heap may
@@ -2303,11 +2304,13 @@ the per-epic implementation notes).
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
 - **Status on 2026-11-14.** Implemented, on by default in the toolshed over a
-  file store, with a worker per served space. The workers compile in the
+  file store, with a worker per served space up to the cap
+  (`SERVER_EXECUTION_MAX_WORKERS`, 4 by default), past which spaces share
+  workers. The workers compile in the
   process's compile workers and share the host's compiled-module cache
   directory, as the main-thread loop does. Run with the variable `true`,
   the pattern integration suites the `MultiRuntimeHarness` drives pass with a
-  worker per space;
+  worker per space under the runner's own cap of 16;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
   that way yet: in CI the workers run in the toolshed-backed lanes and the

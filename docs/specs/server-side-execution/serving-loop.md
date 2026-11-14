@@ -80,8 +80,8 @@ execution observer and decides which worker serves which space:
   other, and that worker's host decides what to activate as a host on the
   main thread does.
 - A space gets a worker of its own while fewer than `maxWorkers` workers are
-  placed on (default 16; `SERVER_EXECUTION_MAX_WORKERS` in the toolshed
-  bootstrap). At the cap a space joins the placed-on worker that serves the
+  placed on (default 16; 4 in the toolshed, `SERVER_EXECUTION_MAX_WORKERS`
+  in its bootstrap). At the cap a space joins the placed-on worker that serves the
   fewest spaces, one holding only parked runtimes first, and that worker's
   host serves several spaces as the diagram allows. `1` serves every space
   from one worker.

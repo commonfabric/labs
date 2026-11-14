@@ -309,6 +309,18 @@ export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
  */
 export const MIN_SERVING_WORKER_HEAP_LIMIT_MB = 256;
 
+/**
+ * How many serving workers a toolshed places spaces on unless told, past
+ * which a space shares a worker. A host runs many toolsheds, Estuary 16, and
+ * each worker may grow to {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB}: at 4
+ * the workers of 16 toolsheds hold about 7 GB before any space grows and
+ * 128 GB if every one reaches its limit, where 16 per toolshed came to
+ * 512 GB. The pool goes past the cap only to give each space that shared a
+ * worker ended at its heap limit a worker of its own, until one of those
+ * closes.
+ */
+export const DEFAULT_MAX_TOOLSHED_SERVING_WORKERS = 4;
+
 /** The serving-worker pool's knobs a toolshed reads from its environment. */
 export type ServingWorkerPoolEnv = Pick<
   ServingWorkerPoolOptions,
@@ -317,12 +329,12 @@ export type ServingWorkerPoolEnv = Pick<
 
 /**
  * Resolves the serving-worker pool's knobs from env (serving-loop.md §1,
- * "Workers"), each absent from the result where the pool's own default
- * stands:
+ * "Workers"); a knob absent from the result leaves the pool's own default:
  * - `SERVER_EXECUTION_MAX_WORKERS`, a positive integer: how many workers
  *   spaces are placed on at most, a space joining a worker that already
- *   serves another once that many are. `1` serves every space from one
- *   worker;
+ *   serves another once that many are. Default
+ *   {@link DEFAULT_MAX_TOOLSHED_SERVING_WORKERS}; `1` serves every space from
+ *   one worker;
  * - `SERVER_EXECUTION_SPARE_WORKERS`, a non-negative integer: how many
  *   workers are kept started ahead of a placement. Default
  *   {@link DEFAULT_SPARE_SERVING_WORKERS}; the literal `0` keeps none;
@@ -362,7 +374,8 @@ export function servingWorkerPoolFromEnv(
     );
     return undefined;
   };
-  const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 });
+  const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 }) ??
+    DEFAULT_MAX_TOOLSHED_SERVING_WORKERS;
   const spareWorkers = read("SERVER_EXECUTION_SPARE_WORKERS", { least: 0 }) ??
     DEFAULT_SPARE_SERVING_WORKERS;
   const heapLimitMb = envGet("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB") === "0"
@@ -374,7 +387,7 @@ export function servingWorkerPoolFromEnv(
     least: 1,
   });
   return {
-    ...(maxWorkers === undefined ? {} : { maxWorkers }),
+    maxWorkers,
     spareWorkers,
     ...(heapLimitMb === undefined ? {} : { heapLimitMb }),
     ...(heapBudgetMb === undefined
@@ -618,10 +631,8 @@ export function startServerExecutionHost(options: {
           ? "by SERVER_EXECUTION_WORKER=true"
           : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
             "keeps it on the main thread)") +
-        (pool.maxWorkers === undefined
-          ? ""
-          : `, on ${pool.maxWorkers} worker(s) at most by ` +
-            "SERVER_EXECUTION_MAX_WORKERS") +
+        `, on ${pool.maxWorkers} worker(s) at most (more only while spaces ` +
+        "separated at a heap limit each hold one)" +
         `, with ${pool.spareWorkers} spare, ` +
         (pool.heapLimitMb === undefined
           ? "no heap limit per worker by SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0"
