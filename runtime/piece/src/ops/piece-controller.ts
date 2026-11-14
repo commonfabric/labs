@@ -6066,36 +6066,32 @@ function pieceSourceCfcEnvelopeIssue(
       proposal,
       instance?.tx.scopeKeyIdentity,
     );
-  try {
-    const issues = [
-      pieceDocumentCfcEnvelopeIssue(
-        "argument",
-        argumentCell,
-        candidate.argumentSchema,
-        {},
+  const issues = [
+    pieceDocumentCfcEnvelopeIssue(
+      "argument",
+      argumentCell,
+      candidate.argumentSchema,
+      {},
+      tx,
+      programModules,
+    ),
+    // Setup writes the result projection, and with it the schema input the
+    // commit merges, only where the candidate's projection differs from the
+    // stored one. A candidate that changes nothing the projection carries
+    // takes no merge at commit, so the review asks setup's own question
+    // first rather than refusing over an envelope the commit never touches.
+    pieces.runtime.runner.setupRewritesResultProjection(tx, candidate, piece)
+      ? pieceDocumentCfcEnvelopeIssue(
+        "result",
+        piece,
+        candidate.resultSchema,
+        { generatedOutputPaths: [[]] },
         tx,
         programModules,
-      ),
-      // Setup writes the result projection, and with it the schema input the
-      // commit merges, only where the candidate's projection differs from the
-      // stored one. A candidate that changes nothing the projection carries
-      // takes no merge at commit, so the review asks setup's own question
-      // first rather than refusing over an envelope the commit never touches.
-      pieces.runtime.runner.setupRewritesResultProjection(tx, candidate, piece)
-        ? pieceDocumentCfcEnvelopeIssue(
-          "result",
-          piece,
-          candidate.resultSchema,
-          { generatedOutputPaths: [[]] },
-          tx,
-          programModules,
-        )
-        : undefined,
-    ].filter((issue): issue is string => issue !== undefined);
-    return issues.length === 0 ? undefined : issues.join("\n");
-  } finally {
-    if (proposal !== undefined) tx.abort("source review complete");
-  }
+      )
+      : undefined,
+  ].filter((issue): issue is string => issue !== undefined);
+  return issues.length === 0 ? undefined : issues.join("\n");
 }
 
 /**
