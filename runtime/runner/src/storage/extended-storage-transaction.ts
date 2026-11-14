@@ -4163,8 +4163,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<Unit, ReadError> {
     if (paths.length === 0) return { ok: {} };
     const readOptions = this.#withAmbientReadMeta(options);
+    // One address, re-aimed at each path, so a batch allocates no address per
+    // path it checks.
+    const probe = { id: address.id, path: paths[0] };
     for (const path of paths) {
-      this.#assertRuntimeSecretUnread({ id: address.id, path }, readOptions);
+      probe.path = path;
+      this.#assertRuntimeSecretUnread(probe, readOptions);
     }
     this.#prepareRead(address);
     if (this.tx.trackReadPaths) {

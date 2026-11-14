@@ -18,7 +18,7 @@
     "deno-test": "ENV=test deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-ffi --allow-env --allow-net=127.0.0.1 --allow-read --allow-write=/tmp,/var/folders --allow-run=git,deno,\"$(deno eval \"console.log(Deno.execPath())\")\" test/**/*.test.ts test/**/*.test.tsx",
     "bench": {
       "description": "Run Cell benchmarks for performance analysis",
-      "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check test/*.bench.ts"
+      "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --v8-flags=--expose-gc --no-check test/*.bench.ts"
     },
     "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --no-check -A $INTEGRATION_TEST_FLAGS \"./integration/*.test.ts\""
   },
