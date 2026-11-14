@@ -49,6 +49,20 @@ part way along the path and one a link inside the value leads to, and those of
 each slot holding a link the read followed, which a dereference retains
 (spec §4.6.3).
 
+The ceiling at the root is the one the host declares when it initializes the
+worker (`renderConfidentialityCeiling`), and the worker renders and answers a
+host's reads under it. A host that declares none is given the default display
+ceiling for the principal the runtime acts as (`defaultDisplayCeiling()`),
+which admits that principal's own identity atoms and the prompt-caveat family,
+with author declassification denied, since a display boundary that no authored
+policy covers is fitted against that ceiling (spec §8.10.6). A host that wants
+no ceiling declares `null`, and then nothing it reads or renders is gated; the
+shell's per-profile opt-out (`cfcRenderCeiling`,
+`docs/development/EXPERIMENTAL_OPTIONS.md`) is that declaration. A
+`WorkerReconciler` built outside the worker, such as the in-process renderer
+and the test VDOM materializer, takes the ceiling it is given and none when it
+is given none.
+
 - A cell child, and a cell mounted as the root, renders as the blocked
   placeholder while the ceiling refuses its read. A text child
   `table.key("row").key("name")`, where `row` links to a document of its own,
@@ -108,7 +122,15 @@ each slot holding a link the read followed, which a dereference retains
   and membership and module-policy providers. That covers a get, a pull, an
   initialization that finds a stored value, a subscription, decided again as
   a render is, a record's field list, and a metadata read. A refused read
-  reaches the host as a refusal, never as an empty value. A read answered
+  reaches the host as a refusal, never as an empty value. The refusal names
+  the kind of label that refused it, and nothing of the label: one stored at
+  the cell's node or above it (`stored`), one the read consumed below the
+  node or behind a link (`consumed`), the one the cell's schema declares
+  where nothing stored applies (`schema`), or labels that could not be read,
+  which includes a document whose stored envelope this build cannot
+  interpret (`unreadable`). The host knows the read it made, and could learn
+  the first three by making narrower reads; the kind tells it whether a label
+  refused the read or a failure to read one did. A read answered
   once first loads the access lists and policy manifests its decision
   consults and does not already admit, since nothing would decide it again
   when one arrived; it waits on the spaces holding them, and one that fails

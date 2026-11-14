@@ -80,8 +80,7 @@ export type DisplayFitSources = {
 /**
  * The label a display decision was made on, as a denial reports it: a cell's
  * stored label, its schema's, a read's consumed labels, or none it could
- * read, which is what a read that consumed the read-failure marker reports
- * as well.
+ * read, which is what a read that reports no consumed labels is decided on.
  */
 export type RenderLabelSummary = {
   labelSource: "stored" | "schema" | "consumed" | "unreadable";
@@ -124,7 +123,7 @@ export function admitsEverything(policy: RenderPolicy): boolean {
  * labels counts as consuming the marker no policy admits, and reads that
  * consumed none are fitted by the cell's schema. A refusal names the schema
  * as its source when the schema refused, and names the labels as unreadable
- * when what refused includes the read-failure marker.
+ * when a read reported none.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -172,7 +171,7 @@ export function readRefusal(
     )
     ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
     : {
-      labelSource: confidentiality.some(namesReadFailure)
+      labelSource: reads.some((read) => read === undefined)
         ? "unreadable"
         : "consumed",
       confidentiality,
@@ -181,32 +180,18 @@ export function readRefusal(
 }
 
 /**
- * The refusal of a read by the information-flow atoms its cell's schema
- * declares, `declared`, which names the labels as unreadable where the schema
- * could not be read for them.
+ * The refusal of a read by `declared`, the information-flow atoms its cell's
+ * schema declares.
  */
 function schemaRefusal(
   declared: readonly unknown[],
   integrity: readonly CfcAtom[],
 ): RenderLabelSummary {
-  const confidentiality = declared as readonly CfcConfClause[];
   return {
-    labelSource: confidentiality.some(namesReadFailure)
-      ? "unreadable"
-      : "schema",
-    confidentiality,
+    labelSource: "schema",
+    confidentiality: declared as readonly CfcConfClause[],
     integrity,
   };
-}
-
-/**
- * Whether `clause` is, or offers as an alternative, the marker a label read
- * that failed stands in for.
- */
-function namesReadFailure(clause: CfcConfClause): boolean {
-  return clauseAlternatives(clause).some((alternative) =>
-    deepEqual(alternative, CFC_LABEL_READ_FAILED_ATOM)
-  );
 }
 
 /**
@@ -510,7 +495,13 @@ function resolvedConfidentialityRenderable(
 ): boolean {
   const offending = atomsOutsideCeiling(resolved, policy.maxConfidentiality);
   for (const clause of offending) {
-    if (namesReadFailure(clause)) return false;
+    if (
+      clauseAlternatives(clause).some((alternative) =>
+        deepEqual(alternative, CFC_LABEL_READ_FAILED_ATOM)
+      )
+    ) {
+      return false;
+    }
     // Declassification names an atom; after resolution an offending clause
     // may be an OR of alternatives, and releasing one alternative releases
     // the clause.
