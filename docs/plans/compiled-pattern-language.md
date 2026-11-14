@@ -822,6 +822,17 @@ as an assumption.
     slot is what the event arrived with, and a declared label is not a
     lower bound there; and no `TransformedBy` is minted beside a label
     that only a declaration gives.
+122. **An output of a computation that threw, in the comparison** (PL
+    question 76). The runtime stores no label there; the compiled path
+    stores an error state under the output's template. *Assumed:* such
+    an output is not a row of the comparison and is no further
+    exception to "equal or tighter". The alternative counts it as an
+    exception by ruling. The comparison met seven such outputs.
+123. **A record for a reference that a site of a body made** (PL
+    question 77). *Assumed:* a path that holds a handle a `createCell`
+    site returned takes the body's `derive` template, and the plan has
+    no member that names the site. The alternative adds such a member,
+    which gives a constant template where the cell is a state cell.
 
 ## Open, and not needing the owner
 
