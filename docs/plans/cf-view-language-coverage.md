@@ -61,6 +61,8 @@ blocks, sections, and alert entries. Logs, checksums, version files, PID files,
 keys, and short prose files are plain text by name. Git, Docker, and Bazel
 ignore files have syntax highlighting that follows each tool's comments,
 negation, wildcards, and white space.
+Graphviz DOT has syntax highlighting and a structure tree of graphs, subgraphs,
+and the nodes that node statements declare.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -82,8 +84,8 @@ remain outside diff editing and semantic source loading.
 Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
-mode, Lean, ignore files, Go's module and checksum files, and Bazel rc files use
-focused scanners.
+mode, Lean, ignore files, Go's module and checksum files, Bazel rc files, and
+Graphviz DOT use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
@@ -91,8 +93,8 @@ This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
 Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
 makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
-directive configuration, ignore-file, and diff support to honest handling of
-every textual syntax in the active `commonfabric` repositories.
+directive configuration, ignore-file, Graphviz DOT, and diff support to honest
+handling of every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -1361,7 +1363,7 @@ passes direct-file and diff fixtures.
 - [x] Add Org mode.
 - [ ] Add SQL.
 - [ ] Add CSV, TSV, numeric `.dat` tables, and structured JSON log records.
-- [ ] Add Graphviz DOT.
+- [x] Add Graphviz DOT.
 - [ ] Add Handlebars and generic `.in` templates.
 - [x] Classify application-specific configuration when it has stable syntax.
 - [x] Keep prose, logs, checksums, versions, PID files, and opaque task records
@@ -1450,6 +1452,38 @@ a headline of white space, block openings before their end lines, and Org
 blocks nested 300 deep. Each source block is colored by a parse of its own, so
 about 3,000 one-line `bash` blocks took 118 to 146 milliseconds and as many
 `python` blocks 36 to 72; the surveyed files hold 18 blocks. The fixture comes from gVisor.
+
+Graphviz DOT is implemented. A November 13, 2026 read of the local checkouts
+of the organization's repositories found one DOT file, gVisor's
+`pkg/sentry/kernel/g3doc/run_states.dot`, which no commit changed in the six
+months before the read, and no other file whose source opens a graph. Labs
+prints DOT from `cf inspect graph --dot` and `cf piece map --format dot`, and
+`--language dot` selects it for that output when it is piped in. `.dot` and
+`.gv` select the language, and `graphviz` and `gv` name it as well. A `.dot`
+file holding a NUL byte, as a Word template does, is binary.
+
+The language uses a focused scanner. The one Tree-sitter DOT grammar on npm,
+`tree-sitter-dot` 0.1.5, is not an official grammar, was last published in
+2021, and ships no WebAssembly build. DOT's lexical syntax is small: comments,
+four forms of ID, six keywords, two edge operators, and punctuation. The scanner
+colors an ID by what it names: a graph, an attribute, an attribute's value, a
+port, or a node. Every character other than white space in the gVisor file, and
+in the DOT that `cf inspect graph --dot` prints, has a token class, and each
+reconstructs exactly.
+
+The timings were measured in processor time, because the machine was so loaded
+that elapsed time mostly measured waiting for a processor. INI control runs
+beside them took 2.9 to 8.1 milliseconds at the 95th percentile, against the
+under 2 recorded for INI. The scanner re-colors 100 kilobytes of DOT shaped like
+the gVisor file, or like the output of `cf inspect graph --dot`, in under 7
+milliseconds at the 95th percentile, and parses it with structure in under 7.
+The inputs built to slow it are slower. Each fills 100 kilobytes with tens of
+thousands of tokens, such as a single chain of 51,200 ports or 51,200 node
+statements. They re-color in 24 to 59 milliseconds at the 95th percentile, and
+parse in 29 to 130. The parse is slowest where every token is a node that the
+structure tree lists. In the same runs, INI took 91 to 115 milliseconds to parse
+51,200 keys, and DOT took 90 to 136 to parse 51,200 nodes. The fixture comes
+from gVisor.
 
 Completion gate: every textual syntax in the survey's 24 active repositories
 has a tested selector and highlighter or an explicit plain-text classification.

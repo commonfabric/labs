@@ -48,6 +48,7 @@ import { leanLanguage } from "./lean/language.ts";
 import { leanToolchainLanguage } from "./lean-toolchain/language.ts";
 import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
+import { dotLanguage } from "./dot/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
 import {
@@ -534,6 +535,7 @@ function allLanguages(): readonly Language[] {
     makeLanguage,
     propertiesLanguage,
     iniLanguage,
+    dotLanguage,
     proguardLanguage,
     gitAttributesLanguage,
     xmlLanguage,
