@@ -1322,6 +1322,8 @@ numbers have gaps.
     at `items`. This is a gap of the crate. The comparison row is looser by an
     artifact of it: the dereferenced read at `items/length` matches the `*` of
     the elements' declared entries.
+    Closed: `.length` of an input collection is now its `enumeration` slot
+    and of an input string its `value` slot, and the row is equal.
 184. **A slot at an absent path** (PL §2.2, §6.4). The runtime stores a declared
     entry where a value is written, so a `shape` slot at an optional field that
     is absent resolves to no label, by the definition of §2.2. `C(m5)` of §6.4

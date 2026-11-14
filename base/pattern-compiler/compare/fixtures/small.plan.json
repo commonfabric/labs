@@ -19,11 +19,11 @@
               "construct": "map",
               "membership": {
                 "op": "slot",
-                "slot": 6
+                "slot": 5
               },
               "name": "titles",
               "source": {
-                "slot": 6
+                "slot": 5
               },
               "within": []
             },
@@ -34,11 +34,11 @@
               "construct": "map",
               "membership": {
                 "op": "slot",
-                "slot": 6
+                "slot": 5
               },
               "name": "loud",
               "source": {
-                "slot": 6
+                "slot": 5
               },
               "within": []
             }
@@ -159,7 +159,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                7
+                6
               ],
               "writes": []
             },
@@ -173,7 +173,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                8
+                7
               ],
               "writes": []
             },
@@ -392,7 +392,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 6
+                "slot": 5
               }
             },
             {
@@ -405,7 +405,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 7
+                "slot": 6
               }
             },
             {
@@ -418,7 +418,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 6
+                "slot": 5
               }
             },
             {
@@ -436,7 +436,7 @@
                 "inputs": [
                   {
                     "op": "slot",
-                    "slot": 8
+                    "slot": 7
                   },
                   {
                     "op": "const"
@@ -539,16 +539,6 @@
                 "kind": "argument"
               },
               "schema": "unhashed:schema/2"
-            },
-            {
-              "observes": "identity",
-              "path": [
-                "items",
-                "length"
-              ],
-              "root": {
-                "kind": "argument"
-              }
             },
             {
               "observes": "enumeration",

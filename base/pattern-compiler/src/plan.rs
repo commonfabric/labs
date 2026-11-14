@@ -120,6 +120,11 @@ enum Root {
 enum Place {
     /// A path of an input.
     Slot(Root, Vec<String>),
+    /// A read of a path of an input under one class, whatever the reader
+    /// does with the result: `.length` of a collection is its membership,
+    /// the `enumeration` slot at the collection, and of a string its
+    /// `value` (PL §3.8).
+    Read(Root, Vec<String>, &'static str),
     /// A path of a value the instance computed.
     Value(usize, Vec<String>),
     /// A record written in the reactive tier.
@@ -1069,6 +1074,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let slot = self.slot(root, path, class);
                 Some(json!({ "op": "slot", "slot": slot }))
             }
+            Place::Read(root, path, class) => {
+                let slot = self.slot(root, path, class);
+                Some(json!({ "op": "slot", "slot": slot }))
+            }
             // Every path of what one opaque call or one expression
             // computed has its template (PL §3.3).
             Place::Value(value, path) => self.value_template(*value, path, class),
@@ -1241,6 +1250,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cones[cone].slots.insert(slot);
                 }
             }
+            Place::Read(root, path, class) => {
+                let slot = self.slot(root, path, class);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
             Place::Value(value, path) => {
                 if let Some(cone) = self.cone {
                     if self.values[*value].cone != cone {
@@ -1289,8 +1304,43 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Place::Record(fields) => fields.get(key).cloned().unwrap_or(Place::Const),
             Place::Const => Place::Const,
+            // A member of the number a length is reads no more.
+            Place::Read(..) => place.clone(),
             _ => Place::Unknown,
         }
+    }
+
+    /// The member `name` of what `written` denotes. `.length` of an input
+    /// collection is "the collection's membership" (PL §3.8), and of an
+    /// input string the string's `value`; neither is a path below it.
+    fn member(&mut self, object: &Place, written: &Expression<'a>, name: &str) -> Place {
+        if let (Place::Slot(root, path), "length") = (object, name) {
+            let shape = self
+                .resolver
+                .typed_at(self.module, written, 0)
+                .map(|ty| self.resolver.shape(self.resolver.present(ty)));
+            let class = match shape {
+                Ok(crate::types::Shape::Array(_) | crate::types::Shape::Tuple(_)) => {
+                    Some("enumeration")
+                }
+                Ok(crate::types::Shape::String | crate::types::Shape::Literal(_)) => Some("value"),
+                _ => None,
+            };
+            if let Some(class) = class {
+                let read = Place::Read(root.clone(), path.clone(), class);
+                if self.cone.is_some() {
+                    return read;
+                }
+                // Written in the reactive tier outside expression code: a
+                // value the instance computes, with that template.
+                let at = written.span().start;
+                return self.build("length", at, |emitter, _| {
+                    emitter.observe(&read, class);
+                    emitter.operands.pop()
+                });
+            }
+        }
+        Self::extend(object, name)
     }
 
     // ----- the reactive tier -----
@@ -1559,7 +1609,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Expression::StaticMemberExpression(member) => {
                 let object = self.eval(&member.object, hint);
-                Self::extend(&object, member.property.name.as_str())
+                self.member(&object, &member.object, member.property.name.as_str())
             }
             Expression::ComputedMemberExpression(member) => {
                 let object = self.eval(&member.object, hint);
@@ -1597,7 +1647,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if member.optional {
                         self.observe(&object, "shape");
                     }
-                    Self::extend(&object, member.property.name.as_str())
+                    self.member(&object, &member.object, member.property.name.as_str())
                 }
                 ChainElement::CallExpression(call) => self.call(call, hint),
                 _ => {
@@ -4529,7 +4579,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     entry.insert("template".to_string(), template);
                 }
             }
-            Place::Accumulator(..) => {
+            Place::Accumulator(..) | Place::Read(..) => {
                 if let Some(template) = self.template_of(place, "value") {
                     entry.insert("template".to_string(), template);
                 }
@@ -4647,6 +4697,15 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Place::Slot(root, at) => {
                 let slot = self.slot(root, at, "identity");
+                self.passed.push((path.clone(), slot));
+                let (cone, made) = self.computing("result", 0);
+                self.cones[cone].slots.insert(slot);
+                if made {
+                    self.cone = None;
+                }
+            }
+            Place::Read(root, at, class) => {
+                let slot = self.slot(root, at, class);
                 self.passed.push((path.clone(), slot));
                 let (cone, made) = self.computing("result", 0);
                 self.cones[cone].slots.insert(slot);

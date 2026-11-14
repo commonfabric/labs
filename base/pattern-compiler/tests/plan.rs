@@ -2627,7 +2627,7 @@ export const P = pattern<{ rows: string[]; url: string }>(({ rows, url }) => {
     let plan = plan_of(&analysis, "P");
     assert_eq!(
         template_line(&plan, &operation_named(&plan, "total").1["input"]),
-        "fold(reduce: derive(expression) { const [element length : value] })"
+        "fold(reduce: derive(expression) { const [element  : value] })"
     );
     assert_eq!(
         template_line(&plan, &operation_named(&plan, "quote").1["input"]),
@@ -2860,4 +2860,35 @@ export const P = pattern<{ rows: { title: string; n: number }[]; i: number }>(({
             "argument rows/*/title : value"
         ]
     );
+}
+
+#[test]
+fn the_length_of_a_collection_is_its_membership_and_of_a_string_its_value() {
+    // PL §3.8: "`count()`, `.length` | The collection's membership", the
+    // `enumeration` slot at the collection and no slot at `items/length`.
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+interface Item { title: string }
+export const Counted = pattern<{ items: Item[]; name: string }>(({ items, name }) => {
+  const count = computed(() => items.length);
+  const some = computed(() => items.length > 0);
+  const wide = computed(() => name.length);
+  const opt = computed(() => items?.length);
+  return { count, some, wide, opt };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Counted");
+    let line = |name: &str| template_line(&plan, &output_named(&plan, name)["template"]);
+    assert_eq!(line("count"), "[argument items : enumeration]");
+    assert_eq!(
+        line("some"),
+        "derive(expression) { [argument items : enumeration] const }"
+    );
+    assert_eq!(line("wide"), "[argument name : value]");
+    assert_eq!(cone_slots(&plan, "count"), ["argument items : enumeration"]);
+    for slot in plan["slots"].as_array().expect("slots") {
+        let path = slot["path"].as_array().expect("a path");
+        assert!(path.last() != Some(&json!("length")), "{slot}");
+    }
 }

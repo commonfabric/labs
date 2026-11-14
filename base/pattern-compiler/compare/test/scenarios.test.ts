@@ -37,10 +37,9 @@ const UNCONDITIONAL = {
   "loud/1": EQUAL,
   note: EQUAL,
   secret: EQUAL,
-  // The crate emits `items.length` as an `identity` slot at `items/length`,
-  // where PL §3.8 has the collection's membership. The dereferenced read of
-  // that path matches the `*` of the elements' declared label.
-  count: "C looser, I equal",
+  // `items.length` is the collection's membership (PL §3.8): the
+  // `enumeration` slot at `items`, which has no label.
+  count: EQUAL,
 };
 
 describe("the small fixture's templates against the runtime's labels", () => {
