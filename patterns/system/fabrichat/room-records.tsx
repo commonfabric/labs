@@ -2233,9 +2233,10 @@ export interface WindowActState {
 
 /**
  * The view of `messages` a window shows, oldest first: the main
- * conversation's, or, where `root` names one, the thread it roots, the root
- * first. `undefined` where `root` names no message of the room's main
- * conversation, or one that is in a thread itself, which roots none.
+ * conversation's, or, where `root` names one, the thread it roots, the root's
+ * own cell first. `undefined` where `root` names no message of the room's main
+ * conversation, in the room's space, or one that is in a thread itself, which
+ * roots none.
  */
 const windowView = (
   messages: Cell<MessagesValue>,
@@ -2245,7 +2246,7 @@ const windowView = (
   if (root === undefined) {
     return entries.filter((entry) => entry.inMain).map((entry) => entry.cell);
   }
-  const key = viewKeyOf(root);
+  const key = isInRoomOf(messages, root) ? viewKeyOf(root) : undefined;
   const rootEntry = entries.find((entry) => entry.key === key);
   if (
     key === undefined || rootEntry === undefined || !rootEntry.inMain ||
@@ -2318,7 +2319,7 @@ export const commitWindow = handler<RoomWindowEvent, WindowActState>(
     );
     windows.key(windowId).set({
       requestId,
-      ...(root === undefined ? {} : { root }),
+      ...(root === undefined ? {} : { root: view[0] }),
       messages: view.slice(slice.start, slice.end),
       hasOlder: slice.hasOlder,
       hasNewer: slice.hasNewer,
