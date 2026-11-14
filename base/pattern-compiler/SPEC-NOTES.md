@@ -689,3 +689,87 @@ numbers have gaps.
     The crate emits one cone for the whole callback (note 91), and a
     declaration inside a promoted `computed` with a statement body is in
     the cone of that `computed`. Not changed in this slice.
+
+## Label templates, second slice
+
+120. **The class expression code reads a slot for** (PL §3.5, §6.2).
+    This adds to note 91. A condition is read for `value` where its
+    static type is a scalar and for `shape` where it is a record, an
+    array, a handle, or `unknown`. A test against `undefined` or `null`
+    reads the other operand for `shape`, and so does `typeof`, as the
+    listing's `m5` and `m3` are. `a?.b` reads `a` for `shape`, and that
+    observation joins the template of the expression code around it, as
+    `m0` joins `T_isSet`. PL states the class of a condition and not of
+    these three.
+121. **`select`** (PL §3.5). `??` tests presence, so its condition is
+    read for `shape`. The branch that is the condition is the same
+    operand read for `identity`. `ifElse`, `when`, and `unless` are the
+    operation of `?:`, `&&`, and `||`. An `if` of a promoted `computed`
+    with a statement body is a `select` over what its two paths return,
+    and a path that returns nothing returns a constant. PL does not say
+    this of a statement. A dynamic key on a record written in place is a
+    `select` over its keys, as §3.18 says, with one more branch,
+    `const`, for a key that names no member: PL gives the label of a
+    missing key for a `pick` and not for this `select`.
+122. **A join** (PL §3.2). `Template` has no node for a join, and PL
+    writes "joined with" for the choice of a `pick` and for the
+    membership of a `filter`, a `flatMap`, and a scan. Chosen: `derive`
+    by expression code over the joined templates. Its confidentiality is
+    the join. Its integrity is the meet with `TransformedBy`, which PL
+    does not say of a membership.
+123. **`pick` over a container slot** (PL §3.18). The child slots are
+    the `shape` slot at `a/*`, which `choice` joins and `from` names,
+    and one `value` slot at `a/*` as the body. PL has the path the
+    surrounding expression reads below the child with the class of that
+    read; the crate reads the whole child.
+124. **`fold` and the membership of a derived collection** (PL §3.2,
+    §3.7, §1.1). The crate has one `Collection` for one element
+    construct, and for a `filter` directly over a slot there is no
+    second record for "the source". Chosen: `fold.collection` names the
+    construct's own record, whose element slots the body is over, and
+    the membership that §3.2 joins into a `fold` is that of what the
+    construct iterates, which the template also names beside the `fold`.
+    PL does not say whether `Collection.source.via` is the method that
+    made the source or the one applied to it; the crate keeps the second.
+    The assembled output of a scan has the member `collection` (note
+    107) and the template of the scan's value, not the membership.
+125. **Per-element outputs** (PL §1.4). A `map`, a `filter`, and a
+    `flatMap` have one entry at the path of the collection followed by
+    `*`, beside the assembled entry, with the template of an element.
+    An output of a cone inside the body that only the body uses has no
+    entry.
+126. **A constructed value used as one value** has no template: a record
+    or an array written in place and a rendered tree have a template
+    per path (PL §3.4), and `Template` has no node for one where it is
+    the branch of a `select`, the element of a `map`, or the value of a
+    promoted `computed`. PL does not give the paths below `$UI` either,
+    so the output of a rendered tree is one entry with no template. Of
+    the 2630 outputs of the plans emitted with no unsupported construct,
+    1751 have a template, and 25 of 319 plans have one on every output.
+    Nearly all the rest are rendered trees and records.
+127. **The template of a write edge, of an operation, and of a binding**
+    (PL §3.11, §3.14, §1.1). Every write edge of a body has the body's
+    template, a reference edge included, where it "applies where the
+    check fails". A path of a binding made in a body has the binding
+    body's template whether it is copied or bound by reference. The
+    input of an effect requested in the reactive tier is the template of
+    its request where that is one path, and else their join (note 122).
+    A `Child` has no template member, and its argument is the write
+    edges with target `argument`.
+128. **`T_label`** (PL §6.2). The listing has
+    `derive(expression) [ const, T_repl ]` for the template literal.
+    §3.19 makes a template literal a `derive` "over the templates of
+    the substitutions", and the crate follows §3.19: no `const` for the
+    text.
+129. **Hashes, constraints, and `cfc-flow:*` are not emitted.** A `Hash`
+    is the tagged hash of a canonical record (PL §1.2), which is
+    determined, but every member that holds one is the address of
+    something the crate does not produce: the emitted value code
+    (`Cone.code`, `CompiledPattern.valueCode`), a body's source "as the
+    loader receives it" (`Body.code`), and a schema in its stored form
+    (`Slot.schema`, the argument and result schemas, the read
+    envelopes). A `Constraint` is built from the label annotations of
+    the schemas at a write target and at the inputs (§4.4), and
+    `cfc-flow:*` compares the declared labels of a template's slots
+    (`Slot.declared`) with those constraints. The templates are there;
+    the declared labels and the constraints need the schemas first.

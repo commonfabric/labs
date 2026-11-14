@@ -1507,7 +1507,7 @@ export const P = pattern<{ items: Cell<string[]>; title: string }>(({ items, tit
         .find(|output| output["path"] == json!(["row", "shout"]))
         .expect("the kept output");
     assert_eq!(output["kept"], json!(true));
-    assert_eq!(shout["at"]["start"].as_u64().is_some(), true);
+    assert!(shout["at"]["start"].as_u64().is_some());
     assert!(plan.to_string().contains(r#"{"site":"Row"}"#), "{plan}");
 }
 
