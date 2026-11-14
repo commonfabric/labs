@@ -7,6 +7,8 @@
  * - Toggling habit completion
  * - Deleting habits
  * - Default values
+ * - The rendered cards: the streak, the week of days, and the toggle, remove
+ *   and Add controls
  * - held-reference survival (CT-1715): a log reference stashed in a cell
  *   BEFORE a toggle must still `equals()`-match and still drive a
  *   subsequent equals()-located removal AFTER the toggle. The toggle writes
@@ -27,8 +29,18 @@ import {
   handler,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import {
+  findElementByText,
+  findNode,
+  hasExactText,
+  hasText,
+  propsOf,
+  styleOf,
+  typeInto,
+} from "../../tools/test-support/vnode-helpers.ts";
 import HabitTracker from "./habit-tracker.tsx";
 import type { Habit, HabitLog } from "./schemas.tsx";
 
@@ -49,6 +61,28 @@ const removeHeldLog = handler<
     logs.set(cur.toSpliced(idx, 1));
   }
 });
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The date `days` before `date`, both YYYY-MM-DD. */
+const daysBefore = (date: string, days: number): string =>
+  new Date(Date.parse(`${date}T00:00:00Z`) - days * DAY_MS).toISOString()
+    .slice(0, 10);
+
+/** The card of the habit named `name`. */
+const card = (ui: unknown, name: string) =>
+  findElementByText(ui, "cf-card", name);
+
+/** The background of the day cell that shows `day`, the date's last two
+ * digits, in the card of `name`. */
+const dayColor = (ui: unknown, name: string, day: string): unknown =>
+  styleOf(
+    findNode(
+      card(ui, name),
+      (node) => propsOf(node) !== undefined && hasExactText(node, day),
+    ),
+    "backgroundColor",
+  );
 
 export default pattern(() => {
   const logsCell = new Writable<HabitLog[]>([]);
@@ -244,6 +278,69 @@ export default pattern(() => {
     () => len(subject.logs) === 0,
   );
 
+  // === Rendered cards ===
+
+  // The logs are dated from the pattern's own today, so the streak counts the
+  // days the test means whatever day it runs.
+  const action_seed_past_days = action(() => {
+    const today = subject.todayDate;
+    logsCell.set([
+      { habitName: "Exercise", date: daysBefore(today, 1), completed: true },
+      { habitName: "Exercise", date: daysBefore(today, 2), completed: true },
+      { habitName: "Exercise", date: daysBefore(today, 3), completed: false },
+      { habitName: "Exercise", date: daysBefore(today, 4), completed: true },
+    ]);
+  });
+  const action_type_new_habit = action(() => {
+    typeInto(subject[UI], "Icon", "💧");
+    typeInto(subject[UI], "New habit name...", "Hydrate");
+  });
+
+  const assert_summary_lists_habits = assert(() =>
+    subject.summary === "🏃 Exercise, ✓ Meditate"
+  );
+  const assert_seeded = assert(() =>
+    len(subject.logs) === 4 &&
+    subject.logs[0]?.date === daysBefore(subject.todayDate, 1)
+  );
+  // Today is not done yet, which does not break the streak; the missed day
+  // three days back does.
+  const assert_streak_of_two = assert(() =>
+    hasText(card(subject[UI], "Exercise"), "Streak: 2 days") &&
+    hasText(card(subject[UI], "Exercise"), "○") &&
+    hasText(card(subject[UI], "Meditate"), "Streak: 0 days") &&
+    dayColor(
+        subject[UI],
+        "Exercise",
+        daysBefore(subject.todayDate, 1).slice(-2),
+      ) === "#3b82f6" &&
+    dayColor(subject[UI], "Exercise", subject.todayDate.slice(-2)) ===
+      "var(--cf-colors-gray-200)"
+  );
+  const assert_streak_of_three = assert(() =>
+    hasText(card(subject[UI], "Exercise"), "Streak: 3 days") &&
+    hasText(card(subject[UI], "Exercise"), "✓") &&
+    dayColor(subject[UI], "Exercise", subject.todayDate.slice(-2)) ===
+      "#3b82f6"
+  );
+  // Removing the first habit leaves the one after it whole.
+  const assert_exercise_removed = assert(() =>
+    subject.habits.map((h: Habit) => `${h.icon} ${h.name} ${h.color}`)
+        .join() === "✓ Meditate #3b82f6" &&
+    card(subject[UI], "Exercise") === undefined &&
+    hasText(card(subject[UI], "Meditate"), "Streak: 0 days")
+  );
+  const assert_empty_message = assert(() =>
+    len(subject.habits) === 0 &&
+    hasText(subject[UI], "No habits yet. Add one below!")
+  );
+  const assert_hydrate_added = assert(() =>
+    subject.habits.map((h: Habit) => `${h.icon} ${h.name}`).join() ===
+      "💧 Hydrate" &&
+    hasText(card(subject[UI], "Hydrate"), "Streak: 0 days") &&
+    !hasText(subject[UI], "No habits yet.")
+  );
+
   return {
     [TESTS]: [
       // Initial state
@@ -307,6 +404,24 @@ export default pattern(() => {
       { assertion: assert_held_log_reads_toggle },
       { action: action_remove_via_held },
       { assertion: assert_removed_via_held },
+
+      // Rendered cards
+      { assertion: assert_summary_lists_habits },
+      { action: action_seed_past_days },
+      { assertion: assert_seeded },
+      { assertion: assert_streak_of_two },
+      { press: subject[UI], control: "○", within: "Exercise" },
+      { assertion: assert_streak_of_three },
+      { press: subject[UI], control: "×", within: "Exercise" },
+      { assertion: assert_exercise_removed },
+      { press: subject[UI], control: "×", within: "Meditate" },
+      { assertion: assert_empty_message },
+      // With no name typed, Add Habit adds nothing.
+      { press: subject[UI], control: "Add Habit" },
+      { assertion: assert_empty_message },
+      { action: action_type_new_habit },
+      { press: subject[UI], control: "Add Habit" },
+      { assertion: assert_hydrate_added },
     ],
     subject,
   };

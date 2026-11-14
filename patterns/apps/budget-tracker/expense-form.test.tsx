@@ -12,17 +12,33 @@
  *   held reference.
  * - removeBudget removes by category
  *
+ * It then checks what the streams refuse and default, and drives the rendered
+ * form: typing into its inputs, the Add Expense and Set Budget buttons act on
+ * what was typed, refuse an amount that is not a number and a negative limit,
+ * and clear the drafts; each row's × removes it.
+ *
  * Run: deno task cf test patterns/apps/budget-tracker/expense-form.test.tsx --verbose
  */
 import {
   action,
   assert,
+  type Cell,
   equals,
   handler,
   pattern,
   TESTS,
+  UI,
+  type VNode,
   Writable,
 } from "commonfabric";
+import {
+  clickButton,
+  clickInRow,
+  findElementByText,
+  hasText,
+  readValue,
+  typeInto,
+} from "../../tools/test-support/vnode-helpers.ts";
 import ExpenseForm from "./expense-form.tsx";
 import type { CategoryBudget, Expense } from "./schemas.tsx";
 
@@ -39,6 +55,17 @@ const removeHeldBudget = handler<
   if (idx >= 0) {
     budgets.set(cur.toSpliced(idx, 1));
   }
+});
+
+/** Types each entry's text into the input with its placeholder, writing
+ * through the cell the input's `$value` binds, as typing does. A handler's
+ * view of the tree keeps that binding a cell; a plain read resolves it to its
+ * text. */
+const typeEntries = handler<
+  void,
+  { ui: Cell<VNode>; entries: { placeholder: string; text: string }[] }
+>((_event, { ui, entries }) => {
+  for (const { placeholder, text } of entries) typeInto(ui, placeholder, text);
 });
 
 export default pattern(() => {
@@ -115,6 +142,148 @@ export default pattern(() => {
   const assert_removed_via_held = assert(() => budgetsCell.get().length === 0);
 
   // ==========================================================================
+  // The exported streams refuse what they cannot record
+  // ==========================================================================
+
+  const action_send_invalid = action(() => {
+    form.addExpense.send({ description: "  ", amount: 5 });
+    form.addExpense.send({ description: "Refund", amount: 0 });
+    form.addExpense.send({ description: "Refund", amount: -3 });
+    form.setBudget.send({ category: "  ", limit: 10 });
+    form.setBudget.send({ category: "Travel", limit: -1 });
+    form.removeBudget.send({ category: "Travel" });
+  });
+  const assert_invalid_ignored = assert(() =>
+    expensesCell.get().length === 0 && budgetsCell.get().length === 0
+  );
+  const action_send_bare_expense = action(() =>
+    form.addExpense.send({ description: " Bus ", amount: 2.5 })
+  );
+  const assert_bare_expense_defaulted = assert(() =>
+    expensesCell.get().length === 1 &&
+    expensesCell.get()[0].description === "Bus" &&
+    expensesCell.get()[0].category === "Other" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(expensesCell.get()[0].date)
+  );
+
+  const action_set_travel = action(() =>
+    form.setBudget.send({ category: "Travel", limit: 20 })
+  );
+  const assert_travel_set = assert(() =>
+    budgetsCell.get().length === 1 && budgetsCell.get()[0].limit === 20
+  );
+  const action_remove_travel = action(() =>
+    form.removeBudget.send({ category: "Travel" })
+  );
+  const assert_travel_removed = assert(() => budgetsCell.get().length === 0);
+
+  // ==========================================================================
+  // The rendered form: its buttons act on the drafts its inputs bind
+  // ==========================================================================
+
+  const action_click_add_expense = action(() =>
+    clickButton(form[UI], "Add Expense")
+  );
+  const assert_empty_draft_adds_nothing = assert(() =>
+    expensesCell.get().length === 1 && hasText(form[UI], "Expenses (1)")
+  );
+  const action_type_bad_amount = typeEntries({
+    ui: form[UI],
+    entries: [
+      { placeholder: "Description", text: " Coffee " },
+      { placeholder: "Amount", text: "a few" },
+      { placeholder: "Category", text: " " },
+    ],
+  });
+  const assert_draft_shown_not_added = assert(() => {
+    const draft = findElementByText(form[UI], "pre", "newDescription");
+    return hasText(draft, 'newDescription: " Coffee "') &&
+      hasText(draft, 'newAmount: "a few"') &&
+      expensesCell.get().length === 1;
+  });
+  const action_type_amount = typeEntries({
+    ui: form[UI],
+    entries: [{ placeholder: "Amount", text: "4.5" }],
+  });
+  const assert_expense_added_and_draft_cleared = assert(() => {
+    const ui = readValue(form[UI]);
+    const draft = findElementByText(ui, "pre", "newDescription");
+    return expensesCell.get().length === 2 &&
+      expensesCell.get()[1].description === "Coffee" &&
+      expensesCell.get()[1].amount === 4.5 &&
+      expensesCell.get()[1].category === "Other" &&
+      hasText(draft, 'newDescription: ""') &&
+      hasText(draft, 'newAmount: ""') &&
+      hasText(draft, 'newCategory: "Other"') &&
+      hasText(ui, "Coffee - $4.5 (Other)") &&
+      hasText(findElementByText(ui, "pre", "expenses"), "Coffee");
+  });
+
+  const action_click_set_budget = action(() =>
+    clickButton(form[UI], "Set Budget")
+  );
+  const assert_empty_budget_draft_sets_nothing = assert(() =>
+    budgetsCell.get().length === 0
+  );
+  const action_type_negative_limit = typeEntries({
+    ui: form[UI],
+    entries: [
+      { placeholder: "Category (e.g. Food)", text: " Food " },
+      { placeholder: "Monthly limit", text: "-5" },
+    ],
+  });
+  const assert_negative_limit_refused = assert(() =>
+    budgetsCell.get().length === 0 &&
+    hasText(
+      findElementByText(form[UI], "pre", "budgetLimit"),
+      'budgetLimit: "-5"',
+    )
+  );
+  const action_type_limit = typeEntries({
+    ui: form[UI],
+    entries: [
+      { placeholder: "Monthly limit", text: "50" },
+    ],
+  });
+  const assert_budget_set_and_draft_cleared = assert(() => {
+    const ui = readValue(form[UI]);
+    const draft = findElementByText(ui, "pre", "budgetLimit");
+    return budgetsCell.get().length === 1 &&
+      budgetsCell.get()[0].category === "Food" &&
+      budgetsCell.get()[0].limit === 50 &&
+      hasText(draft, 'budgetCategory: ""') &&
+      hasText(draft, 'budgetLimit: ""') &&
+      hasText(ui, "Food: $50");
+  });
+  const action_type_budget_update = typeEntries({
+    ui: form[UI],
+    entries: [
+      { placeholder: "Category (e.g. Food)", text: "Food" },
+      { placeholder: "Monthly limit", text: "80" },
+    ],
+  });
+  const assert_budget_updated = assert(() =>
+    budgetsCell.get().length === 1 &&
+    budgetsCell.get()[0].limit === 80 &&
+    hasText(form[UI], "Food: $80")
+  );
+
+  const action_remove_coffee = action(() =>
+    clickInRow(form[UI], "Coffee - $4.5", "×")
+  );
+  const assert_coffee_removed = assert(() =>
+    expensesCell.get().length === 1 &&
+    expensesCell.get()[0].description === "Bus" &&
+    hasText(form[UI], "Expenses (1)")
+  );
+  const action_remove_food_row = action(() =>
+    clickInRow(form[UI], "Food: $80", "×")
+  );
+  const assert_food_row_removed = assert(() =>
+    budgetsCell.get().length === 0 && hasText(form[UI], "Budgets (0)")
+  );
+
+  // ==========================================================================
   // Test Sequence
   // ==========================================================================
   return {
@@ -133,6 +302,41 @@ export default pattern(() => {
       { assertion: assert_held_reads_update },
       { action: action_remove_via_held },
       { assertion: assert_removed_via_held },
+
+      // The streams' refusals and defaults
+      { action: action_send_invalid },
+      { assertion: assert_invalid_ignored },
+      { action: action_send_bare_expense },
+      { assertion: assert_bare_expense_defaulted },
+      { action: action_set_travel },
+      { assertion: assert_travel_set },
+      { action: action_remove_travel },
+      { assertion: assert_travel_removed },
+
+      // The rendered form
+      { action: action_click_add_expense },
+      { assertion: assert_empty_draft_adds_nothing },
+      { action: action_type_bad_amount },
+      { action: action_click_add_expense },
+      { assertion: assert_draft_shown_not_added },
+      { action: action_type_amount },
+      { action: action_click_add_expense },
+      { assertion: assert_expense_added_and_draft_cleared },
+      { action: action_click_set_budget },
+      { assertion: assert_empty_budget_draft_sets_nothing },
+      { action: action_type_negative_limit },
+      { action: action_click_set_budget },
+      { assertion: assert_negative_limit_refused },
+      { action: action_type_limit },
+      { action: action_click_set_budget },
+      { assertion: assert_budget_set_and_draft_cleared },
+      { action: action_type_budget_update },
+      { action: action_click_set_budget },
+      { assertion: assert_budget_updated },
+      { action: action_remove_coffee },
+      { assertion: assert_coffee_removed },
+      { action: action_remove_food_row },
+      { assertion: assert_food_row_removed },
     ],
     form,
   };

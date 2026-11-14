@@ -356,8 +356,8 @@ dials.
 - A space-scoped store's residency ceiling includes its own space as both
   `Space(S)` and `PersonalSpace(S)`, alongside the declared policy. This
   implements the own-space proposal in
-  [specs#71](https://github.com/commonfabric/specs/pull/71), which is closed
-  without merging; no successor ruling is incorporated in the pin. The
+  [specs#71](https://github.com/commonfabric/specs/pull/71), which is open and
+  unruled; no ruling on it is incorporated in the pin. The
   pinned §8.12.4 has no residency term, and the proposed base rule in
   [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
   `Space(S)` form on an unbound store. The own-space addition admits writes
@@ -402,7 +402,46 @@ dials.
   runtime write of label-derived data arriving unlabeled, is `SC-55`'s
   accepted residual, and for the others a declaration that reaches such a
   document stays a read floor and stops being a write ceiling, as the same
-  section states.
+  section states. A served run's cross-holder misfit, below, is measured on
+  those documents all the same.
+- Under strict, a served run, any wave run context
+  (`isServedRunUnderHolderRule` in `cfc/prepare.ts`), admits a
+  clause it read from a store whose holders don't include every holder of the
+  target only by the target's residency. This implements §8.12.5.1 as proposed
+  in [specs#95](https://github.com/commonfabric/specs/pull/95), which the pin
+  does not hold, ahead of its ruling and under a `SPEC-PENDING` marker naming
+  it; `check-cfc-correspondence` exempts the citation. It refuses writes the
+  pinned §8.12.5 admits, by an authored, upgraded or minted declaration or by
+  the runtime-owned routes above, and persists nothing new: an over-taint
+  against the pin. Against the proposal it differs two ways. Residency's
+  owner case admits a cross-holder `PersonalSpace(P)` clause
+  into a store bound to `P`, which the proposal leaves out pending specs#68
+  and specs#71: an under-taint against the proposal's text, whose holders,
+  `P` alone, are inside that clause's audience. And it inherits the
+  reference-write gap below: a served run that carries a cross-holder clause
+  into a store by reference, rather than by value, is not refused, although
+  the clause is in the slot stamp it persists. A read declared onward, whose
+  membership lands as a stamp the measurement does not reach, is the same,
+  and so is a `data:` link of a media type other than the Fabric codec's,
+  which is written as a reference whose content rides in its URI (the codec's
+  own `data:` links and native snapshots are expanded and written as values,
+  `data-updating.ts`). A SQLite write commits beside a value write of its
+  database document's revision, which writer-fit measures, so a served run's
+  cross-holder clause in it is refused there, as any other write's is.
+- Writer-fit does not measure a reference or structure write. §8.2.6
+  requires "writer-fit for the reference and structure actually persisted,
+  including replica audiences", and §8.12.8 that writer-fit and upgrade
+  rules "govern the declared component, including reference
+  identity/structure writes". The measurement in `prepareBoundaryCommit`
+  takes only a target's value-write paths: a recorded link write, and a
+  value made entirely of references, are skipped
+  (`cfc-enforcement-matrix.md` §4, the writer-fit entry's scope note). What
+  such a write persists is the reference's own label, §3 above: the link
+  schema's declarations, the handle's carried restriction, and the creating
+  attempt's flow join as a pointer-class stamp at the slot. None of it is
+  measured against the target's ceiling: an under-taint. A served run's
+  cross-holder clause (§8.12.5.1, above) is in that stamp, so a measurement
+  of reference writes would bring those writes under the holder rule.
 
 ## 6. Idempotent persistence (§4.6.4)
 

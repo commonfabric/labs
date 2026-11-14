@@ -83,6 +83,7 @@ export const LOOM_COMMANDS_TOOL_GUIDANCE = [
   "- A listed command with target loom takes a loomId. Pass expectedVersion to refuse a stale write.",
   "- Batch independent calls into one run_command as {calls: [...]}; they run concurrently and answer in order.",
   "- not_granted means this run may not run the command: do not retry; if the person should, offer it in your result.",
+  "- A component's ref in an answer is a handle this run holds for that piece; describe_handle shows what it holds and, when it can read the piece's pattern, the verbs it takes; a description with no verbs means they could not be read, not that it has none. A ref_unheld says why a component could not be held: do not look for its address another way.",
   `- ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
 ].join("\n");
 

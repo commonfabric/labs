@@ -40,23 +40,28 @@ export const HealthResponseSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
-const GIT_SHA = resolveGitSha();
-
 /** Header carrying the same commit as the body's `gitSha`. Clients that only
  * need liveness + version (the cf CLI) read this instead of the body, so
  * their health probe completes at headers-arrival — a stalled or truncated
  * body cannot delay them. */
 export const GIT_SHA_HEADER = "x-cf-git-sha";
 
-export const index: AppRouteHandler<IndexRoute> = (c) => {
-  const response: HealthResponse = {
-    status: "OK",
-    timestamp: Date.now(),
-    gitSha: GIT_SHA,
+/** The `/_health` handler of a server running the commit `gitSha`. */
+export function healthIndex(
+  gitSha: string | null,
+): AppRouteHandler<IndexRoute> {
+  return (c) => {
+    const response: HealthResponse = {
+      status: "OK",
+      timestamp: Date.now(),
+      gitSha,
+    };
+    if (gitSha !== null) c.header(GIT_SHA_HEADER, gitSha);
+    return c.json(response, HttpStatusCodes.OK);
   };
-  if (GIT_SHA !== null) c.header(GIT_SHA_HEADER, GIT_SHA);
-  return c.json(response, HttpStatusCodes.OK);
-};
+}
+
+export const index = healthIndex(resolveGitSha());
 
 const serverStartTimestamp = Date.now();
 

@@ -3,7 +3,6 @@ import { type CategoryBudget, type Expense } from "./schemas.tsx";
 import DataView from "./data-view.tsx";
 import ExpenseForm from "./expense-form.tsx";
 
-// Use SINGLE type parameter to avoid conflict bug with sub-pattern rendering
 interface State {
   expenses: Writable<Expense[] | Default<[]>>;
   budgets: Writable<CategoryBudget[] | Default<[]>>;

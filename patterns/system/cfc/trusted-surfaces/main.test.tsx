@@ -1,14 +1,19 @@
 import {
   assert,
   handler,
+  NAME,
   pattern,
   Stream,
   TESTS,
   Writable,
 } from "commonfabric";
 import {
+  PUBLISH_SNAPSHOT_ACTION,
+  REVIEW_SNAPSHOT_ACTION,
   SAVE_DRAFT_ACTION,
   SAVE_TITLE_ACTION,
+  TRUSTED_PUBLISH_SURFACE,
+  TRUSTED_REVIEW_SURFACE,
   TRUSTED_SAVE_DRAFT_SURFACE,
   TRUSTED_SAVE_SURFACE,
   TrustedAudiencePublishSurface,
@@ -19,8 +24,10 @@ import {
   TrustedForwardSurface,
   TrustedLongRunningJobSurface,
   TrustedProvenanceReviewSurface,
+  TrustedPublishSurface,
   TrustedRecipientConfirmSurface,
   TrustedRedactedReleaseSurface,
+  TrustedReviewSurface,
   TrustedSafeLinkSurface,
   TrustedSaveDraftSurface,
   TrustedSaveSurface,
@@ -182,6 +189,24 @@ export default pattern(() => {
     redactionLabel,
     sourceText: redactionSourceText,
     releasedRedactedContent,
+  });
+  // The review surface snapshots what the save surfaces stored, and the
+  // publish surface snapshots what was reviewed.
+  const reviewedTitle = new Writable("");
+  const reviewedBody = new Writable("");
+  const trustedReview = TrustedReviewSurface({
+    savedTitle,
+    savedBody,
+    reviewedTitle,
+    reviewedBody,
+  });
+  const publishedTitle = new Writable("");
+  const publishedBody = new Writable("");
+  const trustedPublish = TrustedPublishSurface({
+    reviewedTitle,
+    reviewedBody,
+    publishedTitle,
+    publishedBody,
   });
 
   const action_set_title = setString({
@@ -396,8 +421,59 @@ export default pattern(() => {
       "Released redacted support case: Customer [redacted-secret] code [redacted-id] may be released after redaction."
   );
 
+  const assert_reviewed = assert(() =>
+    reviewedTitle.get() === "Saved from trusted surface" &&
+    reviewedBody.get() === "Draft body" &&
+    publishedTitle.get() === ""
+  );
+  const assert_published = assert(() =>
+    publishedTitle.get() === "Saved from trusted surface" &&
+    publishedBody.get() === "Draft body"
+  );
+  const assert_every_surface_names_itself = assert(() =>
+    [
+      trustedSave[NAME],
+      trustedSaveDraft[NAME],
+      trustedReview[NAME],
+      trustedPublish[NAME],
+      trustedForward[NAME],
+      trustedDirect[NAME],
+      trustedSafeLink[NAME],
+      trustedConversationSend[NAME],
+      trustedAudiencePublish[NAME],
+      trustedDisclaimerAck[NAME],
+      trustedProvenanceReview[NAME],
+      trustedFactCheckGate[NAME],
+      trustedSongIdRecording[NAME],
+      trustedSharePolicy[NAME],
+      trustedLongRunningJob[NAME],
+      trustedRecipientConfirm[NAME],
+      trustedRedactedRelease[NAME],
+    ].join("|") ===
+      [
+        "Trusted Save Surface",
+        "Trusted Save Draft Surface",
+        "Trusted Review Surface",
+        "Trusted Publish Surface",
+        "Trusted Forward Surface",
+        "Trusted Direct Command Surface",
+        "Trusted Safe Link Surface",
+        "Trusted Conversation Send Surface",
+        "Trusted Audience Publish Surface",
+        "Trusted Disclaimer Ack Surface",
+        "Trusted Provenance Review Surface",
+        "Trusted Fact Check Gate Surface",
+        "Trusted Song ID Recording Surface",
+        "Trusted Share Policy Surface",
+        "Trusted Long Running Job Surface",
+        "Trusted Recipient Confirm Surface",
+        "Trusted Redacted Release Surface",
+      ].join("|")
+  );
+
   return {
     [TESTS]: [
+      { assertion: assert_every_surface_names_itself },
       { action: action_set_title },
       // The `savedTitle` / `savedBody` writes carry TrustedAction UI
       // contracts: send the renderer-trusted gesture for the reviewed surface
@@ -419,6 +495,22 @@ export default pattern(() => {
         },
       },
       { assertion: assert_saved_draft },
+      {
+        action: trustedReview.reviewSaved,
+        trustedUi: {
+          surface: TRUSTED_REVIEW_SURFACE,
+          action: REVIEW_SNAPSHOT_ACTION,
+        },
+      },
+      { assertion: assert_reviewed },
+      {
+        action: trustedPublish.publishReviewed,
+        trustedUi: {
+          surface: TRUSTED_PUBLISH_SURFACE,
+          action: PUBLISH_SNAPSHOT_ACTION,
+        },
+      },
+      { assertion: assert_published },
       { action: action_set_recipient },
       { action: action_prepare_forward },
       { assertion: assert_forward_prepared },
@@ -478,6 +570,8 @@ export default pattern(() => {
     ],
     trustedSave,
     trustedSaveDraft,
+    trustedReview,
+    trustedPublish,
     trustedForward,
     trustedDirect,
     trustedSafeLink,

@@ -239,9 +239,15 @@ export const syncTransactions = createRoute({
           schema: z.object({
             success: z.boolean(),
             message: z.string(),
-            added: z.number().describe("Number of transactions added"),
-            modified: z.number().describe("Number of transactions modified"),
-            removed: z.number().describe("Number of transactions removed"),
+            added: z.array(z.record(z.string(), z.unknown())).describe(
+              "The transactions Plaid reported as added",
+            ),
+            modified: z.array(z.record(z.string(), z.unknown())).describe(
+              "The transactions Plaid reported as modified",
+            ),
+            removed: z.array(z.string()).describe(
+              "The ids of the transactions Plaid reported as removed",
+            ),
             hasMore: z.boolean().describe(
               "Whether more transactions are available",
             ),

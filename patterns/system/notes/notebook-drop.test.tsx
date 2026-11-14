@@ -1,68 +1,60 @@
 /**
  * Test: dropping onto a note row keeps memberships stable.
  *
- * Every row's drop zone binds handleDropOntoNotebook with the notebook's own
- * SELF as the target, so target and current alias the same notes collection.
- * The handler adds with addUnique (dedup by link identity, no whole-list
- * read of the target) and must skip the remove-from-current step when the
- * lists alias — otherwise an in-notebook drop of an existing note turns into
- * a move-to-tail reorder, and a multi-select drop strips the selected notes
- * from the notebook entirely (the pre-addUnique code had exactly that
- * data-loss bug). These tests drive the drop stream bound to a row and pin:
- * order stability for an in-notebook re-drop, membership survival for a
- * multi-select re-drop, and a plain add for a note from outside.
+ * Every row's drop zone binds handleDropOntoNotebook, which files a dropped
+ * note in this notebook with addUnique (dedup by link identity, no
+ * whole-list read), and for a note in a multi-selection takes the selection
+ * out of every other notebook. Neither may remove anything from this
+ * notebook: an in-notebook drop of an existing note would turn into a
+ * move-to-tail reorder, and a multi-select drop would strip the selected
+ * notes from the notebook entirely. These tests drive the drop stream bound
+ * to a row and pin: order stability for an in-notebook re-drop, membership
+ * survival for a multi-select re-drop, and a plain add for a note from
+ * outside.
  *
  * Run: deno task cf test patterns/system/notes/notebook-drop.test.tsx --root patterns --verbose
  */
 import { action, assert, pattern, TESTS, UI } from "commonfabric";
 import {
   findNode,
-  propsOf,
-  readValue,
+  fireEvent,
+  isElement,
+  propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Notebook from "./notebook.tsx";
 import Note from "./note.tsx";
-
-type DropStream = {
-  send: (event: { detail: { sourceCell: unknown } }) => void;
-};
 
 // A row's title lives in its cf-chip's `label` prop, which textContent
 // (a children walk) never sees — so locate the row zone as the
 // note,notebook-accepting cf-drop-zone whose subtree holds the chip with
 // that label. Module scope: SES callbacks may not capture callables from
 // enclosing function scopes.
-const isElement = (
-  value: unknown,
-  name: string,
-): value is Record<PropertyKey, unknown> =>
-  typeof value === "object" && value !== null &&
-  (value as { name?: unknown }).name === name;
-
 const sendDropOntoRow = (
   subject: { [UI]: unknown },
   rowText: string,
   sourceCell: unknown,
 ) => {
   const zone = findNode(subject[UI], (node) => {
-    if (!isElement(readValue(node), "cf-drop-zone")) return false;
+    if (!isElement(node, "cf-drop-zone")) return false;
     // Prop values arrive as link proxies, so resolve before comparing.
     if (
-      String(readValue(propsOf(node)?.accept) ?? "") !== "note,notebook"
+      String(propValue(node, "accept") ?? "") !== "note,notebook"
     ) return false;
     // Labels carry the note NAME ("📝 <title>"), so match by inclusion.
     const chip = findNode(
       node,
       (inner) =>
-        isElement(readValue(inner), "cf-chip") &&
-        String(readValue(propsOf(inner)?.label) ?? "").includes(rowText),
+        isElement(inner, "cf-chip") &&
+        String(propValue(inner, "label") ?? "").includes(rowText),
     );
     return chip !== undefined;
   });
-  const stream = propsOf(zone)?.["oncf-drop"];
-  if (typeof stream === "object" && stream !== null && "send" in stream) {
-    (stream as DropStream).send({ detail: { sourceCell } });
-  }
+  fireEvent(
+    zone,
+    "oncf-drop",
+    { detail: { sourceCell } },
+    `the ${rowText} row`,
+  );
 };
 
 const noteTitlesOf = (subject: { notes?: unknown }): string[] =>

@@ -1,5 +1,11 @@
 import { assertEquals } from "@std/assert";
-import { redactHeaders, serializeResponse } from "./pino-logger.ts";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import {
+  redactHeaders,
+  serializeRequest,
+  serializeResponse,
+} from "./pino-logger.ts";
 
 Deno.test("redactHeaders removes sensitive Headers values", () => {
   assertEquals(
@@ -69,4 +75,47 @@ Deno.test("response serializer redacts sensitive headers", () => {
       }),
     },
   );
+});
+
+describe("request and response serializers", () => {
+  const request = {
+    method: "POST",
+    url: "/api/storage/memory",
+    headers: { authorization: "Bearer secret", accept: "application/json" },
+  };
+  const redacted = { authorization: "[redacted]", accept: "application/json" };
+
+  it("returns `undefined` for a request and a response when DISABLE_LOG_REQ_RES is set", () => {
+    expect(
+      serializeResponse({ statusCode: 200, headers: {} }, {
+        DISABLE_LOG_REQ_RES: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      serializeRequest(request, { DISABLE_LOG_REQ_RES: true, ENV: "test" }),
+    ).toBeUndefined();
+  });
+
+  it("returns a request's redacted headers as a JSON string outside production", () => {
+    expect(
+      serializeRequest(request, { DISABLE_LOG_REQ_RES: false, ENV: "test" }),
+    ).toEqual({
+      method: "POST",
+      url: "/api/storage/memory",
+      headers: JSON.stringify(redacted),
+    });
+  });
+
+  it("returns a request's redacted headers as an object in production", () => {
+    expect(
+      serializeRequest(request, {
+        DISABLE_LOG_REQ_RES: false,
+        ENV: "production",
+      }),
+    ).toEqual({
+      method: "POST",
+      url: "/api/storage/memory",
+      headers: redacted,
+    });
+  });
 });

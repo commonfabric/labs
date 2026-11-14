@@ -278,14 +278,24 @@ export const LT1_LATE_SEAL_REFUSED = "lt1-late-seal-refused";
  * when its transaction writes a space's ACL document (INV-12,
  * `docs/specs/memory-v2/09-invariants.md`). The refusal is deterministic, so
  * for a run delivering a durable entry the scheduler's event dispatch seals it
- * as the entry's error consequence, and the wave does not requeue the event
- * for it (`WaveAccumulator.noteSealFailure()`).
+ * as the entry's error consequence, or as the withheld one where the run's
+ * join is foreign to the stream's space (events.md §5), and the wave does not
+ * requeue the event for it (`WaveAccumulator.noteSealFailure()`).
  */
 export const ACL_DOCUMENT_WRITE_REFUSED = "acl-document-write-refused";
 
 export type ServedEventFailureOutcome =
   | {
-    kind: "error" | "dropped";
+    kind: "error";
+    message: string;
+
+    /** Whether the run's join carries a clause its stream's space doesn't
+     * admit, so that its consequence records the outcome withheld rather
+     * than `message` (`withholdProcessedClaimOutcome()`). */
+    withheld?: true;
+  }
+  | {
+    kind: "dropped";
     message: string;
   }
   | {
@@ -515,6 +525,15 @@ export type QueuedEvent = {
    * the flag and queues an execution.
    */
   presyncPending?: boolean;
+
+  /**
+   * The FIFO slot is held while a multi-space commit issued before the head
+   * dispatched still has writes to hand to a later space's replica
+   * (`IStorageManager.multiSpaceCommitsApplied()`), so that the handler reads
+   * every write an earlier event committed. The hand-over clears the flag and
+   * queues an execution.
+   */
+  multiSpaceCommitPending?: boolean;
 
   /**
    * The implementation and payload the head's presync covered. A head whose

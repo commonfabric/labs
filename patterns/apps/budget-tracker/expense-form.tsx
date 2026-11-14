@@ -95,7 +95,6 @@ const removeBudgetHandler = handler<
 
 // ============ PATTERN ============
 
-// Use single type param to avoid conflict bug when composed
 export default pattern<Input>(({ expenses, budgets }) => {
   // Local state for form inputs
   const newDescription = new Writable("");

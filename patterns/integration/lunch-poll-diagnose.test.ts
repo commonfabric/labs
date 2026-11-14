@@ -81,8 +81,20 @@ describe("lunch-poll-diagnose", () => {
     expect(
       casesFromConfig(matrixConfigFromArgs(explicitArgs), explicitArgs),
     ).toEqual([
-      { optionCount: 2, userCount: 3, voteRounds: 2, voters: undefined },
-      { optionCount: 4, userCount: 5, voteRounds: 2, voters: undefined },
+      {
+        program: "main.tsx",
+        optionCount: 2,
+        userCount: 3,
+        voteRounds: 2,
+        voters: undefined,
+      },
+      {
+        program: "main.tsx",
+        optionCount: 4,
+        userCount: 5,
+        voteRounds: 2,
+        voters: undefined,
+      },
     ]);
   });
 

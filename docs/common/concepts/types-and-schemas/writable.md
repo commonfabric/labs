@@ -239,11 +239,13 @@ in the same handler.
 What a reader of the anchors may learn is decided as for any other cell, by
 the label of what was written to it. A handler that reads the field before
 writing the anchors writes them under the field's confidentiality. One that
-writes anchors without reading the field does not, and their offsets follow
-the field's edits from then on all the same, so for a confidential field every
-handler that writes its anchors reads it first. The field's write policy does
-not cover the anchors; a pattern that wants only certain handlers to move them
-declares a write policy on the anchors cell's type.
+writes anchors without reading the field does not, since an offset its writer
+chose says nothing about the field. Once an edit to the field integrates,
+every anchor of the field becomes as confidential as the field was at that
+edit, whether or not the edit moved it, since which anchors move says where
+the edit fell; an anchor stays so until a handler writes it again. The field's
+write policy does not cover the anchors; a pattern that wants only certain
+handlers to move them declares a write policy on the anchors cell's type.
 
 [Collaborative fields](../../../features/collaborative-fields.md#anchors)
 describes how anchors are stored and moved.

@@ -30,6 +30,7 @@ import {
   pattern,
   type PerUser,
   UI,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -79,6 +80,17 @@ interface State {
   people: Writable<Person[] | Default<[]>>;
   expenses: Writable<Expense[] | Default<[]>>;
   myName: PerUser<string | Default<"">>;
+}
+
+export interface Output {
+  [NAME]: "Fair Share";
+  [UI]: VNode;
+  people: Writable<Person[] | Default<[]>>;
+  expenses: Writable<Expense[] | Default<[]>>;
+  myName: PerUser<string | Default<"">>;
+  balances: Balance[];
+  settlements: Settlement[];
+  total: number;
 }
 
 // ============ HELPERS ============
@@ -167,7 +179,7 @@ export const joinWithProfile = handler<
 
 // ============ PATTERN ============
 
-export default pattern<State>(({ people, expenses, myName }) => {
+export default pattern<State, Output>(({ people, expenses, myName }) => {
   // --- Per-session form drafts (local to each viewer) ---
   const personDraft = Writable.perSession.of<string>("");
   const descDraft = Writable.perSession.of<string>("");
@@ -362,9 +374,13 @@ export default pattern<State>(({ people, expenses, myName }) => {
                       // (not `{ ...e }` clones) and split changes are written
                       // through the element's cell — fresh literals would
                       // re-mint every kept expense's entity identity and
-                      // orphan previously-held references.
+                      // orphan previously-held references. The splits are
+                      // written once the kept list is in place: written
+                      // first, an expense held inline in the list would have
+                      // its old split restored by that list.
                       const allExpenses = expenses.get();
                       const cleaned: Expense[] = [];
+                      const splits: { at: number; sharedBy: string[] }[] = [];
                       for (let i = 0; i < allExpenses.length; i++) {
                         const e = allExpenses[i];
                         if (e.paidBy === name) continue;
@@ -379,12 +395,18 @@ export default pattern<State>(({ people, expenses, myName }) => {
                         // An explicit split emptied by this removal is dropped.
                         if (shared.length === 0) continue;
                         if (shared.length !== had.length) {
-                          expenses.key(i).key("sharedBy").set(shared);
+                          splits.push({
+                            at: cleaned.length,
+                            sharedBy: shared,
+                          });
                         }
                         cleaned.push(e);
                       }
                       people.set(cur.toSpliced(idx, 1));
                       expenses.set(cleaned);
+                      for (const { at, sharedBy } of splits) {
+                        expenses.key(at).key("sharedBy").set(sharedBy);
+                      }
                     }}
                   />
                 </cf-hstack>
@@ -539,7 +561,9 @@ export default pattern<State>(({ people, expenses, myName }) => {
                   </span>
                   <cf-text variant="caption" tone="muted">
                     {computed(() => {
-                      const n = expense.sharedBy?.length || 0;
+                      // An empty split is shared by everyone in the ledger.
+                      const n = expense.sharedBy?.length ||
+                        people.get().length;
                       return `${expense.paidBy} paid · split ${n} way${
                         n === 1 ? "" : "s"
                       } · ${expense.date}`;

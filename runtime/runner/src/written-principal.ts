@@ -24,6 +24,11 @@ import type { IExtendedStorageTransaction } from "./storage/interface.ts";
  * for a value that is not the whole of its own cell. The label read is one a
  * reactive computation reruns on.
  *
+ * The principal is returned with no label of its own, for a host, which reads
+ * the label it comes from as well. Pattern code reaches it through
+ * `writtenPrincipalOf()`, which refuses while a `represents-principal`
+ * claim's subject is classified as anything but public.
+ *
  * @throws When the label is stored in a form this build cannot interpret, or
  *   a read through `tx` fails.
  */

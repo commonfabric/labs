@@ -7,6 +7,7 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
+  drawsAsPictures,
   glyphFor,
   sourceColumnOf,
   visitDisplayCellSources,
@@ -38,6 +39,9 @@ Deno.test("displayWidth: matches the rendered cell count", () => {
     "\x1b[31mab\tc",
     "\udc7baB",
     "a\ud835",
+    "N\bNA\bAM\bME\bE",
+    "_\bf_\bd\t\x1b[31mx\by",
+    "😀\b😀\b",
   ];
   for (const mode of DISPLAY_MODES) {
     for (const text of samples) {
@@ -54,8 +58,8 @@ Deno.test("displayWidth: matches the rendered cell count", () => {
 // mode cycle & labels
 //
 
-Deno.test("DISPLAY_MODES: pictures is first, and every mode has a label", () => {
-  assertEquals(DISPLAY_MODES[0], "pictures");
+Deno.test("DISPLAY_MODES: ansi is first, and every mode has a label", () => {
+  assertEquals(DISPLAY_MODES[0], "ansi");
   assertEquals(DISPLAY_MODES.length, 3);
   assertEquals(displayModeLabel("pictures"), "control pictures");
   assertEquals(displayModeLabel("ansi"), "ANSI color");
@@ -167,6 +171,158 @@ Deno.test("ansi: a cell visitor sees each cell a tab draws", () => {
   assertEquals(ranges, [[0, 1], [1, 2], [2, 3], [2, 3], [3, 4]]);
 });
 
+Deno.test("ansi: a character struck over itself is one bold cell", () => {
+  const cells = displayLine(ln("aN\bNA\bAb"), "ansi");
+  assertEquals(
+    cells.map((c) => [c.ch, c.col, c.sourceEnd, c.ansi?.bold]),
+    [
+      ["a", 0, 1, undefined],
+      ["N", 1, 4, true],
+      ["A", 4, 7, true],
+      ["b", 7, 8, undefined],
+    ],
+  );
+  assertEquals(cells[1].ansi?.underline, undefined, "bold is not underlined");
+});
+
+Deno.test("ansi: a character struck over an underscore is one underlined cell", () => {
+  for (const text of ["_\bf", "f\b_"]) {
+    const [cell, ...rest] = displayLine(ln(text), "ansi");
+    assertEquals(rest, [], JSON.stringify(text));
+    assertEquals(cell.ch, "f");
+    assertEquals(cell.ansi?.underline, true);
+    assertEquals(cell.ansi?.bold, undefined, "underlined is not bold");
+  }
+});
+
+Deno.test("ansi: repeated overstrikes combine into one cell", () => {
+  const cells = displayLine(ln("_\bX\bX\bXy"), "ansi");
+  assertEquals(cells.map((c) => c.ch).join(""), "Xy");
+  assertEquals(cells[0].ansi?.bold, true);
+  assertEquals(cells[0].ansi?.underline, true);
+  assertEquals([cells[0].col, cells[0].sourceEnd], [0, 7]);
+  const [interrupted] = displayLine(ln("X\b_\bX"), "ansi");
+  assertEquals(
+    [interrupted.ansi?.bold, interrupted.ansi?.underline],
+    [true, true],
+    "an underscore between two strikes",
+  );
+  const [restruck] = displayLine(ln("X\bY\bX"), "ansi");
+  assertEquals(
+    [restruck.ch, restruck.ansi?.bold],
+    ["X", true],
+    "another character between two strikes",
+  );
+  const [underscore] = displayLine(ln("_\b_"), "ansi");
+  assertEquals(
+    [underscore.ch, underscore.ansi?.bold, underscore.ansi?.underline],
+    ["_", true, undefined],
+    "an underscore struck over itself is bold, not underlined",
+  );
+  assertEquals(
+    displayLine(ln("😀\b😀"), "ansi").map((c) => [c.ch, c.ansi?.bold]),
+    [["😀", true]],
+    "a character outside the Basic Multilingual Plane",
+  );
+});
+
+Deno.test("ansi: an overstrike keeps the color around it", () => {
+  const [cell] = displayLine(ln("\x1b[31mx\bx"), "ansi");
+  assertEquals(cell.ansi?.fg, [205, 49, 49]);
+  assertEquals(cell.ansi?.bold, true);
+});
+
+Deno.test("ansi: two different characters struck together draw the second", () => {
+  const cells = displayLine(ln("+\box\byz"), "ansi");
+  assertEquals(
+    cells.map((c) => [c.ch, c.col, c.sourceEnd, c.ansi]),
+    [["o", 0, 3, undefined], ["y", 3, 6, undefined], ["z", 6, 7, undefined]],
+  );
+  assertEquals(
+    displayLine(ln("x\bx\by"), "ansi").map((c) => [c.ch, c.ansi]),
+    [["y", undefined]],
+    "a bold character struck by another is plain",
+  );
+  for (const text of ["_\bX\bY", "X\b_\bY", "_\b_\bY"]) {
+    const [cell, ...rest] = displayLine(ln(text), "ansi");
+    const label = `an underscore underlines what is drawn: ${
+      JSON.stringify(text)
+    }`;
+    assertEquals(rest, [], label);
+    assertEquals(
+      [cell.ch, cell.ansi?.underline, cell.ansi?.bold],
+      ["Y", true, undefined],
+      label,
+    );
+  }
+});
+
+Deno.test("ansi: overstrike emphasis adds to the syntax colors", () => {
+  const keyword = { fg: [1, 2, 3] as const, italic: true };
+  const [bold, plain] = displayLine(ln("x\bx+\bo"), "ansi", () => keyword);
+  assertEquals(bold.ansi, { ...keyword, bold: true });
+  assertEquals(plain.ansi, undefined, "no emphasis leaves the syntax colors");
+  assertEquals(plain.syntax, keyword);
+});
+
+Deno.test("ansi: an overstrike takes the syntax colors of the character drawn", () => {
+  const line: Line = {
+    text: "_\bf",
+    spans: [{ col: 0, text: "_\b", cls: "punctuation" }, {
+      col: 2,
+      text: "f",
+      cls: "keyword",
+    }],
+  };
+  const keyword = { fg: [1, 2, 3] as const };
+  const [cell] = displayLine(
+    line,
+    "ansi",
+    (span) => span.cls === "keyword" ? keyword : {},
+  );
+  assertEquals(cell.syntax, keyword);
+  assertEquals(cell.ansi, { ...keyword, underline: true });
+});
+
+Deno.test("ansi: a backspace that does not overstrike shows as its glyph", () => {
+  assertEquals(glyphs("x\b", "ansi"), "x␈", "nothing after it");
+  assertEquals(glyphs("\bx", "ansi"), "␈x", "nothing before it");
+  assertEquals(glyphs("\b\bx", "ansi"), "␈␈x", "a backspace before it");
+  assertEquals(glyphs("\t\bx", "ansi"), "    ␈x", "a tab before it");
+  assertEquals(glyphs("x\b\tx", "ansi"), "x␈  x", "a tab after it");
+  assertEquals(
+    glyphs("_\b\x1b[1mx", "ansi"),
+    "_␈x",
+    "a color sequence after it",
+  );
+});
+
+Deno.test("displayColumnOf and sourceColumnOf: an overstrike is one column", () => {
+  const line = ln("aN\bNb");
+  for (const col of [1, 2, 3]) {
+    assertEquals(displayColumnOf(line, "ansi", col), 1, `column ${col}`);
+  }
+  assertEquals(displayColumnOf(line, "ansi", 4), 2);
+  assertEquals(sourceColumnOf(line, "ansi", 1), 1);
+  assertEquals(sourceColumnOf(line, "ansi", 2), 4);
+  assertEquals(displayColumnOf(line, "pictures", 4), 4, "pictures maps 1:1");
+});
+
+Deno.test("ansi: a cell visitor sees one cell for each overstrike", () => {
+  const ranges: [number, number][] = [];
+  visitDisplayCellSources("a😀\b😀b\bc", "ansi", (start, end) => {
+    ranges.push([start, end]);
+    return true;
+  });
+
+  assertEquals(ranges, [[0, 1], [1, 6], [6, 9]]);
+});
+
+Deno.test("pictures and hidden: an overstrike is not interpreted", () => {
+  assertEquals(glyphs("N\bN", "pictures"), "N␈N");
+  assertEquals(glyphs("N\bN", "hidden"), "N…N");
+});
+
 Deno.test("pictures and hidden: a tab is one cell", () => {
   assertEquals(glyphs("a\tb", "pictures"), "a␉b");
   assertEquals(glyphs("a\tb", "hidden"), "a…b");
@@ -228,8 +384,8 @@ Deno.test("displayColumnOf: hidden maps a source column to the compacted column"
   assertEquals(displayColumnOf(line, "hidden", 1), 1, "the ellipsis");
   assertEquals(
     displayColumnOf(line, "hidden", 2),
-    2,
-    "inside the run → next cell",
+    1,
+    "inside the run → the ellipsis that draws it",
   );
   assertEquals(displayColumnOf(line, "hidden", 4), 2, "b");
   assertEquals(
@@ -269,6 +425,20 @@ Deno.test("sourceColumnOf: maps compact display offsets back to source", () => {
 //
 // internals
 //
+
+Deno.test("drawsAsPictures: compares the glyphs and colors a mode draws", () => {
+  const draws = (text: string, mode: DisplayMode) =>
+    drawsAsPictures(text, mode);
+
+  assertEquals(draws("plain", "ansi"), true);
+  assertEquals(draws("bell\x07", "ansi"), true, "a bell draws as ␇ in both");
+  assertEquals(draws("bell\x07", "hidden"), false, "hidden draws an ellipsis");
+  assertEquals(draws("abc\td", "ansi"), false, "a tab draws blank");
+  assertEquals(draws("\x1b[mx", "ansi"), false, "a color sequence is hidden");
+  assertEquals(draws("\x1b[2Jx", "ansi"), true, "other sequences are drawn");
+  assertEquals(draws("N\bN", "ansi"), false, "an overstrike is one cell");
+  assertEquals(draws("N\bN\t\x1b[m", "pictures"), true);
+});
 
 Deno.test("glyphFor: DEL and C1 codes have block glyphs", () => {
   assertEquals(glyphFor("\x7f"), "␡");

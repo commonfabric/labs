@@ -570,6 +570,23 @@ function compileAndRunServed(
               attributeToBuiltin: true,
             },
             (settleTx) => {
+              // TODO(danfuzz): Under the served-run holder rule (§8.12.5.1 of
+              // the CFC specification), a request refused over a program whose
+              // label the target's store doesn't admit should end showing its
+              // refusal, as the `llm` builtins' endings do. This read of the
+              // program, which decides whether the request is still the
+              // target's, puts the program's label in the ending's join, so
+              // the rule refuses everything the ending writes and the node
+              // shows no error. Deciding from an in-memory record of the
+              // latest run's program would lose the guarantee that this ending
+              // never lands over a program that replaced it. Where the store
+              // does admit the label, the read stamps it on everything the
+              // ending writes, the memo's request hash included, and the
+              // node's next run reads the memo and takes the label into its
+              // request, so a program the ceiling admits is refused as well;
+              // an ending that read no input and recorded no hash would end
+              // that, as the `llm` builtins' does. The tests pinning today's
+              // outcomes are in `served-effect-refusal-rerun.test.ts`.
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),

@@ -1529,6 +1529,25 @@ Deno.test("validates the label documents a version-2 CFC envelope references", a
       "does not hold a label",
     );
 
+    // So is one holding a class instance, which shows no own members for a
+    // check of members alone to refuse.
+    const instance = new FabricBytes(new Uint8Array([1, 2, 3]));
+    const instanceHash = taggedHashStringOf(instance);
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(5, {
+            operations: [
+              docWithLabel(`cid:${instanceHash}`),
+              setOp(`cid:${instanceHash}`, instance),
+            ],
+          }),
+        }),
+      ProtocolError,
+      "does not hold a label",
+    );
+
     // A stored label document whose bytes were changed out of band no
     // longer hashes to its id, and a later envelope naming it is refused:
     // the commit API rejects every `cid:` mutation, so direct database

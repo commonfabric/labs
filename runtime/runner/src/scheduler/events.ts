@@ -24,13 +24,20 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import {
+  runOutcomeIsWithheld,
+  withholdProcessedClaimOutcome,
+} from "../executor/processed-claim.ts";
+import {
   addressKey,
   areNormalizedLinksSame,
   type NormalizedFullLink,
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
-import { commitPromiseRejectionOf } from "../storage/extended-storage-transaction.ts";
+import {
+  commitPromiseRejectionOf,
+  runBeforeAbort,
+} from "../storage/extended-storage-transaction.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
@@ -421,6 +428,7 @@ export function isHeadEventParked(
     headEvent?.patternChangePending === true ||
     headEvent?.retryReadinessPending === true ||
     headEvent?.presyncPending === true ||
+    headEvent?.multiSpaceCommitPending === true ||
     (headEvent?.notBefore !== undefined && headEvent.notBefore > now);
 }
 
@@ -2026,6 +2034,30 @@ function holdHeadEventForPresync(
 }
 
 /**
+ * Holds the head while a multi-space commit issued before it still has writes
+ * to hand to a later space's replica, and returns whether it did. Such a
+ * commit hands a space its writes only once the server has answered for the
+ * spaces before it, so a handler that ran meanwhile would read none of them:
+ * a second click would not see the first click's writes to its own space.
+ * The head holds its FIFO slot, as it does while its inputs presync, and the
+ * hand-over queues a fresh tick. A one-space commit's writes are in the
+ * replica as the commit is issued, so it holds nothing.
+ */
+function holdHeadEventForMultiSpaceCommits(
+  state: SchedulerEventExecutionState,
+  queuedEvent: QueuedEvent,
+): boolean {
+  const applied = state.runtime.storageManager.multiSpaceCommitsApplied?.();
+  if (applied === undefined) return false;
+  queuedEvent.multiSpaceCommitPending = true;
+  void applied.then(() => {
+    delete queuedEvent.multiSpaceCommitPending;
+    state.queueExecution();
+  });
+  return true;
+}
+
+/**
  * Brings `implementation`'s input documents for `event` into the local replica
  * through its `presyncInputs`, under the event's actor. Never rejects: a
  * failure is logged.
@@ -2119,6 +2151,11 @@ export async function processPullQueuedEventDuringExecute(
   if (state.isHeadEventLoadParked(queuedEvent)) {
     return;
   }
+
+  // The head holds its slot while an earlier multi-space commit hands its
+  // later spaces' writes to their replicas; the hand-over queues a fresh tick.
+  if (queuedEvent.multiSpaceCommitPending) return;
+  if (holdHeadEventForMultiSpaceCommits(state, queuedEvent)) return;
 
   if (
     queuedEvent.notBefore !== undefined &&
@@ -2427,6 +2464,33 @@ export async function dispatchQueuedEvent(state: {
     }
   };
 
+  // Whether a served run's outcome is withheld: whether its join carries a
+  // clause its stream's space doesn't admit, so that its processed claim, and
+  // every failure it reports, says the same thing whatever happened
+  // (`runOutcomeIsWithheld()`). Decided once, while the transaction is still
+  // open: before the commit, before a failed run's transaction is aborted,
+  // or, when the handler aborts the transaction itself, first thing in that
+  // abort.
+  let outcomeWithheld: boolean | undefined;
+  const servedOutcomeWithheld = (): boolean => {
+    if (served === undefined) return false;
+    outcomeWithheld ??= runOutcomeIsWithheld(
+      tx,
+      queuedEvent.eventLink.space,
+    );
+    return outcomeWithheld;
+  };
+  if (served !== undefined) {
+    runBeforeAbort(tx, () => {
+      servedOutcomeWithheld();
+    });
+  }
+  /** `outcome`, with `withheld` set when the served run's outcome is. */
+  const servedErrorOutcome = (message: string): ServedEventFailureOutcome =>
+    servedOutcomeWithheld()
+      ? { kind: "error", message, withheld: true }
+      : { kind: "error", message };
+
   let failureFinalized = false;
   // A failed setup or handler completes every owner notification once, even
   // when one observer throws. The original failure remains the event outcome.
@@ -2436,6 +2500,8 @@ export async function dispatchQueuedEvent(state: {
     const handlerError = error instanceof Error
       ? error
       : new Error(String(error));
+    // Decided before the abort below takes the observations it reads.
+    servedOutcomeWithheld();
     for (
       const complete of [
         () => {
@@ -2447,10 +2513,10 @@ export async function dispatchQueuedEvent(state: {
         releaseLineage,
         () => state.handleError(handlerError, action, queuedEvent.id),
         () =>
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: handlerError.message,
-          }),
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome(handlerError.message),
+          ),
         runFinalCommitCallback,
         () => tx.abandonStagedWork(eventAbandonError("event execution failed")),
       ]
@@ -3058,8 +3124,22 @@ export async function dispatchQueuedEvent(state: {
         // Taken before the abort, since the read set is what the client arm
         // parks on.
         const runLog = txToReactivityLog(tx);
+        // The reason can name a document the run reached, which a foreign
+        // join's value may have chosen, and the drop notice it can harden
+        // into is written on the entry. Decided before the abort below takes
+        // the observations it reads.
+        // The deferral of later events and the abort's error carry it too,
+        // into the serving host's log and the transaction's settle callbacks.
+        const withheld = servedOutcomeWithheld();
+        const notRunMessage = withheld
+          ? "the handler did not run, and its outcome is withheld"
+          : reason;
         if (tx.status().status === "ready") {
-          tx.abort(new Error(`handler did not run: ${reason}`));
+          tx.abort(
+            new Error(
+              withheld ? notRunMessage : `handler did not run: ${reason}`,
+            ),
+          );
         }
         if (served !== undefined) {
           // Mark/effects atomicity (events.md §4, RULED 2026-08-27 — the
@@ -3081,7 +3161,7 @@ export async function dispatchQueuedEvent(state: {
           reportServedEventFailure(served, {
             kind: "deferred",
             cause: "handler-not-run",
-            message: reason,
+            message: notRunMessage,
           });
           // The withdrawal is a deferral, and a deferral carries the
           // drain's arrival-order BARRIER (events.md §2; review-6459 F1):
@@ -3093,7 +3173,9 @@ export async function dispatchQueuedEvent(state: {
           deferLaterSameSpaceServedEvents(
             state,
             queuedEvent,
-            `whose served handler did not run (${reason})`,
+            withheld
+              ? "whose served handler did not run, its outcome withheld"
+              : `whose served handler did not run (${reason})`,
           );
           runFinalCommitCallback();
           return;
@@ -3179,6 +3261,15 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
 
+      if (served !== undefined) {
+        withholdProcessedClaimOutcome(
+          state.runtime,
+          tx,
+          queuedEvent.eventLink.space,
+          served.streamEntry,
+          servedOutcomeWithheld(),
+        );
+      }
       try {
         state.runtime.prepareTxForCommit(tx);
       } catch (error) {
@@ -3300,7 +3391,9 @@ export async function dispatchQueuedEvent(state: {
 
         // A served event's CFC verdict seals an error consequence (events.md
         // §5: the error IS the consequence — the same honesty as the throw arm
-        // in `finalize` above). Without one the durable entry stays
+        // in `finalize` above), or, for a run whose join is foreign to its
+        // stream's space, the same withheld consequence a commit records
+        // (`servedErrorOutcome`). Without one the durable entry stays
         // unconsequenced and every later drain pass runs it into the identical
         // refusal. Scoped to exactly the class `reportDroppedCfcRejectedWrite`
         // reports; a CFC refusal that is not a verdict defers instead
@@ -3310,10 +3403,7 @@ export async function dispatchQueuedEvent(state: {
         // still-"queued" copy.
         const sealCfcRefusalConsequence = (): void => {
           if (served === undefined || !isCfcRejectedCommitError(error)) return;
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // The seal's refusal of a write to the space's ACL document is
         // deterministic in the same way, so a run delivering a durable entry
@@ -3326,10 +3416,7 @@ export async function dispatchQueuedEvent(state: {
           ) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // For a served event, a commit preparation that failed for a cause a
         // fresh attempt may clear (`failedCommitPreparation`) is a delivery
@@ -3411,10 +3498,10 @@ export async function dispatchQueuedEvent(state: {
           if (served === undefined || !isExplicitTransactionAbort(error)) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: "Event handler aborted its transaction",
-          });
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome("Event handler aborted its transaction"),
+          );
         };
 
         let requeue: Promise<void> | undefined;

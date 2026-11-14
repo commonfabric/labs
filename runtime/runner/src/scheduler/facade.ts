@@ -1290,15 +1290,17 @@ export class Scheduler {
     if (
       this.#hasPendingLineageHeadEvent() || this.#hasLoadParkedHeadEvent() ||
       this.#eventQueue[0]?.retryReadinessPending === true ||
-      this.#eventQueue[0]?.presyncPending === true
+      this.#eventQueue[0]?.presyncPending === true ||
+      this.#eventQueue[0]?.multiSpaceCommitPending === true
     ) {
       // A cross-space lineage head has no timer — its origin commit callback
       // is the wake source; a load-parked head wakes on load completion or
       // drops on an explicit load failure; a head requeued by a stale-basis
       // retry wakes once the retry's readiness resolves; a head held for its
       // input presync wakes once the presync settles, or once a drop takes
-      // it off the queue. Either way idle must stay open until the callback
-      // re-queues execution.
+      // it off the queue; a head held for an earlier multi-space commit wakes
+      // once that commit has handed its writes over. Either way idle must
+      // stay open until the callback re-queues execution.
       return { kind: "drain" };
     }
     // Execution is scheduled - wait for it to complete

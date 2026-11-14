@@ -764,8 +764,11 @@ export type ServingLoopStats = {
    * those closed once their host held nothing, `evicted` those closed while
    * parked to stay within the parked-worker cap or the heap budget,
    * `failed` those that reported an error, failed to start or were killed
-   * by the watchdog, and `shared` the placements that joined a worker
-   * already serving another space because the pool was at its cap.
+   * by the watchdog, `shared` the placements that joined a worker
+   * already serving another space because the pool was at its cap, and
+   * `heapLimited` the workers, among the `failed` ones, that reached their
+   * heap limit. `heapStopped` is how many spaces are on no worker now because
+   * a worker they were alone on reached its heap limit.
    */
   workers: {
     serving: number;
@@ -777,6 +780,8 @@ export type ServingLoopStats = {
     evicted: number;
     failed: number;
     shared: number;
+    heapLimited: number;
+    heapStopped: number;
   };
 };
 
@@ -905,6 +910,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     evicted: 0,
     failed: 0,
     shared: 0,
+    heapLimited: 0,
+    heapStopped: 0,
   },
 });
 

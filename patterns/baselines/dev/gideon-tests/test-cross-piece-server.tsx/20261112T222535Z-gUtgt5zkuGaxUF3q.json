@@ -1,0 +1,57 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "counter": {
+        "default": 0,
+        "type": "number"
+      },
+      "invocationLog": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "counter",
+      "invocationLog"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-cross-piece-server.tsx",
+  "resultSchema": {
+    "description": "A #crossPieceTestServer that exposes a stream for testing cross-piece invocation.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "counter": {
+        "type": "number"
+      },
+      "incrementCounter": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "invocationLog": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "counter",
+      "invocationLog",
+      "incrementCounter",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -27,6 +27,15 @@ import { onGrammarLoad } from "../lib/view/languages/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { styleFor, ui } from "../lib/view/theme.ts";
 import { buildView } from "../lib/view/mod.ts";
+import type { GitHubApi } from "../lib/view/github.ts";
+
+/** A GitHub API that these tests never reach. */
+const noGitHub: GitHubApi = {
+  find: () => Promise.reject(new Error("these tests find nothing")),
+  mergeMethod: () => Promise.reject(new Error("these tests merge nothing")),
+  create: () => Promise.reject(new Error("these tests create nothing")),
+  merge: () => Promise.reject(new Error("these tests merge nothing")),
+};
 
 const OPTS = { color: false, showLineNumbers: false };
 const DOC = parseDocument("export const x = 1;\nconst y = x;\n");
@@ -169,6 +178,10 @@ function makeFake(opts: FakeOpts = {}) {
     },
     git: () => null,
     relay: () => undefined,
+    open: () => false,
+    github: noGitHub,
+    touchGate: () => noGitHub,
+    pullRequestList: () => Promise.resolve(null),
     blame: opts.blame ??
       (() => Promise.reject(new Error("these tests blame nothing"))),
   };
@@ -624,6 +637,32 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   try {
     d.openTty().close();
   } catch { /* no controlling terminal in this environment */ }
+});
+
+Deno.test("realPagerDeps: the pull request list and touch-gate's configuration are the user's", async () => {
+  const home = Deno.makeTempDirSync();
+  try {
+    const d = realPagerDeps(home);
+    assertEquals(await d.pullRequestList(), null);
+    Deno.mkdirSync(join(home, ".cache"));
+    Deno.writeTextFileSync(
+      join(home, ".cache", "github-prs.tsv"),
+      "octo/repo\tfeature\t7\n",
+    );
+    assertEquals(await d.pullRequestList(), "octo/repo\tfeature\t7\n");
+    const error = await assertRejects(() =>
+      d.touchGate("work").merge(
+        { repository: "octo/repo", number: 7, method: "squash", sha: "c0" },
+        () => {},
+        new AbortController().signal,
+      )
+    );
+    assert(
+      String(error).includes(join(home, ".config", "touch-gate", "server")),
+    );
+  } finally {
+    Deno.removeSync(home, { recursive: true });
+  }
 });
 
 //

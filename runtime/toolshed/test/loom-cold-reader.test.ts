@@ -21,7 +21,7 @@ import {
   genesisAcl,
   LoopbackSessionFactory,
   TestStorageManager,
-} from "@/lib/test-support/memory-acl.ts";
+} from "@/test/support/memory-acl.ts";
 
 /** The access a viewer holds on the loom's space and on the piece's. */
 type ViewerAccess = "READ" | "WRITE";

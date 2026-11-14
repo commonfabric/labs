@@ -3,6 +3,7 @@ import { mount } from "../../test-utils/dom.ts";
 
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import type { CellHandle } from "@commonfabric/runtime-client";
 
 import { CFDropZone } from "./index.ts";
 import {
@@ -24,10 +25,19 @@ const cell = createMockCellHandle<unknown>({ title: "Card" }, {
 });
 const { id, space, path } = cell.ref();
 
-/** Starts a drag of `cell` with the pointer at (`x`, `y`). */
-function beginDrag(x: number, y: number, type?: string): void {
+/**
+ * Starts a drag of `cell` with the pointer at (`x`, `y`), delivering
+ * `droppedCell` on a drop where one is given.
+ */
+function beginDrag(
+  x: number,
+  y: number,
+  type?: string,
+  droppedCell?: Promise<CellHandle>,
+): void {
   startDrag({
     cell,
+    droppedCell,
     type,
     sourceElement: document.createElement("div"),
     preview: document.createElement("div"),
@@ -178,6 +188,130 @@ describe("CFDropZone", () => {
         },
       ]);
       expect(zone.hasAttribute("drag-over")).toBe(false);
+    });
+
+    describe("with a dropped cell still resolving", () => {
+      // `cf-drag-source` hands the drag the cell its bound cell resolves to
+      // when the press begins; the drop waits for it.
+
+      const resolved = createMockCellHandle<unknown>({ title: "Card" }, {
+        id: "snapshot:resolved" as `${string}:${string}`,
+      });
+
+      /** Settles with the detail of the next `cf-drop` on `zone`. */
+      function nextDrop(zone: CFDropZone): Promise<unknown> {
+        const dropped = Promise.withResolvers<unknown>();
+        zone.addEventListener(
+          "cf-drop",
+          (event) => dropped.resolve((event as CustomEvent).detail),
+          { once: true },
+        );
+        return dropped.promise;
+      }
+
+      /**
+       * Runs `act()` with `console.error` captured, and settles once it has
+       * been called.
+       */
+      async function nextError(act: () => void): Promise<void> {
+        const original = console.error;
+        const logged = Promise.withResolvers<void>();
+        console.error = () => logged.resolve();
+        try {
+          act();
+          await logged.promise;
+        } finally {
+          console.error = original;
+        }
+      }
+
+      it("dispatches nothing on release, then `cf-drop` with the dropped cell once it resolves", async () => {
+        const { zone, events } = await mountZone();
+        const droppedCell = Promise.withResolvers<CellHandle>();
+        const dropped = nextDrop(zone);
+        beginDrag(150, 125, "card", droppedCell.promise);
+        endDrag();
+        const onRelease = events.map(({ type }) => type);
+
+        droppedCell.resolve(resolved);
+
+        expect({ onRelease, dropped: await dropped }).toEqual({
+          onRelease: ["cf-drag-enter", "cf-drag-leave"],
+          dropped: {
+            sourceCell: resolved.toSigilLink(),
+            sourceCellRef: {
+              id: "snapshot:resolved",
+              space: resolved.ref().space,
+              path: [],
+            },
+            type: "card",
+            pointerX: 150,
+            pointerY: 125,
+            dropZoneRect: { left: 100, top: 100, width: 100, height: 50 },
+          },
+        });
+      });
+
+      it("dispatches drops in the order of their releases", async () => {
+        const { zone } = await mountZone();
+        const first = Promise.withResolvers<CellHandle>();
+        const second = Promise.withResolvers<CellHandle>();
+        const other = createMockCellHandle<unknown>({ title: "Note" }, {
+          id: "snapshot:other" as `${string}:${string}`,
+        });
+        const dropped: unknown[] = [];
+        const both = Promise.withResolvers<void>();
+        zone.addEventListener("cf-drop", (event) => {
+          dropped.push((event as CustomEvent).detail.sourceCellRef.id);
+          if (dropped.length === 2) both.resolve();
+        });
+        beginDrag(150, 125, "card", first.promise);
+        endDrag();
+        beginDrag(150, 125, "card", second.promise);
+        endDrag();
+
+        second.resolve(other);
+        first.resolve(resolved);
+        await both.promise;
+
+        expect(dropped).toEqual(["snapshot:resolved", "snapshot:other"]);
+      });
+
+      it("dispatches no `cf-drop` where the dropped cell fails to resolve", async () => {
+        const { events } = await mountZone();
+
+        await nextError(() => {
+          beginDrag(150, 125, "card", Promise.reject(new Error("refused")));
+          endDrag();
+        });
+
+        expect(events.map(({ type }) => type)).toEqual([
+          "cf-drag-enter",
+          "cf-drag-leave",
+        ]);
+      });
+
+      it("dispatches no `cf-drop` once removed before the dropped cell resolves", async () => {
+        const { zone, events } = await mountZone();
+        const droppedCell = Promise.withResolvers<CellHandle>();
+        beginDrag(150, 125, "card", droppedCell.promise);
+        endDrag();
+
+        zone.remove();
+        droppedCell.resolve(resolved);
+        // Drops dispatch in release order, so one released later over a zone
+        // still in the document arrives once the first has settled.
+        const { zone: later } = await mountZone();
+        const laterDrop = nextDrop(later);
+        beginDrag(150, 125, "card", Promise.resolve(resolved));
+        endDrag();
+        await laterDrop;
+
+        expect(events.map(({ type }) => type)).toEqual([
+          "cf-drag-enter",
+          "cf-drag-leave",
+        ]);
+      });
     });
 
     it("dispatches nothing when the pointer is elsewhere", async () => {

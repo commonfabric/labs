@@ -85,10 +85,9 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
       if (allowed) bucket.tokens -= 1;
 
       buckets.set(key, bucket);
-      while (buckets.size > maxKeys) {
-        const oldest = buckets.keys().next();
-        if (oldest.done) break;
-        buckets.delete(oldest.value);
+      for (const oldest of buckets.keys()) {
+        if (buckets.size <= maxKeys) break;
+        buckets.delete(oldest);
       }
       return allowed;
     },

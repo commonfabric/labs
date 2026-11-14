@@ -783,7 +783,7 @@ straight around the bound built to stop it.
 The central security property was **not testable in the existing harness**:
 `ingest.utils.test.ts` uses `StorageManager.emulate`, whose server is built with
 no `acl` option, so `#aclMode()` is `"off"` and nothing is authorized. This
-change therefore adds `runtime/toolshed/lib/test-support/memory-acl.ts` — a
+change therefore adds `runtime/toolshed/test/support/memory-acl.ts` — a
 real memory-v2 server with `acl: { mode: "enforce" }` over a loopback transport,
 plus arbitrary-shape ACL genesis as the space identity.
 

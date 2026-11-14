@@ -234,13 +234,13 @@ function getCfCommand(rootDir: string): string[] {
 async function findPatternTests(
   rootDir: string,
   filter?: string,
-  only?: PatternTestList,
+  only?: readonly string[],
 ): Promise<string[]> {
   // An explicit list names the files outright, which is what the topology
   // hands over when a lane was asked for part of this suite. A name
   // filter cannot express a set of unrelated files, and a list of them is
   // exactly what selection produces.
-  if (only !== undefined) return selectPatternTestFiles(only.files);
+  if (only !== undefined) return selectPatternTestFiles(only);
   const testFiles: string[] = [];
   for (const tree of PATTERN_TREES) {
     for await (
@@ -264,68 +264,17 @@ export function selectPatternTestFiles(files: readonly string[]): string[] {
 }
 
 /**
- * One line of a `--files` list: a pattern test's path and, where it is
- * known, the seconds one run of it is expected to take, after a tab.
+ * The pattern tests a `--files` list names, one path to a line, with
+ * blank lines passed over.
  */
-export function patternTestListLine(file: string, cost?: number): string {
-  return cost === undefined ? file : `${file}\t${cost}`;
-}
-
-/** The pattern tests a `--files` list names, and what each is expected to take. */
-export interface PatternTestList {
-  files: string[];
-
-  /** Seconds by file, for the files whose line carries a cost. */
-  costs: Map<string, number>;
-}
-
-/**
- * The list a `--files` file holds, in the form {@link patternTestListLine}
- * writes. A cost that is not a finite number of seconds throws, as does a
- * line with more than the two fields.
- */
-export function readPatternTestList(text: string): PatternTestList {
-  const files: string[] = [];
-  const costs = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    const [written, cost, ...extra] = line.trim().split("\t");
-    if (!written) continue;
-    const file = written.replaceAll("\\", "/");
-    files.push(file);
-    if (cost === undefined) continue;
-    const seconds = Number(cost);
-    if (
-      extra.length > 0 || !Number.isFinite(seconds) ||
-      seconds < 0
-    ) {
-      throw new Error(
-        `Malformed pattern test list line: ${JSON.stringify(line)}`,
-      );
-    }
-    costs.set(file, seconds);
-  }
-  return { files, costs };
-}
-
-/**
- * The order the pool starts pattern test files in: the costliest first,
- * so the files still running once the rest have finished are short ones.
- * A file with no cost goes ahead of every file with one, because nothing
- * says it is not the longest. Files of equal cost, and files of no cost,
- * take the order the shuffle seed puts them in. Each file runs in a
- * process of its own, so their order decides how long the run takes and
- * nothing else.
- */
-export function patternTestStartOrder(
-  files: readonly string[],
-  costs: ReadonlyMap<string, number>,
-  seed: number,
-): string[] {
-  const cost = (file: string) => costs.get(file) ?? Infinity;
-  return shuffledPaths(files, seed).sort((a, b) =>
-    cost(a) === cost(b) ? 0 : cost(b) - cost(a)
+export function readPatternTestList(text: string): string[] {
+  return text.split("\n").map((line) => line.trim()).filter((line) =>
+    line !== ""
   );
 }
+
+/** How many `cf test --compile-only` processes the precompile runs at once. */
+const PRECOMPILE_PROCESSES = 5;
 
 /**
  * Compiles every file's program into the compile byte cache through
@@ -427,12 +376,16 @@ export async function precompilePatternTests(
  * report of each file's timing into `junitDir`, and return each file's
  * result. A failing file's output is printed, and is the message its
  * result carries.
+ *
+ * The files run one at a time, in the order the shuffle seed puts them
+ * in, so the time each records is the time it takes with the runner to
+ * itself, which is what test selection charges a lane that holds it.
  */
 async function runPatternTests(
   rootDir: string,
   junitDir: string,
   filter?: string,
-  only?: PatternTestList,
+  only?: readonly string[],
 ): Promise<TestResult[]> {
   const cfCmd = getCfCommand(rootDir);
   const testFiles = await findPatternTests(rootDir, filter, only);
@@ -442,23 +395,19 @@ async function runPatternTests(
     return [];
   }
 
-  const concurrency = 5;
-  console.log(
-    `Found ${testFiles.length} pattern test(s), running ${concurrency} at a time`,
-  );
-  const startOrder = patternTestStartOrder(
-    testFiles,
-    only?.costs ?? new Map(),
-    shuffleSeed(),
-  );
+  console.log(`Found ${testFiles.length} pattern test(s)`);
 
-  // With a cache file to fill, every file's program is compiled once, in one
-  // process, before any test runs. Each `cf test` child seeds from that file
-  // only as it starts, so on a cold cache the children started together
-  // would each compile the modules they share, and the heavy files among
-  // them would run their steps beside that work.
+  // With a cache file to fill, every file's program is compiled before any
+  // test runs, several processes at a time, since compiling is all they do.
+  // Each `cf test` child then seeds from that file as it starts, so the time
+  // recorded for a file is its own steps' and not its compile's.
   if (Deno.env.get("CF_COMPILE_CACHE_FILE")) {
-    await precompilePatternTests(cfCmd, rootDir, testFiles, concurrency);
+    await precompilePatternTests(
+      cfCmd,
+      rootDir,
+      testFiles,
+      PRECOMPILE_PROCESSES,
+    );
   }
   const results: TestResult[] = [];
   const testTimings: { file: string; durationMs: number; passed: boolean }[] =
@@ -470,85 +419,65 @@ async function runPatternTests(
   // not record the same files a second time.
   const recordsFragment = FragmentWriter.openForRun();
 
-  // Run as a pool: always keep `concurrency` tests in flight
-  let nextIndex = 0;
-  const running = new Set<Promise<void>>();
-
-  function enqueue(): void {
-    while (running.size < concurrency && nextIndex < startOrder.length) {
-      const testFile = startOrder[nextIndex++];
-      const p = (async () => {
-        const startMs = performance.now();
-        // A child that cannot even spawn is that file's failure, kept
-        // inside the pool promise: a rejection here would escape the
-        // Promise.race below, skip the fragment close, and leave the
-        // remaining children running unawaited.
-        let result: Awaited<ReturnType<typeof runCommand>>;
-        try {
-          result = await runCommand(
-            [
-              ...cfCmd,
-              "test",
-              "--root",
-              path.join(rootDir, patternRoot(testFile)),
-              testFile,
-            ],
-            {
-              cwd: rootDir,
-              env: {
-                CF_TEST_RECORDS_DIR: "",
-                // Pattern tests run the OFF arm in every lane, whatever the
-                // lane's own posture.
-                EXPERIMENTAL_SERVER_EXECUTION: "false",
-              },
-            },
-          );
-        } catch (error) {
-          result = { success: false, code: 127, stderr: String(error) };
-        }
-        const durationMs = performance.now() - startMs;
-
-        testTimings.push({
-          file: testFile,
-          durationMs,
-          passed: result.success,
-        });
-        const record = {
-          line: "record" as const,
-          test: { k: "pattern", s: "patterns", n: testFile },
-          outcome: result.success ? "pass" as const : "fail" as const,
-          durationMs: Math.round(durationMs),
-        };
-        recordsFragment?.append(record);
-
-        const seconds = (durationMs / 1000).toFixed(1);
-        if (result.success) {
-          console.log(`✅ ${testFile} (${seconds}s)`);
-          results.push({ record });
-          return;
-        }
-        console.log(`❌ ${testFile} (${seconds}s)`);
-        const output = [result.stdout, result.stderr].filter(Boolean)
-          .join("\n");
-        for (const line of output.trimEnd().split("\n")) {
-          console.log(`   ${line}`);
-        }
-        results.push({
-          record: { ...record, file: testFile },
-          message: output,
-          rerun: integrationRerun("pattern-tests", testFile),
-        });
-      })().finally(() => {
-        running.delete(p);
-        enqueue();
-      });
-      running.add(p);
+  for (const testFile of shuffledPaths(testFiles, shuffleSeed())) {
+    const startMs = performance.now();
+    // A child that cannot even spawn is that file's failure, so the files
+    // after it still run and the fragment is still closed.
+    let result: Awaited<ReturnType<typeof runCommand>>;
+    try {
+      result = await runCommand(
+        [
+          ...cfCmd,
+          "test",
+          "--root",
+          path.join(rootDir, patternRoot(testFile)),
+          testFile,
+        ],
+        {
+          cwd: rootDir,
+          env: {
+            CF_TEST_RECORDS_DIR: "",
+            // Pattern tests run the OFF arm in every lane, whatever the
+            // lane's own posture.
+            EXPERIMENTAL_SERVER_EXECUTION: "false",
+          },
+        },
+      );
+    } catch (error) {
+      result = { success: false, code: 127, stderr: String(error) };
     }
-  }
+    const durationMs = performance.now() - startMs;
 
-  enqueue();
-  while (running.size > 0) {
-    await Promise.race(running);
+    testTimings.push({
+      file: testFile,
+      durationMs,
+      passed: result.success,
+    });
+    const record = {
+      line: "record" as const,
+      test: { k: "pattern", s: "patterns", n: testFile },
+      outcome: result.success ? "pass" as const : "fail" as const,
+      durationMs: Math.round(durationMs),
+    };
+    recordsFragment?.append(record);
+
+    const seconds = (durationMs / 1000).toFixed(1);
+    if (result.success) {
+      console.log(`✅ ${testFile} (${seconds}s)`);
+      results.push({ record });
+      continue;
+    }
+    console.log(`❌ ${testFile} (${seconds}s)`);
+    const output = [result.stdout, result.stderr].filter(Boolean)
+      .join("\n");
+    for (const line of output.trimEnd().split("\n")) {
+      console.log(`   ${line}`);
+    }
+    results.push({
+      record: { ...record, file: testFile },
+      message: output,
+      rerun: integrationRerun("pattern-tests", testFile),
+    });
   }
   recordsFragment?.close();
 
@@ -772,7 +701,7 @@ export async function runPackageIntegration(
   rootDir: string,
   junitDir: string,
   filter?: string,
-  only?: PatternTestList,
+  only?: readonly string[],
 ): Promise<PackageOutcome> {
   console.log(`\n${"=".repeat(60)}`);
   console.log(`Running integration tests for: ${pkg}`);
@@ -940,9 +869,7 @@ Arguments:
   --files=<path>    A file naming the pattern tests to run, one path per
                     line, in place of the name filter. This is how a
                     continuous-integration lane asks for the part of the
-                    suite it was given. A path may be followed by a tab
-                    and the seconds it is expected to take; the costliest
-                    files start first.
+                    suite it was given.
 
 Examples:
   deno task integration                       # Run all, auto-cleanup

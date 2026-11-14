@@ -177,7 +177,9 @@ export enum RequestType {
    * with `native` provenance for the request's surface and action and marks
    * it renderer-trusted, so that it satisfies a write's UI contract for that
    * surface and action. Waits for the event's handling, and rejects with the
-   * reason when the event, or the run of the stream's handler, is refused.
+   * reason when the event, or the run of the stream's handler, is refused,
+   * except for a handling whose outcome is withheld, which resolves with
+   * `{ handling: "withheld" }` (see {@link CellSendResponse}).
    */
   CellSendReviewed = "cell:send-reviewed",
 
@@ -1364,7 +1366,8 @@ export type CellSendRequest = BaseRequest & {
   /**
    * Wait for the event's handling as well as its commit, and return its
    * refusal, such as a write the handler made that the runtime refused, to
-   * the caller.
+   * the caller, or, for a handling whose outcome is withheld,
+   * `{ handling: "withheld" }` (see {@link CellSendResponse}).
    */
   awaitHandling?: boolean;
 };
@@ -1395,7 +1398,8 @@ export type CellSendReviewedRequest = BaseRequest & {
 
 /**
  * The {@link RequestType.CellSubscribe} request. `includeCfcLabel` makes every
- * update carry the cell's label too.
+ * update carry the cell's label too, and `includeWrittenPrincipal` the
+ * principal the value's own cell represents.
  */
 export type CellSubscribeRequest = BaseRequest & {
   type: RequestType.CellSubscribe;
@@ -1413,6 +1417,15 @@ export type CellSubscribeRequest = BaseRequest & {
    * caller pays for it.
    */
   includeCfcLabel?: boolean;
+
+  /**
+   * Opt in to delivery of the principal the value's own cell represents, as
+   * `writtenPrincipalAt()` in the runner decides it: every update then
+   * carries it, read with the value as a tracked dependency of the sink, so
+   * that relinking or relabeling the cell holding the value re-fires the
+   * subscription. Off by default.
+   */
+  includeWrittenPrincipal?: boolean;
 };
 
 /** The {@link RequestType.CellUnsubscribe} request. */
@@ -1433,22 +1446,6 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
-
-  /**
-   * Whether to answer also with where a write to the cell lands, read
-   * together with the cell its links lead to: write redirects are followed,
-   * and a link stored as the value there is not.
-   */
-  withWriteTarget?: true;
-};
-
-/** The {@link RequestType.CellResolveAsCell} response. */
-export type CellResolveAsCellResponse = CellResponse & {
-  /**
-   * Where a write to the cell lands, when the request asked for it, read
-   * with {@link CellResponse.cell}.
-   */
-  writeTarget?: CellRef;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -3724,6 +3721,18 @@ export type NullResponse = null;
  */
 export type EmptyResponse = undefined;
 
+/**
+ * The response to a {@link RequestType.CellSend} that waits for the event's
+ * handling, and to a {@link RequestType.CellSendReviewed}: absent for a
+ * handling that committed, and `{ handling: "withheld" }` for one whose outcome
+ * is withheld. A handling under server execution that read data its stream's
+ * space doesn't admit reports the same thing whether it committed or not, so
+ * that its outcome tells no one outside that data's audience what it read; the
+ * caller can say the event was sent, and that its outcome is private. A client
+ * that ignores the field reads it as the success it may have been.
+ */
+export type CellSendResponse = EmptyResponse | { handling: "withheld" };
+
 /** A single boolean verdict. */
 export type BooleanResponse = {
   /**
@@ -4191,6 +4200,15 @@ export type CellUpdateNotification =
        * a label change without a separate round trip.
        */
       cfcLabel?: CfcLabelView | undefined;
+
+      /**
+       * The principal the value's own cell represents, read with the value,
+       * present only for a subscription that opted in through
+       * `includeWrittenPrincipal`. `undefined` when the value is not the
+       * whole of the cell a write to it lands in, or that cell's label names
+       * no single principal.
+       */
+      writtenPrincipal?: DID | undefined;
     })
     | CellRefusedAnswer
   );
@@ -4535,6 +4553,7 @@ export type PresenceUpdateNotification = {
  */
 export type RemoteResponse =
   | EmptyResponse
+  | CellSendResponse
   | NullResponse
   | BooleanResponse
   | SpaceHostRegistrationResponse
@@ -4769,11 +4788,11 @@ export type Commands = {
   };
   [RequestType.CellSend]: {
     request: CellSendRequest;
-    response: EmptyResponse;
+    response: CellSendResponse;
   };
   [RequestType.CellSendReviewed]: {
     request: CellSendReviewedRequest;
-    response: EmptyResponse;
+    response: CellSendResponse;
   };
   [RequestType.CellSubscribe]: {
     request: CellSubscribeRequest;
@@ -4785,7 +4804,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResolveAsCellResponse;
+    response: CellResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;

@@ -1348,10 +1348,10 @@ read them, and creates nothing in the store.
 
 ## What a run leaves out
 
-A run's log names four kinds of identity that did not reach the manifest.
-The first is the design working. The second is a test the tree no longer
-holds. The third is a surface whose records do not say which unit they
-belong to. The fourth is a topology defect.
+A run's log names five kinds of identity that did not reach the manifest.
+The first is the design working. The second and the third are tests the
+tree no longer holds. The fourth is a surface whose records do not say
+which unit they belong to. The fifth is a topology defect.
 
 The first is the identities that measure a whole invocation:
 
@@ -1371,19 +1371,20 @@ record, and there is nothing to do about it either way.
 The second is the identities that have left the tree:
 
 ```
-test selection: 6 identities have left the tree: no suite claims them and
-no run of them has been recorded inside the window a state keeps counters
-for. Their states are dropped from the aggregate.
+test selection: 6 identities have left the tree: no suite claims them, or
+main has stopped recording them in a unit it still runs, and no run of them
+has been recorded inside the window a state keeps counters for. Their
+states are dropped from the aggregate.
 test selection: those 6 were recorded by 2 surface(s): unit:utils 4,
 unit:memory 2
 ```
 
-A test deleted from the repository keeps its records in the store, and
-the store is what the publisher reads, so without this the aggregate
-would carry its state for as long as the store lives. Two things have to
-hold before one is dropped. No suite claims it, so nothing in the tree
-can be asked to run it. And no run of it has been recorded inside the
-window a state keeps counters for, which is the longer of
+A test deleted from the repository keeps its records in the store, and the
+store is what the publisher reads, so without this the aggregate would carry
+its state for as long as the store lives. Two things have to hold before one
+is dropped. No suite claims it, so nothing in the tree can be asked to run
+it, or it is one of the third kind below. And no run of it has been recorded
+inside the window a state keeps counters for, which is the longer of
 `CHURN_WINDOW_DAYS` and `FLAKE_WINDOW_DAYS` and so is sixty days today.
 
 The second condition is what the first cannot say on its own. A suite whose
@@ -1391,7 +1392,7 @@ records name a scope the topology no longer holds claims none of its
 identities, and every one of those is still running on the default branch,
 so the runs hold them where the claim does not. What the second condition
 does not reach is a test the tree holds that nothing runs at all: a skip is
-the one outcome a state records nothing for, so such a test meets both
+the one outcome no counter counts, so such a test meets both
 conditions and is dropped like a deleted one. What that costs is new real
 test failures from before the window, because every counter inside it is
 empty either way.
@@ -1403,14 +1404,55 @@ read a unit at a time, so a declaration naming one leaf inside a unit does
 not reach it — such a unit is still enumerated and still running, and its
 identities are placed by their file rather than reaching this at all.
 
-That window is how long a deletion takes to settle. Until then the
-deleted test is in the count below rather than this one, because it did
-run inside the window. So this count is a one-off when a change deletes tests
-and nothing at all in between, and a count that stays large run after run
-is a suite that has stopped recording rather than a set of tests somebody
-deleted. The surfaces named beside it say which suite.
+That window is how long a deletion takes to settle. Until then the deleted
+test is in the third or the fourth count below rather than this one, because
+it did run inside the window. So this count is a one-off when a change
+deletes tests and nothing at all in between, and a count that stays large
+run after run is a suite that has stopped recording rather than a set of
+tests somebody deleted. The surfaces named beside it say which suite.
 
-The third is the identities no suite claims that the aggregate still
+The third is the tests renamed or deleted in a file the tree still holds:
+
+```
+test selection: main has stopped recording 3 identities in units it still
+runs, so the tree no longer holds them under those names. They are left out
+of the manifest, and their states stay in the aggregate until no run of them
+is left inside the window a state keeps counters for.
+test selection: those 3 were recorded by 1 surface(s): unit:memory 3
+```
+
+A suite whose units are files claims every name recorded in a file the tree
+still holds, so the claim cannot tell a test that is there from one renamed
+or deleted beside the tests that are. What tells them apart is the run on
+the default branch, which runs every unit whole and records every test it
+reaches, skipped or not. A push to the default branch shuffles its tests in
+the order its seed names, which is the Pacific date of the commit under
+test. The publisher keeps the last two orders such a push recorded each
+identity in. The run of the next day's order is left out, because it runs an
+earlier tree in a later order. An identity is a test the unit no longer
+holds under that name once the default branch has recorded other identities
+of the same unit and configuration in two orders later than the last order
+it recorded this one in, or in two orders while never recording this one.
+This holds whether an alias line renamed it or nothing did, and records a
+branch makes under the old name after the change lands do not bring it back.
+A name is held while anything inside it is, so a `describe` that records for
+itself only when it fails on its own account is not read as gone while the
+tests inside it run. It takes two orders rather than one because a run that
+stops part way through a unit records only the tests it reached, and every
+run in one order can stop at the same place. A stop that does not depend on
+the order, such as a hook that fails in every run, leaves the tests after it
+out of the manifest once it has lasted two orders, until a push records them
+again. A run that did not shuffle names no order and counts toward none.
+
+Leaving these out of the manifest is what keeps a renamed test off the
+dashboard's list of tests held back as flaky. Nothing runs a test the tree
+no longer holds, so it would never record the passes that lower its flake
+share, and it would stay on the list until its failures aged out of the
+window. Its state stays in the aggregate. A push to the default branch that
+records the name again puts it back in the manifest with its history. Once
+no run of the name is left inside the window, it is the second kind above.
+
+The fourth is the identities no suite claims that the aggregate still
 carries:
 
 ```
@@ -1520,7 +1562,7 @@ test in a unit a configuration declares unavailable, which is here for
 as long as the declaration stands and is not something to act on: the
 declaration is why it stopped recording.
 
-The fourth is the identities two suites both claim:
+The fifth is the identities two suites both claim:
 
 ```
 test selection: 2 identities are claimed by more than one suite, which is

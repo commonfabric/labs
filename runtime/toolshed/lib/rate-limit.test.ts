@@ -113,6 +113,10 @@ describe("token bucket", () => {
     limiter.take("b");
     limiter.take("c"); // pushes "old" out
 
+    // Only the least recently used key went: the other two are still spent.
+    expect(limiter.take("b")).toBe(false);
+    expect(limiter.take("c")).toBe(false);
+
     // "old" is a fresh bucket again, which is the documented trade-off.
     expect(limiter.take("old")).toBe(true);
   });

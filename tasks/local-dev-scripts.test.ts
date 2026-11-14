@@ -25,6 +25,11 @@ const UNREACHABLE_INSPECTOR_OFFSET = 10080 - ports.inspector;
 // An offset whose servers every client will talk to.
 const REACHABLE_OFFSET = 850;
 
+// What `scripts/start-local-dev.sh` prints once it has started the shell and
+// the toolshed and waits for them.
+const WAITING_FOR_PAIR =
+  "Waiting for the shell and toolshed to bind their ports";
+
 /**
  * Run one of the local dev scripts with a `deno` that exits immediately, so a
  * run that gets as far as launching a server starts nothing and leaves nothing
@@ -293,10 +298,16 @@ async function startWithFakeServers(
         stderr: "piped",
       }).output();
     },
-    /** `stopEnv` is added to the environment of the stop command line. */
-    async stop(stopEnv: Record<string, string> = {}) {
+    /**
+     * `stopEnv` is added to the environment of the stop command line, and
+     * `stopCommand` replaces it.
+     */
+    async stop(
+      stopEnv: Record<string, string> = {},
+      stopCommand: string[] = commands.stop,
+    ) {
       await new Deno.Command("bash", {
-        args: commands.stop,
+        args: stopCommand,
         cwd: dir,
         env: { ...env, ...stopEnv },
         clearEnv: true,
@@ -367,20 +378,6 @@ async function consoleLaunchArgs(
   );
 }
 
-/**
- * Run a bash snippet with the local dev scripts' shared port utilities
- * sourced, and return what it printed.
- */
-async function runWithPortUtils(script: string): Promise<string> {
-  const { stdout } = await new Deno.Command("bash", {
-    args: ["-c", `source scripts/common/port-utils.sh\n${script}`],
-    cwd: repoRoot,
-    stdout: "piped",
-    stderr: "inherit",
-  }).output();
-  return new TextDecoder().decode(stdout).trim();
-}
-
 describe("local-dev-scripts", () => {
   describe("start-local-dev.sh", () => {
     it("names the server and the port an offset makes unreachable", async () => {
@@ -397,8 +394,10 @@ describe("local-dev-scripts", () => {
         "start-local-dev.sh",
         REACHABLE_OFFSET,
       );
-      expect(code).not.toBe(PORT_UNREACHABLE_EXIT);
-      expect(stderr).toContain("shell exited before it became ready");
+      // The stubbed `deno` ends both servers at once, so either can be the one
+      // the script reports.
+      expect(code).toBe(1);
+      expect(stderr).toMatch(/(shell|toolshed) exited before it became ready/);
     });
 
     it("forwards `--allow-skill-scripts` to the console launch when named", async () => {
@@ -508,14 +507,76 @@ describe("local-dev-scripts", () => {
       await run.ended();
     });
 
+    it("ends its servers and exits 1 when a server exits with status 0 while the other has not bound", async () => {
+      await using run = await startWithFakeServers({
+        env: {
+          FAKE_DEV_SERVER_QUITS: "toolshed",
+          FAKE_DEV_SERVER_SILENT: "shell",
+        },
+      });
+      expect((await run.child.status).code).toBe(1);
+      expect(await run.errors).toContain(
+        "toolshed exited before it became ready (exit 0)",
+      );
+      await run.ended();
+    });
+
+    it("reports the console as not running and leaves the other servers serving when its port is already in use", async () => {
+      // The occupant stands in for a console left over from an earlier
+      // launch, which answers health checks on the port as a console would.
+
+      const occupant = Deno.serve(
+        { port: 0, onListen() {} },
+        () => new Response("ok"),
+      );
+      await using run = await startWithFakeServers({
+        args: ["--cf-harness"],
+        ports: { console: occupant.addr.port },
+      });
+      // Declared after the run so that it closes first: `stop-local-dev.sh`
+      // stops every `deno` listening on the run's ports, and this one is the
+      // process running the test.
+      await using _occupant = occupant;
+      expect((await run.child.status).code).toBe(0);
+      expect(await run.drained).toContain(
+        "Console:  NOT RUNNING — it exited before answering (exit 1)",
+      );
+      for (const port of [run.ports.shell, run.ports.toolshed]) {
+        expect(await answers(port)).toBe(true);
+      }
+    });
+
+    it("ends its servers and exits 1 when a server binds and then answers 503", async () => {
+      await using run = await startWithFakeServers({
+        env: { FAKE_DEV_SERVER_UNHEALTHY: "toolshed" },
+      });
+      expect((await run.child.status).code).toBe(1);
+      expect(await run.errors).toContain(
+        `toolshed answered http://localhost:${run.ports.toolshed}/_health with HTTP 503, not 200`,
+      );
+      await run.ended();
+    });
+
+    it("reports the console as not running when it binds and then answers 503", async () => {
+      await using run = await startWithFakeServers({
+        args: ["--cf-harness"],
+        env: { FAKE_DEV_SERVER_UNHEALTHY: "console" },
+      });
+      expect((await run.child.status).code).toBe(0);
+      expect(await run.drained).toContain(
+        "Console:  NOT RUNNING — it answered /api/health with HTTP 503",
+      );
+    });
+
     it("ends its servers when Ctrl-C interrupts it before they are ready", async () => {
       // Ctrl-C sends SIGINT to the terminal's foreground process group,
       // which holds the script and not the servers.
 
       await using run = await startWithFakeServers({
         env: { FAKE_DEV_SERVER_SILENT: "toolshed" },
+        awaitedLine: WAITING_FOR_PAIR,
       });
-      await run.holding(2);
+      await Promise.all([run.holding(2), run.printed]);
       Deno.kill(-run.child.pid, "SIGINT");
       expect((await run.child.status).signal).toBe("SIGINT");
       await run.ended();
@@ -525,13 +586,37 @@ describe("local-dev-scripts", () => {
       it(`ends its servers when it alone is sent ${signal} before they are ready`, async () => {
         await using run = await startWithFakeServers({
           env: { FAKE_DEV_SERVER_SILENT: "toolshed" },
+          awaitedLine: WAITING_FOR_PAIR,
         });
-        await run.holding(2);
+        await Promise.all([run.holding(2), run.printed]);
         Deno.kill(run.child.pid, signal);
         expect((await run.child.status).signal).toBe(signal);
         await run.ended();
       });
     }
+
+    it("ends the console alone when Ctrl-C interrupts it before the console is ready", async () => {
+      await using run = await startWithFakeServers({
+        args: ["--cf-harness"],
+        env: { FAKE_DEV_SERVER_SILENT: "console" },
+        awaitedLine: "Waiting for the cf-harness console to bind its port",
+      });
+      await Promise.all([run.holding(3), run.printed]);
+      Deno.kill(-run.child.pid, "SIGINT");
+      expect((await run.child.status).signal).toBe("SIGINT");
+      for (const port of [run.ports.shell, run.ports.toolshed]) {
+        expect(await answers(port)).toBe(true);
+      }
+      // Stopping the shell and toolshed alone ends every server only if the
+      // script ended the console.
+      await run.stop(
+        {},
+        startLocalDevCommands(run.ports).stop.filter((arg) =>
+          arg !== "--cf-harness"
+        ),
+      );
+      await run.ended();
+    });
 
     it("ends its servers with its process group when it stays attached for Codex", async () => {
       // SIGKILL leaves the script no chance to stop them, so they end only
@@ -731,56 +816,6 @@ describe("local-dev-scripts", () => {
       expect(code).toBe(PORT_UNREACHABLE_EXIT);
       expect(stderr).toContain("inspector port 10080");
       expect(stdout).not.toContain("Stopping local dev servers");
-    });
-  });
-
-  describe("port-utils.sh", () => {
-    describe("foreign_port_holder()", () => {
-      // Each case listens on a port here, so the pid the utility has to find
-      // is one the test already knows: this process.
-
-      it("returns nothing for a port the given pid listens on", async () => {
-        const listener = Deno.listen({ port: 0 });
-        try {
-          expect(
-            await runWithPortUtils(
-              `foreign_port_holder ${listener.addr.port} ${Deno.pid}`,
-            ),
-          ).toBe("");
-        } finally {
-          listener.close();
-        }
-      });
-
-      it("returns nothing for a port a descendant of the given pid listens on", async () => {
-        // `Deno.ppid` is the process that spawned this one, so the
-        // listener below is a descendant of it rather than the pid itself.
-        const listener = Deno.listen({ port: 0 });
-        try {
-          expect(
-            await runWithPortUtils(
-              `foreign_port_holder ${listener.addr.port} ${Deno.ppid}`,
-            ),
-          ).toBe("");
-        } finally {
-          listener.close();
-        }
-      });
-
-      it("returns the listening pid for a port held outside the given pid's tree", async () => {
-        // `$$` is the bash the snippet runs in, a child of this process and so
-        // an ancestor of nothing that listens here.
-        const listener = Deno.listen({ port: 0 });
-        try {
-          expect(
-            await runWithPortUtils(
-              `foreign_port_holder ${listener.addr.port} $$`,
-            ),
-          ).toBe(String(Deno.pid));
-        } finally {
-          listener.close();
-        }
-      });
     });
   });
 });

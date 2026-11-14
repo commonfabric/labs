@@ -105,6 +105,28 @@ export const CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE =
 export const CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE =
   "runtime.undeclarable-store";
 
+// A served event's processed claim: the mark the serving loop writes on a
+// stream's entries document, in the transaction that runs the event's
+// handler, to record that the event has been handled. `target` is the mark's
+// own path on that document, one entry's field.
+//
+// §6.2.2 claims an event's processed cell before its handler runs, in an
+// operation of its own, so the claim reads nothing the handler reads and
+// carries none of the handler's labels. The serving loop claims it in the
+// handler's own transaction instead, so that the claim and the consequences
+// commit together, and that placement leaves the claim what §6.2.2 makes it:
+// the prepare gate neither stamps the attempt's join on a marked path nor
+// measures it there under §8.12.4. The clarification that states this is
+// https://github.com/commonfabric/specs/pull/94. Every other write the
+// transaction makes, an entry it appends to the same document included, is
+// stamped and measured as any write is.
+//
+// The gate takes it only where the input was recorded under
+// {@link runtimeWritePolicyAuthorization} and names a stream's entries
+// document, so no pattern can mark a path of its own this way.
+export const CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM =
+  "runtime.processed-claim";
+
 /**
  * Marks a write-policy input as one the runtime itself recorded.
  *
