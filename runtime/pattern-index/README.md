@@ -26,9 +26,11 @@ the compile, and `composeProgram()` does only the import step, for authored
 source that composes published patterns.
 
 Every failure is an `IndexedPatternError` with a `stage` of `lookup`, `compose`,
-or `compile`. Its message names ids and never quotes indexed source. A compile
-diagnostic, or an index response body, can quote that source, so it is kept
-apart as `rawCauseMessage` for an artifact or an operator log.
+or `compile`. Its message never quotes indexed source: where it names a pattern
+it names its id, and some failures, such as a runtime without CFC enforcement or
+a composition past the cap, name none. A compile diagnostic, or an index
+response body, can quote that source, so it is kept apart as `rawCauseMessage`
+for an artifact or an operator log.
 
 ## Loom helper contract
 

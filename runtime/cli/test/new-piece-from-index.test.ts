@@ -64,7 +64,25 @@ describe("piece new --from-index", () => {
           "an index URL that does not parse",
           { fromIndex: "pat-1", patternIndexUrl: "not a url" },
           undefined,
-          "--pattern-index-url must be a valid URL",
+          "--pattern-index-url must be an http(s) URL",
+        ],
+        [
+          "an index URL that is not http(s)",
+          { fromIndex: "pat-1", patternIndexUrl: "file:///index" },
+          undefined,
+          "--pattern-index-url must be an http(s) URL",
+        ],
+        [
+          "an index URL with a query",
+          { fromIndex: "pat-1", patternIndexUrl: `${INDEX_URL}?x=1` },
+          undefined,
+          "must not carry a query or fragment",
+        ],
+        [
+          "an index URL with a fragment",
+          { fromIndex: "pat-1", patternIndexUrl: `${INDEX_URL}#f` },
+          undefined,
+          "must not carry a query or fragment",
         ],
         [
           "a blank pattern id",

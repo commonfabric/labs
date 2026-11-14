@@ -2453,7 +2453,7 @@ export const piece = targetOptions(
   .action(searchPiecesFromCommand)
   /* piece new */
   .command("new", "Create a new piece with a pattern.")
-  .usage(`${spaceUsage} <main>`)
+  .usage(`${spaceUsage} [main] | --from-index <patternId>`)
   .example(
     cliText(`cf piece new ${EX_ID} ${EX_COMP} ./main.tsx`),
     `Create a new piece, using ./main.tsx as source.`,
@@ -5111,9 +5111,20 @@ function newPieceEntry(
       "--from-index needs the pattern index to read from: pass --pattern-index-url <url>, or set CF_PATTERN_INDEX_URL.",
     );
   }
-  if (!URL.canParse(patternIndexUrl)) {
+  // The index client appends a function name to the base's path, so it
+  // refuses a base with a query or fragment; refused here too, before the
+  // space root is touched.
+  const base = URL.parse(patternIndexUrl);
+  if (
+    base === null || (base.protocol !== "https:" && base.protocol !== "http:")
+  ) {
     throw new ValidationError(
-      `--pattern-index-url must be a valid URL: ${patternIndexUrl}`,
+      `--pattern-index-url must be an http(s) URL: ${patternIndexUrl}`,
+    );
+  }
+  if (base.search !== "" || base.hash !== "") {
+    throw new ValidationError(
+      `--pattern-index-url must not carry a query or fragment: ${patternIndexUrl}`,
     );
   }
   return { patternId, patternIndexUrl };
