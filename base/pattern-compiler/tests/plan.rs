@@ -366,6 +366,51 @@ export const Shown = pattern<{ n: number }>(({ n }) => {
     assert_eq!(slots, ["argument n : value"]);
 }
 
+#[test]
+fn an_element_construct_over_an_array_written_in_place_has_an_output_as_its_source() {
+    // PL §1.1, `Collection.source`: "An array the instance computed
+    // (`Plan.outputs`)". An array written in the reactive tier, over
+    // slots or over constants, is computed by a cone of its own, so that
+    // the cone that uses the assembled result does not precede the body.
+    let analysis = program(
+        r#"import { pattern, UI } from "commonfabric";
+export const Pair = pattern<{ a: string; b: string }>(({ a, b }) => {
+  const shown = [a, b].map((text) => text + "!");
+  const fixed = ["x", "y"].map((text) => text + a);
+  return { shown, fixed };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Pair");
+    let collections = plan["collections"].as_array().expect("collections");
+    assert_eq!(collections.len(), 2);
+    for collection in collections {
+        let output = collection["source"]["output"]
+            .as_u64()
+            .expect("an output as the source") as usize;
+        let cone = plan["outputs"][output]["cone"].as_u64().expect("a cone") as usize;
+        // The cone of the array is not the cone of the body.
+        let body_output = plan["outputs"]
+            .as_array()
+            .expect("outputs")
+            .iter()
+            .find(|other| other["collection"] == json!(0) || other["collection"] == json!(1))
+            .expect("an assembled result");
+        assert_ne!(json!(cone), body_output["cone"]);
+    }
+    let first = plan["outputs"][collections[0]["source"]["output"].as_u64().unwrap() as usize]
+        ["cone"]
+        .as_u64()
+        .unwrap() as usize;
+    let slots: Vec<String> = plan["cones"][first]["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .map(|slot| slot_line(&plan, slot))
+        .collect();
+    assert_eq!(slots, ["argument a : identity", "argument b : identity"]);
+}
+
 // ----- PL §6.2: the plan for the slice of FabriChat -----
 
 fn fabrichat() -> ProgramAnalysis {

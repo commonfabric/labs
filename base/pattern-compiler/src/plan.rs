@@ -1123,6 +1123,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         hint: &str,
         at: u32,
     ) -> Place {
+        let name = if matches!(hint, "branch" | "operand" | "condition" | "child") {
+            via
+        } else {
+            hint
+        };
         let source = match receiver {
             Place::Slot(root, path) => {
                 let slot = self.slot(root, path, "enumeration");
@@ -1136,18 +1141,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
             Place::Unknown => json!({}),
+            Place::Record(_) | Place::Const => {
+                // An array written in the reactive tier is an array the
+                // instance computed (PL §1.1, `Collection.source`). A cone
+                // of its own computes it, so that a cone that uses the
+                // assembled result does not come before the body.
+                let receiver = receiver.clone();
+                let saved = self.cone.take();
+                let array = self.in_cone(name, at, |emitter, _| emitter.pass(&receiver));
+                self.cone = saved;
+                match array {
+                    Place::Value(value, _) => {
+                        self.values[value].referred = true;
+                        json!({ "output": { "$value": value } })
+                    }
+                    _ => json!({}),
+                }
+            }
             _ => {
-                self.unsupported(
-                    "an element construct over a constant or a record written in place",
-                    at,
-                );
+                self.unsupported("an element construct over a stream or an index", at);
                 json!({})
             }
-        };
-        let name = if matches!(hint, "branch" | "operand" | "condition" | "child") {
-            via
-        } else {
-            hint
         };
         let collection = self.collections.len();
         let uses_index = function.params().items.len() > 1;
