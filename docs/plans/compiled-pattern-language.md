@@ -267,8 +267,12 @@ is relitigated.
   function body instantiates is the initial value of the child's stored
   argument, and the child writes it freely.
 - A promoted `computed` mints no `TransformedBy` for the code of its
-  callback. What it computes carries a `TransformedBy` that names the
-  pattern that contains it, because trust is attached to the pattern.
+  callback. Every output of a pattern carries a `TransformedBy` that
+  names the pattern, because trust is attached to the pattern. That
+  holds for a value the pattern only passes on, through a `slot`, a
+  `select`, or a `pick`, as for one it computes. Where the value is
+  passed on by reference, the atom is on the link, as the pattern's
+  endorsement of the selection, and the target keeps its own label.
 - A child in the reactive tier does not write an argument given as a
   literal or a computed value. The runtime allows it today. A pattern
   that changes or owns one of its arguments is given a writable cell
@@ -779,18 +783,10 @@ as an assumption.
     declared name; code is hashed as its source for a cone and as the
     module and binding for a body.
 
-116. **Whether a path that passes a value on carries the pattern's
-    `TransformedBy`** (PL question 64). By ruling, what a pattern
-    computes carries a `TransformedBy` that names the pattern. A path
-    whose template is a `slot`, a `select`, or a `pick` passes a value
-    on and mints nothing; 42 of the 45 corpus rows where a promoted
-    `computed` has less integrity than today are of this kind.
-    *Assumed:* such a path carries the integrity of what it passes on
-    and no atom of the pattern, as the same expression does when it is
-    written in the pattern body. The alternative gives every kept
-    output of a pattern the pattern's atom. Also assumed: the atom of
-    expression code names the pattern and not the cone, where
-    `plan-and-label-templates.md` §3.2 has the cone's code.
+116. **What identifies the pattern in its `TransformedBy`, and which
+    pattern it is for code compiled into another** (PL question 64).
+    *Assumed:* the pattern's module and binding, and the pattern in
+    whose source the expression is written.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
