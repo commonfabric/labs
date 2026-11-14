@@ -3195,21 +3195,21 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .find(|(operand, _)| *operand == name)
                 .map(|(_, expression)| unwrap(expression))
         };
-        let strings = |expression: &Expression<'a>| -> Option<Vec<String>> {
-            match expression {
-                Expression::ArrayExpression(array) => array
-                    .elements
-                    .iter()
-                    .map(|element| match element.as_expression().map(unwrap) {
-                        Some(Expression::StringLiteral(text)) => Some(text.value.to_string()),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => None,
-            }
+        // "The `query`, `scope` and `headless` operands are constants
+        // where each is a literal written at the call, or a name that
+        // resolves to a module-scope constant with a static initializer
+        // ... whose value the compiler reads" (PL §3.19).
+        let constant = |expression: &Expression<'a>| -> Option<Value> {
+            self.resolver.constant_value(self.module, expression, 0)
         };
-        let headless =
-            matches!(operand("headless"), Some(Expression::BooleanLiteral(flag)) if flag.value);
+        let strings = |expression: &Expression<'a>| -> Option<Vec<String>> {
+            constant(expression)?
+                .as_array()?
+                .iter()
+                .map(|element| element.as_str().map(str::to_string))
+                .collect()
+        };
+        let headless = operand("headless").and_then(constant) == Some(json!(true));
         // The `path` operand "is appended to the path the query names":
         // `None` where it is computed.
         let extra: Option<Vec<String>> = match operand("path") {
@@ -3217,8 +3217,20 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some(path) => strings(path),
         };
         let query = operand("query")
-            .and_then(constant_of)
+            .and_then(constant)
             .and_then(|query| query.as_str().map(|query| query.trim().to_string()));
+        // "A `wish` whose `query`, or whose `path` with the key `#now` or
+        // `#profile`, is not a constant" (LS §10.2).
+        let decided_by_path = extra.is_none()
+            && query.as_deref().is_some_and(|query| {
+                matches!(query.strip_prefix('#'), Some("now" | "profile"))
+            });
+        if decided_by_path {
+            self.hints.push((
+                "a `wish` whose path decides the target and is not a constant".to_string(),
+                at,
+            ));
+        }
         // What the plan has beside the operation: the scope `user`, the
         // state cell of the one-shot clock, and the sidecars.
         let (user, clock, sidecars): (bool, bool, &[&str]) = match query.as_deref() {
@@ -4484,7 +4496,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }) {
                     return;
                 }
-                let constant = written.and_then(constant_of).unwrap_or(Value::Null);
+                // A literal, or the value of a module-scope constant
+                // with a static initializer.
+                let constant = written
+                    .and_then(|written| {
+                        constant_of(written)
+                            .or_else(|| self.resolver.constant_value(self.module, written, 0))
+                    })
+                    .unwrap_or(Value::Null);
                 entry.insert("place".to_string(), json!({ "constant": constant }));
                 entry.insert("template".to_string(), json!({ "op": "const" }));
             }

@@ -418,6 +418,22 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                     format!("{found}. {}", messages::rewrite(id)),
                 ));
             }
+            for (kind, start) in &plan.hints {
+                if !kind.starts_with("a `wish`") {
+                    continue;
+                }
+                let position = parsed.lines.position(parsed.source, *start);
+                check.diagnostics.push(Diagnostic::new(
+                    "wish:computed-query",
+                    &parsed.path,
+                    (*start, *start),
+                    position,
+                    format!(
+                        "This is {kind}, so the plan holds the records of every target it could select. {}",
+                        messages::rewrite("wish:computed-query")
+                    ),
+                ));
+            }
             for (start, cones) in &plan.cycles {
                 let position = parsed.lines.position(parsed.source, *start);
                 check.diagnostics.push(Diagnostic::new(

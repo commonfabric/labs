@@ -314,6 +314,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "Make the write in the handler the policy names, or name this writer in the \
              policy of the path."
         }
+        "wish:computed-query" => {
+            "Write the query as a literal or a module-scope constant, so that the plan holds \
+             the records of that target alone."
+        }
         "cfc-flow:max-confidentiality" => {
             "Declare a ceiling that admits the clause, or do not pass a value with that \
              confidentiality to this input."

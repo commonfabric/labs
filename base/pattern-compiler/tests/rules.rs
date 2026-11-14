@@ -626,6 +626,11 @@ const CASES: &[Case] = &[
         "const SEND = \"send\";\nconst SURFACE = \"compose\";\ninterface Note { text: TrustedActionWrite<string, typeof send, typeof SEND, typeof SURFACE> }\nconst send = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"text\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ [UI]: (<div><section data-ui-pattern=\"compose\" data-ui-event-integrity=\"compose\"><UiAction action=\"send\" onClick={send({ note })}>Send</UiAction></section></div>) }));",
     ),
     case(
+        "wish:computed-query",
+        "export const P = pattern<{ tag: string }>(({ tag }) => ({ found: /*!*/wish<{ name: string }>({ query: tag }) }));",
+        "export const P = pattern<{ tag: string }>(({ tag }) => ({ found: wish<{ name: string }>({ query: \"#note\" }) }));",
+    ),
+    case(
         "side-write:cycle",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { /*!*/x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: a }); return { one, two }; });",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number>; c: Cell<number> }>(({ a, b, c }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: c }); return { one, two }; });",

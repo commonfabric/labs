@@ -2003,6 +2003,29 @@ impl<'p, 'a> Checker<'p, 'a> {
                 self.record_call(CallKind::Structural, name, call.span);
                 // `wish` is an operation of the plan, which a function
                 // body has no site for (LS §5.2).
+                // `wish` has one parameter, the record of its operands
+                // (`WishFunction` in `base/api/index.ts`): a string is
+                // not assignable to it.
+                if name == "wish" && api.subpath.is_none() {
+                    if let Some(first) = call.arguments.first().and_then(Argument::as_expression) {
+                        let string = self
+                            .resolver
+                            .typed_at(self.module, first, 0)
+                            .is_ok_and(|ty| {
+                                matches!(
+                                    self.resolver.shape(ty),
+                                    crate::types::Shape::String | crate::types::Shape::Literal(_)
+                                )
+                            });
+                        if string {
+                            self.report(
+                                "subset-type:mismatch",
+                                first.span(),
+                                "A string given to `wish`, whose parameter is the record of its operands, as in `wish({ query })`",
+                            );
+                        }
+                    }
+                }
                 if name == "wish"
                     && api.subpath.is_none()
                     && matches!(self.cur(), Ctx::Function { .. })

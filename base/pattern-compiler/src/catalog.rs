@@ -76,13 +76,6 @@ const fn part(id: &'static str, severity: Severity, rest: &'static str) -> Entry
     }
 }
 
-const fn footprint(id: &'static str, severity: Severity, need: &'static str) -> Entry {
-    Entry {
-        id,
-        severity: Some(severity),
-        status: Status::NeedsFootprint(need),
-    }
-}
 
 const fn retired(id: &'static str) -> Entry {
     Entry {
@@ -97,8 +90,6 @@ use Severity::{Error, Hint, Warning};
 const FLOW_REST: &str = "decided on declared labels by the rules of `plan-and-label-templates.md` §4.4; a \
          template with an `identity` slot is not evaluated, so a write through a handle is \
          left to the runtime, and a `created` and a `request` target have no constraint";
-const LABEL_TEMPLATES: &str =
-    "the label templates of the plan, which are built from footprints and declared labels";
 const PROMOTION_REST: &str = "decided by syntax and by method names, as the measurement of \
      `language-subset.md` §11.5 is; whether a method is the pure one of its name needs \
      the receiver's type";
@@ -150,7 +141,7 @@ pub const CATALOG: &[Entry] = &[
     done("pattern-context:let-declaration", Error),
     done("pattern-context:var-declaration", Error),
     done("pattern-context:assignment", Error),
-    footprint("wish:computed-query", Hint, LABEL_TEMPLATES),
+    done("wish:computed-query", Hint),
     done("pattern-context:loop", Error),
     done("pattern-context:early-return", Error),
     done("pattern-context:missing-return", Error),
