@@ -167,7 +167,8 @@ const recordKey = (host: string, link: NormalizedFullLink): string =>
 /**
  * One user's runner over their agent queue. `start()` registers it and
  * begins following the queue; `stop()` aborts the runs it holds and stops
- * following. `idle()` resolves once no scan is pending and no run is held.
+ * following. `idle()` resolves once no scan is pending and no run is held;
+ * a run a scan lets go of when its lease expires stops being held then.
  */
 export class AgentRunner {
   readonly #options: AgentRunnerOptions;
@@ -216,7 +217,11 @@ export class AgentRunner {
     }
   }
 
-  /** Aborts held runs, waits for them to end, and stops following. */
+  /**
+   * Aborts held runs, waits for them to end, and stops following. A run a
+   * scan has already let go of, because its lease expired, is no longer held,
+   * so it is not waited for, whether or not its execution has settled.
+   */
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#cancelScheduledWake?.();
