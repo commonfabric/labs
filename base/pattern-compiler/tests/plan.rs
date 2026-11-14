@@ -2697,3 +2697,100 @@ export const P = pattern<{ rows: { title: string; n: number }[] }>(({ rows }) =>
         .collect();
     assert_eq!(edges, ["0 -> 2 upper", "1 -> 2 double"]);
 }
+
+/// The outputs at and below a path, each as `path = template`.
+fn entries_below(plan: &Value, first: &str) -> Vec<String> {
+    plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .filter(|output| output["path"][0] == first || output["interim"] == first)
+        .map(|output| {
+            let path: Vec<&str> = output["path"]
+                .as_array()
+                .expect("a path")
+                .iter()
+                .map(|segment| segment.as_str().expect("a segment"))
+                .collect();
+            let template = match output.get("template") {
+                Some(template) => template_line(plan, template),
+                None => "none".to_string(),
+            };
+            format!("{} = {}", path.join("/"), template)
+        })
+        .collect()
+}
+
+#[test]
+fn a_constructed_value_has_a_container_entry_and_an_entry_per_member_that_computes() {
+    // PL §3.4, "The entries of a constructed value" and "A node whose
+    // result is a constructed value": "For `c ? { x: a } : { x: b, y: d }`
+    // the path `x` has `select(c, [a, b])`, the path `y` has
+    // `select(c, [const, d])`, and the container entry has
+    // `select(c, [const, const])`."
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+export const P = pattern<{ c: boolean; a: string; b: string; d: string; rows: { title: string; n: number }[] }>(({ c, a, b, d, rows }) => {
+  const v = c ? { x: a } : { x: b, y: d };
+  const out = rows.map((row) => ({ name: row.title, n: row.n + 1, fixed: 1 }));
+  return { v, out };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let c = "[argument c : value]";
+    assert_eq!(
+        entries_below(&plan, "v"),
+        [
+            format!("v = select({c} ? const | const)"),
+            format!("v/x = select({c} ? [argument a : identity] | [argument b : identity])"),
+            format!("v/y = select({c} ? const | [argument d : identity])"),
+        ]
+    );
+    assert_eq!(
+        entries_below(&plan, "out"),
+        [
+            "out = [argument rows : enumeration]",
+            "out/* = const",
+            "out/*/n = derive(expression) { [element n : value] const }",
+            "out/*/name = [element title : identity]",
+        ]
+    );
+}
+
+#[test]
+fn a_rendered_tree_has_the_paths_of_its_view_nodes() {
+    // PL §3.4, "A JSX element": "the template of the path `props/title`
+    // of an element is the template of the expression written at the
+    // attribute `title`, and the template of `children/0` is that of the
+    // first child. A child whose type is an array, the assembled result
+    // of a `map` among them, is a spread child".
+    let analysis = program(
+        r#"import { pattern, UI } from "commonfabric";
+export const P = pattern<{ t: string; a: string; b: string; rows: { title: string }[] }>(({ t, a, b, rows }) => {
+  return {
+    [UI]: (
+      <div title={t} class="box">
+        {a}
+        <span>{b}</span>
+        {rows.map((row) => <li>{row.title}</li>)}
+        <hr />
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        entries_below(&plan, "$UI"),
+        [
+            "$UI = const",
+            "$UI/children = derive(expression) { [element title : identity] [argument rows : enumeration] }",
+            "$UI/children/* = derive(expression) { [element title : identity] [argument rows : enumeration] }",
+            "$UI/children/0 = [argument a : identity]",
+            "$UI/children/1/children/0 = [argument b : identity]",
+            "$UI/props/title = [argument t : identity]",
+        ]
+    );
+}

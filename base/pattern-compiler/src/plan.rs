@@ -114,6 +114,13 @@ struct Computed {
     /// the template of one element of it, where it has one. The plan has
     /// a per-element output beside the assembled one (PL §1.4).
     element: Option<Option<Value>>,
+    /// For a constructed value, a record or an array written in place
+    /// and a JSX element: its entries, the container entry first (PL
+    /// §3.4, "The entries of a constructed value").
+    entries: Option<Entries>,
+    /// For the assembled result of a `map` whose callback returns a
+    /// constructed value: the entries of one element.
+    element_entries: Option<Entries>,
     /// The paths below the value that a collection has as its source: each
     /// is an interim output of its own (PL §1.1, `Output.path`).
     below: Vec<Vec<String>>,
@@ -141,6 +148,30 @@ struct ConeOut {
 }
 
 type SlotKey = (Root, Vec<String>, &'static str, bool, bool);
+
+/// The entries of a constructed value: the path below the value, and
+/// the template there, where it has one.
+type Entries = Vec<(Vec<String>, Option<Value>)>;
+
+/// The template of the nearest entry at or above a path (PL §3.4).
+fn entry_at(entries: &Entries, path: &[String]) -> Option<Value> {
+    entries
+        .iter()
+        .filter(|(at, _)| path.starts_with(at))
+        .max_by_key(|(at, _)| at.len())
+        .map_or_else(|| Some(json!({ "op": "const" })), |(_, template)| template.clone())
+}
+
+/// A constructed value observed whole: the join of the templates of its
+/// entries at and below a path (PL §3.4).
+fn entries_whole(entries: &Entries, path: &[String]) -> Option<Value> {
+    let below: Option<Vec<Value>> = entries
+        .iter()
+        .filter(|(at, _)| at.starts_with(path))
+        .map(|(_, template)| template.clone())
+        .collect();
+    Some(joined(below?))
+}
 
 /// A static target of a side-write: the slot of the handle, its root and
 /// path, the path below the cell, `resolved`, the module and the offset
@@ -206,6 +237,9 @@ struct Emitter<'r, 'm, 'a> {
     root_types: HashMap<Root, TypeId>,
     /// The type the pattern declares for its result.
     result_type: Option<TypeId>,
+    /// The entries of the constructed value the expression code being
+    /// built computes, for the value `build` makes.
+    pending_entries: Option<Entries>,
 }
 
 /// What the edges of the plan need of a body.
@@ -604,6 +638,8 @@ impl<'a> Emitter<'_, '_, 'a> {
             scan: false,
             template: None,
             element: None,
+            entries: None,
+            element_entries: None,
             below: Vec::new(),
             step: false,
             referred: false,
@@ -635,14 +671,17 @@ impl<'a> Emitter<'_, '_, 'a> {
             std::mem::take(&mut self.operands),
             std::mem::replace(&mut self.opaque, false),
         );
+        let outer = self.pending_entries.take();
         let mut template = None;
         let place = self.in_cone(hint, at, |emitter, cone| {
             template = evaluate(emitter, cone);
         });
         self.operands = saved.0;
         self.opaque = saved.1;
+        let entries = std::mem::replace(&mut self.pending_entries, outer);
         if let Place::Value(value, _) = &place {
             self.values[*value].template = template;
+            self.values[*value].entries = entries;
         }
         place
     }
@@ -671,14 +710,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let opaque = std::mem::replace(&mut self.opaque, saved.1);
         let template = if opaque {
             None
-        } else if let Place::Record(_) = &place {
-            // A record written in place has a template per path (PL
-            // §3.4), and one only where every member is a constant.
-            inputs
-                .iter()
-                .all(|input| input["op"] == "const")
-                .then(|| json!({ "op": "const" }))
         } else {
+            // A constructed value observed whole is the join of the
+            // templates of its entries (PL §3.4).
             Some(joined(inputs))
         };
         (place, template)
@@ -721,20 +755,21 @@ impl<'a> Emitter<'_, '_, 'a> {
             let class = class.unwrap_or_else(|| emitter.test_class(test));
             let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
             let mut templates = Vec::new();
+            let mut constructed = Vec::new();
             for branch in branches {
-                let template = match branch {
+                let (place, template) = match branch {
                     Some(branch) => {
-                        emitter
-                            .one("identity", |emitter| emitter.eval(branch, "branch"))
-                            .1
+                        emitter.one("identity", |emitter| emitter.eval(branch, "branch"))
                     }
                     // "When the selected arm of `&&` or `||` is the
                     // condition, the result carries that operand's full
                     // template, not only its truthiness."
-                    None => emitter.one("identity", |_| tested.clone()).1,
+                    None => emitter.one("identity", |_| tested.clone()),
                 };
+                constructed.push((emitter.entries_of(&place), template.clone()));
                 templates.push(template);
             }
+            emitter.per_path(&constructed, |at| select_node(selector, condition.clone(), at));
             select_node(selector, condition, templates)
         })
     }
@@ -754,10 +789,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let selector = emitter.selector(fields.len() as u32 + 1);
                 let condition = emitter.one("value", |_| key).1;
                 let mut branches: Vec<Option<Value>> = Vec::new();
+                let mut constructed = Vec::new();
                 for member in fields.values() {
-                    branches.push(emitter.one("identity", |_| member.clone()).1);
+                    let template = emitter.one("identity", |_| member.clone()).1;
+                    constructed.push((emitter.entries_of(member), template.clone()));
+                    branches.push(template);
                 }
                 branches.push(Some(json!({ "op": "const" })));
+                constructed.push((None, Some(json!({ "op": "const" }))));
+                emitter.per_path(&constructed, |at| select_node(selector, condition.clone(), at));
                 select_node(selector, condition, branches)
             });
         }
@@ -889,7 +929,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             // Every path of what one opaque call or one expression
             // computed has its template (PL §3.3).
-            Place::Value(value, _) => self.values[*value].template.clone(),
+            Place::Value(value, path) => self.value_template(*value, path, class),
             // The stream of a binding of the reactive tier is named by
             // constants of the plan (PL §3.14).
             Place::Const | Place::Stream(_) | Place::Accumulator(..) => {
@@ -901,6 +941,127 @@ impl<'a> Emitter<'_, '_, 'a> {
             Place::Index(collection) => self.iterated.get(*collection).cloned().flatten(),
             _ => None,
         }
+    }
+
+    /// The template of a path of a value the instance computed. A path
+    /// of a constructed value has the template of the nearest entry at
+    /// or above it, and where the value is observed whole there, the
+    /// join of the entries at and below it. An observation of class
+    /// `shape`, `enumeration` or `identity` at a container has the
+    /// container entry's template alone (PL §3.4).
+    fn value_template(&self, value: usize, path: &[String], class: &str) -> Option<Value> {
+        let Some(entries) = &self.values[value].entries else {
+            return self.values[value].template.clone();
+        };
+        if path.is_empty() && class == "value" {
+            return self.values[value].template.clone();
+        }
+        let below = entries.iter().any(|(at, _)| at.len() > path.len() && at.starts_with(path));
+        if !below {
+            return entry_at(entries, path);
+        }
+        if class == "value" {
+            return entries_whole(entries, path);
+        }
+        match entries.iter().find(|(at, _)| at == path) {
+            Some((_, template)) => template.clone(),
+            None => Some(json!({ "op": "const" })),
+        }
+    }
+
+    /// The entries of a constructed value (PL §3.4): a container entry
+    /// at its own path, and one entry for each member that is not
+    /// constructed in place and whose template is not `const`. `None`
+    /// for a place that is no constructed value.
+    fn entries_of(&mut self, place: &Place) -> Option<Entries> {
+        match place {
+            Place::Record(fields) => {
+                // The key set is static, or decided by what the
+                // positions from a spread on hold.
+                let container = match fields.get("*") {
+                    Some(star) => self.template_of(star, "identity"),
+                    None => Some(json!({ "op": "const" })),
+                };
+                let mut entries: Entries = vec![(Vec::new(), container)];
+                for (name, member) in fields {
+                    match self.entries_of(member) {
+                        Some(below) => {
+                            for (at, template) in below {
+                                if at.is_empty()
+                                    && template.as_ref().is_some_and(|t| t["op"] == "const")
+                                {
+                                    continue;
+                                }
+                                let mut path = vec![name.clone()];
+                                path.extend(at);
+                                entries.push((path, template));
+                            }
+                        }
+                        None => {
+                            let template = self.template_of(member, "identity");
+                            if template.as_ref().is_some_and(|t| t["op"] == "const") {
+                                continue;
+                            }
+                            entries.push((vec![name.clone()], template));
+                        }
+                    }
+                }
+                Some(entries)
+            }
+            Place::Value(value, path) => {
+                let entries = self.values[*value].entries.as_ref()?;
+                if !entries.iter().any(|(at, _)| at.len() > path.len() && at.starts_with(path)) {
+                    return None;
+                }
+                let mut found: Entries = entries
+                    .iter()
+                    .filter(|(at, _)| at.starts_with(path))
+                    .map(|(at, template)| (at[path.len()..].to_vec(), template.clone()))
+                    .collect();
+                if !found.iter().any(|(at, _)| at.is_empty()) {
+                    found.insert(0, (Vec::new(), Some(json!({ "op": "const" }))));
+                }
+                Some(found)
+            }
+            _ => None,
+        }
+    }
+
+    /// A node whose result is a constructed value is written once per
+    /// path (PL §3.4): for each path at which some branch has an entry,
+    /// the node over the template each branch has at the path.
+    fn per_path(
+        &mut self,
+        branches: &[(Option<Entries>, Option<Value>)],
+        node: impl Fn(Vec<Option<Value>>) -> Option<Value>,
+    ) {
+        if branches.iter().all(|(entries, _)| entries.is_none()) {
+            return;
+        }
+        let mut paths: Vec<Vec<String>> = Vec::new();
+        for (entries, _) in branches {
+            for (at, _) in entries.iter().flatten() {
+                if !paths.contains(at) {
+                    paths.push(at.clone());
+                }
+            }
+        }
+        paths.sort();
+        let entries = paths
+            .into_iter()
+            .map(|path| {
+                let at: Vec<Option<Value>> = branches
+                    .iter()
+                    .map(|(entries, whole)| match entries {
+                        Some(entries) => entry_at(entries, &path),
+                        None => whole.clone(),
+                    })
+                    .collect();
+                let template = node(at);
+                (path, template)
+            })
+            .collect();
+        self.pending_entries = Some(entries);
     }
 
     fn observe(&mut self, place: &Place, class: &'static str) {
@@ -1477,16 +1638,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 // A rendered tree has a template per path (PL §3.4), and
                 // none as one value.
                 self.build(hint, at, |emitter, _| {
-                    match expression {
+                    let tree = match expression {
                         Expression::JSXElement(element) => emitter.jsx_element(element),
                         Expression::JSXFragment(fragment) => {
-                            for child in &fragment.children {
-                                emitter.jsx_child(child);
-                            }
+                            emitter.jsx_node(None, &fragment.children)
                         }
-                        _ => {}
-                    }
-                    None
+                        _ => Place::Const,
+                    };
+                    emitter.constructed(&tree)
                 })
             }
             Expression::ConditionalExpression(conditional) => self.select(
@@ -2140,6 +2299,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 None => Place::Const,
             }
         });
+        let element_entries = self.entries_of(&result);
         // The element as the source has it, passed through.
         let source_element = |emitter: &mut Self| {
             let slot = emitter.slot(&Root::Element(collection), &[], "identity");
@@ -2249,6 +2409,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             // The assembled result has the membership template (PL §1.4).
             self.values[value].template = membership;
             self.values[value].element = Some(element);
+            if via == "map" {
+                self.values[value].element_entries = element_entries;
+            }
         }
         let place = Place::Value(value, Vec::new());
         // A cone outside the construct that uses the collection reads its
@@ -2285,9 +2448,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                         // A promoted `computed` is its expression, and
                         // has the expression's template.
                         self.build(hint, at, |emitter, _| {
-                            emitter
-                                .one("identity", |emitter| emitter.eval(expression, hint))
-                                .1
+                            let (place, template) =
+                                emitter.one("identity", |emitter| emitter.eval(expression, hint));
+                            emitter.pending_entries = emitter.entries_of(&place);
+                            template
                         })
                     }
                     None => {
@@ -2793,8 +2957,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Some(JSXAttributeValue::Element(element)) => {
                             let at = element.span.start;
                             self.build(&format!("@{name}"), at, |emitter, _| {
-                                emitter.jsx_element(element);
-                                None
+                                let tree = emitter.jsx_element(element);
+                                emitter.constructed(&tree)
                             })
                         }
                         _ => Place::Const,
@@ -2830,10 +2994,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         if written {
             let at = element.span.start;
             let children = self.build("@children", at, |emitter, _| {
-                for child in &element.children {
-                    emitter.jsx_child(child);
-                }
-                None
+                let tree = emitter.jsx_children(&element.children);
+                emitter.constructed(&tree)
             });
             fields.insert("children".to_string(), children);
         }
@@ -2844,9 +3006,9 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// under a `site` step where the compiler can see the pattern, and a
     /// `Child` where the tag names a factory value. `false` for any other
     /// tag.
-    fn jsx_pattern(&mut self, element: &JSXElement<'a>) -> bool {
+    fn jsx_pattern(&mut self, element: &JSXElement<'a>) -> Option<Place> {
         let JSXElementName::IdentifierReference(identifier) = &element.opening_element.name else {
-            return false;
+            return None;
         };
         let at = element.span.start;
         let name = identifier.name.to_string();
@@ -2892,10 +3054,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             if made {
                 self.cone = None;
             }
-            return true;
+            // What the child renders is no slot of the crate.
+            return Some(Place::Unknown);
         }
         let Some((home, start, DefKind::Pattern)) = self.def_function(identifier) else {
-            return false;
+            return None;
         };
         let argument = self.tag_argument(element);
         // What the pattern declares is in cones of its own, as the
@@ -2910,20 +3073,139 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.operands = saved.0;
         self.opaque = saved.1;
         // The enclosing tree holds what the pattern renders.
-        match &result {
-            Place::Record(fields) => match fields.get("$UI") {
-                Some(rendered) => self.pass(&rendered.clone()),
-                None => self.pass(&result),
-            },
-            other => self.pass(other),
-        }
-        true
+        let rendered = match &result {
+            Place::Record(fields) => fields.get("$UI").cloned().unwrap_or(result.clone()),
+            other => other.clone(),
+        };
+        self.pass(&rendered);
+        Some(rendered)
     }
 
-    fn jsx_element(&mut self, element: &JSXElement<'a>) {
-        if self.jsx_pattern(element) {
-            return;
+    /// The template of a constructed value observed whole, with its
+    /// entries left for the value `build` makes (PL §3.4).
+    fn constructed(&mut self, place: &Place) -> Option<Value> {
+        let entries = self.entries_of(place);
+        let whole = match &entries {
+            Some(entries) => entries_whole(entries, &[]),
+            None => self.template_of(place, "identity"),
+        };
+        self.pending_entries = entries;
+        whole
+    }
+
+    /// The view node of a host element or a fragment (PL §3.4, "A JSX
+    /// element"): `props`, the object literal of the attributes, and
+    /// `children`, the array literal of the children. `type` and `name`
+    /// are constants.
+    fn jsx_node(&mut self, props: Option<Place>, children: &[JSXChild<'a>]) -> Place {
+        let mut fields = BTreeMap::new();
+        if let Some(props) = props {
+            fields.insert("props".to_string(), props);
         }
+        fields.insert("children".to_string(), self.jsx_children(children));
+        Place::Record(fields)
+    }
+
+    /// The array literal of the children of an element. "A child whose
+    /// type is an array ... is a spread child", and "the rule for a
+    /// spread in an array literal gives the positions from it on": one
+    /// member at `*`, the join of what each later child holds and of the
+    /// membership of each spread child.
+    fn jsx_children(&mut self, children: &[JSXChild<'a>]) -> Place {
+        let mut fields = BTreeMap::new();
+        let mut position = 0usize;
+        let mut later: Option<Vec<Option<Value>>> = None;
+        for child in children {
+            let (place, spread) = match child {
+                // Text that is white space with a line break is no
+                // child, and other text is a constant.
+                JSXChild::Text(text) => {
+                    if !(text.value.trim().is_empty() && text.value.contains('\n')) {
+                        position += 1;
+                    }
+                    continue;
+                }
+                JSXChild::Element(element) => (self.jsx_element(element), false),
+                JSXChild::Fragment(fragment) => (self.jsx_node(None, &fragment.children), false),
+                JSXChild::ExpressionContainer(container) => {
+                    let Some(expression) = container.expression.as_expression() else {
+                        continue;
+                    };
+                    let place = self.eval(expression, "child");
+                    self.pass(&place);
+                    let listed = matches!(&place, Place::Value(value, path)
+                        if path.is_empty() && self.values[*value].collection.is_some() && !self.values[*value].scan)
+                        || self.resolver.typed_at(self.module, expression, 0).is_ok_and(|ty| {
+                            matches!(
+                                self.resolver.shape(self.resolver.present(ty)),
+                                Shape::Array(_) | Shape::Tuple(_)
+                            )
+                        });
+                    (place, listed)
+                }
+                JSXChild::Spread(spread) => {
+                    let place = self.eval(&spread.expression, "child");
+                    self.pass(&place);
+                    (place, true)
+                }
+            };
+            if spread && later.is_none() {
+                later = Some(Vec::new());
+            }
+            match &mut later {
+                None => {
+                    fields.insert(position.to_string(), place);
+                    position += 1;
+                }
+                Some(_) => {
+                    let mut templates: Vec<Option<Value>> = Vec::new();
+                    match &place {
+                        Place::Value(value, path) if spread && path.is_empty() => {
+                            // The elements, and which of them there are.
+                            let value = *value;
+                            let element = match &self.values[value].element_entries {
+                                Some(entries) => entries_whole(entries, &[]),
+                                None => match &self.values[value].element {
+                                    Some(element) => element.clone(),
+                                    None => self.values[value].template.clone(),
+                                },
+                            };
+                            templates.push(element);
+                            templates.push(self.values[value].template.clone());
+                        }
+                        Place::Slot(root, path) if spread => {
+                            let mut element = path.clone();
+                            element.push("*".to_string());
+                            let (root, path) = (root.clone(), path.clone());
+                            templates.push(self.template_of(&Place::Slot(root.clone(), element), "identity"));
+                            templates.push(self.template_of(&Place::Slot(root, path), "enumeration"));
+                        }
+                        other => {
+                            let other = other.clone();
+                            templates.push(self.one("identity", |_| other).1);
+                        }
+                    }
+                    if let Some(later) = &mut later {
+                        later.extend(templates);
+                    }
+                }
+            }
+        }
+        if let Some(later) = later {
+            let at = children.first().map_or(0, |child| child.span().start);
+            let star = self.build("children", at, |_, _| {
+                Some(joined(later.into_iter().collect::<Option<Vec<Value>>>()?))
+            });
+            fields.insert("*".to_string(), star);
+        }
+        Place::Record(fields)
+    }
+
+    fn jsx_element(&mut self, element: &JSXElement<'a>) -> Place {
+        if let Some(rendered) = self.jsx_pattern(element) {
+            return rendered;
+        }
+        let mut props = BTreeMap::new();
         for attribute in &element.opening_element.attributes {
             match attribute {
                 JSXAttributeItem::Attribute(attribute) => {
@@ -2931,53 +3213,56 @@ impl<'a> Emitter<'_, '_, 'a> {
                         JSXAttributeName::Identifier(identifier) => identifier.name.to_string(),
                         JSXAttributeName::NamespacedName(name) => name.name.name.to_string(),
                     };
-                    if let Some(JSXAttributeValue::ExpressionContainer(container)) =
-                        &attribute.value
-                    {
-                        if let Some(expression) = container.expression.as_expression() {
-                            match FunctionLike::of(expression) {
-                                Some(function) => {
-                                    self.bind_inline(function, BodyKind::InlineHandler, &name);
-                                }
-                                None => {
-                                    let place = self.eval(expression, &format!("@{name}"));
-                                    self.pass(&place);
-                                }
+                    let place = match &attribute.value {
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(expression) => match FunctionLike::of(expression) {
+                                    Some(function) => {
+                                        self.bind_inline(function, BodyKind::InlineHandler, &name)
+                                    }
+                                    None => {
+                                        let place = self.eval(expression, &format!("@{name}"));
+                                        self.pass(&place);
+                                        place
+                                    }
+                                },
+                                None => Place::Const,
                             }
+                        }
+                        Some(JSXAttributeValue::Element(element)) => self.jsx_element(element),
+                        Some(JSXAttributeValue::Fragment(fragment)) => {
+                            self.jsx_node(None, &fragment.children)
+                        }
+                        _ => Place::Const,
+                    };
+                    props.insert(name, place);
+                }
+                JSXAttributeItem::SpreadAttribute(spread) => {
+                    // "A spread attribute ... [is] a spread in the object
+                    // literal of the attributes" (PL §3.4). Where the
+                    // type of the operand declares its properties, each
+                    // is a path; otherwise the operand decides the key
+                    // set.
+                    let place = self.eval(&spread.argument, "spread");
+                    self.pass(&place);
+                    let declared = self.declared_members(&spread.argument);
+                    match (place, declared) {
+                        (Place::Record(members), _) => props.extend(members),
+                        (Place::Const, _) => {}
+                        (place, Some(declared)) => {
+                            for (name, _) in declared {
+                                let member = Self::extend(&place, &name);
+                                props.insert(name, member);
+                            }
+                        }
+                        (place, None) => {
+                            props.insert("*".to_string(), place);
                         }
                     }
                 }
-                JSXAttributeItem::SpreadAttribute(spread) => {
-                    let place = self.eval(&spread.argument, "spread");
-                    self.pass(&place);
-                }
             }
         }
-        for child in &element.children {
-            self.jsx_child(child);
-        }
-    }
-
-    fn jsx_child(&mut self, child: &JSXChild<'a>) {
-        match child {
-            JSXChild::Element(element) => self.jsx_element(element),
-            JSXChild::Fragment(fragment) => {
-                for child in &fragment.children {
-                    self.jsx_child(child);
-                }
-            }
-            JSXChild::ExpressionContainer(container) => {
-                if let Some(expression) = container.expression.as_expression() {
-                    let place = self.eval(expression, "child");
-                    self.pass(&place);
-                }
-            }
-            JSXChild::Spread(spread) => {
-                let place = self.eval(&spread.expression, "child");
-                self.pass(&place);
-            }
-            JSXChild::Text(_) => {}
-        }
+        self.jsx_node(Some(Place::Record(props)), &element.children)
     }
 
     // ----- bodies -----
@@ -3100,7 +3385,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                     input.insert("at".to_string(), json!(at_path));
                     input.insert("observes".to_string(), json!(class_name(entry.class)));
                     let template = match &place {
-                        Place::Value(value, _) => self.values[*value].template.clone(),
+                        Place::Value(value, path) => {
+                            self.value_template(*value, path, class_name(entry.class))
+                        }
                         // "An entry at a path of the literal itself, such
                         // as `enumeration` at the literal, is an entry of
                         // `Body.computed` whose template is the literal's
@@ -4055,13 +4342,55 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 output.insert("kept".to_string(), json!(kept));
                 output.insert("constraints".to_string(), json!([]));
-                let assembled = Value::Object(output.clone());
-                listed.push((
-                    cone,
-                    value.order,
-                    Some((value.order, below.to_vec())),
-                    assembled,
-                ));
+                // A constructed value has an entry per path (PL §3.4),
+                // the container entry first.
+                let spread = |output: &Map<String, Value>, entries: &Entries, star: bool| {
+                    entries
+                        .iter()
+                        .map(|(at, template)| {
+                            let mut output = output.clone();
+                            let mut path: Vec<Value> =
+                                output["path"].as_array().cloned().unwrap_or_default();
+                            if star {
+                                path.push(json!("*"));
+                            }
+                            path.extend(at.iter().map(|segment| json!(segment)));
+                            output.insert("path".to_string(), json!(path));
+                            output.remove("template");
+                            if star {
+                                output.remove("collection");
+                            }
+                            if let Some(template) = template {
+                                output.insert("template".to_string(), template.clone());
+                            }
+                            Value::Object(output)
+                        })
+                        .collect::<Vec<Value>>()
+                };
+                match (&value.entries, below.is_empty()) {
+                    (Some(entries), true) => {
+                        for output in spread(&output, entries, false) {
+                            listed.push((
+                                cone,
+                                value.order,
+                                Some((value.order, below.to_vec())),
+                                output,
+                            ));
+                        }
+                    }
+                    _ => listed.push((
+                        cone,
+                        value.order,
+                        Some((value.order, below.to_vec())),
+                        Value::Object(output.clone()),
+                    )),
+                }
+                if let (Some(entries), true) = (&value.element_entries, below.is_empty()) {
+                    for output in spread(&output, entries, true) {
+                        listed.push((cone, value.order, None, output));
+                    }
+                    return;
+                }
                 // The per-element entry of an element construct: its
                 // path "has `*` at the position of each enclosing
                 // collection", and its template is over `element` slots
@@ -4744,6 +5073,7 @@ pub fn emit_module<'a>(
             hints: Vec::new(),
             root_types: HashMap::new(),
             result_type: None,
+            pending_entries: None,
         };
         // The type the pattern declares for its result: the second type
         // argument of the call that defines it.
