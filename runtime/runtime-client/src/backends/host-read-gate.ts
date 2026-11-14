@@ -461,13 +461,11 @@ export class HostReadGate {
     let consumed: SinkConsumedLabel | undefined;
     const decide = () => {
       if (last === undefined) return;
-      const refusal = readRefusal(
-        cell,
-        [consumed],
-        policy,
-        this.#sources,
-        watch,
-      );
+      // No labels is a read whose labels could not be read, refused whatever
+      // the policy, as a one-shot read of the same cell is.
+      const refusal = consumed === undefined
+        ? UNREADABLE_LABELS
+        : readRefusal(cell, [consumed], policy, this.#sources, watch);
       if (refusal === undefined) deliverValue(last.value, last.cfcLabel);
       else deliver(refusedUpdate(refusal));
     };
@@ -476,14 +474,22 @@ export class HostReadGate {
       addCancel,
       reeval: decide,
     };
-    addCancel(sinkProjected(cell, (value) => {
-      inspect(value);
-      return hostValueOf(value);
-    }, (value, read, cfcLabel) => {
-      last = { value, cfcLabel };
-      consumed = read;
-      decide();
-    }, { includeCfcLabel }));
+    try {
+      addCancel(sinkProjected(cell, (value) => {
+        inspect(value);
+        return hostValueOf(value);
+      }, (value, read, cfcLabel) => {
+        last = { value, cfcLabel };
+        consumed = read;
+        decide();
+      }, { includeCfcLabel }));
+    } catch (error) {
+      // The sink hands a read whose stored labels this build cannot interpret
+      // no labels rather than failing. Should one fail its first run all the
+      // same, it subscribed to nothing, and the refusal is its one delivery.
+      if (!(error instanceof StoredCfcMetadataError)) throw error;
+      deliver(refusedUpdate(UNREADABLE_LABELS));
+    }
     return cancel;
   }
 

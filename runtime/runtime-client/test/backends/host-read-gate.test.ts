@@ -1009,6 +1009,80 @@ describe("HostReadGate", () => {
       }
     });
 
+    for (
+      const [typing, entrySchema] of [
+        ["typed", { type: "string" }],
+        ["untyped", {}],
+      ] as const
+    ) {
+      it(`delivers the unreadable refusal to a subscription, the field ${typing}, when the document a link leads it to takes such an envelope, and the value once it is readable again`, async () => {
+        // The subscribed document stays readable; only what its read reaches
+        // through the link does not, so only the labels the read consumed can
+        // refuse it.
+
+        await using docs = await shelf();
+        const gate = gateFor(docs.runtime, owner);
+        const target = await docs.write("linked-target", "target value");
+        const entry = target.getAsLink({
+          includeSchema: true,
+          keepAsCell: KeepAsCell.All,
+        });
+        const linker = (await docs.write("readable-linker", { entry }))
+          .asSchema(
+            {
+              type: "object",
+              properties: { entry: entrySchema },
+            } as const,
+          );
+        const { updates, cancel } = subscribe(gate, linker);
+        try {
+          await docs.write(
+            "linked-target",
+            "behind-an-unreadable-envelope",
+            [],
+            {
+              cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+            },
+          );
+          await docs.runtime.idle();
+          expect(updates.at(-1)).toEqual(expect.objectContaining({
+            refused: {
+              refusedBy: "display-ceiling",
+              labelSource: "unreadable",
+            },
+          }));
+          expect(holds(updates, "behind-an-unreadable-envelope")).toBe(false);
+
+          await docs.write("linked-target", "readable again");
+          await docs.runtime.idle();
+          expect(updates.at(-1)).toEqual(
+            expect.objectContaining({ value: { entry: "readable again" } }),
+          );
+        } finally {
+          cancel();
+        }
+      });
+    }
+
+    it("refuses a read and a subscription alike, as unreadable, under a policy that admits everything", async () => {
+      // A policy with no ceiling admits every label, but a read that could
+      // not read its labels has none to admit.
+
+      await using docs = await shelf();
+      const gate = new HostReadGate({ declassifyConfidentiality: [] }, {});
+      const cell = (await docs.write("admits-everything", "a value", [], {
+        cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+      })).asSchema({ type: "string" });
+      const refusal = {
+        refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
+      };
+
+      expect(gate.read(cell)).toEqual(refusal);
+      const { updates, cancel } = subscribe(gate, cell);
+      cancel();
+      expect(updates).toEqual([expect.objectContaining(refusal)]);
+    });
+
     it("names the labels unreadable for a read under a schema nesting one that carries its own definitions", async () => {
       // TODO(danfuzz): This read should be decided on the labels its schema
       // declares, which are none, so that the owner is shown the value. It is

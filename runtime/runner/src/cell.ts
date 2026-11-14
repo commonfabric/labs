@@ -254,9 +254,9 @@ type SinkOptions = {
    * the join to the callback as a third argument. The label metadata is read
    * on the sink's transaction, so a label-only write to anything the read
    * reached re-fires the sink. Where a document the read reached stores
-   * labels this build cannot interpret, the callback is handed no join and
-   * the projection of no value, and the sink stays subscribed. Off by
-   * default.
+   * labels this build cannot interpret, the callback is handed no join, and
+   * no value or the projection of none, and the sink stays subscribed. Off
+   * by default.
    */
   includeConsumedLabel?: boolean;
 };
