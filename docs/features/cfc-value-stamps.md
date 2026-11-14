@@ -134,4 +134,12 @@ mints an atom, covers the references beneath it.
 
 An envelope can hold a stamp's atoms in a `declared` entry. Nothing tells such
 an entry apart from a claim, so it keeps the declared component's discipline.
-The runtime writes a stamp to the `minted` component only.
+The runtime writes a stamp to the `minted` component only. One atom is never
+declared or minted through a schema: `TransformedBy`, which the flow stage
+mints for one attempt. `gateSchemaIntegrity` strips it from every label a
+schema declares or stamps when the schema is admitted, whatever the author
+(CFC §15.4); what a document already stores, the flow stage's stamps among
+it, is left as stored. A declared entry stored before that rule held, or by
+a writer that did not keep it, can still carry the atom, and a reader takes
+no input witness from it: `asWitnessEvidence` and `isWriterStamp` count a
+`TransformedBy` only on a flow-stage (`derived` or `structure`) entry.
