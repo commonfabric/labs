@@ -166,7 +166,7 @@ struct Emitter<'r, 'm, 'a> {
     /// function.
     handlers: HashMap<(usize, u32), usize>,
     /// The result paths that hold an input passed through.
-    passed: Vec<Vec<String>>,
+    passed: Vec<(Vec<String>, usize)>,
     unsupported: Vec<(String, u32)>,
     /// The templates of what the expression code being evaluated
     /// observed, and whether it observed something with no template.
@@ -1933,22 +1933,54 @@ impl<'a> Emitter<'_, '_, 'a> {
                     "within": self.within_json(),
                 }));
                 let (cone, made) = self.computing(hint, at);
+                let saved = (
+                    std::mem::take(&mut self.operands),
+                    std::mem::replace(&mut self.opaque, false),
+                );
+                // The templates of the request, and whether each path
+                // has one.
+                let mut request: Option<Vec<Value>> = Some(Vec::new());
                 for argument in arguments {
                     let place = self.eval(argument, hint);
-                    self.pass(&place);
-                    // One write edge per path of the request (PL §3.14).
+                    // One write edge per path of the request (PL §3.14),
+                    // with the template of what is written there.
                     let mut paths = Vec::new();
                     request_paths(&place, &mut Vec::new(), &mut paths);
-                    for path in paths {
-                        self.cones[cone].writes.push(json!({
-                            "target": {
+                    for (path, member) in paths {
+                        let template = self.one("identity", |_| member).1;
+                        let mut write = Map::new();
+                        write.insert(
+                            "target".to_string(),
+                            json!({
                                 "kind": "request",
                                 "of": { "operation": operation },
                                 "path": path,
-                            },
-                            "constraints": [],
-                        }));
+                            }),
+                        );
+                        match template {
+                            Some(template) => {
+                                write.insert("template".to_string(), template.clone());
+                                if let Some(request) = &mut request {
+                                    request.push(template);
+                                }
+                            }
+                            None => request = None,
+                        }
+                        write.insert("constraints".to_string(), json!([]));
+                        self.cones[cone].writes.push(Value::Object(write));
                     }
+                }
+                self.operands = saved.0;
+                self.opaque = saved.1;
+                // "For an effect, the join of the templates of its
+                // request" (PL §1.1, `Operation.input`).
+                if let Some(mut request) = request {
+                    let input = if request.len() == 1 {
+                        request.remove(0)
+                    } else {
+                        join(request)
+                    };
+                    self.operations[operation]["input"] = input;
                 }
                 if made {
                     self.cone = None;
@@ -2222,10 +2254,35 @@ impl<'a> Emitter<'_, '_, 'a> {
                     let mut input = Map::new();
                     input.insert("at".to_string(), json!(at_path));
                     input.insert("observes".to_string(), json!(class_name(entry.class)));
-                    if let Place::Value(value, _) = &place {
-                        if let Some(template) = &self.values[*value].template {
-                            input.insert("template".to_string(), template.clone());
+                    let template = match &place {
+                        Place::Value(value, _) => self.values[*value].template.clone(),
+                        // "An entry at a path of the literal itself, such
+                        // as `enumeration` at the literal, is an entry of
+                        // `Body.computed` whose template is the literal's
+                        // own" (PL §3.9), which is `const` for a static
+                        // set of keys (§3.4). A `value` entry there
+                        // observes every member.
+                        Place::Record(_)
+                            if matches!(entry.class, Class::Shape | Class::Enumeration) =>
+                        {
+                            Some(json!({ "op": "const" }))
                         }
+                        Place::Record(_) => {
+                            let saved = (
+                                std::mem::take(&mut self.operands),
+                                std::mem::replace(&mut self.opaque, false),
+                            );
+                            let saved_cone = self.cone.take();
+                            self.observe(&place, "value");
+                            self.cone = saved_cone;
+                            let inputs = std::mem::replace(&mut self.operands, saved.0);
+                            let opaque = std::mem::replace(&mut self.opaque, saved.1);
+                            (!opaque).then(|| join(inputs))
+                        }
+                        _ => None,
+                    };
+                    if let Some(template) = template {
+                        input.insert("template".to_string(), template);
                     }
                     computed_inputs.push(Value::Object(input));
                 }
@@ -2527,6 +2584,22 @@ impl<'a> Emitter<'_, '_, 'a> {
         }));
         self.body_facts.push(fact);
         self.body_dynamic.push(dynamic);
+        // "The label of the written value is the edge's template ... the
+        // body's template when a sandboxed body performs the write" (PL
+        // §3.11). For an edge that names a reference, the template
+        // "applies where the check fails" (§1.1).
+        let own = self.body_template(index);
+        if let Some(own) = &own {
+            for write in self.plan_bodies[index]["writes"]
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(write) = write.as_object_mut() {
+                    write.insert("template".to_string(), own.clone());
+                }
+            }
+        }
         // The bindings the body makes (PL §1.1, `Binding`): the handler
         // is a body of the plan, and each path of its state is copied or
         // holds a reference the binding body was given.
@@ -2549,6 +2622,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                 item.insert("path".to_string(), json!(slot_path(&[], &entry.path)));
                 let capture = if entry.copy { "copy" } else { "link" };
                 item.insert("capture".to_string(), json!(capture));
+                // A copied path has the binding body's template, and so
+                // has a path bound by reference where the check of its
+                // reference fails (PL §3.14).
+                if let Some(own) = &own {
+                    item.insert("template".to_string(), own.clone());
+                }
                 if let Some((passes, listed)) = &entry.reference {
                     if let Some(reference) = reference_json(&names, *passes, listed) {
                         item.insert("reference".to_string(), reference);
@@ -2564,12 +2643,17 @@ impl<'a> Emitter<'_, '_, 'a> {
             });
         }
         if computation && record.tier == Some("materializer") {
-            self.operations.push(json!({
-                "kind": "materializer",
-                "implementation": { "body": index },
-                "name": name,
-                "within": self.within_json(),
-            }));
+            // "For a materializer, the template of its body" (PL §1.1,
+            // `Operation.input`).
+            let mut operation = Map::new();
+            operation.insert("kind".to_string(), json!("materializer"));
+            operation.insert("implementation".to_string(), json!({ "body": index }));
+            if let Some(own) = &own {
+                operation.insert("input".to_string(), own.clone());
+            }
+            operation.insert("name".to_string(), json!(name));
+            operation.insert("within".to_string(), self.within_json());
+            self.operations.push(Value::Object(operation));
         }
         if let Some(cone) = self.cone {
             if computation {
@@ -2762,8 +2846,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 return;
             }
-            // The position of an element: PL has no `place` for it.
-            Place::Index(_) => {}
+            // The position of an element: PL has no `place` for it. Its
+            // label is the membership of what the construct iterates.
+            Place::Index(_) => {
+                if let Some(template) = self.template_of(place, "value") {
+                    entry.insert("template".to_string(), template);
+                }
+            }
             Place::Const => {
                 let constant = written.and_then(constant_of).unwrap_or(Value::Null);
                 entry.insert("place".to_string(), json!({ "constant": constant }));
@@ -2864,7 +2953,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Place::Slot(root, at) => {
                 let slot = self.slot(root, at, "identity");
-                self.passed.push(path.clone());
+                self.passed.push((path.clone(), slot));
                 let (cone, made) = self.computing("result", 0);
                 self.cones[cone].slots.insert(slot);
                 if made {
@@ -3114,7 +3203,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         if let Some(result) = result_cone {
-            for (index, path) in self.passed.iter().enumerate() {
+            for (index, (path, slot)) in self.passed.iter().enumerate() {
                 listed.push((
                     position[result],
                     usize::MAX - self.passed.len() + index,
@@ -3122,6 +3211,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     json!({
                         "path": path,
                         "cone": position[result],
+                        "template": { "op": "slot", "slot": slot },
                         "kept": true,
                         "constraints": [],
                     }),
@@ -3328,7 +3418,7 @@ fn constant_of(written: &Expression<'_>) -> Option<Value> {
 
 /// The paths of a request: one per member of a record written at the
 /// site, and the root otherwise.
-fn request_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<Vec<String>>) {
+fn request_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<(Vec<String>, Place)>) {
     match place {
         Place::Record(fields) if !fields.is_empty() => {
             for (name, member) in fields {
@@ -3337,7 +3427,7 @@ fn request_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<Vec<Stri
                 path.pop();
             }
         }
-        _ => found.push(path.clone()),
+        _ => found.push((path.clone(), place.clone())),
     }
 }
 
@@ -3528,6 +3618,28 @@ pub fn emit_module<'a>(
     plans
 }
 
+/// Counts the nodes of a template by kind, a `derive` by what computed
+/// it.
+fn count_nodes(template: &Value, nodes: &mut BTreeMap<String, usize>) {
+    let kind = match template["op"].as_str() {
+        Some("derive") if template["by"].get("body").is_some() => "derive by a body".to_string(),
+        Some("derive") => "derive by expression code".to_string(),
+        Some(op) => op.to_string(),
+        None => return,
+    };
+    *nodes.entry(kind).or_default() += 1;
+    for member in ["inputs", "branches"] {
+        for input in template[member].as_array().into_iter().flatten() {
+            count_nodes(input, nodes);
+        }
+    }
+    for member in ["condition", "body", "choice"] {
+        if let Some(inner) = template.get(member) {
+            count_nodes(inner, nodes);
+        }
+    }
+}
+
 /// For how many of the accepted modules of a program a plan is emitted
 /// with no unsupported construct, and the unsupported constructs by kind.
 pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
@@ -3615,6 +3727,74 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
     out.push_str(&format!(
         "cones: {cones}; edges: {edges}, {write_edges} through a side-write\n"
     ));
+    // The templates of the plans emitted with no unsupported construct:
+    // which records have one, and the nodes by kind.
+    let complete_plans: Vec<&PatternPlan> = with_patterns
+        .iter()
+        .flat_map(|module| &module.plans)
+        .filter(|plan| plan.unsupported.is_empty())
+        .collect();
+    let mut every_output = 0;
+    let mut holders: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut nodes: BTreeMap<String, usize> = BTreeMap::new();
+    for plan in &complete_plans {
+        let plan = &plan.plan;
+        let mut tally = |kind: &'static str, record: &Value, member: &str| {
+            let entry = holders.entry(kind).or_default();
+            entry.1 += 1;
+            if let Some(template) = record.get(member) {
+                entry.0 += 1;
+                count_nodes(template, &mut nodes);
+            }
+        };
+        let list = |value: &Value| value.as_array().cloned().unwrap_or_default();
+        let outputs = list(&plan["outputs"]);
+        if outputs
+            .iter()
+            .all(|output| output.get("template").is_some())
+        {
+            every_output += 1;
+        }
+        for output in &outputs {
+            tally("Output.template", output, "template");
+        }
+        for collection in list(&plan["collections"]) {
+            tally("Collection.membership", &collection, "membership");
+        }
+        for operation in list(&plan["operations"]) {
+            tally("Operation.input", &operation, "input");
+        }
+        for body in list(&plan["bodies"]) {
+            for input in list(&body["computed"]) {
+                tally("ComputedInput.template", &input, "template");
+            }
+            for write in list(&body["writes"]) {
+                tally("WriteEdge.template (body)", &write, "template");
+            }
+        }
+        for cone in list(&plan["cones"]) {
+            for write in list(&cone["writes"]) {
+                tally("WriteEdge.template (cone)", &write, "template");
+            }
+        }
+        for binding in list(&plan["bindings"]) {
+            for entry in list(&binding["state"]) {
+                tally("Binding.state.template", &entry, "template");
+            }
+        }
+    }
+    out.push_str(&format!(
+        "plans in which every output has a template: {every_output} of {}\n",
+        complete_plans.len()
+    ));
+    out.push_str("records with a template, of the records that hold one:\n");
+    for (kind, (with, all)) in &holders {
+        out.push_str(&format!("  {with:6} of {all:6}  {kind}\n"));
+    }
+    out.push_str("template nodes, by kind:\n");
+    for (kind, count) in &nodes {
+        out.push_str(&format!("  {count:7}  {kind}\n"));
+    }
     out.push_str("unsupported constructs, by kind (sites, modules):\n");
     let mut sorted: Vec<(&String, &(usize, BTreeSet<&str>))> = kinds.iter().collect();
     sorted.sort_by_key(|(kind, (sites, _))| (usize::MAX - *sites, kind.to_string()));

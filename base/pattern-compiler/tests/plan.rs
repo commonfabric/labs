@@ -102,11 +102,20 @@ fn a_handler_is_one_body_whose_slots_have_the_roots_event_and_binding() {
         plan["slots"][1]["root"],
         json!({ "kind": "event", "handler": 2 })
     );
-    // The push is a write edge at `*` of the cell behind the handle.
+    // The push is a write edge at `*` of the cell behind the handle, with
+    // the handler's template (PL §3.11, §3.12).
     assert_eq!(
         body["writes"],
         json!([{
             "target": { "kind": "handle", "slot": body["reads"][1], "path": ["*"] },
+            "template": {
+                "op": "derive",
+                "inputs": [
+                    { "op": "slot", "slot": body["reads"][0] },
+                    { "op": "slot", "slot": body["reads"][1] },
+                ],
+                "by": { "body": 2 },
+            },
             "constraints": [],
         }])
     );
@@ -1864,5 +1873,185 @@ fn a_scan_is_a_fold_through_the_deciding_element_and_find_is_a_pick() {
     assert_eq!(
         plan["picks"][first["pick"].as_u64().unwrap() as usize],
         json!({ "chosenBy": "runtime" })
+    );
+}
+
+#[test]
+fn the_templates_of_a_row_are_those_of_pl_section_6_2() {
+    let analysis = fabrichat();
+    let plan = pattern_plan(&analysis, "FabriChatMessageRow");
+    let message = "[argument message : shape]";
+    // "T_text = derive(by B3) [ m0 m1 m2 m4 ]". The row is a plan of its
+    // own, so the slots are at `argument message`, and `m1` is not among
+    // them (SPEC-NOTES 114).
+    assert_eq!(
+        interim_template(&plan, "text"),
+        format!("derive(by bodyText#1) {{ {message} [argument message/authorProfile : shape, inPlace] [argument message/body : value] }}")
+    );
+    // "T_isSet = derive(expression) [ m0 m1 m5 ]", "T_edited = select(
+    // condition: T_isSet, branches: [ derive(expression) [ m3 ], T_isSet
+    // ] )", with `m5` at `editedAt : shape` and `m3` at `body : shape`.
+    let is_set = format!("derive(expression) {{ {message} [argument message/editedAt : shape] }}");
+    assert_eq!(
+        interim_template(&plan, "isEdited"),
+        format!("select({is_set} ? derive(expression) {{ [argument message/body : shape] }} | {is_set})")
+    );
+    // "T_key = derive(by B4) [ m6 ]", "T_place = pick( p0, from: output
+    // facts.places, choice: T_key, body: T_facts )", "T_repl = select(
+    // condition: T_place, branches: [ T_place, const ] )". In the row's
+    // own plan `places` is a slot, so the pick is over a container slot
+    // and its choice joins the `shape` of the chosen child (§3.18).
+    // "`T_repl` leaves out the guard on a missing key, which is one more
+    // `select` on `T_key`": the crate has it.
+    let key = "derive(by viewKeyOf#1) { [argument message : identity] [argument message : identity, resolved] }";
+    let place = format!("pick(container [argument places/* : shape], choice derive(expression) {{ {key} [argument places/* : shape] }}, body [argument places/* : value])");
+    let guarded = format!("select(derive(expression) {{ {key} }} ? const | {place})");
+    let replies = format!("select({guarded} ? {guarded} | const)");
+    assert_eq!(interim_template(&plan, "replies"), replies);
+    // "T_label = select( condition: derive(expression) [ T_repl, const
+    // ], branches: [ const, derive(expression) [ const, T_repl ] ] )".
+    // The template literal is a `derive` over its substitutions (§3.19),
+    // so the crate has no `const` in the second branch.
+    assert_eq!(
+        interim_template(&plan, "threadLabel"),
+        format!("select(derive(expression) {{ {replies} const }} ? const | derive(expression) {{ {replies} }})")
+    );
+    // "`p0` is the pick's choice point": the pick of `replies` names it,
+    // and its cone lists it.
+    let template = &output_named(&plan, "replies")["template"];
+    let pick = &template["condition"]["branches"][1];
+    assert_eq!(pick["op"], "pick");
+    assert_eq!(
+        plan["picks"][pick["pick"].as_u64().unwrap() as usize],
+        json!({ "chosenBy": "valueCode" })
+    );
+}
+
+#[test]
+fn the_templates_of_the_room_are_those_of_pl_section_6_2() {
+    let analysis = fabrichat();
+    let plan = pattern_plan(&analysis, "FabriChatRoomCore");
+    // "T_send = derive(by B0) [ e0 ... b4 dynamic(handle B0.h0) ...
+    // dynamic(handle B0.h3) dynamic(link through b2) ]", and "`T_send`
+    // has three further `dynamic` nodes of kind `link`, through `e3`,
+    // `e5` and `e6`."
+    let send = body_index(&plan, "commitSend");
+    let body = &plan["bodies"][send];
+    let write = &body["writes"][0];
+    let template = &write["template"];
+    assert_eq!(template["by"], json!({ "body": send }));
+    let inputs = template["inputs"].as_array().expect("inputs");
+    let slots: Vec<&Value> = inputs
+        .iter()
+        .filter(|input| input["op"] == "slot")
+        .collect();
+    assert_eq!(slots.len(), body["reads"].as_array().expect("reads").len());
+    let dynamic: Vec<String> = inputs
+        .iter()
+        .filter(|input| input["op"] == "dynamic")
+        .map(|input| {
+            let why = &plan["dynamicReads"][input["reads"].as_u64().unwrap() as usize]["why"];
+            match why["kind"].as_str() {
+                Some("handle") => format!("handle h{}", why["handle"]),
+                Some("link") => format!("link through [{}]", slot_line(&plan, &why["through"])),
+                other => panic!("an unexpected dynamic read {other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        dynamic,
+        [
+            "handle h0",
+            "handle h1",
+            "handle h2",
+            "handle h3",
+            "link through [event attachments/* : identity]",
+            "link through [event replyTo/quotes : identity]",
+            "link through [event replyTo/thread : identity]",
+            "link through [binding messages : identity]",
+        ]
+    );
+    // "w0 handle b2 * T_send", "w3 created n0 T_send", "w4 handle b3 *
+    // T_send", "w5 handle b4 T_send": every write edge of the body has
+    // the body's template, and for a reference edge it "applies where
+    // the check fails" (§1.1, `WriteEdge.template`).
+    for write in body["writes"].as_array().expect("writes") {
+        assert_eq!(&write["template"], template);
+    }
+    // "c1 = collection source: output facts.main membership: T_facts".
+    let main = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .position(|output| output["interim"] == "facts" && output["path"] == json!(["main"]))
+        .expect("the output facts.main");
+    let c1 = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .find(|collection| collection["source"] == json!({ "output": main }))
+        .expect("c1");
+    assert_eq!(c1["membership"], plan["outputs"][main]["template"]);
+    assert_eq!(
+        c1["membership"]["by"],
+        json!({ "body": body_index(&plan, "messageFacts") })
+    );
+}
+
+#[test]
+fn a_write_edge_an_operation_and_a_binding_made_in_a_body_have_their_templates() {
+    // PL §3.11: "The label of the written value is the edge's template
+    // ... the body's template when a sandboxed body performs the write."
+    // §1.1, `Operation.input`: "for an effect, the join of the templates
+    // of its request". §3.14: a scalar copied into a binding has `T_b`.
+    let analysis = program(
+        r#"import { Cell, fetchJson, handler, pattern } from "commonfabric";
+const inc = handler<{ by: number }, { count: Cell<number>; step: number }>((event, state) => {
+  state.count.set(state.count.get() + event.by * state.step);
+});
+const make = handler<{ n: number }, { count: Cell<number>; out: Cell<unknown> }>((event, state) => {
+  state.out.set(inc({ count: state.count, step: event.n }));
+});
+export const P = pattern<{ count: Cell<number>; out: Cell<unknown>; url: string }>(({ count, out, url }) => {
+  const data = fetchJson({ url, mode: "json" });
+  return { maker: make({ count, out }), data };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let make = body_index(&plan, "make");
+    let t_make =
+        "derive(by make) { [event n : value] [binding count : identity] [binding out : identity] }";
+    let body = &plan["bodies"][make];
+    assert_eq!(template_line(&plan, &body["writes"][0]["template"]), t_make);
+    let binding = &plan["bindings"][body["calls"][0]["binding"].as_u64().unwrap() as usize];
+    for entry in binding["state"].as_array().expect("state") {
+        assert_eq!(template_line(&plan, &entry["template"]), t_make);
+    }
+    // The request of the effect: one write edge per path, each with the
+    // template of what is written there, and the operation's input is
+    // their join.
+    let cone = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .find(|cone| cone["entry"] == "data")
+        .expect("the cone of the request");
+    let writes: Vec<String> = cone["writes"]
+        .as_array()
+        .expect("writes")
+        .iter()
+        .map(|write| {
+            format!(
+                "{} {}",
+                write["target"]["path"][0].as_str().unwrap(),
+                template_line(&plan, &write["template"])
+            )
+        })
+        .collect();
+    assert_eq!(writes, ["mode const", "url [argument url : identity]"]);
+    assert_eq!(
+        template_line(&plan, &plan["operations"][0]["input"]),
+        "derive(expression) { const [argument url : identity] }"
     );
 }
