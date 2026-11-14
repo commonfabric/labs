@@ -16,6 +16,7 @@ import {
 } from "../../src/executor/routed-plane.ts";
 import type { WaveSpaceCommit } from "../../src/executor/wave.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
+import { ServerTransport } from "../../../memory/test/support/server-transport.ts";
 import {
   newSharedServer,
   testPrincipalSessionOpenAuthFactory,
@@ -318,6 +319,79 @@ describe("RoutedPlane", () => {
       );
       expect(dials).toEqual([]);
       expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+    });
+
+    it("resolves while a session's first dial finds its owner down, without dialing the owner again", async () => {
+      const transport = new ServerTransport(server);
+      const plane = new RoutedPlane({
+        createTransport: () => transport,
+        sessionOpenAuth: testPrincipalSessionOpenAuthFactory(serviceSigner),
+      });
+      planes.push(plane);
+      const refused = transport.whenRefused();
+      transport.hostDown();
+      const appended = plane.scope().append(space, appendEntry).then(
+        () => "appended",
+        () => "failed",
+      );
+      try {
+        await refused;
+        const dialedAgain = transport.whenRefused();
+        const outcome = await Promise.race([
+          plane.close().then(() => "closed"),
+          dialedAgain.then(() => "dialed again"),
+        ]);
+
+        expect(outcome).toBe("closed");
+        expect(await appended).toBe("failed");
+      } finally {
+        transport.hostUp();
+        await appended;
+      }
+    });
+
+    it("resolves while a session's mount waits for an owner that stays down, and closes the connection without dialing the owner again", async () => {
+      // The connection drops while the mount's open is being signed, so the
+      // mount waits for the owner to come back, which it does not do before
+      // the plane is closed.
+
+      const transport = new ServerTransport(server);
+      const signing = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const sign = testPrincipalSessionOpenAuthFactory(serviceSigner);
+      const plane = new RoutedPlane({
+        createTransport: () => transport,
+        sessionOpenAuth: async (target, session, context) => {
+          signing.resolve();
+          await release.promise;
+          return await sign(target, session, context);
+        },
+      });
+      planes.push(plane);
+      const appended = plane.scope().append(space, appendEntry).then(
+        () => "appended",
+        () => "failed",
+      );
+      try {
+        await signing.promise;
+        const refused = transport.whenRefused();
+        transport.hostDown();
+        release.resolve();
+        await refused;
+        const dialedAgain = transport.whenRefused();
+        const outcome = await Promise.race([
+          plane.close().then(() => "closed"),
+          dialedAgain.then(() => "dialed again"),
+        ]);
+
+        expect(outcome).toBe("closed");
+        expect(transport.closes).toBeGreaterThan(0);
+        expect(await appended).toBe("failed");
+      } finally {
+        // A close left waiting for the owner ends once the owner is back.
+        transport.hostUp();
+        await appended;
+      }
     });
   });
 
