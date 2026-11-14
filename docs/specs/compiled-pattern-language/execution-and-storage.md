@@ -1935,7 +1935,7 @@ the document that stores the path holds one of four things.
 | --- | --- |
 | A value the instance computed, stored in place | The value |
 | A value the instance computed, stored in a part document | A storage link to the part document (section 4.10) |
-| A reference passed through: a state cell, a part of the argument, a cell an element links to, a child's result, a stream | A link to that address |
+| A reference passed through: a state cell, a part of the argument, a cell an element links to, a cell a body created, a child's result, a stream | A link to that address. The target keeps its own label (section 4.3) |
 | An output of narrower scope than this scope instance | A storage link to the same document and path in the narrower declared scope (below) |
 
 **The paths of the rendered tree.** The rendered tree is stored under
@@ -1950,7 +1950,13 @@ children, so the positions from it on are data and their path is
 `children/*`. These are the paths `plan-and-label-templates.md` §3.4
 gives the entries of `Plan.outputs` for a JSX element, and the paths a
 label entry, a provenance record and a split point of section 4.10 are
-named by. That document assumes them (its §8, question 53: how fine the
+named by. `Binding.result` of that document's §1.1 names by the same
+paths the positions at which the instance stores a link to a binding's
+stream: an event attribute of the first child of the root is
+`$UI/children/0/props/onClick`. A child position whose value is the
+result of a pattern compiled into the plan holds the callee's tree in
+place, with no `$UI` level between the position and the tree's paths
+(its §1.1). That document assumes them (its §8, question 53: how fine the
 entries are, and that the paths of a view node are part of the plan),
 and this document assumes the same paths with it. The alternative there
 keeps one entry per constructed value and changes the records, not the
@@ -2032,9 +2038,28 @@ entries.
   A row that is a part document also carries the entries of its paths in
   its own envelope, where they do not move with the position (section
   4.10).
-- **A path whose label is empty has no entry.** A kept path whose template
-  is `const`, such as the static structure of a rendered tree, contributes
-  nothing to the envelope.
+- **A path whose template has no label has no entry of its own.** A kept
+  path whose template is `const`, such as the static structure of a
+  rendered tree, contributes no entry at its path. The root entry below
+  covers it.
+- **The atom of the pattern is one entry at the document's root.** Every
+  kept output carries the `TransformedBy` atom that names the pattern of
+  the instance, with no condition
+  (`plan-and-label-templates.md` §3.2, "The atom of the pattern"). The
+  atom is the same at every kept output of an instance, so the envelope of
+  the result document and of each part document, in each scope instance,
+  holds it once, in one entry at the document's root. The entry applies
+  at every path the document stores, and no entry at a path repeats the
+  atom. *Assumed,* with that document (its §8, question 71).
+- **For a value passed on by reference the atom is on the link.** A kept
+  path that holds a link to another address (section 4.2) is covered by
+  the same root entry, which there is the label of the link at the output
+  path. Nothing is written to the envelope of the document the link
+  names: the target keeps its own entries and gains no atom. A read
+  through the link takes its integrity from the target alone, so the atom
+  reaches a reader that observes the reference and not one that reads the
+  target's content through it (its §3.2 and §3.10; what such a reader is
+  given is its §8, question 72).
 - **Each scope instance has its own envelope**, holding the entries of the
   paths that scope instance stores.
 - **Declared entries are unchanged.** They come from the result schema, and

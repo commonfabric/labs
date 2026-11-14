@@ -1166,11 +1166,19 @@ children, as the JSX factory passes them (`h` in
 returns, as the call does. *Assumed,* with question 53 of section 8: the
 entries of the enclosing rendered tree at the tag's position are those of the
 callee's `[UI]`, since that is what a renderer shows of a result at a child
-position. Where the tag names a factory value, the instantiation is a `Child`
-with one write edge of target `argument` per attribute and one at `children`.
-Its callee is `{ factory }` with the `identity` slot of the factory value. A
-factory value that the instance itself computed in the reactive tier has no
-such slot and no body to name an entry of; *assumed* (section 8, question 58):
+position. That is a rule about the position and not about the tag: it holds
+for a tag, for a call, and for a variable that holds the result of either,
+wherever one is written at a child position of a view node. At every other
+place, such as a path of the result, a path of an argument, or the value of
+an attribute, the tag evaluates to the callee's result, and the entries at
+that place are those of the result, with the callee's tree below `$UI`: for
+`controls: <Controls />` in a returned record the callee's tree is at
+`controls/$UI`. Where the tag names a factory value, the instantiation is a
+`Child` with one write edge of target `argument` per attribute and one at
+`children`. Its callee is `{ factory }` with the `identity` slot of the
+factory value. A factory value that the instance itself computed in the
+reactive tier has no such slot and no body to name an entry of; *assumed*
+(section 8, question 58):
 the tag is refused there, and the author passes the factory value in the
 argument or instantiates it in a function body. A pattern is one the compiler
 can see whichever module declares it and however that module exports it, a
@@ -2209,7 +2217,9 @@ label when the following hold.
   that covers a subtree with parts in it consumes the entries of every
   document the subtree is stored in.
 - **A part's envelope is complete for its paths.** A part document has no
-  label as a whole. For each kept path inside it, its envelope holds every
+  label as a whole, apart from the root entry that holds the atom of the
+  pattern, which every document of the keep set has (section 3.2). For each
+  kept path inside it, its envelope holds every
   entry that a layout without the split holds for that path: the `value`
   entry with the instantiated template of that output path, with the
   element slots bound for the row's position, the frozen `shape` entry,
@@ -2816,7 +2826,7 @@ slot's path consumes. For an entry that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Five more rules fix what a row of the comparison is.
+expected. Nine more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -2843,6 +2853,45 @@ expected. Five more rules fix what a row of the comparison is.
   selection from the stored values, and a row whose selection it cannot
   establish that way is a bound over the branches and is counted apart. It is
   not a row of the comparison.
+- **The atom of a kept output.** Every kept output carries the atom of its
+  pattern (section 3.2), and the runtime stores no atom for a value that a
+  pattern passes on or for a value with no label. With the atom, such a row
+  is tighter on integrity whatever its template is, so the atom would hide
+  what the rule of the template does. Each row is therefore classified
+  twice: on the template's label without the atom of the kept output, and
+  on the label with it. The first classification is the test of the rule
+  the row's template follows (section 3.22). The second is the label the
+  design stores. A row of the fourth exception below has, with the atom,
+  the pattern's atom and not the atoms of the stored object, so neither
+  integrity holds the other. It is counted as that exception by its first
+  classification, and not as a row that cannot be compared.
+- **A value at a child position that is the result of a pattern.** The plan
+  has the entries of the callee's `[UI]` at the position (section 1.1). The
+  runtime holds the callee's result there, with its tree under `$UI`. A row
+  at a path at or below the position is read from the runtime at the same
+  path below `$UI` of that result.
+- **A reference whose target no slot names.** The template of an output can
+  be the label of a reference that the instance computed: a handle that a
+  site of a body made (section 3.9, "A reference a site of the body made"),
+  or any other `identity` entry of `Body.computed`. The plan names no
+  address for the target. The template's side is joined with what a value
+  read through the link stored at the runtime's output path consumes, the
+  entries of the target's own document included. Both sides then read one
+  target, and the row compares the labels of the reference. For a slot of
+  root `operation` that holds what a materializer returned (section 3.11),
+  the runtime's counterpart is the result document of the node that ran
+  the body.
+- **An output the run holds no value at.** It is not a row of the
+  comparison, and it is counted apart by its reason. A position the run did
+  not render, below a conditional that selected another branch or beyond
+  the end of an array, and a link to a cell that holds no value, store
+  nothing on either side. An output of a computation that threw stores
+  nothing in the runtime, which commits none of the writes of a node that
+  throws, so the runtime has no label there. The compiled path stores an
+  error state under the output's template (section 5.2), by the ruling
+  that a failed cone takes a labeled error state. *Assumed* (section 8,
+  question 76): the template's clauses at such an output are not counted
+  as looser than today, and the output is no further exception.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -2851,8 +2900,8 @@ nothing else, because a stored entry does not say which schema declared it.
 
 | Origin | In the comparison |
 | --- | --- |
-| `declared`, in a document a reader passes on the way from an output path to its value, the document of the output path included | The static part. Left out of the runtime's side, and expected as a difference |
-| `declared`, in the argument document of the instance | Compared. These are the labels of the inputs, which the slots of a template resolve to |
+| `declared`, in a document that holds the result of a node: the document an output path names, and each document a reader passes from there on the way to a value that a node computed | The static part. Left out of the runtime's side, and expected as a difference |
+| `declared`, in a document that a slot of the template is bound in, or that a reference the output passes on leads to: the argument document of the instance, a cell the argument links to, the document of a state cell, and a cell that a site of a body created | Compared. These are the labels of the places a template reads, which its slots resolve to |
 | `derived` | Compared. The stamp of a run's join |
 | `structure` | Compared. The stamp of a run, as below |
 | `link` | Compared. The label a stored link carries, which an `identity` slot resolves to |
@@ -2860,8 +2909,32 @@ nothing else, because a stored entry does not say which schema declared it.
 | `label-metadata` | Not compared. No read of content consumes it; a `labelMetadata` slot resolves to it (section 2.4) |
 | No origin | Compared. An entry written before entries had origins |
 
-So the static part is the `declared` entries outside the argument document, and
-no entry of another origin. An entry of origin `structure` is a stamp of a run,
+A `declared` entry is one of two things, and the document tells them apart.
+The static part is what the builder joins onto the outputs of a node from
+the schemas of the node's inputs (`applyArgumentIfcToResult` and
+`applyInputIfcToOutput`, above), so it is in the document of a node's
+result. The other kind is the label that the type of a place declares for
+the place itself: the type of an input, the type a state cell is constructed
+with, or the type a `createCell` site names. It is in the document of that
+cell, which no node writes as its result. A template reads such a place
+through a slot, the slot's label holds the entry, and `Slot.declared` is its
+lower bound (section 1.5). The same holds for the target of a reference that
+an output passes on, which a dereferencing read of the output consumes on
+both sides. Leaving such an entry out would remove from the runtime's side a
+clause that the template's side has, and the row would read as looser where
+the two are equal. The `pinned` output of
+`patterns/dev/test/cfc-trusted-write/main.tsx` is the case in the corpus: a
+state cell whose own type declares a clause, returned by reference. The one
+stored entry that holds the clause is the `declared` entry of the state
+cell's document, and the template's side has the clause through the
+`identity` slot of the state cell, dereferenced.
+
+So the static part is the `declared` entries of the documents that hold the
+result of a node, and no entry of another origin. A label that a node's own
+result schema declares is a `declared` entry of the same document, and it is
+left out with the static part, because the stored entry does not tell the
+two apart. The result document of a child instance is such a document. An
+entry of origin `structure` is a stamp of a run,
 as a `derived` entry is (`isFlowStageStamp` in
 `runtime/runner/src/cfc/prepare.ts`). `prepareBoundaryCommitSteps` in that file
 mints every one of them, each with confidentiality that the transaction
@@ -3937,6 +4010,52 @@ read through a handle has no entry, and so nothing for `passes` or
   `reference`, and the body's template, as a value the body created has
   (section 3.14).
 
+**A reference a site of the body made.** The handle a `createCell` site
+returned, the link an `instantiate` or an `effect` site returned, and the
+stream a `bind` site returned are references the body was not given, so
+`passes` and `oneOf` name none of them.
+
+- **The label of the reference.** A result path, a written path, or a path
+  of a child's argument or of a request that holds such a reference has no
+  `reference` member and takes the body's `derive` template. That template
+  is the label of which cell, instance or stream is at the path. It is
+  needed where the identifier depends on what the body read: a cell created
+  under a cause computed from data, and anything a handler's invocation
+  makes that is identified by its order (section 3.14). For a cell that is
+  a `StateCell` the identifier is a constant of the instance, and the
+  `derive` template is wider than the reference needs. *Assumed* (section
+  8, question 77): the plan has no record that names the site at such a
+  path, and the path takes the `derive` template all the same. Today the
+  body's transaction writes the reference under its join. **Equal.**
+- **What it refers to keeps its own label.** The body's template is not
+  the label of the target. The document of a created cell holds the label
+  that the type at the site declares (`schema` of the `createCell` site),
+  as `declared` entries (section 2.3), and the labels of what is written to
+  it. No template of a path that holds the reference includes them.
+- **A reader that passes it on.** A cone or a body that receives the
+  reference and puts it at a path without reading through it observes it
+  for `identity`: at a slot of root `operation` where the body that made it
+  is a materializer (section 3.11), and at an `identity` entry of
+  `Body.computed` otherwise. Its template for the path is that slot or that
+  entry's template and nothing else. It has no `dynamic` node, because it
+  does not follow the reference (section 3.10).
+- **A kept output that holds it** stores a link to the target. The atom of
+  the pattern is on the link, and the target gains none (section 3.2). The
+  label the target's type declares reaches a reader that follows the link
+  from the output, such as a renderer, by the rule for a dereference
+  (section 3.10). It is in no template of an instance that only passes the
+  reference on.
+
+`patterns/examples/cfc-spec-gallery/main.tsx` is the case in the corpus. A
+`lift` with no labeled input creates a cell under a cause from its input,
+with a type that declares a caveat, writes it, and returns the handle. The
+pattern passes the handle, through an authored function, to an attribute of
+an element in the rendered tree. The `lift` is a materializer. The template
+of the rendered position is the `identity` slot of the materializer's
+result: it has no clause, and the kept output carries the pattern's atom on
+the link. The caveat is a `declared` entry of the created cell's document,
+which a reader of the rendered position consumes when it follows the link.
+
 **Today.** A `lift` or `computed` node reads what its argument schema
 materializes plus what it reads through cells, and the whole join lands on
 every written path. The static part of the footprint is the narrowed
@@ -4032,7 +4151,12 @@ traversed path, plus the current labels of the target observations actually
 made."
 
 A link that is passed on without being followed is a `slot` template of class
-`identity`, with the pass-through integrity rule.
+`identity`, with the pass-through integrity rule. That holds for a reference
+the instance computed, with its `identity` entry of `Body.computed` in the
+place of the slot, and so for a handle that a site of a body made and the
+body returned (section 3.9, "A reference a site of the body made"): a path
+that passes such a handle on has no `dynamic` node, and the label of the
+cell it leads to stays at the cell.
 
 **Today.** The probe of the followed slot is a `followRef` observation and
 the target's content arrives through ordinary reads journaled at the target
@@ -4796,6 +4920,10 @@ above apply, with the following differences.
   today's rules. The existence of a document under a data-dependent
   identifier reveals the data, so its existence label is the body's
   template.
+- A handle the site returned, at a path of the body's result or of a value
+  the body writes, has the body's template as the label of the reference,
+  and the created cell keeps the label its type declares (section 3.9, "A
+  reference a site of the body made").
 
 **A cell that is a `StateCell`.** For a constant cause, or the element
 key, the plan records the cell as follows.
@@ -6568,6 +6696,13 @@ table of section 3.2, with these rules.
   and `cfc-flow:ui-contract` read no label, and are decided for a write
   through a handle as for any other. *Assumed* (section 8, question
   60): this stands.
+- **A slot of root `event` is not decided on.** The plan records
+  `Slot.declared` for such a slot, and it is no lower bound of the slot's
+  label, which is the label the event arrived with (section 3.12). For
+  the rule above the slot counts as one with no `declared` member, in
+  both dimensions: a template that reaches it is not evaluated, and an
+  input constraint that lists it is not decided. The runtime checks each
+  at instantiation, on the label the event arrived with.
 - An atom, a clause or a pattern that holds a term bound at run time is
   not compared. The terms are the `CurrentPrincipal` marker, the atom of
   a `PolicyOf` term, and a `Concept` pattern. How much is left undecided
@@ -7013,6 +7148,9 @@ normally.
   the fail-safe direction (§8.9.3, staged conformance).
 - **Storage.** For a kept output the error state is stored at the output's
   path with that label, like any value. An interim error is not stored.
+  Today a node that throws stores nothing at its outputs, so the runtime
+  has no label there, and the stage 3 comparison does not take such an
+  output as a row (section 3.1, "An output the run holds no value at").
 - **The write edges of a failed cone.** What the target of a write edge
   takes depends on the target.
   - *A path of a child's argument, and a path of an effect's request.*
@@ -8861,10 +8999,15 @@ this document made.
     between two truthy values, and a conditional whose result is scoped.
 70. **Which stored entries are the static part.** A stored entry holds its
     origin and not the schema that declared it. *Assumed,* as section 3.1 has
-    it: the static part is the `declared` entries of the documents between an
-    output path and its value, without those of the instance's argument
-    document, and an entry of every other origin is compared, a `structure`
-    entry included, by the table of section 3.1. Every site of
+    it: the static part is the `declared` entries of the documents that hold
+    the result of a node, between an output path and its value. A `declared`
+    entry of a document that a slot of the template is bound in, or that a
+    reference the output passes on leads to, is the label of that place and
+    is compared: the argument document, a cell it links to, the document of
+    a state cell, and a created cell. An entry of every other origin is
+    compared, a `structure` entry included, by the table of section 3.1. A
+    label that a node's own result schema declares is left out with the
+    static part, which the separation by document cannot avoid. Every site of
     `prepareBoundaryCommitSteps` that mints a `structure` entry gives it
     confidentiality that the transaction consumed, so none holds a clause
     that no run read. A run's join does include the `declared` entries of
@@ -8917,10 +9060,15 @@ this document made.
     beside a clause that only the schema of a created cell declares: a `lift`
     with no labeled input creates a cell under a type that declares a caveat
     and writes it, and the result is rendered. *Assumed:* a `derive` does not
-    mint on account of a `declared` entry of what it writes (section 3.2), and
-    a reader of the created cell follows the reference by section 3.10, so its
-    template holds the declared clause and mints. The rendered position is a
-    kept output and carries the pattern's atom in either case. Not verified:
+    mint on account of a `declared` entry of what it writes (section 3.2). No
+    cone of the pattern follows the reference: the pattern passes the handle
+    on to the rendered position, whose template is the label of the reference
+    and has no clause, and the declared clause stays at the created cell
+    (section 3.9, "A reference a site of the body made"). The rendered
+    position is a kept output and carries the pattern's atom on the link. In
+    the comparison both sides read the created cell through the stored link
+    (section 3.1), so the row is equal in confidentiality, and the runtime's
+    atom corresponds to the atom on the link. Not verified:
     which step of the runtime minted the observed atom, since
     `deriveFlowJoinImpl` decides on the join alone.
 75. **The result paths of a binding's stream, and the event schema of a
@@ -8935,3 +9083,30 @@ this document made.
     slot of root `event` holds the schema of its path. A reader that needs the
     declared event type of a body takes it from a binding that names the
     body.
+76. **An output of a computation that threw, in the comparison** (for the
+    project owner). The runtime commits none of the writes of a node that
+    throws, so it stores no label at the node's outputs. The compiled path
+    stores an error state there under the output's template (section 5.2),
+    by the ruling that a failed cone takes a labeled error state. Where the
+    template has a clause, the compiled path has a label and the runtime has
+    none. *Assumed:* such an output is not a row of the stage 3 comparison,
+    and it is not a further exception to "equal or tighter", because the
+    runtime has no value and no label there to compare with. The alternative
+    counts it as an exception by ruling, beside the four of section 3.1, on
+    the ground that a clause where today there is none is looser by the
+    criterion as written. The stage 3 comparison met seven such outputs in
+    the corpus (the count is the prototype's and was not verified here).
+77. **A record for a reference that a site of the body made.**
+    `BodyOutput.reference` and `WriteEdge.reference` name a reference the
+    body was given. A handle that a `createCell` site of the body returned
+    is none, so a path that holds it takes the body's `derive` template
+    (section 3.9). *Assumed:* that stands, and the plan has no member that
+    names the site at such a path. It is equal to today. The alternative
+    adds a form of `reference` that names the site of `Body.calls`. For a
+    site whose cell is a `StateCell` the path would then take a `const`
+    template, which is tighter, and a reader of the plan could find the
+    cell at the path without a run. For a site identified by a cause
+    computed from data, or by the order of a handler's invocation, the
+    label would stay the `derive` template, and the member would only name
+    the site. The runtime would verify the member by identity, as it
+    verifies `passes`.
