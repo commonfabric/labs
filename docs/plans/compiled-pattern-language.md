@@ -72,9 +72,22 @@ next.
   never decided, because the template holds the handle's `identity`
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
-  targets. The crate's `SPEC-NOTES.md` lists the places where it found
-  the documents ambiguous; notes 167 to 176 are not yet written into
-  the documents.
+  targets. A first comparison of template labels with the labels the
+  runtime computes exists at prototype commit `3fb804de12`, under
+  `base/pattern-compiler/compare/`: a template evaluator in TypeScript
+  and a harness over the runner's emulated storage, with no server and
+  no browser. On one small fixture and on FabriChat's `isEdited` the
+  templates are equal or tighter, except in two places. A conditional
+  inside a `computed` is looser in integrity: the runtime mints
+  `TransformedBy` for it as for any lift, and a `select` carries the
+  integrity of the selected branch alone. And `items.length` is looser
+  through a gap of the crate, which emits an `identity` slot where the
+  document has the collection's membership. The comparison also found
+  that the runtime joins the labels of a module's argument schema onto
+  its result document, which `plan-and-label-templates.md` §3.1 does
+  not describe. The crate's `SPEC-NOTES.md` lists the places where it
+  found the documents ambiguous; notes 177 to 186 are not yet written
+  into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -749,6 +762,18 @@ as an assumption.
     of record; only a recursive type gets a `$defs` entry, named by its
     declared name; code is hashed as its source for a cone and as the
     module and binding for a body.
+
+116. **A conditional inside a `computed` is looser in integrity than
+    today.** The runtime runs it as a lift and mints `TransformedBy`;
+    the template is a `select`, with the integrity of the selected
+    branch alone. It is not one of the three deliberate exceptions.
+    Either the template of a promoted conditional mints the atom, or
+    this becomes a fourth exception. Not assumed either way.
+117. **What the corpus comparison compares.** The runtime copies values
+    where the plan passes references, and joins a static part from a
+    module's argument schema onto its result document. *Assumed:* the
+    comparison is made on dereferenced labels, with the static part
+    separated by its origin.
 
 ## Open, and not needing the owner
 
