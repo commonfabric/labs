@@ -3196,6 +3196,9 @@ export async function readCfInputProbe(
     collect(document, matches);
     const element = matches[0];
     if (!element) {
+      // A cut of a long report keeps its first lines, so what this probe most
+      // has to say, the ids, comes ahead of the page context, whose fill
+      // ledger in turn comes ahead of its IPC counts.
       return {
         selector: targetSelector,
         found: false,

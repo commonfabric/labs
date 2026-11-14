@@ -3099,6 +3099,14 @@ describe("CFC browser helpers", () => {
             host,
             document.createElement("p"),
           );
+          // A fill's ledger and a connection with nothing pending, so the
+          // probe reports both.
+          const scope = globalThis as unknown as {
+            __cfFillDiag: Record<string, unknown>;
+            commonfabric: { rt: { getPendingRequests: () => unknown[] } };
+          };
+          scope.__cfFillDiag = { "#absent-input": { phase: "no-element" } };
+          scope.commonfabric = { rt: { getPendingRequests: () => [] } };
         });
 
         const probe = await readCfInputProbe(probePage, "#absent-input");
@@ -3111,6 +3119,13 @@ describe("CFC browser helpers", () => {
           "d-nested",
         ]);
         expect(probe.presentIdCount).toBe(4);
+        // A cut of a long probe keeps its first lines, so the ids and the fill
+        // ledger come ahead of the IPC counts.
+        const keys = Object.keys(probe);
+        expect(keys.indexOf("presentIdCount")).toBeLessThan(
+          keys.indexOf("fill"),
+        );
+        expect(keys.indexOf("fill")).toBeLessThan(keys.indexOf("pendingIpc"));
       } finally {
         await probePage.close();
       }
@@ -3175,7 +3190,11 @@ describe("CFC browser helpers", () => {
 
     it("keeps every console entry of a probe longer than `xlong` keeps", () => {
       // Every part at its bound or past it, and each entry's text as many
-      // lines as the page's 400-character cut allows.
+      // lines as the page's 400-character cut allows. The probe part is then
+      // longer than `xlong` keeps, so what the report needs most from it
+      // survives only by coming first, in the order `readCfInputProbe` builds
+      // it: the ids and their count, then the fill ledger, ahead of the IPC
+      // counts.
       const entryText = (i: number) =>
         `entry ${i}` + "\n.".repeat(195) +
         (i === 39 ? "\nthe last console line" : "");
@@ -3184,6 +3203,8 @@ describe("CFC browser helpers", () => {
           { length: PRESENT_IDS_MAX },
           (_, i) => `id-${String(i).padStart(3, "0")}`,
         ),
+        presentIdCount: PRESENT_IDS_MAX + 7,
+        fill: { attempts: 601, phase: "no-element" },
         pendingIpc: Array.from(
           { length: 50 },
           (_, i) => ({ type: `request-${i}`, ageMs: i }),
@@ -3204,6 +3225,13 @@ describe("CFC browser helpers", () => {
 
       expect(message).toContain("entry 0");
       expect(message).toContain("the last console line");
+      expect(message).toContain("found: false");
+      expect(message).toContain('"id-000"');
+      expect(message).toContain(
+        `"id-${String(PRESENT_IDS_MAX - 1).padStart(3, "0")}"`,
+      );
+      expect(message).toContain(`presentIdCount: ${PRESENT_IDS_MAX + 7}`);
+      expect(message).toContain('phase: "no-element"');
     });
 
     it("dates a fill's first attempt and its latest, and starts the count again for the next fill", async () => {
