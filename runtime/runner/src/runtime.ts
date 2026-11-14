@@ -2956,9 +2956,24 @@ export class Runtime {
       sourceUpdate?: PreparedSourceUpdate;
     } = {},
   ): IExtendedStorageTransaction {
+    return this.#newTransaction(
+      options.changeGroup,
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+  }
+
+  /**
+   * Helper for `edit()` and `readTxProposingDelegations()`, which creates a
+   * transaction in `changeGroup`, pinned to the delegation snapshot
+   * `delegations`.
+   */
+  #newTransaction(
+    changeGroup: ChangeGroup | undefined,
+    delegations: ModuleDelegationSnapshot,
+  ): ExtendedStorageTransaction {
     const tx = this.storageManager.edit();
-    if (options.changeGroup !== undefined) {
-      tx.changeGroup = options.changeGroup;
+    if (changeGroup !== undefined) {
+      tx.changeGroup = changeGroup;
     }
     (tx as { writeTraceScopeId?: string }).writeTraceScopeId = this.id;
     const debugActionId = this.getWriteDebugContext();
@@ -2988,9 +3003,7 @@ export class Runtime {
     wrapped.setCfcClientIdentity(
       this.servingPosture ? undefined : this.userIdentityDID,
     );
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
+    wrapped.setCfcModuleDelegations(delegations);
     setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
     wrapped.configureSealDestination(
       this.#transactionSealDestination ?? this.#speculationDestination(),
@@ -4631,6 +4644,32 @@ export class Runtime {
       return tx;
     }
     return this.#createReadTx();
+  }
+
+  /**
+   * A transaction that cannot write, pinned for `space` to the published
+   * delegations with `delegations` layered over them, as the setup
+   * transaction of a source update proposing them is (see `edit()`), and
+   * reading as `scopeKeyIdentity`'s instance where it names one. A review
+   * reads through it to judge a candidate by `delegations`, which judges it as
+   * the update's commit will only as far as they are the update's own
+   * proposal (see `PatternManager.proposedSourceUpdateDelegations()`); being
+   * unable to write, it authorizes nothing.
+   */
+  readTxProposingDelegations(
+    space: MemorySpace,
+    delegations: ReadonlyMap<string, ReadonlySet<string>>,
+    scopeKeyIdentity?: ScopeKeyIdentity,
+  ): IExtendedStorageTransaction {
+    const tx = this.#newTransaction(
+      undefined,
+      this.#moduleDelegations.snapshotWith(space, delegations),
+    );
+    if (scopeKeyIdentity !== undefined) {
+      tx.tx.scopeKeyIdentity = scopeKeyIdentity;
+    }
+    tx.setReadOnly("runtime.readTxProposingDelegations()");
+    return tx;
   }
 
   #createReadTx(): IExtendedStorageTransaction {

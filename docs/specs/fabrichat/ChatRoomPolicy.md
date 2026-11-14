@@ -26,7 +26,7 @@ interface ChatRoomPolicy {
   /** How long an entry stays in `recentActivity`, in ns. */
   recentActivityWindowNsec: FabricDurationNsec;
 
-  /** How many of the newest messages `messages.latest` holds. */
+  /** How many messages `messages.latest`, and a window, hold at most. */
   maxWindowCount: number;
 
   /** The most message windows a session can have open. */
@@ -40,11 +40,12 @@ interface ChatRoomPolicy {
 A plain object, with every key present but `maxAttachments`, which a policy
 stated before rooms took attachments doesn't hold, and which then means 10. A
 room enforces `ownersMayObliterate`, `deletionIsObliteration` and
-`maxAttachments`, and holds `maxWindowCount` of its newest messages in
-`messages.latest`; it states `keepsHistory`,
-`proposedTimeMaxAgeNsec`, `proposedTimeMaxLeadNsec`,
-`recentActivityWindowNsec`, and `maxOpenWindows` for the policy's shape, and
-reads none of them. Each duration is a
+`maxAttachments`, holds `maxWindowCount` of its newest messages in
+`messages.latest` and at most that many in a window, and lets a session open
+at most `maxOpenWindows` windows; it states `keepsHistory`,
+`proposedTimeMaxAgeNsec`, `proposedTimeMaxLeadNsec`, and
+`recentActivityWindowNsec` for the policy's shape, and reads none of them. Each
+duration is a
 [`FabricDurationNsec`](../space-model-formal-spec/1-fabric-values.md): an exact
 count of nanoseconds, held as a `bigint`.
 
@@ -87,9 +88,11 @@ The policy document is labeled `authored-by` the principal who wrote it (see
   [times](ChatMessage.md#times)).
 - **`maxWindowCount`**: how many of the newest messages of the main
   conversation `messages.latest` holds (see
-  [`ChatMessageList`](ChatMessageList.md#fields)).
-- **`maxOpenWindows`**: stated and read by nothing. A room offers no message
-  windows.
+  [`ChatMessageList`](ChatMessageList.md#fields)), and the most messages a
+  window holds (see [`ChatMessageWindow`](ChatMessageWindow.md)).
+- **`maxOpenWindows`**: how many windows a session can have open at once; an
+  `openWindow` for another window beyond them opens none (see
+  [`ChatMessageWindow`](ChatMessageWindow.md)).
 - **`maxAttachments`**: the most attachments a message may have (see
   [`ChatMessage`](ChatMessage.md#fields)); a send attaching more is refused.
   Absent, it is 10, so a policy that doesn't state it is still stated

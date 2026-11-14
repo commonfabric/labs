@@ -1,0 +1,21 @@
+A FabriChat room's program as a room set up from it stores it: the import
+closure of `packages/patterns/fabrichat/room.tsx` at commit 560bcd9f20 of this
+repository, each module under its path below `packages/patterns/` at that
+commit, with `.txt` appended. A room set up from it stores a message write
+policy naming four writers, and a writer claim at `messages/windows`.
+
+`fabrichat-four-writer-room-update.test.ts` stores these modules in a space as
+the room's source and sets the room up from them. Each file holds the bytes of
+its blob exactly, since a module's identity is the hash of its bytes, so none
+of them may be edited, reformatted, or regenerated from another commit.
+
+0ea5c6e0682724888b143f7552e9f024ac1dd562 fabrichat/logic.ts
+62525c502fad32826d62e5b1b15eabeb27c15cfd fabrichat/manager.tsx
+93622e92fb8779372c462cb5bec859d838832dfc fabrichat/message-row.tsx
+0646ca195f0a77fd3c20ed91913cc21ef2406d2c fabrichat/room-records.tsx
+5fb51631bc1b45dd9dc6ecc2a9cc42adb52d75f2 fabrichat/room.tsx
+294b57ee7d47c3fa61cb50ab1bb87ca81f35db23 fabrichat/schemas.tsx
+bb12eb1260a67373a2f21bc97128da0b6d6b5c54 loom/participants.tsx
+6bd46593424fc76476384b05cef9cf90cc904be2 system/private-inbox.tsx
+c98677c38aa995270ded70529bbd5cb15674b84c system/profile-home.tsx
+c0ae62ae058673f93b3a935b79cc6d294dbbda74 system/shared-space-catalog.ts

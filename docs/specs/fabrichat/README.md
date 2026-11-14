@@ -19,7 +19,9 @@ departs from this design.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
   - [`ChatMessageList`](ChatMessageList.md): a room's messages: facts, the
-    newest, and its threads.
+    newest, its threads, and a session's windows onto them.
+  - [`ChatMessageWindow`](ChatMessageWindow.md): a run of a room's messages
+    that a session opens.
   - [`ChatReply`](ChatReply.md): the thread a message joins, the message it
     quotes, and where it's shown.
   - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's title, reply count,
@@ -105,7 +107,9 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
-   [`ChatMessageList.md`](ChatMessageList.md), [`ChatReply.md`](ChatReply.md),
+   [`ChatMessageList.md`](ChatMessageList.md),
+   [`ChatMessageWindow.md`](ChatMessageWindow.md),
+   [`ChatReply.md`](ChatReply.md),
    [`ChatThreadSummary.md`](ChatThreadSummary.md),
    [`ChatReaction.md`](ChatReaction.md), [`ChatRoomAbout.md`](ChatRoomAbout.md),
    [`ChatRoomPolicy.md`](ChatRoomPolicy.md), and

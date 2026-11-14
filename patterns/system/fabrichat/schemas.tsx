@@ -293,10 +293,13 @@ export interface ChatRoomPolicy {
   /** Stated for the policy's shape, and read by nothing: the room keeps no activity log. */
   recentActivityWindowNsec: FabricDurationNsec;
 
-  /** How many of the newest messages `messages.latest` holds. */
+  /**
+   * How many of the newest messages `messages.latest` holds, and the most a
+   * window onto the messages holds.
+   */
   maxWindowCount: number;
 
-  /** Stated for the policy's shape, and read by nothing: the room offers no windows. */
+  /** How many windows onto the messages a session can have open at once. */
   maxOpenWindows: number;
 
   /**

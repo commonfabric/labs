@@ -1,8 +1,8 @@
 /**
  * FabriChat's rules that need no runtime: what counts as a single emoji, how
- * the two views of a conversation are derived from replies, and how a
- * thread's title reads when no member has set one. The room applies them to
- * its records; `logic.test.ts` states them directly.
+ * the two views of a conversation are derived from replies, where a window
+ * falls in a view, and how a thread's title reads when no member has set one.
+ * The room applies them to its records; `logic.test.ts` states them directly.
  */
 
 /**
@@ -97,6 +97,53 @@ export const viewPlaces = (
       }];
     }),
   );
+};
+
+/**
+ * Which end of its view a window holds: the newest messages, `before: "end"`,
+ * or the oldest, `after: "start"`.
+ */
+export type WindowAnchor = { before: "end" } | { after: "start" };
+
+/** A window's place in its view: indexes into it, and what lies beyond. */
+export interface WindowSlice {
+  /** The index of the window's first message in the view. */
+  start: number;
+
+  /** The index just past the window's last message. */
+  end: number;
+
+  /** Whether the view has messages before the window. */
+  hasOlder: boolean;
+
+  /** Whether the view has messages after the window. */
+  hasNewer: boolean;
+}
+
+/**
+ * How many messages a window asking for `requested` holds, at most `max`: a
+ * request for none, for a negative count, for a count that is not a finite
+ * number, or for no count at all holds none, and a fractional count is
+ * rounded down.
+ */
+export const windowCount = (requested: unknown, max: number): number =>
+  typeof requested === "number" && Number.isFinite(requested)
+    ? Math.min(Math.max(0, Math.floor(requested)), max)
+    : 0;
+
+/**
+ * Where a window of at most `count` messages, held at the end of its view
+ * `anchor` names, falls in a view of `length` messages, oldest first.
+ */
+export const windowSlice = (
+  length: number,
+  anchor: WindowAnchor,
+  count: number,
+): WindowSlice => {
+  const size = Math.min(Math.max(0, Math.floor(count)), length);
+  const start = "before" in anchor ? length - size : 0;
+  const end = start + size;
+  return { start, end, hasOlder: start > 0, hasNewer: end < length };
 };
 
 /** The most characters a thread's title has when no member has set one. */

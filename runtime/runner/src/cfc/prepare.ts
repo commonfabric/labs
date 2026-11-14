@@ -241,6 +241,7 @@ import {
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
   withoutUndefinedMembers,
+  writerClaimStamp,
 } from "./schema-merge.ts";
 import {
   canonicalizeCfcSchemaDocument,
@@ -1294,6 +1295,23 @@ const claimPathToLogicalPath = (
   return undefined;
 };
 
+/**
+ * Whether, in `space`, module `successor` is attested to succeed module
+ * `predecessor`, directly or through a chain, by the delegations the
+ * transaction is pinned to. A transaction staging a source update is pinned to
+ * that update's proposed delegations as well (see `Runtime.edit()`), so a
+ * release sees the succession it is about to attest.
+ */
+const moduleSucceeds = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  successor: string,
+  predecessor: string,
+): boolean =>
+  tx.getCfcState().moduleDelegations.get(space)?.get(successor)?.includes(
+    predecessor,
+  ) === true;
+
 const writeAuthorizedByReason = (
   tx: IExtendedStorageTransaction,
   schema: JSONSchema,
@@ -1360,9 +1378,12 @@ const writeAuthorizedByReason = (
     typeof writerModuleIdentity === "string" &&
     writerModuleIdentity.length > 0 &&
     (writerModuleIdentity === claimedModuleIdentity ||
-      tx.getCfcState().moduleDelegations.get(targetSpace)?.get(
-          writerModuleIdentity,
-        )?.includes(claimedModuleIdentity) === true);
+      moduleSucceeds(
+        tx,
+        targetSpace,
+        writerModuleIdentity,
+        claimedModuleIdentity,
+      ));
   if (
     !identityArmMatches ||
     !arraysEqual(identity.bindingPath, bindingIdentity.path)
@@ -10877,41 +10898,32 @@ export const releaseMergeOptions = (
   // The modules of the program the release installs (see
   // `PatternManager.programModuleIdentities`).
   programModules: Iterable<string>,
-): Pick<
-  MergeCfcSchemaEnvelopeOptions,
-  "beneathStoredLink" | "adoptsStamp"
-> => {
+  // The stored document's foreign positions, where the caller has found them.
+  foreign: ForeignPositions = storedForeignPositions(
+    storedValuesAt(tx, target),
+    storedSchema,
+  ),
+): ReleaseMergeOptions => {
   const modules = new Set(programModules);
   return {
-    beneathStoredLink: beneathForeignPosition(
-      storedForeignPositions(storedValuesAt(tx, target), storedSchema),
-    ),
+    beneathStoredLink: beneathForeignPosition(foreign),
     adoptsStamp: (claim) => {
       const stamp = writerClaimStamp(claim);
       return stamp !== undefined && modules.has(stamp.moduleIdentity);
     },
+    writePolicyRelease: {
+      installs: (moduleIdentity) => modules.has(moduleIdentity),
+      succeeds: (successor, predecessor) =>
+        moduleSucceeds(tx, target.space, successor, predecessor),
+    },
   };
 };
 
-/** A stamped writer claim's module identity and file, if it is one. */
-const writerClaimStamp = (
-  claim: unknown,
-):
-  | { moduleIdentity: string; file: string | undefined; path: string[] }
-  | undefined => {
-  const binding = isObjectNotArray(claim) &&
-      isObjectNotArray(claim.__ctWriterIdentityOf)
-    ? claim.__ctWriterIdentityOf
-    : {};
-  const { moduleIdentity, file, path } = binding;
-  return typeof moduleIdentity === "string"
-    ? {
-      moduleIdentity,
-      file: typeof file === "string" ? file : undefined,
-      path: Array.isArray(path) ? path.map(String) : [],
-    }
-    : undefined;
-};
+/** What {@link releaseMergeOptions} returns. */
+export type ReleaseMergeOptions = Pick<
+  MergeCfcSchemaEnvelopeOptions,
+  "beneathStoredLink" | "adoptsStamp" | "writePolicyRelease"
+>;
 
 /**
  * Whether one of `identities` is the writer a stamp names: a verified identity
@@ -10944,15 +10956,9 @@ const stampIsWriters = (
  * outside a release, the writer a stamp names is the only one that may.
  */
 const mergeOptionsForWriters = (
-  release: Pick<
-    MergeCfcSchemaEnvelopeOptions,
-    "beneathStoredLink" | "adoptsStamp"
-  >,
+  release: ReleaseMergeOptions,
   writersOwnStamp: (claim: unknown) => boolean,
-): Pick<
-  MergeCfcSchemaEnvelopeOptions,
-  "beneathStoredLink" | "adoptsStamp"
-> => ({
+): ReleaseMergeOptions => ({
   ...release,
   adoptsStamp: (claim) =>
     release.adoptsStamp?.(claim) === true || writersOwnStamp(claim),
@@ -12885,23 +12891,28 @@ export function* prepareBoundaryCommitSteps(
       : undefined;
     let storedSchema: JSONSchema | undefined;
     let mergedSchema = schema;
+    // What a release may do to the stored envelope, where it merges one;
+    // nothing outside one.
+    let release: ReleaseMergeOptions | undefined;
     if (stored.status === "loaded" && undefinedCandidate) {
       storedSchema = stored.schema;
       mergedSchema = storedSchema;
     } else if (stored.status === "loaded") {
       storedSchema = stored.schema;
+      release = foreignPositions === undefined
+        ? undefined
+        : releaseMergeOptions(
+          tx,
+          { space, id, scope },
+          storedSchema,
+          releaseProgramModules(tx, { space, id, scope }),
+          foreignPositions,
+        );
       try {
         mergedSchema = mergeStoredCfcEnvelope(storedSchema, schema, {
           generatedOutputPaths: generatedOutputPaths.get(key),
           ...mergeOptionsForWriters(
-            foreignPositions !== undefined
-              ? releaseMergeOptions(
-                tx,
-                { space, id, scope },
-                storedSchema,
-                releaseProgramModules(tx, { space, id, scope }),
-              )
-              : {},
+            release ?? {},
             stampIsWriters(writeAuthorIdentities.get(key)?.values() ?? []),
           ),
         });
@@ -12941,6 +12952,7 @@ export function* prepareBoundaryCommitSteps(
         storedSchema,
         mergedSchema,
         foreignPositions,
+        release?.writePolicyRelease,
       );
       if (dropped !== undefined) {
         reasons.push(verdictReason(dropped));

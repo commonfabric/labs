@@ -773,11 +773,17 @@ export class PatternManager {
 
   /**
    * Program entry module identity → the identities of every module that
-   * program evaluated with, from the latest evaluation that ran it as its
-   * main module. A release of a pattern reads it to say which modules' writer
-   * stamps the release's schema can carry (see `programModuleIdentities`).
+   * program evaluated with, and the source file each was evaluated from, from
+   * the latest evaluation that ran it as its main module. A release of a
+   * pattern reads it to say which modules' writer stamps the release's schema
+   * can carry (see `programModuleIdentities`), and a review of an update to it
+   * what delegations that update proposes (see
+   * `proposedSourceUpdateDelegations`).
    */
-  readonly #programModules = new Map<string, ReadonlySet<string>>();
+  readonly #programModules = new Map<string, {
+    readonly identities: ReadonlySet<string>;
+    readonly filenames: ReadonlyMap<string, string>;
+  }>();
 
   /**
    * In-flight compiled-cache write-backs; awaited by
@@ -1901,7 +1907,7 @@ export class PatternManager {
     const key = (identity: string) => stringTupleKey([space, identity]);
     if (this.#closureCopiesIssued.has(key(entryIdentity))) return false;
     for (
-      const identity of this.#programModules.get(entryIdentity) ??
+      const identity of this.#programModules.get(entryIdentity)?.identities ??
         [entryIdentity]
     ) {
       this.#closureCopiesIssued.add(key(identity));
@@ -2377,6 +2383,61 @@ export class PatternManager {
         ) => [identity, new Set(predecessors)]),
       ),
     };
+  }
+
+  /**
+   * The writer-authority delegations an update in `space` from the program
+   * `previousEntryIdentity` names to the program `entryIdentity` names would
+   * propose, for a review to judge the update by before it is prepared: what
+   * `prepareSourceUpdate()` derives, from the same verified source closures
+   * where `space` holds the candidate's. Where it does not yet, as for a
+   * candidate compiled without being stored, the candidate's modules are the
+   * ones this session evaluated it with, which leave out a module the
+   * program imports only for its types, so the review can then miss a
+   * delegation the update proposes. `undefined` where neither is at hand, or
+   * the previous program's source closure does not verify in `space`, which
+   * leaves an update nothing to propose.
+   */
+  async proposedSourceUpdateDelegations(
+    space: MemorySpace,
+    previousEntryIdentity: string,
+    entryIdentity: string,
+  ): Promise<ModuleDelegationMap | undefined> {
+    const tx = this.#runtime.edit();
+    try {
+      const previous = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        previousEntryIdentity,
+        tx,
+      );
+      if (!previous?.has(previousEntryIdentity)) return undefined;
+      const stored = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        entryIdentity,
+        tx,
+      );
+      const evaluated = this.#programModules.get(entryIdentity);
+      const candidate = stored?.has(entryIdentity)
+        ? [...stored].map(([identity, doc]) => ({
+          identity,
+          filename: doc.filename,
+        }))
+        : evaluated === undefined
+        ? undefined
+        : [...evaluated.identities].flatMap((identity) => {
+          const filename = evaluated.filenames.get(identity);
+          return filename === undefined ? [] : [{ identity, filename }];
+        });
+      if (candidate === undefined) return undefined;
+      return deriveModuleDelegations(previous, candidate, {
+        previous: previousEntryIdentity,
+        next: entryIdentity,
+      });
+    } finally {
+      tx.abort("source update proposal derived");
+    }
   }
 
   /** Stage the proposal with its matching source transition and register on commit. */
@@ -3917,7 +3978,10 @@ export class PatternManager {
       assertNoReservedHoistExports(byId);
       const main = [...byId].find(([, exports]) => exports === result.main);
       if (main !== undefined) {
-        this.#programModules.set(main[0], new Set(byId.keys()));
+        this.#programModules.set(main[0], {
+          identities: new Set(byId.keys()),
+          filenames: result.sourcePathByIdentity ?? new Map(),
+        });
       }
       for (const [identity, exports] of byId) {
         // `#modulesByIdentity` keeps the whole namespace for MODULE reuse on a
@@ -3968,7 +4032,7 @@ export class PatternManager {
    * one.
    */
   programModuleIdentities(identity: string): ReadonlySet<string> | undefined {
-    return this.#programModules.get(identity);
+    return this.#programModules.get(identity)?.identities;
   }
 
   /**

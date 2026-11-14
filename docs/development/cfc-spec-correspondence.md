@@ -403,6 +403,22 @@ section the snapshot does not hold, is exempted in
 `tasks/check-cfc-correspondence.ts`. The conformance statement's §5 records
 the gap and where the runtime differs from the proposal.
 
+The release that appends a write-policy alternative (§8.15.13 carve-out (c))
+implements [specs#96](https://github.com/commonfabric/specs/pull/96), stacked
+on [specs#52](https://github.com/commonfabric/specs/pull/52), ahead of its
+ruling. A stored `writePolicyAnyOf` is matched by content rather than by
+position, and a release may append an alternative whose writer's module it
+installs, where one stored alternative has the same keys and contract, a
+writer claim that differs from the appended one's only in the symbol it
+binds, and that module or one the space attests it succeeds. It admits more
+than the pin at
+strict, with no default-off dial, so it does not satisfy step 4 above. Its four
+deciding sites, the merge's matching and its append, and the keep rule's
+matching and its admission, carry the `SPEC-PENDING` marker, and their citations
+of sections the snapshot does not
+hold are exempted in `tasks/check-cfc-correspondence.ts`. @danfuzz directed
+landing it this way. The conformance statement's §10 records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

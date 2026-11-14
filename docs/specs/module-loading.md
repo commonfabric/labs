@@ -713,7 +713,11 @@ the successor inherits the direct predecessor plus the predecessor's
 cumulative delegation list ([`deriveModuleDelegations`][c14]). Each setup
 attempt pins the
 proposal alongside committed authority in its own transaction; ordinary
-transactions cannot observe it. The authority fields commit atomically with the
+transactions cannot observe it. The pinned proposal is also what lets the
+setup, a release, append an alternative to a stored write policy whose
+writer's module the installed one succeeds
+([`cfc-conformance-statement.md`](cfc-conformance-statement.md) §10). The
+authority fields commit atomically with the
 source transition. Rejection publishes no proposed authority, while success
 registers the committed union before the updated pattern starts. This makes an
 update chain cold-reload-stable.
@@ -732,8 +736,14 @@ over the envelopes stored on the piece's argument document and on the piece's
 own document — the latter only where setup would rewrite the result
 projection, as the commit merges it only then — so a stored `writeAuthorizedBy`
 claim the candidate's schema cannot reconcile with is reported by the check
-rather than by the commit. It issues no storage writes and creates no module
-update authority. Verified byte caches and in-memory compiler state may be
+rather than by the commit. The dry run reads through a transaction that cannot
+write, pinned to the delegations the update would propose, derived from the
+two entries' verified source closures as setup derives them, or, for a
+candidate the space does not hold yet, from the modules this session
+evaluated it with, which leave out a module imported only for its types. So
+it judges an appended write-policy alternative as the commit does, except
+where that leaves out a delegation the commit's proposal holds. It issues no storage writes and creates no module update authority.
+Verified byte caches and in-memory compiler state may be
 reused by later operations. Normal storage reads can demand materialization by
 an active server executor; preflight does not freeze the space or suppress
 other actors' writes.

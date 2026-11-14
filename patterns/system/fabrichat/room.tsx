@@ -83,6 +83,7 @@ import {
   commitSetThreadTitle,
   commitSetTitle,
   commitThreadSend,
+  commitWindow,
   type ComposerAttachment,
   type ComposerCell,
   type ComposerState,
@@ -105,6 +106,7 @@ import {
   type RepliedMessage,
   rightsOf,
   type RoomStreamEvent,
+  type RoomWindowEvent,
   type SetThreadTitleEvent,
   type SetTitleEvent,
   type StoredAbout,
@@ -113,6 +115,8 @@ import {
   TITLE_KEY,
   type TitlesCell,
   viewKeyOf,
+  type WindowsCell,
+  type WindowsValue,
 } from "./room-records.tsx";
 import {
   bodyText,
@@ -895,8 +899,8 @@ export interface MessageFacts {
    */
   authors: ProfileCell[];
 
-  /** The room's messages as the view offers them. */
-  list: ChatMessageList;
+  /** What the view offers of the room's messages, besides its windows. */
+  list: ChatMessageListFacts;
 }
 
 /**
@@ -1034,8 +1038,8 @@ export interface ChatThreadSummary {
   hasOlder: boolean;
 }
 
-/** A room's messages: facts, the newest, and its threads. */
-export interface ChatMessageList {
+/** What a room derives from its messages: facts, the newest, its threads. */
+export interface ChatMessageListFacts {
   /**
    * How many messages the room holds, obliterated tombstones included, and
    * those it can't read left out (see `messageEntries()`).
@@ -1071,6 +1075,24 @@ export interface ChatMessageList {
    * in a thread. A room shows how many there are; 0 in a room with none.
    */
   legacyReplies: number;
+}
+
+/**
+ * A room's messages: what it derives from them, and this session's windows
+ * onto them.
+ */
+export interface ChatMessageList extends ChatMessageListFacts {
+  /**
+   * This session's open windows onto the messages, by the `windowId` its
+   * client chose (`ChatMessageWindow.md`); absent until the first opens.
+   */
+  windows: PerSession<WindowsCell>;
+
+  /** Opens a window, or moves one already open. */
+  openWindow: Stream<RoomWindowEvent>;
+
+  /** Closes a window. */
+  closeWindow: Stream<RoomWindowEvent>;
 }
 
 /** Who is reading a room. */
@@ -1582,6 +1604,11 @@ export const FabriChatRoomCore = pattern<
     self,
   });
   const alsoToMain = new Writable.perSession(false);
+  // A room's stored result can hold a writer claim at `messages/windows`
+  // naming `commitWindow`, which a release keeps; see `commitWindow`. Its
+  // place in the result fixes the cell's identity, the one such a room's
+  // stored result links.
+  const windows = new Writable.perSession<WindowsValue>();
 
   // Everything the room derives from its messages, in one walk (see
   // `MessageFacts`).
@@ -1969,7 +1996,17 @@ export const FabriChatRoomCore = pattern<
     participantEntries: participantEntriesForUser,
     participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
-    messages: facts.list,
+    messages: {
+      count: facts.list.count,
+      oldestAt: facts.list.oldestAt,
+      newestAt: facts.list.newestAt,
+      latest: facts.list.latest,
+      threads: facts.list.threads,
+      legacyReplies: facts.list.legacyReplies,
+      windows,
+      openWindow: commitWindow({ op: "open", messages, windows }),
+      closeWindow: commitWindow({ op: "close", messages, windows }),
+    },
     canSend: canSendForSession,
     viewer: viewerForSession,
     messageRights: messageRightsForSession,
