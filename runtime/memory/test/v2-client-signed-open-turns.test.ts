@@ -148,5 +148,52 @@ describe("client", () => {
         await t.close();
       }
     });
+
+    it("sends no `session.open` for a mount its caller cancelled in the step its signer returned", async () => {
+      // The signature arrives first and the cancellation right behind it, so
+      // the wait for the signer ends with a signature for a mount that is
+      // already cancelled.
+
+      const t = await connected("cancelled-signed");
+      try {
+        const signing = Promise.withResolvers<void>();
+        const signature = Promise.withResolvers<
+          Awaited<ReturnType<SessionOpenAuthFactory>>
+        >();
+        let sign = (): void => {};
+        const cancel = new AbortController();
+        const cancelled = t.client.mount(
+          spaceFor("cancelled-signed", "cancelled"),
+          {},
+          (space, session, context) => {
+            sign = () =>
+              signature.resolve(
+                testSessionOpenAuthFactory(space, session, context),
+              );
+            signing.resolve();
+            return signature.promise;
+          },
+          cancel.signal,
+        );
+        await signing.promise;
+        const behind = t.client.mount(
+          spaceFor("cancelled-signed", "behind"),
+          {},
+          testSessionOpenAuthFactory,
+        );
+        sign();
+        cancel.abort(new Error("test cancels the mount"));
+        await expect(cancelled).rejects.toThrow("test cancels the mount");
+        // The mount behind the cancelled one has had its turn once it is
+        // mounted, so the cancelled one's turn has passed.
+        await behind;
+
+        expect(
+          t.transport.sentTypes.filter((type) => type === "session.open"),
+        ).toHaveLength(1);
+      } finally {
+        await t.close();
+      }
+    });
   });
 });

@@ -1780,6 +1780,8 @@ export class Client {
                 ...(proofs === undefined ? {} : { proofs }),
               }),
           );
+          // The caller may have cancelled just as the signer returned.
+          requireUncancelled();
           if (this.#staleSince(epoch)) {
             if (whileConnected) throw connectionLostWhileRestoring();
             return STALE;
