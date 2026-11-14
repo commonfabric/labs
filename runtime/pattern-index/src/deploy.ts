@@ -1,37 +1,48 @@
 /**
- * Composition: making the published patterns a program imports resolvable
- * before it compiles, without any of their source passing through the
- * conversation.
+ * Deploying a published pattern: fetching its program from the index,
+ * making the published patterns it imports resolvable, and compiling it into
+ * a space, without any of the fetched source reaching the caller's output.
  *
- * A model composes a published pattern by naming it —
- * `import Sub from "cf:pattern:<patternId>"`, exactly the specifier
- * `search_patterns` hands back. The compiler resolves that specifier from the
- * source-document closure the space holds under `pattern:<identity>`, and for
- * a pattern this space has never run there is no such closure. This module is
- * what puts one there: it reads the imported ids off the program, fetches each
- * one from the index on the trusted host side, and compiles it into the space
- * so its closure is durable by the time the importer's own compile asks for
- * it.
+ * Two callers deploy this way and have to agree: cf-harness's `run_pattern`,
+ * when a model names an indexed pattern, and `cf piece new --from-index`, when
+ * an operator or a deployer does. The steps and their failures live here so
+ * the two cannot drift.
+ *
+ * A program composes a published pattern by naming it —
+ * `import Sub from "cf:pattern:<patternId>"`, exactly the specifier a search
+ * hands back. The compiler resolves that specifier from the source-document
+ * closure the space holds under `pattern:<identity>`, and for a pattern this
+ * space has never run there is no such closure. This module is what puts one
+ * there: it reads the imported ids off the program, fetches each one from the
+ * index on the trusted host side, and compiles it into the space so its
+ * closure is durable by the time the importer's own compile asks for it.
  *
  * Everything here runs host-side. A fetched program reaches the compiler and
  * stops; the errors raised for it name ids and never quote source.
  */
 
 import {
-  type PatternIndexClient,
-  PatternIndexError,
-  type PatternIndexProgram,
-} from "@commonfabric/pattern-index/client";
-import {
   compileAndSavePattern,
   type MemorySpace,
+  type Pattern,
   type Runtime,
   type RuntimeProgram,
   sourceDocKey,
 } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import type { HarnessPatternIndexClientFactory } from "./factory.ts";
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexProgram,
+} from "./client.ts";
+
+/**
+ * Supplies the index client a deploy reads through. A factory rather than a
+ * client, so a caller that may never touch the index builds one only when a
+ * program actually names a published pattern.
+ */
+export type PatternIndexClientFactory = () => Promise<PatternIndexClient>;
 
 /**
  * The `RuntimeProgram` a published program compiles as. Every field the index
@@ -176,7 +187,7 @@ export interface MaterializeComposedPatternsOptions {
   patternIds: readonly string[];
 
   /** The run's index client, or `undefined` when the run has no index. */
-  getClient: HarnessPatternIndexClientFactory | undefined;
+  getClient: PatternIndexClientFactory | undefined;
 }
 
 /**
@@ -331,4 +342,164 @@ export const materializeComposedPatterns = async (
     await runtime.patternManager.flushCompileCacheWrites();
   }
   return materialized;
+};
+
+/** The step of a deploy a failure belongs to. */
+export type IndexedPatternFailureStage = "lookup" | "compose" | "compile";
+
+/**
+ * A deploy that failed. The message names ids and never quotes source, so a
+ * caller may show it to whoever asked for the deploy, a model included. A
+ * compile diagnostic, or a service body that can quote indexed source, is kept
+ * apart as `rawCauseMessage`, for a run artifact or an operator's log.
+ */
+export class IndexedPatternError extends Error {
+  override name = "IndexedPatternError";
+
+  /** Which step failed: reading the index, composing, or compiling. */
+  readonly stage: IndexedPatternFailureStage;
+
+  /** The underlying text, which can quote source the caller did not write. */
+  readonly rawCauseMessage?: string;
+
+  constructor(
+    stage: IndexedPatternFailureStage,
+    message: string,
+    rawCauseMessage?: string,
+  ) {
+    super(message);
+    this.stage = stage;
+    if (rawCauseMessage !== undefined) {
+      this.rawCauseMessage = rawCauseMessage;
+    }
+  }
+}
+
+export interface ComposeProgramOptions {
+  runtime: Runtime;
+
+  /** The space the program compiles into, and reads its imports from. */
+  space: MemorySpace;
+
+  program: RuntimeProgram;
+
+  /** What the index recorded the program composes, when it came from one. */
+  recordedDependencies?: readonly string[];
+
+  /** The index client, or `undefined` when there is no index to read. */
+  getClient: PatternIndexClientFactory | undefined;
+}
+
+/**
+ * Makes every published pattern `program` draws in durable in `space`, so
+ * that its compile resolves them.
+ *
+ * @throws IndexedPatternError at the `compose` stage, for every failure.
+ */
+export const composeProgram = async (
+  options: ComposeProgramOptions,
+): Promise<void> => {
+  const { runtime, space, program, recordedDependencies, getClient } = options;
+  try {
+    await materializeComposedPatterns({
+      runtime,
+      space,
+      patternIds: composedPatternIds(program, recordedDependencies),
+      getClient,
+    });
+  } catch (error) {
+    if (error instanceof PatternCompositionError) {
+      throw new IndexedPatternError(
+        "compose",
+        error.message,
+        error.rawCauseMessage,
+      );
+    }
+    throw new IndexedPatternError(
+      "compose",
+      "the published patterns this source composes could not be made available; the failure text is retained in the run artifact and withheld here, since it can quote source you did not author",
+      describeFailure(error),
+    );
+  }
+};
+
+export interface IndexedPatternOptions {
+  runtime: Runtime;
+
+  /** The space the pattern and everything it imports compile into. */
+  space: MemorySpace;
+
+  /** The published pattern to deploy. */
+  patternId: string;
+
+  getClient: PatternIndexClientFactory;
+}
+
+/**
+ * Reads `patternId`'s program from the index and makes the published patterns
+ * it imports durable in `space`. Answers the program ready to compile, or to
+ * hand to something that compiles it, such as a piece creation.
+ *
+ * @throws IndexedPatternError at the `lookup` or `compose` stage.
+ */
+export const prepareIndexedProgram = async (
+  options: IndexedPatternOptions,
+): Promise<RuntimeProgram> => {
+  const { runtime, space, patternId, getClient } = options;
+  let indexed;
+  try {
+    const client = await getClient();
+    indexed = await client.getPattern({ patternId, includeSource: true });
+  } catch (error) {
+    // `PatternIndexError.message` is stable by construction; the service
+    // body it withheld can quote indexed source, so it goes only to
+    // `rawCauseMessage`.
+    throw new IndexedPatternError(
+      "lookup",
+      `pattern index lookup failed for "${patternId}": ${
+        describeFailure(error)
+      }`,
+      patternIndexErrorDetail(error),
+    );
+  }
+  if (indexed.program === undefined) {
+    throw new IndexedPatternError(
+      "lookup",
+      `the pattern index returned no program for "${patternId}"`,
+    );
+  }
+  const program = runtimeProgramFromIndex(indexed.program);
+  await composeProgram({
+    runtime,
+    space,
+    program,
+    recordedDependencies: indexed.dependencies,
+    getClient,
+  });
+  return program;
+};
+
+/**
+ * Deploys `patternId` into `space`: {@link prepareIndexedProgram}, then a
+ * compile. Answers the program and the pattern it compiled to.
+ *
+ * @throws IndexedPatternError at any stage. A compile failure's diagnostic is
+ * withheld from the message, since it quotes source the caller did not write.
+ */
+export const compileIndexedPattern = async (
+  options: IndexedPatternOptions,
+): Promise<{ program: RuntimeProgram; pattern: Pattern }> => {
+  const program = await prepareIndexedProgram(options);
+  try {
+    const pattern = await compileAndSavePattern(options.runtime, program, {
+      space: options.space,
+    });
+    return { program, pattern };
+  } catch (error) {
+    throw new IndexedPatternError(
+      "compile",
+      `the indexed pattern "${options.patternId}" did not compile; the diagnostic is retained in the run artifact and withheld here, since it quotes source you did not author`,
+      describeFailure(error),
+    );
+  }
 };

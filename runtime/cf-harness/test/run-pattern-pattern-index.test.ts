@@ -29,7 +29,7 @@ import {
   MAX_COMPOSED_PATTERNS,
   patternIndexDependencies,
   runtimeProgramFromIndex,
-} from "../src/pattern-index/composition.ts";
+} from "@commonfabric/pattern-index/deploy";
 import { OUTPUT_CONCERN_MESSAGES } from "../src/run-pattern-output-concerns.ts";
 import type {
   RunPatternToolErrorOutput,

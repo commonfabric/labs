@@ -3,6 +3,7 @@
   "exports": {
     ".": "./mod.ts",
     "./client": "./src/client.ts",
+    "./deploy": "./src/deploy.ts",
     "./successors": "./src/successors.ts",
     "./feedback": "./src/feedback.ts",
     "./front": "./src/front.ts",
