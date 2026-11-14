@@ -564,6 +564,31 @@ const CASES: &[Case] = &[
         "function root(volume: number) { return /*!*/Math.cbrt(volume); }",
         "function root(volume: number) { return Math.sqrt(volume); }",
     ),
+    case(
+        "mergeable-push:read-then-push",
+        "const add = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { if (state.rows.get().length < 3) { /*!*/state.rows.push(event.n); } });",
+        "const add = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { state.rows.push(event.n); });",
+    ),
+    case(
+        "footprint:widened",
+        "const show = lift((x: { donut: { name: string; price: number } }) => JSON.stringify(/*!*/x.donut));",
+        "const show = lift((x: { donut: { name: string; price: number } }) => JSON.stringify({ name: x.donut.name }));",
+    ),
+    case(
+        "footprint:dynamic-read",
+        "const read = lift((x: { on: boolean; count: Cell<number> }) => { if (x.on) { return /*!*/x.count.get(); } return 0; });",
+        "const read = lift((x: { on: boolean; count: Cell<number> }) => { const n = x.count.get(); return x.on ? n : 0; });",
+    ),
+    case(
+        "footprint:materializer",
+        "const tally = lift((x: { counts: Cell<Record<string, number>>; flavor: string }) => { /*!*/x.counts.key(x.flavor).set(1); return 1; });",
+        "const tally = lift((x: { counts: Cell<Record<string, number>> }) => { x.counts.key(\"glazed\").set(1); return 1; });",
+    ),
+    case(
+        "side-write:not-idempotent",
+        "const bump = lift((x: { count: Cell<number> }) => { /*!*/x.count.set(x.count.get() + 1); return 1; });",
+        "const bump = lift((x: { count: Cell<number>; from: Cell<number> }) => { x.count.set(x.from.get() + 1); return 1; });",
+    ),
 ];
 
 fn check_program(files: &[(&str, &str)]) -> Vec<Diagnostic> {

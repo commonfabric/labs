@@ -318,6 +318,9 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         if let Some(check) = check {
             let records = crate::footprint::analyze_module(&resolver, module, &check.bodies);
             footprint_counts(&check.bodies, &records, &mut check.counts);
+            if let Some(parsed) = &parsed[module] {
+                footprint_diagnostics(parsed, &check.bodies, &records, &mut check.diagnostics);
+            }
         }
     }
     let reports = std::mem::take(&mut resolver.types.borrow_mut().reports);
@@ -401,6 +404,83 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         });
     }
     ProgramAnalysis { modules, failures }
+}
+
+/// The diagnostics that need only the footprint of a body
+/// (`language-subset.md` §10.3): each is reported at a site in the body's
+/// own text, once, for the innermost body around it.
+fn footprint_diagnostics(
+    parsed: &Parsed<'_>,
+    bodies: &[Body],
+    records: &[(usize, crate::footprint::Record)],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let innermost = |site: u32| {
+        records
+            .iter()
+            .map(|(index, _)| *index)
+            .filter(|index| bodies[*index].span.0 <= site && site < bodies[*index].span.1)
+            .min_by_key(|index| bodies[*index].span.1 - bodies[*index].span.0)
+    };
+    let mut seen: BTreeSet<(u32, &'static str)> = BTreeSet::new();
+    for (index, record) in records {
+        for (site, what) in &record.sites {
+            if innermost(*site) != Some(*index) {
+                continue;
+            }
+            let (id, found): (&'static str, String) = if let Some(reason) =
+                what.strip_prefix("read:dynamic:")
+            {
+                (
+                    "footprint:dynamic-read",
+                    format!(
+                        "This read through a cell handle is journaled when the body runs: {reason}"
+                    ),
+                )
+            } else if let Some(cause) = what.strip_prefix("widen:") {
+                if cause == "W7" {
+                    continue;
+                }
+                (
+                    "footprint:widened",
+                    format!("Footprint analysis reads this value in full ({cause})"),
+                )
+            } else if what == "materializer" {
+                (
+                        "footprint:materializer",
+                        "The target of this write is not static, so the body is a materializer for all of its writes".to_string(),
+                    )
+            } else if let Some(shape) = what.strip_prefix("not-idempotent:") {
+                let shape = match shape {
+                    "append" => "it adds to what is stored",
+                    "send" => "it delivers one event per run",
+                    _ => "the body reads the path it writes",
+                };
+                (
+                    "side-write:not-idempotent",
+                    format!("A second run of this computation may write something else: {shape}"),
+                )
+            } else if what == "read-then-push" {
+                (
+                    "mergeable-push:read-then-push",
+                    "The handler reads this collection and then pushes to it".to_string(),
+                )
+            } else {
+                continue;
+            };
+            if !seen.insert((*site, id)) {
+                continue;
+            }
+            let position = parsed.lines.position(parsed.source, *site);
+            diagnostics.push(Diagnostic::new(
+                id,
+                &parsed.path,
+                (*site, *site + 1),
+                position,
+                format!("{found}. {}", messages::rewrite(id)),
+            ));
+        }
+    }
 }
 
 /// Adds the counts the measurement of `footprint-analysis.md` §11 compares:

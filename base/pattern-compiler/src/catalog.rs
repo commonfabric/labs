@@ -258,24 +258,42 @@ pub const CATALOG: &[Entry] = &[
     ),
     done("function-body:instantiation-without-cause", Warning),
     done("verb-result:undeclared-return", Error),
-    footprint(
+    part(
         "mergeable-push:read-then-push",
         Warning,
-        "the read and write sets of the handler, and whether the push depends on the read",
+        "reported where a handler pushes onto a cell it read through `get()` or `sample()` \
+         earlier in the source; whether the pushed value depends on the read is not decided",
     ),
-    footprint("footprint:widened", Hint, "the footprint of the body"),
-    footprint("footprint:dynamic-read", Hint, "the footprint of the body"),
-    footprint(
+    part(
+        "footprint:widened",
+        Hint,
+        "reported for the causes W1 to W6 at the site in the body's own text, and not for W7 \
+         or for a widening inside a helper; the message names the cause and not the widened \
+         entries",
+    ),
+    part(
+        "footprint:dynamic-read",
+        Hint,
+        "a read that is dynamic only because the body is used with the handle bound to a \
+         computed value is not reported",
+    ),
+    part(
         "footprint:materializer",
         Hint,
-        "the write side of the footprint",
+        "reported at each write whose target is not static and at each cell created under a \
+         cause computed from data, in the body's own text",
     ),
-    footprint(
+    part(
         "side-write:not-idempotent",
         Warning,
-        "the read and write sets of the body",
+        "a read of its own target is found by the paths of the body's text; two handles that \
+         link to one cell are not seen",
     ),
-    footprint("side-write:cycle", Warning, "the edges of the plan"),
+    footprint(
+        "side-write:cycle",
+        Warning,
+        "the edges of the plan (`Plan.edges`), which a later stage builds from the write edges",
+    ),
     part("computed:not-promoted", Hint, PROMOTION_REST),
     part("computed:redundant", Hint, PROMOTION_REST),
     retired("function-body:instantiation-in-computation"),

@@ -283,6 +283,23 @@ pub fn rewrite(id: &str) -> &'static str {
             "Use `import type`. Move the code that calls a builder, a built-in, or a cell \
              constructor into a subset module."
         }
+        "footprint:widened" => {
+            "Read the properties that are needed in place of the whole value \
+             (`footprint-analysis.md` §5.3)."
+        }
+        "footprint:dynamic-read" => {
+            "Read through one handle at a static key, ahead of any branch, where every path \
+             reads the cell."
+        }
+        "footprint:materializer" => {
+            "Write through a handle the body is given, at a static path, or move the write \
+             into a `handler` or an `action`."
+        }
+        "side-write:not-idempotent" => {
+            "`set` a value computed from other inputs, or move the update into a `handler` \
+             or an `action`."
+        }
+        "mergeable-push:read-then-push" => "Push without reading the collection first.",
         _ => "",
     }
 }

@@ -128,11 +128,18 @@ fn footprint(paths: &[&str]) -> std::io::Result<bool> {
             body.kind.label(),
             body.name.as_deref().unwrap_or("(unnamed)")
         );
-        let lists: [(&str, &[String]); 5] = [
+        if let Some(tier) = record.tier {
+            println!("  tier: {tier}");
+        }
+        let lists: [(&str, &[String]); 9] = [
             ("reads", &record.reads),
             ("read envelope of the dynamic reads", &record.envelope),
             ("dynamic reads", &record.dynamic_reads),
+            ("other dynamic reads", &record.other_dynamic),
             ("writes", &record.writes),
+            ("outputs", &record.outputs),
+            ("calls", &record.calls),
+            ("not idempotent", &record.not_idempotent),
             ("widenings", &record.widenings),
         ];
         for (title, lines) in lists {
