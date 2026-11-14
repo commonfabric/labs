@@ -343,6 +343,32 @@ export async function verifyGmailIdToken(
   return { ok: true, emailAddress: email };
 }
 
+/** What a mint asks of Google to learn which mailbox a token is for. */
+export interface GmailMailboxProof {
+  /** Asks Gmail which mailbox an access token reads. */
+  fetchMailbox: (accessToken: string) => Promise<MailboxLookup>;
+
+  /** Verifies a Google ID token and reads the mailbox it names. */
+  verifyIdToken: (idToken: string) => Promise<MailboxLookup>;
+}
+
+/**
+ * Returns how a mint proves a mailbox, verifying ID tokens against `keys` for
+ * `clientIds`, or `undefined` where Gmail push is not `enabled`: a mailbox
+ * nothing will ever deliver to is not worth binding.
+ */
+export function gmailMailboxProof(
+  enabled: boolean,
+  keys: JWTVerifyGetKey,
+  clientIds: readonly string[],
+): GmailMailboxProof | undefined {
+  if (!enabled) return undefined;
+  return {
+    fetchMailbox: fetchGmailMailbox,
+    verifyIdToken: (idToken) => verifyGmailIdToken(keys, clientIds, idToken),
+  };
+}
+
 /**
  * Helper for `isAcceptedPushToken()`, which returns whether `error` is `jose`
  * failing to fetch or read Google's keys rather than refusing a token. `jose`
@@ -439,21 +465,18 @@ function decodeNotification(rawBody: string): GmailNotification | null {
  */
 function supersedes(
   current: Record<string, unknown>,
-  next: Record<string, unknown>,
+  next: GmailNotification,
 ): boolean {
   const held = current.historyId;
-  const incoming = next.historyId;
-  if (!isHistoryId(incoming)) return false;
   if (!isHistoryId(held)) return true;
   const heldAddress = current.emailAddress;
   if (
     typeof heldAddress !== "string" ||
-    typeof next.emailAddress !== "string" ||
     mailboxKey(heldAddress) !== mailboxKey(next.emailAddress)
   ) {
     return true;
   }
-  return BigInt(incoming) > BigInt(held);
+  return BigInt(next.historyId) > BigInt(held);
 }
 
 /**
@@ -517,7 +540,12 @@ export async function processGmailPush(
       // mailbox's record that slips through is replaced by the new mailbox's
       // first notification, whatever its history id.
       if (registration.mailboxKey !== key) continue;
-      await writeLatest(runtime, registration, record, supersedes);
+      await writeLatest(
+        runtime,
+        registration,
+        record,
+        (current) => supersedes(current, notification),
+      );
       await recordLastSeen(runtime, serviceSpace, id, logger);
       delivered++;
     }

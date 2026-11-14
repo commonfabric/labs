@@ -1,9 +1,9 @@
 import { MiddlewareHandler } from "@hono/hono";
 import {
   context,
+  defaultTextMapGetter,
   Span,
   SpanStatusCode,
-  type TextMapGetter,
   trace,
 } from "@opentelemetry/api";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
@@ -22,12 +22,8 @@ const obtainTracer = () => {
 // the caller's trace (e.g. the browser shell, which stamps traceparent on its
 // telemetry/API calls). No global propagator is registered under Deno, so build
 // one explicitly. When no traceparent is present, `extract` returns the input
-// context unchanged and the span starts as a fresh root — identical to before.
+// context unchanged and the span starts as a fresh root.
 const propagator = new W3CTraceContextPropagator();
-const headersGetter: TextMapGetter<Headers> = {
-  keys: (carrier) => [...carrier.keys()],
-  get: (carrier, key) => carrier.get(key) ?? undefined,
-};
 
 /**
  * Creates a middleware that adds OpenTelemetry tracing to all routes
@@ -38,10 +34,11 @@ export function otelTracing(): MiddlewareHandler {
     const method = c.req.method;
 
     // Start the request span as a child of any inbound traceparent context.
+    // `Headers` names are lower case, as the propagator asks for them.
     const parentCtx = propagator.extract(
       context.active(),
-      c.req.raw.headers,
-      headersGetter,
+      Object.fromEntries(c.req.raw.headers),
+      defaultTextMapGetter,
     );
 
     await context.with(

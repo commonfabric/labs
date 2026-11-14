@@ -72,25 +72,28 @@ route handler. To exercise the route's own handling of a response — an empty
 answer, a provider that turns the request down, a stream that stops early —
 drive `generateText` with a stand-in language model instead.
 
-`findModel` reads the exported `MODELS` registry in
-`runtime/toolshed/routes/ai/llm/models.ts`, and that registry is a plain
-mutable object. A test registers a model under a name of its own, runs the
-generation, and takes the entry back out afterwards:
+`generateText` and `generateObject` take the model registry to resolve the
+request's model from, and `createLLMRouter()` in `llm.router.ts` builds the
+routes over a registry and a response cache. A test builds a registry of its
+own with `createModelRegistry()` from
+`runtime/toolshed/routes/ai/llm/models.ts`, with no provider keys and no
+gateway, registers its stand-in model, and passes that registry along.
+`runtime/toolshed/test/fixtures/llm-models.ts` holds the helpers the route
+tests share:
 
 ```ts
 // Shown for illustration only.
-MODELS["mock:test-model"] = {
-  model: new MockLanguageModelV4({ doStream: { stream } }),
-  name: "mock:test-model",
-  capabilities: { /* the fields the route reads */ },
-  aliases: [],
-};
-try {
-  await generateText({ model: "mock:test-model", messages });
-} finally {
-  delete MODELS["mock:test-model"];
-}
+const models = registryWith(
+  "mock:test-model",
+  new MockLanguageModelV4({ doStream: { stream } }),
+);
+await generateText({ model: "mock:test-model", messages }, models);
 ```
+
+The registry takes the `fetch` its providers send through, gateway discovery
+included, so `routes/ai/llm/models.test.ts` drives discovery, its failures,
+and the choice of the `default` model with a `fetch` of its own and no
+network.
 
 Two properties of the AI SDK shape what these tests can assert.
 

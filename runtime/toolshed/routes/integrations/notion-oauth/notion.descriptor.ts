@@ -14,7 +14,9 @@
  *
  * Note: Notion requires HTTP Basic auth for the token endpoint and does not
  * use scopes — capabilities are configured in the integration dashboard.
- * Notion embeds owner info in the token response; we extract it via tokenMapper.
+ * Notion returns the owner's details in the token response rather than from a
+ * user-info endpoint, and this descriptor does not read them, so the stored
+ * user is empty.
  */
 
 import env from "@/env.ts";
