@@ -351,6 +351,13 @@ impl<'a> Resolver<'_, 'a> {
         let Ok(receiver) = self.typed_at(module, &member.object, depth) else {
             return Err(Origin::CallResult);
         };
+        // `handle?.get()` reads through the handle where it is present,
+        // and the chain adds `undefined` where it is not.
+        let receiver = if member.optional || call.optional {
+            self.present(receiver)
+        } else {
+            receiver
+        };
         let Shape::Handle(kind, value) = self.shape(receiver) else {
             return Err(Origin::CallResult);
         };

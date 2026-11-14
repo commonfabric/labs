@@ -1343,3 +1343,44 @@ const add = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => {
     let inside = format!("case.tsx:{}:", prelude_lines + 1);
     assert!(found[0].message.contains(&inside), "{}", found[0].message);
 }
+
+#[test]
+fn a_widening_in_a_helper_is_reported_at_the_helper_only_where_the_helper_is_a_body() {
+    // FA §3.6: "A function has no record of its own unless it is itself
+    // a body of §1.2, as an authored function called from the reactive
+    // tier is. ... So a widening in a helper is reported at the helper
+    // where the helper is a body, and at the call in each body that calls
+    // it. A function that only other bodies call is reported at those
+    // calls alone."
+    let lines = |snippet: &str| -> Vec<u32> {
+        let mut lines: Vec<u32> = check(snippet)
+            .iter()
+            .filter(|diagnostic| diagnostic.id == "footprint:widened")
+            .map(|diagnostic| diagnostic.line)
+            .collect();
+        lines.sort();
+        lines
+    };
+    let helper = "const text = (donut: { name: string; price: number }): string =>\n  JSON.stringify(donut);\n";
+    // The helper is called from a `lift` alone: one report, at the call.
+    let only_bodies = format!(
+        "{helper}const show = lift((x: {{ donut: {{ name: string; price: number }} }}) =>\n  text(x.donut));\n"
+    );
+    let base = lines("const one = 1;\n").len();
+    assert_eq!(base, 0);
+    let found = lines(&only_bodies);
+    assert_eq!(found.len(), 1, "{found:?}");
+    // Called from the reactive tier too, the helper is a body: its own
+    // text is reported, and the call in the `lift`. The call in the
+    // reactive tier is the use of that body, and is no call in a body.
+    let reactive = format!(
+        "{only_bodies}export const P = pattern<{{ donut: {{ name: string; price: number }} }}>(({{ donut }}) =>\n  ({{ shown: text(donut) }}));\n"
+    );
+    let found = lines(&reactive);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(
+        found[1] - found[0],
+        2,
+        "the helper, then the call in the lift"
+    );
+}

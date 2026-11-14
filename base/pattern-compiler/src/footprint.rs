@@ -702,6 +702,8 @@ struct Store {
     direct: BTreeSet<(String, usize, u32)>,
     dynamic_keys: BTreeSet<(usize, u32)>,
     untyped: BTreeSet<(usize, u32)>,
+    /// The projections whose position is of scalar type.
+    scalars: BTreeSet<PathKey>,
     /// The sites of the runtime calls (FA §8).
     calls: BTreeMap<(usize, u32), String>,
     /// The entries the journaled resolutions start from, one line per
@@ -966,6 +968,14 @@ impl<'a> Analyzer<'_, '_, 'a> {
             } else {
                 &mut self.store.entries
             };
+            // A use of the handle a static resolution returned "records
+            // the resolved entry and no plain entry" (FA §7.1).
+            let class = match (class, proj.resolved) {
+                (Class::Identity, Some((length, true))) if length == proj.path.len() => {
+                    Class::Resolved
+                }
+                _ => class,
+            };
             entries.entry(proj.key()).or_default().insert(class);
         }
     }
@@ -1184,7 +1194,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     .get(&proj.key())
                     .or_else(|| self.store.envelope.get(&proj.key()))
                     .is_some_and(|classes| classes.contains(&Class::Value));
-                if !read {
+                // "Each member is treated by this table, by the type of
+                // the position its projection names, wherever in the body
+                // the member was put into the record" (FA §3.8).
+                if self.store.scalars.contains(&proj.key()) {
+                    self.observe(val, Class::Value);
+                } else if !read {
                     self.observe(val, Class::Identity);
                 }
             }
@@ -2009,6 +2024,33 @@ impl<'a> Analyzer<'_, '_, 'a> {
     // ----- expressions -----
 
     fn eval(&mut self, expression: &Expression<'a>) -> Val {
+        let val = self.eval_inner(expression);
+        // The type of the position a projection names, for a member that
+        // leaves the body in a record the body built (FA §3.8).
+        let member = matches!(
+            expression,
+            Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+                | Expression::ChainExpression(_)
+        );
+        if let (true, Val::Proj(proj)) = (member, &val) {
+            if !self.store.scalars.contains(&proj.key()) {
+                let kinds = self.kinds(expression);
+                let scalar = kinds.scalar
+                    && !kinds.untyped
+                    && !kinds.container
+                    && !kinds.handle
+                    && !kinds.reference
+                    && !kinds.factory;
+                if scalar {
+                    self.store.scalars.insert(proj.key());
+                }
+            }
+        }
+        val
+    }
+
+    fn eval_inner(&mut self, expression: &Expression<'a>) -> Val {
         match expression {
             Expression::ParenthesizedExpression(inner) => self.eval(&inner.expression),
             Expression::TSAsExpression(inner) => self.eval(&inner.expression),

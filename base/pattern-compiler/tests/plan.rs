@@ -932,6 +932,20 @@ fn body_named<'p>(plan: &'p Value, name: &str) -> &'p Value {
         .unwrap_or_else(|| panic!("no body named {name}"))
 }
 
+/// The template of a use of a body: that of the computed input another
+/// body has from it.
+fn facts_template(plan: &Value, name: &str) -> Value {
+    let index = body_index(plan, name);
+    plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .flat_map(|body| body["computed"].as_array().expect("computed"))
+        .map(|input| input["template"].clone())
+        .find(|template| template["by"]["body"] == json!(index))
+        .unwrap_or_else(|| panic!("no computed input from {name}"))
+}
+
 fn body_index(plan: &Value, name: &str) -> usize {
     plan["bodies"]
         .as_array()
@@ -957,11 +971,12 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     // `B2`."
     let analysis = fabrichat();
     let plan = pattern_plan(&analysis, "FabriChatRoomCore");
-    // "B1 function threadTitles reads s2; handles h0 slot s2". The room
-    // calls `threadTitles` twice, so the use has an ordinal (§1.3). The
-    // function reads `threadInfo?.get()`, which FA §7.1 makes static, so
-    // the crate has a `value` slot where the listing has a handle
-    // (SPEC-NOTES 104).
+    // "B1 function threadTitles#1 reads s2 s3 s4 s5", and "`B1` has no
+    // entry in `handles`": `s2` the handle, `s3` "the list's
+    // enumeration", `s4` "the `root` handle of each record", and `s5`
+    // "each `title`". Of the four `shape` slots the listing gives `B1`,
+    // the crate has the one in place at `threadInfo` and the one at the
+    // root of the list (SPEC-NOTES 130).
     let titles = body_named(&plan, "threadTitles#1");
     assert_eq!(titles["kind"], "function");
     assert_eq!(
@@ -969,10 +984,29 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
         [
             "argument threadInfo : identity",
             "argument threadInfo : shape, inPlace",
-            "argument threadInfo : value",
+            "argument threadInfo : enumeration",
+            "argument threadInfo : shape",
+            "argument threadInfo/*/root : identity",
+            "argument threadInfo/*/title : value",
         ]
     );
     assert_eq!(titles["handles"], json!([]));
+    // "T_titles = derive(by B1) [ s2 s3 s4 s5 dynamic(link through s4) ]":
+    // "the links followed below it are a `dynamic` node of kind `link`".
+    let template = facts_template(&plan, "threadTitles#1");
+    let dynamic: Vec<&Value> = template["inputs"]
+        .as_array()
+        .expect("inputs")
+        .iter()
+        .filter(|input| input["op"] == "dynamic")
+        .collect();
+    assert_eq!(dynamic.len(), 1);
+    let read = &plan["dynamicReads"][dynamic[0]["reads"].as_u64().expect("reads") as usize];
+    assert_eq!(read["why"]["kind"], json!("link"));
+    assert_eq!(
+        slot_line(&plan, &read["why"]["through"]),
+        "argument threadInfo/*/root : identity"
+    );
     // "B2 function messageFacts reads s0; computed titles/* : value
     // T_titles; handles h0 slot s0". "`B2` reads `titles[key]` on a
     // record, so its computed inputs include `titles : enumeration`
@@ -991,9 +1025,9 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
         .map(|handle| slot_line(&plan, &handle["handle"]["slot"]))
         .collect();
     assert_eq!(handles, ["argument messages : identity"]);
-    // The crate has `identity` at `titles/*`, where the listing has
-    // `value`: the title leaves the body in a record a helper built
-    // (SPEC-NOTES 71, 104).
+    // "`B2` records `titles/* : value`. The title leaves `B1` in a record
+    // the body built, and such a member is recorded by the type of the
+    // position its projection names, a string here" (FA §3.8).
     let computed: Vec<(Value, Value)> = facts["computed"]
         .as_array()
         .expect("computed")
@@ -1004,7 +1038,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
         computed,
         [
             (json!(["titles"]), json!("enumeration")),
-            (json!(["titles", "*"]), json!("identity")),
+            (json!(["titles", "*"]), json!("value")),
         ]
     );
     // "computed titles/* : value T_titles": each entry has the template
@@ -1106,15 +1140,14 @@ fn the_function_bodies_of_a_row_are_the_records_of_pl_section_6_2() {
     );
     assert_eq!(text["handles"], json!([]));
     // "B4 function viewKeyOf reads m6": `(root) : identity, resolved`.
-    // The crate lists the unresolved `identity` slot beside it.
+    // "`viewKeyOf` uses the handle that the static resolution returned
+    // and not `message` itself, so the body has the resolved `identity`
+    // entry and no plain entry beside it".
     let key = body_named(&plan, "viewKeyOf#1");
     assert_eq!(key["kind"], "function");
     assert_eq!(
         reads_of(&plan, key),
-        [
-            "argument message : identity",
-            "argument message : identity, resolved",
-        ]
+        ["argument message : identity, resolved"]
     );
     // "`p0` is the pick's choice point, an entry of `Plan.picks` with
     // `chosenBy: \"valueCode\"`".
@@ -1758,7 +1791,7 @@ export const P = pattern<{ table: Record<string, number>; key: string; n: number
         .any(|slot| slot["path"] == json!(["table"])));
     assert_eq!(
         interim_template(&plan, "found"),
-        "pick(output built/, choice [argument key : value], body derive(by build) { [argument n : identity] })"
+        "pick(output built/, choice [argument key : value], body derive(by build) { [argument n : value] })"
     );
     assert_eq!(
         interim_template(&plan, "member"),
@@ -1903,7 +1936,7 @@ fn the_templates_of_a_row_are_those_of_pl_section_6_2() {
     // and its choice joins the `shape` of the chosen child (§3.18).
     // "`T_repl` leaves out the guard on a missing key, which is one more
     // `select` on `T_key`": the crate has it.
-    let key = "derive(by viewKeyOf#1) { [argument message : identity] [argument message : identity, resolved] }";
+    let key = "derive(by viewKeyOf#1) { [argument message : identity, resolved] }";
     let place = format!("pick(container [argument places/* : shape], choice derive(expression) {{ {key} [argument places/* : shape] }}, body [argument places/* : value])");
     let guarded = format!("select(derive(expression) {{ {key} }} ? const | {place})");
     let replies = format!("select({guarded} ? {guarded} | const)");

@@ -1129,6 +1129,19 @@ impl<'a> Resolver<'_, 'a> {
             },
             Expression::LogicalExpression(logical) => {
                 let left = self.typed_at(module, &logical.left, next)?;
+                // `list ?? []`: the empty array literal has the element
+                // type `never`, so the result is the array type of the
+                // left operand.
+                let empty = matches!(
+                    unwrap(&logical.right),
+                    Expression::ArrayExpression(array) if array.elements.is_empty()
+                );
+                if empty && logical.operator != LogicalOperator::And {
+                    let present = self.present(left);
+                    if matches!(self.shape(present), Shape::Array(_)) {
+                        return Ok(present);
+                    }
+                }
                 let right = self.typed_at(module, &logical.right, next)?;
                 let left = match logical.operator {
                     LogicalOperator::Coalesce | LogicalOperator::Or => self.present(left),

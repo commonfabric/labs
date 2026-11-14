@@ -317,6 +317,43 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         resolver.check_assignments(module);
         resolver.check_typed_rules(module);
     }
+    // The authored functions that are bodies (`footprint-analysis.md`
+    // §1.2): those a call in the reactive tier names. Each is the module
+    // and the span of its declaration.
+    let mut reactive_functions: BTreeSet<(usize, u32, u32)> = BTreeSet::new();
+    for (module, current) in parsed.iter().enumerate() {
+        let Some(current) = current else {
+            continue;
+        };
+        for node in current.semantic.nodes().iter() {
+            let oxc_ast::AstKind::CallExpression(call) = node.kind() else {
+                continue;
+            };
+            let oxc_ast::ast::Expression::Identifier(identifier) =
+                crate::syntax::unwrap(&call.callee)
+            else {
+                continue;
+            };
+            if resolver.value_def(module, identifier) != Some(crate::module::DefKind::Function)
+                || resolver.place_at(module, call.span.start) != Place::Reactive
+            {
+                continue;
+            }
+            let Some(symbol) = crate::module::symbol_of(current.semantic.scoping(), identifier)
+            else {
+                continue;
+            };
+            let Some((home, symbol)) = resolver.origin(module, symbol) else {
+                continue;
+            };
+            let Some(home_parsed) = resolver.parsed(home) else {
+                continue;
+            };
+            let declaration = home_parsed.semantic.scoping().symbol_declaration(symbol);
+            let span = oxc_span::GetSpan::span(&home_parsed.semantic.nodes().kind(declaration));
+            reactive_functions.insert((home, span.start, span.end));
+        }
+    }
     // The footprint of each body (`footprint-analysis.md`), as counts.
     let mut all_records: Vec<Vec<(usize, crate::footprint::Record)>> = Vec::new();
     for (module, check) in checks.iter_mut().enumerate() {
@@ -325,11 +362,19 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
             let records = crate::footprint::analyze_module(&resolver, module, &check.bodies);
             footprint_counts(&check.bodies, &records, &mut check.counts);
             if let Some(current) = &parsed[module] {
+                // The declarations in this module of the authored
+                // functions that are bodies.
+                let own: Vec<(u32, u32)> = reactive_functions
+                    .iter()
+                    .filter(|(home, ..)| *home == module)
+                    .map(|(_, start, end)| (*start, *end))
+                    .collect();
                 footprint_diagnostics(
                     current,
                     &parsed,
                     &check.bodies,
                     &records,
+                    &own,
                     &mut check.diagnostics,
                 );
             }
@@ -468,8 +513,21 @@ fn footprint_diagnostics(
     modules: &[Option<Parsed<'_>>],
     bodies: &[Body],
     records: &[(usize, crate::footprint::Record)],
+    reactive_functions: &[(u32, u32)],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // "A function has no record of its own unless it is itself a body of
+    // §1.2, as an authored function called from the reactive tier is"
+    // (`footprint-analysis.md` §3.6): what is in the text of any other
+    // function is reported at the calls in the bodies that call it.
+    let is_body = |index: usize| {
+        let body = &bodies[index];
+        body.kind != crate::tiers::BodyKind::AuthoredFunction
+            || reactive_functions.iter().any(|(start, end)| {
+                (*start <= body.span.0 && body.span.1 <= *end)
+                    || (body.span.0 <= *start && *end <= body.span.1)
+            })
+    };
     let innermost = |site: u32| {
         records
             .iter()
@@ -479,7 +537,11 @@ fn footprint_diagnostics(
     };
     let mut seen: BTreeSet<(u32, &'static str)> = BTreeSet::new();
     for (index, record) in records {
-        let own = record.sites.iter().map(|(site, what)| (site, what, None));
+        let own = record
+            .sites
+            .iter()
+            .filter(|_| is_body(*index))
+            .map(|(site, what)| (site, what, None));
         let brought = record
             .brought
             .iter()
