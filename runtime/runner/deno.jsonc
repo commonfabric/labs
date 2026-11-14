@@ -75,6 +75,8 @@
     "./storage/cache.deno": "./src/storage/cache.deno.ts",
     "./local-program.deno": "./src/harness/local-program.deno.ts",
     "./module-compile-worker": "./src/harness/module-compile-worker.ts",
+    "./module-compiler-pool": "./src/harness/module-compiler-pool.ts",
+    "./compilation-cache/shared-compile-cache.deno": "./src/compilation-cache/shared-compile-cache.deno.ts",
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",

@@ -9,6 +9,7 @@ import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
+  DEFAULT_SERVING_COMPILE_WORKERS,
   DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB,
   DEFAULT_SPARE_SERVING_WORKERS,
   ensureSpaceRootsFromEnv,
@@ -17,6 +18,7 @@ import {
   serverExecutionPolicyFromEnv,
   serverExecutionRoute,
   serverExecutionWorkerFromEnv,
+  servingCompileFromEnv,
   servingWorkerPoolFromEnv,
   startServerExecutionHost,
   stopServerExecutionHost,
@@ -226,6 +228,65 @@ describe("serverExecutionPolicyFromEnv", () => {
       expect(warning).toContain(
         "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
       );
+    }
+  });
+});
+
+describe("servingCompileFromEnv()", () => {
+  it("returns the default worker count and the given directory when no knob is set", () => {
+    const warnings: string[] = [];
+    for (
+      const env of [{}, {
+        SERVER_EXECUTION_COMPILE_WORKERS: "",
+        SERVER_EXECUTION_COMPILE_CACHE_DIR: "",
+      }]
+    ) {
+      expect(
+        servingCompileFromEnv(
+          envOf(env),
+          "/cache/compiled",
+          (m) => warnings.push(m),
+        ),
+      ).toEqual({
+        compileWorkers: DEFAULT_SERVING_COMPILE_WORKERS,
+        compileCacheDir: "/cache/compiled",
+      });
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns each knob's value over the defaults", () => {
+    const warnings: string[] = [];
+    expect(
+      servingCompileFromEnv(
+        envOf({
+          SERVER_EXECUTION_COMPILE_WORKERS: "3",
+          SERVER_EXECUTION_COMPILE_CACHE_DIR: "/shared/compiled",
+        }),
+        "/cache/compiled",
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({ compileWorkers: 3, compileCacheDir: "/shared/compiled" });
+    expect(warnings).toEqual([]);
+  });
+
+  it("names no directory where neither the knob nor the caller does", () => {
+    expect(servingCompileFromEnv(envOf({}), undefined).compileCacheDir)
+      .toBeUndefined();
+  });
+
+  it("warns and takes the default for a worker count that is not a positive integer", () => {
+    for (const raw of ["0", "-1", "1.5", "abc", "99999999999999999999"]) {
+      const warnings: string[] = [];
+      expect(
+        servingCompileFromEnv(
+          envOf({ SERVER_EXECUTION_COMPILE_WORKERS: raw }),
+          undefined,
+          (m) => warnings.push(m),
+        ).compileWorkers,
+      ).toBe(DEFAULT_SERVING_COMPILE_WORKERS);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("SERVER_EXECUTION_COMPILE_WORKERS");
     }
   });
 });

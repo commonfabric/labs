@@ -91,6 +91,7 @@ if (import.meta.main) {
           apiUrl: new URL(env.API_URL),
           store: memoryEngineStoreUrl,
           memoryUrl: new URL(env.MEMORY_URL),
+          compileCacheDir: `${env.CACHE_DIR}/compiled-modules`,
           ...(fetch !== undefined ? { fetch } : {}),
         }) !== undefined,
       memoryServer,
