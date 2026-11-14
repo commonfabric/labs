@@ -643,6 +643,19 @@ impl<'a> Resolver<'_, 'a> {
         self.typed_at(module, init, depth)
     }
 
+    /// The type of a parameter of a function of module `module`: the
+    /// type it is written with, or the one `parameter_type` gives it.
+    pub(crate) fn formal_parameter_type(
+        &self,
+        module: usize,
+        parameter: &FormalParameter<'a>,
+    ) -> Declared {
+        match &parameter.type_annotation {
+            Some(annotation) => Ok(self.resolve_type(module, &annotation.type_annotation)),
+            None => self.parameter_type(module, parameter, 0),
+        }
+    }
+
     /// The type of a parameter without an annotation: what the type
     /// arguments of a builder give its callback, or the element type of the
     /// collection a callback is given to.

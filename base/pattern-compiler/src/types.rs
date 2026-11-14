@@ -344,6 +344,11 @@ impl<'a> Resolver<'_, 'a> {
         self.add(Shape::Object(properties, index))
     }
 
+    /// The annotations on the root of `ty` (§8.1).
+    pub fn annotations_of(&self, ty: TypeId) -> Vec<Annotation> {
+        self.types.borrow().annotations(ty).to_vec()
+    }
+
     fn has_annotation(&self, ty: TypeId, key: &str) -> bool {
         self.types
             .borrow()

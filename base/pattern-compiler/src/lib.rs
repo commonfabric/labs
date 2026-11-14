@@ -22,6 +22,7 @@ pub mod parse;
 pub mod plan;
 pub mod program;
 pub mod report;
+pub mod schema;
 pub mod source;
 pub mod syntax;
 pub mod tiers;

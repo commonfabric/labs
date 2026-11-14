@@ -191,6 +191,10 @@ struct Emitter<'r, 'm, 'a> {
     /// What the compiler reports as a hint: a `wish` whose query is not
     /// a constant (PL §3.19, question 48).
     hints: Vec<(String, u32)>,
+    /// The declared type of the data at a slot root, where the emitter
+    /// has it: the pattern's input, the element of a collection, and the
+    /// event and the state of a named handler.
+    root_types: HashMap<Root, TypeId>,
 }
 
 /// What the edges of the plan need of a body.
@@ -470,6 +474,36 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 
     // ----- types -----
+
+    /// Records the declared type of the data at a slot root, from the
+    /// parameter of module `module` that is bound to it.
+    fn root_type(&mut self, module: usize, root: Root, parameter: &FormalParameter<'a>) {
+        if let Ok(ty) = self.resolver.formal_parameter_type(module, parameter) {
+            self.root_types.insert(root, ty);
+        }
+    }
+
+    /// The types on the way from the type of a slot root to a path of
+    /// it, the root first. A handle on the way is crossed, and counts as
+    /// two nodes: the handle and its value.
+    fn slot_types(&self, root: &Root, path: &[String]) -> Option<Vec<TypeId>> {
+        let mut nodes = vec![*self.root_types.get(root)?];
+        let cross = |nodes: &mut Vec<TypeId>| {
+            for _ in 0..4 {
+                let last = nodes[nodes.len() - 1];
+                match self.resolver.shape(self.resolver.present(last)) {
+                    Shape::Handle(_, value) => nodes.push(value),
+                    _ => break,
+                }
+            }
+        };
+        for segment in path {
+            cross(&mut nodes);
+            let last = nodes[nodes.len() - 1];
+            nodes.push(self.type_below(last, segment)?);
+        }
+        Some(nodes)
+    }
 
     /// The type one segment below a type: a property, or for `*` an
     /// element of an array or a child of a record.
@@ -1888,6 +1922,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             );
         }
         if let Some(element) = parameters.get(1) {
+            self.root_type(self.module, Root::Element(collection), element);
             self.bind_pattern(
                 &element.pattern,
                 Place::Slot(Root::Element(collection), Vec::new()),
@@ -2047,6 +2082,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.within.push(json!({ "element": collection }));
         let parameters = &function.params().items;
         if let Some(element) = parameters.first() {
+            self.root_type(self.module, Root::Element(collection), element);
             self.bind_pattern(
                 &element.pattern,
                 Place::Slot(Root::Element(collection), Vec::new()),
@@ -3570,6 +3606,15 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         let (body_kind, record) = self.record_at(home, start)?;
         let index = self.plan_bodies.len();
+        if let (BodyKind::Handler, Some(function)) = (body_kind, self.function_at(home, start)) {
+            let parameters = &function.params().items;
+            if let Some(event) = parameters.first() {
+                self.root_type(home, Root::Event(index), event);
+            }
+            if let Some(state) = parameters.get(1) {
+                self.root_type(home, Root::Binding(index), state);
+            }
+        }
         let mut inputs: HashMap<String, Place> = HashMap::new();
         inputs.insert(
             "event".to_string(),
@@ -4099,6 +4144,29 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if *in_place {
                     slot.insert("inPlace".to_string(), json!(true));
                 }
+                // The schema of the value at the path, and the label the
+                // annotations on the way declare (PL §1.1, §4.4; LS
+                // §8.3). The crate holds the schema itself where PL has
+                // its content address.
+                if let Some(nodes) = self.slot_types(root, path) {
+                    if let Some(last) = nodes.last() {
+                        slot.insert("schema".to_string(), self.resolver.schema_of(*last));
+                    }
+                    let annotations: Vec<Vec<crate::types::Annotation>> = nodes
+                        .iter()
+                        .map(|node| {
+                            let mut found = self.resolver.annotations_of(*node);
+                            let present = self.resolver.present(*node);
+                            if present != *node {
+                                found.extend(self.resolver.annotations_of(present));
+                            }
+                            found
+                        })
+                        .collect();
+                    if let Some(declared) = crate::schema::declared_label(&annotations) {
+                        slot.insert("declared".to_string(), declared);
+                    }
+                }
                 Value::Object(slot)
             })
             .collect();
@@ -4435,11 +4503,13 @@ pub fn emit_module<'a>(
             formal_types: HashMap::new(),
             iterated: Vec::new(),
             hints: Vec::new(),
+            root_types: HashMap::new(),
         };
         let Some(function) = emitter.function_at(module, *start) else {
             continue;
         };
         if let Some(parameter) = function.params().items.first() {
+            emitter.root_type(module, Root::Argument, parameter);
             emitter.bind_pattern(&parameter.pattern, Place::Slot(Root::Argument, Vec::new()));
         }
         let result = match function.expression_body() {
