@@ -689,7 +689,7 @@ export interface DynamicReads {
  * write's body whose path overlaps the annotated path (section 4.4).
  */
 export interface ConstraintInputs {
-  /** Slots of `Body.reads`. */
+  /** Slots of `Body.reads`, or of `Cone.slots` (section 1.5). */
   readonly slots: readonly Index[];
   /**
    * Entries of `Body.handles` through which the body reads the annotated
@@ -1536,21 +1536,47 @@ is partitioned as a pattern body is, with one addition.
 - A declaration inside a promoted `computed` with a block body belongs to
   the cone of that `computed`, as in a pattern body.
 
-The cones of a callback are listed in `Plan.cones` in source order of
-their declarations, the cone of the returned expression last, after the
-cones of every construct and pattern written in the callback. That cone
-is "the last cone of the construct's body" below. Every cone of the body
+The cones of a callback are listed in `Plan.cones` by the rule of
+"Order" above: an edge goes from a lower index to a higher one. Among
+the cones no edge orders, the cone listed first is the earliest in this
+sequence: the cones of the callback's declarations in source order, each
+followed by the cones of the constructs and the patterns written in its
+initializer; then the cone of the returned expression; then the cones of
+the constructs and the patterns written in the returned expression, in
+source order. The cone of the returned expression uses the result of a
+construct or a pattern written in it, so it is listed after their cones
+wherever it uses each of them, and it is then the last cone of the body.
+Where one of them is not used by the returned expression, as a pattern
+called for its effects alone is not, the cones of that one are after it.
+"The last cone of the construct's body", below, is the cone of the body
+with the highest index, whichever cone that is. Every cone of the body
 has slots of root `element`, or reads none and is evaluated per element
 key all the same.
+
+**An interim value of an element body.** A value that a declaration
+cone of the callback computes and another cone of the body uses is an
+interim output, as in a pattern body. Its `interim` is the
+declaration's name, and its `path` is the path below that name: the
+empty path for the value itself. The path has no `*` for the enclosing
+collections, because an interim name is no path of the result, and the
+name is resolved in the element body it is declared in: the cone that
+computes the entry has the `element` step of the collection in its
+`within`, and `host.output` of the entry returns the value for the
+element key the reading cone instance is evaluated for. Two
+declarations of one name in two callbacks are two entries, which the
+`within` of their cones tells apart. The rule for a path with `*`,
+below, is for a path of the result: what the callback returns.
 
 **The assembled result of an element construct.** The runtime assembles
 the result of a `map`, a `filter` or a `flatMap` from per-element results
 (sections 3.6 and 3.7), and no value function returns it. Two kinds of
 entry of `Plan.outputs` concern such a construct.
 
-- **Per element.** An output that a cone of the body computes is an entry
-  whose `path` has `*` at the position of each enclosing collection. Its
-  `cone` is that element cone and its `template` is over `element` slots.
+- **Per element.** An output that a cone of the body computes as part of
+  what the callback returns is an entry whose `path` has `*` at the
+  position of each enclosing collection. An interim value of the body has
+  the path the paragraph above gives it. For both, the
+  `cone` is that element cone and the `template` is over `element` slots.
   Inside the body, `host.output` of such an entry returns the value for
   the element the cone instance is evaluated for. No edge names such an
   entry from outside the body.
@@ -1741,6 +1767,64 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   declared, and a `writer` constraint where a `writeAuthorizedBy` or a
   `writePolicyAnyOf` is. Each is listed in the `constraints` of that edge
   or output. An interim output has no declared type and no constraint.
+
+  Seven points complete the rule.
+
+  - **The written path** is the target's `path`, or `Output.path`, read
+    in the type named above, with `*` taking the element type of an
+    array and the value type of a record. A `push`, a `pushAll` and an
+    `addUnique` have the target path `*` below the list
+    (`footprint-analysis.md` §6.1), so the annotations of the element
+    type apply to them. The annotations are combined from the root of
+    that type down to the written path (`language-subset.md` §8.3). For
+    a `handle` target the root is the handle's value type, as the body
+    that holds the edge declares it, and the annotations written around
+    the handle type do not apply: they are about the position that holds
+    the handle.
+  - **A write floor.** *Assumed* (section 8, question 15): a
+    `requiredIntegrity` annotation combined at the written path gives a
+    `writeFloor` constraint with the annotation's patterns, listed in
+    the `constraints` of the edge or the output as the two above are.
+  - **Two writer annotations on one path.** A `writeAuthorizedBy` and a
+    `writePolicyAnyOf` are two keys, so a path can combine one of each
+    from two nodes, as an element type under `WritePolicyAnyOf` with a
+    property under `WriteAuthorizedBy` does. Each annotation gives a
+    `writer` constraint of its own, and the write has to satisfy every
+    one. That is what the runtime does today: `writeAuthorizedByReason`
+    and `writePolicyAnyOfReason` are tested one after the other in
+    `runtime/runner/src/cfc/prepare.ts`.
+  - **A `uiContract` with no writer.** A `uiContract` annotation at a
+    node that declares no `writeAuthorizedBy`, which is what
+    `TrustedActionUiContract` gives, is a `writer` constraint with one
+    `WriterPolicy` that has the `uiContract` and no `body`. Any body may
+    make the write, and the event has to satisfy the contract (section
+    4.4).
+  - **An annotation below the written path.** A write of a whole value
+    writes every path below it. So each annotated node below the written
+    path gives its constraints to the edge or the output too, tested on
+    the template of the edge or the output, unless the plan has a finer
+    edge or entry at or below that node, which then has them. Without
+    this a body could replace a record whole where a policy guards one
+    of its properties. Today the prepare step tests every annotated
+    entry of the target's schema (`cfcSchemaEntries` in
+    `runtime/runner/src/cfc/schema-label-view.ts`).
+  - **Which record lists the constraint.** A write edge is a member of
+    `Body.writes` or of `Cone.writes`, and the constraint is listed in
+    its `constraints`, whatever the target. For a `state`, a `handle`
+    and a `created` target that is the edge of the body or the cone that
+    writes. For an `argument` target it is the edge, one per path of the
+    argument, of the cone that computes the path, or of the body whose
+    site instantiates the child. For a `request` target it is the edge
+    of the cone that computes the path of the request, or of the body
+    whose site requests the effect. For a kept output it is
+    `Output.constraints`. An `anchors` target has no declared type and
+    no constraint of this kind.
+  - **A writer that is no body.** A `writer` constraint on a kept output
+    or on a write edge of `Cone.writes` that expression code computes
+    has no `Body.code` to compare, so no alternative with a `body`
+    admits the write. An alternative without a `body` is not affected.
+    Where the template of the output or the edge is a `derive` by a
+    body at its root, that body is the writer.
 - **At an input.** For each use of a body, the compiler takes each
   `requiredIntegrity` and `maxConfidentiality` annotation of the types
   of the body's formal inputs, and of the read envelopes of its
@@ -1750,7 +1834,20 @@ the annotations of two sets of schemas (section 4.4 has the keys).
   not emitted. The constraint is listed in the `constraints` of every
   write edge of the body, and of every output whose template has a
   `derive` by that body: those are the writes the body's inputs flow
-  into.
+  into. The `derive` can be anywhere in the output's template: under a
+  `select`, a `fold` or a `pick`, in the template of an output the
+  template's cone received through an edge, and in the template of an
+  entry of `Body.computed` of another body. So the constraint is found
+  by walking the template, and an output that passes a body's result on
+  through a further cone lists it too.
+- **At an input of expression code.** *Assumed* (section 8, question
+  59): expression code and a promoted `computed` are constrained as a
+  body is. A `requiredIntegrity` or a `maxConfidentiality` annotation of
+  the type a slot of the cone is read under (`Slot.schema`) gives a
+  constraint that lists the slots of `Cone.slots` whose path overlaps
+  the annotated path, in `ConstraintInputs.slots`. It is listed in the
+  `constraints` of every output and every write edge of the cone whose
+  template reaches one of the listed slots.
 
 Equal constraints are one entry of `Plan.constraints`.
 
@@ -2548,6 +2645,33 @@ Where the node that holds the join uses its confidentiality alone, as the
 `condition` of a `select` and the `choice` of a `pick` do, the integrity
 of the `derive` has no effect.
 
+**A join or expression code.** The two differ in what they do with a
+`const` input and with an input that occurs twice, so each `derive` with
+`by: { expression: true }` is one or the other, and the place it comes
+from decides which.
+
+- It is expression code where the node stands for something the author
+  wrote that computes a value from operands: an operator, a call of a
+  member of the standard-library surface, a template literal, and a
+  conversion. Its inputs are the operands as written, a `const` operand
+  and a repeated operand included, by the rule for expression code
+  above. So the node of `count + 1` has two inputs, and one of them is
+  `const`.
+- It is a join everywhere else: wherever a rule of this document, of
+  `builtin-inventory.md`, or of `footprint-analysis.md` forms one
+  template from several with the words "joined with" or "the join of".
+  That covers a condition or a choice that joins several observations,
+  a membership that joins a `shape` or a key, a constructed value
+  observed whole (section 3.4), and the positions after a spread. The
+  three cases above apply to it: a `const` input and a repeated input
+  are left out, and one input left is the template itself, with no
+  `derive` around it.
+
+An operand of expression code that is itself a join is one input, the
+joined template. The two forms give one label where no input is `const`
+or repeated. They differ in the canonical form of the plan, and so in
+its hash, which is why the rule is fixed.
+
 **The membership a collection iterates.** A `fold` names a `Collection`,
 and `body` is over that record's `element` slots. The membership the
 `fold` joins, `C(membership)` in the table, is the label of which
@@ -2679,7 +2803,14 @@ template. In `Plan.outputs`, where the plan has entries for it at all
 - **A container entry** at the path of the constructed value itself. Its
   `template` is the template of the value's key set: `const` where the
   key set is static, and otherwise the template of what decides it, as
-  the first paragraph of this section says.
+  the first paragraph of this section says. The entry is left out where
+  no one cone computes the value and its key set is static: the object a
+  pattern body returns, and a record or an array written directly in a
+  pattern body or in that object, whose members are each computed by a
+  cone of their own or name a slot (section 1.4). Such a value has an
+  entry per member and nothing else, and a path with no entry at or
+  above it is constant. Where the key set of such a value is not static,
+  the container entry is an output of the cone `result`.
 - **One entry for each member that is not constructed in place and whose
   template is not `const`,** at the path of the member below the
   constructed value, with the template of the member's expression. A
@@ -2711,19 +2842,33 @@ For `c ? { x: a } : { x: b, y: d }` the path `x` has
 container entry has `select(c, [const, const])`, the label of which key
 set the value has.
 
-**A constructed value observed whole.** Where a rule needs one template
-for all of a constructed value, the template is the join (section 3.2)
-of the templates of its entries at and below the observed path, the
-container entry included. That is the case for an operand of expression
-code that consumes the whole value, as a substitution of a template
-literal does (section 3.19); for an entry of `Body.computed` of class
-`value` at or above the constructed value (section 3.9); for a path of an
-effect's request or of a child's argument that the value is written to
-whole; and for the `body` of a `fold` over elements that are constructed
-values. An entry of `Body.computed` of class `shape` or `enumeration` at
-the path of a constructed value has the template of its container entry
-alone. A constructed value has no reference, so an `identity` entry there
-has the container entry's template too.
+**A constructed value observed whole.** Where a rule needs one template for
+all of a constructed value, the template is the join (section 3.2) of the
+templates of its entries at and below the observed path, the container
+entry included. That is the case for an operand of expression code that
+consumes the whole value, as a substitution of a template literal does
+(section 3.19); for an entry of `Body.computed` of class `value` at or
+above the constructed value (section 3.9); for a path of an effect's
+request or of a child's argument that the value is written to whole; and
+for the `body` of a `fold` over elements that are constructed values. An
+entry of `Body.computed` of class `shape` or `enumeration` at the path of a
+constructed value has the template of its container entry alone. A
+constructed value has no reference, so an `identity` entry there has the
+container entry's template too.
+
+**A node over constructed values, observed whole.** Where the value is the
+result of a node written once per path, a `select`, a `pick`, or the
+per-element output of a `map`, the template is not the join of the per-path
+nodes. It is the one node over the branches, each observed whole by this
+rule: `select(c, [A, B])` with `A` the join of the entries of the first
+branch and `B` that of the second, under the selector the per-path entries
+name; a `pick` whose `body` is the chosen child observed whole; and for the
+body of a `fold`, the element observed whole. The confidentiality is the
+same as that of the join of the per-path nodes, since each of them holds
+the condition or the choice and one branch. The integrity is that of the
+selected branch observed whole, without the further `derive` a join of
+`select` nodes would add, and the template has one node where the join has
+one per path.
 
 *Assumed* (section 8, question 53): the entries are as fine as this, one
 per member that computes, for the rendered tree too. That one template
@@ -4773,7 +4918,23 @@ reads below the child, each with the class of that read. One of them is
 the `shape` slot at the path of `a` followed by `*`, which `choice`
 joins. `from` names that slot as `container`: an index into `Plan.slots`.
 The plan has no slot at the path of `a` itself on account of the pick,
-because the pick observes nothing of the container. For a choice point,
+because the pick observes nothing of the container.
+
+**A chosen child passed on whole.** Where the surrounding expression
+reads nothing below the child and passes it on, as the value of a
+declaration, a path of the result, or an argument, and the child is a
+container or a handle, the child is passed by reference, as the
+selected operand of a `select` is (section 3.5). The child slot is then
+the `identity` slot at the path of `a` followed by `*`, beside the
+`shape` slot there, and `body` is its `slot` node. No `value` slot is
+at the child. A cone that uses the output and reads a path below the
+child has slots of its own for those reads: at the path of `a`, `*`,
+and the path read, each with the class of its read, bound for the
+choice point of the pick to the child it chose. They are entries of
+that cone's `Cone.slots`, and the cone has an edge of kind `output`
+from the cone that evaluates the choice point, which orders the two.
+A child of scalar type is read for `value` at the child and passed on
+as a value. For a choice point,
 the label of each child slot is resolved at the address of the chosen
 child and at no other. What the value function is handed for such a slot,
 so that it can read the child at a key it computes, is section 8,
@@ -6399,20 +6560,25 @@ a handle, and the `identity` slot at the same position is listed. Where
 the position holds a handle, the slot in place resolves to the label of
 which reference it holds (section 2.5), which that `identity` slot joins
 already. All of them are in the footprint of `B0` and join `T_send`. `B1`
-has four more: in place at `argument threadInfo` and at
-`threadInfo/*/root`, and, across the link, at the root of the list and at
-`threadInfo/*`. They join `T_titles`. With
-FabriChat's labels none changes an instantiated label.
+has two more: in place at `argument threadInfo`, and, across the link, at
+the root of the list. They join `T_titles`. With FabriChat's labels
+neither changes an instantiated label.
 
-The four follow from the source of `threadTitles` by the transfer rules
+The two follow from the source of `threadTitles` by the transfer rules
 of `footprint-analysis.md` §3.1 and §3.2. `threadInfo?.get()` tests an
 optional handle, which is the `shape` slot in place at
-`argument threadInfo`. The `??` after it tests what `get()` returned,
-which is the `shape` slot at the root of the list, across the link.
-`record?.root` tests each record, a `shape` slot at `threadInfo/*`: the
-rule for `v?.k` records `shape` at `v` whatever the type of `v`
-declares. `record?.root === undefined` compares a position of handle
-type with `undefined`, a `shape` slot in place at `threadInfo/*/root`.
+`argument threadInfo`. The `??` after it tests an expression whose type
+has `undefined`, so the type does not decide it, and it is the `shape`
+slot at the root of the list, across the link. The two tests the
+callback makes on a record have no slot. `record?.root === undefined`
+tests each record for presence and compares the position `root` with
+`undefined`. `record` is an element of `StoredThreadInfo[]`, whose
+element type admits neither `null` nor `undefined`, and
+`ThreadInfoRecord` in `patterns/system/fabrichat/schemas.tsx` declares
+`root: Cell<unknown>` as required. So the type decides both tests, and
+a test the type decides has no entry where another entry is at or below
+its path (`footprint-analysis.md` §2.2, §2.3): `s4`, at
+`threadInfo/*/root`, is that entry for both.
 
 The listings of this section leave out three more things that the rules
 of section 3 and of `footprint-analysis.md` give the record of the same
@@ -7656,3 +7822,19 @@ this document made.
     of `Plan.outputs`, with the output's template as the label of which
     pattern was chosen. How many tags of the corpus are of this kind
     the prototype has to count.
+59. **An input constraint on what expression code reads.** Section 1.5
+    forms a `requiredIntegrity` or a `maxConfidentiality` constraint
+    from the annotations of the formal inputs of a body, and section 4.4
+    quantifies it over the body's footprint. Expression code of a cone
+    and a promoted `computed` are no body, and they read slots whose
+    type can carry the same annotations, as a pattern's argument type
+    does. *Assumed:* the cone is constrained as a body is, over the
+    slots of `Cone.slots` that overlap the annotated path, on every
+    output and write edge of the cone whose template reaches one. The
+    alternative gives such a read no constraint, so that an annotation
+    on a pattern's argument constrains the bodies that read it and
+    nothing else. The prototype emits neither. The runtime's gate reads
+    the annotation from the schema of the written target and quantifies
+    over the reads of the writing transaction
+    (`verifyInputRequirements`); which of the two that is closer to was
+    not traced.
