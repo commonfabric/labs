@@ -64,6 +64,18 @@ export const hasText = (node: unknown, expected: string): boolean =>
 export const hasExactText = (node: unknown, expected: string): boolean =>
   textContent(node).trim() === expected;
 
+/** Whether the text under `root` carries every string in `present` and none
+ * in `absent`, read in one walk of the tree. */
+export const viewShows = (
+  root: unknown,
+  present: readonly string[],
+  absent: readonly string[] = [],
+): boolean => {
+  const text = textContent(root);
+  return present.every((part) => text.includes(part)) &&
+    absent.every((part) => !text.includes(part));
+};
+
 export const findNode = (
   root: unknown,
   predicate: (node: unknown) => boolean,
@@ -198,7 +210,7 @@ export const fireEvent = (
 export const fireClick = (node: unknown, what = "the node"): void =>
   fireEvent(node, "onClick", {}, what);
 
-/** Clicks the one button labelled `label` under `root`. */
+/** Clicks the first button under `root` whose whole text is `label`. */
 export const clickButton = (root: unknown, label: string): void =>
   fireClick(findNode(root, isButton(label)), `a button labelled "${label}"`);
 
@@ -219,3 +231,18 @@ export const clickInRow = (
     `a button labelled "${label}" in the row "${rowText}"`,
   );
 };
+
+/** Sends `message` from the first `cf-message-input` under `root`, firing its
+ * `oncf-send` with the message in the event's `detail` as the component does
+ * when a person submits it. */
+export const sendMessage = (
+  root: unknown,
+  message: string,
+  what = "the message input",
+): void =>
+  fireEvent(
+    findElement(root, "cf-message-input"),
+    "oncf-send",
+    { detail: { message } },
+    what,
+  );

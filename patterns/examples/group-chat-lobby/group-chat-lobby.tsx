@@ -74,7 +74,7 @@ const resetLobby = handler<
 // STABLE identity key. Display names are mutable and not unique across users
 // (two profiles can both be "Alex"), so re-join detection compares profile
 // cells with `equals()`, never names.
-const joinChat = handler<
+export const joinChat = handler<
   unknown,
   {
     messages: Writable<Message[]>;

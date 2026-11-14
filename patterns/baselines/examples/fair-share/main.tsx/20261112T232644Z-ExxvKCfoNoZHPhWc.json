@@ -1,0 +1,242 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Expense": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "paidBy": {
+            "type": "string"
+          },
+          "sharedBy": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "description",
+          "amount",
+          "paidBy",
+          "sharedBy",
+          "date"
+        ],
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "picture": {
+            "type": "FabricBytes"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "expenses": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Expense"
+        },
+        "type": "array"
+      },
+      "myName": {
+        "default": "",
+        "scope": "user",
+        "type": "string"
+      },
+      "people": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Person"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "people",
+      "expenses",
+      "myName"
+    ],
+    "type": "object"
+  },
+  "pattern": "examples/fair-share/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Balance": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "net": {
+            "type": "number"
+          },
+          "paid": {
+            "type": "number"
+          },
+          "picture": {
+            "type": "FabricBytes"
+          },
+          "share": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "paid",
+          "share",
+          "net"
+        ],
+        "type": "object"
+      },
+      "Expense": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "paidBy": {
+            "type": "string"
+          },
+          "sharedBy": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "description",
+          "amount",
+          "paidBy",
+          "sharedBy",
+          "date"
+        ],
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "picture": {
+            "type": "FabricBytes"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Settlement": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "amount"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "enum": [
+          "Fair Share"
+        ],
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "balances": {
+        "items": {
+          "$ref": "#/$defs/Balance"
+        },
+        "type": "array"
+      },
+      "expenses": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Expense"
+        },
+        "type": "array"
+      },
+      "myName": {
+        "default": "",
+        "scope": "user",
+        "type": "string"
+      },
+      "people": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Person"
+        },
+        "type": "array"
+      },
+      "settlements": {
+        "items": {
+          "$ref": "#/$defs/Settlement"
+        },
+        "type": "array"
+      },
+      "total": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "people",
+      "expenses",
+      "myName",
+      "balances",
+      "settlements",
+      "total",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

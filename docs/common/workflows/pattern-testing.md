@@ -189,6 +189,8 @@ Reading a single node:
   `expected`.
 - `isElement(node, name)` — whether the node is an element with that tag name.
 - `styleOf(node, key)` — one resolved entry of the node's `style` prop.
+- `viewShows(root, present, absent)` — whether the subtree's text contains
+  every string in `present` and none in `absent`, read in one walk.
 
 Searching for a node:
 
@@ -269,30 +271,28 @@ the rendered tree to the node, read the prop, and send it an event:
 ```tsx
 // Shown at module scope.
 import { action, pattern, UI } from "commonfabric";
-import { findElementByText, propsOf } from "../../tools/test-support/vnode-helpers.ts";
+import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
 import MapDemo from "./map-demo.tsx";
 
 export default pattern(() => {
   const subject = MapDemo({ areasOfInterest: [] });
 
-  const action_add_area = action(() => {
-    const button = findElementByText(subject[UI], "cf-button", "+ Add Area");
-    const onClick = propsOf(button)?.onClick;
-    if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
-      (onClick as { send: (event: Record<string, never>) => void }).send({});
-    }
-  });
+  const action_add_area = action(() => clickButton(subject[UI], "+ Add Area"));
 
   return { [TESTS]: [{ action: action_add_area }], subject };
 });
 ```
 
 `patterns/examples/map-demo/map-demo.test.tsx` drives both an inline arrow and a
-bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers does
-the same for any event prop, and fails when the node binds nothing under it;
-`fireClick(node)` is its `onClick` case, with an empty event. `setBound(node,
-prop, value)` writes through the cell a control binds under a `$` prop, such as
-`$value` or `$checked`, as the control does when a person edits it.
+bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers
+sends an event to any event prop, and fails when the node binds nothing under
+it; `fireClick(node)` is its `onClick` case, with an empty event, and
+`clickButton(root, label)` clicks the first button whose whole text is
+`label`.
+`sendMessage(root, message)` sends from the view's `cf-message-input` as a
+person pressing send does. `setBound(node, prop, value)` writes through the cell
+a control binds under a `$` prop, such as `$value` or `$checked`, as the control
+does when a person edits it.
 `patterns/examples/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
 a `cf-input` by firing its `oncf-submit`.
 
