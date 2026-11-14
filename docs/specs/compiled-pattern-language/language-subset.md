@@ -1773,13 +1773,18 @@ things differ, none of them in the value.
 - **The atom for the callback's code.** This is not preserved. The unpromoted
   result carries, at every path, a `TransformedBy` atom that names the code of
   the callback, where its label is not empty. The promoted result carries no
-  atom that names the callback. A path that an operator or a call computes
-  carries the atom of the dependency cone it is evaluated in, and a path that
-  passes a value on, as a conditional and a property access do, carries the
-  integrity of that value and no minted atom. *Assumed,* with
-  `plan-and-label-templates.md` (its §3.2, "A promoted `computed`", and its
-  question 64). So a declared label or an exchange rule that requires
-  `TransformedBy` of a named `computed` is not met by a promoted one. One that
+  atom that names the callback, by ruling. A path that an operator or a call
+  computes carries a `TransformedBy` atom that names the pattern the
+  `computed` is written in. A path that passes a value on, as a conditional
+  and a property access do, carries the integrity of that value, and where it
+  is a kept output of the pattern it carries the pattern's atom as well, on
+  the link where the value is passed on by reference
+  (`plan-and-label-templates.md` §3.2, "The atom of the pattern"). What
+  identifies the pattern, and whether a value passed on to something other
+  than a kept output gets the atom, are *assumed* there (its questions 64 and
+  71). So a declared label or an exchange rule that requires `TransformedBy`
+  of the callback of a `computed` is not met by a promoted one, and one that
+  names the pattern is met by every kept output of the pattern. One that
   names a `lift` is not affected, because a `lift` is not promoted.
 - **Cost.** The promoted expression is part of a dependency cone's value
   code and makes no sandboxed call of its own.
