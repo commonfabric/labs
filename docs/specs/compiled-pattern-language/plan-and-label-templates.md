@@ -190,8 +190,15 @@ export type Template =
   | {
     readonly op: "derive";
     readonly inputs: readonly Template[];
-    /** What computed it: a sandboxed body, or emitted expression code. */
-    readonly by: { readonly body: Index } | { readonly expression: true };
+    /**
+     * What computed it: a sandboxed body, or emitted expression code. For
+     * expression code, `pattern` names the pattern in whose source the
+     * expression is written (`Plan.patterns`). It is absent where that is
+     * entry 0, the pattern the plan is compiled from (section 3.2).
+     */
+    readonly by:
+      | { readonly body: Index }
+      | { readonly expression: true; readonly pattern?: Index };
   }
   /**
    * Conditional selection. One of three nodes whose label depends on a
@@ -218,6 +225,8 @@ export type Template =
     readonly collection: Index;
     readonly body: Template;
     readonly through?: Index;
+    /** The pattern the construct is written in, as for a `derive`. */
+    readonly pattern?: Index;
   }
   /**
    * One child chosen by a run-time key: an element of a collection, a child
@@ -1080,10 +1089,23 @@ export interface Binding {
    */
   readonly name?: string;
   readonly within: readonly WithinStep[];
+  /**
+   * The paths of the result at which the instance stores a link to the
+   * stream, in source order. Absent where the result holds none
+   * (section 8, question 75).
+   */
+  readonly result?: readonly Path[];
 }
 
 export interface Plan {
   readonly version: 1;
+  /**
+   * The identity of each pattern whose source the plan holds code of
+   * (section 1.5). Entry 0 is the pattern the plan is compiled from. The
+   * others are the patterns compiled into it under a `site` step, each
+   * once, in the order of their first site in source.
+   */
+  readonly patterns: readonly Hash[];
   readonly argumentSchema: Hash;
   readonly resultSchema: Hash;
   readonly slots: readonly Slot[];
@@ -1207,9 +1229,14 @@ analysis that fills it in is specified in `footprint-analysis.md`.
   (`WriterPolicy.body`) and the identity a `TransformedBy` atom carries for a
   value the body computed.
 - **Cone identity** is `Cone.code`, the hash of the cone's emitted value
-  function. It is the identity a `TransformedBy` atom carries for a value
-  computed by expression code, so the atom names the code that ran, as it
-  does for a body.
+  function. It says which function the runtime evaluates the cone with, and
+  the plan holds it, so a plan and a value-code module cannot be exchanged
+  separately. `execution-and-storage.md` keys the stored entries of a cone
+  by it. No `TransformedBy` atom carries it.
+- **Pattern identity** is an entry of `Plan.patterns` (section 1.5). By
+  ruling, trust is attached to a pattern, so it is the identity a
+  `TransformedBy` atom carries for a value that expression code computed,
+  and for every kept output of an instance (section 3.2).
 - **Compiler identity** is `CompiledPattern.compiler`, a `CodeHash` atom over
   the compiler build.
 
@@ -1735,7 +1762,7 @@ in place (section 2.5), whether a `value` slot above a handle reads
 through it (section 3.11), and what the runtime validates a value
 against before code sees it (section 5.2).
 
-**Code.** Three members address code.
+**Code.** Four members address code.
 
 - `Cone.code` is the hash of the record `{ source }`, where `source` is
   the text of the cone's value function as the emitted value-code module
@@ -1767,8 +1794,24 @@ against before code sees it (section 5.2).
   `runtime/runner/src/cfc/implementation-identity.ts`). It covers every
   authored function the body can call, because those are in the module
   or in a module it imports.
+- An entry of `Plan.patterns` identifies a pattern by the module that
+  declares it and the binding it is declared at. *Assumed* (section 8,
+  question 64): it is the hash of a record `{ module, binding }` formed as
+  the record of `Body.code` is. `module` is the identity of the module the
+  `pattern(...)` call is written in. `binding` is the path of the
+  pattern's binding in that module: the name of the `const` the call
+  initializes; `default` for a call that is the operand of
+  `export default`; and for an inline `pattern(...)`, which no `const`
+  names, the binding of the enclosing pattern followed by the `within`
+  steps and the name of the site that instantiates it (section 1.3). A
+  pattern and a sandboxed body declared at one binding cannot occur, so
+  the two kinds of record do not collide. The identity of a pattern
+  changes when anything in its module, or in a module that one imports,
+  changes, as `Body.code` does (section 8, question 54). It does not
+  change with the patterns that compile it in, so one pattern has one
+  identity in every plan that holds its code.
 
-Each of the three records is hashed by the rule of section 1.2. `source`
+Each of the four records is hashed by the rule of section 1.2. `source`
 is the text as one string. `module` is the string
 `computeModuleIdentities` returns, which `computeModuleHashes`
 (`runtime/runner/src/harness/module-identity.ts`) forms and which has no
@@ -1779,9 +1822,25 @@ and it holds the pair of `Body.code` without hashing it: `moduleIdentity`
 and `bindingPath` are members of the `ImplementationIdentity` of kind
 `verified` (`runtime/runner/src/cfc/types.ts`) that a `TransformedBy`
 atom carries as its `identity` (`mintTransformedBy` in
-`runtime/runner/src/cfc/input-witness.ts`). *Assumed* (section 8,
-questions 54 and 63): the records as given here, and that a
-`TransformedBy` atom of the compiled path carries the hash.
+`runtime/runner/src/cfc/input-witness.ts`). The identity also holds
+`symbol`, the name the module exports the function's builder under, or
+the name `hoistBuilderCalls`
+(`base/ts-transformers/src/transformers/builder-call-hoisting.ts`) gives a
+builder call it moves to module scope, such as the callback of a
+`computed` written in a pattern
+(`resolveProvenanceImplementationIdentity` in
+`runtime/runner/src/cfc/implementation-identity.ts`, from what
+`recordVerifiedProvenance` in
+`runtime/runner/src/harness/verified-provenance.ts` recorded). An atom
+pattern matches a record by the members it names
+(`runtime/runner/src/cfc/atom-pattern.ts`), and the exchange rules of
+`patterns/examples/cfc-exchange-rules/` name a function by
+`moduleIdentity` and `symbol`. No atom the runtime mints today names a
+pattern: a `TransformedBy` atom names the function whose run wrote, and a
+pattern's own function builds a graph and writes nothing under a
+transaction's identity. *Assumed* (section 8, questions 54, 63 and 64):
+the records as given here, and that a `TransformedBy` atom of the compiled
+path carries the hash.
 
 `Child.callee.compiled` and `Closure.pattern` are the identity of a
 compiled pattern (section 1.2), so a pattern is compiled after the
@@ -2717,8 +2776,10 @@ writes gets one label:
   that file joins the confidentiality that the schemas of a node's input cells
   declare onto the schemas of its outputs (`applyInputIfcToOutput`). The result
   document holds that join as an entry of origin `declared`, beside the
-  `derived` entry of the transaction's join. It is fixed when the graph is built
-  and does not depend on what a run read. It applies to every node: a `lift`, a
+  `derived` entry of the transaction's join where the run stores one (for
+  `ifElse` it stores none where the selected branch is a reference, section
+  3.5). It is fixed when the graph is built and does not depend on what a run
+  read. It applies to every node: a `lift`, a
   `computed`, `ifElse`, and the result of `map`
   (`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` states it for a
   module). So the result of `ifElse` carries the declared confidentiality of the
@@ -2755,7 +2816,81 @@ slot's path consumes. For an entry that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected.
+expected. Five more rules fix what a row of the comparison is.
+
+- **A constructed container.** An output entry that has entries below it is
+  compared as an entry that names a collection is: the runtime's side is what
+  a read of the container's shape consumes. A value read of the container
+  consumes the labels of everything below it, and the template of the
+  container entry does not hold them (section 3.4).
+- **Integrity is a set of atoms.** An atom is compared by the canonical form
+  of the whole atom, and it counts once however many entries of a label view
+  hold it. Where a read covers several stored paths, the runtime's side has
+  the atoms that every one of them holds, which is what a read of the whole
+  has.
+- **An atom that names code.** The runtime's `TransformedBy` atom for the
+  callback of a promoted `computed` and the template's atom for the pattern
+  that contains it name different code (section 3.2). The comparison takes
+  the two as corresponding: a row is equal on them where each side has its
+  atom, and no row is looser because the identities differ.
+- **An atom on a link.** Where an output passes a value on by reference, the
+  pattern's atom is on the link at the output path and not on the target
+  (section 3.2). The template's side of the row holds that atom beside the
+  integrity of the dereferenced value, because the runtime's side, a copy
+  the callback wrote, holds its atom in one label with the value.
+- **A selection the harness cannot establish.** `sel(i)` of section 3.2 is
+  what the value code reports. A harness that has no value code reads the
+  selection from the stored values, and a row whose selection it cannot
+  establish that way is a bound over the branches and is counted apart. It is
+  not a row of the comparison.
+
+**Which entries are the static part.** *Assumed* (section 8, question 70): the
+static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
+`runtime/runner/src/cfc/types.ts`) and by the document that holds it, and by
+nothing else, because a stored entry does not say which schema declared it.
+
+| Origin | In the comparison |
+| --- | --- |
+| `declared`, in a document a reader passes on the way from an output path to its value, the document of the output path included | The static part. Left out of the runtime's side, and expected as a difference |
+| `declared`, in the argument document of the instance | Compared. These are the labels of the inputs, which the slots of a template resolve to |
+| `derived` | Compared. The stamp of a run's join |
+| `structure` | Compared. The stamp of a run, as below |
+| `link` | Compared. The label a stored link carries, which an `identity` slot resolves to |
+| `minted`, `external-ingest` | Compared. Atoms the runtime or a builtin wrote for a value |
+| `label-metadata` | Not compared. No read of content consumes it; a `labelMetadata` slot resolves to it (section 2.4) |
+| No origin | Compared. An entry written before entries had origins |
+
+So the static part is the `declared` entries outside the argument document, and
+no entry of another origin. An entry of origin `structure` is a stamp of a run,
+as a `derived` entry is (`isFlowStageStamp` in
+`runtime/runner/src/cfc/prepare.ts`). `prepareBoundaryCommitSteps` in that file
+mints every one of them, each with confidentiality that the transaction
+consumed and with no clause taken from a schema:
+
+- at the slot of a recorded link write, the transaction's join
+  (`observes: "followRef"`);
+- at a container, the membership stamp (`observes: "enumerate"`) with the
+  transaction's join, or for a result wiring the runtime decides when the graph
+  is built, with what the transaction had read when the setup began, joined in
+  both cases with what a read declared onward to the container consumed at its
+  own path;
+- at the `*` child of a container of references, one entry each for
+  `shape`, `value` and `followRef` with the same join;
+- at a container, once, the existence entry (`observes: "shape"`) with the
+  join of the transaction that created it.
+
+A run's join includes the `declared` entries of the documents the run read. A
+clause that reaches a result through the static part of one node is therefore
+also in the `derived` and `structure` stamps of every node that read that
+result, and the separation by origin does not remove it there. That is the case
+for the container of a `map` (section 3.6): its membership stamp holds the
+coordinator's join, and the template is tighter than that stamp with the
+`structure` entries compared.
+
+A scenario that gives an input its label at a cell the argument links to, under
+a schema the pattern's argument schema does not hold, has an empty static part
+for that label. The comparison of a conditional over such an input shows the
+runtime's label without the condition's clauses (section 3.5).
 
 The comparison criterion is the overview's: a template label is **equal or
 tighter, never looser**. Tighter means fewer confidentiality clauses, or more
@@ -2793,10 +2928,15 @@ integrity atoms. Each rule that is tighter says what the narrowing rests on.
   stored object whole keeps the object's integrity and is not part of the
   exception.
 
-The stage 3 comparison expects these four differences and no other in that
-direction (section 7.5). One further difference in that direction is open, and
-is neither expected nor counted among the four: the integrity of a conditional
-written in a `computed` (section 3.5; section 8, question 64).
+The stage 3 comparison expects these four differences in that direction
+(section 7.5). A promoted `computed` is not a fifth. By ruling it mints no
+`TransformedBy` atom for the code of its callback, and every kept output of the
+pattern that contains it carries the atom of that pattern (section 3.2, "The
+atom of the pattern"). Against today each path of its result has one atom that
+names code where the runtime has one, and the two name different code. An
+output that the pattern body passes on, with no `computed`, carries the
+pattern's atom where the runtime stores none, which is **tighter**. What that
+atom's truth rests on is in section 3.2.
 
 ### 3.2 Template semantics
 
@@ -2809,9 +2949,83 @@ selector `i`:
 | `slot s` | `C(s)` | `I(s)`, unchanged |
 | `derive` | `⊔` of `C` over `inputs` | `⊓` of `I` over `inputs`, plus `TransformedBy` for `by` |
 | `select` | `C(condition) ⊔ C(branches[sel])` | `I(branches[sel])` |
-| `fold` | `C(membership) ⊔` the `⊔` of `C(body)` over the elements it covers | `⊓` of `I(body)` over those elements, plus `TransformedBy` |
+| `fold` | `C(membership) ⊔` the `⊔` of `C(body)` over the elements it covers | `⊓` of `I(body)` over those elements, plus `TransformedBy` for its `pattern` |
 | `pick` | `C(choice) ⊔ C(body)` at the chosen child | `I(body)` at the chosen child |
 | `dynamic` | `⊔` of the labels the journaled reads consumed | `⊓` over those reads |
+
+The label of a kept output is the label of its template by this table, with
+one atom added to the integrity: the `TransformedBy` atom of the pattern the
+plan is compiled from ("The atom of the pattern", below).
+
+**The atom of the pattern.** By ruling, trust is attached to a pattern, and
+the code of the reactive tier is named in a `TransformedBy` atom by the
+pattern that contains it. The atom's `identity` is an entry of
+`Plan.patterns` (section 1.5). Two rules place it.
+
+- **What expression code computes.** A `derive` with
+  `by: { expression: true }` and a `fold` mint the atom of the pattern in
+  whose source the expression or the construct is written: entry `pattern`
+  of `Plan.patterns`, and entry 0 where the node has no `pattern` member.
+  Every expression of one pattern mints one atom, whichever cone evaluates
+  it. For code of a pattern compiled into another under a `site` step, that
+  is the pattern compiled in and not the one that holds the site, so an
+  expression mints the same atom in every plan that holds it. Which pattern
+  it is for code compiled in is *assumed* (section 8, question 64). In this
+  document, "`by: { expression: true }`" names such a node whatever its
+  `pattern` member is. Where a rule forms a join, `pattern` is the pattern
+  in whose source the construct the rule applies to is written.
+- **Every kept output.** Every entry of `Plan.outputs` with `kept: true`
+  carries the atom of entry 0 of `Plan.patterns`, the pattern of the
+  instance, whatever its template is. That holds for a value the pattern
+  only passes on, through a `slot`, a `select`, or a `pick`, as for one it
+  computes. No template node stands for it: it is a rule on `Output`, and
+  the runtime adds the atom where it instantiates the label of a kept
+  output (section 4.1). The atom is added with no condition, so a kept
+  output whose template has no label carries it too. Where the template is
+  a `derive` or a `fold` of the same pattern, the atom added is the atom
+  the node minted, and the output carries it once.
+
+**Where the atom of a kept output is stored.** A kept output that holds a
+value has the atom in the label of the value. A kept output that passes a
+value on by reference stores a link, and the atom is in the label of the link
+at the output path. It is the pattern's endorsement of the selection: this
+pattern chose that reference for this output. The target keeps its own label
+and gains no atom, and another output or another instance that refers to the
+same target says nothing about this pattern. The specification's rule for the
+integrity of a link is §3.7.2 (`03-core-concepts.md`). A read through the link
+takes its integrity from the target alone (section 3.10), so the atom reaches
+a reader that observes the reference and not one that reads the target's
+content through it; what such a reader is given is open (section 8, question
+72). *Assumed* (section 8, question 71): the atom of an instance is the same
+at every kept output, so it is stored as one entry at the root of each
+document the keep set is stored in, which applies at every path below, and
+not as one entry per output.
+
+**What the atom of a kept output rests on.** For a value the pattern passes
+on, the atom is integrity that the runtime does not store today, and "tighter
+means more integrity atoms" (section 3.1) covers it only if the atom is true.
+It claims that the code of the named pattern decided what this output holds:
+which value, selected from which inputs. It does not claim that the pattern
+computed the value, and the integrity of the value passed on stays what it
+was. Three things make the claim true. The plan is compiled from the
+pattern's source by a trusted compiler (section 7.2), and its hash is part of
+the identity of the compiled pattern. The paths of the result are written by
+the runtime alone, from the plan: no body and no other instance writes a kept
+output. And the pattern's identity changes when its module does (section
+1.5). A rule that releases on `TransformedBy` of a pattern therefore releases
+whatever the pattern passes on as well as what it computes, and an author who
+names a pattern in a rule endorses its selections.
+
+**What does not get the atom.** The ruling names the outputs of a pattern.
+*Assumed* (section 8, question 71): an interim output, the target of a write
+edge, the argument of a child, the request of an effect, and the state of a
+binding get no atom added. Each carries the label of its template, which
+holds the pattern's atom where a `derive` or a `fold` of the pattern
+computed the value, and no atom of the pattern where the value is passed on.
+A child's argument is the case that decides the assumption: a pattern
+compiled into its caller has no stored argument, so an atom added to a
+`Child`'s argument would make a label depend on which of the two forms the
+compiler chose.
 
 **The inputs of a `derive`.** A join and a meet do not depend on the order
 of their operands or on how often one occurs, so `inputs` is a list for the
@@ -2832,9 +3046,10 @@ another, or is "the join of" several, the template is a `derive` with
 `by: { expression: true }` whose `inputs` are the joined templates, in
 the order the rule names them. Its confidentiality is the join. Its
 integrity is the meet of the inputs' hereditary atoms, plus the
-`TransformedBy` atom of the cone the node is evaluated in. That holds for
-the membership of a derived collection too: which elements are present
-was computed, and the atom says by what. Three cases need no such node.
+`TransformedBy` atom of the pattern the construct is written in ("The atom
+of the pattern", above). That holds for the membership of a derived
+collection too: which elements are present was computed, and the atom
+says by what. Three cases need no such node.
 
 - A join with `const` is the other template alone.
 - A join of one template with itself is that template.
@@ -2902,17 +3117,52 @@ Notes on the integrity column:
 - **`derive` drops value-bound atoms and mints.** This is the default
   transition of §8.9.3 applied to the template's inputs instead of to a
   transaction's reads. The minted atom names `Body.code` for a sandboxed
-  body, and `Cone.code` for emitted expression code (section 1.2).
+  body, and the pattern for emitted expression code (section 1.2).
+- **A promoted `computed`.** By ruling, a `computed` that meets the promotion
+  criterion (`language-subset.md` §6.1) mints no `TransformedBy` atom for the
+  code of its callback. It is compiled as expression code of the reactive
+  tier, and its templates are those the same expression has when it is written
+  in the pattern body. A `derive` in it mints the atom of the pattern that
+  contains the `computed`, under the condition below. A path of it whose
+  template is a `slot`, a `select`, or a `pick` carries the integrity of what
+  it passes on, and, where the path is a kept output, the atom of the pattern
+  by the rule for every kept output. Today a `computed` is a lift: one
+  transaction writes its whole result, and every path of the result carries an
+  atom that names the callback where the join is not empty (section 3.1): the
+  module's identity, and the name the transformer gave the callback when it
+  moved the call to module scope (section 1.5). So a kept path of the promoted
+  result has an atom that names the pattern where the runtime has one that
+  names the callback, and it has that atom beside an empty label, where the
+  runtime has none. The comparison takes the two atoms as corresponding
+  (section 3.1). A path of the promoted result that is an interim output and
+  passes a value on has no atom where the runtime has one. Nothing stores the
+  label of an interim output. Where such a value reaches a kept output, the
+  output carries the pattern's atom, and where a `derive` reads it, the
+  `derive` mints. Where it reaches the argument of a child, the target of a
+  write edge, or the request of an effect unchanged, what is stored there has
+  no atom of the pattern, where today it refers to a result that has the
+  callback's atom. That is fewer atoms, under the assumption of "What does not
+  get the atom" above, and it is the difference question 71 of section 8 is
+  about. A `computed` that stays a body keeps its atom: its
+  template is a `derive` whose `by` names `Body.code`, and a kept output of it
+  carries the pattern's atom beside that one.
 - **`const` is neutral.** A literal is not an observation, so it does not
   empty the meet. This matches the runtime, where a literal in a function
   body is not a read.
 - **When `derive` and `fold` mint.** *Assumed* (section 8, question 66): the
   atom is minted where the label of the node has a confidentiality clause or a
   hereditary atom, and not beside an empty label. That is the condition the
-  runtime applies (section 3.1), so the integrity is **equal**, and an output
-  whose inputs carry no label stores no entry. The alternative mints on every
-  `derive`, which is tighter and stores an entry for every kept output a
-  derivation writes.
+  runtime applies (section 3.1), so the integrity is **equal**. The alternative
+  mints on every `derive`, which is tighter. The condition is on the label of
+  the node alone. A label that the schema of a written path declares is a
+  `declared` entry stored beside the template's label, and it does not make a
+  node mint: `deriveFlowJoinImpl` decides on the transaction's join, before the
+  declared entries of the targets are added. The condition does not apply to
+  the atom of a kept output, which is added in every case. A template that is
+  tighter than today down to the empty label, as a test of an absent optional
+  field is (section 6.4), mints nothing where the runtime mints beside the
+  clauses it holds. Where that value is a kept output it carries the pattern's
+  atom all the same, and where it is interim no label is stored for it.
 - **Witness-bearing atoms.** *Assumed* (section 8, question 67): a `derive` and
   a `fold` mint, beside the atom that holds the identity alone, one atom with
   the identity and an `inputWitness` for each `TransformedBy` atom that every
@@ -3159,34 +3409,106 @@ is not read, and so makes no cone instance stale
 the result are functions of the condition and the selected branch alone.
 
 **Today.** `ifElse`, `when` and `unless` share `forwardReference`
-(`runtime/runner/src/builtins/forward-reference.ts`). It reads the
-condition's truthiness at its root (`readsTruthyAtRoot`), resolves only the
-selected input, and writes a link to it. The result slot's label is that
-transaction's join, which holds the condition's label; a reader that follows the
-link consumes the selected branch's label at its own document. That `derived`
-part is **equal**. The result document also holds the static part of section
-3.1: the declared confidentiality of the condition and of both branches,
-whichever branch is selected. By ruling the `select` does not join it, so the
-template is **tighter** where the unselected branch declares a clause that the
-selected branch and the condition lack, and the comparison expects that
-difference.
+(`runtime/runner/src/builtins/forward-reference.ts`). Its action reads the
+condition's truthiness at its root (`readsTruthyAtRoot` in
+`runtime/runner/src/schema.ts`), resolves only the selected input, and makes
+two writes in one transaction.
 
-**A conditional written in a `computed`: open.** `c ? a : b` in the body of a
+- It writes a reference to the selected input's resolved target into a result
+  store the node owns (`ownedCell` in
+  `runtime/runner/src/builtins/runtime-owned-store.ts`), at the store's root,
+  with `setRawUntyped`. Where the selected input is a literal, the reference is
+  a `data:` link, which `setRawUntyped` stores as the literal's value
+  (`findAndInlineDataUriLinks`).
+- Through `sendResult` it writes a link to that store at the node's output
+  binding (`sendValueToBindingInner` in
+  `runtime/runner/src/pattern-binding.ts`, under `preserveLinkOutput`), with
+  `writeValueOrThrow`, and only where the binding does not hold that link
+  already.
+
+The read of the condition is an ordinary read, so the transaction's join
+(`deriveFlowJoinImpl`) holds the condition's label. Where that join is stored
+depends on what the result store holds.
+
+- **The selected branch is a reference.** No entry holds the join. Neither
+  write records a link write: `recordLinkWritePolicyInput`
+  (`runtime/runner/src/data-updating.ts`) is reached from `diffAndUpdate`
+  alone, and both writes bypass it. `prepareBoundaryCommitSteps` stamps the
+  join's confidentiality on the slot of a recorded link write, as a
+  `structure` entry with `observes: "followRef"`, and has no such record for
+  either slot. Its flow stage then takes each written value as link structure
+  (`isPureLinkStructure`), which gets no `derived` entry, and a link at the
+  root of a document is no container (`pureLinkContainerPaths`), so it gets no
+  `structure` entry either. The two probes `forwardReference` and
+  `setRawUntyped` make to elide a write are marked `internalVerifierRead` (in
+  `forwardsNothingToUnwrittenStore` and in `setRawUntyped`), so they add
+  nothing to the join and are not the cause.
+- **The selected branch is a literal.** The result store holds the literal's
+  value, which is content. The flow stage stamps the join at the store's root,
+  as a `derived` entry that a `value` read consumes and one that a `shape`
+  read consumes. No `TransformedBy` atom was observed on either.
+
+A reader of the output path follows the link at the output binding to the
+result store, and the reference there to the selected branch, and consumes the
+label of the selected branch at the branch's own document. So which label of
+the condition reaches a reader is as follows.
+
+| The condition's label is | Selected branch a reference | Selected branch a literal |
+| --- | --- | --- |
+| Declared by the schema of the condition's input | Reaches the reader through the static part alone | Reaches the reader through the static part and the `derived` entries |
+| Stored and not declared, as a `derived` entry on the result of another node is | Does not reach the reader | Reaches the reader through the `derived` entries |
+
+The static part of section 3.1 is an entry of origin `declared` at the root of
+the document the output binding names, with the declared confidentiality of the
+condition and of both branches, whichever branch is selected. Read by origin
+without that entry, a conditional over references carries the selected
+branch's label and nothing of the condition.
+
+These statements were read from the functions named and observed by running a
+pattern over a condition with a stored label, with literal branches and with
+branches that are cells, and over a condition whose input schema declares a
+clause.
+`runtime/runner/test/condition-builtin-reads.test.ts` asserts the literal case
+alone ("stamps the sealed clause on an `ifElse` output").
+
+**Against the template.** Which branch a conditional selects reveals the
+condition, so the `select` joins the condition's confidentiality, by the
+flow-path rule section 3.2 cites. The runtime's own rule for a written
+reference is the same: the comment on the link stamp in
+`prepareBoundaryCommitSteps` says that a written reference is a selection made
+under what the attempt observed, and that the join's confidentiality reaches
+its slot. A conditional over references does not get that stamp, because its
+writes are not recorded as link writes. That is a **finding against the
+runtime**, and the template does not reproduce it.
+
+*Assumed* (section 8, question 69): the template stands, and the comparison for
+a conditional is made with the runtime's static part included. With it, the
+template is **equal** where the selected branch and the condition carry every
+clause the unselected branch declares, and **tighter** where the unselected
+branch declares a clause they lack, which is the difference the ruling of
+section 3.1 expects. Without it the template has the condition's clauses and
+the runtime's label has none of them, which reads as looser and is the
+runtime's omission. Where the condition's label is stored and not declared,
+the static part does not hold it, and the comparison reports the template as
+looser for a conditional over references: that row is the finding, and is not
+a fifth exception.
+
+**A conditional written in a `computed`.** `c ? a : b` in the body of a
 `computed` is part of a lift today. Its transaction reads the condition and both
 operands, writes a copy of the selected value, and mints `TransformedBy` under
 the condition of section 3.1. Where the `computed` is promoted
 (`language-subset.md` §6.1), the template is a `select` over the operands. Its
 confidentiality is equal where the selected branch carries every clause the
-other does, and tighter otherwise. Its integrity is the selected branch's alone,
-which holds no `TransformedBy` atom of the conditional, so the template has
-fewer atoms than today and is looser on integrity. This is none of the four
-exceptions of section 3.1, and the comparison reports it. The question is the
-project owner's and is not assumed either way (section 8, question 64). One
-alternative has the template of a conditional that a promoted `computed` holds
-mint the atom of its cone, which is equal to today and makes a promoted
-conditional carry an atom that the same conditional written in the reactive tier
-does not. The other keeps the `select` as it is and counts the difference as a
-fifth exception.
+other does, and tighter otherwise. The integrity of the `select` is the selected
+branch's alone, and by ruling no atom names the callback. Where the conditional
+is a kept output it carries the atom of the pattern that contains the
+`computed`, by the rule for every kept output of section 3.2: on the value where
+the output holds one, and on the link where the selected branch is passed on by
+reference. The runtime's copy carries the atom of the callback. The comparison
+takes the two atoms as corresponding (section 3.1), so the integrity is
+**equal** where the join is not empty and **tighter** where it is empty. The
+same conditional written in the pattern body, with no `computed`, has the same
+template and the same atom, where the runtime mints none: **tighter**.
 
 ### 3.6 `map`
 
@@ -3253,11 +3575,18 @@ plus its slot's ([CFC observation classes](../cfc-observation-classes.md) §6.2)
 the static part of section 3.1: the stage 3 comparison observed, for a list that
 has no label of its own and whose elements declare a clause, that the
 container's root resolves to that clause, on a covering entry and on its
-`enumerate` and `shape` entries. The template of the container is the source's
-`enumeration` slot, which does not carry it. By ruling the template does not
-join it, so the container is **tighter** than today, and the comparison expects
-that difference. The specification calls this arrangement decomposition and
-prefers it (§8.5.4.3): "Each **element op** runs in its own transaction that
+`enumerate` and `shape` entries. The covering entry is of origin `declared`.
+The `enumerate` and `shape` entries are of origin `structure`: they hold the
+join of the coordinator's transaction (`prepareBoundaryCommitSteps`; section
+3.1), which is wider than the membership where that transaction consumed more
+than the membership. The template of the container is the source's
+`enumeration` slot, which carries neither. By ruling the template does not
+join the static part, and the result's membership is the source's alone, so
+the container is **tighter** than today with the `structure` entries compared
+and without them, and the comparison expects that difference. Which read of
+the coordinator's transaction consumes the clause of the elements was not
+traced (section 8, question 70). The specification calls this arrangement
+decomposition and prefers it (§8.5.4.3): "Each **element op** runs in its own transaction that
 reads only its element." The template arrives at the same labels without the
 transactions. Within one element's body, a `computed` that returns several paths
 is **tighter** as in section 3.4.
@@ -3336,6 +3665,18 @@ class: `length` is not a property the plan names a path for. That holds in
 expression code and in a function body alike (`footprint-analysis.md` §2.2
 and §3.4), so `computed(() => items.length)` has the `enumeration` slot at
 `items` and no entry at `items/length`.
+
+Where the instance computed the collection and no `Collection` record stands for
+it, the template of `.length` is the template of the collection's own
+`enumeration`, as the `output` row of the table in section 3.2 gives it: for an
+assembled entry its `template`, for an array constructed in place the template
+of its container entry (section 3.4), and for the result of one opaque call the
+call's template.
+
+`.length` of a string is not an aggregate. A string has no membership, and its
+length is computed from its content. For a string that is an input the template
+is the `value` slot at the string's path, and for a string the instance computed
+it is the template of the string. In both cases no path `length` is named.
 
 A predicate is observed for truthiness, with the classes of section 3.5. The
 callback of `minBy` and `maxBy` is called the **key function**: it returns
@@ -3867,6 +4208,29 @@ and a computed value on another: a conditional between the two, and a result
 path of a body whose returned reference the identity comparison did not confirm
 (section 3.9), which is then a computed value.
 
+**What the compiler decides.** For each bound path the compiler has three
+answers, and it reports one of them.
+
+- **Produced.** The path can hold no reference on any evaluation. Its template
+  is a `const`, a `derive` of expression code, or a `fold`, or a producing body
+  returns at the path a value it computed (`footprint-analysis.md` §6.2). Where
+  the callee writes through the handle, this is `binding:write-to-computed`.
+- **Reference.** The path holds a reference on every evaluation: an element
+  that a construct passes on from a stored collection, a `select` or a `pick`
+  whose every branch or child is a stored place, the result of a `computed`
+  whose type is a handle, or a result path of a body that `Body.outputs`
+  records as `passes` or `oneOf` on every `return`. Nothing is reported, and
+  the write lands at the reference's target.
+- **Mixed.** The path holds a reference on some evaluations and can hold a
+  produced value on others: a `select` with one branch of each kind, a result
+  path of a body with `oneOf` beside a computed value, and what an authored
+  function returns where its summary does not decide. Nothing is reported, and
+  the runtime decides each write.
+
+The plan has no member that records which of the three holds. The answer is
+used for the report alone, and the runtime decides every write by the reference
+test, the writes of a path the compiler found to be a reference included.
+
 Today no refusal of this kind was found. A value a node computes is stored in a
 document of its own, a handle to it writes like any handle, and the node's next
 run writes its result over what was written. The one refusal by the kind of
@@ -4044,6 +4408,23 @@ template joins the event slots of the footprint. **Equal or tighter**: equal
 for an inferred event type, and for a body that reads every field the
 authored type declares; tighter when the authored type declares a field the
 body does not read.
+
+**The label of an event slot.** An event is not stored, so no entry is
+resolved at an address for it. The label of a slot of root `event` is the
+label the event arrived with: the template of the body that sent it (section
+3.14), or no label for an event a renderer sent. *Assumed* (section 8, question
+73): a label that the event's schema declares is not joined to it. That is
+**equal** to today. The runtime hands a handler its event in an immutable cell
+read under the event's schema (`#instantiateJavaScriptHandlerNode` in
+`runtime/runner/src/runner.ts`), no label is stored for that cell, and the
+join of the handler's transaction is over stored entries
+(`forEachFlowObservation` in `runtime/runner/src/cfc/prepare.ts`). The stage 3
+comparison observed it: with a clause declared on a field of the event's
+type, the paths the handler wrote carry the clauses of the state it read and
+not that clause. So `Slot.declared` of a slot of root `event` is not a lower
+bound of the slot's label, and a compile-time check of section 4.4 does not
+take it as one. A comparison that gives an event slot its declared label
+reads a clause into the template that neither side has.
 
 ### 3.13 `findIndex`, `some`, `every`, `find`, and `reduce`
 
@@ -5572,7 +5953,8 @@ nothing to compare.
 | --- | --- | --- |
 | Property access | Slot path extension | Equal |
 | Object, array construction | Template per path | Equal in pattern bodies; tighter in promoted expressions |
-| Conditional | `select` | Equal to the `derived` part; tighter than the static part of section 3.1, by ruling. A conditional written in a `computed` is looser on integrity, which is open (question 64) |
+| Conditional | `select` | Equal to the `derived` part; tighter than the static part of section 3.1, by ruling, with the static part included in the comparison (question 69): today a conditional over references stores no label of its condition, a finding against the runtime (section 3.5). A promoted `computed` mints no atom for its callback's code, by ruling; a conditional in one that is a kept output carries the pattern's atom, which the comparison takes as corresponding to the callback's |
+| A kept output (section 3.2) | The output's template, with the `TransformedBy` atom of the instance's pattern added; on the link where the output passes a value on by reference | Tighter on integrity, by ruling: an atom where the runtime stores none for a value the pattern body passes on or an unlabeled value; for a promoted `computed`, an atom that names the pattern where the runtime's names the callback |
 | `map` | Element template; membership slot | Equal to the `derived` part; the container tighter than the static part of section 3.1, by ruling; tighter within an element as above |
 | `filter` | Pass-through elements; membership `fold` of predicates | Equal |
 | `flatMap` | Element template; membership `fold` of segment lengths | Tighter (content of other segments excluded) |
@@ -5607,9 +5989,13 @@ nothing to compare.
 Four things are looser, and all four are decided: the collection index, a slot
 for a read through a handle on a run that throws before the read, what an
 element body stores once per element key, which is to be revisited, and the
-integrity of a slot that reads as a default (section 3.1). A fifth is open and
-not decided: the integrity of a conditional written in a `computed` (section
-3.5; section 8, question 64). Another way a compiled label could be
+integrity of a slot that reads as a default (section 3.1). A promoted
+`computed` is not a fifth: by ruling it mints no `TransformedBy` atom for the
+code of its callback, and its kept outputs carry the atom of the pattern
+(section 3.2). Under the assumption of question 71 of section 8, a value that
+a promoted `computed` passes on unchanged to the argument of a child, the
+target of a write edge, or the request of an effect has no atom where today
+it has the callback's. Another way a compiled label could be
 looser than today's is a static footprint standing in for reads that are
 dynamic today, and `handles` exclude it: a read a body makes through a cell
 on some runs only, or at a path it computes, stays journaled. A widening
@@ -5734,8 +6120,14 @@ interface TemplateInputs {
   membership(collection: Index): Label;
   /** Join of what a journaled read set consumed. */
   dynamicLabel(reads: Index): Label;
-  /** The `TransformedBy` atoms for a derivation, minted by the runtime. */
-  mint(by: { body: Index } | { expression: true }): readonly Atom[];
+  /**
+   * The `TransformedBy` atoms for a derivation, minted by the runtime: for
+   * a body, of `Body.code`; for expression code, of the entry of
+   * `Plan.patterns` that `pattern` names, or of entry 0.
+   */
+  mint(
+    by: { body: Index } | { expression: true; pattern?: Index },
+  ): readonly Atom[];
 }
 
 /** What a `const` instantiates to: no clause, and no part in the meet. */
@@ -5808,7 +6200,7 @@ function instantiateTemplate(t: Template, inp: TemplateInputs): Instantiated {
         ]),
         integrity: [
           ...hereditaryMeet(parts.map((p) => p.integrity)),
-          ...inp.mint({ expression: true }),
+          ...inp.mint({ expression: true, pattern: t.pattern }),
         ],
       };
     }
@@ -5823,6 +6215,11 @@ element, or the collection's length less one when no element decides, so
 that the fold covers everything. The value code reports neither the
 selection of a `through` selector nor the position that bounds a prefix
 fold.
+
+`instantiateTemplate` returns the label of a template. For a kept output
+the adapter adds the atom of entry 0 of `Plan.patterns` to the integrity of
+what it returns, a `NEUTRAL` result included (section 3.2, "The atom of the
+pattern").
 
 A `const` instantiates to `NEUTRAL`, and every node that takes a part
 handles it. A `derive` and a `fold` leave neutral parts out of the join
@@ -6227,9 +6624,10 @@ table of section 3.2, with these rules.
   `type` is a variable, and a record whose `type` is `TransformedBy`.
   Where a required pattern is one of these and the template has a
   `derive`, the verdict depends on the atom the `derive` mints. A
-  compiler that has `Body.code` or `Cone.code` forms the atom and
-  decides the pattern. One that does not leaves the pattern out, as it
-  leaves out a pattern with a run-time term.
+  compiler that has `Body.code` or the pattern's entry of
+  `Plan.patterns` forms the atom and decides the pattern. One that does
+  not leaves the pattern out, as it leaves out a pattern with a run-time
+  term.
 
 | Diagnostic | Reported where | Not decided where |
 | --- | --- | --- |
@@ -7309,6 +7707,16 @@ to `T_facts`.
 
 Each `TransformedBy` atom of the table is minted under the condition of section
 3.2: where the label of the node has a clause or a hereditary atom.
+`TransformedBy(pattern)` is the atom of the pattern in whose source the
+expression is written: the room pattern for `isEmpty`, and the row pattern for
+`isEdited`. The table has what the templates mint. A row of it that is a kept
+output carries in addition the atom of the pattern the plan is compiled from,
+with no condition (section 3.2, "The atom of the pattern"). The kept outputs
+of the slice are `messages`, which is `facts.list`, and the positions of the
+rendered tree (section 6.2). There the atom of the room pattern stands beside
+`TransformedBy(messageFacts)` on `messages`, beside `TransformedBy(bodyText)`
+on a row's text, beside the row pattern's atom on the edited mark, and alone
+on the thread label where the selected branch mints nothing.
 
 `C(m5)` is the label of a `shape` slot at `editedAt`, and it has no clause for a
 message that was not edited. The runtime stores a declared entry for a field
@@ -7565,9 +7973,15 @@ clause any of its slots carries.
   handles, including the ones the run did not reach, for what an element body
   stores once per element key it expects the join over the positions that hold
   the key (section 2.6), and for a slot that reads as a default it expects the
-  empty integrity (section 2.5). It compares dereferenced labels and separates
-  the runtime's entries by origin, so that the static part the runtime joins
-  from declarations is expected as a difference (section 3.1).
+  empty integrity (section 2.5). For a promoted `computed` it expects an atom
+  that names the pattern where the runtime's names the callback, and for a
+  value that a pattern passes on to a kept output it expects the pattern's
+  atom where the runtime stores none (section 3.2). It compares dereferenced
+  labels and
+  separates the runtime's entries by origin, so that the static part the runtime
+  joins from declarations is expected as a difference (section 3.1). For a
+  conditional it compares with the static part included (section 3.5; section
+  8, question 69).
 
 ## 8. Open questions
 
@@ -8333,7 +8747,7 @@ this document made.
     today. The order of the members of a union in the walk that numbers
     the names was not fixed against the mapping.
 63. **No tag for the kind of record in a hash.** Section 1.2 hashes a
-    plan, a schema document, a label document and the three code
+    plan, a schema document, a label document and the four code
     records with the one function and the one algorithm tag, `fid1`,
     and nothing in the hashed value says which kind of record it is.
     Two records of two kinds with equal content then have one hash.
@@ -8347,21 +8761,44 @@ this document made.
     `{ module, binding }` of section 1.5. The record of `Cone.code` and
     that of `CompiledPattern.valueCode` have the same member, so a
     module that holds one function and nothing else gives both one
-    hash. The alternative puts the kind in front of the hashed value,
-    as `computeModuleHashes`
+    hash. A pattern's entry of `Plan.patterns` and `Body.code` have the
+    same members too, and differ by their `binding`. The alternative puts
+    the kind in front of the hashed value, as `computeModuleHashes`
     (`runtime/runner/src/harness/module-identity.ts`) does for a module
     identity. Whether a `TransformedBy` atom of the compiled path
     carries the hash or a record is for `execution-and-storage.md` and
     the specification change.
-64. **The integrity of a conditional written in a `computed`** (for the project
-    owner). Open, and not assumed either way. Today `c ? a : b` in a `computed`
-    is part of a lift, whose result carries a `TransformedBy` atom. The template
-    of a promoted `computed` is a `select`, with the integrity of the selected
-    branch alone (section 3.5), so it is looser on integrity than today, and
-    that is none of the four exceptions of section 3.1. Either the template of a
-    conditional that a promoted `computed` holds mints the atom of its cone, or
-    the difference is a fifth exception. The stage 3 comparison reports the
-    difference until the question is ruled.
+64. **What identifies the pattern in its `TransformedBy` atom, and which
+    pattern it is for code compiled into another** (for the project owner; the
+    continuation plan's question 116). Not open: ruled, for the atom itself. A
+    promoted `computed` mints no `TransformedBy` atom for the code of its
+    callback, and every output of a pattern carries a `TransformedBy` atom
+    that names the pattern, a value the pattern only passes on included; where
+    the value is passed on by reference the atom is on the link (section 3.2).
+    Two things the ruling does not decide are *assumed*. First, the pattern is
+    identified by the hash of `{ module, binding }` (section 1.5), which is
+    the form of `Body.code` under question 54 and the pair of members a rule
+    names a function by today, where `symbol` is in the place of `binding`
+    (`patterns/examples/cfc-exchange-rules/blessed-computation.tsx`). The
+    alternative is a hash of the pattern's own source with the functions it
+    can call, as for question 54. Second, for code of a pattern compiled into
+    another under a `site` step, a `derive` and a `fold` name the pattern in
+    whose source the expression is written, and the atom of a kept output
+    names the pattern the plan is compiled from. The result of a pattern
+    compiled in then carries that pattern's atom where it computes a value and
+    not where it passes one on, while the same pattern instantiated as a
+    `Child` has kept outputs of its own, each with its atom. So a label can
+    depend on which of the two forms the compiler chose. The alternative
+    gives the paths of what a `site` evaluates to the atom of the pattern
+    compiled in, which needs a template node for it, because such a value can
+    be one branch of a `select`. The corpus has five declared labels that
+    match `TransformedBy` of named code, all exchange-rule preconditions in
+    `patterns/examples/cfc-exchange-rules/`, and each names a `lift` by
+    `symbol`, so none is affected (the count is the continuation plan's; the
+    `symbol` members were read). No write policy names a pattern:
+    `WriterPolicy.body` is the body that writes, and expression code writes
+    no input. A `uiContract` names a surface by the string of
+    `data-ui-pattern` (section 4.4), which is not a code identity.
 65. **What the stage 3 comparison compares** (for the project owner). The
     runtime copies a value where the plan passes a reference, so the two sides
     do not store the same thing at an output path. *Assumed:* the comparison is
@@ -8373,10 +8810,12 @@ this document made.
 66. **A `TransformedBy` atom beside an empty label.** The table of section 3.2
     gives a `derive` its atom without a condition, and the runtime mints it
     where the join has a clause or a hereditary atom (section 3.1). *Assumed:*
-    the template mints under the runtime's condition, so the integrity is equal
-    and an output with no label stores no entry. The alternative mints on every
-    `derive`: tighter on integrity, and one stored entry for every kept output a
-    derivation writes.
+    the template mints under the runtime's condition, so the integrity is
+    equal. The alternative mints on every `derive`: tighter on integrity. The
+    condition does not apply to the atom of a kept output, which by ruling
+    every kept output carries (question 71), so the alternative changes the
+    labels of interim outputs and of what they feed, and of no kept output of
+    the same pattern.
 67. **Witness-bearing `TransformedBy` atoms.** The runtime mints, beside the
     atom that holds the identity, one atom with an `inputWitness` per
     `TransformedBy` atom that every confidential location read carries (section
@@ -8396,6 +8835,103 @@ this document made.
     the definition of section 2.2 stands, and the slot's label is what a `shape`
     read at that path consumes today. A node that reads the whole record today
     carries the clauses of the fields that are present, so the template is
-    tighter. The alternative joins the `shape` observation of the enclosing
-    object into a test of presence on one of its optional properties, since
+    tighter. With no clause the template mints nothing (question 66), where the
+    runtime mints beside those clauses; a kept output carries the pattern's
+    atom all the same (section 3.2). The alternative joins the `shape`
+    observation of the enclosing object into a test of presence on one of its optional properties, since
     which properties an object has is the object's shape.
+69. **What the label of a conditional is compared with** (for the project
+    owner; the continuation plan's question 119). Today a conditional over
+    references stores no label of its condition: the two writes of
+    `forwardReference` are not recorded as link writes, so no entry holds the
+    transaction's join, and the condition's confidentiality reaches a reader
+    through the static part alone, where the condition's input schema declares
+    it (section 3.5). Over a literal branch the result store holds `derived`
+    entries with the join. The template joins the condition in both cases.
+    *Assumed:* the template stands, the missing stamp is a finding against the
+    runtime, and the comparison for a conditional is made with the static part
+    included. A condition whose label is stored and not declared then reads as
+    a template looser than today over references, and that row is counted as
+    the finding and not as an exception. The alternative makes the comparison
+    without the static part, as for every other operation, and expects the
+    template to be looser by the condition's clauses on every conditional over
+    references. Whether the runtime is corrected, by recording the two writes
+    as link writes so that the slot gets its stamp, is for the runtime and is
+    not decided here. Not verified: a run in which the condition changes
+    between two truthy values, and a conditional whose result is scoped.
+70. **Which stored entries are the static part.** A stored entry holds its
+    origin and not the schema that declared it. *Assumed,* as section 3.1 has
+    it: the static part is the `declared` entries of the documents between an
+    output path and its value, without those of the instance's argument
+    document, and an entry of every other origin is compared, a `structure`
+    entry included, by the table of section 3.1. Every site of
+    `prepareBoundaryCommitSteps` that mints a `structure` entry gives it
+    confidentiality that the transaction consumed, so none holds a clause
+    that no run read. A run's join does include the `declared` entries of
+    what it read, so a clause of the static part of one node is in the stamps
+    of the nodes that read its result, and no separation by origin removes it
+    there. The alternative leaves the `structure` entries out with the
+    `declared` ones, which makes the container of a `map` equal and makes an
+    array result whose only entries are `structure` stamps read as unlabeled.
+    Not traced: which read of a `map` coordinator's transaction consumes the
+    clause that the elements of an unlabeled list declare.
+71. **Where the pattern's atom is added, and how it is stored** (for the
+    project owner). By ruling every output of a pattern carries the pattern's
+    `TransformedBy` atom. *Assumed:* "output" is a kept output, an entry of
+    `Plan.outputs` with `kept: true`; the atom is added with no condition, an
+    output with no other label included; and it is stored as one entry at the
+    root of each document the keep set is stored in (section 3.2).
+    `execution-and-storage.md` has to agree on the stored form. An interim
+    output, the target of a write edge, the argument of a child, the request
+    of an effect, and the state of a binding get no atom added. A value that
+    a promoted `computed` passes on unchanged to one of those then has no
+    atom where today it refers to a result with the callback's atom. The
+    alternative adds the atom at each of them, as something the pattern sends
+    out. It makes the argument of a `Child` differ from the argument of the
+    same pattern compiled in, which has no stored argument. A second
+    alternative keeps the condition of question 66 for the atom of a kept
+    output, so that an unlabeled output stores nothing.
+72. **What a reader that follows a link is given of the atom on the link.**
+    The atom of an output that passes a value on by reference is in the label
+    of the link, and a read through a link takes its integrity from the target
+    alone (section 3.10). *Assumed:* that stands, so a required integrity or
+    an exchange rule evaluated over what a dereferencing read consumed does
+    not see the pattern's atom, and one evaluated over the reference does.
+    The alternative has a read through the link carry the link's atoms beside
+    the target's, under the specification's rule for the integrity of a link
+    (§3.7.2, `03-core-concepts.md`). Not verified: this document's reading
+    against the text of that section, which is for the specification change.
+73. **A label that the schema of an event declares.** Today such a
+    declaration adds nothing to what the handler writes (section 3.12), and
+    no corpus pattern declares one. *Assumed:* the label of a slot of root
+    `event` is the label the event arrived with, equal to today, and the
+    declaration is not a lower bound of it. The alternative joins the declared
+    label to the event slot. It is what an author who annotates a field of an
+    event type expects, it is wider than today, and it would be a fifth
+    exception. Whether the runtime's omission is a finding against the
+    runtime is for the owner. Not verified by a run in this repository: the
+    observation is the prototype's.
+74. **A mint beside a label that only a declaration gives.** The stage 3
+    comparison observed, at three positions of
+    `patterns/examples/cfc-spec-gallery/main.tsx`, a `TransformedBy` atom
+    beside a clause that only the schema of a created cell declares: a `lift`
+    with no labeled input creates a cell under a type that declares a caveat
+    and writes it, and the result is rendered. *Assumed:* a `derive` does not
+    mint on account of a `declared` entry of what it writes (section 3.2), and
+    a reader of the created cell follows the reference by section 3.10, so its
+    template holds the declared clause and mints. The rendered position is a
+    kept output and carries the pattern's atom in either case. Not verified:
+    which step of the runtime minted the observed atom, since
+    `deriveFlowJoinImpl` decides on the join alone.
+75. **The result paths of a binding's stream, and the event schema of a
+    body.** The prototype emits a `result` path on a binding and an
+    `eventSchema` on a handler's body. *Assumed:* `Binding.result` is a member
+    of the plan (section 1.1), because the instance has to store a link to the
+    stream at those paths and no other record says where, and it lists the
+    positions of the rendered tree that hold the stream as well as the other
+    paths of the result. `execution-and-storage.md` has to agree on the paths
+    of a view node (question 53). A body has no `eventSchema` member:
+    `Binding.eventSchema` holds it for every binding of the handler, and a
+    slot of root `event` holds the schema of its path. A reader that needs the
+    declared event type of a body takes it from a binding that names the
+    body.

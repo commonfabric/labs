@@ -289,8 +289,18 @@ that the arguments of a node declare onto the node's result, whatever a run
 read. A conditional and the container of a `map` are trusted not to join the
 labels of all their arguments, so their templates leave that static part out,
 and the comparison of staging step 3 expects the difference (§3.1, §3.5 and §3.6
-there). Whether a conditional written in a `computed` may carry less integrity
-than today is open (§3.5 there, question 64).
+there).
+
+By ruling, trust is attached to a pattern. A promoted `computed` mints no
+`TransformedBy` atom for the code of its callback, and every kept output of a
+pattern carries a `TransformedBy` atom that names the pattern, a value the
+pattern only passes on included. Where the value is passed on by reference,
+the atom is on the link, as the pattern's endorsement of the selection, and
+the target keeps its own label. A value the pattern body passes on then has
+an atom where the runtime stores none today, which is tighter. What identifies
+the pattern, which pattern it is for code compiled into another, and whether
+anything besides a kept output gets the atom are *assumed* (§3.2 there,
+questions 64 and 71).
 
 Instantiating a template means substituting actual labels for slots and
 combining them. The runtime does this only for what it stores or checks:

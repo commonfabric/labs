@@ -202,15 +202,23 @@ These facts hold for every registered built-in and are not repeated per entry.
   resolved to. A run that selects the reference already stored writes
   nothing. The write surface is static and declared as `storeWrites`.
 - **CFC:** the transaction reads the condition's root and link topology, so
-  the store carries the condition's label and the pointer's, and neither
-  branch's content label. A reader that follows the reference consumes the
-  selected branch's label at that point. No integrity is minted. The
-  store also holds, as an entry of origin `declared`, the confidentiality
-  that the schemas of the condition and of both branches declare,
-  whichever branch is selected (`applyInputIfcToOutput` in
-  `builder/node-utils.ts`). By ruling the template does not join that
-  static part, and is tighter there (`plan-and-label-templates.md` §3.1
-  and §3.5).
+  its join holds the condition's label and the pointer's, and neither
+  branch's content label. Where the selected branch is a literal, the store
+  holds the literal's value and `derived` entries with that join. Where the
+  selected branch is a reference, no entry holds the join: the store's
+  write and the write of the link at the node's output binding are not
+  recorded as link writes, so `prepareBoundaryCommitSteps`
+  (`cfc/prepare.ts`) stamps neither slot. A reader that follows the
+  reference consumes the selected branch's label at that point. No
+  integrity is minted. The document the output binding names also holds,
+  as an entry of origin `declared`, the confidentiality that the schemas of
+  the condition and of both branches declare, whichever branch is selected
+  (`applyInputIfcToOutput` in `builder/node-utils.ts`). For a conditional
+  over references that entry is the one place the condition's label
+  reaches a reader from. By ruling the template does not join that static
+  part, and is tighter there; the template joins the condition, and the
+  missing stamp is a finding against the runtime
+  (`plan-and-label-templates.md` §3.1 and §3.5, and its question 69).
 - **Execution:** pure structural: served, and speculated by clients.
   Computation; replayable.
 - **New design:** class A. The conditional expressions `?:`, `&&`, and `||`

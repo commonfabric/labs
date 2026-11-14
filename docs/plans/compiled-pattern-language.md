@@ -73,27 +73,26 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `4baaee9be1`, under
+  computes exists at prototype commit `92f71cb071`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
-  no browser. It covers three fixtures and FabriChat's `isEdited`. The
-  templates are equal or tighter, with these differences. A read of a
-  defaulted property has no integrity where the runtime gives it the
-  object's, which is the fourth exception. A promoted conditional has
-  no `TransformedBy`. The container of a `map` is tighter than the
-  runtime with the static part the runtime joins from a module's
-  argument schema, and equal without it. The result of `ifElse` is
-  equal or tighter with the static part, and wider without it, because
-  the runtime stores no other label on that result document: the
-  static part is the only place the condition's label appears there.
-  Writes through a bound handle are classified per plan: 24 through a
-  reference, 26 through a path that may hold a reference, and none
-  into a value the instance produces, so `binding:write-to-computed`
-  reports nothing. The crate does not follow a literal through a
-  compiled-in pattern, so it misses three `Counter({ value: N })`
-  sites whose `increment` writes `value`. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; notes 187
-  to 196 are not yet written into the documents.
+  no browser. It generates a scenario per module, with a distinct atom
+  per input and one event per handler. Of the 270 modules with a full
+  plan, 213 run; 33 need `wish`, 14 request an effect, and the runtime
+  refuses the commit of 10. Of 1,191 outputs compared, 1,120 are
+  equal, 23 tighter, and 48 have less integrity than the runtime; 28
+  write edges are compared and all are equal. In 45 of the 48 a
+  `computed` is promoted to a slot, a `select`, or a constructed
+  value, and the runtime's lift mints `TransformedBy` where the
+  template mints none (question 116). The other 3 are one position in
+  the CFC gallery whose label only a declaration gives. No output is
+  looser in confidentiality. The comparison is partial: 196 outputs
+  have no stored value, 304 selectors and picks were not found, and
+  per-element handlers and handlers bound only in a rendered tree get
+  no event. With the three `Counter({ value: N })` sites reported, the
+  crate accepts 333 modules and reports 389 errors. The crate's
+  `SPEC-NOTES.md` lists the places where it found the documents
+  ambiguous; notes 197 to 207 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -267,6 +266,13 @@ is relitigated.
   and the write lands there. An argument given to a pattern that a
   function body instantiates is the initial value of the child's stored
   argument, and the child writes it freely.
+- A promoted `computed` mints no `TransformedBy` for the code of its
+  callback. Every output of a pattern carries a `TransformedBy` that
+  names the pattern, because trust is attached to the pattern. That
+  holds for a value the pattern only passes on, through a `slot`, a
+  `select`, or a `pick`, as for one it computes. Where the value is
+  passed on by reference, the atom is on the link, as the pattern's
+  endorsement of the selection, and the target keeps its own label.
 - A child in the reactive tier does not write an argument given as a
   literal or a computed value. The runtime allows it today. A pattern
   that changes or owns one of its arguments is given a writable cell
@@ -777,32 +783,43 @@ as an assumption.
     declared name; code is hashed as its source for a cone and as the
     module and binding for a body.
 
-116. **A promoted `computed` mints no `TransformedBy`** (PL question
-    64). Today a `computed` is a lift, and its result carries the atom
-    for its code. A promoted one is compiled as an expression of the
-    reactive tier: a conditional in it is a `select`, with the
-    confidentiality of the condition and the chosen branch and the
-    integrity of the chosen branch. *Assumed:* that stands, and the
-    comparison expects the difference. The alternative mints the atom
-    for a promoted expression. The corpus has five declared labels
-    that match `TransformedBy` of named code, all exchange-rule
-    preconditions in `patterns/examples/cfc-exchange-rules/`, and each
-    names a `lift`, so none is affected.
+116. **What identifies the pattern in its `TransformedBy`, and which
+    pattern it is for code compiled into another** (PL question 64).
+    *Assumed:* the pattern's module and binding, and the pattern in
+    whose source the expression is written.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
     module's argument schema is separated by its origin and expected
     as a difference, by ruling.
 
-119. **What the label of an `ifElse` result is compared with.** The
-    runtime's result document holds only the static part joined from
-    the argument schema, and no label derived from the condition. The
-    template joins the condition and the chosen branch. *Assumed:* the
-    template is right, since which branch is chosen reveals the
-    condition, and the comparison is made with the runtime's static
-    part included for a conditional. Whether the runtime labels the
-    condition anywhere else, such as on the link it writes, is not
-    verified.
+119. **The runtime does not label an `ifElse` result with its
+    condition** (PL question 69). Where the chosen branch is a
+    reference, `forwardReference` writes the reference and a link to it
+    with two raw writes that are not recorded as link writes, and no
+    stored entry holds the condition's label. It reaches a reader only
+    through the static entry joined from the argument schema, and only
+    where the condition's input schema declares it. Where the branch is
+    a literal, the stored value gets the join. This is confirmed by a
+    test over three cases, not committed. It is a finding against the
+    runtime, and by the owner's decision it is not filed, because the
+    builder path is retired; what matters is that a conditional in
+    pattern code has the right label in the compiled path. *Assumed:*
+    the template, which joins the condition and the
+    chosen branch, stands, and the comparison is made with the
+    runtime's static part included for a conditional.
+
+120. **Where the pattern's `TransformedBy` is added** (PL questions 71
+    and 72). *Assumed:* at kept outputs only, with no condition, as one
+    entry at the root of the result document. A promoted `computed`
+    that passes a value unchanged to a child argument, a write target,
+    or an effect request then has fewer atoms than today. What a reader
+    that dereferences a link gets of the link's atom is not stated.
+121. **Two labels the comparison found the documents wrong or silent
+    about** (PL questions 73 and 74). *Assumed:* the label of an event
+    slot is what the event arrived with, and a declared label is not a
+    lower bound there; and no `TransformedBy` is minted beside a label
+    that only a declaration gives.
 
 ## Open, and not needing the owner
 
