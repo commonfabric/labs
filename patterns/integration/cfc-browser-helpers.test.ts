@@ -13,6 +13,7 @@ import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import {
   armSenderEcho,
+  type CfInputProbe,
   CLICK_TARGET_ATTR,
   clickCfButton,
   clickCfButtonsConcurrently,
@@ -3110,7 +3111,6 @@ describe("CFC browser helpers", () => {
           "d-nested",
         ]);
         expect(probe.presentIdCount).toBe(4);
-        expect(Object.keys(probe).at(-1)).toBe("consoleTail");
       } finally {
         await probePage.close();
       }
@@ -3145,21 +3145,64 @@ describe("CFC browser helpers", () => {
       }
     });
 
+    /** A probe of a field nothing matches, with `fields` beside it. */
+    const absentProbe = (fields: Partial<CfInputProbe>): CfInputProbe => ({
+      selector: "#absent-input",
+      found: false,
+      value: "",
+      disabled: false,
+      readOnly: false,
+      visible: false,
+      hostTagName: "",
+      ...fields,
+    });
+
     it("keeps the end of a probe longer than `long` keeps", () => {
-      const probe = {
-        selector: "#absent-input",
-        found: false,
+      const probe = absentProbe({
         completedIpc: Object.fromEntries(
           Array.from({ length: 80 }, (_, i) => [`ipc/kind-${i}`, {
             count: i,
             maxMs: i,
           }]),
         ),
-        consoleTail: ["the last console line"],
-      };
+        subscriptionTotals: { activeInstances: 17 },
+      });
 
       const message = fillFailureMessage("#absent-input", "Grace", probe);
 
+      expect(message).toContain("activeInstances");
+    });
+
+    it("keeps every console entry of a probe longer than `xlong` keeps", () => {
+      // Every part at its bound or past it, and each entry's text as many
+      // lines as the page's 400-character cut allows.
+      const entryText = (i: number) =>
+        `entry ${i}` + "\n.".repeat(195) +
+        (i === 39 ? "\nthe last console line" : "");
+      const probe = absentProbe({
+        presentIds: Array.from(
+          { length: PRESENT_IDS_MAX },
+          (_, i) => `id-${String(i).padStart(3, "0")}`,
+        ),
+        pendingIpc: Array.from(
+          { length: 50 },
+          (_, i) => ({ type: `request-${i}`, ageMs: i }),
+        ),
+        completedIpc: Object.fromEntries(
+          Array.from({ length: 300 }, (_, i) => [`ipc/kind-${i}`, {
+            count: i,
+            maxMs: i,
+          }]),
+        ),
+        consoleTail: Array.from(
+          { length: 40 },
+          (_, i) => ({ t: i, method: "log", text: entryText(i) }),
+        ),
+      });
+
+      const message = fillFailureMessage("#absent-input", "Grace", probe);
+
+      expect(message).toContain("entry 0");
       expect(message).toContain("the last console line");
     });
 

@@ -846,17 +846,33 @@ export async function fillCfInput(
 }
 
 /**
- * Returns the message `fillCfInput` fails with, which renders `probe` at
- * `xlong`: the page-level context, the console tail last, follows the field's
- * own state and the IPC counts, and a shorter cut drops it.
+ * Returns the message `fillCfInput` fails with. It renders `probe` at `xlong`,
+ * less its console tail, which follows as plain lines, one per entry with its
+ * own line breaks escaped, so that neither a cut of the probe nor a rendering
+ * that shortens long strings can reach it. The probe keeps at most 40 entries,
+ * and the page keeps 400 characters of each.
  */
 export function fillFailureMessage(
   selector: string,
   value: string,
-  probe: unknown,
+  probe: CfInputProbe | undefined,
 ): string {
+  const { consoleTail, ...rest } = probe ?? {};
+  const tailLines = Array.isArray(consoleTail)
+    ? consoleTail.map((entry) => {
+      const { t, method, text } = entry as {
+        t?: unknown;
+        method?: unknown;
+        text?: unknown;
+      };
+      return `  ${t} ${method} ${JSON.stringify(text)}`;
+    })
+    : [`  ${JSON.stringify(consoleTail)}`];
   return `Timed out filling cf input "${selector}" with "${value}". ` +
-    debugStr`Last probe: $quote,indent,xlong${probe}`;
+    debugStr`Last probe: $quote,indent,xlong${
+      probe === undefined ? probe : rest
+    }` +
+    `\nIts console tail, oldest first:\n${tailLines.join("\n")}`;
 }
 
 /**
@@ -3040,7 +3056,7 @@ type TextProbe = {
   bodyText: string;
 };
 
-type CfInputProbe = {
+export type CfInputProbe = {
   selector: string;
   found: boolean;
   value: string;
@@ -3180,7 +3196,6 @@ export async function readCfInputProbe(
     collect(document, matches);
     const element = matches[0];
     if (!element) {
-      // The page context goes last, so that its console tail ends the report.
       return {
         selector: targetSelector,
         found: false,
