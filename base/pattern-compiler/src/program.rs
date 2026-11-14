@@ -516,6 +516,37 @@ fn footprint_counts(
             .map(|(_, what)| what.as_str())
             .collect();
         let count = |prefix: &str| own.iter().filter(|what| what.starts_with(prefix)).count();
+        // The write side, the runtime calls, and the resolutions.
+        if let Some(tier) = record.tier {
+            add(format!("footprint:tier:{tier}"), 1);
+        }
+        for call in &record.calls {
+            add(format!("footprint:calls:{call}"), 1);
+        }
+        if !record.outputs.is_empty() {
+            add("footprint:outputs:bodies with a reference".to_string(), 1);
+            add("footprint:outputs:paths".to_string(), record.outputs.len());
+        }
+        add(
+            "footprint:resolutions:resolved entries".to_string(),
+            record
+                .reads
+                .iter()
+                .filter(|line| line.contains("identity (resolved)"))
+                .count(),
+        );
+        add(
+            "footprint:label metadata:static entries".to_string(),
+            record
+                .reads
+                .iter()
+                .filter(|line| line.contains("labelMetadata"))
+                .count(),
+        );
+        for line in &record.other_dynamic {
+            let kind = line.split(':').next().unwrap_or("");
+            add(format!("footprint:other dynamic reads:{kind}"), 1);
+        }
         // Widenings: directly, and with the helpers the body calls.
         let direct: BTreeSet<&str> = own
             .iter()

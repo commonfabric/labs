@@ -420,6 +420,10 @@ struct Analyzer<'r, 'm, 'a> {
     /// Whether the body is evaluated again: a `lift`, a `computed`, an
     /// `assert`, or an authored function (FA §6.3, §8).
     computation: bool,
+    /// Whether the body is a handler or a computation, and not an authored
+    /// function, which is held to the rules of the bodies that call it (FA
+    /// §8).
+    handler: bool,
 }
 
 impl<'a> Analyzer<'_, '_, 'a> {
@@ -2787,7 +2791,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         *input == target_input
                             && (path.starts_with(&target) || target.starts_with(path))
                     });
-                    if !self.computation && read && matches!(name, "push" | "pushAll" | "addUnique")
+                    if !self.computation
+                        && self.handler
+                        && read
+                        && matches!(name, "push" | "pushAll" | "addUnique")
                     {
                         self.store.read_then_push.insert(site);
                     }
@@ -3206,8 +3213,12 @@ pub fn analyze_module<'a>(
             root: (module, (span.start, span.end)),
             computation: !matches!(
                 body.kind,
-                BodyKind::Handler | BodyKind::Action | BodyKind::InlineHandler
+                BodyKind::Handler
+                    | BodyKind::Action
+                    | BodyKind::InlineHandler
+                    | BodyKind::AuthoredFunction
             ),
+            handler: body.kind != BodyKind::AuthoredFunction,
         };
         let arguments = parameter_names(body.kind, function)
             .into_iter()
