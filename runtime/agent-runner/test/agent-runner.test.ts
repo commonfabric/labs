@@ -833,9 +833,12 @@ describe("agent runner", () => {
 
     clock = expiry.at;
     expiry.wake();
+    // The wake's scan is in flight and the run's execution never settles,
+    // so `idle()` resolves only once the scan has dropped the run.
+    await runner.idle();
+    expect(runner.activeRuns).toBe(0);
     const record = await waitForState(result, "cancelled");
     expect(record.errorCode).toBe("CANCELLED");
-    await runner.idle();
   });
 
   it("stops following a record removed from the queue", async () => {
