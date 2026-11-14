@@ -526,15 +526,16 @@ const Home = pattern(
     // Whether the refused inbox is Home's own while Home holds none, which the
     // button's click never takes: the notice then hides the button and says
     // why. It compares the stored links, read typed as the click reads them,
-    // and follows neither. The markup stays static, and this decides only
-    // which part of it displays, so that Home's anonymous cells keep their
-    // numbers.
+    // with `Writable.equalLinks()`, which follows neither: `equals()` resolves
+    // both, and would read the refused inbox. The markup stays static, and
+    // this decides only which part of it displays, so that Home's anonymous
+    // cells keep their numbers.
     const ownRefusedStyles = computed(() => {
       const own = ownPrivateInbox.get()?.piece;
       const refusedInbox = privateInboxRefusal.get()?.refusal?.inbox;
       const ownRefused = privateInbox.get()?.piece === undefined &&
         own !== undefined && refusedInbox !== undefined &&
-        equals(own, refusedInbox);
+        Writable.equalLinks(own, refusedInbox);
       return {
         replace: { display: ownRefused ? "none" : "flex" },
         ownRefused: {

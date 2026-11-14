@@ -1217,7 +1217,9 @@ export const replaceRefusedPrivateInbox = handler<
   if (refusal === undefined) return;
   if (privateInbox.get()?.piece === undefined) {
     const own = ownPrivateInbox?.piece;
-    if (own === undefined || equals(own, refusal.inbox)) return;
+    // By the stored links, which `equalLinks()` does not resolve: the run
+    // reads nothing of the refused inbox before it writes Home's holder.
+    if (own === undefined || Writable.equalLinks(own, refusal.inbox)) return;
     privateInbox.set({ piece: own });
   }
   privateInboxRefusal.set({});
