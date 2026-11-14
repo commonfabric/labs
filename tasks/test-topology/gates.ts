@@ -19,7 +19,11 @@ import {
 } from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
-import { COMPILER_PATHS, GATE_PATHS } from "../check-cause-assignments.ts";
+import {
+  CAUSE_ASSIGNMENT_PARTS,
+  COMPILER_PATHS,
+  GATE_PATHS,
+} from "../check-cause-assignments.ts";
 import {
   BASELINES_DIR,
   collectCompatibilityPaths,
@@ -413,16 +417,22 @@ export const REACHED_BY_ABSENT_PATHS: ReadonlySet<string> = new Set([
  * history.
  */
 export const HISTORY_GATES: readonly Gate[] = [
-  {
-    name: "check-cause-assignments",
+  // One gate for each part of the patterns the cause-assignment gate
+  // compares, since comparing them all takes longer than a lane holds.
+  ...Array.from({ length: CAUSE_ASSIGNMENT_PARTS }, (_, at): Gate => ({
+    name: `check-cause-assignments ${at + 1} of ${CAUSE_ASSIGNMENT_PARTS}`,
     kind: "gate",
     run: ["task", "check-cause-assignments"],
-    args: ({ baseRef }) => [baseRef],
+    args: ({ baseRef }) => [
+      baseRef,
+      "--part",
+      `${at + 1}/${CAUSE_ASSIGNMENT_PARTS}`,
+    ],
     // The paths a pattern's numbering is built by, and the gate's own
     // modules. The task passes a change touching none of them without
     // compiling anything, so the two lists are one.
     reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],
-  },
+  })),
   {
     name: "check-baselines-append-only",
     kind: "gate",

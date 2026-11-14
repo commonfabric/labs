@@ -6,6 +6,7 @@ import {
   runDenoCommandWithTemporaryLock,
 } from "@commonfabric/test-support/isolated-deno";
 import {
+  acceptedInPart,
   acceptedMoveProblems,
   compareDumps,
   describeCompileErrors,
@@ -13,6 +14,8 @@ import {
   dumperConfig,
   dumperEnvironment,
   failureReports,
+  inPart,
+  parseArguments,
   workspacePackages,
 } from "./check-cause-assignments.ts";
 import {
@@ -583,6 +586,78 @@ describe("check-cause-assignments", () => {
     });
   });
 
+  describe("parseArguments()", () => {
+    it("compares every pattern against origin/main when given nothing", () => {
+      expect(parseArguments([])).toEqual({
+        baseRef: "origin/main",
+        part: { index: 0, count: 1 },
+      });
+    });
+
+    it("reads a base revision and a part counted from one", () => {
+      expect(parseArguments(["HEAD~2", "--part", "2/3"])).toEqual({
+        baseRef: "HEAD~2",
+        part: { index: 1, count: 3 },
+      });
+    });
+
+    it("throws on a part outside its count, malformed, or missing", () => {
+      for (const part of ["0/3", "4/3", "two/3", "1/", undefined]) {
+        expect(() =>
+          parseArguments(part === undefined ? ["--part"] : ["--part", part])
+        ).toThrow("--part takes K/N");
+      }
+    });
+
+    it("throws on a second base revision", () => {
+      expect(() => parseArguments(["HEAD", "HEAD~1"])).toThrow(
+        "a second base revision, HEAD~1",
+      );
+    });
+
+    it("throws on an option it does not know", () => {
+      expect(() => parseArguments(["--parts", "1/2"])).toThrow(
+        "unknown argument --parts",
+      );
+    });
+  });
+
+  describe("inPart()", () => {
+    it("deals every item into exactly one of the parts", () => {
+      const items = ["a", "b", "c", "d", "e", "f", "g"];
+      const parts = [0, 1, 2].map((index) =>
+        inPart(items, { index, count: 3 })
+      );
+      expect(parts).toEqual([["a", "d", "g"], ["b", "e"], ["c", "f"]]);
+      expect(parts.flat().toSorted()).toEqual(items);
+    });
+  });
+
+  describe("acceptedInPart()", () => {
+    const entry = (pattern: string): AcceptedMove => ({
+      pattern,
+      base: "0123456789abcdef",
+      head: "fedcba9876543210",
+      reason: "a reason",
+    });
+    const files = ["patterns/a.tsx", "patterns/b.tsx"];
+    const accepted = [entry("a.tsx"), entry("b.tsx"), entry("gone.tsx")];
+
+    it("gives each part the entries naming its own patterns", () => {
+      expect(
+        acceptedInPart(accepted, files, { index: 1, count: 2 })
+          .map(({ pattern }) => pattern),
+      ).toEqual(["b.tsx"]);
+    });
+
+    it("gives the first part the entries naming no pattern the tree holds", () => {
+      expect(
+        acceptedInPart(accepted, files, { index: 0, count: 2 })
+          .map(({ pattern }) => pattern),
+      ).toEqual(["a.tsx", "gone.tsx"]);
+    });
+  });
+
   describe("acceptedMoveProblems()", () => {
     const entry = (overrides: Partial<AcceptedMove> = {}): AcceptedMove => ({
       pattern: "room.tsx",
@@ -865,6 +940,7 @@ describe("check-cause-assignments", () => {
         "patterns/room.tsx": "// a pattern\n",
         "patterns/schemas.ts": "// a helper\n",
       },
+      args: readonly string[] = [],
     ): Promise<{ code: number; stdout: string; stderr: string }> {
       const repo = await Deno.makeTempDir({
         prefix: "cause-assignments-gate-",
@@ -904,6 +980,7 @@ describe("check-cause-assignments", () => {
             "-A",
             join(ROOT, "tasks/check-cause-assignments.ts"),
             "HEAD",
+            ...args,
           ],
         });
         return {
@@ -928,6 +1005,39 @@ describe("check-cause-assignments", () => {
 
       expect(stdout).toContain("compared 1 patterns");
       expect(code).toBe(0);
+    });
+
+    it("compares only the patterns its part holds", async () => {
+      const patterns = {
+        "patterns/one.tsx": "// a pattern\n",
+        "patterns/two.tsx": "// a pattern\n",
+        "patterns/three.tsx": "// a pattern\n",
+      };
+      const first = await runGate(WATCHED_EDIT, patterns, ["--part", "1/2"]);
+      const second = await runGate(WATCHED_EDIT, patterns, ["--part", "2/2"]);
+
+      expect(first.stdout).toContain("part 1 of 2: compared 2 patterns");
+      expect(second.stdout).toContain("part 2 of 2: compared 1 patterns");
+      expect([first.code, second.code]).toEqual([0, 0]);
+    });
+
+    it("exits 2 with its usage for a part it cannot read", async () => {
+      const { code, stderr } = await runGate(WATCHED_EDIT, undefined, [
+        "--part",
+        "0/2",
+      ]);
+
+      expect(stderr).toContain("Usage: check-cause-assignments.ts");
+      expect(code).toBe(2);
+    });
+
+    it("fails a part that holds no pattern, having compared nothing", async () => {
+      const { code, stderr } = await runGate(WATCHED_EDIT, {
+        "patterns/one.tsx": "// a pattern\n",
+      }, ["--part", "2/2"]);
+
+      expect(stderr).toContain("This run compared no patterns");
+      expect(code).toBe(1);
     });
 
     it("exits 1 naming the pattern, where every build on the head side returns `undefined`", async () => {

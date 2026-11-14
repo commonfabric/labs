@@ -526,7 +526,11 @@ export function pathsOf(listing: string): Set<string> {
   return new Set(listing.split("\0").filter((path) => path.length > 0));
 }
 
-/** The files this change touched, as the repository names them. */
+/**
+ * The files this change touched, as the repository names them. A file the
+ * change moved is both of its paths, since what reaches the path it left
+ * is as touched as what reaches the path it came to.
+ */
 export async function changedFiles(
   root: string,
   base: string | undefined,
@@ -539,7 +543,7 @@ export async function changedFiles(
   return pathsOf(
     await gitOutput(
       root,
-      ["diff", "-z", "--name-only", `${base}...HEAD`],
+      ["diff", "-z", "--name-only", "--no-renames", `${base}...HEAD`],
       `cannot diff against ${base}`,
     ),
   );

@@ -21,14 +21,20 @@
  * on a pattern the base builds and the change compiles from the same source to
  * no assignment, and on a run that compares no patterns at all.
  *
- * Usage: check-cause-assignments.ts [base-ref]   (default: origin/main)
+ * The patterns are compared in `CAUSE_ASSIGNMENT_PARTS` parts, each its own
+ * run, so that each fits in a lane: `--part K/N` compares every Nth pattern
+ * of the sorted list, starting from the Kth. A run with no `--part` compares
+ * them all.
+ *
+ * Usage: check-cause-assignments.ts [base-ref] [--part K/N]
+ *        (default base: origin/main)
  */
 
 import { parse as parseJsonc } from "@std/jsonc";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { EXPERIMENTAL_ENV_VARS } from "../runtime/runner/src/experimental-posture.ts";
-import { collectAllPatternFiles } from "./pattern-files.ts";
+import { collectAllPatternFiles, patternKey } from "./pattern-files.ts";
 import {
   type AmbiguousCells,
   ambiguousCells,
@@ -79,6 +85,81 @@ export const GATE_PATHS: readonly string[] = [
   "tasks/pattern-compat-unevaluable.ts",
   "tasks/pattern-files.ts",
 ];
+
+/** How many parts continuous integration compares the patterns in. */
+export const CAUSE_ASSIGNMENT_PARTS = 3;
+
+/**
+ * One part of the patterns: the ones at `index`, `index + count`, and so on,
+ * counting from zero, in the sorted list.
+ */
+export interface Part {
+  index: number;
+  count: number;
+}
+
+/** What a run of the gate is asked to compare. */
+export interface Arguments {
+  baseRef: string;
+  part: Part;
+}
+
+/**
+ * The base revision and part `args` name. Throws on a `--part` that is not
+ * `K/N` with `1 <= K <= N`, on an argument it does not know, and on a second
+ * base revision.
+ */
+export function parseArguments(args: readonly string[]): Arguments {
+  let baseRef = "origin/main";
+  let part: Part = { index: 0, count: 1 };
+  let named = false;
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at]!;
+    if (arg === "--part") {
+      const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(args[++at] ?? "");
+      const [k, n] = match === null
+        ? [0, 0]
+        : [Number(match[1]), Number(match[2])];
+      if (k < 1 || k > n) {
+        throw new Error(
+          `--part takes K/N with 1 <= K <= N, not ${args[at] ?? "nothing"}`,
+        );
+      }
+      part = { index: k - 1, count: n };
+    } else if (arg.startsWith("-")) {
+      throw new Error(`unknown argument ${arg}`);
+    } else if (named) {
+      throw new Error(`a second base revision, ${arg}`);
+    } else {
+      baseRef = arg;
+      named = true;
+    }
+  }
+  return { baseRef, part };
+}
+
+/** The entries of the sorted `items` that `part` holds. */
+export function inPart<T>(items: readonly T[], part: Part): T[] {
+  return items.filter((_, index) => index % part.count === part.index);
+}
+
+/**
+ * The accepted moves a run comparing `part` of `files` judges: those naming
+ * one of its patterns, and in the first part, those naming no pattern the
+ * tree holds, so that every entry is reported by some part as forgiving
+ * nothing once it does.
+ */
+export function acceptedInPart(
+  accepted: readonly AcceptedMove[],
+  files: readonly string[],
+  part: Part,
+): AcceptedMove[] {
+  const held = new Set(files.map((file) => patternKey(file)));
+  const mine = new Set(inPart(files, part).map((file) => patternKey(file)));
+  return accepted.filter(({ pattern }) =>
+    mine.has(pattern) || (part.index === 0 && !held.has(pattern))
+  );
+}
 
 /** The verdict on one comparison of two dumps. */
 export interface Comparison {
@@ -577,7 +658,17 @@ async function main() {
     );
     Deno.exit(1);
   }
-  const baseRef = Deno.args[0] ?? "origin/main";
+  let parsed: Arguments;
+  try {
+    parsed = parseArguments(Deno.args);
+  } catch (error) {
+    console.error(
+      `${String(error)}\n` +
+        "Usage: check-cause-assignments.ts [base-ref] [--part K/N]",
+    );
+    Deno.exit(2);
+  }
+  const { baseRef, part } = parsed;
   let mergeBase: string;
   try {
     mergeBase = (await git("merge-base", baseRef, "HEAD")).trim();
@@ -609,7 +700,8 @@ async function main() {
   const baseTree = join(scratch, "base");
   await git("worktree", "add", "--detach", baseTree, mergeBase);
   try {
-    const files = await collectAllPatternFiles();
+    const all = await collectAllPatternFiles();
+    const files = inPart(all, part);
     const inBase: string[] = [];
     for (const file of files) {
       try {
@@ -637,12 +729,16 @@ async function main() {
       ),
       dumpTree(head, join(head, "deno.jsonc"), files, shards, scratch, "head"),
     ]);
-    const comparison = compareDumps(baseDump, headDump, ACCEPTED_MOVES, {
-      base: await unevaluableIn(baseTree),
-      head: UNEVALUABLE_PATTERNS,
-    });
+    const comparison = compareDumps(
+      baseDump,
+      headDump,
+      acceptedInPart(ACCEPTED_MOVES, all, part),
+      { base: await unevaluableIn(baseTree), head: UNEVALUABLE_PATTERNS },
+    );
     console.log(
-      `check-cause-assignments: compared ${comparison.compared} patterns ` +
+      `check-cause-assignments${
+        part.count === 1 ? "" : ` part ${part.index + 1} of ${part.count}`
+      }: compared ${comparison.compared} patterns ` +
         `built from the same source by ${mergeBase.slice(0, 10)} and this ` +
         `change, in ${Math.round((performance.now() - started) / 1000)}s.`,
     );

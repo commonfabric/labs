@@ -26,8 +26,13 @@ import { patternPath, PATTERNS_DIR } from "./pattern-files.ts";
 const BASELINES_PREFIX = `${PATTERNS_DIR}/baselines/`;
 
 async function git(...args: string[]): Promise<string> {
+  return await gitIn(Deno.cwd(), ...args);
+}
+
+async function gitIn(cwd: string, ...args: string[]): Promise<string> {
   const { code, stdout, stderr } = await new Deno.Command("git", {
     args,
+    cwd,
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -37,6 +42,25 @@ async function git(...args: string[]): Promise<string> {
     );
   }
   return new TextDecoder().decode(stdout);
+}
+
+/**
+ * The paths the repository at `root` deleted since `mergeBase`, a file it
+ * moved among them at the path it left, since a baseline moved out of the
+ * store is as gone from it as one removed.
+ */
+export async function deletedSince(
+  root: string,
+  mergeBase: string,
+): Promise<string[]> {
+  return (await gitIn(
+    root,
+    "diff",
+    "--no-renames",
+    "--diff-filter=D",
+    "--name-only",
+    `${mergeBase}...HEAD`,
+  )).split("\n").filter((line) => line.length > 0);
 }
 
 /** The pattern key a baseline path belongs to: `<key>/<file>.json`. */
@@ -80,12 +104,7 @@ async function main() {
     Deno.exit(2);
   }
 
-  const deleted = (await git(
-    "diff",
-    "--diff-filter=D",
-    "--name-only",
-    `${mergeBase}...HEAD`,
-  )).split("\n").filter((line) => line.length > 0);
+  const deleted = await deletedSince(Deno.cwd(), mergeBase);
 
   const deletedPatterns = new Set(
     deleted.filter((path) => path.endsWith(".ts") || path.endsWith(".tsx")),
