@@ -1941,14 +1941,16 @@ metadata and screenshot.
 
 ```ts
 interface LinkPreviewInput {
-  url: string | Default<"https://github.com">;
+  url?: string | Default<"https://github.com">;
 }
 ```
 
 ### Output Schema
 
 ```ts
-interface LinkPreviewInput {
+interface LinkPreviewOutput {
+  [NAME]: string;
+  [UI]: VNode;
   url: string;
 }
 ```

@@ -287,7 +287,8 @@ export default pattern(() => {
 bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers
 sends an event to any event prop, and fails when the node binds nothing under
 it; `fireClick(node)` is its `onClick` case, with an empty event, and
-`clickButton(root, label)` finds the one button labelled `label` and clicks it.
+`clickButton(root, label)` clicks the first button whose whole text is
+`label`.
 `sendMessage(root, message)` sends from the view's `cf-message-input` as a
 person pressing send does. `setBound(node, prop, value)` writes through the cell
 a control binds under a `$` prop, such as `$value` or `$checked`, as the control

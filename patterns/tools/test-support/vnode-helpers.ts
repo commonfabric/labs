@@ -210,7 +210,7 @@ export const fireEvent = (
 export const fireClick = (node: unknown, what = "the node"): void =>
   fireEvent(node, "onClick", {}, what);
 
-/** Clicks the one button labelled `label` under `root`. */
+/** Clicks the first button under `root` whose whole text is `label`. */
 export const clickButton = (root: unknown, label: string): void =>
   fireClick(findNode(root, isButton(label)), `a button labelled "${label}"`);
 
