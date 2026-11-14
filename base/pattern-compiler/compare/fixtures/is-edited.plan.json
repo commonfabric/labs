@@ -96,6 +96,9 @@
               }
             }
           ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/is-edited.tsx#default"
+          ],
           "picks": [],
           "selectors": [
             {

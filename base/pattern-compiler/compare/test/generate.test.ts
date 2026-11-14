@@ -137,9 +137,11 @@ describe("a generated scenario for the handler fixture", () => {
         ]),
       ),
     ).toEqual({
-      last: [[], "equal"],
-      log: [[], "equal"],
-      note: [["input:note"], "equal"],
+      // Each is a value the pattern passes on: the template has the atom
+      // of the pattern, and the runtime stores none (PL §3.2).
+      last: [[], "tighter"],
+      log: [[], "tighter"],
+      note: [["input:note"], "tighter"],
     });
     expect(run.writes.map((row) => clauses(row.runtime.confidentiality)))
       .toEqual([["alice", "input:secret"], ["alice", "input:secret"]]);

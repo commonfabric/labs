@@ -470,6 +470,9 @@
               }
             }
           ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/small.tsx#default"
+          ],
           "picks": [],
           "selectors": [
             {

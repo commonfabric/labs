@@ -2932,3 +2932,109 @@ export const P = pattern<{ out: Cell<unknown[]> }>(({ out }) => ({ make: make({ 
     );
     assert_eq!(body["envelopes"], json!([{ "kind": "created", "call": 0 }]));
 }
+
+const COMPILED_IN: &str = r#"import { pattern } from "commonfabric";
+const Row = pattern<{ title: string; tags: string[] }>(({ title, tags }) => {
+  const shout = title + "!";
+  const marks = tags.map((tag) => tag + "*");
+  const long = tags.filter((tag) => tag.length > 2);
+  return { shout, marks, long };
+});
+export const Outer = pattern<{ title: string; tags: string[] }>(({ title, tags }) => {
+  const row = Row({ title, tags });
+  const own = title + "?";
+  return { row, own };
+});
+"#;
+
+/// Every template node below a value of a plan, of one `op`.
+fn nodes_of(value: &Value, op: &str, found: &mut Vec<Value>) {
+    match value {
+        Value::Object(members) => {
+            if members.get("op") == Some(&json!(op)) {
+                found.push(value.clone());
+            }
+            for below in members.values() {
+                nodes_of(below, op, found);
+            }
+        }
+        Value::Array(items) => {
+            for below in items {
+                nodes_of(below, op, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn a_plan_lists_the_pattern_it_is_compiled_from_and_each_pattern_compiled_in() {
+    // PL §1.1: "Entry 0 is the pattern the plan is compiled from. The
+    // others are the patterns compiled into it under a `site` step, each
+    // once". §1.5: the record `{ module, binding }`, with `binding` "the
+    // name of the `const` the call initializes; `default` for a call that
+    // is the operand of `export default`". The crate has no hash, so an
+    // entry is a placeholder that holds the two members.
+    let plan = plan_of(&program(COMPILED_IN), "Outer");
+    assert_eq!(
+        plan["patterns"],
+        json!([
+            "unhashed:pattern/case.tsx#Outer",
+            "unhashed:pattern/case.tsx#Row"
+        ])
+    );
+    let analysis = analyze(&[
+        SourceFile {
+            path: "row.tsx".to_string(),
+            text: r#"import { pattern } from "commonfabric";
+export default pattern<{ title: string }>(({ title }) => {
+  return { shout: title + "!" };
+});
+"#
+            .to_string(),
+        },
+        SourceFile {
+            path: "outer.tsx".to_string(),
+            text: r#"import { pattern } from "commonfabric";
+import Row from "./row.tsx";
+export const Outer = pattern<{ title: string }>(({ title }) => {
+  const first = Row({ title });
+  const second = Row({ title });
+  return { first, second };
+});
+"#
+            .to_string(),
+        },
+    ]);
+    let plan = plan_of(&analysis, "Outer");
+    assert_eq!(
+        plan["patterns"],
+        json!([
+            "unhashed:pattern/outer.tsx#Outer",
+            "unhashed:pattern/row.tsx#default"
+        ])
+    );
+}
+
+#[test]
+fn a_derive_and_a_fold_name_the_pattern_their_source_is_written_in() {
+    // PL §3.2, "The atom of the pattern": "A `derive` with
+    // `by: { expression: true }` and a `fold` mint the atom of the pattern
+    // in whose source the expression or the construct is written: entry
+    // `pattern` of `Plan.patterns`, and entry 0 where the node has no
+    // `pattern` member."
+    let plan = plan_of(&program(COMPILED_IN), "Outer");
+    let mut folds = Vec::new();
+    nodes_of(&plan, "fold", &mut folds);
+    assert!(!folds.is_empty(), "{plan}");
+    for fold in &folds {
+        assert_eq!(fold["pattern"], json!(1), "{fold}");
+    }
+    let own = kept(&plan, json!(["own"]));
+    assert_eq!(own["template"]["by"], json!({ "expression": true }));
+    let shout = kept(&plan, json!(["row", "shout"]));
+    assert_eq!(
+        shout["template"]["by"],
+        json!({ "expression": true, "pattern": 1 })
+    );
+}

@@ -54,6 +54,8 @@ type PlanWrite = {
 
 /** The members of a plan this harness reads. */
 export type Plan = {
+  /** The identity of each pattern the plan holds code of (PL §1.1). */
+  patterns?: string[];
   slots: {
     root: PlanSlotRoot;
     path: string[];
@@ -126,7 +128,10 @@ export type Row = {
   output: number;
   path: string[];
   runtime: Label;
-  /** The template's label as §3.2 gives it. */
+  /**
+   * The template's label as §3.2 gives it, with the atom of the plan's
+   * pattern that every kept output carries.
+   */
   stored: Evaluated;
   /**
    * The template's label with each `identity` slot joined with the label a
@@ -662,6 +667,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 entry.template,
                 inputsFor(dereference, {}),
                 elements,
+                { patterns: plan.patterns },
               );
               if (evaluated.unsupported.length > 0) {
                 throw new Unsupported(
@@ -768,7 +774,9 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               !(membership.op === "fold" &&
                 membership.collection === collection)
             ) {
-              const evaluated = evaluateTemplate(membership, inputs, elements);
+              const evaluated = evaluateTemplate(membership, inputs, elements, {
+                patterns: plan.patterns,
+              });
               if (evaluated.unsupported.length > 0) {
                 throw new Unsupported(
                   `a \`${evaluated.unsupported[0]}\` node`,
@@ -872,6 +880,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         template: Template,
         dereference: boolean,
         context: Context,
+        kept = false,
       ): Evaluated => {
         nestedBound = false;
         const evaluated = evaluateTemplate(
@@ -881,6 +890,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             event: context.event,
           }),
           context.elements,
+          { patterns: plan.patterns, kept },
         );
         if (evaluated.unsupported.length > 0) {
           throw new Unsupported(`a \`${evaluated.unsupported[0]}\` node`);
@@ -955,8 +965,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 cfcLabelViewForResolvedCell(cell),
                 observes,
               );
-              const stored = evaluate(template, false, { elements });
-              const reached = evaluate(template, true, { elements });
+              // A kept output carries the atom of the plan's pattern (PL
+              // §3.2). Where the output passes a value on by reference
+              // the atom is on the link, and the row holds it beside the
+              // integrity of the dereferenced value (PL §3.1, "An atom on
+              // a link").
+              const stored = evaluate(template, false, { elements }, true);
+              const reached = evaluate(template, true, { elements }, true);
               const withoutStatic = byOrigin(cell, observes, false);
               rows.push({
                 output: number,

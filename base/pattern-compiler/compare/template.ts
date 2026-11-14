@@ -20,11 +20,18 @@ export type Label = {
   integrity: Atom[] | "neutral";
 };
 
+/**
+ * What computed a `derive`: a sandboxed body, or expression code of the
+ * pattern at `pattern` in `Plan.patterns`, and of entry 0 where the member
+ * is absent (§3.2, "The atom of the pattern").
+ */
+export type By = { body: number } | { expression: true; pattern?: number };
+
 /** A node of a template, as the `plan` command of the crate emits it. */
 export type Template =
   | { op: "const" }
   | { op: "slot"; slot: number }
-  | { op: "derive"; inputs: Template[]; by: unknown }
+  | { op: "derive"; inputs: Template[]; by: By }
   | {
     op: "select";
     selector: number;
@@ -32,7 +39,7 @@ export type Template =
     branches: Template[];
   }
   | { op: "pick"; pick: number; choice: Template; body: Template }
-  | { op: "fold"; collection: number; body: Template }
+  | { op: "fold"; collection: number; body: Template; pattern?: number }
   | { op: "dynamic"; reads: unknown };
 
 /**
@@ -86,6 +93,18 @@ export type EvaluationOptions = {
    * alternative §3.2 names.
    */
   mintWithoutLabel?: boolean;
+  /**
+   * `Plan.patterns`: the identity of each pattern whose source the plan
+   * holds code of. A `derive` by expression code and a `fold` mint the atom
+   * of the entry their `pattern` names.
+   */
+  patterns?: readonly string[];
+  /**
+   * Whether the template is that of a kept output. Its label then has the
+   * atom of entry 0 of `patterns` added, with no condition (§3.2, "Every
+   * kept output").
+   */
+  kept?: boolean;
 };
 
 /** The result of evaluating a template. */
@@ -140,11 +159,50 @@ const meet = (
   return result;
 };
 
-/** The atom a `derive` mints. It names the plan's `by`, not a code hash. */
-const minted = (by: unknown): Atom => ({
+/**
+ * The `TransformedBy` atom of a pattern: its identity is the entry of
+ * `Plan.patterns`, which in the crate's plans is a placeholder for the hash
+ * of `{ module, binding }` (§1.5).
+ */
+export const patternAtom = (
+  patterns: readonly string[] | undefined,
+  pattern = 0,
+): Atom => ({
   type: TRANSFORMED_BY,
-  identity: { kind: "template", by },
+  identity: {
+    kind: "pattern",
+    pattern: patterns?.[pattern] ?? `unlisted:${pattern}`,
+  },
 });
+
+/**
+ * The atom a `derive` mints: of the pattern for expression code, and for a
+ * body one that names the body's index in the plan, not a code hash.
+ */
+const minted = (by: By, patterns: readonly string[] | undefined): Atom =>
+  "expression" in by ? patternAtom(patterns, by.pattern) : {
+    type: TRANSFORMED_BY,
+    identity: { kind: "body", body: by.body },
+  };
+
+/**
+ * The label of a kept output: the label of its template with the atom of
+ * the pattern the plan is compiled from, once, and also beside no label
+ * (§3.2, "Every kept output").
+ */
+export const keptOutputLabel = (
+  label: Label,
+  patterns: readonly string[] | undefined,
+): Label => {
+  const atom = patternAtom(patterns, 0);
+  const integrity = label.integrity === "neutral" ? [] : label.integrity;
+  return {
+    confidentiality: label.confidentiality,
+    integrity: integrity.some((other) => atomKey(other) === atomKey(atom))
+      ? integrity
+      : [...integrity, atom],
+  };
+};
 
 const NEUTRAL: Label = { confidentiality: [], integrity: "neutral" };
 
@@ -159,7 +217,9 @@ export const evaluateTemplate = (
   const unsupported: string[] = [];
   const mintWithoutLabel = options.mintWithoutLabel ?? false;
 
-  const derive = (parts: Label[], by: unknown): Label => {
+  const { patterns } = options;
+
+  const derive = (parts: Label[], by: By): Label => {
     const confidentiality = union(parts.map((part) => part.confidentiality));
     const kept = meet(
       parts.map((part) =>
@@ -171,7 +231,7 @@ export const evaluateTemplate = (
     const integrity = kept === "neutral" ? [] : kept;
     return mintWithoutLabel || confidentiality.length > 0 ||
         integrity.length > 0
-      ? { confidentiality, integrity: [...integrity, minted(by)] }
+      ? { confidentiality, integrity: [...integrity, minted(by, patterns)] }
       : { confidentiality, integrity };
   };
 
@@ -229,7 +289,10 @@ export const evaluateTemplate = (
         ]);
         return mintWithoutLabel || confidentiality.length > 0 ||
             kept.length > 0
-          ? { confidentiality, integrity: [...kept, minted("fold")] }
+          ? {
+            confidentiality,
+            integrity: [...kept, patternAtom(patterns, node.pattern)],
+          }
           : { confidentiality, integrity: kept };
       }
       case "dynamic": {
@@ -244,7 +307,11 @@ export const evaluateTemplate = (
   };
 
   const label = walk(template, elements);
-  return { label, bound, unsupported };
+  return {
+    label: options.kept ? keptOutputLabel(label, patterns) : label,
+    bound,
+    unsupported,
+  };
 };
 
 /** How a template label stands to the runtime's on one axis. */
@@ -256,11 +323,41 @@ export type Comparison = {
   overall: Relation;
   /** Witness-bearing `TransformedBy` atoms of the runtime's label. */
   runtimeInputWitnesses: number;
+  /**
+   * The atoms of the template that name a pattern and stand where the
+   * runtime's label has an atom that names other code: the callback of a
+   * promoted `computed` (§3.1, "An atom that names code"). The two are
+   * taken as corresponding, so they are no difference in the count.
+   */
+  patternForOtherCode: number;
+};
+
+/**
+ * The category a row of the comparison is counted in. A row that is not
+ * looser and has an atom that names the pattern where the runtime's names
+ * other code is counted apart from the equal and the tighter ones: the
+ * atoms differ in what they name, and not in their number.
+ */
+export type Category = Relation | "atom names the pattern";
+
+export const categoryOf = (comparison: Comparison): Category => {
+  const axes = [comparison.confidentiality, comparison.integrity];
+  return axes.includes("incomparable")
+    ? "incomparable"
+    : axes.includes("looser")
+    ? "looser"
+    : comparison.patternForOtherCode > 0
+    ? "atom names the pattern"
+    : comparison.overall;
 };
 
 const isTransformedBy = (atom: Atom): boolean =>
   typeof atom === "object" && atom !== null &&
   (atom as { type?: unknown }).type === TRANSFORMED_BY;
+
+const namesPattern = (atom: Atom): boolean =>
+  isTransformedBy(atom) &&
+  (atom as { identity?: { kind?: unknown } }).identity?.kind === "pattern";
 
 const hasInputWitness = (atom: Atom): boolean =>
   isTransformedBy(atom) &&
@@ -280,7 +377,9 @@ const relation = (onlyTemplate: number, onlyRuntime: number, more: Relation) =>
  * confidentiality clauses, or more integrity atoms. Clauses and atoms are
  * compared structurally, with two exceptions for `TransformedBy`. The
  * identity of an atom without a witness is not compared, since the plan
- * names a cone and the runtime a compiled function: such atoms are counted.
+ * names a body by its index or a pattern, and the runtime a compiled
+ * function: such atoms are counted, and `patternForOtherCode` says how many
+ * of the template's name a pattern where the runtime's names other code.
  * An atom with an input witness is not part of §3.2, so it is left out of
  * the relation and counted in `runtimeInputWitnesses`.
  */
@@ -306,6 +405,13 @@ export const compareLabels = (template: Label, runtime: Label): Comparison => {
   const templatePlain = keys(plain(templateI));
   const runtimePlain = keys(plain(runtimeI));
   const mintDifference = mints(templateI) - mints(runtimeI);
+  // The template's atoms that name a body correspond to the runtime's
+  // first, and those that name a pattern to the runtime's that are left.
+  const templatePatterns = mints(templateI.filter(namesPattern));
+  const patternForOtherCode = Math.min(
+    templatePatterns,
+    Math.max(mints(runtimeI) - (mints(templateI) - templatePatterns), 0),
+  );
   const integrity = relation(
     [...templatePlain].filter((key) => !runtimePlain.has(key)).length +
       Math.max(mintDifference, 0),
@@ -328,5 +434,6 @@ export const compareLabels = (template: Label, runtime: Label): Comparison => {
     integrity,
     overall,
     runtimeInputWitnesses: runtimeI.filter(hasInputWitness).length,
+    patternForOtherCode,
   };
 };

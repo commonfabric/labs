@@ -135,6 +135,9 @@
               }
             }
           ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/defaulted.tsx#default"
+          ],
           "picks": [],
           "selectors": [],
           "slots": [

@@ -2,9 +2,13 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  type By,
+  categoryOf,
   compareLabels,
   evaluateTemplate,
+  keptOutputLabel,
   type Label,
+  patternAtom,
   type Template,
   type TemplateInputs,
   TRANSFORMED_BY,
@@ -36,9 +40,16 @@ const inputs = (selected?: number): TemplateInputs => ({
 });
 
 const slot = (index: number): Template => ({ op: "slot", slot: index });
-const minted = (by: unknown) => ({
+const PATTERNS = ["outer", "row"];
+const BODY = { body: 4 };
+const EXPRESSION = { expression: true } as const;
+const mintedByBody = {
   type: TRANSFORMED_BY,
-  identity: { kind: "template", by },
+  identity: { kind: "body", body: 4 },
+};
+const atomOf = (pattern: string) => ({
+  type: TRANSFORMED_BY,
+  identity: { kind: "pattern", pattern },
 });
 
 describe("evaluateTemplate", () => {
@@ -57,27 +68,86 @@ describe("evaluateTemplate", () => {
     const template: Template = {
       op: "derive",
       inputs: [slot(0), { op: "const" }, slot(1)],
-      by: "f",
+      by: BODY,
     };
 
     expect(evaluateTemplate(template, inputs()).label).toEqual({
       confidentiality: ["a", "b"],
-      integrity: [ENDORSED, minted("f")],
+      integrity: [ENDORSED, mintedByBody],
     });
+  });
+
+  it("mints the atom of the pattern an expression is written in", () => {
+    // PL §3.2, "The atom of the pattern": entry `pattern` of
+    // `Plan.patterns`, and entry 0 where the node has no `pattern` member.
+    const derive = (by: By): Template => ({
+      op: "derive",
+      inputs: [slot(0)],
+      by,
+    });
+    const integrity = (template: Template) =>
+      evaluateTemplate(template, inputs(), [], { patterns: PATTERNS }).label
+        .integrity;
+
+    expect(integrity(derive(EXPRESSION))).toEqual([ENDORSED, atomOf("outer")]);
+    expect(integrity(derive({ expression: true, pattern: 1 }))).toEqual([
+      ENDORSED,
+      atomOf("row"),
+    ]);
+    expect(integrity({ op: "fold", collection: 0, body: slot(3), pattern: 1 }))
+      .toEqual([ENDORSED, atomOf("row")]);
+  });
+
+  it("adds the atom of the plan's pattern to a kept output, whatever its template", () => {
+    // PL §3.2, "Every kept output": with no condition, beside no label
+    // too, and once where a `derive` of the same pattern minted it.
+    const kept = (template: Template) =>
+      evaluateTemplate(template, inputs(1), [], {
+        patterns: PATTERNS,
+        kept: true,
+      }).label;
+
+    expect(kept(slot(1))).toEqual({
+      confidentiality: ["b"],
+      integrity: [ENDORSED, atomOf("outer")],
+    });
+    expect(kept({ op: "const" })).toEqual({
+      confidentiality: [],
+      integrity: [atomOf("outer")],
+    });
+    expect(
+      kept({
+        op: "select",
+        selector: 0,
+        condition: slot(2),
+        branches: [slot(0), slot(1)],
+      }).integrity,
+    ).toEqual([ENDORSED, atomOf("outer")]);
+    expect(kept({ op: "derive", inputs: [slot(1)], by: EXPRESSION }).integrity)
+      .toEqual([ENDORSED, atomOf("outer")]);
+    expect(
+      kept({
+        op: "derive",
+        inputs: [slot(1)],
+        by: { expression: true, pattern: 1 },
+      }).integrity,
+    ).toEqual([ENDORSED, atomOf("row"), atomOf("outer")]);
+    expect(keptOutputLabel({ confidentiality: [], integrity: [] }, PATTERNS))
+      .toEqual({ confidentiality: [], integrity: [patternAtom(PATTERNS)] });
   });
 
   it("mints for a derive over unlabeled inputs only when told to", () => {
     const template: Template = {
       op: "derive",
       inputs: [{ op: "const" }],
-      by: "f",
+      by: BODY,
     };
 
     expect(evaluateTemplate(template, inputs()).label.integrity).toEqual([]);
     expect(
       evaluateTemplate(template, inputs(), [], { mintWithoutLabel: true })
         .label.integrity,
-    ).toEqual([minted("f")]);
+    ).toEqual([mintedByBody]);
   });
 
   it("joins the condition with the selected branch alone", () => {
@@ -115,7 +185,7 @@ describe("evaluateTemplate", () => {
 
     expect(evaluateTemplate(template, inputs()).label).toEqual({
       confidentiality: ["m", "x", "y"],
-      integrity: [ENDORSED, minted("fold")],
+      integrity: [ENDORSED, atomOf("unlisted:0")],
     });
   });
 
@@ -168,14 +238,45 @@ describe("compareLabels", () => {
       integrity: "looser",
       overall: "looser",
       runtimeInputWitnesses: 0,
+      patternForOtherCode: 0,
     });
   });
 
   it("counts a TransformedBy atom without comparing its identity", () => {
     const runtime = label([], [{ type: TRANSFORMED_BY, identity: "lift" }]);
 
-    expect(compareLabels(label([], [minted("f")]), runtime).overall)
+    expect(compareLabels(label([], [mintedByBody]), runtime).overall)
       .toBe("equal");
+  });
+
+  it("takes an atom that names the pattern as corresponding to the runtime's atom for other code", () => {
+    // PL §3.1, "An atom that names code": equal on the atoms where each
+    // side has its atom, and counted in a category of its own.
+    const callback = { type: TRANSFORMED_BY, identity: "callback" };
+    const pattern = atomOf("outer");
+    const promoted = compareLabels(label([], [pattern]), label([], [callback]));
+
+    expect(promoted.integrity).toBe("equal");
+    expect(promoted.patternForOtherCode).toBe(1);
+    expect(categoryOf(promoted)).toBe("atom names the pattern");
+    // A value the pattern passes on: an atom where the runtime has none.
+    const passed = compareLabels(label([], [pattern]), label([], []));
+    expect(passed.patternForOtherCode).toBe(0);
+    expect(categoryOf(passed)).toBe("tighter");
+    // A body keeps its atom, and the pattern's stands beside it.
+    const body = compareLabels(
+      label([], [mintedByBody, pattern]),
+      label([], [callback]),
+    );
+    expect(body.patternForOtherCode).toBe(0);
+    expect(categoryOf(body)).toBe("tighter");
+    // A row that is looser is looser, whatever its atoms name.
+    expect(
+      categoryOf(compareLabels(label(["a"], [pattern]), label([], [callback]))),
+    ).toBe("looser");
+    expect(categoryOf(compareLabels(label([], []), label([], [])))).toBe(
+      "equal",
+    );
   });
 
   it("leaves a witness-bearing atom out of the relation and counts it", () => {
@@ -184,11 +285,12 @@ describe("compareLabels", () => {
       { type: TRANSFORMED_BY, identity: "lift", inputWitness: ENDORSED },
     ]);
 
-    expect(compareLabels(label([], [minted("f")]), runtime)).toEqual({
+    expect(compareLabels(label([], [mintedByBody]), runtime)).toEqual({
       confidentiality: "equal",
       integrity: "equal",
       overall: "equal",
       runtimeInputWitnesses: 1,
+      patternForOtherCode: 0,
     });
   });
 });

@@ -110,6 +110,9 @@
               }
             }
           ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/passed.tsx#default"
+          ],
           "picks": [],
           "selectors": [],
           "slots": [

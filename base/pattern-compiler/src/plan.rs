@@ -364,6 +364,11 @@ struct Emitter<'r, 'm, 'a> {
     hints: Vec<(String, u32)>,
     /// The handles bound to a computed value (ruling T3).
     handle_writes: Vec<HandleWrite>,
+    /// The patterns whose source the plan holds code of, by the module
+    /// and the start of the function: the pattern the plan is compiled
+    /// from, then each pattern compiled in, in the order of its first
+    /// site (PL §1.1, `Plan.patterns`).
+    patterns: Vec<(usize, u32)>,
     /// Where each pattern being compiled in is called, outermost first.
     inline_at: Vec<u32>,
     /// The parameters of the pattern being compiled in that the call
@@ -1685,6 +1690,48 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.inline_argument(home, start, name, argument, at)
     }
 
+    /// The identity of a pattern (PL §1.5): the record `{ module,
+    /// binding }`, where `binding` is the name of the `const` the
+    /// `pattern(...)` call initializes, `default` for the operand of
+    /// `export default`, and for an inline pattern the binding of the
+    /// enclosing pattern and its own position. PL has the hash of the
+    /// record there, and the module's identity in it. The crate has
+    /// neither, so the entry is a placeholder, `unhashed:pattern/`, the
+    /// path of the module, `#`, and the binding.
+    fn pattern_identity(&self, home: usize, start: u32) -> String {
+        let path = self
+            .resolver
+            .parsed(home)
+            .map(|parsed| parsed.path.clone())
+            .unwrap_or_default();
+        let bodies = &self.bodies[home];
+        let found = body_functions(self.resolver, home, bodies)
+            .into_iter()
+            .find(|(index, other)| *other == start && bodies[*index].kind == BodyKind::Pattern)
+            .map(|(index, _)| index);
+        let mut binding = String::new();
+        let mut body = found;
+        while let Some(index) = body {
+            let step = match (&bodies[index].name, bodies[index].parent) {
+                (Some(name), _) => name.clone(),
+                (None, None) => "default".to_string(),
+                (None, Some(_)) => format!("{}:{}", bodies[index].line, bodies[index].column),
+            };
+            binding = match binding.is_empty() {
+                true => step,
+                false => format!("{step}/{binding}"),
+            };
+            if bodies[index].name.is_some() {
+                break;
+            }
+            body = bodies[index].parent;
+        }
+        if binding.is_empty() {
+            binding = "default".to_string();
+        }
+        format!("unhashed:pattern/{path}#{binding}")
+    }
+
     /// The same, with the argument as the place it is bound to.
     fn inline_argument(
         &mut self,
@@ -1706,6 +1753,15 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_env = std::mem::take(&mut self.env);
         let saved_module = std::mem::replace(&mut self.module, home);
         self.within.push(json!({ "site": name }));
+        let pattern = self
+            .patterns
+            .iter()
+            .position(|known| *known == (home, start))
+            .unwrap_or_else(|| {
+                self.patterns.push((home, start));
+                self.patterns.len() - 1
+            });
+        let saved_pattern = WRITTEN_IN.replace(pattern);
         self.inline_at.push(at);
         let literal_keys = std::mem::take(&mut self.literal_keys);
         let mut given: HashSet<String> = HashSet::new();
@@ -1742,6 +1798,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         };
         self.given_constants = saved_given;
         self.inline_at.pop();
+        WRITTEN_IN.set(saved_pattern);
         self.within.pop();
         self.module = saved_module;
         self.env = saved_env;
@@ -2775,8 +2832,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         let input = (|| {
             // The `fold` joins the membership its collection iterates
             // by its own rule (PL §3.2).
-            let mut inputs =
-                vec![json!({ "op": "fold", "collection": collection, "body": template? })];
+            let mut inputs = vec![fold_node(collection, template?, None)];
             iterated?;
             if let Some(initial) = initial {
                 inputs.push(initial?);
@@ -2962,14 +3018,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             json!({ "op": "slot", "slot": slot })
         };
         let fold = |body: Option<Value>, through: Option<usize>| -> Option<Value> {
-            let mut node = Map::new();
-            node.insert("op".to_string(), json!("fold"));
-            node.insert("collection".to_string(), json!(collection));
-            node.insert("body".to_string(), body?);
-            if let Some(through) = through {
-                node.insert("through".to_string(), json!(through));
-            }
-            Some(Value::Object(node))
+            Some(fold_node(collection, body?, through))
         };
         let joined = |fold: Option<Value>, iterated: &Option<Value>| -> Option<Value> {
             // "A `fold` of `t`, joined with membership" is the `fold`
@@ -5806,8 +5855,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 body["eventSchema"] = self.resolver.schema_of(ty);
             }
         }
+        let patterns: Vec<Value> = self
+            .patterns
+            .iter()
+            .map(|(home, start)| json!(self.pattern_identity(*home, *start)))
+            .collect();
         let mut plan = json!({
             "version": 1,
+            "patterns": patterns,
             "slots": slots,
             "selectors": self.selectors.iter().map(|arity| json!({ "arity": arity })).collect::<Vec<Value>>(),
             "picks": self.picks.iter().map(|by| json!({ "chosenBy": by })).collect::<Vec<Value>>(),
@@ -6504,9 +6559,46 @@ fn input_failure(
     }
 }
 
-/// Expression code over the templates of its operands (PL §3.2).
+thread_local! {
+    /// The entry of `Plan.patterns` whose source the emitter is
+    /// evaluating: 0 for the pattern the plan is compiled from, and the
+    /// entry of a pattern compiled in while its body is evaluated (PL
+    /// §3.2, "The atom of the pattern"). The functions that make a
+    /// `derive` and a `fold` read it, and `Emitter::inline_argument` sets
+    /// it.
+    static WRITTEN_IN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Expression code over the templates of its operands (PL §3.2). The
+/// node names the pattern it is written in where that is not entry 0.
 fn join(inputs: Vec<Value>) -> Value {
-    json!({ "op": "derive", "inputs": inputs, "by": { "expression": true } })
+    match WRITTEN_IN.get() {
+        0 => json!({ "op": "derive", "inputs": inputs, "by": { "expression": true } }),
+        pattern => json!({
+            "op": "derive",
+            "inputs": inputs,
+            "by": { "expression": true, "pattern": pattern },
+        }),
+    }
+}
+
+/// A `fold` over a collection, which names the pattern it is written in
+/// as a `derive` does (PL §1.1).
+fn fold_node(collection: usize, body: Value, through: Option<usize>) -> Value {
+    let mut node = Map::new();
+    node.insert("op".to_string(), json!("fold"));
+    node.insert("collection".to_string(), json!(collection));
+    node.insert("body".to_string(), body);
+    if let Some(through) = through {
+        node.insert("through".to_string(), json!(through));
+    }
+    match WRITTEN_IN.get() {
+        0 => {}
+        pattern => {
+            node.insert("pattern".to_string(), json!(pattern));
+        }
+    }
+    Value::Object(node)
 }
 
 /// A join of templates (PL §3.2, "A join"): a `derive` by expression
@@ -6808,6 +6900,7 @@ pub fn emit_module<'a>(
             iterated: Vec::new(),
             hints: Vec::new(),
             handle_writes: Vec::new(),
+            patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),
             literal_keys: HashSet::new(),

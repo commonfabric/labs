@@ -9,6 +9,8 @@ import {
   runHandler,
   runSmall,
 } from "../scenarios.ts";
+import { categoryOf } from "../template.ts";
+import type { Row } from "../harness.ts";
 
 // The comparison of stage 3
 // (`docs/specs/compiled-pattern-language/README.md`, "Staging") for one
@@ -16,37 +18,48 @@ import {
 // for its slots, against the label the run stored for the output. Notes 177
 // to 186 of `SPEC-NOTES.md` explain each row that is not `equal`.
 
+// The relation on each axis, and where an atom of the template names the
+// pattern and the runtime's names other code, that it does (PL §3.1, "An
+// atom that names code").
+const verdict = (row: Row) =>
+  `C ${row.comparison.confidentiality}, I ${row.comparison.integrity}` +
+  (categoryOf(row.comparison) === "atom names the pattern" ? ", by name" : "");
+
 const verdicts = async (flag: boolean) =>
   Object.fromEntries(
-    (await compareSmall(flag)).map((row) => [
-      row.path.join("/"),
-      `C ${row.comparison.confidentiality}, I ${row.comparison.integrity}`,
-    ]),
+    (await compareSmall(flag)).map((row) => [row.path.join("/"), verdict(row)]),
   );
 
-const EQUAL = "C equal, I equal";
+// A promoted `computed` over a labeled input: the template mints the atom
+// of the pattern, where the runtime's lift mints one for the callback.
+const NAMED = "C equal, I equal, by name";
+// A value the pattern passes on, or one with no label: the template has
+// the atom of the pattern that every kept output carries, and the runtime
+// stores no atom (PL §3.2, "Every kept output").
+const PASSED = "C equal, I tighter";
 
 // The rows that do not depend on which branch the conditionals take.
 const UNCONDITIONAL = {
-  shout: EQUAL,
-  echo: EQUAL,
-  both: EQUAL,
+  shout: NAMED,
+  echo: NAMED,
+  both: NAMED,
   // No input of `greeting` has a label, and neither side mints
-  // `TransformedBy` beside none (PL §3.2, question 66).
-  greeting: EQUAL,
+  // `TransformedBy` beside none (PL §3.2, question 66). The output
+  // carries the pattern's atom all the same.
+  greeting: PASSED,
   // The runtime's container carries the label the result schema declares
   // for the elements. The template is the source's membership.
-  titles: "C tighter, I equal",
-  "titles/0": EQUAL,
-  "titles/1": EQUAL,
-  loud: "C tighter, I equal",
-  "loud/0": EQUAL,
-  "loud/1": EQUAL,
-  note: EQUAL,
-  secret: EQUAL,
+  titles: "C tighter, I tighter",
+  "titles/0": PASSED,
+  "titles/1": PASSED,
+  loud: "C tighter, I tighter",
+  "loud/0": NAMED,
+  "loud/1": NAMED,
+  note: PASSED,
+  secret: PASSED,
   // `items.length` is the collection's membership (PL §3.8): the
   // `enumeration` slot at `items`, which has no label.
-  count: EQUAL,
+  count: PASSED,
 };
 
 describe("the small fixture's templates against the runtime's labels", () => {
@@ -54,20 +67,22 @@ describe("the small fixture's templates against the runtime's labels", () => {
     expect(await verdicts(true)).toEqual({
       ...UNCONDITIONAL,
       // A conditional inside a `computed` is a lift today: it copies the
-      // value and mints `TransformedBy`. A `select` has the integrity of
-      // the selected branch.
-      chosen: "C equal, I looser",
-      direct: EQUAL,
+      // value and mints `TransformedBy` for the callback. A `select` has
+      // the integrity of the selected branch, and the kept output the
+      // atom of the pattern (PL §3.5).
+      chosen: NAMED,
+      // The same conditional in the pattern body: the runtime mints none.
+      direct: PASSED,
     });
   });
 
   it("compares each output when the conditionals select the unlabeled branch", async () => {
     expect(await verdicts(false)).toEqual({
       ...UNCONDITIONAL,
-      chosen: "C tighter, I looser",
+      chosen: "C tighter, I equal, by name",
       // The runtime's label is the one the result schema declares, which
       // joins both branches whichever is selected.
-      direct: "C tighter, I equal",
+      direct: "C tighter, I tighter",
     });
   });
 
@@ -100,12 +115,13 @@ describe("the template of a message row's isEdited against the runtime's label",
 
   it("has no clause when the message was not edited, since no label is stored for an absent field", async () => {
     // With no clause the template mints no `TransformedBy` (PL §3.2,
-    // question 66), and the runtime's label has one beside its clauses:
-    // fewer clauses, and looser on integrity (note 197).
+    // question 66), and the runtime's label has one beside its clauses.
+    // The output is kept, so it carries the pattern's atom all the same
+    // (PL §3.2; note 197 had it looser on integrity).
     expect(await isEdited(false)).toEqual({
       runtime: ["body", "edited", "sent"],
       template: [],
-      overall: "looser",
+      overall: "tighter",
     });
   });
 });
@@ -115,38 +131,41 @@ describe("an object with a declared integrity atom and a defaulted property (rul
     Object.fromEntries(
       (await compareDefaulted(given)).map((row) => [
         row.path.join("/"),
-        `C ${row.comparison.confidentiality}, I ${row.comparison.integrity}`,
+        verdict(row),
       ]),
     );
 
   it("has the object's integrity on a whole read and none at the property a default fills", async () => {
     expect(await relations(false)).toEqual({
-      whole: EQUAL,
-      name: EQUAL,
+      whole: PASSED,
+      name: PASSED,
       // The runtime gives the defaulted property the object's atom. The
-      // template has the empty integrity there, which is looser: the
-      // exception by ruling of PL §3.1.
-      nick: "C equal, I looser",
-      derived: EQUAL,
+      // slot has the empty integrity there, which is the exception by
+      // ruling of PL §3.1. The output has the pattern's atom, which the
+      // runtime lacks, so the two sets of atoms are incomparable.
+      nick: "C equal, I incomparable",
+      derived: PASSED,
     });
   });
 
   it("is equal at the property where the argument supplies it", async () => {
     expect(await relations(true)).toEqual({
-      whole: EQUAL,
-      name: EQUAL,
-      nick: EQUAL,
-      derived: EQUAL,
+      whole: PASSED,
+      name: PASSED,
+      nick: PASSED,
+      derived: PASSED,
     });
   });
 });
 
 describe("the runtime's labels read by origin (ruling T2)", () => {
+  // The confidentiality with the static part, and without it. The
+  // integrity does not depend on the static part here.
   const overall = async (flag: boolean) =>
     Object.fromEntries(
       (await compareSmall(flag)).map((row) => [
         row.path.join("/"),
-        `${row.comparison.overall}, ${row.comparisonWithoutStatic.overall}`,
+        `${row.comparison.confidentiality}, ${row.comparisonWithoutStatic.confidentiality}`,
       ]),
     );
 
@@ -200,6 +219,10 @@ describe("the write edges of a handler against the labels its event's run stored
       ]);
       expect(row.comparison.confidentiality).toBe("looser");
       expect(row.comparison.integrity).toBe("equal");
+      // The target of a write edge gets no atom of the pattern added
+      // (PL §3.2, "What does not get the atom"): the atom of each side
+      // names the handler's body.
+      expect(row.comparison.patternForOtherCode).toBe(0);
     }
   });
 
@@ -210,7 +233,7 @@ describe("the write edges of a handler against the labels its event's run stored
       Object.fromEntries(
         rows.map((row) => [row.path.join("/"), row.comparison.overall]),
       ),
-    ).toEqual({ last: "equal", log: "equal", note: "equal" });
+    ).toEqual({ last: "tighter", log: "tighter", note: "tighter" });
   });
 });
 
@@ -229,22 +252,20 @@ describe("the branch a selector took, found from the run", () => {
 });
 
 describe("a computed whose template is not a derive (note 202)", () => {
-  it("has no TransformedBy where the runtime's lift mints one", async () => {
+  it("has the atom of the pattern where the runtime's lift mints one for the callback", async () => {
     const rows = Object.fromEntries(
-      (await comparePassed()).map((row) => [
-        row.path.join("/"),
-        `C ${row.comparison.confidentiality}, I ${row.comparison.integrity}`,
-      ]),
+      (await comparePassed()).map((row) => [row.path.join("/"), verdict(row)]),
     );
 
     expect(rows).toEqual({
-      // A slot passed on, and the membership of a collection.
-      same: "C equal, I looser",
-      count: "C equal, I looser",
+      // A slot passed on, and the membership of a collection. The template
+      // mints nothing, and the kept output carries the pattern's atom.
+      same: NAMED,
+      count: NAMED,
       // The container entry of a constructed value is `const`, and the
       // lift's label is on the container too.
-      tagged: "C tighter, I looser",
-      "tagged/who": "C equal, I looser",
+      tagged: "C tighter, I equal, by name",
+      "tagged/who": NAMED,
     });
   });
 });

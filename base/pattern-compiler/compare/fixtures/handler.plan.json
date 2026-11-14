@@ -237,6 +237,9 @@
               }
             }
           ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/handler.tsx#default"
+          ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
           "selectors": [],

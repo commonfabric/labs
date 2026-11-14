@@ -25,7 +25,12 @@ import {
   type WriteRow,
 } from "./harness.ts";
 import { showLabel } from "./scenarios.ts";
-import type { Relation, Template } from "./template.ts";
+import {
+  type Category,
+  categoryOf,
+  type Relation,
+  type Template,
+} from "./template.ts";
 
 type CorpusPlan = Plan & {
   argumentSchema?: string;
@@ -54,7 +59,10 @@ export type ResultRow = {
   confidentiality: Relation;
   integrity: Relation;
   overall: Relation;
-  withoutStatic: Relation;
+  /** The category the row is counted in (PL §3.1). */
+  category: Category;
+  /** The category against the runtime's label without its static part. */
+  withoutStatic: Category;
   /** A selector or a pick of the template was not found from the run. */
   bound: boolean;
 };
@@ -110,7 +118,8 @@ const resultRow = (
     confidentiality: row.comparison.confidentiality,
     integrity: row.comparison.integrity,
     overall: row.comparison.overall,
-    withoutStatic: row.comparisonWithoutStatic.overall,
+    category: categoryOf(row.comparison),
+    withoutStatic: categoryOf(row.comparisonWithoutStatic),
     bound: evaluated.bound,
   };
 };
@@ -271,15 +280,8 @@ const report = async (file: string) => {
   );
   for (const kind of ["output", "write"] as const) {
     const of = rows.filter((row) => row.kind === kind && !row.bound);
-    const by = (relation: Relation, field: "overall" | "withoutStatic") =>
-      of.filter((row) =>
-        (row[field] === "looser" &&
-            (row.confidentiality === "incomparable" ||
-              row.integrity === "incomparable") &&
-            field === "overall"
-          ? "incomparable"
-          : row[field]) === relation
-      ).length;
+    const by = (category: Category, field: "category" | "withoutStatic") =>
+      of.filter((row) => row[field] === category).length;
     console.log(
       `${
         kind === "output" ? "outputs" : "write edges"
@@ -289,17 +291,33 @@ const report = async (file: string) => {
         } more whose label is a bound`,
     );
     for (
-      const relation of ["equal", "tighter", "looser", "incomparable"] as const
+      const category of [
+        "equal",
+        "tighter",
+        "atom names the pattern",
+        "looser",
+        "incomparable",
+      ] as const
     ) {
       console.log(
-        `  ${relation.padEnd(12)} ${`${by(relation, "overall")}`.padStart(6)}` +
-          (relation === "incomparable"
-            ? ""
-            : `   without the static part ${
-              `${by(relation, "withoutStatic")}`.padStart(6)
-            }`),
+        `  ${category.padEnd(22)} ${
+          `${by(category, "category")}`.padStart(6)
+        }` +
+          `   without the static part ${
+            `${by(category, "withoutStatic")}`.padStart(6)
+          }`,
       );
     }
+    // A row counted under "atom names the pattern" is equal or tighter
+    // on each axis otherwise.
+    const named = of.filter((row) => row.category === "atom names the pattern");
+    console.log(
+      `  of the rows whose atom names the pattern, ${
+        named.filter((row) => row.overall === "equal").length
+      } are equal otherwise and ${
+        named.filter((row) => row.overall === "tighter").length
+      } tighter`,
+    );
   }
   console.log("not compared, by reason:");
   const reasons = new Map<string, number>();
@@ -327,7 +345,7 @@ const report = async (file: string) => {
       ran.reduce((sum, result) => sum + (result.events ?? 0), 0)
     }`,
   );
-  console.log("\nrows that are looser, by what differs:");
+  console.log("\nrows that are looser or incomparable, by what differs:");
   const looser = rows.filter((row) => row.overall === "looser" && !row.bound);
   for (
     const [cause, group] of count(
