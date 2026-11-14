@@ -411,6 +411,100 @@ export const Pair = pattern<{ a: string; b: string }>(({ a, b }) => {
     assert_eq!(slots, ["argument a : identity", "argument b : identity"]);
 }
 
+/// The slots of the cone whose entry is `entry`, in the notation of PL
+/// §6.2.
+fn cone_slots(plan: &Value, entry: &str) -> Vec<String> {
+    let cone = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .find(|cone| cone["entry"] == entry)
+        .unwrap_or_else(|| panic!("no cone {entry}"));
+    cone["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .map(|slot| slot_line(plan, slot))
+        .collect()
+}
+
+#[test]
+fn a_context_read_in_the_reactive_tier_has_the_slots_of_pl_section_3_16() {
+    let analysis = program(
+        r#"import { Cell, equals, linksOf, pattern, principalOf, spaceAccess, spaceOf, toIndentedDebugString } from "commonfabric";
+interface Item { title: string }
+export const Context = pattern<{ a: Cell<Item>; b: Cell<Item>; list: Item[] }>(({ a, b, list }) => {
+  const where = spaceOf(a);
+  const same = equals(a, b);
+  const links = linksOf(list);
+  const who = principalOf(a);
+  const access = spaceAccess(b);
+  const shown = toIndentedDebugString(list);
+  return { where, same, links, who, access, shown };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Context");
+    // "`spaceOf(x)`: The `identity` slot of `x`, resolved".
+    assert_eq!(cone_slots(&plan, "where"), ["argument a : identity, resolved"]);
+    // "`equals(a, b)`: The `identity` slots of both operands, resolved".
+    assert_eq!(
+        cone_slots(&plan, "same"),
+        ["argument a : identity, resolved", "argument b : identity, resolved"]
+    );
+    // "`linksOf(list)`: The `enumeration` slot of the list and the
+    // `identity` slot of each element".
+    assert_eq!(
+        cone_slots(&plan, "links"),
+        ["argument list : enumeration", "argument list/* : identity"]
+    );
+    // "`principalOf`: The `identity` slot of the target, resolved, and a
+    // `labelMetadata` slot on it".
+    assert_eq!(
+        cone_slots(&plan, "who"),
+        ["argument a : identity, resolved", "argument a : labelMetadata"]
+    );
+    // "`spaceAccess`: `dynamic`, of kind `space`, through the `identity`
+    // slot of the operand, resolved".
+    assert_eq!(cone_slots(&plan, "access"), ["argument b : identity, resolved"]);
+    let of = plan["dynamicReads"]
+        .as_array()
+        .expect("dynamic reads")
+        .iter()
+        .find(|read| read["why"]["kind"] == "space")
+        .expect("a dynamic read of kind space")["why"]["of"]
+        .clone();
+    assert_eq!(slot_line(&plan, &of), "argument b : identity, resolved");
+    // BI: "Every operand by `value`, over its whole subtree".
+    assert_eq!(cone_slots(&plan, "shown"), ["argument list : value"]);
+}
+
+#[test]
+fn a_dynamic_read_of_kind_space_in_a_body_names_the_slot_of_its_operand() {
+    // PL §1.1, `DynamicReads`: "The access list of the space an
+    // `identity` slot's target lives in, or of the space a `value` slot
+    // names."
+    let analysis = program(
+        r#"import { Cell, lift, pattern, spaceAccess } from "commonfabric";
+interface Item { title: string }
+const allowed = lift((x: { item: Cell<Item>; on: boolean }) => { if (x.on) { return spaceAccess(x.item) !== undefined; } return false; });
+export const Gate = pattern<{ item: Cell<Item>; on: boolean }>(({ item, on }) => {
+  const open = allowed({ item, on });
+  return { open };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Gate");
+    let of = plan["dynamicReads"]
+        .as_array()
+        .expect("dynamic reads")
+        .iter()
+        .find(|read| read["why"]["kind"] == "space")
+        .expect("a dynamic read of kind space")["why"]["of"]
+        .clone();
+    assert_eq!(slot_line(&plan, &of), "argument item : identity");
+}
+
 // ----- PL §6.2: the plan for the slice of FabriChat -----
 
 fn fabrichat() -> ProgramAnalysis {

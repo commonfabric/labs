@@ -485,6 +485,37 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.observe(place, "identity");
     }
 
+    /// The cone being evaluated observes a reference after resolution: the
+    /// `identity` slot, resolved (PL §2.5).
+    fn resolve(&mut self, place: &Place) {
+        match place {
+            Place::Slot(root, path) => {
+                let slot = self.slot_with(root, path, "identity", true, false);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
+            Place::Record(fields) => {
+                for member in fields.values() {
+                    self.resolve(member);
+                }
+            }
+            other => self.pass(other),
+        }
+    }
+
+    /// Whether the checker types an expression as a string.
+    fn is_string(&self, expression: &Expression<'a>) -> bool {
+        self.resolver
+            .typed_at(self.module, expression, 0)
+            .is_ok_and(|ty| {
+                matches!(
+                    self.resolver.shape(ty),
+                    crate::types::Shape::String | crate::types::Shape::Literal(_)
+                )
+            })
+    }
+
     fn observe(&mut self, place: &Place, class: &'static str) {
         match place {
             Place::Slot(root, path) => {
@@ -1296,6 +1327,80 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 Place::Slot(Root::Operation(operation), Vec::new())
             }
+            // The context reads (PL §3.16).
+            "spaceOf" | "equals" => self.in_cone(hint, at, |emitter, _| {
+                for argument in arguments {
+                    let place = emitter.eval(argument, "operand");
+                    emitter.resolve(&place);
+                }
+            }),
+            "principalOf" | "principalsOf" | "profileOwnerOf" => {
+                self.in_cone(hint, at, |emitter, _| {
+                    if let Some(first) = arguments.first() {
+                        let place = emitter.eval(first, "operand");
+                        emitter.resolve(&place);
+                        emitter.observe(&place, "labelMetadata");
+                    }
+                    for argument in arguments.iter().skip(1) {
+                        let place = emitter.eval(argument, "operand");
+                        emitter.consume(&place);
+                    }
+                })
+            }
+            "spaceAccess" | "spaceAccessOf" | "spaceMembers" | "spaceDeleted" => {
+                self.in_cone(hint, at, |emitter, _| {
+                    let Some(first) = arguments.first() else {
+                        return;
+                    };
+                    let place = emitter.eval(first, "operand");
+                    match &place {
+                        Place::Slot(root, path) => {
+                            // A cell operand by its `identity` slot,
+                            // resolved; an operand that names a space by
+                            // its `value` slot.
+                            let names_space = name == "spaceDeleted" && emitter.is_string(first);
+                            let slot = if names_space {
+                                emitter.slot(root, path, "value")
+                            } else {
+                                emitter.slot_with(root, path, "identity", true, false)
+                            };
+                            if let Some(cone) = emitter.cone {
+                                emitter.cones[cone].slots.insert(slot);
+                            }
+                            emitter
+                                .dynamic_reads
+                                .push(json!({ "why": { "kind": "space", "of": slot } }));
+                        }
+                        Place::Const => {}
+                        _ => emitter.unsupported(
+                            "a dynamic read of kind `space` whose operand the emitter cannot name",
+                            at,
+                        ),
+                    }
+                    for argument in arguments.iter().skip(1) {
+                        let place = emitter.eval(argument, "operand");
+                        emitter.consume(&place);
+                    }
+                })
+            }
+            "linksOf" => self.in_cone(hint, at, |emitter, _| {
+                if let Some(first) = arguments.first() {
+                    let place = emitter.eval(first, "operand");
+                    emitter.observe(&place, "enumeration");
+                    emitter.pass(&Self::extend(&place, "*"));
+                }
+            }),
+            // A rendering as text reads every operand by `value`, over its
+            // whole subtree (BI, "Debug strings").
+            "toIndentedDebugString" | "toCompactDebugString" => {
+                self.in_cone(hint, at, |emitter, _| {
+                    for argument in arguments {
+                        let place = emitter.eval(argument, "operand");
+                        emitter.consume(&place);
+                    }
+                })
+            }
+            "getPatternEnvironment" => Place::Const,
             _ => {
                 self.unsupported(format!("the built-in `{name}` in the reactive tier"), at);
                 for argument in arguments {
@@ -1414,6 +1519,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut reads: Vec<usize> = Vec::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
         let mut names: Names = HashMap::new();
+        // The `value` entries, for an operand that names a space.
+        let mut value_names: Names = HashMap::new();
         let identity_at = |entries: &[Entry], input: &str, path: &[Seg]| {
             entries.iter().any(|entry| {
                 entry.input == input
@@ -1443,6 +1550,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                     if matches!(entry.class, Class::Identity | Class::Resolved) {
                         names.insert(key, json!(slot));
+                    } else if entry.class == Class::Value {
+                        value_names.insert(key, json!(slot));
                     }
                 }
                 Place::Const | Place::Index(_) | Place::Stream(_) => {}
@@ -1462,6 +1571,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                     at_path.extend(slot_path(&[], &entry.path));
                     if matches!(entry.class, Class::Identity | Class::Resolved) {
                         names.insert(key, json!({ "computed": computed_inputs.len() }));
+                    } else if entry.class == Class::Value {
+                        value_names.insert(key, json!({ "computed": computed_inputs.len() }));
                     }
                     computed_inputs.push(json!({
                         "at": at_path,
@@ -1536,12 +1647,34 @@ impl<'a> Emitter<'_, '_, 'a> {
                 "why": { "kind": "labelMetadata", "body": index },
             }));
         }
-        if record
-            .other_dynamic
-            .iter()
-            .any(|line| line.starts_with("space:"))
-        {
-            self.unsupported("a dynamic read of kind `space`", at);
+        // The reads of the access list of a space (PL §3.16): each names
+        // the slot of its operand, or the operand's entry of `computed`.
+        let mut spaces: Vec<Value> = Vec::new();
+        for starts in &record.detail.spaces {
+            for (input, path) in starts {
+                let of = match name_of(&names, input, path, false)
+                    .or_else(|| name_of(&value_names, input, path, false))
+                {
+                    Some(Value::Number(slot)) => json!(slot),
+                    Some(Value::Object(computed)) => {
+                        json!({ "body": index, "computed": computed["computed"] })
+                    }
+                    _ => {
+                        self.unsupported(
+                            "a dynamic read of kind `space` whose operand the emitter cannot name",
+                            at,
+                        );
+                        continue;
+                    }
+                };
+                if !spaces.contains(&of) {
+                    spaces.push(of);
+                }
+            }
+        }
+        for of in spaces {
+            self.dynamic_reads
+                .push(json!({ "why": { "kind": "space", "of": of } }));
         }
         // `Body.calls`.
         let mut calls: Vec<Value> = Vec::new();

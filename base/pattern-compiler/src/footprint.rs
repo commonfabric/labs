@@ -240,6 +240,10 @@ pub struct Detail {
     pub edges: Vec<WriteRec>,
     /// The entries each journaled resolution starts from.
     pub links: Vec<Vec<(String, Vec<Seg>)>>,
+    /// The entries each read of the access list of a space starts from:
+    /// the operand of `spaceAccess`, `spaceAccessOf`, `spaceMembers`, or
+    /// `spaceDeleted`.
+    pub spaces: Vec<Vec<(String, Vec<Seg>)>>,
     pub label_metadata: bool,
     /// `Body.outputs`: the result path, whether the reference is `passes`,
     /// and the entries it names.
@@ -684,6 +688,7 @@ struct Store {
     /// The writes, each with the value written.
     pending: Vec<(Pending, Val, bool)>,
     link_entries: BTreeSet<Vec<PathKey>>,
+    space_entries: BTreeSet<Vec<PathKey>>,
 }
 
 /// The target of a write the record is filled in for at the end.
@@ -2695,6 +2700,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
                             .collect();
                         if !names.is_empty() {
                             self.store.spaces.insert(names.join(", "));
+                            self.store
+                                .space_entries
+                                .insert(val.projections().iter().map(Proj::key).collect());
                         }
                     }
                 }
@@ -3590,6 +3598,11 @@ impl<'a> Analyzer<'_, '_, 'a> {
             edges,
             links: store
                 .link_entries
+                .iter()
+                .map(|starts| starts.to_vec())
+                .collect(),
+            spaces: store
+                .space_entries
                 .iter()
                 .map(|starts| starts.to_vec())
                 .collect(),
