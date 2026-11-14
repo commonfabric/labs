@@ -664,9 +664,12 @@ numbers have gaps.
     target does not name is not. "No slot is excepted" for a state
     target is taken literally, so the cone that writes a state cell has
     an edge to itself through its own `identity` slot of the cell, and
-    is reported unless the body reads its own target. The corpus has 2
-    reports of `side-write:cycle` and 41 edges through a side-write
-    (20 before).
+    is reported unless the body reads its own target. The corpus has 9
+    reports of `side-write:cycle` where it had none, 2 of them in
+    accepted modules, and the plans of the accepted modules have 41
+    edges through a side-write (20 before). Most of the 9 are an edge
+    from a cone to itself through a state cell or a handle that the
+    body writes and does not read.
 117. **`side-write:cycle` names the side-write** where the write is in
     the module of the pattern, and the function where it is in another
     module. One site is reported once, whatever the number of cones it
