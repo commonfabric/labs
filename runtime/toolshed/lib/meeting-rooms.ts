@@ -16,6 +16,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { isGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type { Server } from "@commonfabric/memory/v2/server";
+import type { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   isExplicitSpaceOwner,
@@ -121,7 +122,7 @@ export class MeetingRooms {
       creator: row.creator,
     };
     if (row.creator === principal && row.root !== null) {
-      result.intent = { requestId: row.request_id, root: this.#root(row) };
+      result.intent = { requestId: row.request_id, root: decodeRoot(row.root) };
     }
     return result;
   }
@@ -188,13 +189,11 @@ export class MeetingRooms {
     request: MeetingRoomRequest,
     key: string,
   ): Promise<AllocationRow> {
-    let space = "space" in request.candidate
-      ? request.candidate.space
-      : undefined;
-    if (space === undefined) {
-      if (!("root" in request.candidate)) {
-        throw new Error("Missing candidate root");
-      }
+    // A caller's candidate passed `isValidSpaceDid` when `ensure` parsed it.
+    let space: string;
+    if ("space" in request.candidate) {
+      space = request.candidate.space;
+    } else {
       space = await this.#createSpace(principal, request.candidate.root);
       if (!isValidSpaceDid(space)) throw new Error("Invalid created space DID");
     }
@@ -229,12 +228,33 @@ export class MeetingRooms {
       db.close();
     }
   }
+}
 
-  /** Decodes the allocating principal's retained genesis intent. */
-  #root(row: AllocationRow): GenesisRoot {
-    if (row.root === null) throw new Error("Missing retained genesis root");
-    const root = decodeTrustedMemoryBoundary(row.root);
-    if (!isGenesisRoot(root)) throw new Error("Invalid retained genesis root");
-    return root;
-  }
+/** Decodes the allocating principal's retained genesis intent. */
+function decodeRoot(encoded: string): GenesisRoot {
+  const root = decodeTrustedMemoryBoundary(encoded);
+  if (!isGenesisRoot(root)) throw new Error("Invalid retained genesis root");
+  return root;
+}
+
+/**
+ * A `createSpace` for {@link MeetingRooms}: for each candidate it opens
+ * storage with `open(options)`, creates a loom space owned by the creator
+ * from the candidate's genesis root, and closes the storage again.
+ */
+export function loomSpaceCreator<Options>(
+  open: (options: Options) => Pick<StorageManager, "createSpace" | "close">,
+  options: Options,
+): (creator: DID, root: GenesisRoot) => Promise<DID> {
+  return async (creator, root) => {
+    const storage = open(options);
+    try {
+      return await storage.createSpace({ [creator]: "OWNER" }, {
+        root,
+        spaceKind: "loom",
+      });
+    } finally {
+      await storage.close();
+    }
+  };
 }

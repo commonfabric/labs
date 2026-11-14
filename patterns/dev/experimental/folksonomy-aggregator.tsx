@@ -25,6 +25,7 @@ import {
   pattern,
   Stream,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -61,6 +62,8 @@ interface Input {
  * The #folksonomyAggregator tag is how folksonomy-tags instances discover this piece via wish().
  */
 export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   events: TagEvent[];
   suggestions: Record<string, CommunityTagSuggestion[]>;
   postEvent: Stream<TagEvent>;

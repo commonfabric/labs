@@ -1,0 +1,35 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "dev/experimental/folksonomy-stress-test.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "genMs": {
+        "type": "number"
+      },
+      "loadMs": {
+        "type": "number"
+      },
+      "loadedCount": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "loadedCount",
+      "genMs",
+      "loadMs",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

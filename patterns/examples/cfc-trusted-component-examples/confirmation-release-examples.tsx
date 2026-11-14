@@ -235,49 +235,48 @@ export const SecurityIncidentRedactedReleaseExample = pattern<
   };
 });
 
-const EXAMPLE_TITLES = [
-  "Finance Recipient Confirmation",
-  "Customer Support Recipient Confirmation",
-  "Patient Case Redacted Release",
-  "Security Incident Redacted Release",
-] as const;
+export default pattern<Record<PropertyKey, never>>(() => {
+  const examples = [
+    FinanceRecipientConfirmExample({}),
+    CustomerSupportRecipientConfirmExample({}),
+    PatientCaseRedactedReleaseExample({}),
+    SecurityIncidentRedactedReleaseExample({}),
+  ] as const;
 
-export default pattern<Record<PropertyKey, never>>(() => ({
-  [NAME]: computed(() => "Confirmation and Redacted Release Examples"),
-  [UI]: (
-    <cf-screen title="Confirmation and Redacted Release Examples">
-      <cf-vstack gap="3" style={{ padding: "1rem" }}>
-        <cf-card>
-          <cf-vstack slot="content" gap="2">
-            <cf-heading level={2}>
-              Recipient confirmation and redacted release
-            </cf-heading>
-            <cf-label>
-              These untrusted host wrappers embed trusted surfaces for recipient
-              confirmation and source-visible redacted release.
-            </cf-label>
-            <cf-label>
-              The gallery currently exposes {EXAMPLE_TITLES.length}{" "}
-              example patterns.
-            </cf-label>
-          </cf-vstack>
-        </cf-card>
-        <cf-card>
-          <cf-vstack slot="content" gap="2">
-            <cf-heading level={3}>Catalog</cf-heading>
-            {EXAMPLE_TITLES.map((title, index) => (
-              <div>
-                {index + 1}. {title}
-              </div>
-            ))}
-          </cf-vstack>
-        </cf-card>
-        <div>{FinanceRecipientConfirmExample({})}</div>
-        <div>{CustomerSupportRecipientConfirmExample({})}</div>
-        <div>{PatientCaseRedactedReleaseExample({})}</div>
-        <div>{SecurityIncidentRedactedReleaseExample({})}</div>
-      </cf-vstack>
-    </cf-screen>
-  ),
-  exampleCount: EXAMPLE_TITLES.length,
-}));
+  return {
+    [NAME]: computed(() => "Confirmation and Redacted Release Examples"),
+    [UI]: (
+      <cf-screen title="Confirmation and Redacted Release Examples">
+        <cf-vstack gap="3" style={{ padding: "1rem" }}>
+          <cf-card>
+            <cf-vstack slot="content" gap="2">
+              <cf-heading level={2}>
+                Recipient confirmation and redacted release
+              </cf-heading>
+              <cf-label>
+                These untrusted host wrappers embed trusted surfaces for
+                recipient confirmation and source-visible redacted release.
+              </cf-label>
+              <cf-label>
+                The gallery currently exposes {examples.length}{" "}
+                example patterns.
+              </cf-label>
+            </cf-vstack>
+          </cf-card>
+          <cf-card>
+            <cf-vstack slot="content" gap="2">
+              <cf-heading level={3}>Catalog</cf-heading>
+              {examples.map((example, index) => (
+                <div>
+                  {index + 1}. {example[NAME]}
+                </div>
+              ))}
+            </cf-vstack>
+          </cf-card>
+          {examples.map((example) => <div>{example}</div>)}
+        </cf-vstack>
+      </cf-screen>
+    ),
+    exampleCount: examples.length,
+  };
+});

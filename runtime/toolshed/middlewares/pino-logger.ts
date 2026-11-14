@@ -35,16 +35,37 @@ export function redactHeaders(headers: unknown): unknown {
   );
 }
 
-export function serializeResponse(response: {
-  statusCode: number;
-  headers: unknown;
-}): { status: number; headers: string } | undefined {
-  if (env.DISABLE_LOG_REQ_RES) {
+export function serializeResponse(
+  response: { statusCode: number; headers: unknown },
+  environment: Pick<typeof env, "DISABLE_LOG_REQ_RES"> = env,
+): { status: number; headers: string } | undefined {
+  if (environment.DISABLE_LOG_REQ_RES) {
     return undefined;
   }
   return {
     status: response.statusCode,
     headers: JSON.stringify(redactHeaders(response.headers)),
+  };
+}
+
+/**
+ * The logged form of a request, with its sensitive headers redacted: an
+ * object in production, where the log is structured, and a JSON string
+ * elsewhere, where it is pretty-printed.
+ */
+export function serializeRequest(
+  request: { method: string; url: string; headers: unknown },
+  environment: Pick<typeof env, "DISABLE_LOG_REQ_RES" | "ENV"> = env,
+): { method: string; url: string; headers: unknown } | undefined {
+  if (environment.DISABLE_LOG_REQ_RES) {
+    return undefined;
+  }
+  return {
+    method: request.method,
+    url: request.url,
+    headers: environment.ENV === "production"
+      ? redactHeaders(request.headers)
+      : JSON.stringify(redactHeaders(request.headers)),
   };
 }
 
@@ -62,18 +83,7 @@ export function pinoLogger() {
       level: env.LOG_LEVEL || "info",
       serializers: {
         res: serializeResponse,
-        req: (req) => {
-          if (env.DISABLE_LOG_REQ_RES) {
-            return undefined;
-          }
-          return {
-            method: req.method,
-            url: req.url,
-            headers: env.ENV === "production"
-              ? redactHeaders(req.headers)
-              : JSON.stringify(redactHeaders(req.headers)),
-          };
-        },
+        req: serializeRequest,
       },
     }, destination),
     http: {

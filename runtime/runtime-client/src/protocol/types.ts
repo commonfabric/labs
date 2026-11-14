@@ -1401,7 +1401,8 @@ export type CellSendReviewedRequest = BaseRequest & {
 
 /**
  * The {@link RequestType.CellSubscribe} request. `includeCfcLabel` makes every
- * update carry the cell's label too.
+ * update carry the cell's label too, and `includeWrittenPrincipal` the
+ * principal the value's own cell represents.
  */
 export type CellSubscribeRequest = BaseRequest & {
   type: RequestType.CellSubscribe;
@@ -1419,6 +1420,15 @@ export type CellSubscribeRequest = BaseRequest & {
    * caller pays for it.
    */
   includeCfcLabel?: boolean;
+
+  /**
+   * Opt in to delivery of the principal the value's own cell represents, as
+   * `writtenPrincipalAt()` in the runner decides it: every update then
+   * carries it, read with the value as a tracked dependency of the sink, so
+   * that relinking or relabeling the cell holding the value re-fires the
+   * subscription. Off by default.
+   */
+  includeWrittenPrincipal?: boolean;
 };
 
 /** The {@link RequestType.CellUnsubscribe} request. */
@@ -1439,22 +1449,6 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
-
-  /**
-   * Whether to answer also with where a write to the cell lands, read
-   * together with the cell its links lead to: write redirects are followed,
-   * and a link stored as the value there is not.
-   */
-  withWriteTarget?: true;
-};
-
-/** The {@link RequestType.CellResolveAsCell} response. */
-export type CellResolveAsCellResponse = CellResponse & {
-  /**
-   * Where a write to the cell lands, when the request asked for it, read
-   * with {@link CellResponse.cell}.
-   */
-  writeTarget?: CellRef;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -4230,6 +4224,15 @@ export type CellUpdateNotification =
        * a label change without a separate round trip.
        */
       cfcLabel?: CfcLabelView | undefined;
+
+      /**
+       * The principal the value's own cell represents, read with the value,
+       * present only for a subscription that opted in through
+       * `includeWrittenPrincipal`. `undefined` when the value is not the
+       * whole of the cell a write to it lands in, or that cell's label names
+       * no single principal.
+       */
+      writtenPrincipal?: DID | undefined;
     })
     | CellRefusedAnswer
   );
@@ -4825,7 +4828,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResolveAsCellResponse;
+    response: CellResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;

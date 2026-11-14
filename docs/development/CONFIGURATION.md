@@ -71,8 +71,8 @@ explains why it lives in the toolshed rather than in `@commonfabric/llm`.
 2. `gateway:gpt-5.6-luna`
 3. `gateway:gemini-3.5-flash`
 
-The first available candidate becomes the `default` alias and the value used
-for `TASK_MODELS.coding` / `TASK_MODELS.json`. Only these candidates can become
+The first available candidate becomes the `default` alias and the model the
+registry names for the `coding` and `json` tasks. Only these candidates can become
 the default. If none is registered, the alias remains unavailable even when
 other language models are registered. A request naming an unavailable `default`
 or an unknown model is rejected.
@@ -109,7 +109,7 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 | Var | Default | Notes |
 |---|---|---|
 | `PLAID_CLIENT_ID` / `PLAID_SECRET` | _(unset)_ | |
-| `PLAID_ENV` | `sandbox` | `sandbox` \| `development` \| `production`. |
+| `PLAID_ENV` | `sandbox` | `sandbox` \| `production`. |
 | `PLAID_PRODUCTS` | `transactions` | Comma-separated. |
 | `PLAID_COUNTRY_CODES` | `US` | |
 | `PLAID_REDIRECT_URI` | _(unset)_ | Optional. |
@@ -518,9 +518,10 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
   - `SANDBOX_SERVICE_URL` → `https://sandbox.stage.commontools.dev`.
   Both fall back gracefully when unreachable, but expect logs warning about
   the failed probes if you're off the corporate network.
-- **`"implicit trust"`** appears as the identity-passphrase default in two
-  places (toolshed `IDENTITY_PASSPHRASE` and the CLI dev recipe). They must
-  match for toolshed and the CLI to share an identity in local dev.
+- **`"implicit trust"`** appears as the development identity passphrase in two
+  places (the identity a toolshed with `ENV=development` signs as when neither
+  `IDENTITY` nor `IDENTITY_PASSPHRASE` is set, and the CLI dev recipe). They
+  must match for toolshed and the CLI to share an identity in local dev.
 
 ---
 

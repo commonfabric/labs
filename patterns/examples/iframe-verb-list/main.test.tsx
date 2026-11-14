@@ -23,6 +23,15 @@ export default pattern(() => {
   const action_add_two_line_bread = action(() => {
     list.addItem.send({ id: "bread", text: "Bread\nand butter" });
   });
+  const action_add_without_id = action(() => {
+    list.addItem.send({ id: "", text: "Jam" });
+  });
+  const action_add_under_reserved_id = action(() => {
+    list.addItem.send({ id: "__proto__", text: "Jam" });
+  });
+  const action_add_blank_text = action(() => {
+    list.addItem.send({ id: "jam", text: "   " });
+  });
 
   const assert_starts_empty = assert(() => list.state.items.length === 0);
   const assert_holds_milk = assert(() =>
@@ -45,6 +54,10 @@ export default pattern(() => {
   );
   const assert_text_keeps_bread_on_one_line = assert(() =>
     list[FS].content === "- [ ] Milk\n- [ ] Eggs\n- [ ] Bread and butter"
+  );
+  const assert_refused_items_were_not_added = assert(() =>
+    list.state.items.length === 3 &&
+    list.state.items.every((item) => item.text !== "Jam" && item.id !== "jam")
   );
   const assert_nothing_is_checked_or_hidden = assert(() =>
     Object.keys(list.state.checked).length === 0 &&
@@ -69,6 +82,17 @@ export default pattern(() => {
 
       { action: action_add_two_line_bread },
       { assertion: assert_text_keeps_bread_on_one_line },
+
+      { action: action_add_without_id },
+      { action: action_add_under_reserved_id },
+      { action: action_add_blank_text },
+      { assertion: assert_refused_items_were_not_added },
+    ],
+    // Each refused item is the verb's error, which the runner reports.
+    expectRuntimeErrors: [
+      "An item needs an id.",
+      'An item id cannot be "__proto__".',
+      "An item needs text.",
     ],
     list,
   };

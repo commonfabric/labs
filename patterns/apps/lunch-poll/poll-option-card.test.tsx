@@ -28,11 +28,19 @@ import type {
   Vote,
 } from "./main.tsx";
 
-type EmptyState = Record<PropertyKey, never>;
+/** Where the recording streams below write what the card sent them. */
+type SentState = { sent: Writable<string[]> };
 
-const noopCastVote = handler<CastVoteEvent, EmptyState>(() => {});
-const noopRemoveOption = handler<RemoveOptionEvent, EmptyState>(() => {});
-const noopLogVisit = handler<LogVisitEvent, EmptyState>(() => {});
+const recordCastVote = handler<CastVoteEvent, SentState>((event, { sent }) =>
+  sent.push(`vote ${event.optionId} ${event.voteType}`)
+);
+const recordRemoveOption = handler<RemoveOptionEvent, SentState>((
+  event,
+  { sent },
+) => sent.push(`remove ${event.optionId}`));
+const recordLogVisit = handler<LogVisitEvent, SentState>((event, { sent }) =>
+  sent.push(`log ${event.optionId}`)
+);
 const recordSetOptionImage = handler<
   SetOptionImageEvent,
   { lastEvent: Writable<SetOptionImageEvent | undefined> }
@@ -81,9 +89,11 @@ export default pattern(() => {
   const rank = new Writable<number | undefined>(undefined);
   const reactiveRank = computed(() => rank.get());
 
-  const castVote: Stream<CastVoteEvent> = noopCastVote({});
-  const removeOption: Stream<RemoveOptionEvent> = noopRemoveOption({});
-  const logVisit: Stream<LogVisitEvent> = noopLogVisit({});
+  // What the card's controls sent, in order.
+  const sent = new Writable<string[]>([]);
+  const castVote: Stream<CastVoteEvent> = recordCastVote({ sent });
+  const removeOption: Stream<RemoveOptionEvent> = recordRemoveOption({ sent });
+  const logVisit: Stream<LogVisitEvent> = recordLogVisit({ sent });
   const lastSetOptionImage = new Writable<SetOptionImageEvent | undefined>(
     undefined,
   );
@@ -253,6 +263,27 @@ export default pattern(() => {
         GENERATED_IMAGE_DATA_URL;
   });
 
+  // Each control sends its event for this card's option; remove asks first,
+  // and Cancel takes the question back without sending anything.
+  const CONFIRM = 'Remove "Sushi Place" and discard its votes?';
+  const assert_remove_asks_first = assert(() =>
+    hasText(card[UI], CONFIRM) && removeConfirmTarget.get() === "opt-sushi" &&
+    sent.get().length === 0
+  );
+  const assert_remove_cancelled = assert(() =>
+    !hasText(card[UI], CONFIRM) && removeConfirmTarget.get() === null &&
+    sent.get().length === 0
+  );
+  const assert_removed = assert(() =>
+    !hasText(card[UI], CONFIRM) &&
+    sent.get().join(", ") === "remove opt-sushi"
+  );
+  const assert_controls_sent = assert(() =>
+    sent.get().join(", ") ===
+      "remove opt-sushi, log opt-sushi, vote opt-sushi green, " +
+        "vote opt-sushi yellow, vote opt-sushi red"
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_my_green_vote_label_renders },
@@ -274,6 +305,19 @@ export default pattern(() => {
       { assertion: assert_keep_button_when_generated },
       { action: action_keep_generated_art },
       { assertion: assert_keep_sends_generated_image },
+
+      { press: card[UI], control: "remove" },
+      { assertion: assert_remove_asks_first },
+      { press: card[UI], control: "Cancel" },
+      { assertion: assert_remove_cancelled },
+      { press: card[UI], control: "remove" },
+      { press: card[UI], control: "Yes, remove" },
+      { assertion: assert_removed },
+      { press: card[UI], control: "✓ we went here" },
+      { press: card[UI], control: "🟢" },
+      { press: card[UI], control: "🟡" },
+      { press: card[UI], control: "🔴" },
+      { assertion: assert_controls_sent },
     ],
     card,
     generatingCard,

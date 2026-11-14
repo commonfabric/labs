@@ -127,7 +127,7 @@ const SharedTranscript = pattern<
   });
 
   return {
-    [NAME]: computed(() => `${id} transcript`),
+    [NAME]: "transcript",
     [UI]: (
       <cf-vstack id={id} gap="3" style={{ minHeight: 0 }}>
         <cf-label>{messageCountLabel}</cf-label>
@@ -164,7 +164,7 @@ const RoomsList = pattern<RoomsListInput, { [NAME]: string; [UI]: any }>((
   });
 
   return {
-    [NAME]: computed(() => `${id} rooms`),
+    [NAME]: "rooms list",
     [UI]: (
       <cf-hstack id={id} gap="2" wrap>
         <cf-chip

@@ -199,12 +199,7 @@ export default pattern<AgentInput, AgentOutput>(
 
     const lastRunTimestamp = computed(() => {
       const ts = lastRun.get();
-      if (!ts) return "";
-      try {
-        return new Date(ts).toLocaleString();
-      } catch {
-        return ts;
-      }
+      return ts ? new Date(ts).toLocaleString() : "";
     });
 
     const nameDisplayStyle = computed(() =>

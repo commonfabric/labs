@@ -8,17 +8,16 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  findElement,
+  findElementByText,
   findNodeById,
   findNodeByProp,
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
+import { sortDisplayMessages } from "./logic.ts";
 import {
-  createRandomImportedClaimedMessages,
-  seededRandom,
-  sortDisplayMessages,
-} from "./logic.ts";
-import {
+  chatAdminEveryoneIsAdmin,
   type ChatAdminRegistryValue,
   chatAdminRolesValue,
   type EmptyMyProfileValue,
@@ -64,6 +63,21 @@ const adminGesture = {
 
 type GroupChatDemoInputArg = Parameters<typeof GroupChatDemo>[0];
 
+/** A prop of the node with `id` in `view`. */
+const propOf = (view: unknown, id: string, prop: string): unknown =>
+  propValue(findNodeById(view, id), prop);
+
+/** Which side the transcript shows the message reading `body` on. */
+const badgePlacement = (view: unknown, body: string): unknown =>
+  propValue(
+    findElementByText(
+      findNodeById(view, "trusted-conversation-preview"),
+      "cf-cfc-authorship",
+      body,
+    ),
+    "data-badge-placement",
+  );
+
 // A `cf-submit-input` delivers its field's text on the trusted click, from its
 // button or from Enter in the field.
 const submitted = (text: string) => ({
@@ -105,20 +119,6 @@ export default pattern(() => {
     adminRegistry,
   } as GroupChatDemoInputArg);
 
-  // Imported rows are appended via push: rewriting the whole list with
-  // `messages.set([...])` re-writes the existing TRUSTED rows, which only the
-  // reviewed send binding may author under CFC enforcement.
-  const action_add_deterministic_imported = action(() => {
-    const random = seededRandom(0xdecafbad);
-    const nextMessages = createRandomImportedClaimedMessages(
-      sortDisplayMessages(messages.get() as SharedChatMessage[]),
-      participantClaimsValue(profiles, myProfile, messages),
-      random,
-    );
-    nextMessages.forEach((message) =>
-      messages.push(message as SharedChatMessage)
-    );
-  });
   const action_add_same_name_unverified_imports = action(() => {
     messages.push({
       origin: "imported",
@@ -148,6 +148,25 @@ export default pattern(() => {
       propValue(panelStatus, "label") ===
         "Save a profile to manage admins";
   });
+  // Before a profile is saved, nothing can be sent and no one is listed.
+  const assert_send_waits_for_profile = assert(() =>
+    propOf(chat[UI], "trusted-send-button", "disabled") === true &&
+    propValue(
+        findElement(
+          findNodeById(chat[UI], "trusted-participants-panel"),
+          "cf-chip",
+        ),
+        "label",
+      ) === "No participants yet"
+  );
+  const assert_nothing_sent_or_saved = assert(() =>
+    messages.get().length === 0 &&
+    myProfile.get().profile === undefined
+  );
+  const assert_policy_untouched_without_profile = assert(() =>
+    chatAdminEveryoneIsAdmin(adminRegistry) === true &&
+    chatAdminRolesValue(adminRegistry).length === 0
+  );
   const assert_profile_created = assert(() =>
     chat.currentProfileName === "Alice"
   );
@@ -183,12 +202,25 @@ export default pattern(() => {
       propValue(toggleButton, "disabled") === true &&
       hasText(toggleButton, "Admin via everyone");
   });
+  const assert_send_opens_to_participants = assert(() =>
+    propOf(chat[UI], "trusted-send-button", "disabled") === false &&
+    propValue(
+        findElement(
+          findNodeById(chat[UI], "trusted-participants-panel"),
+          "cf-chip",
+        ),
+        "label",
+      ) === "Alice · Bob"
+  );
+  const assert_blank_message_not_sent = assert(() =>
+    messages.get().length === 0
+  );
   const assert_bootstrap_admin_can_add_room = assert(() => {
     const roomList = roomsValue(rooms);
     return roomList.length === 1 &&
       roomList[0]?.name === "Ops";
   });
-  const assert_everyone_disabled_seeds_alice = assert(() =>
+  const assert_alice_sole_admin = assert(() =>
     chat.currentUserIsAdmin === true &&
     bobChat.currentUserIsAdmin !== true &&
     chatAdminRolesValue(adminRegistry).length === 1 &&
@@ -208,20 +240,25 @@ export default pattern(() => {
       // for the prop rather than for rendered text.
       findNodeByProp(userList, "label", "Admin") !== undefined;
   });
+  const assert_everyone_admin_again = assert(() =>
+    chatAdminEveryoneIsAdmin(adminRegistry) === true &&
+    bobChat.currentUserIsAdmin === true
+  );
+  // While everyone is an admin, a per-participant toggle changes nothing.
+  const assert_participant_toggle_ignored = assert(() =>
+    chatAdminEveryoneIsAdmin(adminRegistry) === true &&
+    chatAdminRolesValue(adminRegistry).length === 1 &&
+    chatAdminRolesValue(adminRegistry)[0]?.displayName === "Alice"
+  );
   const assert_admin_view_lists_bob_after_lockdown = assert(() => {
     const userList = findNodeById(chat[UI], "trusted-admin-user-list");
     return hasText(userList, "Bob") &&
       hasText(userList, "Make admin");
   });
-  const assert_last_admin_removal_blocked = assert(() =>
-    chat.currentUserIsAdmin === true &&
-    bobChat.currentUserIsAdmin !== true &&
-    chatAdminRolesValue(adminRegistry).length === 1 &&
-    (adminRegistry.get() as { everyoneIsAdmin?: boolean }).everyoneIsAdmin ===
-      false
-  );
   const assert_bob_cannot_add_room_after_lockdown = assert(() =>
-    roomsValue(rooms).length === 1
+    roomsValue(rooms).length === 1 &&
+    propOf(bobChat[UI], "trusted-room-add-button", "disabled") === true &&
+    propOf(chat[UI], "trusted-room-add-button", "disabled") === false
   );
   const assert_bob_admin_enabled = assert(() =>
     bobChat.currentUserIsAdmin === true &&
@@ -265,6 +302,11 @@ export default pattern(() => {
     messages.get()[0]?.origin === "sent" &&
     messages.get()[0]?.authorName === "Alice" &&
     messages.get()[0]?.body === "Hello from Alice"
+  );
+  // Each user's transcript shows their own messages on their side.
+  const assert_own_messages_on_own_side = assert(() =>
+    badgePlacement(chat[UI], "Hello from Alice") === "end" &&
+    badgePlacement(bobChat[UI], "Hello from Alice") === "start"
   );
   const assert_profile_renamed = assert(() =>
     chat.currentProfileName === "Alice Renamed"
@@ -321,6 +363,24 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_initially_empty },
       { assertion: assert_admin_view_waits_for_profile },
+      { assertion: assert_send_waits_for_profile },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("Too early"),
+        trustedUi: sendGesture,
+      },
+      {
+        action: chat.saveProfile,
+        event: submitted("   "),
+        trustedUi: profileGesture,
+      },
+      { assertion: assert_nothing_sent_or_saved },
+      {
+        action: chat.toggleEveryoneAdmin,
+        event: { everyoneIsAdmin: false },
+        trustedUi: adminGesture,
+      },
+      { assertion: assert_policy_untouched_without_profile },
       {
         action: chat.saveProfile,
         event: submitted("Alice"),
@@ -335,6 +395,13 @@ export default pattern(() => {
       },
       { assertion: assert_alice_sees_bob_without_bob_message },
       { assertion: assert_admin_view_everyone_enabled },
+      { assertion: assert_send_opens_to_participants },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("   "),
+        trustedUi: sendGesture,
+      },
+      { assertion: assert_blank_message_not_sent },
       {
         action: chat.addTrustedRoom,
         event: submitted("Ops"),
@@ -346,8 +413,27 @@ export default pattern(() => {
         event: { type: "click", target: { name: "", value: "on" } },
         trustedUi: adminGesture,
       },
-      { assertion: assert_everyone_disabled_seeds_alice },
+      { assertion: assert_alice_sole_admin },
       { assertion: assert_admin_view_explicit_alice },
+      {
+        action: chat.toggleEveryoneAdmin,
+        event: { everyoneIsAdmin: true },
+        trustedUi: adminGesture,
+      },
+      { assertion: assert_everyone_admin_again },
+      {
+        action: chat.toggleParticipantAdmin,
+        event: { name: "Bob" },
+        trustedUi: adminGesture,
+      },
+      { assertion: assert_participant_toggle_ignored },
+      // Turning it off again keeps the explicit admins there already.
+      {
+        action: chat.toggleEveryoneAdmin,
+        event: { everyoneIsAdmin: false },
+        trustedUi: adminGesture,
+      },
+      { assertion: assert_alice_sole_admin },
       { assertion: assert_admin_view_lists_bob_after_lockdown },
       // Removing the last admin is refused by the handler, so the roster keeps
       // Alice.
@@ -356,7 +442,7 @@ export default pattern(() => {
         event: { name: "Alice" },
         trustedUi: adminGesture,
       },
-      { assertion: assert_last_admin_removal_blocked },
+      { assertion: assert_alice_sole_admin },
       {
         action: bobChat.addTrustedRoom,
         event: submitted("Bob room"),
@@ -405,6 +491,7 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       { assertion: assert_message_sent },
+      { assertion: assert_own_messages_on_own_side },
       {
         action: chat.saveProfile,
         event: submitted("Alice Renamed"),
@@ -418,7 +505,7 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       { assertion: assert_second_message_uses_current_name },
-      { action: action_add_deterministic_imported },
+      { action: chat.addRandomMessages },
       { assertion: assert_imported_messages_injected },
       { assertion: assert_thread_order_sortable },
       { assertion: assert_verified_imports_do_not_duplicate_participants },

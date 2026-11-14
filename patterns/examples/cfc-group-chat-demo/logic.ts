@@ -147,27 +147,19 @@ export const sortDisplayMessages = <
   messages: readonly Message[],
 ): Message[] => Array.from(messages).sort(compareMessagesByThreadOrder);
 
+/** One of `values`, which must not be empty. */
 const chooseRandom = <Value>(
-  values: readonly Value[],
+  values: readonly [Value, ...Value[]],
   random: RandomSource,
-): Value | undefined => {
-  if (values.length === 0) {
-    return undefined;
-  }
+): Value => values[Math.floor(random() * values.length)] ?? values[0];
 
-  const index = Math.floor(random() * values.length);
-  return values[index] ?? values[0];
-};
-
+/** A timestamp that places a message at a random point in `messages`, which
+ * must not be empty. */
 const randomInsertTimestamp = (
   messages: readonly PlainChatMessage[],
   random: RandomSource,
 ): number => {
   const ordered = sortDisplayMessages(messages);
-  if (ordered.length === 0) {
-    return Date.now();
-  }
-
   const slot = random() * (ordered.length + 1);
   const rightIndex = Math.floor(slot);
   const fractional = slot - rightIndex;
@@ -193,24 +185,19 @@ export const createRandomImportedClaimedMessages = <ProfileRef>(
   participants: readonly ParticipantClaim<ProfileRef>[],
   random: RandomSource = Math.random,
 ): ImportedClaimedChatMessage<ProfileRef>[] => {
-  const authorPool = Array.from(participants);
+  const [firstAuthor, ...otherAuthors] = participants;
   const workingMessages = sortDisplayMessages(existingMessages);
   const insertCount = Math.min(3, workingMessages.length);
-  if (authorPool.length === 0 || insertCount === 0) {
+  if (firstAuthor === undefined || insertCount === 0) {
     return [];
   }
 
   return Array.from({ length: insertCount }, () => {
-    const author = chooseRandom(authorPool, random);
+    const author = chooseRandom([firstAuthor, ...otherAuthors], random);
     const body = chooseRandom(RANDOM_IMPORTED_BODIES, random);
-    if (!author || !body) {
-      return undefined;
-    }
     const timestamp = randomInsertTimestamp(workingMessages, random);
     const message = createImportedClaimedMessage(author, body, timestamp);
     workingMessages.push(message);
     return message;
-  }).filter((message): message is ImportedClaimedChatMessage<ProfileRef> =>
-    message !== undefined
-  );
+  });
 };

@@ -24,6 +24,10 @@ import {
   ServingWorkerPool,
   type ServingWorkerPoolOptions,
 } from "../../src/executor/serving-worker-host.ts";
+import {
+  type ServingThreadOptions,
+  startServingThread,
+} from "../../src/executor/serving-thread.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import {
@@ -36,6 +40,7 @@ import {
 const identity = await Identity.fromPassphrase("serving-worker-recovery");
 const space = "did:key:z6MkServingWorkerRecovery" as MemorySpace;
 const other = "did:key:z6MkServingWorkerRecoveryOther" as MemorySpace;
+const third = "did:key:z6MkServingWorkerRecoveryThird" as MemorySpace;
 
 describe("serving-worker-recovery", () => {
   let fakes: ReturnType<typeof fakeServingWorkers>;
@@ -404,6 +409,328 @@ describe("serving-worker-recovery", () => {
       await clock.tick(1);
       await clock.settle();
       expect(workers()).toHaveLength(3);
+    });
+  });
+
+  describe("a worker whose heap reaches its limit", () => {
+    const MB = 1024 * 1024;
+
+    /**
+     * Starts the pool with a 100 MB heap limit over the stand-in workers,
+     * which a thread started with a heap limit would not be.
+     */
+    const startLimited = (
+      over: Partial<ServingWorkerPoolOptions> = {},
+    ): ServingWorkerPool =>
+      start({
+        heapLimitMb: 100,
+        startThread: (module, { onFailed }) =>
+          startServingThread(module, { onFailed }),
+        ...over,
+      });
+
+    /** The spaces placed on `worker`, as the pool has them. */
+    const spacesOn = (
+      started: ServingWorkerPool,
+      worker: FakeServingWorker,
+    ): string[] =>
+      [...started.accessForTestingOnly.placements].flatMap(([placed, on]) =>
+        on.worker.port === worker ? [placed] : []
+      );
+
+    it("leaves a worker serving whose heap is larger than the limit and has not reached it", async () => {
+      // The limit bounds the heap's old generation, and the heap a worker
+      // reports is all of it, so the size alone ends no worker.
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].beat(120 * MB, { external: 100 * MB - 1 });
+      await clock.settle();
+      expect(workers()[0].terminated).toBe(false);
+    });
+
+    it("is what a worker counts as whose buffers outside the heap come to the limit", async () => {
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].beat(MB, { external: 100 * MB });
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(1);
+      expect(workers()[0].terminated).toBe(true);
+      expect(started.stats().workers).toMatchObject({
+        heapLimited: 1,
+        heapStopped: 1,
+      });
+    });
+
+    it("ends a worker that says it reached a limit the pool was given none of", async () => {
+      // A thread started by a `startThread` of the caller's own.
+      const started = start();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].beat(MB, { heapLimitReached: true, external: 4096 * MB });
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(1);
+      expect(workers()[0].terminated).toBe(true);
+      expect(started.stats().workers.heapStopped).toBe(1);
+    });
+
+    it("is ended, and leaves the one space it served unplaced whatever session or event the space has", async () => {
+      const closed: unknown[] = [];
+      const started = startLimited({
+        onWorkerClosed: (spaces, cause) => closed.push([spaces, cause]),
+      });
+      server.openSession(space, "session-1");
+      await clock.settle();
+      server.holdEvents(space);
+      const [grown] = workers();
+      const holder = holderOf(grown);
+      expect(server.executionLeases.acquire(space, holder)).toBe(true);
+
+      grown.beat(MB, { heapLimitReached: true });
+      await clock.settle();
+      expect(grown.terminated).toBe(true);
+      expect(closed).toEqual([[[space], "failed"]]);
+      expect(server.executionLeases.holderOf(space)).toBeUndefined();
+      expect(started.stats().workers).toMatchObject({
+        serving: 0,
+        failed: 1,
+        heapLimited: 1,
+        heapStopped: 1,
+      });
+
+      // Neither the session still live on the space, nor the events its
+      // store holds, nor another session's open places it again.
+      await clock.tick(60_000);
+      server.openSession(space, "session-2");
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(1);
+      expect(started.stats().workers.heapStopped).toBe(1);
+    });
+
+    it("has its space placed again by a commit admitted after it was ended, and by none it had taken", async () => {
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      server.admit(admittedNotice(space, { seq: 1, warm: true }));
+      await clock.settle();
+      workers()[0].beat(MB, { heapLimitReached: true });
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(1);
+
+      const notice = admittedNotice(space, { seq: 2 });
+      server.admit(notice);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(workers()[1].receivedOf("observer.commitAdmitted")).toEqual([
+        { notice },
+      ]);
+      expect(started.stats().workers.heapStopped).toBe(0);
+    });
+
+    it("has its space placed again by a lifecycle verb that names it", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => {
+        worker.host.onRequest(
+          "host.runLifecycleVerb",
+          ({ space }) => Promise.resolve({ receipt: space, timings: [] }),
+        );
+        worker.serve();
+      });
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      workers()[0].beat(MB, { heapLimitReached: true });
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+
+      const run = await started.runLifecycleVerb(space, {
+        name: "upload",
+        request: {},
+      });
+      expect(run.receipt).toBe(space);
+      expect(workers()).toHaveLength(2);
+    });
+
+    it("paces a commit admitted while it backs off, and widens across the space's kills whatever waves its workers commit", async () => {
+      using _commit = stub(
+        EngineWaveCommitSink.prototype,
+        "commitWave",
+        () => Promise.resolve({ ok: { seq: 1 } }),
+      );
+      server.openEngine = () => Promise.resolve({} as Engine.Engine);
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+
+      /** Ends the space's worker at its limit, then admits a commit. */
+      const placedAgainAfter = async (ms: number, seq: number) => {
+        const before = workers().length;
+        workers().at(-1)!.beat(MB, { heapLimitReached: true });
+        await clock.settle();
+        server.admit(admittedNotice(space, { seq }));
+        await clock.tick(ms - 1);
+        expect(workers()).toHaveLength(before);
+        await clock.tick(1);
+        await clock.settle();
+        expect(workers()).toHaveLength(before + 1);
+        return workers().at(-1)!;
+      };
+      const second = await placedAgainAfter(10, 2);
+      await second.host.request("sink.commitWave", {
+        sessionId: holderOf(second),
+        localSeq: 1,
+        batch: encodeMemoryBoundary({ space } as unknown as FabricValue),
+      });
+      await placedAgainAfter(20, 3);
+      await placedAgainAfter(40, 4);
+    });
+
+    it("has each of the spaces that shared it placed on a worker of its own, which no other space joins", async () => {
+      const started = startLimited({ maxWorkers: 1 });
+      server.openSession(space, "session-1");
+      server.openSession(other, "session-2");
+      await clock.settle();
+      const [shared] = workers();
+      expect(spacesOn(started, shared).sort()).toEqual([other, space].sort());
+
+      shared.beat(MB, { heapLimitReached: true });
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(3);
+      expect(spacesOn(started, workers()[1])).toHaveLength(1);
+      expect(spacesOn(started, workers()[2])).toHaveLength(1);
+      expect(started.stats().workers.heapStopped).toBe(0);
+
+      // The pool is over its cap of one, and a space placed now gets a
+      // worker that is not one of theirs.
+      server.openSession(third, "session-3");
+      await clock.settle();
+      expect(workers()).toHaveLength(4);
+      expect(spacesOn(started, workers()[3])).toEqual([third]);
+    });
+
+    it("stops the space whose own worker is then ended, and leaves the one it had shared with serving", async () => {
+      const started = startLimited({ maxWorkers: 1 });
+      server.openSession(space, "session-1");
+      server.openSession(other, "session-2");
+      await clock.settle();
+      workers()[0].beat(MB, { heapLimitReached: true });
+      await clock.tick(10);
+      await clock.settle();
+      const growing = workers().slice(1).find((worker) =>
+        spacesOn(started, worker)[0] === space
+      )!;
+      const steady = workers().slice(1).find((worker) =>
+        spacesOn(started, worker)[0] === other
+      )!;
+
+      growing.beat(MB, { heapLimitReached: true });
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(3);
+      expect(steady.terminated).toBe(false);
+      expect(started.stats().workers).toMatchObject({
+        serving: 1,
+        heapLimited: 2,
+        heapStopped: 1,
+      });
+    });
+
+    it("counts no failure against the spaces that shared it", async () => {
+      const started = startLimited({ maxWorkers: 1 });
+      server.openSession(space, "session-1");
+      server.openSession(other, "session-2");
+      await clock.settle();
+      workers()[0].beat(MB, { heapLimitReached: true });
+      await clock.tick(10);
+      await clock.settle();
+      const steady = workers().slice(1).find((worker) =>
+        spacesOn(started, worker)[0] === other
+      )!;
+
+      // The space's first failure of its own backs off the base delay.
+      steady.fail();
+      await clock.tick(9);
+      expect(workers()).toHaveLength(3);
+      await clock.tick(1);
+      await clock.settle();
+      expect(workers()).toHaveLength(4);
+    });
+
+    it("lets a space share a worker again once a worker of its own has closed with nothing left to serve", async () => {
+      const started = startLimited({ maxWorkers: 1 });
+      server.openSession(space, "session-1");
+      server.openSession(other, "session-2");
+      await clock.settle();
+      workers()[0].beat(MB, { heapLimitReached: true });
+      await clock.tick(10);
+      await clock.settle();
+      const own = workers().slice(1).find((worker) =>
+        spacesOn(started, worker)[0] === other
+      )!;
+      const kept = workers().slice(1).find((worker) =>
+        spacesOn(started, worker)[0] === space
+      )!;
+      server.closeSession(other, "session-2");
+      own.report("vacant");
+      await clock.settle();
+      expect(own.terminated).toBe(true);
+
+      // `maxWorkers: 1` would have it join a worker that takes a second
+      // space; the one worker left is another space's own, so it gets a fresh
+      // one, and the next space joins that.
+      server.openSession(other, "session-4");
+      await clock.settle();
+      expect(workers()).toHaveLength(4);
+      server.openSession(third, "session-3");
+      await clock.settle();
+      expect(workers()).toHaveLength(4);
+      expect(spacesOn(started, workers()[3]).sort()).toEqual(
+        [other, third].sort(),
+      );
+      expect(spacesOn(started, kept)).toEqual([space]);
+    });
+
+    it("leaves the space unplaced as well when the thread itself reports that it reached its limit", async () => {
+      const reports: ServingThreadOptions["onFailed"][] = [];
+      const started = startLimited({
+        startThread: (module, { onFailed }) => {
+          reports.push(onFailed);
+          return startServingThread(module, { onFailed });
+        },
+      });
+      server.openSession(space, "session-1");
+      await clock.settle();
+
+      reports[0]("JS heap out of memory", { atHeapLimit: true });
+      await clock.tick(60_000);
+      expect(workers()).toHaveLength(1);
+      expect(workers()[0].terminated).toBe(true);
+      expect(started.stats().workers).toMatchObject({
+        heapLimited: 1,
+        heapStopped: 1,
+      });
+    });
+
+    it("throws for a limit no thread can be started with", () => {
+      for (const heapLimitMb of [0, 4, 15, 100.5, Number.MAX_VALUE]) {
+        expect(() => start({ heapLimitMb })).toThrow("heapLimitMb");
+      }
+      expect(workers()).toHaveLength(0);
+    });
+
+    it("counts a spare that reaches it as a spare that failed", async () => {
+      const started = startLimited({ spareWorkers: 1 });
+      await started.ready;
+      workers()[0].beat(MB, { heapLimitReached: true });
+      await clock.tick(10);
+      await clock.settle();
+      expect(workers()).toHaveLength(2);
+      expect(started.stats().workers).toMatchObject({
+        spare: 1,
+        heapLimited: 1,
+        heapStopped: 0,
+      });
     });
   });
 

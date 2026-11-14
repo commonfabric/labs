@@ -101,6 +101,14 @@ function load(path: string): RouterConfig {
   return { ...fields, routers, limits } as unknown as RouterConfig;
 }
 
+/** Calls `tick` every `ms` milliseconds until the returned function is called. */
+export type Repeat = (tick: () => void, ms: number) => () => void;
+
+const repeatOnInterval: Repeat = (tick, ms) => {
+  const id = setInterval(tick, ms);
+  return () => clearInterval(id);
+};
+
 /** Directory snapshot shared with the placement broker; no request supplies an address. */
 export class MemoryRouterPolicy {
   readonly config: RouterConfig;
@@ -311,8 +319,12 @@ export class MemoryRouterPolicy {
     }
   }
 
-  /** Starts only the private Memory link/data endpoints, with no HTTP routes. */
-  async start(server: Server) {
+  /**
+   * Starts only the private Memory link/data endpoints, with no HTTP routes.
+   * `repeat` schedules the check that fences the host's contexts when this
+   * toolshed's ownership changes.
+   */
+  async start(server: Server, repeat: Repeat = repeatOnInterval) {
     const c = this.config;
     const epochs = new RoutedEpochStore(c.epochLedger);
     const host = new RoutedMemoryHost({
@@ -335,7 +347,7 @@ export class MemoryRouterPolicy {
       // Contexts record the epoch they were admitted under, so they can only
       // fall out of date when the directory changes or becomes unavailable.
       let fenced = this.#generation;
-      const fence = setInterval(() => {
+      const stopFencing = repeat(() => {
         this.#current();
         if (this.#generation === fenced) return;
         fenced = this.#generation;
@@ -343,7 +355,7 @@ export class MemoryRouterPolicy {
       }, 500);
       return {
         close: async () => {
-          clearInterval(fence);
+          stopFencing();
           try {
             await listener.close();
           } finally {

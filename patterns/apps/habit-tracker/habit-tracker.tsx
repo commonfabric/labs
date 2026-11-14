@@ -22,16 +22,17 @@ const toDateString = (timestamp: number): string => {
   return now.toISOString().split("T")[0];
 };
 
-// Get date N days ago as YYYY-MM-DD
-const getDateDaysAgo = (baseTimestamp: number, daysAgo: number): string => {
-  const date = new Date(baseTimestamp);
-  date.setDate(date.getDate() - daysAgo);
-  return date.toISOString().split("T")[0];
-};
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The YYYY-MM-DD date N days before another
+const getDateDaysAgo = (date: string, daysAgo: number): string =>
+  toDateString(Date.parse(`${date}T12:00:00Z`) - daysAgo * DAY_MS);
 
 export default pattern<HabitTrackerInput, HabitTrackerOutput>(
   ({ habits, logs }) => {
-    const nowCell = wish<number>({ query: "#now" });
+    // Today, from a clock that ticks every five minutes, so it advances while
+    // the piece stays open and on every later load.
+    const nowCell = wish<number>({ query: "#now/300" });
     const todayDate = computed(() =>
       nowCell.result == null ? "" : toDateString(nowCell.result)
     );
@@ -50,7 +51,9 @@ export default pattern<HabitTrackerInput, HabitTrackerOutput>(
       const habitExists = habits.get().some((h) => h.name === habitName);
       if (!habitExists) return;
 
-      const today = toDateString(Date.now());
+      // The day the cards show as today, so a toggle lands where it is seen.
+      const today = todayDate;
+      if (today === "") return;
       const currentLogs = logs.get();
       const existingIdx = currentLogs.findIndex(
         (log) => log.habitName === habitName && log.date === today,
@@ -93,9 +96,10 @@ export default pattern<HabitTrackerInput, HabitTrackerOutput>(
     const habitCards = computed(() => {
       const habitList = habits.get();
       const logList = logs.get();
-      const todayTimestamp = nowCell.result;
-      if (todayTimestamp == null) return [];
-      const today = toDateString(todayTimestamp);
+      // Reads today's date, which changes once a day, not the five-minute
+      // clock.
+      const today = todayDate;
+      if (today === "") return [];
 
       return habitList.map((habit) => {
         const isCompletedToday = logList.some(
@@ -107,7 +111,7 @@ export default pattern<HabitTrackerInput, HabitTrackerOutput>(
 
         let streak = 0;
         for (let i = 0; i < 365; i++) {
-          const dateToCheck = getDateDaysAgo(todayTimestamp, i);
+          const dateToCheck = getDateDaysAgo(today, i);
           const completed = logList.some(
             (log) =>
               log.habitName === habit.name &&
@@ -151,7 +155,7 @@ export default pattern<HabitTrackerInput, HabitTrackerOutput>(
 
             <cf-hstack gap="1" style="margin-top: 0.5rem;">
               {[6, 5, 4, 3, 2, 1, 0].map((daysAgo) => {
-                const date = getDateDaysAgo(todayTimestamp, daysAgo);
+                const date = getDateDaysAgo(today, daysAgo);
                 const dayCompleted = logList.some(
                   (log) =>
                     log.habitName === habit.name &&

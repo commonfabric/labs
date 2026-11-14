@@ -1,12 +1,8 @@
 /**
- * End-to-end check of the part of the webhook flow this PR actually changes: a
- * cell link serialized to the `fcl1:` wire string (as `CellHandle.toWireString`
- * produces it) must decode, resolve to the right cell, and deliver a payload to
- * that cell's inbox stream. This mirrors `sendToStream`'s decode -> resolve ->
- * send path; that function reaches the `@/index.ts` runtime singleton (which is
- * uninitialized in tests), so it can't be called directly here, but the logic
- * exercised is identical, against the house in-memory `StorageManager.emulate`
- * runtime.
+ * End-to-end check of webhook delivery addressing: a cell link serialized to
+ * the `fcl1:` wire string (as `CellHandle.toWireString` produces it) decodes,
+ * resolves to the right cell, and delivers a payload to that cell's inbox
+ * stream through `sendToStream`.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -15,12 +11,10 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
-  assertWebhookCellLinkRefPayload,
   type JSONSchema,
-  linkRefFrom,
-  linkRefPayloadFromString,
   linkRefPayloadToString,
 } from "@commonfabric/runner/shared";
+import { sendToStream } from "./webhooks.utils.ts";
 
 const STREAM_SCHEMA: JSONSchema = {
   asCell: ["stream"],
@@ -81,14 +75,7 @@ describe("webhook cell-link wire delivery (fcl1: -> resolve -> stream)", () => {
     });
     expect(wire.startsWith("fcl1:")).toBe(true);
 
-    // Decode + resolve + send, mirroring `sendToStream`.
-    const payload = linkRefPayloadFromString(wire);
-    assertWebhookCellLinkRefPayload(payload);
-    const streamCell = runtime.getCellFromLink(linkRefFrom(payload))
-      .asSchema({ asCell: ["stream"] });
-    streamCell.withTx(tx).send({ data: "hello-webhook" });
-    await tx.commit().settled;
-    tx = runtime.edit();
+    await sendToStream(runtime, wire, { data: "hello-webhook" });
     await runtime.scheduler.idle();
 
     expect(await received.pull()).toEqual({ data: "hello-webhook" });

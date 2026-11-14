@@ -1,5 +1,5 @@
 import { OpenInferenceBatchSpanProcessor } from "@arizeai/openinference-vercel";
-import { context, diag, trace } from "@opentelemetry/api";
+import { context, type ContextManager, diag, trace } from "@opentelemetry/api";
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import {
@@ -18,11 +18,30 @@ import { detachRuntimeOtelBridgeIfAttached } from "@/runtime-options.ts";
 let _providerRegistered = false;
 let _provider: BasicTracerProvider | undefined;
 
-export const otlpExporter = new OTLPTraceExporter({
-  url: env.OTEL_EXPORTER_OTLP_ENDPOINT
-    ? `${env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, "")}/v1/traces`
-    : "http://localhost:4318/v1/traces",
-});
+/**
+ * What the tracer is configured with, read from `environment`, with the
+ * fallback each setting takes when its variable is empty.
+ */
+export function otelSettings(
+  environment: Pick<
+    typeof env,
+    "OTEL_EXPORTER_OTLP_ENDPOINT" | "OTEL_SERVICE_NAME" | "ENV"
+  >,
+): { tracesUrl: string; serviceName: string; environment: string } {
+  return {
+    tracesUrl: environment.OTEL_EXPORTER_OTLP_ENDPOINT
+      ? `${
+        environment.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, "")
+      }/v1/traces`
+      : "http://localhost:4318/v1/traces",
+    serviceName: environment.OTEL_SERVICE_NAME || "toolshed-dev",
+    environment: environment.ENV || "development",
+  };
+}
+
+const settings = otelSettings(env);
+
+export const otlpExporter = new OTLPTraceExporter({ url: settings.tracesUrl });
 
 export const provider = new BasicTracerProvider({
   // The provider uses this resource as given, so merge it over the default one
@@ -30,9 +49,9 @@ export const provider = new BasicTracerProvider({
   // conflict, so `service.name` stays ours rather than the default.
   resource: defaultResource().merge(
     resourceFromAttributes({
-      "service.name": env.OTEL_SERVICE_NAME || "toolshed-dev",
+      "service.name": settings.serviceName,
       "service.version": "1.0.0",
-      "deployment.environment": env.ENV || "development",
+      "deployment.environment": settings.environment,
     }),
   ),
   // The sampler is built from OTEL_TRACES_SAMPLER and OTEL_TRACES_SAMPLER_ARG
@@ -62,7 +81,7 @@ export const provider = new BasicTracerProvider({
 // the process picks up whatever is registered at the time it runs.
 registerTelemetry(
   createAiSdkTelemetry(
-    provider.getTracer(env.OTEL_SERVICE_NAME || "toolshed-dev"),
+    provider.getTracer(settings.serviceName),
   ),
 );
 
@@ -96,27 +115,32 @@ export async function shutdownOpenTelemetry(): Promise<void> {
   }
 }
 
-// Prefer Deno's built-in context manager when running on Deno ≥2.2.
-// It properly hooks into the runtime's AsyncContext implementation so
-// tracing context survives across *all* async boundaries.
-// Falls back to the Node/async-hooks based manager when not available
-// (eg. unit tests executed under Node).
-const getContextManager = () => {
-  try {
-    // deno-lint-ignore no-explicit-any
-    const cm = (globalThis as any)?.Deno?.telemetry?.contextManager;
-    if (cm && typeof cm.enable === "function") {
-      diag.debug("Using Deno's built-in telemetry context manager");
-      return cm;
-    }
-  } catch (_) {
-    // ignored – not running on Deno with telemetry support
+/**
+ * Returns the runtime's own context manager, which hooks into its
+ * AsyncContext implementation so tracing context survives across every async
+ * boundary; or, where `runtime` has none, the async-hooks based manager.
+ */
+export function chooseContextManager(
+  runtime: { telemetry?: { contextManager?: ContextManager } } = Deno,
+): ContextManager {
+  const builtIn = runtime.telemetry?.contextManager;
+  if (builtIn !== undefined) {
+    diag.debug("Using Deno's built-in telemetry context manager");
+    return builtIn;
   }
   diag.debug("Falling back to AsyncHooksContextManager");
   return new AsyncHooksContextManager();
-};
+}
 
-export function initOpenTelemetry(enabled: boolean = env.OTEL_ENABLED) {
+/**
+ * Registers the tracer provider globally, with the context manager
+ * `contextManager` returns, once per process and only when `enabled`. A
+ * failure to register is logged rather than thrown.
+ */
+export function initOpenTelemetry(
+  enabled: boolean = env.OTEL_ENABLED,
+  contextManager: () => ContextManager = chooseContextManager,
+) {
   if (_providerRegistered || !enabled) {
     if (!enabled) {
       console.log("OpenTelemetry is disabled via OTEL_ENABLED env var");
@@ -128,8 +152,7 @@ export function initOpenTelemetry(enabled: boolean = env.OTEL_ENABLED) {
 
   try {
     // Set up context manager
-    const contextManager = getContextManager();
-    context.setGlobalContextManager(contextManager.enable());
+    context.setGlobalContextManager(contextManager().enable());
 
     // Register provider globally
     trace.setGlobalTracerProvider(provider);
@@ -142,8 +165,8 @@ export function initOpenTelemetry(enabled: boolean = env.OTEL_ENABLED) {
 
     diag.debug("OpenTelemetry configuration details:", {
       exporter: env.OTEL_EXPORTER_OTLP_ENDPOINT,
-      service: env.OTEL_SERVICE_NAME || "toolshed-dev",
-      environment: env.ENV || "development",
+      service: settings.serviceName,
+      environment: settings.environment,
     });
   } catch (error) {
     console.error("Failed to initialize OpenTelemetry:", error);

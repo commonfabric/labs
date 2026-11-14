@@ -55,7 +55,6 @@ interface CatalogInput {
           { id: "radio"; label: "Radio" },
           { id: "autocomplete"; label: "Autocomplete" },
           { id: "tags"; label: "Tags" },
-          { id: "fab"; label: "FAB" },
         ];
       },
       {
@@ -118,6 +117,7 @@ interface CatalogInput {
           { id: "tab-list"; label: "Tab List" },
           { id: "tabs"; label: "Tabs" },
           { id: "table"; label: "Table" },
+          { id: "chat"; label: "Chat" },
         ];
       },
       {
@@ -141,6 +141,7 @@ export interface CatalogOutput {
   [NAME]: string;
   [UI]: VNode;
   selectedStory: string;
+  categories: Category[];
 }
 
 const styles = {
@@ -246,6 +247,7 @@ export default pattern<CatalogInput, CatalogOutput>(
         </cf-screen>
       ),
       selectedStory,
+      categories,
     };
   },
 );

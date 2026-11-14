@@ -25,6 +25,7 @@ import {
   type PortLike,
   type ServingLoopDiagnostics,
   type ServingWorkerInit,
+  type WorkerHeartbeat,
 } from "../../src/executor/serving-port-protocol.ts";
 import {
   emptyServingLoopStats,
@@ -245,9 +246,21 @@ export class FakeServingWorker implements PortLike {
     this.#host.notify("host.occupancy", { occupancy });
   }
 
-  /** Posts a heartbeat carrying `heapUsed`, as the worker's timer does. */
-  beat(heapUsed: number): void {
-    this.#host.notify("worker.heartbeat", { heapUsed });
+  /**
+   * Posts a heartbeat carrying `heapUsed`, as the worker's timer does, from a
+   * thread that holds no buffers and has not reached its heap limit unless
+   * `over` says otherwise.
+   */
+  beat(
+    heapUsed: number,
+    over: Partial<WorkerHeartbeat> = {},
+  ): void {
+    this.#host.notify("worker.heartbeat", {
+      heapUsed,
+      external: 0,
+      heapLimitReached: false,
+      ...over,
+    });
   }
 
   /** The notices of one method the pool has sent, in order. */

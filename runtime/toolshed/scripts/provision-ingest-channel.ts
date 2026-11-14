@@ -50,7 +50,8 @@ const USAGE =
   "usage: deno task provision-ingest-channel --space <did:key:...> " +
   "--install-id <id> [--cause-prefix location] [--name <label>] [--force]";
 
-const defaultRuntime = () =>
+/** Build the runtime this command talks to. Replaced in tests. */
+export const defaultRuntime = (): Runtime =>
   new Runtime({
     apiUrl: new URL(env.MEMORY_URL),
     storageManager: StorageManager.open({

@@ -52,6 +52,7 @@ import {
   SpaceLifetimeChannelCapError,
 } from "@/routes/ingest/ingest.utils.ts";
 import {
+  type GmailMailboxProof,
   MailboxBindingFullError,
   mailboxKey,
   mailboxListUpdate,
@@ -135,21 +136,12 @@ export interface ControlDeps {
    * How a mint proves the mailbox it binds. Absent where Gmail push is not
    * configured, and a mint carrying a proof is then refused.
    */
-  gmail?: GmailProofDeps;
+  gmail?: GmailMailboxProof;
   logger?: {
     warn: (obj: unknown, msg: string) => void;
     info: (obj: unknown, msg: string) => void;
     error: (obj: unknown, msg: string) => void;
   };
-}
-
-/** What a mint asks of Google to learn which mailbox a token is for. */
-interface GmailProofDeps {
-  /** Asks Gmail which mailbox an access token reads. */
-  fetchMailbox: (accessToken: string) => Promise<MailboxLookup>;
-
-  /** Verifies a Google ID token and reads the mailbox it names. */
-  verifyIdToken: (idToken: string) => Promise<MailboxLookup>;
 }
 
 /**

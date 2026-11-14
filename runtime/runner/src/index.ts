@@ -155,7 +155,6 @@ export {
   isWithheldDelivery,
   pullProjected,
   readProjected,
-  resolveWriteTarget,
   sendEvent,
   setCell,
   sinkProjected,

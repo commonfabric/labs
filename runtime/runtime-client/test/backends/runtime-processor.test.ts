@@ -5669,42 +5669,119 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("`RuntimeProcessor` cell resolution IPC", () => {
-    it("returns, when asked, where a write to the cell lands beside the cell its links lead to", async () => {
+  describe("`RuntimeProcessor` written principal IPC", () => {
+    /**
+     * A profile in `cfcSigner`'s space whose `picture` field is a write
+     * redirect to a cell of its own holding a picture labeled as representing
+     * `cfcSigner`, `relabel()` storing it again labeled as representing
+     * someone else, and a subscription to the field, asking for the written
+     * principal with `includeWrittenPrincipal`, which returns what it posted.
+     */
+    async function subscribedPicture(includeWrittenPrincipal?: boolean) {
       const { runtime, storageManager } = createRuntime();
-      try {
-        const space = cfcSigner.did();
-        const value = runtime.getCell<number>(space, "resolve-value");
-        const holder = runtime.getCell<unknown>(space, "resolve-holder");
-        const field = runtime.getCell<unknown>(space, "resolve-field");
-        await Promise.all([value.sync(), holder.sync(), field.sync()]);
+      const space = cfcSigner.did();
+      const visitor = (await Identity.fromPassphrase("written-principal ipc"))
+        .did();
+      const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
+      const pictureCell = runtime.getCell<unknown>(space, "ipc-picture");
+      const profile = runtime.getCell(
+        space,
+        "ipc-profile",
+        {
+          type: "object",
+          properties: { picture: { type: "FabricBytes" } },
+        } as const satisfies JSONSchema,
+      );
+      const label = (subject: string) => ({
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: [{ kind: "represents-principal", subject }] },
+          }],
+        },
+      });
+      const commit = async (
+        edit: (tx: IExtendedStorageTransaction) => void,
+      ) => {
         const tx = runtime.edit();
-        value.withTx(tx).set(1);
-        holder.withTx(tx).setRawUntyped(value.getAsLink());
-        field.withTx(tx).setRawUntyped(holder.getAsWriteRedirectLink());
+        writeSeedEnvelopeDoc(tx, space);
+        edit(tx);
         expect((await tx.commit().settled).error).toBeUndefined();
-        const processor = buildProcessor({ runtime });
-        const request = {
-          type: RequestType.CellResolveAsCell,
-          cell: field.getAsNormalizedFullLink(),
-        } as const;
+        await runtime.idle();
+        // The subscription posts from a microtask.
+        await Promise.resolve();
+      };
+      await commit((tx) => {
+        seedStoredEnvelope(
+          tx,
+          { ...pictureCell.getAsNormalizedFullLink(), path: [] },
+          { value: bytes, cfc: label(space) },
+        );
+        profile.withTx(tx).setRawUntyped(
+          { picture: pictureCell.getAsWriteRedirectLink() } as never,
+        );
+      });
+      const posted: Record<string, unknown>[] = [];
+      buildProcessor({ runtime }).handleCellSubscribe({
+        type: RequestType.CellSubscribe,
+        cell: createCellRef(profile.key("picture")),
+        ...(includeWrittenPrincipal && { includeWrittenPrincipal }),
+      }, {
+        id: 1,
+        post: (message) => {
+          posted.push(message as Record<string, unknown>);
+          return true;
+        },
+      });
+      await Promise.resolve();
+      return {
+        posted,
+        bytes,
+        space,
+        visitor,
+        relabel: () =>
+          commit((tx) =>
+            seedStoredEnvelope(
+              tx,
+              { ...pictureCell.getAsNormalizedFullLink(), path: ["cfc"] },
+              label(visitor) as never,
+            )
+          ),
+        [Symbol.asyncDispose]: async () => {
+          await runtime.dispose();
+          await storageManager.close();
+        },
+      };
+    }
 
-        const plain = processor.handleCellResolveAsCell(request);
-        const both = processor.handleCellResolveAsCell({
-          ...request,
-          withWriteTarget: true,
-        });
+    it("posts with each value the principal its own cell represents, and posts again when only that principal changes", async () => {
+      await using picture = await subscribedPicture(true);
+      expect(picture.posted.map(({ value, writtenPrincipal }) => ({
+        value,
+        writtenPrincipal,
+      }))).toEqual([{ value: picture.bytes, writtenPrincipal: picture.space }]);
 
-        expect(plain.writeTarget).toBeUndefined();
-        expect([plain.cell.id, both.cell.id, both.writeTarget?.id]).toEqual([
-          value.getAsNormalizedFullLink().id,
-          value.getAsNormalizedFullLink().id,
-          holder.getAsNormalizedFullLink().id,
-        ]);
-      } finally {
-        await runtime.dispose();
-        await storageManager.close();
-      }
+      await picture.relabel();
+
+      expect(picture.posted.at(-1)).toMatchObject({
+        value: picture.bytes,
+        writtenPrincipal: picture.visitor,
+      });
+      expect(picture.posted).toHaveLength(2);
+    });
+
+    it("posts no principal to a subscription that did not ask for one", async () => {
+      await using picture = await subscribedPicture();
+      await picture.relabel();
+
+      expect(picture.posted.some((message) => "writtenPrincipal" in message))
+        .toBe(false);
+      expect(picture.posted.map(({ value }) => value)).toEqual([
+        picture.bytes,
+      ]);
     });
   });
 

@@ -173,17 +173,15 @@ const toggleEmojiPicker = handler<
   emojiPickerMessageId.set(current === msgId ? "" : msgId);
 });
 
-// Handler to add/toggle a reaction on a message
-const toggleReaction = handler<
-  unknown,
-  {
-    messages: Writable<Message[]>;
-    msgId: string;
-    emoji: string;
-    myName: string;
-    emojiPickerMessageId: Writable<string>;
-  }
->((_event, { messages, msgId, emoji, myName, emojiPickerMessageId }) => {
+// Adds `myName`'s `emoji` reaction to the message `msgId`, or withdraws it
+// when they already reacted with it. A reaction nobody holds any more is
+// dropped.
+const toggleReactionOn = (
+  messages: Writable<Message[]>,
+  msgId: string,
+  emoji: string,
+  myName: string,
+) => {
   const msgs = messages.get() || [];
   const msgIndex = msgs.findIndex((m: Message) => m && m.id === msgId);
   if (msgIndex < 0) return;
@@ -215,8 +213,36 @@ const toggleReaction = handler<
   const updatedMsgs = [...msgs];
   updatedMsgs[msgIndex] = { ...msg, reactions };
   messages.set(updatedMsgs);
+};
 
-  // Close the emoji picker after selecting
+// Handler for a reaction chip already on a message, which closes any open
+// picker
+const toggleReaction = handler<
+  unknown,
+  {
+    messages: Writable<Message[]>;
+    msgId: string;
+    emoji: string;
+    myName: string;
+    emojiPickerMessageId: Writable<string>;
+  }
+>((_event, { messages, msgId, emoji, myName, emojiPickerMessageId }) => {
+  toggleReactionOn(messages, msgId, emoji, myName);
+  emojiPickerMessageId.set("");
+});
+
+// Handler for an emoji in the picker, which reacts to the message the picker
+// is open on and closes it
+const pickReaction = handler<
+  unknown,
+  {
+    messages: Writable<Message[]>;
+    emoji: string;
+    myName: string;
+    emojiPickerMessageId: Writable<string>;
+  }
+>((_event, { messages, emoji, myName, emojiPickerMessageId }) => {
+  toggleReactionOn(messages, emojiPickerMessageId.get(), emoji, myName);
   emojiPickerMessageId.set("");
 });
 
@@ -401,15 +427,12 @@ export default pattern<RoomInput, RoomOutput>(
                             isValidMessage ? "flex" : "none"
                           ),
                           marginBottom: computed(() => {
-                            if (!msg) {
-                              return "8px";
-                            }
                             const msgArray = (messages.get() || []).filter((
                               message: Message,
                             ) => message && message.id);
                             const currentIndex = msgArray.findIndex((
                               message: Message,
-                            ) => message && message.id === msg.id);
+                            ) => message && message.id === msg?.id);
                             if (
                               currentIndex < 0 ||
                               currentIndex >= msgArray.length - 1
@@ -631,9 +654,8 @@ export default pattern<RoomInput, RoomOutput>(
                                     {REACTION_EMOJIS.map((emoji) => (
                                       <button
                                         type="button"
-                                        onClick={toggleReaction({
+                                        onClick={pickReaction({
                                           messages,
-                                          msgId: msg.id,
                                           emoji,
                                           myName,
                                           emojiPickerMessageId,

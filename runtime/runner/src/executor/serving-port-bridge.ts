@@ -19,6 +19,16 @@ import type {
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import type { CollectedMemory } from "../collected-memory.ts";
+import {
+  isPlaceCompileFailure,
+  markPlaceCompileFailure,
+} from "../harness/compile-failure.ts";
+import {
+  decodeModuleCompileRequest,
+  encodeCompileFailure,
+  encodeModules,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import type { HostOccupancy } from "./host.ts";
@@ -35,6 +45,7 @@ import {
   type PortLike,
   type ServingLoopDiagnostics,
   type ServingWorkerInit,
+  type WorkerHeartbeat,
 } from "./serving-port-protocol.ts";
 import { servedAclChangeOf } from "./served-acl-change.ts";
 import { emptyServingLoopStats, type ServingLoopStats } from "./stats.ts";
@@ -82,8 +93,15 @@ export type ServingPortBridgeOptions = {
   /** Called with what the worker's host holds, each time the host says. */
   onOccupancy?: (occupancy: HostOccupancy) => void;
 
-  /** Called with the worker's heap size, in bytes, at each heartbeat. */
-  onHeartbeat?: (heapUsed: number) => void;
+  /** Called with what the worker says of its memory, at each heartbeat. */
+  onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
+
+  /**
+   * Where the worker's `compiler.compile` requests run: the compile workers
+   * the process shares. Absent, each such request fails as a failure of the
+   * place it was to run.
+   */
+  moduleCompiler?: ModuleCompiler;
 };
 
 /** The observer events a bridge carries to its worker. */
@@ -424,6 +442,26 @@ export class ServingPortBridge {
       }
       return connection.receive(payload);
     });
+    endpoint.onRequest("compiler.compile", async ({ request }) => {
+      const compiler = this.#options.moduleCompiler;
+      try {
+        if (compiler === undefined) {
+          throw markPlaceCompileFailure(
+            new Error("this process runs no compiles for its serving workers"),
+          );
+        }
+        const modules = await compiler.compile(
+          decodeModuleCompileRequest(request),
+        );
+        return { kind: "compiled", modules: encodeModules(modules) };
+      } catch (error) {
+        return {
+          kind: "failed",
+          failure: encodeCompileFailure(error),
+          place: isPlaceCompileFailure(error),
+        };
+      }
+    });
     endpoint.onNotice("loopback.close", ({ transport }) => {
       const connection = this.#connections.get(transport);
       this.#connections.delete(transport);
@@ -436,8 +474,8 @@ export class ServingPortBridge {
       this.#workerReady.resolve();
     });
     // The endpoint has already counted it, which is all the watchdog reads.
-    endpoint.onNotice("worker.heartbeat", ({ heapUsed }) => {
-      this.#options.onHeartbeat?.(heapUsed);
+    endpoint.onNotice("worker.heartbeat", (heartbeat) => {
+      this.#options.onHeartbeat?.(heartbeat);
     });
     endpoint.onNotice("host.occupancy", ({ occupancy }) => {
       this.#options.onOccupancy?.(occupancy);

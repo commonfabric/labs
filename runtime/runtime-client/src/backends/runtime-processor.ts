@@ -93,7 +93,6 @@ import {
   resolveExternalRootRefForStructure,
   resolveSlugReference,
   resolveSlugTargetInPiece,
-  resolveWriteTarget,
   Runtime,
   runtimePresets,
   RuntimeTelemetry,
@@ -196,7 +195,6 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
-  type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
   type CellSendResponse,
@@ -2688,6 +2686,7 @@ export class RuntimeProcessor {
     let reported = false;
     const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
       includeCfcLabel: request.includeCfcLabel,
+      includeWrittenPrincipal: request.includeWrittenPrincipal,
     }, (value) => {
       // Log subscriptions whose schema gives no shape and that produce
       // CellResult proxies, `true` and a schema of annotations alone among
@@ -2741,16 +2740,11 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(
-    request: CellResolveAsCellRequest,
-  ): CellResolveAsCellResponse {
-    const cell = getCell(this.#runtime, request.cell);
-    // Both are resolved in this one turn, so they describe the same links.
+  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
     return {
-      cell: resolvedCellRef(cell.resolveAsCell()),
-      ...(request.withWriteTarget
-        ? { writeTarget: resolvedCellRef(resolveWriteTarget(cell)) }
-        : {}),
+      cell: resolvedCellRef(
+        getCell(this.#runtime, request.cell).resolveAsCell(),
+      ),
     };
   }
 

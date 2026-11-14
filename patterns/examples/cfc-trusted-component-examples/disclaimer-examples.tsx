@@ -832,23 +832,6 @@ export const DisclaimerLookalikeHostExample = pattern<
   };
 });
 
-const EXAMPLE_TITLES = [
-  "Prompt routing ack",
-  "AI-generated content disclaimer",
-  "Medical-style information disclaimer",
-  "Influence disclosure ack",
-  "Redacted summary disclaimer",
-  "Confidential source disclaimer",
-  "Public-post disclaimer",
-  "Source provenance review",
-  "Citation provenance review",
-  "Public-post provenance review",
-  "Fact-check brief gate",
-  "Fact-check release gate",
-  "Fact-check claims gate",
-  "Lookalike disclaimer host",
-] as const;
-
 export const DISCLAIMER_EXAMPLE_COUNT = 14;
 export const DISCLAIMER_RENDERED_EXAMPLE_COUNT = 14;
 
@@ -887,7 +870,7 @@ export default pattern<Record<PropertyKey, never>>(() => {
                 update the protected outputs.
               </cf-label>
               <cf-label>
-                The gallery currently exposes {EXAMPLE_TITLES.length}{" "}
+                The gallery currently exposes {renderedExamples.length}{" "}
                 example patterns.
               </cf-label>
             </cf-vstack>
@@ -895,9 +878,9 @@ export default pattern<Record<PropertyKey, never>>(() => {
           <cf-card>
             <cf-vstack slot="content" gap="2">
               <cf-heading level={3}>Catalog</cf-heading>
-              {EXAMPLE_TITLES.map((title, index) => (
+              {renderedExamples.map((example, index) => (
                 <div>
-                  {index + 1}. {title}
+                  {index + 1}. {example[NAME]}
                 </div>
               ))}
             </cf-vstack>
