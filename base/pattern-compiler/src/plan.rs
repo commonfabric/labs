@@ -4780,6 +4780,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 self.root_type(home, Root::Binding(index), state);
             }
         }
+        // An `action` declares its event as the annotation of its one
+        // parameter or as its type argument. An inline handler has no
+        // declared type for its event.
+        if let (BodyKind::Action, Some(function)) = (body_kind, self.function_at(home, start)) {
+            if let Some(event) = function.params().items.first() {
+                self.root_type(home, Root::Event(index), event);
+            }
+        }
         let mut inputs: HashMap<String, Place> = HashMap::new();
         inputs.insert(
             "event".to_string(),

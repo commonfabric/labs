@@ -3108,3 +3108,48 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
         assert!(body.get("eventSchema").is_none(), "{body}");
     }
 }
+
+#[test]
+fn the_binding_of_an_action_names_the_schema_of_the_event_its_parameter_declares() {
+    // PL §1.1, `Binding.eventSchema`: "the schema of the type the
+    // handler's event declares". An `action` declares the type of its
+    // event as the annotation of its parameter or as its type argument.
+    let analysis = program(
+        r#"import { Writable, action, pattern } from "commonfabric";
+export const P = pattern<{ n: Writable<number> }>(({ n }) => {
+  const annotated = action(({ by }: { by: number }) => {
+    n.set(by);
+  });
+  const argued = action<{ to: number }>(({ to }) => {
+    n.set(to);
+  });
+  return { annotated, argued };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    let plan = &found.plan;
+    for (name, property) in [("annotated", "by"), ("argued", "to")] {
+        let binding = plan["bindings"]
+            .as_array()
+            .expect("bindings")
+            .iter()
+            .find(|binding| binding["name"] == name)
+            .unwrap_or_else(|| panic!("no binding {name}"));
+        let schema = binding["eventSchema"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no schema for {name}"));
+        let document = &found
+            .schemas
+            .iter()
+            .find(|(id, _)| id == schema)
+            .expect("the document")
+            .1;
+        assert_eq!(document["properties"][property]["type"], "number", "{name}");
+    }
+}
