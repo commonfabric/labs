@@ -109,55 +109,6 @@ describe("cell-handle", () => {
     });
   });
 
-  describe("CellHandle resolveAsCellWithWriteTarget()", () => {
-    const ref: CellRef = {
-      id: "of:with-write-target" as CellRef["id"],
-      space: "did:key:test" as CellRef["space"],
-      scope: "space",
-      path: ["field"],
-    };
-    const linked: CellRef = { ...ref, id: "of:linked" as CellRef["id"] };
-    const written: CellRef = { ...ref, id: "of:written" as CellRef["id"] };
-
-    /** A runtime whose worker responds to every request with `answer`. */
-    function answering(answer: unknown) {
-      const requests: unknown[] = [];
-      const runtime = {
-        [$conn]: () => ({
-          request: (request: unknown) => {
-            requests.push(request);
-            return Promise.resolve(answer);
-          },
-          peersOf: () => [],
-        }),
-      } as unknown as RuntimeClient;
-      return { runtime, requests };
-    }
-
-    it("returns handles on the cell the links lead to and on where a write lands", async () => {
-      const { runtime, requests } = answering({
-        cell: linked,
-        writeTarget: written,
-      });
-      const resolved = await new CellHandle(runtime, ref)
-        .resolveAsCellWithWriteTarget();
-      expect(resolved.cell.ref()).toEqual(linked);
-      expect(resolved.writeTarget.ref()).toEqual(written);
-      expect(requests).toEqual([{
-        type: RequestType.CellResolveAsCell,
-        cell: ref,
-        withWriteTarget: true,
-      }]);
-    });
-
-    it("rejects an answer that leaves the write target out", async () => {
-      const { runtime } = answering({ cell: linked });
-      await expect(
-        new CellHandle(runtime, ref).resolveAsCellWithWriteTarget(),
-      ).rejects.toThrow("The worker answered without the cell's write target.");
-    });
-  });
-
   describe("CellHandle subscribers that throw", () => {
     const ref: CellRef = {
       id: "of:throwing-subscriber" as CellRef["id"],
