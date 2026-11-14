@@ -84,6 +84,29 @@ describe("generateValue", () => {
   });
 });
 
+describe("generateEvent", () => {
+  it("leaves out a member the event's type declares as a handle", () => {
+    // A handler that is sent a plain value where its event declares a
+    // handle gets a handle it cannot write, and its `set` throws.
+    const schema: Schema = {
+      type: "object",
+      properties: {
+        text: { type: "string" },
+        result: { asCell: ["cell"], type: "string" },
+      },
+    };
+    const plan = {
+      slots: [],
+      outputs: [],
+      bindings: [{ name: "h", handler: { body: 0 }, eventSchema: "event" }],
+    } as unknown as Plan;
+
+    expect(generateEvent(plan, [{ id: "event", schema }], 0)).toEqual({
+      text: "event-text-text",
+    });
+  });
+});
+
 describe("a generated scenario for the handler fixture", () => {
   it("gives each input an atom of its own where its schema declares no clause at its root", async () => {
     const { plan, schemas } = await planOf("handler");

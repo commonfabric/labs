@@ -51,20 +51,28 @@ const isStream = (schema: Schema): boolean =>
   typeof schema === "object" && Array.isArray(schema.asCell) &&
   schema.asCell.includes("stream");
 
+const isHandle = (schema: Schema): boolean =>
+  typeof schema === "object" && schema.asCell !== undefined;
+
 /**
  * A value of `schema`. `name` makes each string distinct, so that a value
- * the run stores can be told from another.
+ * the run stores can be told from another. With `handles` false there is
+ * no value for a schema that declares a handle: a plain value sent in an
+ * event where a handle is declared is read as a handle that cannot be
+ * written.
  */
 export const generateValue = (
   schema: Schema,
   root: Schema,
   name: string,
   depth = 0,
+  handles = true,
 ): unknown => {
   const resolved = resolve(schema, root);
   if (resolved === false) return NONE;
   if (resolved === true) return `${name}-value`;
   if (isStream(resolved)) return NONE;
+  if (!handles && isHandle(resolved)) return NONE;
   if ("const" in resolved) return resolved.const;
   if (resolved.enum !== undefined) return resolved.enum[0];
   const variants = resolved.anyOf ?? resolved.oneOf;
@@ -74,7 +82,7 @@ export const generateValue = (
       const inner = resolve(variant, root);
       const type = typeof inner === "object" ? inner.type : undefined;
       if (type === "null" || type === "undefined") continue;
-      const value = generateValue(variant, root, name, depth);
+      const value = generateValue(variant, root, name, depth, handles);
       if (value !== NONE) return value;
     }
     return null;
@@ -96,7 +104,13 @@ export const generateValue = (
     case "array": {
       if (depth >= DEPTH || resolved.items === undefined) return [];
       const items = [0, 1].map((index) =>
-        generateValue(resolved.items!, root, `${name}-${index}`, depth + 1)
+        generateValue(
+          resolved.items!,
+          root,
+          `${name}-${index}`,
+          depth + 1,
+          handles,
+        )
       );
       return items.includes(NONE) ? [] : items;
     }
@@ -114,6 +128,7 @@ export const generateValue = (
           root,
           `${name}-${key}`,
           depth + 1,
+          handles,
         );
         if (inner !== NONE) value[key] = inner;
       }
@@ -214,7 +229,7 @@ export const generateEvent = (
     entry.id === plan.bindings?.[binding]?.eventSchema
   )?.schema;
   if (declared !== undefined) {
-    const value = generateValue(declared, declared, "event");
+    const value = generateValue(declared, declared, "event", 0, false);
     if (value !== NONE && value !== null && typeof value === "object") {
       return value;
     }

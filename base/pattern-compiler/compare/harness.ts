@@ -1377,14 +1377,21 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               reasons?: readonly string[];
               refusals?: readonly {
                 gate: string;
-                target?: { id: string; path: readonly string[] };
+                target?: {
+                  space: string;
+                  id: string;
+                  path: readonly string[];
+                };
                 offendingAtoms: readonly string[];
-                inputs: readonly { read: { id: string } }[];
+                inputs: readonly { read: { space: string; id: string } }[];
                 reason: string;
               }[];
             };
-          const known = (id: string) =>
-            documents.get(id) ?? "a document the scenario did not make";
+          const known = (address: { space: string; id: string }) =>
+            address.space !== space
+              ? "a document of another space"
+              : documents.get(address.id) ??
+                "a document the scenario did not make";
           settled.resolve({
             binding,
             handler,
@@ -1405,13 +1412,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                   reason,
                   gate: detail.gate,
                   ...(detail.target === undefined ? {} : {
-                    target: known(detail.target.id),
+                    target: known(detail.target),
                     path: [...detail.target.path],
                   }),
                   offending: [...detail.offendingAtoms],
                   inputs: [
                     ...new Set(
-                      detail.inputs.map((input) => known(input.read.id)),
+                      detail.inputs.map((input) => known(input.read)),
                     ),
                   ],
                 };
