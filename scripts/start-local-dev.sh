@@ -296,12 +296,14 @@ run_and_wait() {
     return "$exit_code"
 }
 
+# Stops the log reader and the command the script is waiting for, without
+# waiting for them: this also runs from the signal handlers, where bash 5 may
+# already have collected their exit, and a `wait` there would block on the
+# servers instead.
 stop_waiting() {
     local pid
     for pid in "$WAITED_PID" "$TAIL_PID"; do
-        [[ -n "$pid" ]] || continue
-        kill "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
+        [[ -z "$pid" ]] || kill "$pid" 2>/dev/null
     done
     WAITED_PID=""
     TAIL_PID=""
@@ -366,6 +368,9 @@ wait_for_binds() {
     mkfifo "$WORK_DIR/logs"
     tail -n +1 -f "${logs[@]}" > "$WORK_DIR/logs" &
     TAIL_PID=$!
+    # Disowned so that bash does not report it as terminated when
+    # stop_waiting stops it.
+    disown "$TAIL_PID"
     run_and_wait "$WORK_DIR/logs" read_log_events
     stop_waiting
     rm -f "$WORK_DIR/logs"
