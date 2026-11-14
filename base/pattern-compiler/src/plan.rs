@@ -357,6 +357,9 @@ struct Emitter<'r, 'm, 'a> {
     inline_at: Vec<u32>,
     /// The parameters of the function whose returns are being classified.
     formal_names: Vec<String>,
+    /// The patterns compiled in as a tag: the module, and the span of the
+    /// function (PL §4.4: the chain of a tag is followed).
+    tags: Vec<(usize, u32, u32)>,
     /// The declared type of the data at a slot root, where the emitter
     /// has it: the pattern's input, the element of a collection, and the
     /// event and the state of a named handler.
@@ -3661,6 +3664,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             std::mem::take(&mut self.operands),
             std::mem::replace(&mut self.opaque, false),
         );
+        if let Some(function) = self.function_at(home, start) {
+            let span = function.span();
+            self.tags.push((home, span.start, span.end));
+        }
         let result = self.inline_argument(home, start, &name, argument, at);
         self.cone = saved_cone;
         self.operands = saved.0;
@@ -6545,6 +6552,9 @@ pub fn emit_module<'a>(
     };
     let mut plans = Vec::new();
     let starts = body_functions(resolver, module, &bodies[module]);
+    // For each plan, the start of its pattern's function and the patterns
+    // it compiles in as a tag.
+    let mut tags: Vec<(u32, Vec<(usize, u32, u32)>)> = Vec::new();
     for (index, body) in bodies[module].iter().enumerate() {
         // A pattern compiled into another has no plan of its own.
         if body.kind != BodyKind::Pattern || body.parent.is_some() {
@@ -6588,6 +6598,7 @@ pub fn emit_module<'a>(
             handle_writes: Vec::new(),
             inline_at: Vec::new(),
             formal_names: Vec::new(),
+            tags: Vec::new(),
             root_types: HashMap::new(),
             result_type: None,
             state_types: HashMap::new(),
@@ -6638,6 +6649,7 @@ pub fn emit_module<'a>(
         }
         let hints = std::mem::take(&mut emitter.hints);
         let handle_writes = std::mem::take(&mut emitter.handle_writes);
+        tags.push((*start, std::mem::take(&mut emitter.tags)));
         let argument_schema = emitter
             .root_types
             .get(&Root::Argument)
@@ -6658,6 +6670,26 @@ pub fn emit_module<'a>(
             result_schema,
             schemas,
         });
+    }
+    // "The chain ... continues through a pattern written as a tag" (PL
+    // §4.4): a pattern that another plan of the module compiles in as a
+    // tag, with no report of its bindings there, has its surface from the
+    // pattern that embeds it and is not reported on its own.
+    for index in 0..plans.len() {
+        let own = tags[index].0;
+        let embedded = (0..plans.len()).any(|other| {
+            other != index
+                && tags[other].1.iter().any(|(home, start, end)| {
+                    *home == module
+                        && *start == own
+                        && !plans[other].flows.iter().any(|(id, at, _)| {
+                            *id == "cfc-flow:ui-contract" && *start <= *at && *at < *end
+                        })
+                })
+        });
+        if embedded {
+            plans[index].flows.retain(|(id, ..)| *id != "cfc-flow:ui-contract");
+        }
     }
     plans
 }

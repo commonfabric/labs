@@ -343,3 +343,46 @@ fn ui_contract_is_silent_where_a_surface_is_not_decided_or_nothing_binds_the_han
     .is_empty());
     assert!(warnings(&surface("<span>{name}</span>")).is_empty());
 }
+
+/// A row that binds the trusted action and leaves the surface to the
+/// pattern that embeds it, and a pattern that embeds it by `embedded`.
+fn row(embedded: &str) -> String {
+    format!(
+        "const SEND = \"send\";
+const SURFACE = \"compose\";
+interface Note {{ text: TrustedActionWrite<string, typeof send, typeof SEND, typeof SURFACE> }}
+const send = handler<{{ text: string }}, {{ note: Cell<Note> }}>((event, state) => {{
+  state.note.key(\"text\").set(event.text);
+}});
+const Row = pattern<{{ note: Cell<Note> }}>(({{ note }}) => ({{
+  [UI]: (<UiAction action=\"send\" onClick={{send({{ note }})}}>Send</UiAction>),
+}}));
+export const P = pattern<{{ note: Cell<Note> }}>(({{ note }}) => {{
+  {embedded}
+}});
+"
+    )
+}
+
+#[test]
+fn ui_contract_follows_a_pattern_written_as_a_tag_under_the_surface() {
+    // PL §8: "`LobbyParticipantRow` ... is written as a tag under the
+    // surface, so by section 4.4 its chain is followed and it is not
+    // reported."
+    assert!(warnings(&row(
+        "return { [UI]: (<section data-ui-pattern=\"compose\" data-ui-event-integrity=\"compose\"><Row note={note} /></section>) };"
+    ))
+    .is_empty());
+    // A tag under no surface: the row and the embedding are reported.
+    assert!(!warnings(&row("return { [UI]: (<div><Row note={note} /></div>) };")).is_empty());
+    // "`FabriChatThreadComposer` ...: the room calls it, a `computed`
+    // collects the trees, and the room places them under the element
+    // that carries the surface." A call is not followed, and the row is
+    // reported.
+    assert_eq!(
+        warnings(&row(
+            "const made = Row({ note }); return { [UI]: (<section data-ui-pattern=\"compose\" data-ui-event-integrity=\"compose\">{made[UI]}</section>) };"
+        )),
+        ["cfc-flow:ui-contract"]
+    );
+}
