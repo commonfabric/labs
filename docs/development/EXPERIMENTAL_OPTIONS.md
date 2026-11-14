@@ -2829,10 +2829,13 @@ JSON, in `EXPERIMENTAL_FOLLOWED_POSTURE`. The toolshed resolves every flag it
 reads, for its own runtime, its serving runtimes and its memory route, with
 `experimentalOptionsWithFollowedPosture`: an explicit `EXPERIMENTAL_*` wins,
 otherwise the followed posture's value for a `"server"` flag, otherwise the
-default, the rule `adoptServerExperimentalOptions` applies for a client. It
-then publishes the posture it resolved, so its own clients adopt the
-followed deployment's flags in turn. A value that is not a JSON object stops
-the toolshed from starting. The toolshed does not fetch the posture itself:
+default, the rule `adoptServerExperimentalOptions` applies for a client. As
+for a client, a followed posture silent on `readerSchemaPrecedence` or
+`agentBuiltin` is an older deployment's and gives each the legacy `false`,
+and a followed posture of `null`, which a deployment publishes before its
+Runtime exists, adopts nothing. The toolshed then publishes the posture it
+resolved, so its own clients adopt the followed deployment's flags in turn.
+Any other value that is not a JSON object stops the toolshed from starting. The toolshed does not fetch the posture itself:
 the launcher decides what to do when the deployment cannot be reached, for
 instance starting with the last posture it saw.
 

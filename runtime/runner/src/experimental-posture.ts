@@ -335,11 +335,13 @@ export const FOLLOWED_POSTURE_ENV = "EXPERIMENTAL_FOLLOWED_POSTURE";
  * ({@link experimentalOptionsFromEnv}), and each server-authoritative flag
  * the followed posture publishes that the environment leaves unset, as a
  * deployed client adopts its server's ({@link adoptServerExperimentalOptions}).
- * Without a followed posture, the environment's flags alone.
+ * Without a followed posture, the environment's flags alone. A followed
+ * posture of `null`, what a deployment publishes before its Runtime exists,
+ * adopts nothing, as it does for a client.
  *
- * @throws Error when the followed posture is not a JSON object: whoever set
- * it meant this server to follow it, and a server that ran its own defaults
- * instead would disagree with the clients it shares.
+ * @throws Error when the followed posture is neither a JSON object nor
+ * `null`: whoever set it meant this server to follow it, and a server that
+ * ran its own defaults instead would disagree with the clients it shares.
  */
 export function experimentalOptionsWithFollowedPosture(
   env: EnvReader,
@@ -359,10 +361,11 @@ export function experimentalOptionsWithFollowedPosture(
     );
   }
   if (
-    followed === null || typeof followed !== "object" || Array.isArray(followed)
+    followed !== null &&
+    (typeof followed !== "object" || Array.isArray(followed))
   ) {
     throw new Error(
-      `${FOLLOWED_POSTURE_ENV} is ${debugStr`$quote${raw}`}; expected the JSON object a deployment publishes as its posture`,
+      `${FOLLOWED_POSTURE_ENV} is ${debugStr`$quote${raw}`}; expected the JSON object a deployment publishes as its posture, or null`,
     );
   }
   return adoptServerExperimentalOptions(

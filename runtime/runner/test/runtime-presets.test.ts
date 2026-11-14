@@ -494,7 +494,28 @@ describe("runtimePresets conformance", () => {
       ).toBe(true);
     });
 
-    for (const raw of ["{ not json", "null", "[]", '"on"', "", "true"]) {
+    it("adopts nothing from a followed posture of null, as a deployment publishes before its runtime exists", () => {
+      const env: Record<string, string> = {
+        [FOLLOWED_POSTURE_ENV]: "null",
+        EXPERIMENTAL_MODERN_CELL_REP: "true",
+      };
+      expect(experimentalOptionsWithFollowedPosture((name) => env[name]))
+        .toEqual({ modernCellRep: true });
+    });
+
+    it("takes the legacy false for readerSchemaPrecedence and agentBuiltin from a followed posture silent on them", () => {
+      const env: Record<string, string> = {
+        [FOLLOWED_POSTURE_ENV]: JSON.stringify({ serverExecution: false }),
+      };
+      expect(experimentalOptionsWithFollowedPosture((name) => env[name]))
+        .toEqual({
+          serverExecution: false,
+          readerSchemaPrecedence: false,
+          agentBuiltin: false,
+        });
+    });
+
+    for (const raw of ["{ not json", "[]", '"on"', "", "true"]) {
       it(`throws, naming the variable, for a followed posture of ${JSON.stringify(raw)}`, () => {
         expect(() =>
           experimentalOptionsWithFollowedPosture((name) =>
