@@ -2582,6 +2582,13 @@ compares. Each is listed with how the lemma uses it.
   `reference` for it.
 - **A read through what a site returned** (§7.5) is covered in the same
   way: the site is an entry of `Body.handles`.
+- **A reference a site made, at a path of the result or of a write**
+  (`plan-and-label-templates.md` §3.9, "A reference a site of the body
+  made"). The handle a `createCell` site returned is no reference the
+  body was given, so the record holds no `reference` for the path, and
+  S3 says nothing of it. The path takes the body's template, and which
+  cell is at the path is a function of the footprint by S1. The label of
+  the cell stays at the cell.
 - **`oneOf` for an entry with `*`** (§3.8). S3 holds because the
   reference at the path is one of those the entry holds. Which one is a
   function of the footprint by S1, and its label joins the body's
