@@ -60,6 +60,27 @@ pub struct Record {
     /// `write:dynamic`, `key:dynamic`, and `widen:` and the cause. The
     /// measurement counts each site once, for the innermost body around it.
     pub sites: Vec<(u32, String)>,
+    /// The sites of the runtime calls that create something (FA §8), in
+    /// source order: `instantiate:order`, `instantiate:tag`,
+    /// `createCell:order`, `createCell:cause`, `createCell:cause (state)`,
+    /// `createCell:cause (data)`, `effect:` and the built-in, and `bind`.
+    pub calls: Vec<String>,
+    /// The dynamic reads that belong to no handle's envelope (FA §7.1,
+    /// §8.4): `link: ` and the entries the journaled resolutions start
+    /// from, `space: ` and the entries, and `labelMetadata`.
+    pub other_dynamic: Vec<String>,
+    /// `Body.outputs` (FA §3.8): `path : passes entry` and
+    /// `path : oneOf entry, entry`.
+    pub outputs: Vec<String>,
+    /// The tier of a computation (FA §6.3): `primary output`, `static
+    /// side-write`, or `materializer`. `None` for a handler (FA §6.4).
+    pub tier: Option<&'static str>,
+    /// The shapes of FA §6.6 a computation has, one per site: `append`,
+    /// `send`, and `reads its own target`.
+    pub not_idempotent: Vec<String>,
+    /// The number of pushes in a handler onto a collection the handler
+    /// read before (`mergeable-push:read-then-push`).
+    pub read_then_push: usize,
 }
 
 /// The footprint of one body.
@@ -95,6 +116,13 @@ struct Proj {
     /// that holds no handle: it names the position, and `get()` on it adds
     /// no hop.
     made: bool,
+    /// For a handle a resolution returned: the length of the path of the
+    /// position that was resolved, and whether the resolution is static
+    /// (FA §7.1).
+    resolved: Option<(usize, bool)>,
+    /// One mark for each time the path entered a recursive type again, for
+    /// W6 (FA §5.2).
+    entered: Vec<String>,
 }
 
 impl Proj {
@@ -104,6 +132,8 @@ impl Proj {
             path: Vec::new(),
             dynamic: false,
             made: false,
+            resolved: None,
+            entered: Vec::new(),
         })
     }
 
@@ -119,6 +149,32 @@ impl Proj {
             path,
             dynamic: self.dynamic,
             made: false,
+            resolved: self.resolved,
+            entered: self.entered.clone(),
+        }
+    }
+
+    /// The path of the root of the cell a handle links to.
+    fn cell(&self) -> PathKey {
+        let mut path = self.path.clone();
+        if !self.made {
+            path.push(Seg::Hop);
+        }
+        (self.input.clone(), path)
+    }
+
+    /// The path as a write target shows it, with the flag of FA §6.2.
+    fn target(&self) -> String {
+        let full = display_path(&self.input, &self.path);
+        match self.resolved {
+            Some((length, _)) if length <= self.path.len() => {
+                let head = display_path(&self.input, &self.path[..length]);
+                match full.strip_prefix(&head) {
+                    Some(rest) => format!("{head} (resolved){rest}"),
+                    None => full,
+                }
+            }
+            _ => full,
         }
     }
 }
@@ -149,6 +205,9 @@ fn display_path(input: &str, path: &[Seg]) -> String {
 enum Class {
     Enumeration,
     Identity,
+    /// A resolved `identity` entry (FA §7.1, "Resolutions").
+    Resolved,
+    LabelMetadata,
     Shape,
     Value,
 }
@@ -158,6 +217,8 @@ impl Class {
         match self {
             Class::Enumeration => "enumeration",
             Class::Identity => "identity",
+            Class::Resolved => "identity (resolved)",
+            Class::LabelMetadata => "labelMetadata",
             Class::Shape => "shape",
             Class::Value => "value",
         }
@@ -294,6 +355,24 @@ struct Store {
     direct: BTreeSet<(String, usize, u32)>,
     dynamic_keys: BTreeSet<(usize, u32)>,
     untyped: BTreeSet<(usize, u32)>,
+    /// The sites of the runtime calls (FA §8).
+    calls: BTreeMap<(usize, u32), String>,
+    /// The entries the journaled resolutions start from, one line per
+    /// resolution, and the entries of the dynamic reads of kind `space`.
+    links: BTreeSet<String>,
+    spaces: BTreeSet<String>,
+    label_metadata: bool,
+    /// The sites that make a computation a materializer besides a write
+    /// whose target is not static.
+    materializer: BTreeSet<(usize, u32)>,
+    /// The shapes of FA §6.6, by site.
+    not_idempotent: BTreeMap<(usize, u32), &'static str>,
+    /// The cell each write through one anchored handle lands in.
+    write_targets: Vec<(PathKey, (usize, u32))>,
+    /// The cells the body has read through a handle.
+    read_cells: BTreeSet<PathKey>,
+    read_then_push: BTreeSet<(usize, u32)>,
+    outputs: Vec<String>,
 }
 
 struct Frame {
@@ -338,6 +417,9 @@ struct Analyzer<'r, 'm, 'a> {
     closures: Vec<(usize, u32, bool)>,
     /// The module and the span of the body.
     root: (usize, (u32, u32)),
+    /// Whether the body is evaluated again: a `lift`, a `computed`, an
+    /// `assert`, or an authored function (FA §6.3, §8).
+    computation: bool,
 }
 
 impl<'a> Analyzer<'_, '_, 'a> {
@@ -711,8 +793,14 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     path: proj.path[..index].to_vec(),
                     dynamic: proj.dynamic && crossed,
                     made: false,
+                    resolved: None,
+                    entered: Vec::new(),
                 };
-                self.observe(&Val::Proj(position), Class::Identity);
+                let class = match proj.resolved {
+                    Some((length, true)) if length == index => Class::Resolved,
+                    _ => Class::Identity,
+                };
+                self.observe(&Val::Proj(position), class);
                 crossed = true;
             }
         }
@@ -721,8 +809,131 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 dynamic: proj.dynamic && crossed,
                 ..proj.clone()
             };
-            self.observe(&Val::Proj(position), Class::Identity);
+            let class = match proj.resolved {
+                Some((length, true)) if length == proj.path.len() => Class::Resolved,
+                _ => Class::Identity,
+            };
+            self.observe(&Val::Proj(position), class);
         }
+    }
+
+    /// Whether the point being evaluated is one every run that returns
+    /// normally reaches (FA §3.7).
+    fn unconditional(&self) -> bool {
+        self.cond == 0 && !self.returned
+    }
+
+    /// Whether `val` is one projection whose path has no `*` and no hop
+    /// whose read is dynamic: the first two conditions of FA §7.1 and
+    /// §7.2.
+    fn anchored(val: &Val) -> Option<&Proj> {
+        match val {
+            Val::Proj(proj) if !proj.path.contains(&Seg::Star) && !proj.dynamic => Some(proj),
+            _ => None,
+        }
+    }
+
+    /// A resolution of `val` (FA §7.1, "Resolutions"): a resolved
+    /// `identity` entry where it is static, and a plain entry with a
+    /// dynamic read of kind `link` where it is journaled. `fixed` is false
+    /// for a call that never records a resolved entry. The result is `val`
+    /// as the handle the resolution returns.
+    fn resolution(&mut self, val: &Val, fixed: bool) -> Val {
+        let is_static = fixed && self.unconditional() && Self::anchored(val).is_some();
+        let projections = val.projections();
+        let mut names = Vec::new();
+        let mut results = Vec::new();
+        for proj in &projections {
+            let resolved = Proj {
+                resolved: Some((proj.path.len(), is_static)),
+                made: false,
+                ..proj.clone()
+            };
+            // The hops above the operand, and the operand itself.
+            self.use_handle(&Proj {
+                made: proj.made,
+                ..resolved.clone()
+            });
+            if proj.made {
+                let class = if is_static {
+                    Class::Resolved
+                } else {
+                    Class::Identity
+                };
+                self.observe(&Val::Proj(proj.clone()), class);
+            }
+            names.push(display_path(&proj.input, &proj.path));
+            results.push(Val::Proj(Proj {
+                made: proj.made,
+                ..resolved
+            }));
+        }
+        if !is_static && !names.is_empty() {
+            self.store.links.insert(names.join(", "));
+        }
+        if results.is_empty() {
+            return val.clone();
+        }
+        Val::alts(results)
+    }
+
+    /// An observation of the label metadata of `val` (FA §8.4).
+    fn label_metadata(&mut self, val: &Val) {
+        if self.unconditional() && Self::anchored(val).is_some() {
+            self.observe(val, Class::LabelMetadata);
+        } else if val.has_projection() {
+            self.store.label_metadata = true;
+        }
+    }
+
+    /// The creation of a cell (FA §8.2). `cause` is the argument of
+    /// `X.for(cause)`.
+    fn create_cell(&mut self, cause: Option<&Expression<'a>>, start: u32) {
+        let site = self.site(start);
+        let kind = match cause {
+            None => "createCell:order",
+            Some(_) if !self.computation => "createCell:cause",
+            Some(cause) => {
+                let constant = match unwrap(cause) {
+                    Expression::StringLiteral(_) | Expression::NumericLiteral(_) => true,
+                    Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+                    Expression::Identifier(_) => {
+                        let val = self.eval(cause);
+                        !val.has_projection() && !matches!(val, Val::Computed | Val::Built(_))
+                    }
+                    _ => false,
+                };
+                if constant {
+                    "createCell:cause (state)"
+                } else {
+                    self.store.materializer.insert(site);
+                    "createCell:cause (data)"
+                }
+            }
+        };
+        self.store.calls.insert(site, kind.to_string());
+    }
+
+    /// Whether `expression` has a type the checker cut because it is the
+    /// recursive use of a type inside itself, for W6.
+    fn recursive_type(&self, expression: &Expression<'a>, below: bool) -> bool {
+        let resolver = self.resolver;
+        let Ok(ty) = resolver.typed_at(self.module(), expression, 0) else {
+            return false;
+        };
+        let members = match resolver.shape(ty) {
+            Shape::Union(members) => members,
+            _ => vec![ty],
+        };
+        members.into_iter().any(|member| {
+            match resolver.shape(member) {
+                Shape::Unresolved(crate::types::Why::Recursive) => true,
+                // What is read below the cut has a type the checker did
+                // not evaluate.
+                Shape::Unresolved(_) => below,
+                _ => false,
+            }
+        })
     }
 
     // ----- the environment -----
@@ -1550,7 +1761,48 @@ impl<'a> Analyzer<'_, '_, 'a> {
             self.observe(&object, Class::Value);
             return Val::Computed;
         }
-        self.extend(&object, name)
+        // W6: the path enters a recursive type a second time (FA §5.2).
+        let below = object
+            .projections()
+            .iter()
+            .any(|proj| !proj.entered.is_empty());
+        if !self.recursive_type(&member.object, below) {
+            return self.extend(&object, name);
+        }
+        let entered = "(recursive)".to_string();
+        let again = object
+            .projections()
+            .iter()
+            .any(|proj| proj.entered.iter().any(|other| *other == entered));
+        if again {
+            for proj in object.projections() {
+                let mut path = proj.path.clone();
+                while path.last() == Some(&Seg::Star) {
+                    path.pop();
+                }
+                self.observe(&Val::Proj(Proj { path, ..proj }), Class::Value);
+            }
+            self.widen("W6", member.span.start);
+            return Val::Computed;
+        }
+        let extended = self.extend(&object, name);
+        Self::enter(extended, &entered)
+    }
+
+    fn enter(val: Val, entered: &str) -> Val {
+        match val {
+            Val::Proj(mut proj) => {
+                proj.entered.push(entered.to_string());
+                Val::Proj(proj)
+            }
+            Val::Alts(members) => Val::Alts(
+                members
+                    .into_iter()
+                    .map(|member| Self::enter(member, entered))
+                    .collect(),
+            ),
+            other => other,
+        }
     }
 
     fn computed_member(&mut self, member: &ComputedMemberExpression<'a>) -> Val {
@@ -1782,13 +2034,22 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     .api_ref_of_callee(parsed.semantic.scoping(), callee)
             });
             if let Some(api) = api {
-                return self.api_call(api.name.as_str(), &arguments);
+                return self.api_call(api.name.as_str(), &arguments, call.span.start);
             }
             // A pattern or a handler: the argument leaves the body by
             // reference (FA §8.1, §8.5).
-            if let Some(DefKind::Pattern | DefKind::Handler) =
+            if let Some(kind @ (DefKind::Pattern | DefKind::Handler)) =
                 self.resolver.value_def(module, identifier)
             {
+                let site = self.site(call.span.start);
+                let kind = match kind {
+                    DefKind::Pattern => "instantiate:order",
+                    _ => "bind",
+                };
+                self.store
+                    .calls
+                    .entry(site)
+                    .or_insert_with(|| kind.to_string());
                 for argument in &arguments {
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
@@ -1837,24 +2098,117 @@ impl<'a> Analyzer<'_, '_, 'a> {
     }
 
     /// A call of a function `commonfabric` exports.
-    fn api_call(&mut self, name: &str, arguments: &[&Expression<'a>]) -> Val {
+    fn api_call(&mut self, name: &str, arguments: &[&Expression<'a>], start: u32) -> Val {
+        let site = self.site(start);
+        let (first, rest) = match arguments.split_first() {
+            Some((first, rest)) => (Some(*first), rest),
+            None => (None, arguments),
+        };
         match name {
-            // The equality functions record `identity` at each operand (FA
-            // §3.2).
-            "equals" | "equalLinks" => {
+            // The `cause` entries (FA §8.4): no input is observed.
+            "eventKey" | "currentPrincipal" => {
+                let key = if name == "eventKey" {
+                    "eventKey"
+                } else {
+                    "principal"
+                };
+                self.store
+                    .entries
+                    .entry(("cause".to_string(), vec![Seg::Key(key.to_string())]))
+                    .or_default()
+                    .insert(Class::Value);
+                Val::Computed
+            }
+            // Each operand is resolved, and decided on its own.
+            "equals" => {
+                for argument in arguments {
+                    let val = self.eval(argument);
+                    self.resolution(&val, true);
+                }
+                Val::Computed
+            }
+            "equalLinks" => {
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.observe(&val, Class::Identity);
                 }
                 Val::Computed
             }
+            "principalOf" | "principalsOf" | "writtenPrincipalOf" | "profileOwnerOf"
+            | "spaceOf" | "spaceAccess" | "spaceAccessOf" | "spaceMembers" | "spaceDeleted"
+            | "resultOwnerOf" => {
+                if let Some(first) = first {
+                    let val = self.eval(first);
+                    let scalar = {
+                        let kinds = self.kinds(first);
+                        kinds.scalar && !kinds.handle && !kinds.container && !kinds.reference
+                    };
+                    if scalar {
+                        // An operand that names a space.
+                        self.observe(&val, Class::Value);
+                    } else {
+                        self.resolution(&val, name != "resultOwnerOf");
+                    }
+                    if name.starts_with("principal")
+                        || matches!(name, "writtenPrincipalOf" | "profileOwnerOf")
+                    {
+                        self.label_metadata(&val);
+                    }
+                    if name.starts_with("spaceA") || matches!(name, "spaceMembers" | "spaceDeleted")
+                    {
+                        let names: Vec<String> = val
+                            .projections()
+                            .iter()
+                            .map(|proj| display_path(&proj.input, &proj.path))
+                            .collect();
+                        if !names.is_empty() {
+                            self.store.spaces.insert(names.join(", "));
+                        }
+                    }
+                }
+                for argument in rest {
+                    let val = self.eval(argument);
+                    self.consume_scalar(argument, &val);
+                }
+                Val::Computed
+            }
+            "linksOf" => {
+                if let Some(first) = first {
+                    let val = self.eval(first);
+                    self.observe(&val, Class::Enumeration);
+                    let member = self.member(&val);
+                    self.observe(&member, Class::Identity);
+                }
+                Val::Computed
+            }
+            "getPatternEnvironment" => Val::Computed,
             // A builder call in a body creates a value. Its callback is a
-            // body of its own.
-            "computed" | "lift" | "handler" | "action" | "pattern" | "assert" => Val::Created,
+            // body of its own. An `action` is a binding (FA §8.5).
+            "action" => {
+                self.store.calls.insert(site, "bind".to_string());
+                Val::Created
+            }
+            "computed" | "lift" | "handler" | "pattern" | "assert" => Val::Created,
             _ => {
-                // An effect, a context read, a cell constructor, or a pure
-                // function: what it is given leaves the body by reference
-                // (FA §3.8, §8).
+                // An effect request (FA §8.3), or another call: what it is
+                // given leaves the body by reference (FA §3.8).
+                if matches!(
+                    name,
+                    "fetchBinary"
+                        | "fetchText"
+                        | "fetchJson"
+                        | "fetchJsonUnchecked"
+                        | "fetchProgram"
+                        | "generateText"
+                        | "generateObject"
+                        | "llmDialog"
+                        | "agent"
+                        | "sqliteQuery"
+                        | "navigateTo"
+                        | "compileAndRun"
+                ) {
+                    self.store.calls.insert(site, format!("effect:{name}"));
+                }
                 for argument in arguments {
                     if FunctionLike::of(argument).is_some() {
                         continue;
@@ -1881,7 +2235,56 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 return self.static_call(object.name.as_str(), name, arguments, start);
             }
         }
+        // `X.of(value)` and `X.for(cause)`, and the same under
+        // `X.perSpace`, `X.perUser`, and `X.perSession` (FA §8.2).
+        let constructor = match unwrap(&member.object) {
+            Expression::StaticMemberExpression(scope)
+                if matches!(
+                    scope.property.name.as_str(),
+                    "perSpace" | "perUser" | "perSession"
+                ) =>
+            {
+                unwrap(&scope.object)
+            }
+            other => other,
+        };
+        if let Expression::Identifier(object) = constructor {
+            let is_constructor = matches!(
+                object.name.as_str(),
+                "Cell"
+                    | "Writable"
+                    | "OpaqueCell"
+                    | "Stream"
+                    | "ComparableCell"
+                    | "ReadonlyCell"
+                    | "WriteonlyCell"
+            ) && self.resolver.value_def(self.module(), object).is_none();
+            if is_constructor && matches!(name, "of" | "for") {
+                self.create_cell(arguments.first().copied().filter(|_| name == "for"), start);
+                for argument in arguments {
+                    let val = self.eval(argument);
+                    self.leaves(argument, &val);
+                }
+                return Val::Created;
+            }
+        }
         let receiver = self.eval(&member.object);
+        // `.for(tag)` on an instantiation (FA §8.1).
+        if name == "for" {
+            if let Expression::CallExpression(inner) = unwrap(&member.object) {
+                let site = self.site(inner.span.start);
+                if let Some(kind) = self.store.calls.get_mut(&site) {
+                    if kind == "instantiate:order" {
+                        *kind = "instantiate:tag".to_string();
+                    }
+                    for argument in arguments {
+                        let val = self.eval(argument);
+                        self.leaves(argument, &val);
+                    }
+                    return receiver;
+                }
+            }
+        }
         if member.optional || call.optional {
             self.presence(&member.object, &receiver);
         }
@@ -2282,6 +2685,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 let mut results = Vec::new();
                 for handle in &handles {
                     self.use_handle(handle);
+                    self.store.read_cells.insert(handle.cell());
                     let mut result = if handle.made {
                         Proj {
                             made: false,
@@ -2330,19 +2734,30 @@ impl<'a> Analyzer<'_, '_, 'a> {
                             path,
                             dynamic: handle.dynamic,
                             made: !flattens,
+                            resolved: handle.resolved,
+                            entered: Vec::new(),
                         })
                     })
                     .collect();
                 Val::alts(results)
             }
-            "resolveAsCell" | "for" | "withTx" | "asSchema" => {
+            "resolveAsCell" if arguments.is_empty() => self.resolution(receiver, true),
+            "for" | "withTx" | "asSchema" | "resolveAsCell" => {
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.leaves(argument, &val);
                 }
                 receiver.clone()
             }
-            "equals" | "equalLinks" => {
+            "equals" => {
+                self.resolution(receiver, true);
+                for argument in arguments {
+                    let val = self.eval(argument);
+                    self.resolution(&val, true);
+                }
+                Val::Computed
+            }
+            "equalLinks" => {
                 for handle in &handles {
                     self.use_handle(handle);
                 }
@@ -2360,9 +2775,34 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     every_static &= !dynamic;
                     self.store.writes.insert(format!(
                         "{}{}",
-                        display_path(&handle.input, &handle.path),
+                        handle.target(),
                         if dynamic { " (dynamic)" } else { "" }
                     ));
+                    if !dynamic {
+                        self.store.write_targets.push((handle.cell(), site));
+                    }
+                    // A push onto a collection the handler read before.
+                    let read = self.store.read_cells.iter().any(|(input, path)| {
+                        let (target_input, target) = handle.cell();
+                        *input == target_input
+                            && (path.starts_with(&target) || target.starts_with(path))
+                    });
+                    if !self.computation && read && matches!(name, "push" | "pushAll" | "addUnique")
+                    {
+                        self.store.read_then_push.insert(site);
+                    }
+                }
+                if self.computation {
+                    // The first two shapes of FA §6.6.
+                    match name {
+                        "push" | "pushAll" | "increment" => {
+                            self.store.not_idempotent.insert(site, "append");
+                        }
+                        "send" => {
+                            self.store.not_idempotent.insert(site, "send");
+                        }
+                        _ => {}
+                    }
                 }
                 self.store.write_sites.insert(site, every_static);
                 for argument in arguments {
@@ -2389,6 +2829,82 @@ impl<'a> Analyzer<'_, '_, 'a> {
         }
     }
 
+    /// `Body.outputs` (FA §3.8): the result paths that hold a reference
+    /// the body was given.
+    fn outputs(&mut self, val: &Val, path: &str, depth: u32) {
+        let reference = |store: &Store, proj: &Proj| {
+            !proj.dynamic
+                && store.entries.get(&proj.key()).is_some_and(|classes| {
+                    classes.contains(&Class::Identity) || classes.contains(&Class::Resolved)
+                })
+        };
+        let shown = if path.is_empty() { "(root)" } else { path };
+        match val {
+            Val::Proj(proj) if reference(&self.store, proj) => {
+                let form = if proj.path.contains(&Seg::Star) {
+                    "oneOf"
+                } else {
+                    "passes"
+                };
+                self.store.outputs.push(format!(
+                    "{shown} : {form} {}",
+                    display_path(&proj.input, &proj.path)
+                ));
+            }
+            Val::Alts(members) => {
+                let mut names = Vec::new();
+                for member in members {
+                    match member {
+                        Val::Proj(proj) if reference(&self.store, proj) => {
+                            names.push(display_path(&proj.input, &proj.path));
+                        }
+                        _ => return,
+                    }
+                }
+                names.sort();
+                self.store
+                    .outputs
+                    .push(format!("{shown} : oneOf {}", names.join(", ")));
+            }
+            Val::Built(built) if depth < 6 => {
+                let (fields, bag) = {
+                    let built = built.borrow();
+                    (built.fields.clone(), built.bag.clone())
+                };
+                let join = |key: &str| {
+                    if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{path}/{key}")
+                    }
+                };
+                for (name, member) in &fields {
+                    self.outputs(member, &join(name), depth + 1);
+                }
+                // Which member of a bag is at a position is a choice the
+                // body made.
+                let members: Vec<Proj> = bag.iter().flat_map(Val::projections).collect();
+                let every = !bag.is_empty()
+                    && bag
+                        .iter()
+                        .all(|member| matches!(member, Val::Proj(_) | Val::Alts(_)))
+                    && members.iter().all(|proj| reference(&self.store, proj));
+                if every {
+                    let mut names: Vec<String> = members
+                        .iter()
+                        .map(|proj| display_path(&proj.input, &proj.path))
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    self.store
+                        .outputs
+                        .push(format!("{} : oneOf {}", join("*"), names.join(", ")));
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ----- the record -----
 
     fn finish(mut self) -> Record {
@@ -2401,6 +2917,27 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 self.call_function(module, start, Vec::new(), true);
             }
         }
+        // The third shape of FA §6.6: a read at or below a path the body
+        // writes, through the same anchored handle.
+        if self.computation {
+            let targets = self.store.write_targets.clone();
+            for ((input, path), site) in targets {
+                let store = &self.store;
+                let read = store
+                    .entries
+                    .keys()
+                    .chain(store.envelope.keys())
+                    .chain(store.read_cells.iter())
+                    .any(|(other, below)| *other == input && below.starts_with(&path));
+                if read {
+                    self.store
+                        .not_idempotent
+                        .entry(site)
+                        .or_insert("reads its own target");
+                }
+            }
+        }
+        let computation = self.computation;
         let store = &self.store;
         let (root_module, (from, to)) = self.root;
         let own = |site: &(usize, u32)| site.0 == root_module && from <= site.1 && site.1 < to;
@@ -2445,8 +2982,62 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .iter()
                 .map(|(cause, _, start)| (*start, format!("widen:{cause}"))),
         );
+        let materializer =
+            store.write_sites.values().any(|fixed| !*fixed) || !store.materializer.is_empty();
+        let state_cell = store.calls.values().any(|call| call.ends_with("(state)"));
+        let tier = if !computation {
+            None
+        } else if materializer {
+            Some("materializer")
+        } else if !store.write_sites.is_empty() || state_cell {
+            Some("static side-write")
+        } else {
+            Some("primary output")
+        };
+        if computation {
+            // The sites that make the body a materializer, for the hint.
+            sites.extend(
+                store
+                    .write_sites
+                    .iter()
+                    .filter(|(site, fixed)| own(site) && !**fixed)
+                    .map(|(site, _)| site)
+                    .chain(store.materializer.iter().filter(|site| own(site)))
+                    .map(|site| (site.1, "materializer".to_string())),
+            );
+        }
+        sites.extend(
+            store
+                .not_idempotent
+                .iter()
+                .filter(|(site, _)| own(site))
+                .map(|(site, shape)| (site.1, format!("not-idempotent:{shape}"))),
+        );
+        sites.extend(
+            store
+                .read_then_push
+                .iter()
+                .filter(|site| own(site))
+                .map(|site| (site.1, "read-then-push".to_string())),
+        );
+        let mut other_dynamic: Vec<String> = Vec::new();
+        if store.label_metadata {
+            other_dynamic.push("labelMetadata".to_string());
+        }
+        other_dynamic.extend(store.links.iter().map(|names| format!("link: {names}")));
+        other_dynamic.extend(store.spaces.iter().map(|names| format!("space: {names}")));
         sites.sort();
         Record {
+            calls: store.calls.values().cloned().collect(),
+            other_dynamic,
+            outputs: store.outputs.clone(),
+            tier,
+            not_idempotent: store
+                .not_idempotent
+                .values()
+                .map(|shape| shape.to_string())
+                .collect(),
+            read_then_push: store.read_then_push.len(),
             sites,
             reads: normal_form(&store.entries, store),
             envelope: normal_form(&store.envelope, store),
@@ -2508,7 +3099,9 @@ fn normal_form(entries: &BTreeMap<PathKey, BTreeSet<Class>>, store: &Store) -> V
                 *input == key.0
                     && path.starts_with(&key.1)
                     && (path.len() > key.1.len()
-                        || classes.iter().any(|class| *class != Class::Shape))
+                        || classes
+                            .iter()
+                            .any(|class| !matches!(class, Class::Shape | Class::LabelMetadata)))
             })
         });
         if other {
@@ -2611,6 +3204,10 @@ pub fn analyze_module<'a>(
             active: Vec::new(),
             closures: Vec::new(),
             root: (module, (span.start, span.end)),
+            computation: !matches!(
+                body.kind,
+                BodyKind::Handler | BodyKind::Action | BodyKind::InlineHandler
+            ),
         };
         let arguments = parameter_names(body.kind, function)
             .into_iter()
@@ -2621,6 +3218,8 @@ pub fn analyze_module<'a>(
         if let Some(expression) = function.expression_body() {
             analyzer.leaves(expression, &result);
         }
+        analyzer.outputs(&result, "", 0);
+        analyzer.store.outputs.sort();
         records.push((index, analyzer.finish()));
     }
     records

@@ -746,7 +746,11 @@ fn let_after_an_if_that_assigns_it_has_the_join_of_the_assignments() {
                /*?*/count;\n\
              }\n"
         ),
-        ["string | undefined", "string | number", "string | number | undefined"]
+        [
+            "string | undefined",
+            "string | number",
+            "string | number | undefined"
+        ]
     );
 }
 

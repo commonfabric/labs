@@ -407,10 +407,16 @@ impl<'a> Resolver<'_, 'a> {
                         }
                     }
                 }
-                AstKind::BlockStatement(block) => earlier(&block.body, child, &mut conditions, &never),
-                AstKind::FunctionBody(body) => earlier(&body.statements, child, &mut conditions, &never),
+                AstKind::BlockStatement(block) => {
+                    earlier(&block.body, child, &mut conditions, &never)
+                }
+                AstKind::FunctionBody(body) => {
+                    earlier(&body.statements, child, &mut conditions, &never)
+                }
                 AstKind::Program(program) => earlier(&program.body, child, &mut conditions, &never),
-                AstKind::SwitchCase(case) => earlier(&case.consequent, child, &mut conditions, &never),
+                AstKind::SwitchCase(case) => {
+                    earlier(&case.consequent, child, &mut conditions, &never)
+                }
                 AstKind::SwitchStatement(statement) => {
                     let position = statement
                         .cases
