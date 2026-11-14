@@ -49,19 +49,23 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `09d0f15bfc`, on 426 corpus modules, it accepts 334
-  without an error and reports 382 errors: `any` in a type (182), 71
+  prototype commit `27dde7bf4a`, on 426 corpus modules, it accepts 335
+  without an error and reports 384 errors: `any` in a type (182), 73
   type mismatches, a function type in data from one declaration (35),
-  and `patternTool` (31) are most of them. Of the 71 mismatches it
-  classes 29 as real refusals, 15 as gaps of the checker, and 37 as
-  places where the document refuses something that looks intended.
-  FabriChat has 11 errors. Footprint analysis is started: the core of
-  `footprint-analysis.md` §2 to §7 is implemented and measured, and
-  finds 90 of 1,972 bodies widening (4.6%) where the document's script
-  found 83 of 1,962. Not yet in it: runtime calls and context reads
-  (§8), resolutions, outputs, and the twelve diagnostics that need the
-  footprint. The crate's `SPEC-NOTES.md` lists the places where it found
-  the documents ambiguous.
+  and `patternTool` (31) are most of them. Footprint analysis covers
+  `footprint-analysis.md` §2 to §8: reads, writes, handles, helper
+  calls, the causes of a widening, runtime calls, context reads,
+  resolutions, `Body.outputs`, and the tier of a computation. It finds
+  90 of 1,972 bodies widening (4.6%) where the document's script found
+  83 of 1,962, and 12 computations that are materializers. Its listing
+  for FabriChat's `commitEdit` equals the one in §12.3. Five of the
+  twelve diagnostics that need the footprint are emitted, as hints and
+  warnings; one needs the plan's edges and six need label templates,
+  which the crate does not build. Not in it: `Body.computed`, which
+  needs a pass per use of a body, write edges with references (§6.5),
+  and the narrowing of a copy by a handler's footprint (§8.5). The
+  crate's `SPEC-NOTES.md` lists the places where it found the documents
+  ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -638,12 +642,16 @@ as an assumption.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
 95. **A write through a handle bound to a value the instance computes**
-    (PL question 42; LS question 28): a `computed` result, an operator
-    result, or a literal given where a handler, a `lift`, or a
-    compiled-in pattern declares a writable handle. The corpus has 20
-    such arguments. *Assumed:* the runtime refuses the write. The
-    alternative lets it land and be replaced at the next evaluation,
-    which is understood to be what happens today.
+    (PL question 42; LS question 28): a `computed` result or an operator
+    result given where a handler, a `lift`, or a compiled-in pattern
+    declares a writable handle. The corpus has 21 such arguments in the
+    reactive tier, of which 2 are written through (one is a test of this
+    behavior, one is in `topics/topic.tsx`), and 13 more given to a
+    pattern instantiated in a function body, all written through, in
+    `notebook.tsx`, `daily-journal.tsx`, and `weekly-calendar.tsx`.
+    *Assumed:* the runtime refuses the write. The alternative lets it
+    land and be replaced at the next evaluation, which is understood to
+    be what happens today.
 96. **The integrity of a slot that reads a stored object whole where a
     default fills one of its properties** (PL question 43). *Assumed:*
     the meet over the parts read, which is empty, so one defaulted
