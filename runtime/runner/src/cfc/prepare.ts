@@ -4732,13 +4732,14 @@ const resultWiringsByTarget = (
  * slots that changed, while the wiring's membership is the root container's:
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
- * verifier read that consumes nothing. Only a root holding nothing but
- * references is taken: the restatement re-mints membership, and a root holding
- * data as well would take a value stamp from what the setup read, which no
- * write of that data made. A document the transaction does not hold a value
- * for is left out.
+ * verifier read that consumes nothing. A root holding data as well as
+ * references is taken too: the setup states that data again, so the persist
+ * region replaces the root's value stamp as it re-mints a membership, while
+ * what sits below the root keeps the entries the writes there left. A document
+ * the transaction does not hold a value for is left out.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
 const withRestatedResultWirings = (
   tx: IExtendedStorageTransaction,
   targets: ReturnType<typeof valueWriteTargets>,
@@ -4757,7 +4758,7 @@ const withRestatedResultWirings = (
       type: "application/json",
       path: ["value"],
     }, { meta: internalVerifierRead }).ok?.value;
-    if (value === undefined || !isPureLinkStructure(value)) continue;
+    if (value === undefined) continue;
     const root = pathKey([]);
     result.set(key, {
       space,
@@ -13221,10 +13222,24 @@ export function* prepareBoundaryCommitSteps(
       ]),
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
+    // A result wiring this transaction restates, on a document holding data
+    // as well as references, without writing its root
+    // (`withRestatedResultWirings`). The root's value entries are replaced
+    // (below), but the root is not a written path: what sits below it keeps
+    // what the writes there left, and no existence entry records a creation
+    // this attempt did not make.
+    const restatedDataRoot = flowTarget !== undefined &&
+      resultWirings.has(key) &&
+      flowTarget.paths.some((path) => path.length === 0) &&
+      !(valueTargets.get(key)?.paths.some((path) => path.length === 0) ??
+        false) &&
+      !isPureLinkStructure(flowTarget.valuesByPath.get(pathKey([])));
     // A served event's processed claim takes nothing of the attempt's reads
     // (§6.2.2; `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`), so its path is
     // neither stamped with the join nor measured against the store.
     const flowWrittenPaths = (flowTarget?.paths ?? []).filter((path) =>
+      !(restatedDataRoot && path.length === 0) &&
       !isProcessedClaimPath(
         tx,
         target,
@@ -13819,10 +13834,14 @@ export function* prepareBoundaryCommitSteps(
         }) && entryPath[entryPath.length - 1] === "*"
         ? entryPath.slice(0, -1)
         : entryPath;
+      // A restated data root replaces its own value stamp and nothing below
+      // it (`restatedDataRoot`).
       if (
         flowPersist &&
         (entry.origin === "derived" || entry.origin === "structure") &&
-        flowWrittenPrefixes.hasPrefixOf(clearProbePath)
+        (flowWrittenPrefixes.hasPrefixOf(clearProbePath) ||
+          (restatedDataRoot && entry.origin === "derived" &&
+            clearProbePath.length === 0))
       ) {
         flowCleared = true;
         if (
@@ -14398,6 +14417,37 @@ export function* prepareBoundaryCommitSteps(
               observes: "shape",
             }));
           }
+        }
+      }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
+      // A restated data root's value stamp is re-minted the way its
+      // membership is (§8.9.1.3): where the wiring is build-decided, from what
+      // the transaction read when its setup began, and with no integrity,
+      // since the runtime placed the data the build holds. A setup that
+      // carries the stored name over keeps the attempt's whole join. The
+      // stamp is not measured against the store, as the membership stamps
+      // are not, and mints no existence entry.
+      const restatedWiring = restatedDataRoot
+        ? resultWirings.get(key)
+        : undefined;
+      if (restatedWiring !== undefined) {
+        const buildDecided = restatedWiring.buildDecided;
+        const confidentiality = buildDecided
+          ? wiringConfidentiality(restatedWiring.setupBegan)
+          : flowConfidentiality;
+        const integrity = buildDecided ? [] : flowIntegrity;
+        if (confidentiality.length > 0 || integrity.length > 0) {
+          persistedLabelEntries.push(markFlowStampEntry({
+            path: [],
+            label: {
+              ...(confidentiality.length > 0
+                ? { confidentiality: [...confidentiality] }
+                : {}),
+              ...(integrity.length > 0 ? { integrity: [...integrity] } : {}),
+            },
+            origin: "derived",
+            observes: "value",
+          }));
         }
       }
       for (const path of onwardStampPaths) {

@@ -96,7 +96,8 @@ describe("cfc-result-wiring-stamp", () => {
   /**
    * The patterns set up below: `plain` and `wider` differ in their result, so
    * one set up over the other rewrites the wiring; `named` carries a name,
-   * which a setup of the same pattern keeps from the stored result.
+   * which a setup of the same pattern keeps from the stored result. `mixed`,
+   * `remixed` and `namedMixed` hold data beside their references.
    */
   const patterns = () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
@@ -125,6 +126,11 @@ describe("cfc-result-wiring-stamp", () => {
       remixed: cf.pattern<{ x: number }>(({ x }) => ({
         a: double(x),
         note: "changed",
+      })),
+      namedMixed: cf.pattern<{ x: number }>(({ x }) => ({
+        [NAME]: title(x),
+        a: double(x),
+        note: "fixed",
       })),
     };
   };
@@ -321,7 +327,11 @@ describe("cfc-result-wiring-stamp", () => {
       expect(membershipOf(result)).toContain(BOB);
     });
 
-    it("stamps nothing of it on an unchanged result that holds data beside its references", async () => {
+    it("stamps it on the value of an unchanged result that holds data beside its references", async () => {
+      // The setup restates the data the result holds, so the result's value
+      // stamp is re-minted from the attempt's join, which carries what the
+      // transaction read before choosing the pattern.
+
       const { mixed } = patterns();
       const bobs = await seedBobsDocument();
       const result = await setUp("mixed-reads-bob", mixed);
@@ -329,8 +339,23 @@ describe("cfc-result-wiring-stamp", () => {
 
       await setUp("mixed-reads-bob", mixed, bobs);
 
-      expect(derivedOf(result)).not.toContain(BOB);
+      expect(derivedOf(result)).toContain(BOB);
       expect(membershipOf(result)).not.toContain(BOB);
+    });
+
+    it("records no existence of an unchanged result that holds data beside its references", async () => {
+      // The root existed before the setup, which only restates it, so no
+      // existence entry records a creation from the attempt's join.
+
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-exists", mixed);
+      expect(existenceOf(result)).toEqual([]);
+
+      await setUp("mixed-exists", mixed, bobs);
+
+      expect(derivedOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([]);
     });
   });
 
@@ -985,6 +1010,56 @@ describe("cfc-result-wiring-stamp", () => {
       await setUp("remixed", remixed);
 
       expect(derivedOf(result)).not.toContain(BOB);
+    });
+
+    it("comes off at a setup that finds the result unchanged", async () => {
+      // The setup restates the data the result holds, in a transaction that
+      // read nothing labeled, so the value stamp is re-minted empty.
+
+      const { mixed } = patterns();
+      const result = await setUp("remint-unchanged", mixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-unchanged", mixed);
+
+      expect(derivedOf(result)).not.toContain(BOB);
+    });
+
+    it("stays where a run given no transaction finds the result unchanged", async () => {
+      // Only a setup in the transaction it was asked in restates an unchanged
+      // result (`#isAsking` in `runner.ts`). A run given no transaction holds
+      // none of the reads that chose its pattern, so a re-mint there could
+      // drop a clause they carried.
+
+      const { mixed } = patterns();
+      const result = await setUp("unasked-unchanged", mixed);
+      await plantValueStamp(result, BOB);
+
+      const again = runtime.run(
+        undefined,
+        mixed,
+        { x: 1 },
+        runtime.getCell(space, "unasked-unchanged"),
+      );
+      await again.pull();
+      await runtime.idle();
+      runtime.runner.stop(again);
+
+      expect(derivedOf(result)).toContain(BOB);
+    });
+
+    it("stays where the setup carries over the stored name, whose read takes the stamp", async () => {
+      // The setup reads the name it carries over from the stored result, and
+      // that read consumes the stamp at the root above it, so the attempt's
+      // join, which the stamp is re-minted from, carries the clause again.
+
+      const { namedMixed } = patterns();
+      const result = await setUp("named-mixed", namedMixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("named-mixed", namedMixed);
+
+      expect(derivedOf(result)).toContain(BOB);
     });
   });
 });
