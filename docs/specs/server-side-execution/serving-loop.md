@@ -89,6 +89,16 @@ execution observer and decides which worker serves which space:
   (default none; one in the toolshed, `SERVER_EXECUTION_SPARE_WORKERS`), so
   that a placement finds a worker whose modules have loaded. Spares do not
   count toward the cap.
+- Given `heapLimitMb` (2048 in the toolshed,
+  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`), the pool starts each worker as a
+  `node:worker_threads` thread whose old generation the limit bounds
+  (`serving-thread.ts`), since a Deno `Worker` takes no limit and one that
+  reaches the isolate's limit aborts the process. Reaching the limit stops
+  what was growing the heap. A thread that reached it while evaluating its
+  modules reports an error; one that reached it in a handler keeps running
+  its timers with that handler gone, so the pool also takes a worker whose
+  heartbeat reports its heap at the limit out as a failed one. Either way
+  its spaces are placed again on a fresh worker and the process goes on.
 - A host reports what it holds (`ExecutorHost.occupancy`): `busy` while it
   serves, starts, ends or re-evaluates a tenure or holds a notice for a
   tenure to come, `parked` while it holds nothing but runtimes kept from

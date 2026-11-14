@@ -437,6 +437,29 @@ describe("serving-worker", () => {
     );
   });
 
+  it("ends a worker whose heap reaches its limit while it serves, alone, and serves its space from a fresh one", async () => {
+    const workerModule = new URL(
+      "./fixtures/serving-worker-that-grows.ts",
+      import.meta.url,
+    );
+    workerModule.searchParams.set("marker", `${directory}/grew`);
+    await start({ workerModule, heapLimitMb: 160, watchdogIntervalMs: 200 });
+
+    // The first worker's heap grows as soon as it is told of the space, before
+    // it derives anything, and stops at its limit with the worker's timers
+    // still posting heartbeats. The total the reader reads is then the fresh
+    // worker's.
+    await startParent(space, 1);
+    await closures.matching((entry) =>
+      entry.cause === "failed" && entry.spaces.includes(space)
+    );
+    await readTotal(space, 2);
+
+    const stats = await worker.requestStats();
+    expect(stats.workers.failed).toBe(1);
+    expect(stats.workers.serving).toBe(1);
+  });
+
   it("serves two spaces from one worker under `maxWorkers: 1`", async () => {
     await start({ maxWorkers: 1 });
     await startParent(space, 1);

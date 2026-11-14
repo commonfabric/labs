@@ -16,7 +16,6 @@ import type {
   AdmittedCommitNotice,
   Server,
 } from "@commonfabric/memory/v2/server";
-import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
@@ -31,6 +30,7 @@ import {
   writesSpaceAcl,
 } from "./host.ts";
 import { ServingPortBridge } from "./serving-port-bridge.ts";
+import { type ServingThread, startServingThread } from "./serving-thread.ts";
 import type {
   LifecycleVerbDescriptor,
   LifecycleVerbRun,
@@ -143,6 +143,15 @@ export type ServingWorkerPoolOptions = {
   spareWorkers?: number;
 
   /**
+   * The largest each worker's heap may grow, in megabytes. A worker that
+   * reaches it is ended alone, as a worker that fails is, at the error that
+   * reports it or at its next heartbeat, and its spaces are placed again; the
+   * process goes on. Absent, a worker grows to the process's own heap limit,
+   * and one that reaches it aborts the process.
+   */
+  heapLimitMb?: number;
+
+  /**
    * How large the workers' JavaScript heaps may be together, in bytes, as
    * their heartbeats report them, before the pool closes workers that hold
    * only parked runtimes, the longest parked first. Workers serving a space
@@ -187,7 +196,7 @@ export type CollectedWorkerMemory = CollectedMemory & {
 
 /** One running worker, the bridge serving it, and what is placed on it. */
 type PoolWorker = {
-  worker: Worker;
+  worker: ServingThread;
   bridge: ServingPortBridge;
 
   /** The lease holder this worker's leases name. */
@@ -632,7 +641,7 @@ export class ServingWorkerPool {
     // tear down, leases included.
     if (worker.gone) return;
     this.#forget(worker);
-    await terminateWorker(worker.worker, worker.lifetimeLock);
+    await worker.worker.terminate(worker.lifetimeLock);
     if (!hostClosed) worker.bridge.releaseLeasesOf(worker.holder);
   }
 
@@ -849,10 +858,17 @@ export class ServingWorkerPool {
     // to the server, whose lease read then matches the holder the worker's
     // host acquires under.
     const processInstanceId = crypto.randomUUID();
-    const worker = new Worker(
+    // The worker reports a failure only after `started` is built below.
+    let onFailed = (_message: string) => {};
+    const worker = startServingThread(
       this.#options.workerModule ??
         new URL("./serving-worker.ts", import.meta.url),
-      { type: "module", name: "serving-loop" },
+      {
+        ...(this.#options.heapLimitMb === undefined
+          ? {}
+          : { heapLimitMb: this.#options.heapLimitMb }),
+        onFailed: (message) => onFailed(message),
+      },
     );
     const intervalMs = this.#options.watchdogIntervalMs ??
       WATCHDOG_INTERVAL_MS;
@@ -860,7 +876,7 @@ export class ServingWorkerPool {
       worker,
       bridge: new ServingPortBridge({
         server,
-        port: worker,
+        port: worker.port,
         leaseHolderInstance: processInstanceId,
         // A committed wave is the progress a space whose workers keep
         // failing never makes, as the host's own failure streak counts it:
@@ -925,10 +941,7 @@ export class ServingWorkerPool {
     started.ready.catch((error) => {
       this.#onWorkerFailed(started, String(error));
     });
-    worker.onerror = (event) => {
-      event.preventDefault();
-      this.#onWorkerFailed(started, event.message);
-    };
+    onFailed = (message) => this.#onWorkerFailed(started, message);
     this.#workers.add(started);
     this.#counts.started += 1;
     return started;
@@ -996,9 +1009,26 @@ export class ServingWorkerPool {
     }
   }
 
-  /** A worker's heartbeat: its heap, which the heap budget adds up. */
+  /**
+   * A worker's heartbeat: its heap, which the heap budget adds up. A worker
+   * whose heap has reached its limit is taken out of the pool as one that
+   * failed. The limit stops whatever was growing the heap, but a worker's
+   * thread that reached it inside a message handler keeps running its timers
+   * with that handler gone, so it goes on posting heartbeats and answers
+   * nothing.
+   */
   #onHeartbeat(worker: PoolWorker, heapUsed: number): void {
     worker.heapUsed = heapUsed;
+    const limitMb = this.#options.heapLimitMb;
+    if (limitMb !== undefined && heapUsed >= limitMb * 1024 * 1024) {
+      this.#onWorkerFailed(
+        worker,
+        `its heap reached ${Math.round(heapUsed / (1024 * 1024))} MB, ` +
+          `at its ${limitMb} MB limit`,
+        { killed: true },
+      );
+      return;
+    }
     this.#evictParkedWorkers();
   }
 
@@ -1090,7 +1120,7 @@ export class ServingWorkerPool {
       this.#resumeAfter(
         worker,
         owed,
-        terminateWorker(worker.worker, worker.lifetimeLock).then(() => {
+        worker.worker.terminate(worker.lifetimeLock).then(() => {
           worker.bridge.releaseLeasesOf(worker.holder);
         }),
         { failed: false },
@@ -1229,7 +1259,7 @@ export class ServingWorkerPool {
     );
     this.#forget(worker);
     this.#counts.failed += 1;
-    const terminated = terminateWorker(worker.worker, worker.lifetimeLock)
+    const terminated = worker.worker.terminate(worker.lifetimeLock)
       .then(() => {
         const released = worker.bridge.releaseLeasesOf(worker.holder);
         if (killed) this.#leasesLost += released;

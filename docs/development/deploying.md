@@ -198,7 +198,13 @@ about 110 MB before it serves anything
 "Workers"). `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB` bounds what the workers'
 heaps come to together by closing the workers kept only for a parked space's
 runtime; it closes no worker that serves a space, so it does not bound a space
-that grows.
+that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048) does: each
+serving worker runs as a `node:worker_threads` thread whose old generation
+that limit bounds, and the pool ends a worker whose heap reaches it, alone,
+and places its spaces again, where a worker reaching the 16 GiB isolate limit
+would abort the whole process. The limit bounds each worker, not their sum,
+so a host that runs many toolsheds sizes it, with
+`SERVER_EXECUTION_MAX_WORKERS`, against its memory.
 
 A worker that reaches the limit takes its process down. Events still queued
 survive that, and the restarted process handles them.

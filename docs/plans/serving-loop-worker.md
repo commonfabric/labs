@@ -302,7 +302,11 @@ worker's host closes.
 Three knobs bound that: `maxWorkers`, past which a space joins a worker that
 already serves one; `spareWorkers`, which hides the load time from a
 placement; and the cap on workers kept only for parked runtimes, with the
-heap budget that closes such workers under memory pressure.
+heap budget that closes such workers under memory pressure. A heap limit
+per worker (`heapLimitMb`, `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`) bounds a
+space that grows: the worker runs as a `node:worker_threads` thread with that
+limit, and the pool ends it alone, rather than the process, when its heap
+reaches it.
 
 **Failure.** A worker that fails affects its own spaces. The watchdog, the
 lease release and the backoff are the ones above, per worker and per space.

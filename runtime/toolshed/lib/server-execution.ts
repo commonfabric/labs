@@ -292,10 +292,18 @@ export function serverExecutionWorkerFromEnv(
 /** How many spare serving workers a toolshed keeps started unless told. */
 export const DEFAULT_SPARE_SERVING_WORKERS = 1;
 
+/**
+ * The largest a toolshed's serving worker's heap may grow unless told, in
+ * megabytes: well above what a worker serving one space holds, about 80 MB,
+ * and far below the 16 GiB each isolate of the toolshed's own process may
+ * reach, so a runaway space ends its own worker rather than the process.
+ */
+export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
+
 /** The serving-worker pool's knobs a toolshed reads from its environment. */
 export type ServingWorkerPoolEnv = Pick<
   ServingWorkerPoolOptions,
-  "maxWorkers" | "spareWorkers" | "heapBudgetBytes"
+  "maxWorkers" | "spareWorkers" | "heapBudgetBytes" | "heapLimitMb"
 >;
 
 /**
@@ -309,6 +317,10 @@ export type ServingWorkerPoolEnv = Pick<
  * - `SERVER_EXECUTION_SPARE_WORKERS`, a non-negative integer: how many
  *   workers are kept started ahead of a placement. Default
  *   {@link DEFAULT_SPARE_SERVING_WORKERS}; the literal `0` keeps none;
+ * - `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, a positive integer: the
+ *   largest each worker's heap may grow, in megabytes, past which that
+ *   worker alone is ended and its spaces placed again. Default
+ *   {@link DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB};
  * - `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, a positive integer: how
  *   large the workers' heaps may be together, in megabytes, before workers
  *   holding only parked runtimes are closed. Default: no budget.
@@ -341,12 +353,16 @@ export function servingWorkerPoolFromEnv(
   const maxWorkers = read("SERVER_EXECUTION_MAX_WORKERS", { least: 1 });
   const spareWorkers = read("SERVER_EXECUTION_SPARE_WORKERS", { least: 0 }) ??
     DEFAULT_SPARE_SERVING_WORKERS;
+  const heapLimitMb = read("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", {
+    least: 1,
+  }) ?? DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB;
   const heapBudgetMb = read("SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", {
     least: 1,
   });
   return {
     ...(maxWorkers === undefined ? {} : { maxWorkers }),
     spareWorkers,
+    heapLimitMb,
     ...(heapBudgetMb === undefined
       ? {}
       : { heapBudgetBytes: heapBudgetMb * 1024 * 1024 }),
@@ -508,7 +524,8 @@ export function startServerExecutionHost(options: {
           ? ""
           : `, on ${pool.maxWorkers} worker(s) at most by ` +
             "SERVER_EXECUTION_MAX_WORKERS") +
-        `, with ${pool.spareWorkers} spare`,
+        `, with ${pool.spareWorkers} spare, each worker's heap limited to ` +
+        `${pool.heapLimitMb} MB`,
     );
     // The workers' entry adds the lifecycle verbs, the self-directed fetch
     // and the module cache itself (lib/serving-worker.ts).
