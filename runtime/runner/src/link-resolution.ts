@@ -25,7 +25,6 @@ import type {
   IExtendedStorageTransaction,
   INotFoundError,
   MemorySpace,
-  Metadata,
 } from "./storage/interface.ts";
 import {
   dereferenceResolutionProbe,
@@ -1195,34 +1194,9 @@ export function readMaybeLink(
   link: NormalizedFullLink,
   onlyWriteRedirects = false,
 ): NormalizedFullLink | undefined {
-  const stored = readStoredReference(
-    tx,
-    link,
-    linkResolutionProbe,
-    onlyWriteRedirects,
-  );
-  return stored === undefined ? undefined : parseLink(stored as CellLink, link);
-}
-
-/**
- * Returns the value stored at `link`'s position as it is stored, where that
- * position holds a reference, and otherwise `undefined`: the two reads
- * {@link readMaybeLink} makes, journaled with `meta`. `meta` is
- * `linkResolutionProbe` or carries it, so both reads stay reference-identity
- * observations; a caller that only moves the reference it finds adds
- * `machineryRead`. Siblings of the sigil can make the stored value no
- * reference after all, so it is returned unchecked, for a caller that needs a
- * reference to check with `isCellLink()`.
- */
-export function readStoredReference(
-  tx: IExtendedStorageTransaction,
-  link: NormalizedFullLink,
-  meta: Metadata,
-  onlyWriteRedirects = false,
-): unknown {
   const readSubPath = (extraPath: readonly string[]) =>
     tx.readValueOrThrow({ ...link, path: [...link.path, ...extraPath] }, {
-      meta,
+      meta: linkResolutionProbe,
     });
 
   const maybeSigilPayload = linkPayloadAtProbe(readSubPath(linkProbeSubPath()));
@@ -1232,7 +1206,8 @@ export function readStoredReference(
     (!onlyWriteRedirects ||
       (maybeSigilPayload as CellLinkRefPayload).overwrite === "redirect")
   ) {
-    return readSubPath([]);
+    return parseLink(readSubPath([]) as CellLink, link);
+  } else {
+    return undefined;
   }
-  return undefined;
 }
