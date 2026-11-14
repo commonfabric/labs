@@ -399,6 +399,89 @@ fn a_handler_is_held_to_no_idempotency_contract_and_a_read_then_push_is_counted(
         "const f = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { state.rows.push(event.n); });\n",
     );
     assert_eq!(blind.read_then_push, 0);
+    // LS §10.3: "`addUnique` is not reported: it is the merge-safe
+    // operation the message names."
+    let unique = analyze(
+        "const f = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { if (state.rows.get().length < 3) { state.rows.addUnique(event.n); } });\n",
+    );
+    assert_eq!(unique.read_then_push, 0);
+    let all = analyze(
+        "const f = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { if (state.rows.get().length < 3) { state.rows.pushAll([event.n]); } });\n",
+    );
+    assert_eq!(all.read_then_push, 1);
+}
+
+// ----- §8.2: a constant cause -----
+
+#[test]
+fn a_constant_cause_is_a_template_an_operator_or_a_local_const_over_constants() {
+    // FA §8.2: "a literal, a template literal whose substitutions are
+    // constant, an operator over constants, or a local `const` whose
+    // initializer is constant. An expression that holds a projection, a
+    // `Computed` value, a `let` binding, or a call is not constant."
+    for cause in [
+        "`total-${1}`",
+        "\"a\" + \"b\"",
+        "PREFIX + \"-total\"",
+        "`${PREFIX}-${local}`",
+        "local",
+    ] {
+        let record = analyze(&format!(
+            "const PREFIX = \"donut\";\nconst f = lift((x: {{ n: number }}) => {{ const local = \"k\" + 1; const c = Cell.for({cause}); return x.n; }});\n"
+        ));
+        assert_eq!(record.calls, ["createCell:cause (state)"], "{cause}");
+    }
+    for cause in ["`total-${x.n}`", "\"a\" + x.n", "changing", "String(1)", "derived"] {
+        let record = analyze(&format!(
+            "const f = lift((x: {{ n: number }}) => {{ let changing = \"k\"; const derived = `${{x.n}}`; const c = Cell.for({cause}); return x.n; }});\n"
+        ));
+        assert_eq!(record.calls, ["createCell:cause (data)"], "{cause}");
+    }
+}
+
+// ----- §5.2: W6 in the other forms of access -----
+
+#[test]
+fn a_destructuring_and_a_keyed_access_enter_a_recursive_type_as_a_property_read_does() {
+    // FA §5.2: "An access counts in whatever form it is written: a
+    // property access, an element access, a destructuring, or an
+    // iteration."
+    let expected = [
+        "box.children : enumeration",
+        "box.children/*/children : value",
+        "box.children/*/label : value",
+    ];
+    let destructured = analyze(
+        "function f(box: Box) { let n = 0; for (const c of box.children) { const { children, label: own } = c; n += own.length; for (const g of children) { const { label } = g; n += label.length; } } return n; }\n",
+    );
+    assert_eq!(destructured.reads, expected);
+    assert_eq!(destructured.widenings, ["W6"]);
+    let in_loop = analyze(
+        "function f(box: Box) { let n = 0; for (const { children, label: own } of box.children) { n += own.length; for (const { label } of children) { n += label.length; } } return n; }\n",
+    );
+    assert_eq!(in_loop.reads, expected);
+    assert_eq!(in_loop.widenings, ["W6"]);
+    let keyed = analyze(
+        "function f(box: Box) { let n = 0; for (const c of box.children) { n += c[\"label\"].length; for (const g of c[\"children\"]) { n += g[\"label\"].length; } } return n; }\n",
+    );
+    assert_eq!(keyed.reads, expected);
+    assert_eq!(keyed.widenings, ["W6"]);
+}
+
+#[test]
+fn a_type_that_refers_to_itself_through_a_property_widens_at_the_second_entry() {
+    // FA §5.2: "With a type that refers to itself through a property and
+    // no array, `node.next`, the second entry is `node/next/next`, and
+    // the widened entry is at that path."
+    let record = analyze(
+        "interface Chain { name: string; next?: Chain }\nfunction f(node: Chain) { return node.next?.next?.next?.name; }\n",
+    );
+    assert!(
+        has(&record.reads, "node.next/next : value"),
+        "{:?}",
+        record.reads
+    );
+    assert_eq!(record.widenings, ["W6"]);
 }
 
 // ----- §5.2: W6 -----

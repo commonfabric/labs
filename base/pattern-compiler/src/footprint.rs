@@ -3202,6 +3202,8 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         self.store.write_targets.push((handle.cell(), site));
                     }
                     // A push onto a collection the handler read before.
+                    // `addUnique` is the merge-safe operation, and is
+                    // not reported (LS §10.3).
                     let read = self.store.read_cells.iter().any(|(input, path)| {
                         let (target_input, target) = handle.cell();
                         *input == target_input
@@ -3210,7 +3212,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     if !self.computation
                         && self.handler
                         && read
-                        && matches!(name, "push" | "pushAll" | "addUnique")
+                        && matches!(name, "push" | "pushAll")
                     {
                         self.store.read_then_push.insert(site);
                     }
