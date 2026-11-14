@@ -134,7 +134,12 @@ describe("cfc-result-wiring-stamp", () => {
     };
   };
 
-  /** How many attempts the latest {@link setUp} took. */
+  /**
+   * How many attempts the latest {@link setUp} took. Only the case that forces
+   * the release checks it: in any other, whether a release pass drops the
+   * stopped piece's documents before its next setup is a matter of timing, so
+   * that setup may take one attempt or two.
+   */
   let setUpAttempts = 0;
 
   /**
