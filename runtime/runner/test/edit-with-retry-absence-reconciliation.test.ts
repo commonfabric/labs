@@ -884,10 +884,11 @@ describe("editWithRetry absence reconciliation", () => {
   });
 
   describe("an action that throws", () => {
-    // Client A stores `stored-doc`, `chain-0` and `chain-1`; `body` runs against client B, a cold
-    // replica of the same space, which has loaded none of them. A read of a
-    // document B has not loaded is what a read after a release pass dropped
-    // that document is, so B's first read of each finds it absent.
+    // Client A stores `stored-doc`, `chain-0` and `chain-1`; `body` runs
+    // against client B, a cold replica of the same space, which has loaded
+    // none of them. A read of a document B has not loaded is what a read after
+    // a release pass dropped that document is, so B's first read of each finds
+    // it absent.
     const withColdReader = async (
       body: (reader: {
         runtime: Runtime;
@@ -1023,7 +1024,7 @@ describe("editWithRetry absence reconciliation", () => {
       });
     });
 
-    it("spends the retry budget it shares with commit retries, one run for each document it found absent", async () => {
+    it("runs again once for each document it found absent, until its retry budget is spent", async () => {
       await withColdReader(async ({ runtime }) => {
         // Each run reads the chain in order and throws at the first document
         // it finds absent, so each run finds one more loaded than the last.
@@ -1042,6 +1043,45 @@ describe("editWithRetry absence reconciliation", () => {
         expect(runs).toBe(2);
         expect(result.error?.message).toBe(
           "editWithRetry action threw: Error: chain-1 is unavailable",
+        );
+      });
+    });
+
+    it("reports the throw, with its transaction aborted, when naming the documents it found absent fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        storageManager.pendingLoadGeneration = () => {
+          throw new Error("load bookkeeping is unavailable");
+        };
+        let runs = 0;
+        let attempt: IExtendedStorageTransaction | undefined;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          attempt = tx;
+          requireStored(runtime, tx);
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+        expect(attempt!.status().status).toBe("error");
+      });
+    });
+
+    it("reports the throw when counting the documents it found absent fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        storageManager.open(space).presentCount = () => {
+          throw new Error("the replica cannot count");
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
         );
       });
     });

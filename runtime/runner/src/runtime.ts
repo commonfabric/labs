@@ -3774,10 +3774,17 @@ export class Runtime {
       // check that refuses on the `undefined` does, so the attempt's absences
       // are reconciled as a returning attempt's are (below): when one of them
       // turns out to exist, `fn` runs again against it. The absences are
-      // named before the abort, which ends the transaction's reads.
-      const reconciliation = maxRetries > 0
-        ? this.#awaitUnexaminedAbsences(tx)
-        : 0;
+      // named before the abort, which ends the transaction's reads. Naming
+      // them only decides whether to run again, so a failure to name them, or
+      // to count them, reports the throw as it is.
+      let reconciliation: number | Promise<number> = 0;
+      if (maxRetries > 0) {
+        try {
+          reconciliation = this.#awaitUnexaminedAbsences(tx);
+        } catch {
+          reconciliation = 0;
+        }
+      }
       tx.abort(error);
       const thrown = {
         error: {
@@ -3787,13 +3794,16 @@ export class Runtime {
         },
       };
       if (typeof reconciliation === "number") return Promise.resolve(thrown);
-      return reconciliation.then((present) => {
-        if (signal.aborted) return stoppedResult();
-        if (present > 0) {
-          return this.editWithRetry<T>(fn, maxRetries - 1, options);
-        }
-        return thrown;
-      });
+      return reconciliation.then(
+        (present) => {
+          if (signal.aborted) return stoppedResult();
+          if (present > 0) {
+            return this.editWithRetry<T>(fn, maxRetries - 1, options);
+          }
+          return thrown;
+        },
+        () => thrown,
+      );
     }
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
