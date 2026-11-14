@@ -2666,11 +2666,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         self.store.binds.insert(site, (handler, false, state));
                     }
                 }
-                return if instantiates {
-                    Val::Site(site.0, site.1)
-                } else {
-                    Val::Created
-                };
+                // What the site returned: the link to the instance, or
+                // the stream of the binding, which the body can send on
+                // (PL §3.11).
+                return Val::Site(site.0, site.1);
             }
             // A function of an imported TypeScript module reads each
             // argument in full (FA §1.2, W3).
@@ -2842,7 +2841,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
                         self.store.pending.push((Pending::Request(site), val, true));
                     }
                 }
-                Val::Created
+                if effect {
+                    // The link to the effect's result (PL §3.14).
+                    Val::Site(site.0, site.1)
+                } else {
+                    Val::Created
+                }
             }
         }
     }
@@ -2933,11 +2937,24 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 let val = self.eval(argument);
                 self.leaves(argument, &val);
             }
-            return if WRITERS.contains(&name) {
-                Val::Computed
-            } else {
-                receiver
-            };
+            if !WRITERS.contains(&name) {
+                return receiver;
+            }
+            // A write through what the site returned (PL §3.11): an edge
+            // with target `created` for the cell of a `createCell` site
+            // and for the stream of a `bind` site, and an envelope of
+            // kind `created` for the link an `instantiate` or an `effect`
+            // site returned.
+            let site = (module, site_start);
+            let fixed = self
+                .store
+                .calls
+                .get(&site)
+                .is_some_and(|kind| kind == "bind" || kind.starts_with("createCell"));
+            self.store
+                .pending
+                .push((Pending::Created(site), Val::Computed, fixed));
+            return Val::Computed;
         }
         let kinds = self.kinds(&member.object);
         let made = receiver.projections().iter().any(|proj| proj.made);

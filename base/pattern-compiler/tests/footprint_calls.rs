@@ -606,3 +606,37 @@ fn commit_edit_has_the_footprint_of_section_12_3() {
     assert!(record.calls.is_empty(), "{:?}", record.calls);
     assert!(record.widenings.is_empty(), "{:?}", record.widenings);
 }
+
+// ----- PL §3.11: a write through what a site of the body returned -----
+
+#[test]
+fn a_write_through_what_a_site_returned_is_an_edge_or_an_envelope_that_names_the_site() {
+    // PL §3.11, "A write through what a site of the body returned":
+    // `bind`: "`stream.send(event)` on the stream the site returned is a
+    // `WriteEdge` with target `created` that names the `bind` site";
+    // `createCell`: "a `WriteEdge` with target `created`"; `instantiate`,
+    // `effect`: "a `WriteEnvelope` of kind `created` that names the site".
+    let record = analyze(
+        "const Counter = pattern<{ start: number }, { count: Cell<number> }>(({ start }) => ({ count: Writable.of(0) }));\n\
+         const bump = handler<{ n: number }, { total: Cell<number> }>((event, state) => { state.total.set(event.n); });\n\
+         const f = handler<{ n: number }, { total: Cell<number> }>((event, state) => {\n\
+           const child = Counter({ start: event.n });\n\
+           child.count.set(event.n);\n\
+           const stream = bump({ total: state.total });\n\
+           stream.send({ n: 1 });\n\
+           const made = Writable.of(0);\n\
+           made.set(event.n);\n\
+           const moved = navigateTo(event.n);\n\
+           moved.set(1);\n\
+         });\n",
+    );
+    assert_eq!(
+        record.calls,
+        ["instantiate:order", "bind", "createCell:order", "effect:navigateTo"]
+    );
+    assert_eq!(
+        record.edges,
+        ["argument n0", "created n1", "created n2", "request n3"]
+    );
+    assert_eq!(record.envelopes, ["created n0", "created n3"]);
+}

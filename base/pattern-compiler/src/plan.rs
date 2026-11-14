@@ -2935,6 +2935,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             };
             if !*fixed {
+                // An envelope of kind `created` names the site alone
+                // (PL §1.1, `WriteEnvelope`).
+                let mut target_json = target_json;
+                if target_json["kind"] == "created" {
+                    if let Some(envelope) = target_json.as_object_mut() {
+                        envelope.remove("path");
+                    }
+                }
                 envelopes.push(target_json);
                 continue;
             }
