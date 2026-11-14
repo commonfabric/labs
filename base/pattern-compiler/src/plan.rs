@@ -979,6 +979,20 @@ impl<'a> Emitter<'_, '_, 'a> {
                         self.inline_pattern(home, start, &name, &arguments, at)
                     }
                     _ => {
+                        let global = self.resolver.parsed(self.module).is_some_and(|parsed| {
+                            symbol_of(parsed.semantic.scoping(), identifier).is_none()
+                        });
+                        if global {
+                            // A function of the standard library, such as
+                            // `String`: expression code over its
+                            // arguments.
+                            return self.in_cone(hint, at, |emitter, _| {
+                                for argument in &arguments {
+                                    let place = emitter.eval(argument, "operand");
+                                    emitter.consume(&place);
+                                }
+                            });
+                        }
                         self.unsupported("a call of a name the emitter does not resolve", at);
                         Place::Unknown
                     }

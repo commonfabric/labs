@@ -342,6 +342,30 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
     );
 }
 
+#[test]
+fn a_call_of_a_standard_library_function_is_expression_code_that_consumes_its_arguments() {
+    // PL §1.4: a cone is expression code over slots; a conversion such as
+    // `String(n)` is an operator over its operand (note 91).
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+export const Shown = pattern<{ n: number }>(({ n }) => {
+  const text = String(n);
+  return { text };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Shown");
+    let cone = &plan["cones"][0];
+    assert_eq!(cone["entry"], "text");
+    let slots: Vec<String> = cone["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .map(|slot| slot_line(&plan, slot))
+        .collect();
+    assert_eq!(slots, ["argument n : value"]);
+}
+
 // ----- PL §6.2: the plan for the slice of FabriChat -----
 
 fn fabrichat() -> ProgramAnalysis {
