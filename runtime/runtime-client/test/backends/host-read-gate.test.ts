@@ -33,6 +33,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../../runner/test/cfc-seed-envelope.ts";
+import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { HostReadGate } from "@/backends/host-read-gate.ts";
 import {
   renderConfidentialityResolverFor,
@@ -1103,6 +1104,22 @@ describe("HostReadGate", () => {
       ).toEqual({
         refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
       });
+    });
+
+    it("throws a read's failure that is not an envelope this build cannot interpret, rather than refusing it", async () => {
+      // Only a document whose stored labels cannot be interpreted is decided
+      // as labels that could not be read; any other failure of a read is the
+      // read's, and reaches the host as a failure.
+
+      await using docs = await shelf();
+      const failing = patchableCell(docs.publicPiece.asSchema(true));
+      failing.withTx = () => {
+        throw new Error("a read that fails on its own");
+      };
+
+      expect(() => gateFor(docs.runtime, owner).read(failing)).toThrow(
+        "a read that fails on its own",
+      );
     });
 
     it("names a consumed label for a value stored under the read-failure marker, as a runtime secret is", async () => {

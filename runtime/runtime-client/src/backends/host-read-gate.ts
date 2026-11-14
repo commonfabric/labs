@@ -501,22 +501,14 @@ export class HostReadGate {
       addCancel,
       reeval: decide,
     };
-    try {
-      addCancel(sinkProjected(cell, (value) => {
-        inspect(value);
-        return hostValueOf(value);
-      }, (value, read, cfcLabel, writtenPrincipal) => {
-        last = { value, cfcLabel, writtenPrincipal };
-        consumed = read;
-        decide();
-      }, sinkOptions));
-    } catch (error) {
-      // The sink hands a read whose stored labels this build cannot interpret
-      // no labels rather than failing. Should one fail its first run all the
-      // same, it subscribed to nothing, and the refusal is its one delivery.
-      if (!(error instanceof StoredCfcMetadataError)) throw error;
-      deliver(refusedUpdate(UNREADABLE_LABELS));
-    }
+    addCancel(sinkProjected(cell, (value) => {
+      inspect(value);
+      return hostValueOf(value);
+    }, (value, read, cfcLabel, writtenPrincipal) => {
+      last = { value, cfcLabel, writtenPrincipal };
+      consumed = read;
+      decide();
+    }, sinkOptions));
     return cancel;
   }
 
