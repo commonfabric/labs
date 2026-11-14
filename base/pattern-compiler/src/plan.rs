@@ -51,6 +51,9 @@ pub struct PatternPlan {
     /// identifier of the diagnostic, the offset in the module of the
     /// pattern, and what was found.
     pub flows: Vec<(&'static str, u32, String)>,
+    /// The handles of a binding's state that are bound to a computed
+    /// value, by case (ruling T3).
+    pub handle_writes: Vec<HandleWrite>,
     /// The schemas of the pattern's argument and of its result, where
     /// the pattern declares the type (PL §1.1, `Child.argumentSchema` and
     /// `Child.resultSchema` are their content addresses).
@@ -101,6 +104,66 @@ fn name_schemas(
         }
     }
     schemas
+}
+
+/// One handle of a binding's state that is bound to a computed value
+/// (ruling T3 of 2026-11-14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandleWrite {
+    /// `reference`: the value at the bound path refers to a stored place,
+    /// and the handler writes through it. `computed: written` and
+    /// `computed: read`: the instance produces the value. `mixed: written`
+    /// and `mixed: read`: a selection with a branch of each kind.
+    pub case: &'static str,
+    /// Where the bound value is written, in the module of the pattern.
+    pub at: u32,
+    /// The state path, the handler, and the text of the bound value.
+    pub what: String,
+}
+
+/// What a place is, for a write through a handle bound to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A path of an input, of a state cell, or of an element of a stored
+    /// collection.
+    Stored,
+    /// A reference to a stored place that a computation passed on.
+    Reference,
+    /// A value the instance produces.
+    Produced,
+    /// A selection between a reference and a produced value.
+    Mixed,
+    /// The result of an operation, of a child, or of something this slice
+    /// does not classify.
+    Other,
+}
+
+/// What a computed value is said to hold, where its template does not
+/// show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Declared {
+    /// The value itself is a reference to a stored place.
+    Whole,
+    /// The value is an array the instance made, and its elements are
+    /// references to stored places.
+    Elements,
+    Produced,
+    Mixed,
+}
+
+fn combine(found: impl IntoIterator<Item = Option<Declared>>) -> Option<Declared> {
+    let mut all: Option<Declared> = None;
+    for one in found.into_iter().flatten() {
+        all = Some(match (all, one) {
+            (None, one) => one,
+            (Some(a), b) if a == b => a,
+            (Some(Declared::Whole | Declared::Elements), Declared::Whole | Declared::Elements) => {
+                Declared::Elements
+            }
+            _ => Declared::Mixed,
+        });
+    }
+    all
 }
 
 /// Where the data of a slot lives (`SlotRoot`).
@@ -182,6 +245,8 @@ struct Computed {
     /// The value is what the step of a `reduce` returns: an output whose
     /// path has `*`, and no assembled entry (PL §3.13).
     step: bool,
+    /// What the value holds, where the emitter decided it (ruling T3).
+    origin: Option<Declared>,
     order: usize,
 }
 
@@ -286,6 +351,12 @@ struct Emitter<'r, 'm, 'a> {
     /// What the compiler reports as a hint: a `wish` whose query is not
     /// a constant (PL §3.19, question 48).
     hints: Vec<(String, u32)>,
+    /// The handles bound to a computed value (ruling T3).
+    handle_writes: Vec<HandleWrite>,
+    /// Where each pattern being compiled in is called, outermost first.
+    inline_at: Vec<u32>,
+    /// The parameters of the function whose returns are being classified.
+    formal_names: Vec<String>,
     /// The declared type of the data at a slot root, where the emitter
     /// has it: the pattern's input, the element of a collection, and the
     /// event and the state of a named handler.
@@ -777,6 +848,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             below: Vec::new(),
             step: false,
             referred: false,
+            origin: None,
             order,
         });
         order
@@ -884,6 +956,25 @@ impl<'a> Emitter<'_, '_, 'a> {
         class: Option<&'static str>,
         branches: [Option<&Expression<'a>>; 2],
     ) -> Place {
+        let mut origins: Vec<Option<Declared>> = Vec::new();
+        let place = self.select_in(hint, at, test, class, branches, &mut origins);
+        // A selection passes the selected branch on: it is a reference
+        // where every branch is one (ruling T3).
+        if let Place::Value(value, _) = &place {
+            self.values[*value].origin = combine(origins);
+        }
+        place
+    }
+
+    fn select_in(
+        &mut self,
+        hint: &str,
+        at: u32,
+        test: &Expression<'a>,
+        class: Option<&'static str>,
+        branches: [Option<&Expression<'a>>; 2],
+        origins: &mut Vec<Option<Declared>>,
+    ) -> Place {
         self.build(hint, at, |emitter, _| {
             let selector = emitter.selector(2);
             let class = class.unwrap_or_else(|| emitter.test_class(test));
@@ -900,6 +991,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // template, not only its truthiness."
                     None => emitter.one("identity", |_| tested.clone()),
                 };
+                origins.push(emitter.declared_of(&place));
                 constructed.push((emitter.entries_of(&place), template.clone()));
                 templates.push(template);
             }
@@ -1546,6 +1638,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_env = std::mem::take(&mut self.env);
         let saved_module = std::mem::replace(&mut self.module, home);
         self.within.push(json!({ "site": name }));
+        self.inline_at.push(at);
         if let Some(parameter) = function.params().items.first() {
             self.bind_pattern(&parameter.pattern, argument);
         }
@@ -1555,6 +1648,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .block_body()
                 .and_then(|statements| self.statements(statements)),
         };
+        self.inline_at.pop();
         self.within.pop();
         self.module = saved_module;
         self.env = saved_env;
@@ -2902,19 +2996,37 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // Not promoted: a body, with what it captures as its
                     // formal inputs.
                     let name = fallback_name(hint, "computed");
-                    return self.use_body(self.module, start, name, &[], hint, at);
+                    let origin = if self.returns_handle(function) {
+                        Some(Declared::Whole)
+                    } else {
+                        self.returned_origin(function)
+                    };
+                    let place = self.use_body(self.module, start, name, &[], hint, at);
+                    if let Place::Value(value, _) = &place {
+                        self.values[*value].origin = origin;
+                    }
+                    return place;
                 }
                 // Promoted: expression code.
                 match function.expression_body() {
                     Some(expression) => {
                         // A promoted `computed` is its expression, and
                         // has the expression's template.
-                        self.build(hint, at, |emitter, _| {
+                        let mut origin = None;
+                        let built = self.build(hint, at, |emitter, _| {
                             let (place, template) =
                                 emitter.one("identity", |emitter| emitter.eval(expression, hint));
+                            origin = emitter.declared_of(&place);
                             emitter.pending_entries = emitter.entries_of(&place);
                             template
-                        })
+                        });
+                        if self.returns_handle(function) {
+                            origin = Some(Declared::Whole);
+                        }
+                        if let Place::Value(value, _) = &built {
+                            self.values[*value].origin = origin;
+                        }
+                        built
                     }
                     None => {
                         let statements = function.block_body().unwrap_or(&[]);
@@ -2927,6 +3039,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                         });
                         self.env = saved;
+                        if let Place::Value(value, _) = &place {
+                            self.values[*value].origin = self.returned_origin(function);
+                        }
                         place
                     }
                 }
@@ -4444,6 +4559,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         let value = self.value(&hint, cone);
         self.values[value].template = self.body_template(body);
+        // What the body returns, by the form of its returns. The caller of
+        // a `computed` decides with the names it captures.
+        let saved = std::mem::replace(&mut self.formal_names, formals);
+        self.values[value].origin = self.returned_origin(function);
+        self.formal_names = saved;
         Place::Value(value, Vec::new())
     }
 
@@ -4607,6 +4727,379 @@ impl<'a> Emitter<'_, '_, 'a> {
         state.push(Value::Object(entry));
     }
 
+    /// What a place is, for a write through a handle bound to it. With
+    /// `element`, what an element of the place is.
+    fn origin_of(&self, place: &Place, element: bool) -> Origin {
+        match place {
+            Place::Slot(Root::Element(collection), _) => self.source_origin(*collection),
+            Place::Slot(..) => Origin::Stored,
+            Place::Value(value, path) => {
+                let computed = &self.values[*value];
+                let below = element || !path.is_empty();
+                match computed.origin {
+                    Some(Declared::Whole) => return Origin::Reference,
+                    Some(Declared::Elements) if below => return Origin::Reference,
+                    Some(Declared::Elements | Declared::Produced) => return Origin::Produced,
+                    Some(Declared::Mixed) => return Origin::Mixed,
+                    None => {}
+                }
+                if let (Some(collection), false) = (computed.collection, computed.scan) {
+                    // The result of a `filter` is an array the instance
+                    // made, of the elements of its source.
+                    if below && self.collections[collection]["construct"] == "filter" {
+                        return match self.source_origin(collection) {
+                            Origin::Stored | Origin::Reference => Origin::Reference,
+                            other => other,
+                        };
+                    }
+                    return Origin::Produced;
+                }
+                if computed.chosen.is_some() {
+                    return Origin::Reference;
+                }
+                match computed.template.as_ref().and_then(|template| template["op"].as_str()) {
+                    Some("derive" | "fold" | "const") => Origin::Produced,
+                    _ => Origin::Other,
+                }
+            }
+            _ => Origin::Other,
+        }
+    }
+
+    /// What an element of what a collection iterates is.
+    fn source_origin(&self, collection: usize) -> Origin {
+        let source = &self.collections[collection]["source"];
+        if let Some(slot) = source["slot"].as_u64() {
+            let (root, path, ..) = &self.slots[slot as usize];
+            return self.origin_of(&Place::Slot(root.clone(), path.clone()), true);
+        }
+        if let Some(value) = source["output"]["$value"].as_u64() {
+            return self.origin_of(&Place::Value(value as usize, Vec::new()), true);
+        }
+        if let Some(inner) = source["collection"].as_u64() {
+            if self.collections[inner as usize]["construct"] == "filter" {
+                return match self.source_origin(inner as usize) {
+                    Origin::Stored | Origin::Reference => Origin::Reference,
+                    other => other,
+                };
+            }
+            return Origin::Produced;
+        }
+        Origin::Other
+    }
+
+    /// What a place holds, as a computed value that passes it on has it.
+    fn declared_of(&self, place: &Place) -> Option<Declared> {
+        if matches!(place, Place::Const) {
+            return None;
+        }
+        match self.origin_of(place, false) {
+            Origin::Stored | Origin::Reference => Some(Declared::Whole),
+            Origin::Mixed => Some(Declared::Mixed),
+            Origin::Other => Some(Declared::Mixed),
+            Origin::Produced => match self.origin_of(place, true) {
+                Origin::Stored | Origin::Reference => Some(Declared::Elements),
+                _ => Some(Declared::Produced),
+            },
+        }
+    }
+
+    /// "A handle that a `computed` returns": whether the expression a
+    /// `computed` returns has the type of a handle, which is a reference to
+    /// the cell behind it.
+    fn returns_handle(&self, function: FunctionLike<'_, 'a>) -> bool {
+        function.expression_body().is_some_and(|expression| {
+            self.resolver
+                .typed_at(self.module, expression, 0)
+                .is_ok_and(|ty| {
+                    let present = self.resolver.present(ty);
+                    matches!(self.resolver.shape(present), Shape::Handle(..))
+                })
+        })
+    }
+
+    /// What a `computed` that stays a body returns, by the form of each
+    /// expression it returns: a reference to a stored place where each is
+    /// an element or a selection of elements of one (ruling T3: "an
+    /// element that a `filter` (or another construct that passes elements
+    /// on) in a `computed` yields, or a handle that a `computed` returns").
+    fn returned_origin(&self, function: FunctionLike<'_, 'a>) -> Option<Declared> {
+        fn gather<'e, 'a>(
+            statements: &'e [Statement<'a>],
+            returned: &mut Vec<&'e Expression<'a>>,
+            locals: &mut HashMap<String, &'e Expression<'a>>,
+        ) {
+            for statement in statements {
+                match statement {
+                    Statement::ReturnStatement(statement) => {
+                        if let Some(argument) = &statement.argument {
+                            returned.push(argument);
+                        }
+                    }
+                    Statement::VariableDeclaration(declaration) => {
+                        for declarator in &declaration.declarations {
+                            if let (BindingPattern::BindingIdentifier(name), Some(init)) =
+                                (&declarator.id, &declarator.init)
+                            {
+                                locals.insert(name.name.to_string(), init);
+                            }
+                        }
+                    }
+                    Statement::BlockStatement(block) => gather(&block.body, returned, locals),
+                    Statement::IfStatement(branch) => {
+                        gather(std::slice::from_ref(&branch.consequent), returned, locals);
+                        if let Some(alternate) = &branch.alternate {
+                            gather(std::slice::from_ref(alternate), returned, locals);
+                        }
+                    }
+                    Statement::ForOfStatement(each) => {
+                        gather(std::slice::from_ref(&each.body), returned, locals)
+                    }
+                    Statement::ForStatement(each) => {
+                        gather(std::slice::from_ref(&each.body), returned, locals)
+                    }
+                    Statement::WhileStatement(each) => {
+                        gather(std::slice::from_ref(&each.body), returned, locals)
+                    }
+                    Statement::TryStatement(tried) => {
+                        gather(&tried.block.body, returned, locals);
+                        if let Some(handler) = &tried.handler {
+                            gather(&handler.body.body, returned, locals);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut returned = Vec::new();
+        let mut locals = HashMap::new();
+        match function.expression_body() {
+            Some(expression) => returned.push(expression),
+            None => gather(function.block_body().unwrap_or(&[]), &mut returned, &mut locals),
+        }
+        let found: Vec<Option<Declared>> = returned
+            .iter()
+            .map(|expression| self.passed_on(expression, &locals, 0))
+            .collect();
+        Some(combine(found).unwrap_or(Declared::Produced))
+    }
+
+    /// What one returned expression of a function body passes on. `None`
+    /// is a constant, which is no branch of a selection.
+    fn passed_on(
+        &self,
+        expression: &Expression<'a>,
+        locals: &HashMap<String, &Expression<'a>>,
+        depth: u32,
+    ) -> Option<Declared> {
+        if depth > 12 {
+            return Some(Declared::Produced);
+        }
+        let next = depth + 1;
+        let below = |found: Option<Declared>| match found {
+            Some(Declared::Elements) => Some(Declared::Whole),
+            other => other,
+        };
+        let elements = |found: Option<Declared>| match found {
+            Some(Declared::Whole) => Some(Declared::Elements),
+            other => other,
+        };
+        match unwrap(expression) {
+            Expression::NullLiteral(_)
+            | Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_) => None,
+            Expression::ArrayExpression(array) if array.elements.is_empty() => None,
+            // A path below a record or an array assembled in the body can
+            // hold a reference the body put there.
+            Expression::ArrayExpression(_)
+            | Expression::ObjectExpression(_)
+            | Expression::NewExpression(_) => Some(Declared::Mixed),
+            Expression::Identifier(identifier) => {
+                let name = identifier.name.as_str();
+                if let Some(init) = locals.get(name) {
+                    // An array the body fills by `push` starts empty.
+                    return match unwrap(init) {
+                        Expression::ArrayExpression(_) => Some(Declared::Mixed),
+                        _ => self.passed_on(init, locals, next),
+                    };
+                }
+                if self.formal_names.iter().any(|formal| formal == name) {
+                    // A parameter returned unchanged.
+                    return Some(Declared::Mixed);
+                }
+                match self.env.get(name) {
+                    Some(place) => self.declared_of(place),
+                    None if name == "undefined" => None,
+                    None if self.resolver.value_def(self.module, identifier).is_some() => None,
+                    None => Some(Declared::Produced),
+                }
+            }
+            Expression::ConditionalExpression(conditional) => combine([
+                self.passed_on(&conditional.consequent, locals, next),
+                self.passed_on(&conditional.alternate, locals, next),
+            ]),
+            Expression::LogicalExpression(logical) => {
+                let right = self.passed_on(&logical.right, locals, next);
+                if logical.operator == LogicalOperator::And {
+                    right
+                } else {
+                    combine([self.passed_on(&logical.left, locals, next), right])
+                }
+            }
+            Expression::StaticMemberExpression(member) => {
+                below(self.passed_on(&member.object, locals, next))
+            }
+            Expression::ComputedMemberExpression(member) => {
+                below(self.passed_on(&member.object, locals, next))
+            }
+            Expression::CallExpression(call) => {
+                let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+                    // What an authored function returns is not followed
+                    // here: it can pass on a reference it was given.
+                    return Some(Declared::Mixed);
+                };
+                let receiver = self.passed_on(&member.object, locals, next);
+                match member.property.name.as_str() {
+                    "get" | "sample" => receiver,
+                    "key" | "find" | "findLast" | "at" => below(receiver),
+                    "filter" | "slice" | "toSorted" | "sort" | "reverse" | "toReversed" => {
+                        elements(receiver)
+                    }
+                    "map" => {
+                        // A callback that returns its element passes the
+                        // elements on.
+                        let passes = call
+                            .arguments
+                            .first()
+                            .and_then(|argument| argument.as_expression())
+                            .and_then(FunctionLike::of)
+                            .is_some_and(|callback| {
+                                let parameter = callback.params().items.first().and_then(|item| {
+                                    match &item.pattern {
+                                        BindingPattern::BindingIdentifier(name) => {
+                                            Some(name.name.as_str())
+                                        }
+                                        _ => None,
+                                    }
+                                });
+                                match (parameter, callback.expression_body().map(unwrap)) {
+                                    (Some(parameter), Some(Expression::Identifier(returned))) => {
+                                        returned.name == parameter
+                                    }
+                                    _ => false,
+                                }
+                            });
+                        if passes {
+                            elements(receiver)
+                        } else {
+                            Some(Declared::Produced)
+                        }
+                    }
+                    _ => Some(Declared::Produced),
+                }
+            }
+            _ => Some(Declared::Produced),
+        }
+    }
+
+    /// Whether the checker listed `written` as a value bound where a
+    /// handle that can write is declared (`assign.rs`, `note_bindings`).
+    fn declared_writable(&self, written: &Expression<'a>) -> bool {
+        let span = written.span();
+        self.resolver.types.borrow().notes.iter().any(|(module, category, at)| {
+            *module == self.module
+                && category.starts_with("a writable handle bound to")
+                && *at == span
+        })
+    }
+
+    /// Whether the body writes through a handle at or below `path` of its
+    /// state.
+    fn writes_through(&self, body: usize, path: &[String]) -> bool {
+        ["writes", "envelopes"].iter().any(|list| {
+            self.plan_bodies[body][*list]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|write| {
+                    let target = write.get("target").unwrap_or(write);
+                    target["kind"] == "handle"
+                        && target["slot"].as_u64().is_some_and(|slot| {
+                            let (root, at, ..) = &self.slots[slot as usize];
+                            matches!(root, Root::Binding(_)) && at.starts_with(path)
+                        })
+                })
+        })
+    }
+
+    /// The handles of a binding's state that are bound to a computed
+    /// value (ruling T3). Where the value at the bound path is a reference
+    /// to a stored place, the handle resolves through the reference, and
+    /// the binding's entry says so. Where the instance produces the value,
+    /// a write through the handle is refused at run time.
+    fn bound_handles(
+        &mut self,
+        body: usize,
+        path: &mut Vec<String>,
+        place: &Place,
+        written: Option<&Expression<'a>>,
+        state: &mut [Value],
+    ) {
+        if let Place::Record(fields) = place {
+            for (name, member) in fields {
+                let below = written.and_then(|written| member_written(written, name));
+                path.push(name.clone());
+                self.bound_handles(body, path, member, below, state);
+                path.pop();
+            }
+            return;
+        }
+        let origin = self.origin_of(place, false);
+        if matches!(origin, Origin::Stored | Origin::Other) {
+            return;
+        }
+        let writes = self.writes_through(body, path);
+        let declared = written.is_some_and(|written| self.declared_writable(written));
+        let case = match (origin, writes) {
+            (Origin::Reference, true) => "reference",
+            (Origin::Produced, true) => "computed: written",
+            (Origin::Mixed, true) => "mixed: written",
+            (Origin::Produced, false) if declared => "computed: read",
+            (Origin::Mixed, false) if declared => "mixed: read",
+            _ => return,
+        };
+        if origin == Origin::Reference {
+            for entry in state.iter_mut().filter(|entry| entry["path"] == json!(path)) {
+                entry["through"] = json!("reference");
+            }
+        }
+        // The site in the module of the pattern: where the value is
+        // written, or where the pattern that binds it is called.
+        let at = match (self.inline_at.first(), written) {
+            (Some(site), _) => *site,
+            (None, Some(written)) => written.span().start,
+            (None, None) => 0,
+        };
+        let text = written
+            .and_then(|written| {
+                let parsed = self.resolver.parsed(self.module)?;
+                let text = written.span().source_text(parsed.source);
+                let line = parsed.lines.position(parsed.source, written.span().start).0;
+                Some(format!("`{}` at {}:{line}", text.split_whitespace().collect::<Vec<_>>().join(" "), parsed.path))
+            })
+            .unwrap_or_default();
+        let what = format!(
+            "state path `{}` of `{}`, bound to {text}",
+            path.join("/"),
+            self.plan_bodies[body]["name"].as_str().unwrap_or("")
+        );
+        let write = HandleWrite { case, at, what };
+        if !self.handle_writes.contains(&write) {
+            self.handle_writes.push(write);
+        }
+    }
+
     /// A handler applied to its state in the reactive tier.
     fn bind_handler(
         &mut self,
@@ -4627,6 +5120,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             let place = self.eval(argument, hint);
             self.cone = saved;
             self.state_entries(&mut Vec::new(), &place, Some(argument), &mut state);
+            self.bound_handles(body, &mut Vec::new(), &place, Some(argument), &mut state);
         }
         let name = base_name(hint, name);
         self.bindings.push(json!({
@@ -6091,6 +6585,9 @@ pub fn emit_module<'a>(
             formal_types: HashMap::new(),
             iterated: Vec::new(),
             hints: Vec::new(),
+            handle_writes: Vec::new(),
+            inline_at: Vec::new(),
+            formal_names: Vec::new(),
             root_types: HashMap::new(),
             result_type: None,
             state_types: HashMap::new(),
@@ -6140,6 +6637,7 @@ pub fn emit_module<'a>(
             emitter.keep(&mut Vec::new(), &result);
         }
         let hints = std::mem::take(&mut emitter.hints);
+        let handle_writes = std::mem::take(&mut emitter.handle_writes);
         let argument_schema = emitter
             .root_types
             .get(&Root::Argument)
@@ -6155,6 +6653,7 @@ pub fn emit_module<'a>(
             cycles,
             hints,
             flows,
+            handle_writes,
             argument_schema,
             result_schema,
             schemas,

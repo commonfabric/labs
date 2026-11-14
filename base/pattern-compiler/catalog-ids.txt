@@ -46,6 +46,7 @@ cell:collection-method-in-function error
 cell:cause-not-literal error
 cell:method-tier error
 sqlite:tables-not-static error
+binding:write-to-computed error
 collection:nested-scan warning
 pattern-context:get-call retired
 pattern-context:optional-chaining retired

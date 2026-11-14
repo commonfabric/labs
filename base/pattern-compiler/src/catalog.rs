@@ -205,6 +205,13 @@ pub const CATALOG: &[Entry] = &[
          constant arguments, and what a row-label rule refers to, is not followed",
     ),
     part(
+        "binding:write-to-computed",
+        Error,
+        "reported for the state of a handler bound in the reactive tier, a pattern compiled \
+         in included; a `lift` result that writes through its argument and a literal are \
+         counted and not reported",
+    ),
+    part(
         "collection:nested-scan",
         Warning,
         "reported for a scan of a captured binding of an enclosing reactive body; \

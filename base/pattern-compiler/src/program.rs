@@ -418,6 +418,35 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                     format!("{found}. {}", messages::rewrite(id)),
                 ));
             }
+            for write in &plan.handle_writes {
+                let (severity, found) = match write.case {
+                    "computed: written" => (
+                        crate::diagnostics::Severity::Error,
+                        "The callee writes through a handle bound to a value the instance computes, and the write is refused when it runs",
+                    ),
+                    _ => continue,
+                };
+                let position = parsed.lines.position(parsed.source, write.at);
+                let mut diagnostic = Diagnostic::new(
+                    "binding:write-to-computed",
+                    &parsed.path,
+                    (write.at, write.at),
+                    position,
+                    format!(
+                        "{found}: {}. {}",
+                        write.what,
+                        messages::rewrite("binding:write-to-computed")
+                    ),
+                );
+                diagnostic.severity = severity;
+                check.diagnostics.push(diagnostic);
+            }
+            for write in &plan.handle_writes {
+                *check
+                    .counts
+                    .entry(format!("plan:handle bound to a computed value:{}", write.case))
+                    .or_insert(0) += 1;
+            }
             for (kind, start) in &plan.hints {
                 if !kind.starts_with("a `wish`") {
                     continue;
@@ -478,6 +507,20 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         let mut diagnostics = check.diagnostics;
         diagnostics.sort_by(|a, b| (a.start, a.id, a.end).cmp(&(b.start, b.id, b.end)));
         diagnostics.dedup();
+        // The handles bound to a computed value, by case (ruling T3).
+        let handle_sites: Vec<(String, u32, String)> = all_plans[index]
+            .iter()
+            .flat_map(|plan| &plan.handle_writes)
+            .filter_map(|write| {
+                let parsed = parsed[index].as_ref()?;
+                let (line, _) = parsed.lines.position(parsed.source, write.at);
+                Some((
+                    format!("a handle bound to a computed value: {}", write.case),
+                    line,
+                    write.what.clone(),
+                ))
+            })
+            .collect();
         modules.push(ModuleAnalysis {
             path: files[index].path.clone(),
             plans: std::mem::take(&mut all_plans[index]),
@@ -526,6 +569,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
                         Some((category.clone(), line, text))
                     })
                     .collect();
+                sites.extend(handle_sites);
                 sites.sort();
                 sites.dedup();
                 sites

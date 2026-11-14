@@ -314,6 +314,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "Make the write in the handler the policy names, or name this writer in the \
              policy of the path."
         }
+        "binding:write-to-computed" => {
+            "Bind the handle to the stored place the value is computed from, or declare the \
+             callee's property as a value or a `ReadonlyCell`."
+        }
         "wish:computed-query" => {
             "Write the query as a literal or a module-scope constant, so that the plan holds \
              the records of that target alone."

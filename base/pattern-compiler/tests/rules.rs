@@ -631,6 +631,11 @@ const CASES: &[Case] = &[
         "export const P = pattern<{ tag: string }>(({ tag }) => ({ found: wish<{ name: string }>({ query: \"#note\" }) }));",
     ),
     case(
+        "binding:write-to-computed",
+        "const rename = handler<unknown, { name: Writable<string> }>((_, state) => { state.name.set(\"x\"); });\nexport const P = pattern<{ name: string }>(({ name }) => ({ go: rename({ name: /*!*/name + \"!\" }) }));",
+        "const rename = handler<unknown, { name: Writable<string> }>((_, state) => { state.name.set(\"x\"); });\nexport const P = pattern<{ name: string }>(({ name }) => ({ go: rename({ name }) }));",
+    ),
+    case(
         "side-write:cycle",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { /*!*/x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: a }); return { one, two }; });",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number>; c: Cell<number> }>(({ a, b, c }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: c }); return { one, two }; });",
