@@ -182,7 +182,11 @@ export type Template =
   | { readonly op: "const" }
   /** The observation of one slot, passed through unchanged. */
   | { readonly op: "slot"; readonly slot: Index }
-  /** A new value computed from the inputs. */
+  /**
+   * A new value computed from the inputs. A join of templates is this
+   * node with `by: { expression: true }` over the joined templates
+   * (section 3.2).
+   */
   | {
     readonly op: "derive";
     readonly inputs: readonly Template[];
@@ -203,7 +207,11 @@ export type Template =
    * A join over the elements of a collection: all of them, or, when
    * `through` is set, the leading elements up to and including the position
    * that selector holds. The runtime supplies that position from its own
-   * scan (section 3.13).
+   * scan (section 3.13). `collection` is the record of the construct whose
+   * callback `body` is the template of: `body` is over the `element` slots
+   * that name that record. The membership the node joins is the one that
+   * record iterates, which is the membership of its `source`, and not its
+   * own `membership` (section 3.2).
    */
   | {
     readonly op: "fold";
@@ -273,14 +281,37 @@ export interface Collection {
   readonly name: string;
   readonly within: readonly WithinStep[];
   /**
-   * The input collection, or what this one is derived from. The record of
-   * a scan, an aggregate, a `reduce` or an index names its receiver: a
-   * slot, a bucket, or an output, which for a receiver that is itself a
-   * collection of the plan is that collection's assembled output
-   * (section 3.13).
+   * The construct the record is of. It says what the runtime does with
+   * the per-element results: assembles them (`map`, `filter`, `flatMap`),
+   * scans them (`some`, `every`, `find`, `findIndex`), or hands them to the
+   * operation whose `input` has a `fold` that names this record
+   * (`operation`: an aggregate with a callback, a `reduce`, or an index).
+   */
+  readonly construct:
+    | "map"
+    | "filter"
+    | "flatMap"
+    | "some"
+    | "every"
+    | "find"
+    | "findIndex"
+    | "operation";
+  /**
+   * What the construct iterates: its receiver. The record of a scan, an
+   * aggregate, a `reduce` or an index names a slot, a bucket, or an
+   * output, which for a receiver that is itself a collection of the plan
+   * is that collection's assembled output (section 3.13). The record of a
+   * `map`, a `filter` or a `flatMap` whose receiver is itself the result
+   * of one of those three names that collection's record, with `via`.
    */
   readonly source:
     | { readonly slot: Index }
+    /**
+     * `collection` is the record of the receiver. `via` is the construct
+     * of this record, the one applied to the receiver, and equals
+     * `construct`: it says how the elements of this collection come from
+     * those of the receiver (section 3.7).
+     */
     | {
       readonly collection: Index;
       readonly via: "map" | "filter" | "flatMap";
@@ -289,7 +320,11 @@ export interface Collection {
     | { readonly operation: Index }
     /** An array the instance computed (`Plan.outputs`). */
     | { readonly output: Index };
-  /** The label of which elements are present and in what order. */
+  /**
+   * The label of which elements the result of the construct has and in
+   * what order. For a scan and for `operation` it is the membership the
+   * record iterates (section 3.7).
+   */
   readonly membership: Template;
   /**
    * What a body applied to this collection does that makes the position
@@ -1008,16 +1043,23 @@ export interface Binding {
     /**
      * For a binding of the reactive tier: what the path resolves to. A
      * slot of the instance; an output of the instance (`Plan.outputs`); the
-     * stream of another binding of the reactive tier (`Plan.bindings`); or
-     * a constant written at the binding, which the plan holds and nothing
-     * stores. `template` is the label of the same place: the `slot` node,
-     * the output's template, or `const`. Absent for a binding made in a
-     * function body, whose state document holds the path (section 3.14).
+     * stream of another binding of the reactive tier (`Plan.bindings`); the
+     * index of the element in the collection of an enclosing element body
+     * (`Plan.collections`); or a constant written at the binding, which the
+     * plan holds and nothing stores. `template` is the label of the same
+     * place: the `slot` node, the output's template, for an index the
+     * membership that collection iterates (section 3.6), and `const` for
+     * a stream and for a constant. A constant is held as its value,
+     * whether it is written as a literal or as the name of a module-scope
+     * constant, which the compiler evaluates. A path bound to `undefined`
+     * has no entry of `state`. Absent for a binding made in a function
+     * body, whose state document holds the path (section 3.14).
      */
     readonly place?:
       | { readonly slot: Index }
       | { readonly output: Index }
       | { readonly stream: Index }
+      | { readonly index: Index }
       | { readonly constant: unknown };
     /**
      * For a path bound by reference in a function body: the reference the
@@ -1182,9 +1224,12 @@ adding or removing a declaration does not rename another one's stored state.
   rule takes the name of the place it is written at: the property of the
   object literal, or the JSX attribute. That is the case for a `computed`,
   an `action` or a `lift` whose function is an arrow written in place,
-  which has no callee's name. Where it is written at neither, as a JSX
-  child is, its base name is the name of the construct: `computed`,
-  `action`, `lift`.
+  which has no callee's name. It is also the case for a state cell, which
+  the second rule gives no base name. Where it is written at neither, as a
+  JSX child is, its base name is the name of the construct: `computed`,
+  `action`, `lift`, or the cell constructor, such as `Writable`. The
+  place is the fallback alone: a declaration that has a base name by the
+  second rule takes it wherever it is written.
 - Where two declarations of one pattern body have the same name by these
   rules, each takes the name and its ordinal among them, in source order.
   Adding a declaration with another name moves no ordinal. Adding one with
@@ -1192,13 +1237,20 @@ adding or removing a declaration does not rename another one's stored state.
   name with its ordinal is written `name#n`, with `n` counted from 1:
   two bindings of a handler `save` are `save#1` and `save#2`. A
   declaration whose name no other declaration of the body has takes no
-  ordinal.
+  ordinal. The names of `Plan.bodies` are counted apart from the names of
+  the other records: a handler is one `Body` named `save`, and it is not
+  one more declaration of the name its bindings have. The name of a body
+  enters an identifier only as the first part of the name of a thing the
+  body makes (next rule), which has a `/` that no other name has, so the
+  two sets of names cannot collide.
 - A thing a site of a function body makes, where the plan has a record
   for it, is named from the body. A `Child` that a site of `Body.calls`
   instantiates has the body's `name`, `/n`, and the index of the site in
   `Body.calls`: `openRoom/n0`. A `StateCell` a body creates under a
   constant cause has the body's `name`, `/`, and the cause (section
-  3.14). Both have the `within` of the body.
+  3.14). Both have the `within` of the body. The body's `name` is taken
+  with its ordinal, so the name is formed after the ordinals are given:
+  `make#1/n0`.
 
 Names are unique within one pattern body, and the steps of `within` tell two
 bodies apart. The records that hold a name are `StateCell`, `Operation`,
@@ -1432,10 +1484,12 @@ entry.
   value, computes nothing and has no cone.
 - A JSX tree that is not the initializer of a declaration is one cone.
 - An element construct is not part of the cone of the expression it is
-  written in. Its callback is cones by these same rules: one for each
-  declaration in the callback that computes, and one for the expression
-  the callback returns. The enclosing cone uses the assembled result
-  (below).
+  written in. Its callback is cones by the rules of the next paragraph.
+  The enclosing cone uses the assembled result (below).
+- A declaration written inside a promoted `computed` whose body is a
+  block (`language-subset.md` §6.1) is no declaration of the reactive
+  tier for this rule. It is part of the initializer the `computed` is
+  written in, and its value is a value of that one cone.
 - A pattern compiled into the instance is cones by these same rules, with
   the `site` step in the `within` of what it declares.
 - One cone, whose `entry` is `result`, computes the paths of the result
@@ -1446,6 +1500,36 @@ So the result of a body used inside an initializer, and the condition of
 a `select` there, are values of that one cone, and are entries of
 `Plan.outputs` only where another cone, a `pick`, or a collection refers
 to them.
+
+**The cones of an element body.** The callback of an element construct
+is partitioned as a pattern body is, with one addition.
+
+- Each `const` declaration of the callback whose initializer computes is
+  one cone, whose `entry` is the declaration's name. A declaration that
+  destructures is one cone for all the names it binds. A declaration
+  whose initializer only names a slot, or a path of another
+  declaration's value, has no cone.
+- The expression the callback returns is one cone, whether or not it
+  computes, so every element construct has at least one cone, and the
+  assembled entry has a cone to name (below). For a callback with an
+  expression body it is the only cone. Its `entry` is the name of the
+  collection (section 1.3). Where the expression only names a slot or a
+  declaration's value, its value function returns what it was handed.
+- A pattern compiled into the callback, by a call or by a JSX tag, adds
+  its cones by the rules for a pattern body, and what it declares has
+  the `element` step and then the `site` step in `within`.
+- An element construct written inside the callback is not part of the
+  cone it is written in, as in a pattern body. Its own callback is cones
+  by these rules, with one more `element` step.
+- A declaration inside a promoted `computed` with a block body belongs to
+  the cone of that `computed`, as in a pattern body.
+
+The cones of a callback are listed in `Plan.cones` in source order of
+their declarations, the cone of the returned expression last, after the
+cones of every construct and pattern written in the callback. That cone
+is "the last cone of the construct's body" below. Every cone of the body
+has slots of root `element`, or reads none and is evaluated per element
+key all the same.
 
 **The assembled result of an element construct.** The runtime assembles
 the result of a `map`, a `filter` or a `flatMap` from per-element results
@@ -1510,6 +1594,162 @@ of kind `cache` whose `implementation` names the cone. `never` forbids the
 runtime to store them. `language-subset.md` has no form by which an author
 writes either, so a compiled plan leaves the member absent, and the runtime
 decides. Section 2.6 gives the label of what a cache stores.
+
+### 1.5 What a hash, a declared label, and a constraint are built from
+
+Every member of type `Hash` is the tagged hash of a canonical record
+(section 1.2). This section says which record, for each member, and
+where the declared labels and the constraints of a plan come from. The
+templates of a plan need none of it: a plan without schemas has every
+template and no hash, no `Slot.declared`, and no constraint.
+
+**Schemas.** A schema is the JSON schema the compiler emits for a type
+of the subset, in the form the runtime stores a schema in: the mapping
+of [`ts_to_json_schema_mapping.md`](../schema-generator/ts_to_json_schema_mapping.md),
+with a handle as the marker that mapping gives it, each label annotation
+as the `ifc` metadata of its node (`language-subset.md` §8.2), and the
+default and the scope of a node where it declares one
+(`language-subset.md` §8.8). Its hash is taken over that document in
+canonical form. The type each member is the schema of:
+
+| Member | The type |
+| --- | --- |
+| `Plan.argumentSchema`, `Plan.resultSchema` | The argument type and the result type the pattern declares, or the checker infers |
+| `StateCell.schema`, and `schema` of a `createCell` site | The value type of the cell constructor |
+| `Child.argumentSchema`, `Child.resultSchema` | The types the callee's type declares: for a compiled callee, its `Plan.argumentSchema` and `Plan.resultSchema` |
+| `Binding.eventSchema`, `Binding.stateSchema` | The event type and the state type of the handler, or of the factory's type |
+| `Slot.schema` | The type under which the slot's reader observes the path (below) |
+| `HandleReads.envelope` | The read envelope `footprint-analysis.md` §7.3 defines: the handle's value type, narrowed to the paths and classes some read through the handle may observe, with the label annotations of the paths it admits |
+
+**The schema of a slot.** `Slot.schema` is the type the reader has at the
+slot's path. For a slot of `Body.reads` it is the type the body declares
+for the formal input the slot is in, at the path below it: the parameter
+type of an authored function or a `lift`, the event type and the state
+type of a handler. For a slot that expression code or a promoted
+`computed` reads, and for a capture of a `computed` that is a body, it
+is the static type the checker gives the expression that reads the path.
+The type is the same for every class of slot at the path: the class says
+what is observed, and the schema what the position can hold. Two reads
+of one root and path in one class under two types are two entries of
+`Plan.slots`, which differ in `schema` alone. They are bound to one
+address and have one label, because the schema is no part of a slot's
+key (section 1.2). Three rules read the type: whether a `shape` slot is
+in place (section 2.5), whether a `value` slot above a handle reads
+through it (section 3.11), and what the runtime validates a value
+against before code sees it (section 5.2).
+
+**Code.** Three members address code.
+
+- `Cone.code` is the hash of the record `{ source }`, where `source` is
+  the text of the cone's value function as the emitted value-code module
+  holds it, from the first character of the function to the last, with
+  the text of each emitted helper function it calls that is not the
+  entry of another cone appended in the order of first use. The emitter
+  has to be deterministic: one source and one compiler build give one
+  text.
+- `CompiledPattern.valueCode` is the hash of the record `{ source }` over
+  the whole text of the emitted value-code module. The module does not
+  hold the hash of the plan, so the plan, which holds every `Cone.code`,
+  can be hashed after the module is emitted, and `CompiledPattern` after
+  both.
+- `Body.code` identifies a sandboxed body by the module that declares it
+  and the binding it is declared at. *Assumed* (section 8, question 54):
+  it is the hash of the record `{ module, binding }`. `module` is the
+  content-addressed identity the loader gives the module the body's
+  function is written in, the one `computeModuleIdentities`
+  (`runtime/runner/src/sandbox/module-record-compiler.ts`) computes
+  today from the module's source and the identities of the modules it
+  imports. `binding` is the path of the function's binding in that
+  module: the name of the `const` for a handler, a `lift` or an authored
+  function declared at module scope, and for a function written in
+  place, a `computed`, an `action` or an inline event handler, the name
+  of the enclosing pattern's binding followed by the `within` steps and
+  the `name` of the use (section 1.3). This is the pair that
+  `writeAuthorizedBy` verifies today (`moduleIdentity` and `bindingPath`
+  in `resolveProvenanceImplementationIdentity`,
+  `runtime/runner/src/cfc/implementation-identity.ts`). It covers every
+  authored function the body can call, because those are in the module
+  or in a module it imports.
+
+`Child.callee.compiled` and `Closure.pattern` are the identity of a
+compiled pattern (section 1.2), so a pattern is compiled after the
+patterns it names in this way. `CompiledPattern.compiler` is given by
+the build. `WriterPolicy.body` is `Body.code` of the handler the
+annotation's binding names: the compiler resolves `typeof b` to the
+declaration of `b` and forms the record from it, whether or not the plan
+being emitted has a `Body` for that handler.
+
+**Declared labels.** `Slot.declared` is read from the annotations of the
+type `Slot.schema` is the schema of, taken from the root of the slot's
+formal input, or of the declaration the root names, down to the slot's
+path, and combined as `language-subset.md` §8.3 combines the annotations
+on a path. The values are the label arguments in the canonical form
+`language-subset.md` §8.5 gives them.
+
+- `declared.confidentiality` is the combined `confidentiality` list at
+  the path. For a `value` slot over a subtree it is joined with the
+  lists of the annotated nodes below the path, since the slot observes
+  them. Where the type below the path is recursive, each annotated node
+  is taken once.
+- `declared.integrity` is the combined `integrity` list at the path. The
+  nodes below the path add nothing: the integrity of a subtree read
+  whole is a meet.
+- A slot at a path with no such annotation at or above it has no
+  `declared` member, and one with an annotation of one dimension alone
+  has that member alone.
+- *Assumed* (section 8, question 55): an `identity` slot and a `shape`
+  slot in place have no `declared` member, because they observe the
+  reference stored at the position, whose label is a pointer label, and
+  the annotation declares the label of the value.
+
+**Constraints.** `Plan.constraints` is built after the templates, from
+the annotations of two sets of schemas (section 4.4 has the keys).
+
+- **At a write target.** For each `WriteEdge` and each kept `Output`, the
+  compiler takes the type at the written path: of the `StateCell.schema`
+  for a `state` target, of the handle's value type at the target's
+  `path` for a `handle` target, of `Child.argumentSchema` for an
+  `argument` target, of the `createCell` site's schema for a `created`
+  target, of the built-in's request type for a `request` target, and of
+  `Plan.resultSchema` for a kept output. The annotations combined at
+  that path give a `writerFit` constraint where a `confidentiality` is
+  declared, and a `writer` constraint where a `writeAuthorizedBy` or a
+  `writePolicyAnyOf` is. Each is listed in the `constraints` of that edge
+  or output. An interim output has no declared type and no constraint.
+- **At an input.** For each use of a body, the compiler takes each
+  `requiredIntegrity` and `maxConfidentiality` annotation of the types
+  of the body's formal inputs, and of the read envelopes of its
+  handles, and forms one constraint from it that lists the entries of
+  the body's footprint whose path overlaps the annotated path
+  (`ConstraintInputs`, section 4.4). A constraint that lists nothing is
+  not emitted. The constraint is listed in the `constraints` of every
+  write edge of the body, and of every output whose template has a
+  `derive` by that body: those are the writes the body's inputs flow
+  into.
+
+Equal constraints are one entry of `Plan.constraints`.
+
+**The compile-time checks.** Each `cfc-flow:*` diagnostic of
+`language-subset.md` §10.5 evaluates one kind of constraint on declared
+labels, by the rule of section 4.4, "When a constraint is checked".
+
+| Diagnostic | Evaluated on |
+| --- | --- |
+| `cfc-flow:write-policy` | A `writer` constraint of a static write edge: the `Body.code` of the body whose record holds the edge against the `body` of each `WriterPolicy`. It needs the resolution of the bindings the policy names and no label |
+| `cfc-flow:writer-fit` | A `writerFit` constraint: the template of the edge or the output, with each `slot` node replaced by `Slot.declared.confidentiality`, against the confidentiality declared at the target |
+| `cfc-flow:write-floor` | A `writeFloor` constraint: the same template, with each `slot` node replaced by `Slot.declared.integrity` |
+| `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity` | An input constraint: the `declared` member of each slot it lists, and for an entry of `Body.computed` the entry's template with its `slot` nodes replaced in the same way |
+| `cfc-flow:ui-contract` | A `writer` constraint whose alternative has a `uiContract`, and the bindings of the plan that name the handler (section 4.4) |
+
+A template is evaluated on declared labels only where every `slot` node
+it reaches has the `declared` member of the dimension tested, on every
+selection, and it has no `dynamic` node, no `fold` and no `pick`. An
+input constraint is evaluated only where it lists no entry of
+`Body.handles`. In every other case the diagnostic is not reported and
+the constraint is checked at instantiation. For confidentiality the
+declared label is a lower bound, so a `select` is evaluated as the join
+of its condition with the meet of its branches' clauses, and only a
+failure is reported.
 
 ## 2. Slots and observation classes
 
@@ -2252,6 +2492,46 @@ in one order.
   entry of `Plan.dynamicReads` the use of the body made, in the order of
   `Plan.dynamicReads`. Each occurs once.
 
+**A join.** `Template` has no node of its own for a join. Where a rule of
+this document says that a template is one template "joined with"
+another, or is "the join of" several, the template is a `derive` with
+`by: { expression: true }` whose `inputs` are the joined templates, in
+the order the rule names them. Its confidentiality is the join. Its
+integrity is the meet of the inputs' hereditary atoms, plus the
+`TransformedBy` atom of the cone the node is evaluated in. That holds for
+the membership of a derived collection too: which elements are present
+was computed, and the atom says by what. Three cases need no such node.
+
+- A join with `const` is the other template alone.
+- A join of one template with itself is that template.
+- A `fold` joins the membership its collection iterates by its own rule
+  (below), so "a `fold` of `t`, joined with membership" is the `fold`
+  alone.
+
+Where the node that holds the join uses its confidentiality alone, as the
+`condition` of a `select` and the `choice` of a `pick` do, the integrity
+of the `derive` has no effect.
+
+**The membership a collection iterates.** A `fold` names a `Collection`,
+and `body` is over that record's `element` slots. The membership the
+`fold` joins, `C(membership)` in the table, is the label of which
+elements the callback is evaluated over and in what order. It is given by
+the record's `source`:
+
+| `Collection.source` | The membership the record iterates |
+| --- | --- |
+| `slot` | The `slot` node of the `enumeration` slot at the source's path |
+| `collection` | The `membership` of that record |
+| `operation` | The membership of the bucket (section 3.17) |
+| `output` | The template of the output's own `enumeration`: for an assembled entry its `template`, for an array constructed in place the template of its container entry (section 3.4), and for the result of one opaque call the call's template |
+
+`Collection.membership` is a different thing: the label of which elements
+the *result* of the construct has. For a `map` the two are the same. For
+a `filter` and a `flatMap`, `membership` is a `fold` that names the
+record itself (section 3.7), and that `fold` joins what the record
+iterates, so the definition is not circular. `TemplateInputs.membership`
+of section 4.2 returns the membership the record iterates.
+
 Notes on the integrity column:
 
 - **`slot` keeps every class of atom.** It is a pass-through, and §3.1.6.2
@@ -2336,6 +2616,81 @@ element key and no cone instance (section 1.3).
 static is refused there (`reactive:unsupported-expression`), so the plan
 has no record for one.
 
+**A JSX element.** A host element is the construction of its view node,
+the record the JSX factory returns (`h` in
+`runtime/runner/src/builder/h.ts`): `type` and `name`, which are
+constants, `props`, the object literal of the attributes, and `children`,
+the array literal of the children. So the template of the path
+`props/title` of an element is the template of the expression written
+at the attribute `title`, and the template of `children/0` is that of
+the first child. A child whose type is an array, the assembled result of
+a `map` among them, is a spread child: the factory flattens it into the
+children, and the rule for a spread in an array literal gives the
+positions from it on. A fragment is the same record with the fragment's
+name. The rendered tree under `$UI` is such a construction, and its paths
+are these.
+
+**The entries of a constructed value.** A constructed value is a record
+or an array written in place, a JSX element included. It has no one
+template. In `Plan.outputs`, where the plan has entries for it at all
+(section 1.4), it has these:
+
+- **A container entry** at the path of the constructed value itself. Its
+  `template` is the template of the value's key set: `const` where the
+  key set is static, and otherwise the template of what decides it, as
+  the first paragraph of this section says.
+- **One entry for each member that is not constructed in place and whose
+  template is not `const`,** at the path of the member below the
+  constructed value, with the template of the member's expression. A
+  member that is itself constructed in place has entries by these rules
+  at its own paths, and a container entry of its own only where its key
+  set is not static.
+
+The label of a path of the value is the template of the nearest entry at
+or above the path. So a path with no entry of its own below a
+construction with a static key set is constant, and every path of the
+result of one opaque call has the call's template (section 3.3). The
+entries have the `cone`, the `kept` and the `interim` of the value: a
+record that a promoted `computed` named `stats` returns has entries at
+paths below the interim name `stats`.
+
+**A node whose result is a constructed value** is written once per path.
+A `select` one of whose branches is a constructed value, a `pick` whose
+chosen child is one, and the per-element output of a `map` whose callback
+returns one are not one template over the whole value. For each path at
+which some branch has an entry, the plan has an entry whose template is
+the node with each branch replaced by that branch's template at the path:
+the template of the nearest entry of the branch at or above the path,
+and `const` where the branch is a constructed value that has no such
+path, because the path then holds nothing. The entries of one `select`
+name one selector, and those of one `pick` one choice point. The
+container entry is the node over the container entries of the branches.
+For `c ? { x: a } : { x: b, y: d }` the path `x` has
+`select(c, [a, b])`, the path `y` has `select(c, [const, d])`, and the
+container entry has `select(c, [const, const])`, the label of which key
+set the value has.
+
+**A constructed value observed whole.** Where a rule needs one template
+for all of a constructed value, the template is the join (section 3.2)
+of the templates of its entries at and below the observed path, the
+container entry included. That is the case for an operand of expression
+code that consumes the whole value, as a substitution of a template
+literal does (section 3.19); for an entry of `Body.computed` of class
+`value` at or above the constructed value (section 3.9); for a path of an
+effect's request or of a child's argument that the value is written to
+whole; and for the `body` of a `fold` over elements that are constructed
+values. An entry of `Body.computed` of class `shape` or `enumeration` at
+the path of a constructed value has the template of its container entry
+alone. A constructed value has no reference, so an `identity` entry there
+has the container entry's template too.
+
+*Assumed* (section 8, question 53): the entries are as fine as this, one
+per member that computes, for the rendered tree too. That one template
+over the whole value is not the rule follows from "equal to or tighter":
+it would give every member the join of all of them, where the builder
+gives each member of a record written in a pattern body the label of its
+own node.
+
 **Today.** In a pattern body, a constructed object is structure: each member
 is a link to the node that computes it, and each node output is a document
 with its own label. **Equal**, at the cost of a document per member. Inside a
@@ -2353,7 +2708,32 @@ branches. `a && b` is `select(a, [b, a])`: when `a` is falsy the result is
 The condition's slots have the class the test needs: `value` at the root for
 a scalar condition, `shape` at the root for a record or array, whose
 truthiness is its existence. Nothing below the root is observed (section
-2.4).
+2.4). The static type of the condition decides: `value` where it is a
+scalar type, and `shape` where it is a record, an array, a handle, or
+`unknown`. At a position of handle or reference type the `shape` slot is
+in place (section 2.5).
+
+Three more tests of expression code observe less than the value, by the
+rules `footprint-analysis.md` §3.2 gives a function body.
+
+- A comparison with `undefined` or `null`, `==` and `!=` included, reads
+  the other operand for `shape`.
+- `typeof e` reads `e` for `shape`: the kind of the value and not its
+  content.
+- `a?.b` tests whether `a` is present, so it reads `a` for `shape`, and
+  that observation joins the template of the expression code the access
+  is written in. The access itself extends the path (section 3.3).
+
+`a ?? b` tests presence, so the condition is `a` read for `shape`, and
+the branch that is `a` is the operand passed on: its `value` where it is
+a scalar, and the `slot` node of its reference where it is a container or
+a handle.
+
+**A guard in a promoted `computed`.** An `if` in the block body of a
+promoted `computed` (`language-subset.md` §6.1) is a `select` over what
+its two paths return. A path that ends in a `return` without an
+expression, and the path of a guard that has no `else` and falls through
+to a `return` of that kind, has the branch `const`.
 
 When the selected arm of `&&` or `||` *is* the condition, the result carries
 that operand's full template, not only its truthiness.
@@ -2452,10 +2832,11 @@ paths is **tighter** as in section 3.4.
 
 `xs.filter((x) => pred)` creates a derived `Collection`.
 
-- **Membership template.** `fold` over the source with body the template of
-  `pred`, joined with the source's membership. Which elements are present,
-  and at which index, depends on the predicate's result for *every* element,
-  dropped ones included.
+- **Membership template.** A `fold` whose `collection` is the record of the
+  `filter` itself and whose `body` is the template of `pred`. The `fold`
+  joins the membership the record iterates, which is the source's (section
+  3.2). Which elements are present, and at which index, depends on the
+  predicate's result for *every* element, dropped ones included.
 - **Element template.** An element of the result is the source element,
   passed through: `slot` templates over the source's `element` root, so every
   class of integrity survives. Its root `shape` slot is replaced by the
@@ -2464,10 +2845,11 @@ paths is **tighter** as in section 3.4.
 
 `xs.flatMap((x) => body)`:
 
-- **Membership template.** `fold` over the source with body the
-  `enumeration` of the segment `body` returns, joined with the source's
-  membership. Position and multiplicity depend on every segment's *length*,
-  not on its content.
+- **Membership template.** A `fold` whose `collection` is the record of the
+  `flatMap` itself and whose `body` is the `enumeration` of the segment
+  `body` returns. It joins the source's membership in the same way.
+  Position and multiplicity depend on every segment's *length*, not on its
+  content.
 - **Element template.** The body's template for the originating element,
   with the root `shape` replaced by the membership template.
 
@@ -2917,7 +3299,30 @@ the same root reads what the edge writes in two cases.
   position does not reach the cell.
 
 For a target with root `state` the rule is the same with the cell's root
-in the place of the handle's path, and no slot is excepted.
+in the place of the handle's path. One slot is excepted there: the
+`identity` slot at the cell's root, with the empty path. It is the handle
+of the cell, which a body holds in order to write, and it observes which
+cell that is. No write to the cell changes it, as no write through a
+handle changes the reference at the handle's own position. So a cone
+whose body writes a state cell and reads nothing of it has no edge to
+itself. Every other slot of the root is a reader by the rule: a `shape`
+slot at the root, which observes whether the cell holds anything, and an
+`identity` slot at a path below the root, which observes a reference the
+write can replace.
+
+The type the second case asks for is the slot's own: `Slot.schema` is
+the type under which the slot's reader observes the path (section 1.5),
+and the case holds where that type has a data type at the handle's
+position. A slot whose type is `unknown` at or above the position stops
+there, as one with a handle type does (section 2.5).
+
+**What the report of a cycle names.** `side-write:cycle`
+(`language-subset.md` §10.3) is computed from `Plan.edges`. It is
+reported once per write edge that is on a cycle, whatever the number of
+cones the edge closes a cycle with, and it names the side-write. A body
+of kind `function` that a cone uses is a computation for this report: its
+static write edges are edges of the cone, as those of a `lift` or a
+`computed` are (`footprint-analysis.md` §6.3).
 
 **A write through a handle that `key` flattened.** For `h` of type
 `Cell<{ a: Cell<T> }>`, a write through `h.key("a")` lands in the cell
@@ -4346,7 +4751,11 @@ path of `a` has the call's template (section 3.3), so `body` is that
 template whichever child is chosen, and the label is the template of `k`
 joined with the call's. When `a` is a constructed object with a static key
 set, the compiler emits a `select` over its keys in place of a `pick`, and
-each branch is the template of that member.
+each branch is the template of that member. Its `condition` is the
+template of `k`, and it has one branch more than the object has keys:
+`const`, for a key that names no member. The result is then `undefined`
+with the label of the condition, which is what a `pick` gives a missing
+key (above).
 
 **Handle methods in the reactive tier.** `language-subset.md` §4.7 allows
 `get()`, `key(k)` and `elementById(k)` on a handle in the reactive tier.
@@ -4399,8 +4808,9 @@ in the operation's first request transaction, and nothing is sent.
 
 **`wish`.** It is structural, and one call is one record, whatever its
 query. *Assumed:* it is written in the reactive tier alone.
-`language-subset.md` §4.4 lists it among the calls of tier R, the corpus
-has no call in a function body (`builtin-inventory.md`, "Calls inside function
+`language-subset.md` §4.4 lists it among the calls of tier R and its §5.2
+refuses it in a function body (`function-body:wish`), the corpus has no
+call in a function body (`builtin-inventory.md`, "Calls inside function
 bodies"), and `Body.calls` has no site for one.
 
 - **The operation.** An `Operation` of kind `wish`, with
@@ -4756,7 +5166,7 @@ interface TemplateInputs {
    * none was chosen.
    */
   chosen(pick: Index): TemplateInputs | undefined;
-  /** Membership label of a collection. */
+  /** Label of the membership a collection iterates (section 3.2). */
   membership(collection: Index): Label;
   /** Join of what a journaled read set consumed. */
   dynamicLabel(reads: Index): Label;
@@ -5711,7 +6121,8 @@ second is beside `e2`: the body tests whether the list is present and
 asks for its length, and an `enumeration` entry does not remove a `shape`
 entry at its path (`footprint-analysis.md` §2.3). The others are in place
 (`inPlace`), at the positions of the optional handles: among them
-`binding myProfile`, `binding joined`, `event replyTo/thread` and
+`binding myProfile`, `binding joined`, `binding threadInfo`,
+`event attachments/*`, `event replyTo/thread` and
 `event replyTo/quotes`. Each of those observes whether the position holds
 a handle, and the `identity` slot at the same position is listed. Where
 the position holds a handle, the slot in place resolves to the label of
@@ -5736,6 +6147,12 @@ an instantiated label with FabriChat's labels.
   has an entry that names both (`Widening.computed`).
 - `m4` is at a position of handle type, so it has `inPlace`, as the
   omitted `shape` slots of `B0` have.
+- `B2` makes one static read through `messages`. `indexesOf` calls
+  `get()` on the list unconditionally and asks for its length, which is
+  an `enumeration` slot at `argument messages` whose path crosses the
+  handle's link, with a `shape` slot beside it for the `??` on the
+  result (`footprint-analysis.md` §3.2, §7.2). Both join `T_facts`. The
+  reads of the elements are under a computed index and stay with `h0`.
 
 The binding, an entry of `Plan.bindings`. The middle column is the
 member `place` of each state path:
@@ -5894,8 +6311,15 @@ T_place  = pick( p0, from: output facts.places, choice: T_key,
 T_repl   = select( condition: T_place, branches: [ T_place, const ] )
 T_label  = select( condition: derive(expression) [ T_repl, const ],
                    branches:  [ const,
-                                derive(expression) [ const, T_repl ] ] )
+                                derive(expression) [ T_repl ] ] )
 ```
+
+The second branch of `T_label` is the template literal
+`${replies} replies`. A template literal is a `derive` over the templates
+of its substitutions (section 3.19), and its text is no operand, so the
+node has the one input. The condition `replies === 1` is an operator
+with two operands, one of them a constant, so it has the `const` node
+(section 3.2).
 
 `FabriChatMessageRow` is written as a JSX tag in the callback of the
 `map`. A tag that names a pattern the compiler can see is a call compiled
@@ -5946,15 +6370,18 @@ constant.
 Kept outputs in the slice: the room's `messages` output (from `facts.list`),
 and the rendered tree under `[UI]`, which holds the empty-state branch and
 each row's text, edited mark and thread label. `facts.main`,
-`facts.entries`, `facts.places`, the row's key and `replies` are interim
+`facts.entries`, `facts.places` and `replies` are interim
 outputs: another cone, a `pick` or a collection refers to each.
 
 By the partition of section 1.4, the cones of the slice are `facts`,
-`isEmpty`, the JSX tree, and per row `text`, `isEdited`, the row's key,
-`replies` and `threadLabel`. The result of `B1` is computed and used
-inside the cone `facts`, and the conditions of `T_edited` and `T_label`
-inside the cones `isEdited` and `threadLabel`. None of the three is an
-entry of `Plan.outputs`.
+`isEmpty`, the JSX tree, and per row `text`, `isEdited`, `replies` and
+`threadLabel`. The row's key is declared inside the promoted `computed`
+of `replies`, so it is a value of the cone `replies`: `B4` and the pick
+are evaluated there, and the key has no cone and no entry of
+`Plan.outputs`. The result of `B1` is computed and used inside the cone
+`facts`, and the conditions of `T_edited` and `T_label` inside the cones
+`isEdited` and `threadLabel`. None of those three is an entry of
+`Plan.outputs` either.
 
 ### 6.3 The gate on the send handler
 
@@ -6749,11 +7176,18 @@ this document made.
     reactive tier that computes, with everything nested in its
     initializer; one per JSX tree; the callback of an element construct
     by the same rules; and one cone named `result`. *Assumed:* that
-    partition, which is the one the prototype emits. The partition
-    decides which values are entries of `Plan.outputs`, what an interim
-    output is named, and how much is evaluated again when one input
-    changes: a finer partition, with a cone per use of a body or per
-    `select`, evaluates less and stores more names. It changes no label.
+    partition. Section 1.4 states it for an element body in full: a cone
+    per `const` declaration of the callback that computes, one for the
+    returned expression in every case, and a declaration inside a
+    promoted `computed` with a block body in the cone of that
+    `computed`. The partition decides which values are entries of
+    `Plan.outputs`, what an interim output is named, and how much is
+    evaluated again when one input changes: a finer partition, with a
+    cone per use of a body or per `select`, evaluates less and stores
+    more names. A coarser one, with one cone for the whole callback of
+    an element construct, which is what the prototype emits, evaluates
+    every declaration of a row when one of its inputs changes. Neither
+    changes a label.
 45. **A statically resolved pattern on a cycle of calls.** A pattern that
     calls itself in its reactive tier, directly or through other
     statically resolved patterns, cannot be compiled into the enclosing
@@ -6793,7 +7227,7 @@ this document made.
     That is tighter where a part reads less than the join, and it needs
     a constant query for every call. Three smaller choices are assumed
     with it: `wish` is written in the reactive tier alone, which
-    `language-subset.md` has to state; the result carries no integrity,
+    `language-subset.md` §5.2 states; the result carries no integrity,
     as today; and a sidecar's argument carries the label of the result.
     The table of section 3.19 from a query to its part is read from
     `parseWishTarget` and `getResolutionKind`. Which runs launch which
@@ -6845,3 +7279,41 @@ this document made.
     envelope names no address until the instance exists, so it bounds
     the write and gives nothing to order by. The alternative refuses
     every such write and has the handler pass the cell in the argument.
+53. **The entries of a constructed value.** Section 3.4 gives a record
+    or an array written in place, a JSX element included, a container
+    entry and one entry of `Plan.outputs` per member that computes, and
+    writes a `select`, a `pick` or a per-element output over such a
+    value once per path. The rendered tree under `$UI` then has the
+    paths of its view nodes, `props/<attribute>` and `children/<n>`,
+    and a child that is an array is a spread child. *Assumed.* That the
+    value has no one template for the whole follows from "equal to or
+    tighter". What is assumed is how fine the entries are and that the
+    paths of a view node are part of the plan. In the corpus about a
+    third of the outputs the prototype emits are constructed values
+    used whole, nearly all of them rendered trees and records, so the
+    rule multiplies the entries of `Plan.outputs`, and with them the
+    labels instantiated per evaluation. The alternative keeps one entry
+    per constructed value and holds the per-path templates in a member
+    of that entry, which is the same labels in fewer records and one
+    more record shape. `execution-and-storage.md` has to agree on the
+    paths of a view node, since they are stored paths.
+54. **What `Body.code` is the hash of.** Section 1.5 makes it the hash
+    of the module's content-addressed identity and the path of the
+    function's binding, which is the pair a write policy verifies today.
+    *Assumed.* The identity then changes when anything in the module, or
+    in a module it imports, changes, so a write policy that names a
+    handler stops admitting it after an edit to an unrelated function of
+    the same module, and a `TransformedBy` atom names the module and the
+    binding and not the body's own text. The alternative hashes the text
+    of the body with the text of every authored function it can call,
+    which changes only when the code that can run changes and needs the
+    call graph to be closed at compile time. What
+    `computeModuleIdentities` takes from the modules a module imports
+    was not traced.
+55. **The declared label of a slot that observes a reference.** Section
+    1.5 gives an `identity` slot and a `shape` slot in place no
+    `declared` member, because an annotation declares the label of the
+    value at a path and those slots observe the reference stored there.
+    *Assumed.* A compile-time check then never fails on such a slot and
+    is left to instantiation. The alternative reads the annotation as a
+    declaration about the reference too.
