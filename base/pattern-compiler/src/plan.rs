@@ -4973,6 +4973,85 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
     for (kind, count) in &nodes {
         out.push_str(&format!("  {count:7}  {kind}\n"));
     }
+    // The schemas, the declared labels, and the constraints of the plans
+    // of the accepted modules.
+    let (mut slots, mut with_schema, mut with_declared) = (0, 0, 0);
+    let (mut kept, mut kept_with_schema) = (0, 0);
+    let mut constraint_kinds: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        let plan = &plan.plan;
+        let plan_slots = plan["slots"].as_array().cloned().unwrap_or_default();
+        for slot in &plan_slots {
+            slots += 1;
+            with_schema += usize::from(slot.get("schema").is_some());
+            with_declared += usize::from(slot.get("declared").is_some());
+        }
+        for output in plan["outputs"].as_array().into_iter().flatten() {
+            if output["kept"] == json!(true) {
+                kept += 1;
+                kept_with_schema += usize::from(output.get("schema").is_some());
+            }
+        }
+        for constraint in plan["constraints"].as_array().into_iter().flatten() {
+            let kind = constraint["kind"].as_str().unwrap_or("");
+            let entry = constraint_kinds.entry(kind.to_string()).or_default();
+            entry.0 += 1;
+            // "At compile time, when everything it reads is declared:
+            // every listed slot has a `declared` label for the dimension
+            // the constraint tests" (PL §4.4).
+            let dimension = match kind {
+                "requiredIntegrity" => "integrity",
+                "maxConfidentiality" => "confidentiality",
+                _ => continue,
+            };
+            let declared = constraint["slots"].as_array().is_some_and(|listed| {
+                listed.iter().all(|slot| {
+                    slot.as_u64().is_some_and(|slot| {
+                        plan_slots[slot as usize]["declared"]
+                            .get(dimension)
+                            .is_some()
+                    })
+                })
+            });
+            entry.1 += usize::from(declared);
+        }
+    }
+    out.push_str(&format!(
+        "slots: {slots}, {with_schema} with a schema, {with_declared} with a declared label; kept outputs: {kept}, {kept_with_schema} with a schema\n"
+    ));
+    out.push_str(
+        "constraints, by kind (records, those whose every listed slot declares the label):\n",
+    );
+    for (kind, (count, declared)) in &constraint_kinds {
+        out.push_str(&format!("  {count:5} {declared:4}  {kind}\n"));
+    }
+    // The `cfc-flow:*` diagnostics: occurrences, modules, and the modules
+    // that have no other error.
+    let mut flow: BTreeMap<&str, (usize, BTreeSet<&str>, BTreeSet<&str>)> = BTreeMap::new();
+    for module in &analysis.modules {
+        let others = module
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.is_error() && !diagnostic.id.starts_with("cfc-flow:"));
+        for diagnostic in &module.diagnostics {
+            if diagnostic.id.starts_with("cfc-flow:") {
+                let entry = flow.entry(diagnostic.id).or_default();
+                entry.0 += 1;
+                entry.1.insert(module.path.as_str());
+                if !others && diagnostic.is_error() {
+                    entry.2.insert(module.path.as_str());
+                }
+            }
+        }
+    }
+    out.push_str("cfc-flow diagnostics (occurrences, modules, modules they newly refuse):\n");
+    for (id, (count, modules, refused)) in &flow {
+        out.push_str(&format!(
+            "  {count:5} {:4} {:4}  {id}\n",
+            modules.len(),
+            refused.len()
+        ));
+    }
     out.push_str("unsupported constructs, by kind (sites, modules):\n");
     let mut sorted: Vec<(&String, &(usize, BTreeSet<&str>))> = kinds.iter().collect();
     sorted.sort_by_key(|(kind, (sites, _))| (usize::MAX - *sites, kind.to_string()));

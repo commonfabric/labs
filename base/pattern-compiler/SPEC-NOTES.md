@@ -788,8 +788,7 @@ numbers have gaps.
     differs: (a) of the four `shape` slots the listing gives `B1`, the
     crate has the one in place at `threadInfo` and the one at the root of
     the list, and not the ones at `threadInfo/*/root` and at
-    `threadInfo/*`: the type of `record` and of `record.root` decides
-    those tests, and FA §2.2 records nothing for a test the type decides.
+    `threadInfo/*`. Why the analysis records neither was not traced.
     (b) The source declares the row's key inside the `computed` of
     `replies`, so the crate has no cone `key` (note 114 f). (c) The crate
     has more `shape` slots in place than the listing names "among them"
@@ -896,3 +895,87 @@ numbers have gaps.
     function is a body where a call in the reactive tier names it, in
     any module. The call in the reactive tier is the use of that body
     and reports nothing itself.
+
+## Schemas, declared labels, and constraints
+
+145. **The schema of a type** (`ts_to_json_schema_mapping.md`, cited as
+    SM). `src/schema.rs` emits the forms of SM §4, §6.2, §7, §8 and §11
+    that the types of the subset have: primitives and literals, objects
+    with `properties`, `required` and `additionalProperties`, arrays and
+    tuples, unions with the all-literal and the primitive-merging rules,
+    a handle as one more entry of `asCell`, a default, and the label
+    annotations under `ifc`. It hoists no named type into `$defs` (SM §5),
+    so a type that contains itself is cut at depth 12 with `{}`; it emits
+    no scope entry in `asCell` (SM §10), no `description` (SM §12), and
+    the native table of SM §5.2 as `{}`. A literal has the `enum` form of
+    the type path. A pattern factory and a handler factory are
+    `{ asCell: ["cell"] }` and `{ asCell: ["stream"] }`, after the
+    callable properties SM §4 keeps.
+146. **`Slot.schema`** (PL §1.1) is a `Hash`. The crate holds the schema
+    itself in its place, since it computes no content address (note 129).
+    A slot has one where the emitter has the declared type of its root:
+    the pattern's input, the element of a collection, and the event and
+    the state of a named handler. A state cell, an operation, a binding
+    of an inline handler or an action, and the cause have none. Of the
+    10,167 slots of the plans of the accepted modules, 5,720 have a
+    schema. A kept output has a `schema` member, which PL's `Output`
+    does not have, where the pattern declares a result type: 923 of
+    1,561.
+147. **A label argument as data** (LS §8.5). The checker keeps the text
+    of an annotation's argument. `src/schema.rs` reads a list, a literal
+    atom, an object atom, and `AnyOf<list>` from it, and nothing else:
+    a reference to an alias, a constant reference `typeof NAME`, a
+    marker type such as `CurrentPrincipal`, `PolicyOf`, and a spread are
+    not replaced. Such an argument is `{ "$source": text }` in the
+    schema, and the slot then declares nothing for that dimension. The
+    corpus has 1 slot with a declared label by this reading.
+148. **`Slot.declared`** (PL §4.4, LS §8.3). `confidentiality` joins the
+    lists of every node from the root to the path, outer first, each
+    atom once. `integrity` is the first one found on the way, since LS
+    requires it declared alike on one path; `cfc-label:conflict` is not
+    checked here. A handle on the way counts as two nodes, the handle
+    and its value.
+149. **`Plan.constraints`** (PL §4.4). The crate emits `writer`,
+    `writerFit`, `writeFloor`, `requiredIntegrity` and
+    `maxConfidentiality`. An input constraint lists the slots of
+    `Body.reads` at or below the annotated node; a slot above the
+    annotated path, which overlaps it in the other prefix direction, is
+    not listed, and neither are `handles` and `computed`. It is listed
+    on every write edge of the body, as the writes it guards; a body
+    with no write edge lists it nowhere, since PL does not say which
+    output of the cone it guards. `WriterPolicy.body` is the name of the
+    binding where PL has a `Hash`. Only a write edge of a body through a
+    handle of a slot has constraints: a write to a state cell, a cone's
+    write, and an output have none. The corpus has 6 `writer` and 4
+    `writerFit` records.
+150. **`cfc-flow:write-policy`** (LS §8.6, PL §4.4) is reported where
+    the writing body is not the handler, or the function, that the
+    binding of `WriteAuthorizedBy` names, compared by name. A write the
+    body makes through a function it calls is the body's. The policies
+    of `WritePolicyAnyOf`, `TrustedActionWrite` and
+    `TrustedActionWriteWithIntegrity` are not read: the checker keeps
+    the name of those aliases and not their arguments. The corpus has no
+    report.
+151. **`cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`,
+    `cfc-flow:write-floor` and `cfc-flow:writer-fit` are not built.** PL
+    §4.4 states each as a relation between labels, "fits the ceiling",
+    "fits it", and "satisfies the patterns, with one coherent witness
+    across them", and gives the relations by the runtime functions that
+    hold them today (`verifyInputRequirements`, `verifyWriteFloor`,
+    `prepareBoundaryCommitSteps`). Neither PL nor LS defines when a list
+    of atoms fits another or when an integrity satisfies a pattern, with
+    `AnyOf` clauses and object atoms. Two more things are open for the
+    two write checks: `I(template)` and `C(template)` of a `derive` by a
+    body need the `TransformedBy` atom, which holds `Body.code`, a hash
+    the crate does not have, and PL says a compile-time pass on
+    confidentiality "settles nothing", so only a failure counts, which
+    needs the relation's negation to be exact. The records are emitted,
+    and `plan --corpus` counts the input constraints whose every listed
+    slot declares the label: the corpus has no input constraint.
+152. **`cfc-flow:ui-contract` is not built.** The checker does not keep
+    the arguments of the trusted-action aliases (note 150), and the
+    crate has no record of the surface an element sits under.
+153. **Hashes** stay as note 129 has them: every `Hash` is the address
+    of emitted value code, of source as the loader receives it, or of a
+    schema in its stored form, and the crate produces none of the three
+    in that form.

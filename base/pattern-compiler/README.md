@@ -42,6 +42,12 @@ and `src/plan.rs` emits a first slice of the plan of
 the label templates of §3 for expression code, a use of a body, a
 `select`, a `pick`, a `fold`, a collection, a write edge, an operation, and
 a binding. A record or a rendered tree used as one value has no template.
+A slot holds the JSON schema of the type at its path and the label its
+annotations declare, where the emitter has the type of the slot's root
+(`src/schema.rs`), and the plan lists the constraints of
+`plan-and-label-templates.md` §4.4 that come from the annotations a body
+reads and writes under. Of the `cfc-flow:*` diagnostics,
+`cfc-flow:write-policy` is reported.
 `plan path/to/module.tsx` prints the plan of each pattern,
 `plan --corpus <patterns directory>` counts the modules a plan is emitted for
 with no unsupported construct and the records that have a template, and
