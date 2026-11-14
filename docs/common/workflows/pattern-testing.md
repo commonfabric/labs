@@ -514,6 +514,141 @@ inside the assertion itself (they are gated and throw in a `computed()`
 anyway). If the pattern stamps a timestamp or random ID, assert that the value
 exists or changed in the expected place.
 
+## Answering Fetches and Model Requests
+
+A test states what a fetch or a language model answers in a module-scope
+export, which the runner reads after it compiles the test and before anything
+runs.
+
+### Fetches
+
+`fetchMocks` answers the HTTP requests `fetchJson` and the other fetch
+builtins make. The first entry whose `urlIncludes` is part of a request's URL
+answers it, with `body` (or `base64Body`, for bytes), `status`, and
+`contentType`; `delayMs` holds the answer back for that long. A request no
+entry matches goes to the network.
+
+```tsx
+// Shown at module scope.
+export const fetchMocks = [
+  { urlIncludes: "/api/weather", body: '{"forecast":"sunny"}' },
+];
+```
+
+`patterns/examples/fetch-json/fetch-mock.test.tsx` is a worked example.
+
+### Model requests
+
+`llmMocks` answers the requests `generateText`, `generateObject`, `llm`, and
+each turn of `llmDialog` make. Every request is answered from it, whether or
+not the test exports it, so a test that makes a request without stating an
+answer fails rather than reaching a model.
+
+```tsx
+// Shown at module scope.
+import { action, assert, pattern, TESTS, UI } from "commonfabric";
+import {
+  hasText,
+  sendMessage,
+} from "../../tools/test-support/vnode-helpers.ts";
+import LLMTest from "./llm.tsx";
+
+export const llmMocks = [
+  {
+    when: {
+      systemContains: "helpful assistant",
+      lastMessageContains: "What is the capital of France?",
+    },
+    text: "Paris.",
+  },
+];
+
+export default pattern(() => {
+  const subject = LLMTest({ title: "LLM Test" });
+  const action_ask = action(() =>
+    sendMessage(subject[UI], "What is the capital of France?")
+  );
+  return {
+    [TESTS]: [
+      { action: action_ask },
+      { assertion: assert(() => subject.response === "Paris.") },
+      { assertion: assert(() => hasText(subject[UI], "LLM Response:")) },
+    ],
+  };
+});
+```
+
+Each entry carries one kind of answer:
+
+- `text`, `toolCalls`, or both answer a text request, which is what
+  `generateText`, `llm`, and `llmDialog` make. Each tool call is
+  `{ name, input }`, with an optional `id`. A streamed request, such as each
+  turn of a dialog, receives the text as its partial result before the reply
+  completes.
+- `object` answers a `generateObject` request. A `generateObject` given tools
+  is sent as a text request offering a `presentResult` tool, and an `object`
+  entry answers it with a call to that tool carrying the object.
+- `error` fails the request with that message, whichever kind it is. This is
+  how a test reaches a pattern's handling of a failed request. A failed
+  request usually logs a warning, which fails the test unless it also sets
+  `allowConsoleWarnings: true`.
+
+`when` narrows which requests an entry answers, with the conditions
+`systemContains`, `lastMessageContains`, `messagesContain` (a list of strings,
+each in some message), `hasTools` (a list of tool names the request offers),
+and `messageCount`. The text conditions search a message's text parts only, so
+a tool result does not match them. An entry that calls tools answers only a
+request that offers each tool it calls.
+
+A request is answered by the first entry, in the order the test lists them,
+that no earlier request used up, whose kind fits, and whose conditions the
+request meets. That entry is then used up, unless it says `repeat: true`, in
+which case it answers every request it fits. So entries without conditions
+answer requests in turn, and the conditions pick an entry out when the order of
+the requests is not fixed, as when a pattern starts two requests at once. An
+entry that repeats suits a request a pattern makes a varying number of times,
+such as one for each item of a list it keeps.
+
+A dialog's tools run when the model calls them, so a test states every turn of
+the model's side of the conversation. After a tool call, the next request
+carries the call and the tool's result, so `messageCount` tells the turns
+apart:
+
+```tsx
+// Shown at module scope.
+export const llmMocks = [
+  {
+    when: { messageCount: 1 },
+    toolCalls: [{ name: "readRawBriefing", input: {} }],
+  },
+  {
+    when: { messageCount: 3 },
+    toolCalls: [{
+      name: "sendMail",
+      input: { recipient: "bob@example.org", subject: "approved", body: "…" },
+    }],
+  },
+  { when: { messageCount: 5 }, text: "I could not send the email." },
+];
+```
+
+`patterns/examples/cfc-agent-prompt-injection-demo/model-turns.test.tsx` drives
+two dialogs this way and asserts what each tool did, and
+`patterns/examples/llm/llm.test.tsx` states both an answer and a failed
+request.
+
+The runner fails the test with a result named `llmMocks` for a request no entry
+answered, saying what the request held and why each remaining entry of its kind
+did not fit it; when the run fails for another reason, these join its error. An
+entry no request uses is not a failure, since a test can make a request with
+server execution on that it makes none of with server execution off. An export
+the runner cannot read, such as an entry with an unknown key or two kinds of
+answer, fails the run before anything runs.
+
+A multi-user test has one list of entries for all its participants: each
+request is answered by the first entry that fits and is not used up, whichever
+participant makes it.
+
 ## Test Organization
 
 ### Naming Conventions
@@ -654,41 +789,6 @@ Run that action as the first step, and assert the seed landed before anything
 depends on it — reading the seeded value back, rather than only its absence
 from a filtered view, so an unresolved wish fails the test instead of passing
 it for the wrong reason.
-
-### Mocking Language-Model Calls
-
-A test never reaches a model. A pattern that calls `generateObject`,
-`generateText`, `llm`, or `llmDialog` gets its answers from an `llmMocks` array
-the test file exports at module scope. An entry with `object` answers a
-`generateObject` request, including one given tools, which receives the object
-as its `presentResult` call; an entry with `text` answers any of the others
-with that reply. Each entry answers one request, the first of its kind whose
-last message contains `promptIncludes`, and is then used up. A request no entry answers fails, and the
-builtin reports that as the call's `error`, so an empty array is how a test
-reaches the error path, and an item whose request is sent a second time shows
-up as an error rather than passing unnoticed.
-
-```tsx
-// Shown at module scope.
-export const llmMocks = [
-  {
-    promptIncludes: "a self-watering plant pot",
-    object: { name: "AquaPot", price: 25 },
-  },
-  { promptIncludes: "Hello", text: "Hi there" },
-];
-```
-
-The language-model builtins warn as they trace each request, and a request no
-entry answers fails with a warning, so such a test returns
-`allowConsoleWarnings: true`.
-`patterns/dev/gideon-tests/test-llm-dumb-map-generateobject.test.tsx` mocks a
-request per list item, and
-`patterns/dev/gideon-tests/test-generateobject-error-handling.test.tsx` shows
-both the answered and the failed request.
-`patterns/dev/experimental/chat-note.test.tsx` answers a `generateText` reply.
-A multi-user test cannot declare
-`llmMocks`.
 
 ### Testing Initial State
 

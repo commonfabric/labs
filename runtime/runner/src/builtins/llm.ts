@@ -1527,9 +1527,9 @@ export function generateText(
     const partialWithLog = resultCell.key("partial").withTx(tx);
     const requestHashWithLog = resultCell.key("requestHash").withTx(tx);
 
-    // If neither prompt nor messages is provided, don't make a request
+    // With neither a prompt nor any messages, there is nothing to send
     const hasPrompt = Array.isArray(prompt) ? prompt.length > 0 : !!prompt;
-    if (!hasPrompt && !messages) {
+    if (!hasPrompt && (!messages || messages.length === 0)) {
       // Abandon a request already in flight, where abandoning one is possible.
       // Advancing the run makes its response fail the guard on the way back, so
       // nothing of it reaches the cell, and dropping the remembered hash lets

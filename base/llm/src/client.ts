@@ -1,5 +1,6 @@
 import {
   isLLMNativeModelToolResults,
+  type LLMContent,
   LLMGenerateObjectRequest,
   LLMGenerateObjectResponse,
   type LLMNativeModelToolResult,
@@ -87,6 +88,41 @@ export const setLLMUrl = (toolshedUrl: string) => {
 type MockResponseMatcher = (request: LLMRequest) => boolean;
 type MockObjectResponseMatcher = (request: LLMGenerateObjectRequest) => boolean;
 
+/**
+ * Answers the requests an `LLMClient` makes in place of the LLM service. While
+ * one is installed with `setLLMResponder()`, every request goes to it and none
+ * reaches the network. The JSON-transport checks on schemas run first, so a
+ * responder sees only requests the service could have received.
+ */
+export interface LLMResponder {
+  /**
+   * Answers a `sendRequest()`. A streamed request carries `callback`, which
+   * the responder calls with the text so far, as the service's stream would.
+   */
+  sendRequest(
+    request: LLMRequest,
+    callback: PartialCallback | undefined,
+    abortSignal: AbortSignal | undefined,
+  ): Promise<LLMResponse>;
+
+  /** Answers a `generateObject()`. */
+  generateObject(
+    request: LLMGenerateObjectRequest,
+    abortSignal: AbortSignal | undefined,
+  ): Promise<LLMGenerateObjectResponse>;
+}
+
+let responder: LLMResponder | undefined;
+
+/**
+ * Installs `next` as the answerer of every request any `LLMClient` in this
+ * process makes, replacing the mock catalog or another responder. `undefined`
+ * removes it, and requests go to the LLM service again.
+ */
+export function setLLMResponder(next: LLMResponder | undefined): void {
+  responder = next;
+}
+
 type MockEntry =
   | { type: "sendRequest"; matcher: MockResponseMatcher; response: LLMResponse }
   | {
@@ -95,29 +131,17 @@ type MockEntry =
     response: LLMGenerateObjectResponse;
   };
 
-class MockCatalog {
+let mockGate: (() => Promise<void>) | undefined;
+
+/**
+ * The responder `enableMockMode()` installs: answers from registered mock
+ * responses, each used once, the first registered match winning.
+ */
+class MockCatalog implements LLMResponder {
   #mocks: MockEntry[] = [];
-  #enabled = false;
-
-  enable(): void {
-    this.#enabled = true;
-  }
-
-  disable(): void {
-    this.#enabled = false;
-  }
 
   clear(): void {
     this.#mocks = [];
-  }
-
-  reset(): void {
-    this.disable();
-    this.clear();
-  }
-
-  isEnabled(): boolean {
-    return this.#enabled;
   }
 
   addResponse(matcher: MockResponseMatcher, response: LLMResponse): void {
@@ -131,32 +155,45 @@ class MockCatalog {
     this.#mocks.push({ type: "generateObject", matcher, response });
   }
 
-  /**
-   * Find a matching sendRequest mock. Skips generateObject entries.
-   * Removes the matched mock (one-time use).
-   */
-  findResponse(request: LLMRequest): LLMResponse | undefined {
+  async sendRequest(
+    request: LLMRequest,
+    callback: PartialCallback | undefined,
+  ): Promise<LLMResponse> {
     const index = this.#mocks.findIndex((m) =>
       m.type === "sendRequest" && m.matcher(request)
     );
-    if (index === -1) return undefined;
-    const [mock] = this.#mocks.splice(index, 1);
-    if (mock.type === "sendRequest") return mock.response;
+    const [mock] = index === -1 ? [] : this.#mocks.splice(index, 1);
+    if (mock?.type !== "sendRequest") {
+      throw new Error(
+        "Mock mode enabled but no matching mock response found for sendRequest",
+      );
+    }
+    if (mockGate) await mockGate();
+    // The callback gets the whole text at once rather than in pieces.
+    if (callback) {
+      const content = mock.response.content;
+      const text = typeof content === "string"
+        ? content
+        : content.find((part) => part.type === "text")?.text;
+      if (text) callback(text);
+    }
+    return mock.response;
   }
 
-  /**
-   * Find a matching generateObject mock. Skips sendRequest entries.
-   * Removes the matched mock (one-time use).
-   */
-  findObjectResponse(
+  async generateObject(
     request: LLMGenerateObjectRequest,
-  ): LLMGenerateObjectResponse | undefined {
+  ): Promise<LLMGenerateObjectResponse> {
     const index = this.#mocks.findIndex((m) =>
       m.type === "generateObject" && m.matcher(request)
     );
-    if (index === -1) return undefined;
-    const [mock] = this.#mocks.splice(index, 1);
-    if (mock.type === "generateObject") return mock.response;
+    const [mock] = index === -1 ? [] : this.#mocks.splice(index, 1);
+    if (mock?.type !== "generateObject") {
+      throw new Error(
+        "Mock mode enabled but no matching mock response found for generateObject request",
+      );
+    }
+    if (mockGate) await mockGate();
+    return mock.response;
   }
 }
 
@@ -165,8 +202,6 @@ class MockCatalog {
 // Deno runs test files in separate processes by default, so this is safe
 // as long as tests within a single file don't run in parallel.
 const mockCatalog = new MockCatalog();
-
-let mockGate: (() => Promise<void>) | undefined;
 
 /**
  * Hold every matched mock response open until `gate` resolves.
@@ -204,14 +239,14 @@ export function setMockResponseGate(
  * ```
  */
 export function enableMockMode(): void {
-  mockCatalog.enable();
+  responder = mockCatalog;
 }
 
 /**
  * Disable mock mode - requests will go to the real API.
  */
 export function disableMockMode(): void {
-  mockCatalog.disable();
+  if (responder === mockCatalog) responder = undefined;
 }
 
 /**
@@ -226,8 +261,8 @@ export function clearMockResponses(): void {
  * Reset mock mode - disable and clear all responses.
  */
 export function resetMockMode(): void {
-  mockCatalog.reset();
-  mockGate = undefined;
+  disableMockMode();
+  clearMockResponses();
 }
 
 /**
@@ -337,17 +372,66 @@ export function failureHint(status: number, parameters: string): string {
   return "The LLM service turned the request down.";
 }
 
-function extractMessageText(
-  content: unknown,
+/** The text parts of a message's content, joined by spaces. */
+export function extractMessageText(
+  content: LLMContent | undefined,
 ): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((p: any) => p.type === "text")
-      .map((p: any) => p.text ?? "")
-      .join(" ");
+  if (content === undefined || typeof content === "string") {
+    return content ?? "";
   }
-  return "";
+  return content.flatMap((part) => part.type === "text" ? [part.text] : [])
+    .join(" ");
+}
+
+/**
+ * The first of `assertions` that `request` fails, described, or `undefined`
+ * when it meets them all.
+ */
+export function requestMismatch(
+  assertions: ConversationFixtureAssertions,
+  request: LLMRequest | LLMGenerateObjectRequest,
+): string | undefined {
+  if (
+    assertions.messageCount !== undefined &&
+    request.messages.length !== assertions.messageCount
+  ) {
+    return `expected ${assertions.messageCount} messages, got ${request.messages.length}`;
+  }
+  for (const needle of assertions.messagesContain ?? []) {
+    if (
+      !request.messages.some((m) =>
+        extractMessageText(m.content).includes(needle)
+      )
+    ) {
+      return `expected some message to contain "${needle}"`;
+    }
+  }
+  if (assertions.lastMessageContains !== undefined) {
+    const last = request.messages[request.messages.length - 1];
+    const text = extractMessageText(last?.content);
+    if (!text.includes(assertions.lastMessageContains)) {
+      return `expected last message to contain "${assertions.lastMessageContains}", got "${text}"`;
+    }
+  }
+  if (assertions.hasTools) {
+    const tools = "tools" in request && request.tools
+      ? Object.keys(request.tools)
+      : [];
+    for (const toolName of assertions.hasTools) {
+      if (!tools.includes(toolName)) {
+        return `expected tool "${toolName}" in request, got [${
+          tools.join(", ")
+        }]`;
+      }
+    }
+  }
+  if (
+    assertions.systemContains !== undefined &&
+    !(request.system ?? "").includes(assertions.systemContains)
+  ) {
+    return `expected system prompt to contain "${assertions.systemContains}"`;
+  }
+  return undefined;
 }
 
 function runAssertions(
@@ -356,64 +440,12 @@ function runAssertions(
   entryIndex: number,
   fixtureDescription?: string,
 ): void {
+  const mismatch = requestMismatch(assertions, request);
+  if (mismatch === undefined) return;
   const label = fixtureDescription
     ? `Fixture "${fixtureDescription}" entry ${entryIndex}`
     : `Fixture entry ${entryIndex}`;
-
-  if (assertions.messageCount !== undefined) {
-    if (request.messages.length !== assertions.messageCount) {
-      throw new Error(
-        `${label}: expected ${assertions.messageCount} messages, got ${request.messages.length}`,
-      );
-    }
-  }
-
-  if (assertions.messagesContain) {
-    for (const needle of assertions.messagesContain) {
-      const found = request.messages.some((m) =>
-        extractMessageText(m.content).includes(needle)
-      );
-      if (!found) {
-        throw new Error(
-          `${label}: expected some message to contain "${needle}"`,
-        );
-      }
-    }
-  }
-
-  if (assertions.lastMessageContains) {
-    const last = request.messages[request.messages.length - 1];
-    const text = last ? extractMessageText(last.content) : "";
-    if (!text.includes(assertions.lastMessageContains)) {
-      throw new Error(
-        `${label}: expected last message to contain "${assertions.lastMessageContains}", got "${text}"`,
-      );
-    }
-  }
-
-  if (assertions.hasTools) {
-    const tools = "tools" in request && request.tools
-      ? Object.keys(request.tools)
-      : [];
-    for (const toolName of assertions.hasTools) {
-      if (!tools.includes(toolName)) {
-        throw new Error(
-          `${label}: expected tool "${toolName}" in request, got [${
-            tools.join(", ")
-          }]`,
-        );
-      }
-    }
-  }
-
-  if (assertions.systemContains) {
-    const system = request.system ?? "";
-    if (!system.includes(assertions.systemContains)) {
-      throw new Error(
-        `${label}: expected system prompt to contain "${assertions.systemContains}"`,
-      );
-    }
-  }
+  throw new Error(`${label}: ${mismatch}`);
 }
 
 /**
@@ -433,7 +465,7 @@ function runAssertions(
  * ```
  */
 export function loadConversationFixture(fixture: ConversationFixture): void {
-  mockCatalog.enable();
+  enableMockMode();
 
   const description = fixture.description;
 
@@ -508,19 +540,7 @@ export class LLMClient {
     // purpose regardless of where it would have gone.
     assertJsonTransportSafe(request.schema, "The generateObject schema");
 
-    // Check for mock mode
-    if (mockCatalog.isEnabled()) {
-      const mockResponse = mockCatalog.findObjectResponse(request);
-      if (mockResponse) {
-        if (mockGate) await mockGate();
-        // Simulate async behavior
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        return mockResponse;
-      }
-      throw new Error(
-        "Mock mode enabled but no matching mock response found for generateObject request",
-      );
-    }
+    if (responder) return await responder.generateObject(request, abortSignal);
 
     // Guard: block live calls in test environments
     if (_isTestEnvironment) {
@@ -596,37 +616,8 @@ export class LLMClient {
       );
     }
 
-    // Check for mock mode
-    if (mockCatalog.isEnabled()) {
-      const mockResponse = mockCatalog.findResponse(request);
-      if (mockResponse) {
-        if (mockGate) await mockGate();
-        // NOTE: Streaming simulation calls the callback once with the full
-        // text rather than delivering incremental chunks. Tests that depend on
-        // partial-chunk behavior will need a more granular mock.
-        if (callback && request.stream) {
-          let text = "";
-          if (typeof mockResponse.content === "string") {
-            text = mockResponse.content;
-          } else if (Array.isArray(mockResponse.content)) {
-            const textPart = mockResponse.content.find((p: any) =>
-              p.type === "text"
-            ) as any;
-            text = textPart?.text || "";
-          }
-
-          if (text) {
-            callback(text);
-          }
-        }
-
-        // Simulate async behavior
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        return mockResponse;
-      }
-      throw new Error(
-        "Mock mode enabled but no matching mock response found for sendRequest",
-      );
+    if (responder) {
+      return await responder.sendRequest(request, callback, abortSignal);
     }
 
     // Guard: block live calls in test environments

@@ -2,8 +2,8 @@
  * Test Pattern: Self-Improving Classifier examples
  *
  * Expands, collapses, and removes recorded examples. With five examples and a
- * correction among them, the classifier asks the model for rules, which has
- * no endpoint here and so suggests none.
+ * correction among them, the classifier asks the model for rules, a request
+ * the test states fails, and so suggests none.
  *
  * Pattern under test: ./self-improving-classifier.tsx
  */
@@ -17,6 +17,14 @@ import {
   sortedIds,
 } from "./classifier-test-fixture.ts";
 import SelfImprovingClassifier from "./self-improving-classifier.tsx";
+
+// The model fails the request for rules.
+export const llmMocks = [
+  {
+    when: { systemContains: "pattern recognition expert" },
+    error: "The model is unavailable.",
+  },
+];
 
 export default pattern(() => {
   const subject = SelfImprovingClassifier({
@@ -78,7 +86,7 @@ export default pattern(() => {
       { assertion: assert_party_removed },
     ],
     subject,
-    // The model has no endpoint in a pattern test, so the llm builtin warns.
+    // The llm builtin warns that the request for rules failed.
     allowConsoleWarnings: true,
   };
 });

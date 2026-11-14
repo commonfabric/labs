@@ -5,8 +5,8 @@
  * renders: adding aisles from the message input, which the tab sorts and
  * checks for gaps, removing one, and uploading and hiding aisle-sign photos.
  * `ExtractedAisleResults` is rendered with extraction results the test
- * supplies, since no model runs in a pattern test to produce them, and its
- * Merge, Add and Add All buttons are pressed.
+ * supplies, and its Merge, Add and Add All buttons are pressed; the tab's own
+ * extraction request is one the test states fails.
  *
  * Run: deno task cf test --root patterns patterns/apps/store-mapper/store-mapper-aisles.test.tsx
  */
@@ -24,6 +24,14 @@ import {
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
 import { AislesTab, ExtractedAisleResults } from "./store-mapper.tsx";
+
+// The model fails the sign photo's aisle extraction.
+export const llmMocks = [
+  {
+    when: { systemContains: "photos from a grocery store" },
+    error: "The model is unavailable.",
+  },
+];
 
 interface Aisle {
   name: string;
@@ -217,9 +225,9 @@ export default pattern(() => {
             "aisle-sign.jpg,endcap.jpg"
         ),
       },
-      // The sign photo's extraction request fails, since a pattern test has
-      // no model endpoint; the end-cap photo has no image, so nothing is
-      // asked of a model and its card reports no aisles.
+      // The sign photo's extraction request fails, as the test states; the
+      // end-cap photo has no image, so nothing is asked of a model and its
+      // card reports no aisles.
       {
         assertion: assert(() =>
           photoCardShows(
@@ -312,8 +320,7 @@ export default pattern(() => {
     ],
     // Allows every console warning, since the runner has no narrower setting.
     // The one this test causes is the llm builtin's warning that the sign
-    // photo's extraction request failed ("Invalid URL"), as a pattern test
-    // has no model endpoint.
+    // photo's extraction request failed.
     allowConsoleWarnings: true,
   };
 });
