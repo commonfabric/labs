@@ -9,6 +9,7 @@ import {
   type Schema,
 } from "../generate.ts";
 import { type Plan, runScenario, scenarioAudience } from "../harness.ts";
+import { atomKey } from "../template.ts";
 
 const fixture = (name: string) =>
   new URL(`../fixtures/${name}`, import.meta.url);
@@ -238,5 +239,50 @@ describe("a generated scenario for a handler that writes an input with a declare
       { binding: 0, handler: "overwrite", outcome: "committed" },
       { binding: 1, handler: "seal", outcome: "committed" },
     ]);
+  });
+});
+
+describe("a handler that passes a handle on without reading through it", () => {
+  // `fixtures/handle-passed.tsx`: the handler sets `mine` and gives the
+  // handles of `mine` and `other` to a child. Ruling U1: a handle a body
+  // passes on without reading through it adds nothing of the label of its
+  // cell to what the body writes. The argument's link to the cell of
+  // `other` carries the clause that the cell's own type declares, as an
+  // entry of origin `link`, and the run's join does not hold it.
+  it("has no clause of the cell of the handle in the label of what the handler writes", async () => {
+    const modules = JSON.parse(
+      await Deno.readTextFile(fixture("handle-passed.plan.json")),
+    );
+    const { plan, schemas } = modules[0].patterns.find((
+      pattern: { name: string },
+    ) => pattern.name === "default");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("handle-passed.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
+    });
+    const clauses = (atoms: unknown[]) =>
+      [...new Set(atoms.flatMap((atom) => atomKey(atom).match(/input:\w+/g)))]
+        .sort();
+    const mine = "input:mine";
+
+    expect(run.events).toEqual([
+      { binding: 0, handler: "join", outcome: "committed" },
+    ]);
+    // The write through `mine`. The writes to the child's argument have
+    // no cell the harness can name.
+    expect(run.writes.map((row) => [row.write, row.path])).toEqual([[3, []]]);
+    const [row] = run.writes;
+    expect(clauses(row.runtime.confidentiality)).toEqual([mine]);
+    // The body writes through `mine`, so the reference it writes through
+    // is read, and the template keeps the label of that link.
+    expect(clauses(row.template.label.confidentiality)).toEqual([mine]);
+    expect(row.comparison.confidentiality).toBe("equal");
+    expect(row.comparison.integrity).toBe("equal");
   });
 });

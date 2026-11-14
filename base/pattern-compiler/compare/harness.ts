@@ -820,6 +820,59 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           : cell;
       };
 
+      // Ruling U1: a handle that a body passes on without reading through
+      // it adds nothing of the label of its cell to what the body writes.
+      // A handle is passed on where its `identity` slot is in the reads of
+      // the handler's body and no write edge of the body has the slot as
+      // its target. A handle the body writes through is not passed on: the
+      // run reads the reference to find the cell it writes.
+      const passedOn = (slot: number, binding: number | undefined): boolean => {
+        if (binding === undefined) return false;
+        const body = plan.bodies
+          ?.[plan.bindings?.[binding]?.handler?.body ?? -1];
+        const { root, path } = plan.slots[slot];
+        const place = JSON.stringify([root, path]);
+        return !(body?.writes ?? []).some(({ target }) => {
+          if (target.kind !== "handle" || target.slot === undefined) {
+            return false;
+          }
+          const written = plan.slots[target.slot];
+          return JSON.stringify([written.root, written.path]) === place;
+        });
+      };
+      // The label of the link stored at `cell`'s path without what the
+      // link's own schema declares and what the link carries of its
+      // target: the `followRef` entries at the path that are not of origin
+      // `link`. An entry of origin `link` holds "what the reference
+      // declares and carries" (`prepareBoundaryCommitSteps` in
+      // `runtime/runner/src/cfc/prepare.ts`, where it persists the result
+      // of `linkLabels.persisted`), and the schema of a link to a cell is
+      // the cell's own, so the entry repeats the label the cell's type
+      // declares. What is left is the stamp of the run that wrote the link.
+      // The restrictions of a link the path crosses part way are not read.
+      const linkWithoutDeclaration = (cell: AnyCell): Label => {
+        const link = resolveLink(
+          runtime,
+          read,
+          cell.getAsNormalizedFullLink(),
+          "top",
+        );
+        const metadata = readStoredCfcMetadata(read, link);
+        if (metadata === undefined) return consumed(undefined, "followRef");
+        return consumed(
+          cfcLabelViewFromMetadata({
+            ...metadata,
+            labelMap: {
+              ...metadata.labelMap,
+              entries: metadata.labelMap.entries.filter((entry) =>
+                entry.origin !== "link"
+              ),
+            },
+          }, link.path),
+          "followRef",
+        );
+      };
+
       const note = (kind: string, index: number, context: Context) =>
         `${rowKey}|${kind}${index}|${JSON.stringify(context.elements)}`;
 
@@ -862,6 +915,9 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return evaluated.label;
             }
             if (observes === "identity") {
+              if (!dereference && passedOn(slot, scope.binding)) {
+                return linkWithoutDeclaration(cell);
+              }
               const reference = consumed(
                 cfcLabelViewForResolvedCell(cell, { lastNode: "top" }),
                 "followRef",
