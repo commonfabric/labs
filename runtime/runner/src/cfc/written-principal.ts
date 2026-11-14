@@ -2,9 +2,9 @@
  * When the cell a write to a value lands in is the value's own, so that the
  * one principal its label names (`soleRepresentedPrincipal()`) is the one the
  * value represents. A host holding a runtime reads it through
- * `writtenPrincipalAt()`, pattern code through `writtenPrincipalOf()`, and a
- * host holding cell handles through `observeWrittenPrincipal()` in the runtime
- * client, each by this rule.
+ * `writtenPrincipalAt()`, which the worker also applies for a host holding
+ * cell handles (`observeWrittenPrincipal()` in the runtime client), and
+ * pattern code through `writtenPrincipalOf()`.
  *
  * A write declared `RepresentsCurrentUser`, as a profile's `setPicture` is,
  * labels the value with the principal it acts for. That label speaks for the
@@ -15,9 +15,6 @@
  * nothing of who pointed a field at the cell: the links on the way, write
  * redirects among them, are followed, so a reader relies on the field's write
  * policy for that, as a profile's owner-protected fields provide.
- *
- * The module depends on nothing but `link-types.ts`, so the main thread can
- * import it without the rest of the CFC machinery.
  */
 import { areNormalizedLinksSame, type NormalizedLink } from "../link-types.ts";
 

@@ -12,7 +12,6 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { FabricValue } from "@commonfabric/data-model";
-import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, KeepAsCell, Runtime } from "@commonfabric/runner";
 import type { JSONSchema } from "@commonfabric/runner/shared";
@@ -28,13 +27,8 @@ import {
   type CfcAuthorshipState,
   observeAuthorship,
 } from "@/authorship.ts";
-import type { RuntimeProcessor } from "@/backends/mod.ts";
-import { RuntimeClients } from "@/backends/client-registry.ts";
 import { createCellRef } from "@/backends/utils.ts";
-import { MessagePortRuntimeTransport } from "@/client/transports/message-port/transport-message-port.ts";
-import { RequestType } from "@/protocol/mod.ts";
-import { RuntimeClient } from "@/runtime-client.ts";
-import { buildProcessor } from "./backends/build-processor.ts";
+import { attachedClient } from "./attached-client.ts";
 
 const signer = await Identity.fromPassphrase("authorship-read-scope", {
   implementation: "noble",
@@ -49,43 +43,6 @@ const room = (await Identity.fromPassphrase("authorship-read-scope room", {
 })).did();
 // What `buildProcessor()` runs the processor under, which the client asserts.
 const apiUrl = "http://localhost/";
-
-/**
- * A client attached over a channel to a processor serving `runtime`, as a
- * page's client is to its worker.
- */
-async function attachedClient(runtime: Runtime): Promise<RuntimeClient> {
-  const clients = new RuntimeClients({
-    setConsoleBridge: () => {},
-    owner: { id: 0, post: () => true },
-    initializeRuntime: () =>
-      Promise.resolve(
-        buildProcessor({
-          runtime,
-          identity: signer,
-          space: home,
-        }) as unknown as RuntimeProcessor,
-      ),
-  });
-  await clients.handleMessage(
-    clients.owner,
-    new MessageEvent("message", {
-      data: realmFromFabricValue({
-        msgId: 1,
-        data: {
-          type: RequestType.Initialize,
-          data: { apiUrl, identity: { placeholder: true }, spaceDid: home },
-        },
-      } as never),
-    }),
-  );
-  const channel = new MessageChannel();
-  clients.attach(channel.port2);
-  return await RuntimeClient.attach(
-    new MessagePortRuntimeTransport({ port: channel.port1 }),
-    { apiUrl: new URL(apiUrl), identity: signer.did(), spaceDid: home },
-  );
-}
 
 /** The part of a profile a room reads, as `fabrichat/schemas.tsx` types it. */
 const chatProfileSchema = {
@@ -147,7 +104,7 @@ async function messageByAProfile() {
     sentAt: 1,
   });
 
-  const client = await attachedClient(runtime);
+  const client = await attachedClient(runtime, signer, home);
 
   const idOf = (cell: Cell<unknown>) => cell.getAsNormalizedFullLink().id;
   return {
@@ -252,7 +209,7 @@ async function messageWithALinkingBody(shape: "record" | "list" = "record") {
     });
   });
 
-  const client = await attachedClient(runtime);
+  const client = await attachedClient(runtime, signer, home);
   const idOf = (cell: Cell<unknown>) => cell.getAsNormalizedFullLink().id;
   return {
     runtime,
