@@ -1703,6 +1703,87 @@ sampled read is made through a transaction that journals it and marks it
 as not scheduling (`sample` in `runtime/runner/src/cell.ts`), so the label
 is **equal**.
 
+**A default belongs to the place.** By ruling, a default belongs to the
+stored place, and a reader bound to the place by reference gets a link and
+not a copy. A link holds, beside the address it names, the schema of the
+place it names, as the plan of the instance that wrote the link declares
+it, and so the default that declaration has. A slot whose path crosses a
+link is read under the schema of the slot, with one member taken from the
+chain: the default of the link nearest the bound address whose schema
+declares one. Where no link of the chain declares one, the default of the
+slot's own schema applies. Everything else the read validates against is
+the slot's schema alone. So where nothing is stored at the bound address,
+the slot reads as the default of the place's declaration, for every
+reader, a reader whose own schema declares no default included.
+
+- **A path that resolves without a stored link.** A path of the state of
+  a binding of the reactive tier resolves to a slot of the instance
+  (section 3.14), and a slot of a pattern compiled into another is an
+  entry of the enclosing plan (section 1.1). No link is stored for
+  either. The rule is the same: the read is made under the reader's
+  schema with the default of the schema of the slot it resolves to
+  (`Slot.schema`), which is the place's declaration.
+- **Which plan holds the default.** The reader's plan does not hold it.
+  A handler is one `Body` however many bindings name it, and its
+  `binding` slots have the schema its own state type declares. The
+  default reaches a read at run time, from the link or from the slot the
+  path resolves to. No record changes.
+- **The label.** A default read through a link has the label of the slot,
+  by the rules above and no further rule: the confidentiality is the join
+  of the `followRef` entries at each address of the chain with what the
+  slot's class consumes at the bound address, where the read found
+  nothing stored, and the integrity is that of the observation at the
+  bound address. This is the case of section 5.2 in which a slot reads as
+  the default its schema declares, and the label is the label of that
+  slot there too. The link that holds the default is on the chain, so the
+  label of which link the reader holds, and with it of which default, is
+  joined. The default is a constant of the source of the pattern that
+  declares the place. It does not enter the reader's templates as a
+  `const`, because the reader's plan does not hold it: it is what the
+  slot read. *Assumed:* the integrity is not changed for such a read. The
+  value comes from the schema a link holds and not from the bound
+  address, and a pointer contributes no integrity, so the alternative
+  gives a default read through a link the empty integrity (section 8,
+  question 41).
+- **A write.** A write through a handle to such a place stores a value at
+  the place, under the label of the writing edge. Every reader then reads
+  that value, and the default is no longer read.
+- **A copy is not a link.** Where a binding made in a function body
+  copies a scalar (section 3.14), the copy holds what the body read. A
+  scalar read from a place where nothing is stored, and whose declaration
+  has a default, is copied as the default, with `T_b`.
+
+Today a read that crosses a link continues under the reader's schema and
+takes the default of the last link crossed whose schema declares one,
+the reader's own where none does (`combineSchemaForLink` in
+`runtime/runner/src/traverse.ts`; a payload of a link has a `schema`
+member, `CellLinkRefPayload` in `runtime/runner/src/sigil-types.ts`). An
+absent value takes the default of that combined schema before it is
+validated (`materializeSchemaView` in `runtime/runner/src/schema-view.ts`,
+through `defaultForAbsentValue`), and the read of the path found empty is
+registered in the transaction, so the default carries the join that the
+read contributes. A binding a pattern makes is written as a link with the
+schema of the path it names (`unwrapOneLevelAndBindToDoc` in
+`runtime/runner/src/pattern-binding.ts`). **Equal.**
+
+**A handle to a position that holds nothing.** An `identity` slot at a
+position of handle type yields a handle whether or not anything is stored
+at the position. Where the position holds a link, the handle names the
+cell the link leads to. Where it holds a plain value or nothing, the
+handle names the position itself: that path of the document the slot's
+root is in. So the body of a pattern is handed a handle for an optional
+property of its input that the caller left out, and the handle names that
+path of the instance's argument document. A read through it finds nothing
+stored and gives the default of the declaration, by the rule above, or
+what section 5.2 gives where there is none. A write through it lands at
+that path. Whether such a position holds anything is observed by a `shape`
+slot in place (above), and the `identity` slot's own label is that of the
+`followRef` read of the position. Today a position declared as a cell is
+handed to the body as a handle where nothing is stored
+(`processDefaultValue` in `runtime/runner/src/schema.ts`, and the branch
+for a link to an absent value of `#traversePointerWithSchema` in
+`runtime/runner/src/traverse.ts`). **Equal.**
+
 ### 2.6 Stored state that is not an output
 
 Beside outputs and write targets, the runtime stores state of its own: the
@@ -2621,6 +2702,39 @@ journals, and the write goes to the cell it returns (`resolveWriteTarget`
 in `runtime/runner/src/cell.ts` states the difference between the two
 targets). **Equal.**
 
+**A write through a handle to a value the instance computes.** In the
+reactive tier an argument that is a value may stand where the callee
+declares a handle that can write (`language-subset.md` §7.5.2), and the
+value can be one the instance computes: the result of a `computed` or of
+an operator, an assembled collection, a literal. Where the write lands
+depends on what the callee is.
+
+- **A child.** The enclosing plan writes a computed argument path into
+  the child's argument document (section 3.15), so the child's handle
+  names that path of its own argument document, and the write lands
+  there. Section 3.15 ("A handle to a path of the argument") has the
+  rule, and no rule is added for it.
+- **A handler bound in the reactive tier, a `lift` result, and a pattern
+  compiled into the enclosing instance.** The path resolves to an
+  `Output` of the instance (`Binding.state`). The records do not
+  determine the write. A `handle` target names a cell that a handle
+  links to, an output is not a cell, and an interim output is stored
+  nowhere. *Assumed* (section 8, question 42): the runtime refuses the
+  write, as it refuses a write that neither an edge nor an envelope of
+  the body covers (below). In a handler the refusal rejects the event's
+  transaction, and a cone whose write is refused fails, with the error
+  state of section 5.2. No label rule is needed, because nothing is
+  written. The refusal is decided by
+  what the path resolves to and reads no data.
+
+Today no refusal of this kind was found. A value a node computes is
+stored in a document of its own, a handle to it writes like any handle,
+and the node's next run writes its result over what was written. The one
+refusal by the kind of address is of a write to a `data:` or `snapshot:`
+address (`IReadOnlyAddressError` in
+`runtime/runner/src/storage/interface.ts`). The assumed rule is therefore
+narrower than today in what a program may do, and it changes no label.
+
 **A handle from a computed input.** A body can write through a handle that
 reached it in a value the instance computed, such as a handle another body
 returned or one a `pick` chose. Such a handle has no slot. A `handle`
@@ -3009,9 +3123,13 @@ above apply, with the following differences.
 - **The edges are the cone's.** The write edges belong to the cone that
   runs the body. They are derived writes, so a failed constraint on one
   drops that write alone (section 4.4). They do not make the body a
-  materializer: the cone is the argument's one writer, and the child reads
+  materializer: the cone is the one writer of the argument among the
+  cones of the enclosing instance, and the child reads
   the argument through its own `argument` slots, in the pull that extends
-  through its result (section 3.15).
+  through its result (section 3.15). The child can write a path of its own
+  argument through a handle it declares there, and the next evaluation of
+  the cone replaces what it wrote (section 3.15, "A handle to a path of
+  the argument").
 - **Teardown.** The instances a computation makes belong to it: to the
   cone that runs the body, for the element and the scope it is evaluated
   for. An instance that an evaluation no longer makes is torn down, as a
@@ -3238,7 +3356,10 @@ or an output of the instance, and every entry of `Binding.state` has
 pattern body, `el` is bound by reference: the handler's state path is the
 element's slot, and the push stores a link to the original element. The
 stream is named by the binding's `name` and `within` (section 1.3), and
-not by what the binding holds.
+not by what the binding holds. A path so bound reads the default that the
+declaration of the slot it resolves to has, where nothing is stored there,
+whatever the handler's own state type declares (section 2.5, "A default
+belongs to the place").
 
 **A binding made while a function body runs** is a `bind` site in a
 `lift`, a `computed`, a `handler`, an `action`, or an authored function
@@ -3251,6 +3372,10 @@ there.
 | A scalar | The value, in the binding's state document | `copy` | `T_b` |
 | A container (an object, an array, a tuple) that the body computed | The value, in the binding's state document. A reference inside it stays a reference, by the rule for a value passed on unchanged | `copy` | `T_b`, and the reference rules of section 3.9 for a reference inside it |
 | A container that the body read from an input or a cell and passes on unchanged, a reference at a position typed `unknown`, or a factory value the body was given and passes on unchanged | A link to the address the container is stored at. For a reference, the reference itself. For a factory value, the factory value | `link` | The reference rules of section 3.9. The body observes the container for `identity` and does not read its content |
+
+A copied scalar is what the body read. A scalar the body read from a
+place where nothing is stored, and whose declaration has a default, is
+copied as the default (section 2.5).
 
 A container the body read and passes on unchanged has a stored address,
 which is why it can be bound by reference. `Binding.state` records the
@@ -3403,11 +3528,48 @@ enclosing plan cannot inline it, so the two meet only at those two
 documents.
 
 **Labels going in.** An argument path that is a reference is written as a
-reference and carries the reference's label. An argument path that is a
+reference and carries the reference's label. The link written holds the
+schema of the place it names, as the enclosing plan declares it
+(`Slot.schema` of the slot the path names), the default included, so the
+child reads that default where nothing is stored at the place (section
+2.5, "A default belongs to the place"). An argument path that is a
 computed value is written into the argument document with its instantiated
 template. Such a value is therefore stored even when the enclosing instance
 would not otherwise keep it: the argument of a child is part of the keep
 set.
+
+**A handle to a path of the argument.** Where the child's plan has an
+`identity` slot with root `argument` at a position of handle type, what
+the handle names follows from what the argument document holds there
+(section 2.5).
+
+- **The path holds a link**: the request gave a handle, or a value bound
+  by reference in the reactive tier, or a container a function body read
+  and passes on unchanged. The handle names the cell the link leads to,
+  and a write lands there (section 3.11).
+- **The path holds a value**: a value the enclosing instance computed, a
+  literal, or a scalar or a computed container a function body gave
+  (`language-subset.md` §7.5.3). The handle names that path of the
+  child's own argument document. A write through it is a `handle` target
+  of the child's plan, lands at that path, and carries the template of
+  the child's edge. It changes nothing the requester holds.
+- **The path holds nothing**: the handle names the path all the same
+  (section 2.5, "A handle to a position that holds nothing").
+
+A path of the second kind has two writers: the child, through the handle,
+and the cone of the enclosing instance whose write edge with target
+`argument` names the path. The path holds what was written last, under
+the label of that write. An evaluation of the cone writes the path again,
+so it replaces what the child wrote. That is the case for a child of the
+reactive tier and for an instance a `lift` or a `computed` makes: each
+evaluation that names the instance writes its argument (section 3.14, "In
+a body that is re-evaluated"). An instance a handler made is not written
+again by a later event (section 3.14). The cone is evaluated when one of
+its inputs changed, so the child's write stays until then. The slots of
+the child that read the path resolve to the label stored there, whichever
+writer stored it. The error state of section 5.2 for a path of a child's
+argument is unchanged: a failed cone gives the path the error state,
+whatever the child wrote there.
 
 **Labels inside.** The child's plan supplies its templates at run time. Its
 `argument` slots are bound to the argument document and resolve to the
@@ -5601,7 +5763,8 @@ data type, which `language-subset.md` §4.4.1 requires (3.13); an event is route
 to an instance that is not loaded through a stream index (2.6); a read of a cell
 whose writer is in an instance that is not loaded returns the stored value where
 the basis rows show it current, and loads the instance only where they show it
-stale (5.4).
+stale (5.4); a default belongs to the stored place, and a reader bound by
+reference reads it through the schema the link holds (2.5).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -6004,3 +6167,29 @@ this document made.
     runtime attests (section 3.16), and the `rev` counts the writes made
     through the handle. `execution-and-storage.md` §6.8 stores the
     document on this assumption.
+41. **The integrity of a default read through a link.** By ruling, a
+    reader bound by reference reads the default of the place's
+    declaration where nothing is stored (section 2.5). The rules for a
+    slot whose path crosses a link give the read the integrity of the
+    observation at the bound address. *Assumed:* that stands, which is
+    what the runtime computes today. The value read is not stored at the
+    bound address: it comes from the schema that a link of the chain
+    holds, and a pointer contributes no integrity. The alternative gives
+    such a read the empty integrity, which under-claims and is the
+    fail-safe direction. The same holds for a default a slot's own schema
+    declares (section 5.2).
+42. **A write through a handle to an output of the instance** (from
+    `language-subset.md` §13, question 28). A handler bound in the
+    reactive tier, a `lift` result, or a pattern compiled into the
+    enclosing instance can declare a handle that writes at a path that
+    resolves to a value the instance computes. *Assumed:* the runtime
+    refuses the write (section 3.11). The alternative lets the write land
+    at the path of a kept output, where the next evaluation of the
+    output's cone replaces it, as a write to a child's argument path is
+    replaced (section 3.15). It needs the output kept wherever such a
+    handle names it, a rule for the label memoized for the output
+    (sections 4.1 and 4.3), and a `WriteEdge` target that names an output from
+    another body. Today the write is understood to land and to be
+    replaced by the node's next run. The prototype has to count the
+    arguments that name a computed value where a writable handle is
+    declared.

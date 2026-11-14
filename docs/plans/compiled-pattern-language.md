@@ -46,17 +46,22 @@ next.
 - **Prototype:** branch `claude/compiled-pattern-prototype` holds a Rust
   crate at `base/pattern-compiler/`, stage 2 in progress. It is not part
   of this branch. It parses the corpus with the `oxc` parser, classifies
-  code into tiers, applies the rules of `language-subset.md` that need no
-  types, and holds the type checker as far as evaluating written types
-  and inferring the types of expressions. At prototype commit
-  `bcacc19240`, on 426 corpus modules, it accepts 358 without an error
-  and reports 283 errors, most of them `any` in a type (182), a function
-  type in data from one declaration (35), and `patternTool` (31). It
-  gives a type to 95.5% of the 7,633 receivers of method calls. Not yet
-  in it: narrowing, assignability, 13 catalog entries that need the type
-  checker, promotion by the typed criterion, and footprint analysis. The
-  crate's `SPEC-NOTES.md` lists the places where it found the document
-  ambiguous.
+  code into tiers, and holds the subset type checker: written types,
+  inference, narrowing, assignability, and promotion by the typed
+  criterion, which agrees with the syntactic one wherever it decides. At
+  prototype commit `09d0f15bfc`, on 426 corpus modules, it accepts 334
+  without an error and reports 382 errors: `any` in a type (182), 71
+  type mismatches, a function type in data from one declaration (35),
+  and `patternTool` (31) are most of them. Of the 71 mismatches it
+  classes 29 as real refusals, 15 as gaps of the checker, and 37 as
+  places where the document refuses something that looks intended.
+  FabriChat has 11 errors. Footprint analysis is started: the core of
+  `footprint-analysis.md` §2 to §7 is implemented and measured, and
+  finds 90 of 1,972 bodies widening (4.6%) where the document's script
+  found 83 of 1,962. Not yet in it: runtime calls and context reads
+  (§8), resolutions, outputs, and the twelve diagnostics that need the
+  footprint. The crate's `SPEC-NOTES.md` lists the places where it found
+  the documents ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -203,6 +208,26 @@ is relitigated.
   result is bound by reference: a value stands for a handle of it and a
   readable handle for its value. An authored function called there is
   not, so its argument is `count.get()` and not `count`.
+- A default belongs to the stored place. A callee bound by reference to
+  a property that declares a default gets a link, not a copy, and the
+  link holds the schema with the default, so the callee reads the
+  default where nothing is stored, whether or not it declares one.
+- A read of a default carries no integrity. Where a stored object has
+  an absent property and a default fills it, the defaulted part carries
+  the empty integrity, not the object's claims. The specification has no
+  rule for a default that is read and not stored, and needs this one.
+- `elementById` yields a handle of the element type or `undefined`,
+  because the record for a key may never have been written or may have
+  been cleared.
+- An argument bound by reference takes the declared type of its path. A
+  condition that narrows the value does not narrow the handle, and `!`
+  does not change the type of a place.
+- On a value of type `unknown` the only test is against `undefined`. A
+  `typeof` test does not narrow it, and a legacy key read for a string
+  is declared `string`.
+- A writable view wider than a place's declaration is refused, with no
+  exception for migration code. An input that holds data of an older
+  shape declares that shape.
 - `typeof NAME` in a label argument, outside a writer or rule-set
   position, stands for the value of a module-scope constant with a
   static initializer.
@@ -610,6 +635,15 @@ as an assumption.
     assignable to `ReadonlyCell<unknown>`. Raised by the owner, not
     ruled. The prototype is counting the corpus sites that write through
     such a handle.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
+95. **A write through a handle bound to a value the instance computes**
+    (PL question 42; LS question 28): a `computed` result, an operator
+    result, or a literal given where a handler, a `lift`, or a
+    compiled-in pattern declares a writable handle. The corpus has 20
+    such arguments. *Assumed:* the runtime refuses the write. The
+    alternative lets it land and be replaced at the next evaluation,
+    which is understood to be what happens today.
 
 ## Open, and not needing the owner
 
