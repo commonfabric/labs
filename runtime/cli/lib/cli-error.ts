@@ -3,6 +3,7 @@ import {
   CompilerError,
   TransformerError,
 } from "@commonfabric/js-compiler/errors";
+import { IndexedPatternError } from "@commonfabric/pattern-index/deploy";
 import { SlugAssignedError } from "@commonfabric/piece";
 import { SlugResolutionError } from "@commonfabric/runner";
 
@@ -11,8 +12,8 @@ import { IdentityKeyfileError } from "./identity.ts";
 
 /**
  * The value to print for a top-level CLI failure. Validation, transformer,
- * compiler, verb-input, slug, and identity-keyfile errors carry user-facing
- * messages, so print those without a stack trace. Other Errors print their
+ * compiler, verb-input, slug, identity-keyfile, and indexed-pattern errors
+ * carry user-facing messages, so print those without a stack trace. Other Errors print their
  * stack, falling back to the message. Anything else prints as-is.
  */
 export function renderCliError(e: unknown): unknown {
@@ -20,7 +21,7 @@ export function renderCliError(e: unknown): unknown {
     e instanceof ValidationError || e instanceof TransformerError ||
     e instanceof CompilerError || e instanceof VerbInputValidationError ||
     e instanceof SlugResolutionError || e instanceof SlugAssignedError ||
-    e instanceof IdentityKeyfileError
+    e instanceof IdentityKeyfileError || e instanceof IndexedPatternError
   ) {
     return e.message;
   }
