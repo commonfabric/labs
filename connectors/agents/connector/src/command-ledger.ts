@@ -246,7 +246,7 @@ async function syncDirectory(path: string): Promise<void> {
  * Writes all of `contents` to `file` and synchronizes it. Throws when a write
  * reports no bytes written, which would otherwise repeat forever.
  */
-export async function writeAndSync(
+async function writeAndSync(
   file: Pick<Deno.FsFile, "write" | "sync">,
   contents: string,
 ): Promise<void> {
@@ -363,12 +363,20 @@ export class CommandLedger {
 
   /**
    * Opening a ledger as if on the operating system, and as the user, that
-   * `system` states, which a test chooses.
+   * `system` states, which a test chooses, and the helper that writes a
+   * ledger file, given a file a test supplies.
    */
   static get accessForTestingOnly(): {
     open(path: string, system: CommandLedgerSystem): Promise<CommandLedger>;
+    writeAndSync(
+      file: Pick<Deno.FsFile, "write" | "sync">,
+      contents: string,
+    ): Promise<void>;
   } {
-    return { open: (path, system) => CommandLedger.#open(path, system) };
+    return {
+      open: (path, system) => CommandLedger.#open(path, system),
+      writeAndSync,
+    };
   }
 
   /** Opens the ledger at `path`, creating its directory privately. */
