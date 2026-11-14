@@ -2184,3 +2184,120 @@ fn a_constant_query_decides_the_scope_and_the_records_beside_the_operation() {
         ]
     );
 }
+
+const REDUCE: &str = r#"import { pattern } from "commonfabric";
+interface Row { amount: number; done: boolean }
+export const Sum = pattern<{ rows: Row[]; start: number }>(({ rows, start }) => {
+  const total = rows.reduce((sum: number, row: Row) => sum + row.amount, start);
+  const any = rows.some((row) => row.done);
+  return { total, any };
+});
+"#;
+
+#[test]
+fn a_reduce_is_an_operation_whose_step_is_a_cone_over_a_collection_of_its_own() {
+    // PL §3.13, "The record" of `reduce`.
+    let plan = plan_of(&program(REDUCE), "Sum");
+    let (index, operation) = operation_named(&plan, "total");
+    assert_eq!(operation["kind"], json!("reduce"));
+    // "The `reduce` has a `Collection` of its own, named `reduce`, whose
+    // source is the receiver".
+    let collection = collection_named(&plan, "reduce");
+    assert_eq!(
+        slot_line(&plan, &collection["source"]["slot"]),
+        "argument rows : enumeration"
+    );
+    assert_eq!(collection["bodyUses"], json!({ "index": false }));
+    // "The step is emitted as one cone, and `Operation.implementation`
+    // is `{ cone }` with that cone."
+    let cone = &plan["cones"][operation["implementation"]["cone"]
+        .as_u64()
+        .expect("a cone") as usize];
+    let slots: Vec<String> = cone["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .map(|slot| slot_line(&plan, slot))
+        .collect();
+    // "The step cone reads the accumulator through a slot with root
+    // `operation` that names the `reduce` itself, at the empty path. ...
+    // The slot is in `Cone.slots`".
+    assert_eq!(slots, ["operation  : value", "element amount : value"]);
+    let accumulator = cone["slots"][0].as_u64().expect("a slot") as usize;
+    assert_eq!(
+        plan["slots"][accumulator]["root"],
+        json!({ "kind": "operation", "operation": index })
+    );
+    // "The step's result is an output of the step cone whose path has
+    // `*`. Its template is the template of `expr`", and "the step's
+    // template has `const` where the expression reads it".
+    let step = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["interim"] == json!("total") && output["path"] == json!(["*"]))
+        .expect("the output of the step");
+    assert_eq!(
+        template_line(&plan, &step["template"]),
+        "derive(expression) { const [element amount : value] }"
+    );
+    // "The cone the `reduce` is written in computes `init` and writes it
+    // into the operation's state by a `WriteEdge` with target `request`,
+    // at the path `initial`, with the template of `init`."
+    let writes: Vec<&Value> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .flat_map(|cone| cone["writes"].as_array().expect("writes"))
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(
+        writes[0]["target"],
+        json!({ "kind": "request", "of": { "operation": index }, "path": ["initial"] })
+    );
+    assert_eq!(
+        template_line(&plan, &writes[0]["template"]),
+        "[argument start : identity]"
+    );
+    // "`Operation.input` is the `fold` over the collection of the step's
+    // template, joined with the template of `init`", and with the
+    // collection's membership.
+    assert_eq!(
+        template_line(&plan, &operation["input"]),
+        "derive(expression) { fold(reduce: derive(expression) { const [element amount : value] }) [argument rows : enumeration] [argument start : identity] }"
+    );
+    // "A cone that uses it reads a slot with root `operation`."
+    let total = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["path"] == json!(["total"]))
+        .expect("the output total");
+    assert_eq!(
+        template_line(&plan, &total["template"]),
+        "[operation  : identity]"
+    );
+}
+
+#[test]
+fn what_the_predicate_of_a_scan_returns_is_an_output_whose_path_has_a_star() {
+    // PL §3.13, "The record of a scan": "What the callback returns is an
+    // output whose path has `*`", beside the result, which "is an
+    // `Output` with the member `collection`".
+    let plan = plan_of(&program(REDUCE), "Sum");
+    let outputs = plan["outputs"].as_array().expect("outputs");
+    let predicate = outputs
+        .iter()
+        .find(|output| output["path"] == json!(["any", "*"]))
+        .expect("the output of the predicate");
+    assert_eq!(
+        template_line(&plan, &predicate["template"]),
+        "[element done : value]"
+    );
+    assert!(predicate.get("collection").is_none());
+    let result = outputs
+        .iter()
+        .find(|output| output["path"] == json!(["any"]))
+        .expect("the result of the scan");
+    assert!(result.get("collection").is_some());
+}

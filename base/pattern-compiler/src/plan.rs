@@ -74,6 +74,10 @@ enum Place {
     Stream(usize),
     /// The index of the element of a collection.
     Index(usize),
+    /// The accumulator of a `reduce`, or a path of it: the step cone
+    /// receives it through a slot with root `operation`, and it is
+    /// `const` in the step's template (PL §3.13).
+    Accumulator(usize, Vec<String>),
     /// A literal, a constant of the module, or a definition.
     Const,
     /// Something the emitter does not follow.
@@ -104,6 +108,9 @@ struct Computed {
     /// The paths below the value that a collection has as its source: each
     /// is an interim output of its own (PL §1.1, `Output.path`).
     below: Vec<Vec<String>>,
+    /// The value is what the step of a `reduce` returns: an output whose
+    /// path has `*`, and no assembled entry (PL §3.13).
+    step: bool,
     order: usize,
 }
 
@@ -553,6 +560,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             template: None,
             element: None,
             below: Vec::new(),
+            step: false,
             referred: false,
             order,
         });
@@ -841,7 +849,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             Place::Value(value, _) => self.values[*value].template.clone(),
             // The stream of a binding of the reactive tier is named by
             // constants of the plan (PL §3.14).
-            Place::Const | Place::Stream(_) => Some(json!({ "op": "const" })),
+            Place::Const | Place::Stream(_) | Place::Accumulator(..) => {
+                Some(json!({ "op": "const" }))
+            }
             // "A body that uses the index adds the collection's
             // `enumeration` to its element template" (PL §3.6): the
             // membership of what the construct iterates.
@@ -875,6 +885,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.observe(member, class);
                 }
             }
+            Place::Accumulator(operation, path) => {
+                let slot = self.slot(&Root::Operation(*operation), path, class);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
             Place::Stream(_) | Place::Index(_) | Place::Const | Place::Unknown => {}
         }
     }
@@ -890,6 +906,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let mut path = path.clone();
                 path.push(key.to_string());
                 Place::Value(*value, path)
+            }
+            Place::Accumulator(operation, path) => {
+                let mut path = path.clone();
+                path.push(key.to_string());
+                Place::Accumulator(*operation, path)
             }
             Place::Record(fields) => fields.get(key).cloned().unwrap_or(Place::Const),
             Place::Const => Place::Const,
@@ -1552,6 +1573,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
             }
+            "reduce" => match arguments.first().and_then(|first| FunctionLike::of(first)) {
+                Some(function) => {
+                    self.reduce(receiver, function, arguments.get(1).copied(), hint, at)
+                }
+                None => {
+                    self.unsupported("an element construct with no callback in place", at);
+                    Place::Unknown
+                }
+            },
             "for" | "asSchema" | "withTx" => receiver.clone(),
             // The method forms of `equals` and `equalLinks` (LS §4.7, PL
             // §3.16): on a handle, or on a cell constructor with both
@@ -1614,20 +1644,131 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
     }
 
-    /// An element construct: a collection, and the cone of its body.
-    fn collection(
+    /// `xs.reduce((acc, x) => expr, init)` (PL §3.13, "The record"): an
+    /// `Operation` of kind `reduce` whose implementation is the cone of
+    /// the step, a `Collection` of its own named `reduce`, the
+    /// accumulator as a slot with root `operation`, and the initial value
+    /// written at the path `initial`.
+    fn reduce(
         &mut self,
         receiver: &Place,
-        via: &str,
         function: FunctionLike<'_, 'a>,
+        initial: Option<&Expression<'a>>,
         hint: &str,
         at: u32,
     ) -> Place {
-        let name = base_name(hint, via);
-        // A scan (PL §3.13): the predicate is the body, the runtime
-        // evaluates it in order, and a selector holds the position the
-        // scan stopped at.
-        let scan = matches!(via, "some" | "every" | "findIndex" | "find");
+        let Some(step) = function.expression_body() else {
+            // "The callback of `reduce` is an expression"
+            // (`language-subset.md` §4.4.1).
+            self.unsupported("a `reduce` whose callback is not an expression", at);
+            return Place::Unknown;
+        };
+        let (source, iterated) = self.source_of(receiver, "reduce", true, "reduce", at);
+        let operation = self.operations.len();
+        self.operations.push(json!({
+            "kind": "reduce",
+            "name": base_name(hint, "reduce"),
+            "within": self.within_json(),
+        }));
+        let collection = self.collections.len();
+        let parameters = &function.params().items;
+        let mut record = json!({
+            "name": "reduce",
+            "within": self.within_json(),
+            "source": source,
+            "bodyUses": { "index": parameters.len() > 2 },
+        });
+        if let Some(membership) = &iterated {
+            record["membership"] = membership.clone();
+        }
+        self.collections.push(record);
+        self.iterated.push(iterated.clone());
+        // The cone the `reduce` is written in computes `init`.
+        let initial = initial.map(|initial| {
+            let (cone, made) = self.computing(hint, at);
+            let template = self.operand_template(initial, hint);
+            let mut write = Map::new();
+            write.insert(
+                "target".to_string(),
+                json!({ "kind": "request", "of": { "operation": operation }, "path": ["initial"] }),
+            );
+            if let Some(template) = &template {
+                write.insert("template".to_string(), template.clone());
+            }
+            write.insert("constraints".to_string(), json!([]));
+            self.cones[cone].writes.push(Value::Object(write));
+            if made {
+                self.cone = None;
+            }
+            template
+        });
+        // The step: one cone, which the runtime evaluates once per
+        // position, in order.
+        let saved_env = self.env.clone();
+        let saved_cone = self.cone.take();
+        let saved_operands = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        self.within.push(json!({ "element": collection }));
+        if let Some(accumulator) = parameters.first() {
+            self.bind_pattern(
+                &accumulator.pattern,
+                Place::Accumulator(operation, Vec::new()),
+            );
+        }
+        if let Some(element) = parameters.get(1) {
+            self.bind_pattern(
+                &element.pattern,
+                Place::Slot(Root::Element(collection), Vec::new()),
+            );
+        }
+        if let Some(index) = parameters.get(2) {
+            self.bind_pattern(&index.pattern, Place::Index(collection));
+        }
+        let name = base_name(hint, "reduce").to_string();
+        let (cone, _) = self.computing(&name, function.span().start);
+        let (_, template) = self.one("identity", |emitter| emitter.eval(step, &name));
+        self.within.pop();
+        self.cone = saved_cone;
+        self.env = saved_env;
+        self.operands = saved_operands.0;
+        self.opaque = saved_operands.1;
+        let value = self.value(&name, cone);
+        self.values[value].step = true;
+        self.values[value].template = template.clone();
+        self.operations[operation]["implementation"] = json!({ "$cone": cone });
+        // "`Operation.input` is the `fold` over the collection of the
+        // step's template, joined with the template of `init`", and with
+        // the collection's membership (the template of the same section).
+        let input = (|| {
+            let mut inputs = vec![
+                json!({ "op": "fold", "collection": collection, "body": template? }),
+                iterated?,
+            ];
+            if let Some(initial) = initial {
+                inputs.push(initial?);
+            }
+            Some(join(inputs))
+        })();
+        if let Some(input) = input {
+            self.operations[operation]["input"] = input;
+        }
+        Place::Slot(Root::Operation(operation), Vec::new())
+    }
+
+    /// The `source` of the collection of an element construct, and the
+    /// membership of what the construct iterates. A scan and a `reduce`
+    /// name their receiver, which for a collection of the plan is its
+    /// assembled output (PL §3.13).
+    fn source_of(
+        &mut self,
+        receiver: &Place,
+        via: &str,
+        scan: bool,
+        name: &str,
+        at: u32,
+    ) -> (Value, Option<Value>) {
         // The membership of what the construct iterates: for an input
         // collection its `enumeration` slot, and for a collection the
         // instance computed the producing template (PL §3.6).
@@ -1688,6 +1829,24 @@ impl<'a> Emitter<'_, '_, 'a> {
                 json!({})
             }
         };
+        (source, iterated)
+    }
+
+    /// An element construct: a collection, and the cone of its body.
+    fn collection(
+        &mut self,
+        receiver: &Place,
+        via: &str,
+        function: FunctionLike<'_, 'a>,
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let name = base_name(hint, via);
+        // A scan (PL §3.13): the predicate is the body, the runtime
+        // evaluates it in order, and a selector holds the position the
+        // scan stopped at.
+        let scan = matches!(via, "some" | "every" | "findIndex" | "find");
+        let (source, iterated) = self.source_of(receiver, via, scan, name, at);
         let collection = self.collections.len();
         let uses_index = function.params().items.len() > 1;
         self.collections.push(json!({
@@ -1763,6 +1922,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         };
         // The membership of the result, the template of an element of
         // it, and for a scan the template of its value.
+        let mut predicate: Option<Option<Value>> = None;
         let (membership, element, scanned) = match via {
             "map" => (iterated.clone(), body, None),
             // PL §3.7: "`fold` over the source with body the template of
@@ -1796,6 +1956,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             _ => {
                 let through = self.selectors.len();
                 self.selectors.push(0);
+                predicate = Some(body.clone());
                 let choice = joined(fold(body, Some(through)), &iterated);
                 let scanned = if via == "find" {
                     let pick = self.picks.len();
@@ -1839,6 +2000,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         if scan {
             self.values[value].scan = true;
             self.values[value].template = scanned;
+            // "What the callback returns is an output whose path has
+            // `*`" (PL §3.13, "The record of a scan").
+            self.values[value].element = predicate;
         } else {
             // The assembled result has the membership template (PL §1.4).
             self.values[value].template = membership;
@@ -2216,7 +2380,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 _ => None,
             }
         };
-        let headless = matches!(operand("headless"), Some(Expression::BooleanLiteral(flag)) if flag.value);
+        let headless =
+            matches!(operand("headless"), Some(Expression::BooleanLiteral(flag)) if flag.value);
         // The `path` operand "is appended to the path the query names":
         // `None` where it is computed.
         let extra: Option<Vec<String>> = match operand("path") {
@@ -2232,17 +2397,22 @@ impl<'a> Emitter<'_, '_, 'a> {
             None => {
                 self.hints
                     .push(("a `wish` whose query is not a constant".to_string(), at));
-                (true, true, &["suggestion", "profileCreate", "profilePicker"])
+                (
+                    true,
+                    true,
+                    &["suggestion", "profileCreate", "profilePicker"],
+                )
             }
             Some(query) if query.starts_with('/') => (false, false, &[]),
             Some(query) if query.starts_with('#') => {
                 let mut segments = query[1..].split('/').filter(|segment| !segment.is_empty());
                 let key = segments.next().unwrap_or("");
                 let below: Vec<&str> = segments.collect();
-                let first = below
-                    .first()
-                    .copied()
-                    .or_else(|| extra.as_ref().and_then(|extra| extra.first().map(String::as_str)));
+                let first = below.first().copied().or_else(|| {
+                    extra
+                        .as_ref()
+                        .and_then(|extra| extra.first().map(String::as_str))
+                });
                 let computed_path = extra.is_none() && below.is_empty();
                 match key {
                     "default" | "mentionable" | "summaryIndex" | "knowledgeGraph"
@@ -3069,7 +3239,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             // The position of an element: PL has no `place` for it. Its
             // label is the membership of what the construct iterates.
-            Place::Index(_) => {
+            Place::Index(_) | Place::Accumulator(..) => {
                 if let Some(template) = self.template_of(place, "value") {
                     entry.insert("template".to_string(), template);
                 }
@@ -3181,7 +3351,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cone = None;
                 }
             }
-            Place::Stream(_) | Place::Index(_) | Place::Const | Place::Unknown => {}
+            Place::Stream(_)
+            | Place::Index(_)
+            | Place::Accumulator(..)
+            | Place::Const
+            | Place::Unknown => {}
         }
     }
 
@@ -3413,6 +3587,19 @@ impl<'a> Emitter<'_, '_, 'a> {
                     listed.push((cone, value.order, None, Value::Object(output)));
                 }
             };
+            if value.step {
+                let mut output = Map::new();
+                output.insert("path".to_string(), json!(["*"]));
+                output.insert("interim".to_string(), json!(value.name));
+                output.insert("cone".to_string(), json!(cone));
+                if let Some(template) = &value.template {
+                    output.insert("template".to_string(), template.clone());
+                }
+                output.insert("kept".to_string(), json!(false));
+                output.insert("constraints".to_string(), json!([]));
+                listed.push((cone, value.order, None, Value::Object(output)));
+                continue;
+            }
             for path in &value.kept {
                 entry(json!(path), None, true, &[]);
             }
@@ -3500,6 +3687,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Value::Object(slot)
             })
             .collect();
+        for operation in &mut self.operations {
+            if let Some(cone) = operation["implementation"]
+                .get("$cone")
+                .and_then(Value::as_u64)
+            {
+                operation["implementation"] = json!({ "cone": position[cone as usize] });
+            }
+        }
         let dynamic_reads = std::mem::take(&mut self.dynamic_reads);
         let mut plan = json!({
             "version": 1,
