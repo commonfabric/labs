@@ -421,6 +421,47 @@ const report = async (file: string) => {
       ran.reduce((sum, result) => sum + (result.events ?? 0), 0)
     }`,
   );
+  // What became of the events: the runtime's reason for each one whose
+  // transaction was not committed, without the identifiers in it.
+  const outcomes = ran.flatMap((result) =>
+    (result.outcomes ?? []).map((outcome) => ({
+      ...outcome,
+      module: result.module,
+    }))
+  );
+  const refused = outcomes.filter((outcome) => outcome.outcome === "refused");
+  console.log(
+    `events committed: ${
+      outcomes.filter((outcome) => outcome.outcome === "committed").length
+    }, refused: ${refused.length} in ${
+      new Set(refused.map((outcome) => outcome.module)).size
+    } modules`,
+  );
+  console.log("events refused, by the runtime's reason:");
+  for (
+    const [reason, group] of count(
+      refused,
+      (outcome) =>
+        (outcome.aborted !== undefined
+          ? `the handler threw: ${outcome.aborted}`
+          : [
+            ...new Set(
+              (outcome.refusals ?? [{ reason: outcome.reason ?? "" }]).map((
+                refusal,
+              ) =>
+                refusal.reason.replace(/ for \S+/, "").replace(/ at \/\S*/, "")
+                  .slice(0, 90)
+              ),
+            ),
+          ].join("; ")).slice(0, 200),
+    )
+  ) {
+    const [example] = group;
+    console.log(
+      `  ${`${group.length}`.padStart(5)}  ${reason}\n` +
+        `         ${example.module} ${example.handler} ${example.event}`,
+    );
+  }
   console.log("\nrows that are looser or incomparable, by what differs:");
   const looser = rows.filter((row) =>
     !row.bound &&

@@ -33,70 +33,65 @@ job builds or tests it. It is not a Deno workspace member.
 
 ## What it does not cover
 
-It has no code emission. Its footprint analysis
-(`src/footprint.rs`) fills in the `Body` record of
+It has no code emission. Its footprint analysis (`src/footprint.rs`) fills in
+the `Body` record of
 [`footprint-analysis.md`](../../docs/specs/compiled-pattern-language/footprint-analysis.md),
 and `src/plan.rs` emits a first slice of the plan of
 [`plan-and-label-templates.md`](../../docs/specs/compiled-pattern-language/plan-and-label-templates.md)
-§1.1 as JSON: the records without their hashes and constraints, and with
-the label templates of §3 for expression code, a use of a body, a
-`select`, a `pick`, a `fold`, a collection, a write edge, an operation, and
-a binding. A constructed value, a rendered tree included, has an entry
-per path.
-A slot holds the JSON schema of the type at its path and the label its
-annotations declare, where the emitter has the type of the slot's root
-(`src/schema.rs`), and the plan lists the constraints of
-`plan-and-label-templates.md` §4.4 that come from the annotations a body
-reads and writes under. The `cfc-flow:*` diagnostics are
-reported where `plan-and-label-templates.md` §4.4 has the compiler decide
-them on declared labels (`src/flow.rs`; notes 167 to 172 of
-`SPEC-NOTES.md`).
+§1.1 as JSON: the records without their hashes and constraints, and with the
+label templates of §3 for expression code, a use of a body, a `select`, a
+`pick`, a `fold`, a collection, a write edge, an operation, and a binding. A
+constructed value, a rendered tree included, has an entry per path. A slot holds
+the JSON schema of the type at its path and the label its annotations declare,
+where the emitter has the type of the slot's root (`src/schema.rs`), and the
+plan lists the constraints of `plan-and-label-templates.md` §4.4 that come from
+the annotations a body reads and writes under. The `cfc-flow:*` diagnostics are
+reported where `plan-and-label-templates.md` §4.4 has the compiler decide them
+on declared labels (`src/flow.rs`; notes 167 to 172 of `SPEC-NOTES.md`).
 `plan path/to/module.tsx` prints the plan of each pattern,
 `plan --corpus <patterns directory>` counts the modules a plan is emitted for
 with no unsupported construct and the records that have a template, and
-`plan --corpus <directory> --sites` lists
-each unsupported construct with its file, line, and text. `SPEC-NOTES.md`
-lists what it leaves out. Its type checker
+`plan --corpus <directory> --sites` lists each unsupported construct with its
+file, line, and text. `SPEC-NOTES.md` lists what it leaves out. Its type checker
 resolves written types and the declared types of bindings, infers the types of
 call results, standard-library members, operators, literals, and callback
 parameters, narrows a reference by the conditions around it and by the
-assignments to a `let`, and decides assignability (`language-subset.md` §7.5)
-at four sites: an argument, an attribute of a tag that names a pattern, a
-returned value under a written return type, and an initializer under an
-annotation. The arguments of a pattern, of a handler, and of a `lift` result
-written in the reactive tier are bound by reference (§7.5.2), and the argument
-of a pattern instantiated in a function body is accepted under the same
-conditions (§7.5.3). The body of a `pattern` reads an optional property of its
-input whose type declares a default without `undefined` (§7.6.1). It does not check
-a generic function per instantiation, and it does not apply assignability at an
-assignment or at the argument of a handle method. Where it has no type for an
-expression, the expression is counted under the reason, and a rule that needs
-the type counts the site as not decided and reports nothing. `SPEC-NOTES.md`
-lists the places where the specification was ambiguous or could not be
-implemented as written, with the reading this crate chose.
+assignments to a `let`, and decides assignability (`language-subset.md` §7.5) at
+four sites: an argument, an attribute of a tag that names a pattern, a returned
+value under a written return type, and an initializer under an annotation. The
+arguments of a pattern, of a handler, and of a `lift` result written in the
+reactive tier are bound by reference (§7.5.2), and the argument of a pattern
+instantiated in a function body is accepted under the same conditions (§7.5.3).
+The body of a `pattern` reads an optional property of its input whose type
+declares a default without `undefined` (§7.6.1). It does not check a generic
+function per instantiation, and it does not apply assignability at an assignment
+or at the argument of a handle method. Where it has no type for an expression,
+the expression is counted under the reason, and a rule that needs the type
+counts the site as not decided and reports nothing. `SPEC-NOTES.md` lists the
+places where the specification was ambiguous or could not be implemented as
+written, with the reading this crate chose.
 
 `compare/` holds a first form of the comparison of stage 3: a TypeScript
 evaluator of the templates of `plan-and-label-templates.md` §3.2
 (`compare/template.ts`), a harness that runs a pattern through the existing
 transformer and builder and reads the stored labels of its slots and outputs
 (`compare/harness.ts`), six fixtures, a generator of scenarios
-(`compare/generate.ts`), and a run over the corpus (`compare/corpus.ts`).
-The harness resolves a slot of root `argument`, `element`, `state`,
-`binding`, and `event`. It sends an event to the stream of a binding and
-compares the write edges of the handler's body with the labels at the paths
-that event's run wrote. It finds the branch of a `select` and the child of a
-`pick` from the values the run stored. Every kept output carries the atom of
-the plan's pattern, and a row whose atom names the pattern where the
-runtime's names other code is counted in a category of its own. The position
-of a tag that names a pattern is read below the `$UI` of the result the run
-holds there. The generator gives each top-level
-input of a plan a value of its type and a confidentiality atom of its own,
-and each handler an event of the type its event declares.
+(`compare/generate.ts`), and a run over the corpus (`compare/corpus.ts`). The
+harness resolves a slot of root `argument`, `element`, `state`, `binding`, and
+`event`. It sends an event to the stream of a binding and compares the write
+edges of the handler's body with the labels at the paths that event's run wrote.
+It finds the branch of a `select` and the child of a `pick` from the values the
+run stored. Every kept output carries the atom of the plan's pattern, and a row
+whose atom names the pattern where the runtime's names other code is counted in
+a category of its own. The position of a tag that names a pattern is read below
+the `$UI` of the result the run holds there. The generator gives each top-level
+input of a plan a value of its type and a confidentiality atom of its own, and
+each handler an event of the type its event declares.
 
 Run the tests from the repository root with
-`deno test -A base/pattern-compiler/compare/test/`, and print the tables of
-the fixtures with `deno run -A base/pattern-compiler/compare/report.ts`. The
-run over the corpus needs the release build of the crate:
+`deno test -A base/pattern-compiler/compare/test/`, and print the tables of the
+fixtures with `deno run -A base/pattern-compiler/compare/report.ts`. The run
+over the corpus needs the release build of the crate:
 
 ```sh
 deno run -A --no-check base/pattern-compiler/compare/corpus.ts run results.jsonl
@@ -104,13 +99,15 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.js
 ```
 
 `run` takes each module the crate emits a plan for with no unsupported
-construct, skips the ones that need `wish` or request an effect, and appends
-one line per module to the results file. `report` prints the modules run and
-skipped by reason, the outputs and write edges compared by category, what
-was not compared by reason, the looser rows by what differs, and the outputs
-the run holds no value at by what the run stores there, with one example
-each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what
-the comparison takes as each side's label and what it found.
+construct, skips the ones that need `wish` or request an effect, and appends one
+line per module to the results file. `report` prints the modules run and skipped
+by reason, the outputs and write edges compared by category, what was not
+compared by reason, the events committed and refused with the runtime's reason
+for each refusal, the looser rows by what differs, and the outputs the run holds
+no value at by what the run stores there, with one example each. Notes 177 to
+186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what the comparison takes as
+each side's label and what it found, and notes 217 to 227 why the runtime
+refuses an event and what the generator does about it.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
@@ -130,24 +127,24 @@ release that builds with the Rust 1.93 toolchain.
 
 ## Layout
 
-| Module                   | Holds                                                                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `parse`                  | The call into the parser and the scope analysis                                                                       |
-| `module`                 | The module model: imports, definitions, exports                                                                       |
-| `api`                    | The `commonfabric` exports, the methods of a cell handle, and the standard-library surface of `language-subset.md` §9 |
-| `tiers`                  | The records of bodies, captures, and call sites that the later stages read                                            |
-| `check`                  | The walk that classifies code into tiers and applies the rules                                                        |
-| `types`                  | The representation of types, the resolution of written types, and the rules it decides (`language-subset.md` §7, §8)  |
-| `declared`               | The declared type of a binding and of an expression that names one                                                    |
-| `infer`                  | The types no declaration gives: call results, standard-library members, operators, literals, and callback parameters  |
-| `narrow`                 | The type of a reference where a condition has been tested (`language-subset.md` §7.6)                                 |
-| `assign`                 | Assignability (`language-subset.md` §7.5, §7.5.1, §7.5.2) and the sites it is checked at                              |
-| `typed`                  | The other catalog rules that read the type of an expression: property reads, casts, pattern results, generic calls    |
-| `footprint`              | What a function body reads and writes of its inputs (`footprint-analysis.md` §2 to §7), and where the analysis widens  |
+| Module                   | Holds                                                                                                                               |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `parse`                  | The call into the parser and the scope analysis                                                                                     |
+| `module`                 | The module model: imports, definitions, exports                                                                                     |
+| `api`                    | The `commonfabric` exports, the methods of a cell handle, and the standard-library surface of `language-subset.md` §9               |
+| `tiers`                  | The records of bodies, captures, and call sites that the later stages read                                                          |
+| `check`                  | The walk that classifies code into tiers and applies the rules                                                                      |
+| `types`                  | The representation of types, the resolution of written types, and the rules it decides (`language-subset.md` §7, §8)                |
+| `declared`               | The declared type of a binding and of an expression that names one                                                                  |
+| `infer`                  | The types no declaration gives: call results, standard-library members, operators, literals, and callback parameters                |
+| `narrow`                 | The type of a reference where a condition has been tested (`language-subset.md` §7.6)                                               |
+| `assign`                 | Assignability (`language-subset.md` §7.5, §7.5.1, §7.5.2) and the sites it is checked at                                            |
+| `typed`                  | The other catalog rules that read the type of an expression: property reads, casts, pattern results, generic calls                  |
+| `footprint`              | What a function body reads and writes of its inputs (`footprint-analysis.md` §2 to §7), and where the analysis widens               |
 | `plan`                   | The plan of a pattern as JSON: slots, bodies for each use, bindings, cones, outputs, and edges (`plan-and-label-templates.md` §1.1) |
-| `program`                | A set of modules, the resolution of imports between them, and the rules that follow a call into another function      |
-| `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                     |
-| `corpus`, `report`       | Which files are the corpus, and the report over them                                                                  |
+| `program`                | A set of modules, the resolution of imports between them, and the rules that follow a call into another function                    |
+| `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                                   |
+| `corpus`, `report`       | Which files are the corpus, and the report over them                                                                                |
 
 Footprint analysis reads the body records of `tiers`. The corpus report prints
 its counts under names that begin with `footprint:`, in the form of
