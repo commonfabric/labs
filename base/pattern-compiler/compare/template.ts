@@ -299,8 +299,10 @@ export const compareLabels = (template: Label, runtime: Label): Comparison => {
   const templateI = list(template.integrity);
   const runtimeI = list(runtime.integrity);
   const plain = (atoms: Atom[]) => atoms.filter((a) => !isTransformedBy(a));
+  // A view lists an atom once for each entry that has it, so the atoms
+  // are counted by identity.
   const mints = (atoms: Atom[]) =>
-    atoms.filter((a) => isTransformedBy(a) && !hasInputWitness(a)).length;
+    keys(atoms.filter((a) => isTransformedBy(a) && !hasInputWitness(a))).size;
   const templatePlain = keys(plain(templateI));
   const runtimePlain = keys(plain(runtimeI));
   const mintDifference = mints(templateI) - mints(runtimeI);

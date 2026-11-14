@@ -79,7 +79,10 @@ export const generateValue = (
     }
     return null;
   }
-  const type = Array.isArray(resolved.type) ? resolved.type[0] : resolved.type;
+  // Of several types, the first that is not `null`.
+  const type = Array.isArray(resolved.type)
+    ? resolved.type.find((type) => type !== "null") ?? resolved.type[0]
+    : resolved.type;
   switch (type) {
     case "string":
       return `${name}-text`;

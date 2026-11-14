@@ -353,9 +353,25 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     if (error !== undefined) throw error;
     await result.pull();
     await runtime.idle();
+    const { plan } = scenario;
+    // A result path the result's schema leaves out is computed when it is
+    // read: read each kept output, so that the run stores its label.
+    for (const entry of plan.outputs) {
+      if (entry.kept === false || entry.interim !== undefined) continue;
+      const star = entry.path.indexOf("*");
+      const path = star < 0 ? entry.path : entry.path.slice(0, star);
+      try {
+        await path.reduce(
+          (cell, key) => cell.key(key as never) as AnyCell,
+          result as AnyCell,
+        ).pull();
+      } catch {
+        // A path the run does not hold has no label to compare.
+      }
+    }
+    await runtime.idle();
     await storageManager.synced();
 
-    const { plan } = scenario;
     const skipped: Skipped[] = [];
     const how = new Map<string, keyof Decided>();
     const selects = new Map<number, SelectNode>();
@@ -882,6 +898,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             continue;
           }
           const template = entry.template;
+          const container = plan.outputs.some((other) =>
+            other.kept !== false && other.interim === undefined &&
+            other.path.length > entry.path.length &&
+            isPrefix(entry.path, other.path)
+          );
           // Each `*` of the path is an element of the collection the output
           // at the path above it names.
           let instances: { path: string[]; elements: ElementBinding[] }[] = [
@@ -920,11 +941,16 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               rowKey = `output ${path.join("/")}`;
               // The entry of a collection is the label of its membership,
               // so the runtime's side is what a read of the container's
-              // shape consumes, without the elements.
-              const observes = entry.collection === undefined
+              // shape consumes, without the elements. The same holds for
+              // the container entry of a constructed value, which has an
+              // entry per path below it (PL §3.4).
+              const observes = entry.collection === undefined && !container
                 ? "value"
                 : "shape";
               const cell = at(output, path);
+              if (valueOf(cell) === undefined) {
+                throw new Unsupported("an output the run holds no value at");
+              }
               const runtimeLabel = consumed(
                 cfcLabelViewForResolvedCell(cell),
                 observes,

@@ -79,15 +79,33 @@ implemented as written, with the reading this crate chose.
 evaluator of the templates of `plan-and-label-templates.md` §3.2
 (`compare/template.ts`), a harness that runs a pattern through the existing
 transformer and builder and reads the stored labels of its slots and outputs
-(`compare/harness.ts`), and three fixtures. Run the tests from the repository
-root with `deno test -A base/pattern-compiler/compare/test/`, and print the
-tables with `deno run -A base/pattern-compiler/compare/report.ts`. Notes 177
-to 186 and 191 to 193 of `SPEC-NOTES.md` say what the comparison takes as
-each side's label and what it found. A third fixture, `defaulted.tsx`,
-compares a whole read and a property read of an object with a declared
-integrity atom and a defaulted property, and each row is also compared with
-the runtime's label read by origin, without the static part a module's
-result document carries.
+(`compare/harness.ts`), four fixtures, a generator of scenarios
+(`compare/generate.ts`), and a run over the corpus (`compare/corpus.ts`).
+The harness resolves a slot of root `argument`, `element`, `state`,
+`binding`, and `event`. It sends an event to the stream of a binding and
+compares the write edges of the handler's body with the labels at the paths
+that event's run wrote. It finds the branch of a `select` and the child of a
+`pick` from the values the run stored. The generator gives each top-level
+input of a plan a value of its type and a confidentiality atom of its own,
+and each handler an event of the type its event declares.
+
+Run the tests from the repository root with
+`deno test -A base/pattern-compiler/compare/test/`, and print the tables of
+the fixtures with `deno run -A base/pattern-compiler/compare/report.ts`. The
+run over the corpus needs the release build of the crate:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/corpus.ts run results.jsonl
+deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.jsonl
+```
+
+`run` takes each module the crate emits a plan for with no unsupported
+construct, skips the ones that need `wish` or request an effect, and appends
+one line per module to the results file. `report` prints the modules run and
+skipped by reason, the outputs and write edges compared by relation, what
+was not compared by reason, and the looser rows by what differs, with one
+example each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md`
+say what the comparison takes as each side's label and what it found.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
@@ -174,6 +192,9 @@ cargo run --release -- corpus ../../patterns --json
 cargo run --release -- corpus ../../patterns --files
 cargo run --release -- corpus ../../patterns --diagnostics
 cargo run --release -- corpus ../../patterns --sites
+cargo run --release -- plan path/to/module.tsx
+cargo run --release -- plan --corpus ../../patterns
+cargo run --release -- plan --corpus ../../patterns --json
 ```
 
 `check` takes the modules of one program: an import between two of them is

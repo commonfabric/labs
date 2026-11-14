@@ -208,8 +208,9 @@ pub const CATALOG: &[Entry] = &[
         "binding:write-to-computed",
         Error,
         "reported for the state of a handler bound in the reactive tier, a pattern compiled \
-         in included; a `lift` result that writes through its argument and a literal are \
-         counted and not reported",
+         in included, and for a literal given where a handle that can write is declared or \
+         as the argument of a pattern compiled in; a `lift` result that writes through its \
+         argument is not examined",
     ),
     part(
         "collection:nested-scan",
