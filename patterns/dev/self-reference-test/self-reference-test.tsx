@@ -1,21 +1,25 @@
 // PATTERN TIER: fixture — scaffolding that pins a bug or drives the
 // runtime. Do not copy from this file. Tiers: patterns/index.md
-import { Default, pattern, SELF, UI, Writable } from "commonfabric";
+import { Default, pattern, SELF, UI, type VNode, Writable } from "commonfabric";
 
+/** A node as its parent, children and registry hold it. */
+export interface TreeNode {
+  label: string;
+  parent: TreeNode | null;
+  children: TreeNode[];
+}
 interface Input {
   label: string | Default<"Untitled">;
-  parent: Output | null | Default<null>;
-  registry: Writable<Output[] | Default<[]>>;
+  parent: TreeNode | null | Default<null>;
+  registry: Writable<TreeNode[] | Default<[]>>;
 }
-export interface Output {
-  label: string;
-  parent: Output | null;
-  children: Output[];
+export interface Output extends TreeNode {
+  [UI]: VNode;
 }
 
 const Node = pattern<Input, Output>(
   ({ label, parent, registry, [SELF]: self }) => {
-    const children = new Writable<Output[]>([]);
+    const children = new Writable<TreeNode[]>([]);
 
     return {
       label,

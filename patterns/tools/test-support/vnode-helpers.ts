@@ -1,4 +1,4 @@
-import { UI } from "commonfabric";
+import { UI, type VNode, type Writable } from "commonfabric";
 
 const isRecord = (value: unknown): value is Record<PropertyKey, unknown> =>
   typeof value === "object" && value !== null;
@@ -318,3 +318,76 @@ export const answerOwnerCheck = (root: unknown, isOwner: boolean): void =>
     isOwner,
     "cf-owner-view",
   );
+
+/** A rendered view reached as cells rather than as the values they hold. A
+ * value read resolves a `$`-prop to the plain value its binding holds, so a
+ * test that writes through a binding walks the view this way instead. */
+export interface ViewCell {
+  get(): unknown;
+  key(key: string | number): ViewCell;
+  set(value: unknown): void;
+}
+
+/** The view a handler receives as a `Writable<VNode>`, walkable by key. */
+export function viewCell(cell: Writable<VNode>): ViewCell;
+export function viewCell(cell: unknown): unknown {
+  return cell;
+}
+
+/** A node's children paired with the key each sits under. */
+const keyedChildren = (value: unknown): [string | number, unknown][] => {
+  if (Array.isArray(value)) return value.map((child, index) => [index, child]);
+  if (!isRecord(value)) return [];
+  const children: [string | number, unknown][] = [];
+  if (value[UI] !== undefined && value[UI] !== value) {
+    children.push([UI, value[UI]]);
+  }
+  if (value.children !== undefined) {
+    children.push(["children", value.children]);
+  }
+  return children;
+};
+
+/** The keys from `root` down to the first node `accept` admits, searched in
+ * the order `findNode` searches. */
+const pathTo = (
+  root: unknown,
+  accept: (node: unknown) => boolean,
+): (string | number)[] | undefined => {
+  const value = readValue(root);
+  if (accept(value)) return [];
+  for (const [key, child] of keyedChildren(value)) {
+    const path = pathTo(child, accept);
+    if (path !== undefined) return [key, ...path];
+  }
+  return undefined;
+};
+
+/** The cell under `cell` that holds the first node `accept` admits. */
+export const findViewCell = (
+  cell: ViewCell,
+  accept: (node: unknown) => boolean,
+): ViewCell | undefined =>
+  pathTo(cell.get(), accept)?.reduce<ViewCell>(
+    (parent, key) => parent.key(key),
+    cell,
+  );
+
+/** The cell the first node under `view` that `accept` admits binds as `prop`
+ * (`$checked`, `$value`, …). Setting it writes whatever the binding links to,
+ * as the bound control does. Throws when no such node binds `prop`. */
+export const boundViewCell = (
+  view: ViewCell,
+  accept: (node: unknown) => boolean,
+  prop: string,
+  what = "the node",
+): ViewCell => {
+  const node = findViewCell(
+    view,
+    (value) => accept(value) && propsOf(value)?.[prop] !== undefined,
+  );
+  if (node === undefined) {
+    throw new Error(`boundViewCell: ${what} binding ${prop} was not found`);
+  }
+  return node.key("props").key(prop);
+};

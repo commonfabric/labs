@@ -27,8 +27,8 @@ import {
   ifElse,
   NAME,
   pattern,
-  toIndentedDebugString,
   UI,
+  type VNode,
 } from "commonfabric";
 
 interface ProductIdea {
@@ -41,19 +41,17 @@ export interface Input {
   userInput: string | Default<"a self-watering plant pot">;
 }
 
-export default pattern<Input, Input>(({ userInput }) => {
+export interface Output extends Input {
+  [NAME]: string;
+  [UI]: VNode;
+}
+
+export default pattern<Input, Output>(({ userInput }) => {
   const idea = generateObject<ProductIdea>({
     prompt: userInput,
     system:
       "Generate a creative product idea based on the user's input. Be concise.",
   });
-
-  // Error message as string for display
-  const errorMessage = idea.error
-    ? (typeof idea.error === "string"
-      ? idea.error
-      : toIndentedDebugString(idea.error))
-    : null;
 
   return {
     [NAME]: "GenerateObject Error Handling Test",
@@ -86,7 +84,7 @@ export default pattern<Input, Input>(({ userInput }) => {
             </span>,
             ifElse(
               idea.error,
-              <span style={{ color: "red" }}>Error: {errorMessage}</span>,
+              <span style={{ color: "red" }}>Error: {idea.error}</span>,
               <div>
                 <h3 style={{ marginTop: 0 }}>{idea.result?.name}</h3>
                 <p>{idea.result?.description}</p>
@@ -102,7 +100,7 @@ export default pattern<Input, Input>(({ userInput }) => {
           <strong>Debug info:</strong>
           <ul>
             <li>pending: {String(idea.pending)}</li>
-            <li>error: {errorMessage}</li>
+            <li>error: {idea.error}</li>
             <li>result: {idea.result ? "present" : "null"}</li>
           </ul>
         </div>

@@ -70,7 +70,9 @@ export type Output = {
   isHidden: boolean | Default<false>;
   noteId: string | Default<"">;
   isGenerating: boolean;
-  editContent: Stream<{ detail: { value: string } }>;
+  editContent: Stream<
+    { detail: { value: string }; result?: Writable<string> }
+  >;
 };
 
 // Parse document content into LLM messages
@@ -79,7 +81,7 @@ export type Output = {
 // - Sections separated by --- horizontal rules
 // - Sections with ## AI or ## Assistant header are assistant messages
 // - Other sections are user messages
-function parseContentToMessages(
+export function parseContentToMessages(
   content: string,
   mentionable: MentionablePiece[],
 ): { system: string; messages: LLMMessage[] } {
@@ -174,13 +176,6 @@ function expandWikiLinks(
     return match;
   });
 }
-
-const _updateContent = handler<
-  { detail: { value: string } },
-  { content: Writable<string> }
->((event, state) => {
-  state.content.set(event.detail?.value ?? "");
-});
 
 const handlePieceLinkClick = handler<
   {

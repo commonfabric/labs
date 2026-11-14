@@ -2,12 +2,14 @@
 
 ## Overview
 
-LLM-powered patterns have test coverage at three layers:
+LLM-powered patterns have test coverage at four layers:
 
 1. **Client guard** — `LLMClient` blocks live LLM calls in test environments
 2. **Server-side tests** — toolshed route logic (model resolution, JSON mode,
    tool conversion)
 3. **Runner smoke tests** — full pattern-to-mock-response path
+4. **Pattern tests** — a `cf test` file answers its pattern's language-model
+   calls from an `llmMocks` export
 
 ## Test-environment guard
 
@@ -64,6 +66,20 @@ addMockObjectResponse(
 ```
 
 Mock responses are **one-time use** — they're consumed when matched.
+
+## Pattern tests
+
+A pattern test (`*.test.tsx`, run by `cf test`) cannot reach the client's mock
+API, so it declares its answers instead: a module-scope `llmMocks` array of
+`{ promptIncludes, object }` and `{ promptIncludes, text }` entries.
+`runtime/cli/lib/llm-mock.ts` reads the export and turns mock mode on for the
+run, registering each entry as a one-time mock that matches a request whose
+last message contains `promptIncludes`: an `object` entry as a
+`generateObject` answer, and a `text` entry as an assistant reply to a text
+request. Mock mode stays on whatever the array holds, so a
+request no entry answers fails and reaches the pattern as `error`.
+[Pattern testing](../common/workflows/pattern-testing.md#mocking-language-model-calls)
+shows the export.
 
 ## Testing the toolshed route against a mock model
 
@@ -217,6 +233,7 @@ in `beforeEach` to reset between tests.
 | `runtime/toolshed/routes/ai/llm/errors.test.ts` | Sorting a failure into a status, including shapes the routes cannot produce |
 | `runtime/runner/test/llm-pattern-smoke.test.ts` | generateText, generateObject, and tool-calling through runtime |
 | `runtime/runner/test/llm-conversation-fixture.test.ts` | Multi-turn conversations and tool chains via fixtures |
+| `runtime/cli/test/llm-mock.test.ts` | Reading a pattern test's `llmMocks` export and answering from it |
 
 ## Running tests
 

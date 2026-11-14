@@ -903,9 +903,6 @@ original pattern with `entries`.
   present when this stage begins.
 - [ ] Update `patterns/index.md` only where generated summaries or
   public examples change.
-- [ ] Update `patterns/dev/test/source-coverage/commonfabric-stub.test.ts`
-  so source coverage models the new public API while retaining an explicitly
-  named legacy fixture if needed.
 - [ ] Verify every wrapper remains readable at the call site and does not expose
   captured values in the public tool schema.
 - [ ] Run a final source inventory and classify every remaining hit as API,

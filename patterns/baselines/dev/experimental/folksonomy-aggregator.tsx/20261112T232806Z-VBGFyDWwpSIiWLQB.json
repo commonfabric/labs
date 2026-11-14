@@ -1,0 +1,132 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "TagEvent": {
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "use",
+              "remove"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "scope",
+          "tag",
+          "action",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "events": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/TagEvent"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "events"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/experimental/folksonomy-aggregator.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CommunityTagSuggestion": {
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "tag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag",
+          "count"
+        ],
+        "type": "object"
+      },
+      "TagEvent": {
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "use",
+              "remove"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "scope",
+          "tag",
+          "action",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A #folksonomyAggregator that collects tag usage events and serves community suggestions.\n\nThe #folksonomyAggregator tag is how folksonomy-tags instances discover this piece via wish().",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "events": {
+        "items": {
+          "$ref": "#/$defs/TagEvent"
+        },
+        "type": "array"
+      },
+      "postEvent": {
+        "$ref": "#/$defs/TagEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "suggestions": {
+        "additionalProperties": {
+          "items": {
+            "$ref": "#/$defs/CommunityTagSuggestion"
+          },
+          "type": "array"
+        },
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "required": [
+      "events",
+      "suggestions",
+      "postEvent",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
