@@ -66,20 +66,18 @@ describe("evaluateTemplate", () => {
     });
   });
 
-  it("mints for a derive over unlabeled inputs unless told not to", () => {
+  it("mints for a derive over unlabeled inputs only when told to", () => {
     const template: Template = {
       op: "derive",
       inputs: [{ op: "const" }],
       by: "f",
     };
 
-    expect(evaluateTemplate(template, inputs()).label.integrity).toEqual([
-      minted("f"),
-    ]);
+    expect(evaluateTemplate(template, inputs()).label.integrity).toEqual([]);
     expect(
-      evaluateTemplate(template, inputs(), [], { mintWithoutLabel: false })
+      evaluateTemplate(template, inputs(), [], { mintWithoutLabel: true })
         .label.integrity,
-    ).toEqual([]);
+    ).toEqual([minted("f")]);
   });
 
   it("joins the condition with the selected branch alone", () => {

@@ -71,9 +71,11 @@ export type TemplateInputs = {
 /** Options of an evaluation. */
 export type EvaluationOptions = {
   /**
-   * Whether a `derive` whose inputs carry no label mints its
-   * `TransformedBy` atom. §3.2 mints without a condition, and the runtime
-   * mints beside a label that exists (§3.1). Default `true`.
+   * Whether a `derive` or a `fold` whose label has no confidentiality
+   * clause and no hereditary atom mints its `TransformedBy` atom. §3.2
+   * assumes (section 8, question 66) that it does not, which is the
+   * condition the runtime applies (§3.1). Default `false`; `true` is the
+   * alternative §3.2 names.
    */
   mintWithoutLabel?: boolean;
 };
@@ -147,7 +149,7 @@ export const evaluateTemplate = (
 ): Evaluated => {
   let bound = false;
   const unsupported: string[] = [];
-  const mintWithoutLabel = options.mintWithoutLabel ?? true;
+  const mintWithoutLabel = options.mintWithoutLabel ?? false;
 
   const derive = (parts: Label[], by: unknown): Label => {
     const confidentiality = union(parts.map((part) => part.confidentiality));
@@ -209,14 +211,18 @@ export const evaluateTemplate = (
         const bodies = inputs.elementKeys(node.collection, at).map((key) =>
           walk(node.body, [...at, { collection: node.collection, key }])
         );
-        const kept = meet(bodies.map((body) => body.integrity));
-        return {
-          confidentiality: union([
-            membership.confidentiality,
-            ...bodies.map((body) => body.confidentiality),
-          ]),
-          integrity: [...(kept === "neutral" ? [] : kept), minted("fold")],
-        };
+        const met = meet(bodies.map((body) => body.integrity));
+        const kept = (met === "neutral" ? [] : met).filter((atom) =>
+          inputs.hereditary(atom)
+        );
+        const confidentiality = union([
+          membership.confidentiality,
+          ...bodies.map((body) => body.confidentiality),
+        ]);
+        return mintWithoutLabel || confidentiality.length > 0 ||
+            kept.length > 0
+          ? { confidentiality, integrity: [...kept, minted("fold")] }
+          : { confidentiality, integrity: kept };
       }
       case "dynamic": {
         const label = inputs.dynamic?.(node.reads, at);

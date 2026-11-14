@@ -28,9 +28,9 @@ const UNCONDITIONAL = {
   shout: EQUAL,
   echo: EQUAL,
   both: EQUAL,
-  // The runtime mints `TransformedBy` beside a label only, and no input of
-  // `greeting` has one.
-  greeting: "C equal, I tighter",
+  // No input of `greeting` has a label, and neither side mints
+  // `TransformedBy` beside none (PL §3.2, question 66).
+  greeting: EQUAL,
   // The runtime's container carries the label the result schema declares
   // for the elements. The template is the source's membership.
   titles: "C tighter, I equal",
@@ -96,10 +96,13 @@ describe("the template of a message row's isEdited against the runtime's label",
   });
 
   it("has no clause when the message was not edited, since no label is stored for an absent field", async () => {
+    // With no clause the template mints no `TransformedBy` (PL §3.2,
+    // question 66), and the runtime's label has one beside its clauses:
+    // fewer clauses, and looser on integrity (note 197).
     expect(await isEdited(false)).toEqual({
       runtime: ["body", "edited", "sent"],
       template: [],
-      overall: "tighter",
+      overall: "looser",
     });
   });
 });
@@ -121,7 +124,7 @@ describe("an object with a declared integrity atom and a defaulted property (rul
       // template has the empty integrity there, which is looser: the
       // exception by ruling of PL §3.1.
       nick: "C equal, I looser",
-      derived: "C equal, I tighter",
+      derived: EQUAL,
     });
   });
 
@@ -130,7 +133,7 @@ describe("an object with a declared integrity atom and a defaulted property (rul
       whole: EQUAL,
       name: EQUAL,
       nick: EQUAL,
-      derived: "C equal, I tighter",
+      derived: EQUAL,
     });
   });
 });
