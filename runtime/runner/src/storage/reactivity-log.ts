@@ -155,6 +155,27 @@ export const writeDestinationRead: Metadata = {
   [writeDestinationReadMarker]: true,
 };
 
+const payloadReadMarker: unique symbol = Symbol("payloadReadMarker");
+
+/**
+ * Marks a read that does not recurse and returns the scalar it found: a
+ * traversal that returns a scalar to its caller. A read that stops at a node
+ * observes the node's existence, kind and members (CFC spec §4.5.2, a shape
+ * observation), and a scalar has none, so what such a read returns is the
+ * payload, which the spec labels with the path's `value` observation. The
+ * flow join classes a marked read as a value observation; scheduling and
+ * conflict detection see the shallow read they always did. A read that
+ * resolves a reference to mint a handle, or that rejects the scalar it
+ * found, carries no marker: it returned no scalar.
+ */
+export const payloadRead: Metadata = {
+  [payloadReadMarker]: true,
+};
+
+export function isPayloadRead(meta?: Metadata): boolean {
+  return meta?.[payloadReadMarker] === true;
+}
+
 const declaredOnwardReadMarker = Symbol("declaredOnwardRead");
 
 /** Where a read declared onward lands: one path of one document. */
