@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   applyPieceSourceTransition,
@@ -14,6 +15,7 @@ import {
   setPatternSource,
 } from "../src/runner.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 
@@ -557,5 +559,83 @@ describe("patternSource meta accessors", () => {
         allowUnavailable: true,
       }),
     ).rejects.toThrow(PIECE_SOURCE_MOVED);
+  });
+
+  describe("a transition committed by a runtime that has not loaded the running source", () => {
+    // A writer stores a piece running a pattern of two modules, the entry
+    // and a module it imports. A reader that has loaded none of that
+    // pattern's source documents is in the state a release pass leaves
+    // once it has dropped them, which it may do between preparing a
+    // transition and committing it: the preparation keeps nothing it read.
+
+    it("verifies the running source closure inside `editWithRetry()` and commits the transition", async () => {
+      const server = newSharedServer();
+      const writerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const writer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: writerStorage,
+      });
+      let readerStorage: EmulatedStorageManager | undefined;
+      let reader: Runtime | undefined;
+      try {
+        const compiled = await writer.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [
+            {
+              name: "/main.tsx",
+              contents: "import { pattern } from 'commonfabric';\n" +
+                "import { label } from './label.ts';\n" +
+                "export default pattern(() => ({ label }));",
+            },
+            {
+              name: "/label.ts",
+              contents: "export const label = 'running';",
+            },
+          ],
+        }, { space: signer.did() });
+        const pattern = writer.patternManager.getArtifactEntryRef(compiled)!;
+        const seed = writer.edit();
+        writer.getCell(signer.did(), "transition-cold-reader", undefined, seed)
+          .setMetaRaw("patternIdentity", pattern, rawMetaWriteAuthorization);
+        await seed.commit().settled;
+        await writer.patternManager.flushCompileCacheWrites();
+        await writerStorage.synced();
+        await server.flushSessions();
+
+        readerStorage = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        reader = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: readerStorage,
+        });
+        const piece = reader.getCell(signer.did(), "transition-cold-reader");
+        await piece.sync();
+        const expected = getPieceSourceSnapshot(piece)!;
+        const result = await reader.editWithRetry((tx) =>
+          applyPieceSourceTransition(reader!, piece, tx, pattern, {
+            revisionId: "detach-from-cold-reader",
+            baseline: { kind: "retain", revisionId: "cold-reader-baseline" },
+            timestamp: 42,
+            operation: "detach",
+            origin: null,
+            expected,
+          })
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(
+          getPieceSourceRevisions(piece).map(({ revisionId }) => revisionId),
+        ).toEqual(["cold-reader-baseline", "detach-from-cold-reader"]);
+      } finally {
+        await reader?.dispose();
+        await writer.dispose();
+        await readerStorage?.close();
+        await writerStorage.close();
+        await server.close();
+      }
+    });
   });
 });
