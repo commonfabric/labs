@@ -104,7 +104,7 @@ next.
   on (`plan-and-label-templates.md` §3.9), and its harness does not
   yet separate the static part by document (§3.1). The crate's
   `SPEC-NOTES.md` lists the places where it found the documents
-  ambiguous; notes 217 to 227 are not yet written into the documents.
+  ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -847,6 +847,21 @@ as an assumption.
     site returned takes the body's `derive` template, and the plan has
     no member that names the site. The alternative adds such a member,
     which gives a constant template where the cell is a state cell.
+124. **How much of a handler's template is on a link it writes** (PL
+    question 79). By ruling the link carries at least the label of the
+    event. *Assumed:* the handler's whole template joined with the
+    label of the reference, which equals what the runtime stores
+    today. The alternative joins the event and the reference alone.
+    For a `lift` or a `computed` that passes a handle on at a result
+    path the link keeps the label of the reference alone.
+125. **How a result path of a binding names a position inside an
+    element** (PL question 78). *Assumed:* a `*` at the position of
+    each enclosing collection. Two collections spread into one array
+    of children are not told apart by the path.
+126. **A schema of the plan and the schema the runtime stores an input
+    under** (PL question 80). *Assumed:* the comparison stores inputs
+    under the runtime's schema. The documents do not say how a schema
+    of the plan names a policy.
 
 ## Open, and not needing the owner
 
