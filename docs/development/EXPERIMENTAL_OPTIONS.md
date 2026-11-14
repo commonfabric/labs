@@ -2280,7 +2280,8 @@ the per-epic implementation notes).
   The pool that places spaces on workers takes four more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
-  already serves one (default 16; `1` serves every space from one worker),
+  already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
+  serves every space from one worker),
   `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
   of a placement (default 1 in the toolshed; `0` keeps none),
   `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, the largest each worker's heap may

@@ -294,6 +294,9 @@ describe("servingCompileFromEnv()", () => {
 describe("servingWorkerPoolFromEnv()", () => {
   /** What the pool takes from a toolshed when no knob says otherwise. */
   const DEFAULTS = {
+    // Four, so that 16 toolsheds on one host at the default heap limit come
+    // to 128 GB at most, where 16 each came to 512 GB.
+    maxWorkers: 4,
     spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
     heapLimitMb: DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB,
   };
@@ -305,7 +308,10 @@ describe("servingWorkerPoolFromEnv()", () => {
         envOf({ SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "0" }),
         (m) => warnings.push(m),
       ),
-    ).toEqual({ spareWorkers: DEFAULT_SPARE_SERVING_WORKERS });
+    ).toEqual({
+      maxWorkers: DEFAULTS.maxWorkers,
+      spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
+    });
     expect(
       servingWorkerPoolFromEnv(
         envOf({
@@ -316,13 +322,14 @@ describe("servingWorkerPoolFromEnv()", () => {
         (m) => warnings.push(m),
       ),
     ).toEqual({
+      maxWorkers: DEFAULTS.maxWorkers,
       spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
       heapLimitMb: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
     });
     expect(warnings).toEqual([]);
   });
 
-  it("returns the toolshed's spare count and heap limit alone when no knob is set", () => {
+  it("returns the toolshed's worker cap, spare count and heap limit when no knob is set", () => {
     const warnings: string[] = [];
     for (
       const env of [{}, {

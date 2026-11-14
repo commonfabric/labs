@@ -191,7 +191,7 @@ isolate rather than to the process, so the main thread and every serving worker
 can each reach 16 GiB. The compiled binary fixes the limit when it is built: it
 ignores `DENO_V8_FLAGS`, `NODE_OPTIONS` and `--v8-flags` given when it starts,
 so changing the limit for a deployment takes a new build. A toolshed runs a serving worker per served space, up to
-`SERVER_EXECUTION_MAX_WORKERS` of them (default 16) and
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 4) and
 `SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
 about 110 MB before it serves anything
 ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
