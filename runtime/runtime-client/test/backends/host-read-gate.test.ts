@@ -943,6 +943,72 @@ describe("HostReadGate", () => {
       }
     });
 
+    it("delivers the unreadable refusal to a subscription whose read crosses a link out of a document with such an envelope, and the value once it is readable again", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const target = await docs.write("link-target", "target value");
+      const entry = target.getAsLink({
+        includeSchema: true,
+        keepAsCell: KeepAsCell.All,
+      });
+      const unknownEnvelope = {
+        cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+      };
+      const linker = (await docs.write(
+        "unreadable-linker",
+        { entry },
+        [],
+        unknownEnvelope,
+      )).asSchema({
+        type: "object",
+        properties: { entry: { type: "string" } },
+      });
+      const { updates, cancel } = subscribe(gate, linker);
+      try {
+        expect(updates).toEqual([
+          expect.objectContaining({
+            refused: {
+              refusedBy: "display-ceiling",
+              labelSource: "unreadable",
+            },
+          }),
+        ]);
+
+        await docs.write("unreadable-linker", { entry });
+        await docs.runtime.idle();
+        expect(updates.at(-1)).toEqual(
+          expect.objectContaining({ value: { entry: "target value" } }),
+        );
+      } finally {
+        cancel();
+      }
+    });
+
+    it("delivers the unreadable refusal to a subscription when only the envelope of the value it holds becomes one this build cannot interpret, and the value when it is readable again", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+      const cell = (await docs.write("same-value", "the same value"))
+        .asSchema({ type: "string" });
+      const { updates, cancel } = subscribe(gate, cell);
+      try {
+        await docs.write("same-value", "the same value", [], {
+          cfc: { version: 99, labelMap: { version: 1, entries: [] } },
+        });
+        await docs.runtime.idle();
+        expect(updates.at(-1)).toEqual(expect.objectContaining({
+          refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
+        }));
+
+        await docs.write("same-value", "the same value");
+        await docs.runtime.idle();
+        expect(updates.at(-1)).toEqual(
+          expect.objectContaining({ value: "the same value" }),
+        );
+      } finally {
+        cancel();
+      }
+    });
+
     it("names the labels unreadable for a read under a schema nesting one that carries its own definitions", async () => {
       // TODO(danfuzz): This read should be decided on the labels its schema
       // declares, which are none, so that the owner is shown the value. It is
