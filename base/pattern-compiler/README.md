@@ -38,10 +38,12 @@ It has no code emission and no label templates. Its footprint analysis
 [`footprint-analysis.md`](../../docs/specs/compiled-pattern-language/footprint-analysis.md),
 and `src/plan.rs` emits a first slice of the plan of
 [`plan-and-label-templates.md`](../../docs/specs/compiled-pattern-language/plan-and-label-templates.md)
-§1.1 as JSON: the records without their templates, hashes, and constraints.
-`plan path/to/module.tsx` prints the plan of each pattern, and
+§1.1 as JSON: the records without their hashes and constraints, and with the
+templates of an operator, a projection, and a use of a body alone.
+`plan path/to/module.tsx` prints the plan of each pattern,
 `plan --corpus <patterns directory>` counts the modules a plan is emitted for
-with no unsupported construct. `SPEC-NOTES.md`
+with no unsupported construct, and `plan --corpus <directory> --sites` lists
+each unsupported construct with its file, line, and text. `SPEC-NOTES.md`
 lists what it leaves out. Its type checker
 resolves written types and the declared types of bindings, infers the types of
 call results, standard-library members, operators, literals, and callback

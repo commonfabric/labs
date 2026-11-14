@@ -2281,7 +2281,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
         let again = object
             .projections()
             .iter()
-            .any(|proj| proj.entered.iter().any(|other| *other == entered));
+            .any(|proj| proj.entered.contains(&entered));
         if again {
             for proj in object.projections() {
                 let mut path = proj.path.clone();
