@@ -632,7 +632,12 @@ fn a_write_through_what_a_site_returned_is_an_edge_or_an_envelope_that_names_the
     );
     assert_eq!(
         record.calls,
-        ["instantiate:order", "bind", "createCell:order", "effect:navigateTo"]
+        [
+            "instantiate:order",
+            "bind",
+            "createCell:order",
+            "effect:navigateTo"
+        ]
     );
     assert_eq!(
         record.edges,

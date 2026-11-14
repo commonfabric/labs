@@ -2301,3 +2301,153 @@ fn what_the_predicate_of_a_scan_returns_is_an_output_whose_path_has_a_star() {
         .expect("the result of the scan");
     assert!(result.get("collection").is_some());
 }
+
+const LITERALS: &str = r#"import { cellFromUrl, pattern, SqliteDb } from "commonfabric";
+interface Base { id: string; note?: string; kind: string }
+export const Lit = pattern<{ base: Base; extra: string[]; more: string[]; label: string; db: SqliteDb; address: string }>(
+  ({ base, extra, more, label, db, address }) => {
+    const merged = { note: label, kind: label, ...base, id: label };
+    const list = [label, ...extra, label, ...more];
+    const holed = [label, , label];
+    const keyed = { ["fixed"]: label };
+    const linked = cellFromUrl({ url: address });
+    const rows = db.query<{ n: number }>("select 1", { params: [label] });
+    return {
+      id: merged.id, note: merged.note, kind: merged.kind,
+      head: list[0], rest: list,
+      holed,
+      fixed: keyed.fixed,
+      cell: linked.cell,
+      rows: rows.result,
+    };
+  },
+);
+"#;
+
+fn kept<'p>(plan: &'p Value, path: Value) -> &'p Value {
+    plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["path"] == path)
+        .unwrap_or_else(|| panic!("no output at {path}"))
+}
+
+#[test]
+fn a_spread_in_an_object_literal_has_the_template_of_each_path_its_type_declares() {
+    // PL §3.4, "A spread in an object literal".
+    let plan = plan_of(&program(LITERALS), "Lit");
+    // "A member written after the spread replaces the path."
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["id"]))["template"]),
+        "[argument label : identity]"
+    );
+    // "A member written before the spread is replaced where the type of
+    // `a` declares its path as required": "the template is the `slot`
+    // node of the reference at `a.p`".
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["kind"]))["template"]),
+        "[argument base/kind : identity]"
+    );
+    // "Where the type declares the path as optional ... the path is a
+    // `select` whose condition is the `shape` of `a.p`."
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["note"]))["template"]),
+        "select([argument base/note : shape] ? [argument base/note : identity] | [argument label : identity])"
+    );
+}
+
+#[test]
+fn a_spread_in_an_array_literal_puts_every_later_position_at_the_path_star() {
+    // PL §3.4, "A spread in an array literal": "A member written before
+    // the first spread has its own path and the template of its
+    // expression", and "every position from the first spread on is at
+    // the path `*`, and the template there is the join of the template
+    // of each spread operand at `*`, of the templates of the members
+    // written after the first spread, and of the array's `enumeration`",
+    // which "is `derive` by expression code over the `enumeration` of
+    // each spread operand".
+    let plan = plan_of(&program(LITERALS), "Lit");
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["head"]))["template"]),
+        "[argument label : identity]"
+    );
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["rest", "*"]))["template"]),
+        "derive(expression) { [argument extra/* : identity] [argument label : identity] [argument more/* : identity] derive(expression) { [argument extra : enumeration] [argument more : enumeration] } }"
+    );
+    // "A hole ... The position of the hole holds nothing, has no
+    // template".
+    let paths: Vec<&Value> = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .map(|output| &output["path"])
+        .filter(|path| path[0] == json!("holed"))
+        .collect();
+    assert_eq!(paths, [&json!(["holed", "0"]), &json!(["holed", "2"])]);
+    // "A key that is static ... is the name it evaluates to."
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["fixed"]))["template"]),
+        "[argument label : identity]"
+    );
+}
+
+#[test]
+fn cell_from_url_and_a_query_on_a_database_are_operations_of_kind_effect() {
+    // PL §3.19, "`cellFromUrl`": "one `Operation` of kind `effect` with
+    // `implementation: { builtin: "cellFromUrl" }`. A cone writes `url`,
+    // `hosts` and `spaceHost` into its state by write edges with target
+    // `request`, and a reader reads `pending` and `cell` through slots
+    // with root `operation`."
+    let plan = plan_of(&program(LITERALS), "Lit");
+    let (index, linked) = operation_named(&plan, "linked");
+    assert_eq!(linked["kind"], json!("effect"));
+    assert_eq!(
+        linked["implementation"],
+        json!({ "builtin": "cellFromUrl" })
+    );
+    assert_eq!(
+        template_line(&plan, &linked["input"]),
+        "[argument address : identity]"
+    );
+    let cell = kept(&plan, json!(["cell"]));
+    assert_eq!(
+        template_line(&plan, &cell["template"]),
+        "[operation cell : identity]"
+    );
+    assert_eq!(
+        plan["slots"][cell["template"]["slot"].as_u64().unwrap() as usize]["root"],
+        json!({ "kind": "operation", "operation": index })
+    );
+    // PL §3.14: "`db.query(...)` holds the handle by value as an operand
+    // of a `sqliteQuery` request".
+    let (rows, operation) = operation_named(&plan, "rows");
+    assert_eq!(
+        operation["implementation"],
+        json!({ "builtin": "sqliteQuery" })
+    );
+    let mut paths: Vec<String> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .flat_map(|cone| cone["writes"].as_array().expect("writes"))
+        .filter(|write| write["target"]["of"] == json!({ "operation": rows }))
+        .map(|write| {
+            format!(
+                "{} = {}",
+                write["target"]["path"],
+                template_line(&plan, &write["template"])
+            )
+        })
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            "[\"db\"] = [argument db : value]",
+            "[\"params\",\"0\"] = [argument label : identity]",
+            "[\"sql\"] = const",
+        ]
+    );
+}

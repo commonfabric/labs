@@ -1229,6 +1229,19 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     Some(Expression::Identifier(key)) => {
                                         format!("${}", key.name)
                                     }
+                                    // "A key that is static ... is the
+                                    // name it evaluates to" (PL §3.4).
+                                    Some(Expression::StringLiteral(key)) => key.value.to_string(),
+                                    Some(Expression::NumericLiteral(key)) => key.value.to_string(),
+                                    Some(Expression::TemplateLiteral(key))
+                                        if key.expressions.is_empty() =>
+                                    {
+                                        key.quasis
+                                            .first()
+                                            .and_then(|quasi| quasi.value.cooked.as_ref())
+                                            .map(|text| text.to_string())
+                                            .unwrap_or_default()
+                                    }
                                     _ => {
                                         self.unsupported(
                                             "a computed key of a record in the reactive tier",
@@ -1242,9 +1255,52 @@ impl<'a> Emitter<'_, '_, 'a> {
                             fields.insert(name, member);
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
-                            match self.eval(&spread.argument, hint) {
-                                Place::Record(members) => fields.extend(members),
-                                Place::Const => {}
+                            let place = self.eval(&spread.argument, hint);
+                            let declared = match &place {
+                                Place::Slot(..) | Place::Value(..) => {
+                                    self.declared_members(&spread.argument)
+                                }
+                                _ => None,
+                            };
+                            match (place, declared) {
+                                (Place::Record(members), _) => fields.extend(members),
+                                (Place::Const, _) => {}
+                                // PL §3.4, "A spread in an object
+                                // literal": each path the type of `a`
+                                // declares has the template of `a.p`. A
+                                // member written before the spread stays
+                                // where the type does not declare its
+                                // path, is replaced where the path is
+                                // required, and is one branch of a
+                                // `select` on the `shape` of `a.p` where
+                                // it is optional.
+                                (place, Some(declared)) => {
+                                    for (name, optional) in declared {
+                                        let member = Self::extend(&place, &name);
+                                        let earlier =
+                                            fields.get(&name).cloned().filter(|_| optional);
+                                        let member = match earlier {
+                                            Some(earlier) => self.build(
+                                                &format!("@{name}"),
+                                                spread.span.start,
+                                                |emitter, _| {
+                                                    let selector = emitter.selector(2);
+                                                    let condition =
+                                                        emitter.one("shape", |_| member.clone()).1;
+                                                    let branches = vec![
+                                                        emitter
+                                                            .one("identity", |_| member.clone())
+                                                            .1,
+                                                        emitter.one("identity", |_| earlier).1,
+                                                    ];
+                                                    select_node(selector, condition, branches)
+                                                },
+                                            ),
+                                            None => member,
+                                        };
+                                        fields.insert(name, member);
+                                    }
+                                }
                                 _ => self.unsupported(
                                     "a spread into a record in the reactive tier",
                                     spread.span.start,
@@ -1257,17 +1313,106 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             Expression::ArrayExpression(array) => {
                 let mut fields = BTreeMap::new();
+                // The members up to the first spread whose positions are
+                // not static. "A spread of a value of tuple type has
+                // static positions and is the members written out", and a
+                // hole "holds nothing, has no template" (PL §3.4).
+                let mut position = 0usize;
+                let mut rest = array.elements.len();
                 for (index, element) in array.elements.iter().enumerate() {
-                    match element.as_expression() {
-                        Some(element) => {
-                            let member = self.eval(element, hint);
-                            fields.insert(index.to_string(), member);
+                    match element {
+                        ArrayExpressionElement::Elision(_) => position += 1,
+                        ArrayExpressionElement::SpreadElement(spread) => {
+                            let written = match unwrap(&spread.argument) {
+                                Expression::ArrayExpression(inner)
+                                    if inner
+                                        .elements
+                                        .iter()
+                                        .all(|element| element.as_expression().is_some()) =>
+                                {
+                                    Some(inner)
+                                }
+                                _ => None,
+                            };
+                            let Some(written) = written else {
+                                rest = index;
+                                break;
+                            };
+                            for element in written.elements.iter().filter_map(|e| e.as_expression())
+                            {
+                                let member = self.eval(element, hint);
+                                fields.insert(position.to_string(), member);
+                                position += 1;
+                            }
                         }
-                        None => self.unsupported(
-                            "a spread or a hole in an array of the reactive tier",
-                            element.span().start,
-                        ),
+                        element => {
+                            if let Some(element) = element.as_expression() {
+                                let member = self.eval(element, hint);
+                                fields.insert(position.to_string(), member);
+                            }
+                            position += 1;
+                        }
                     }
+                }
+                if rest < array.elements.len() {
+                    // "Every position from the first spread on is at the
+                    // path `*`, and the template there is the join of the
+                    // template of each spread operand at `*`, of the
+                    // templates of the members written after the first
+                    // spread, and of the array's `enumeration`", which is
+                    // "`derive` by expression code over the `enumeration`
+                    // of each spread operand".
+                    let later = &array.elements[rest..];
+                    let star = self.build(hint, at, |emitter, cone| {
+                        let mut inputs: Vec<Option<Value>> = Vec::new();
+                        let mut enumerations: Vec<Option<Value>> = Vec::new();
+                        for element in later {
+                            match element {
+                                ArrayExpressionElement::Elision(_) => {}
+                                ArrayExpressionElement::SpreadElement(spread) => {
+                                    let place = emitter.eval(&spread.argument, hint);
+                                    match &place {
+                                        Place::Slot(root, path) => {
+                                            let slot = emitter.slot(root, path, "enumeration");
+                                            emitter.cones[cone].slots.insert(slot);
+                                            enumerations
+                                                .push(Some(json!({ "op": "slot", "slot": slot })));
+                                            let member = Self::extend(&place, "*");
+                                            inputs.push(emitter.one("identity", |_| member).1);
+                                        }
+                                        Place::Const => {}
+                                        other => {
+                                            // A collection the instance
+                                            // computed: its template is
+                                            // its membership, and that of
+                                            // one value its own.
+                                            let template =
+                                                emitter.one("identity", |_| other.clone()).1;
+                                            enumerations.push(template.clone());
+                                            inputs.push(template);
+                                        }
+                                    }
+                                }
+                                element => {
+                                    if let Some(element) = element.as_expression() {
+                                        inputs.push(
+                                            emitter
+                                                .one("identity", |emitter| {
+                                                    emitter.eval(element, hint)
+                                                })
+                                                .1,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        let enumerations: Option<Vec<Value>> = enumerations.into_iter().collect();
+                        let mut inputs: Vec<Value> =
+                            inputs.into_iter().collect::<Option<Vec<Value>>>()?;
+                        inputs.push(join(enumerations?));
+                        Some(join(inputs))
+                    });
+                    fields.insert("*".to_string(), star);
                 }
                 Place::Record(fields)
             }
@@ -1582,6 +1727,19 @@ impl<'a> Emitter<'_, '_, 'a> {
                     Place::Unknown
                 }
             },
+            // "`db.query(...)` holds the handle by value as an operand
+            // of a `sqliteQuery` request" (PL §3.14).
+            "query" if matches!(receiver, Place::Slot(..) | Place::Value(..)) => {
+                let receiver = receiver.clone();
+                self.effect(
+                    "sqliteQuery",
+                    Some(("db", &receiver)),
+                    arguments,
+                    &["sql"],
+                    hint,
+                    at,
+                )
+            }
             "for" | "asSchema" | "withTx" => receiver.clone(),
             // The method forms of `equals` and `equalLinks` (LS §4.7, PL
             // §3.16): on a handle, or on a cell constructor with both
@@ -1810,12 +1968,22 @@ impl<'a> Emitter<'_, '_, 'a> {
                 // `const`. For a literal written in place, the
                 // membership is the literal's `enumeration`" (PL §3.6),
                 // which is `const` for a static set of keys (§3.4).
+                // An array written with a spread has the membership its
+                // positions from the spread on have, which joins the
+                // `enumeration` of each spread operand.
+                let membership = match &receiver {
+                    Place::Record(fields) => match fields.get("*") {
+                        Some(Place::Value(value, _)) => self.values[*value].template.clone(),
+                        _ => Some(json!({ "op": "const" })),
+                    },
+                    _ => Some(json!({ "op": "const" })),
+                };
                 let array = self.build(name, at, |emitter, _| {
                     emitter.pass(&receiver);
-                    Some(json!({ "op": "const" }))
+                    membership.clone()
                 });
                 self.cone = saved;
-                iterated = Some(json!({ "op": "const" }));
+                iterated = membership;
                 match array {
                     Place::Value(value, _) => {
                         self.values[value].referred = true;
@@ -2094,69 +2262,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }),
             "wish" => self.wish(arguments, hint, at),
-            _ if EFFECTS.contains(&name) => {
-                let operation = self.operations.len();
-                self.operations.push(json!({
-                    "kind": "effect",
-                    "implementation": { "builtin": name },
-                    "name": base_name(hint, name),
-                    "within": self.within_json(),
-                }));
-                let (cone, made) = self.computing(hint, at);
-                let saved = (
-                    std::mem::take(&mut self.operands),
-                    std::mem::replace(&mut self.opaque, false),
-                );
-                // The templates of the request, and whether each path
-                // has one.
-                let mut request: Option<Vec<Value>> = Some(Vec::new());
-                for argument in arguments {
-                    let place = self.eval(argument, hint);
-                    // One write edge per path of the request (PL §3.14),
-                    // with the template of what is written there.
-                    let mut paths = Vec::new();
-                    request_paths(&place, &mut Vec::new(), &mut paths);
-                    for (path, member) in paths {
-                        let template = self.one("identity", |_| member).1;
-                        let mut write = Map::new();
-                        write.insert(
-                            "target".to_string(),
-                            json!({
-                                "kind": "request",
-                                "of": { "operation": operation },
-                                "path": path,
-                            }),
-                        );
-                        match template {
-                            Some(template) => {
-                                write.insert("template".to_string(), template.clone());
-                                if let Some(request) = &mut request {
-                                    request.push(template);
-                                }
-                            }
-                            None => request = None,
-                        }
-                        write.insert("constraints".to_string(), json!([]));
-                        self.cones[cone].writes.push(Value::Object(write));
-                    }
-                }
-                self.operands = saved.0;
-                self.opaque = saved.1;
-                // "For an effect, the join of the templates of its
-                // request" (PL §1.1, `Operation.input`).
-                if let Some(mut request) = request {
-                    let input = if request.len() == 1 {
-                        request.remove(0)
-                    } else {
-                        join(request)
-                    };
-                    self.operations[operation]["input"] = input;
-                }
-                if made {
-                    self.cone = None;
-                }
-                Place::Slot(Root::Operation(operation), Vec::new())
+            // `cellFromUrl` is one `Operation` of kind `effect`, whose
+            // parsing half needs no resolution (PL §3.19).
+            _ if EFFECTS.contains(&name) || name == "cellFromUrl" => {
+                self.effect(name, None, arguments, &[], hint, at)
             }
+
             // The context reads (PL §3.16).
             "spaceOf" | "equals" => self.derived(hint, at, |emitter, _| {
                 for argument in arguments {
@@ -2244,6 +2355,133 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Place::Unknown
             }
         }
+    }
+
+    /// A request of an effect in the reactive tier: one `Operation` of
+    /// kind `effect`, and one write edge with target `request` per path
+    /// of the request (PL §3.14). `held` is an operand the request holds
+    /// by value at a path of its own, as `db.query(...)` holds the handle
+    /// of the database, and `named` gives the path of each argument that
+    /// is not the record of the request.
+    fn effect(
+        &mut self,
+        builtin: &str,
+        held: Option<(&str, &Place)>,
+        arguments: &[&Expression<'a>],
+        named: &[&str],
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let operation = self.operations.len();
+        self.operations.push(json!({
+            "kind": "effect",
+            "implementation": { "builtin": builtin },
+            "name": base_name(hint, builtin),
+            "within": self.within_json(),
+        }));
+        let (cone, made) = self.computing(hint, at);
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        // The templates of the request, and whether each path has one.
+        let mut request: Option<Vec<Value>> = Some(Vec::new());
+        let mut operands: Vec<(Vec<String>, Place, &'static str)> = Vec::new();
+        if let Some((name, place)) = held {
+            operands.push((vec![name.to_string()], place.clone(), "value"));
+        }
+        for (index, argument) in arguments.iter().enumerate() {
+            let place = self.eval(argument, hint);
+            let prefix: Vec<String> = named
+                .get(index)
+                .map(|name| name.to_string())
+                .into_iter()
+                .collect();
+            operands.push((prefix, place, "identity"));
+        }
+        for (prefix, place, class) in operands {
+            // One write edge per path of the request, with the template
+            // of what is written there.
+            let mut paths = Vec::new();
+            request_paths(&place, &mut prefix.clone(), &mut paths);
+            for (path, member) in paths {
+                let template = self.one(class, |_| member).1;
+                let mut write = Map::new();
+                write.insert(
+                    "target".to_string(),
+                    json!({
+                        "kind": "request",
+                        "of": { "operation": operation },
+                        "path": path,
+                    }),
+                );
+                match template {
+                    Some(template) => {
+                        write.insert("template".to_string(), template.clone());
+                        if let Some(request) = &mut request {
+                            request.push(template);
+                        }
+                    }
+                    None => request = None,
+                }
+                write.insert("constraints".to_string(), json!([]));
+                self.cones[cone].writes.push(Value::Object(write));
+            }
+        }
+        self.operands = saved.0;
+        self.opaque = saved.1;
+        // "For an effect, the join of the templates of its request" (PL
+        // §1.1, `Operation.input`).
+        if let Some(mut request) = request {
+            let input = if request.len() == 1 {
+                request.remove(0)
+            } else {
+                join(request)
+            };
+            self.operations[operation]["input"] = input;
+        }
+        if made {
+            self.cone = None;
+        }
+        Place::Slot(Root::Operation(operation), Vec::new())
+    }
+
+    /// The properties the type of an expression declares, each with
+    /// whether it is optional: for an object type with no index
+    /// signature, and for a union of such types, where a property that
+    /// one alternative lacks is optional.
+    fn declared_members(&self, expression: &Expression<'a>) -> Option<Vec<(String, bool)>> {
+        let ty = self.resolver.typed_at(self.module, expression, 0).ok()?;
+        let ty = self.resolver.present(ty);
+        let alternatives = match self.resolver.shape(ty) {
+            Shape::Union(alternatives) => alternatives.clone(),
+            _ => vec![ty],
+        };
+        let mut members: Vec<(String, bool)> = Vec::new();
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        for alternative in &alternatives {
+            let Shape::Object(properties, None) = self.resolver.shape(*alternative) else {
+                return None;
+            };
+            for property in &properties {
+                match members.iter_mut().find(|(name, _)| *name == property.name) {
+                    Some(member) => member.1 |= property.optional,
+                    None => members.push((property.name.clone(), property.optional)),
+                }
+            }
+            seen.push(
+                properties
+                    .iter()
+                    .map(|property| property.name.clone())
+                    .collect(),
+            );
+        }
+        for member in &mut members {
+            if seen.iter().any(|names| !names.contains(&member.0)) {
+                member.1 = true;
+            }
+        }
+        Some(members)
     }
 
     /// The template of an operand of a request as one value: the
