@@ -16,6 +16,7 @@ cell-factory:empty-array error
 pattern-context:let-declaration error
 pattern-context:var-declaration error
 pattern-context:assignment error
+wish:computed-query hint
 pattern-context:loop error
 pattern-context:early-return error
 pattern-context:missing-return error

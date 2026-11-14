@@ -147,6 +147,7 @@ pub const CATALOG: &[Entry] = &[
     done("pattern-context:let-declaration", Error),
     done("pattern-context:var-declaration", Error),
     done("pattern-context:assignment", Error),
+    footprint("wish:computed-query", Hint, LABEL_TEMPLATES),
     done("pattern-context:loop", Error),
     done("pattern-context:early-return", Error),
     done("pattern-context:missing-return", Error),
