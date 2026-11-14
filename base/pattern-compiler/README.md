@@ -47,8 +47,10 @@ A slot holds the JSON schema of the type at its path and the label its
 annotations declare, where the emitter has the type of the slot's root
 (`src/schema.rs`), and the plan lists the constraints of
 `plan-and-label-templates.md` §4.4 that come from the annotations a body
-reads and writes under. Of the `cfc-flow:*` diagnostics,
-`cfc-flow:write-policy` is reported.
+reads and writes under. The `cfc-flow:*` diagnostics are
+reported where `plan-and-label-templates.md` §4.4 has the compiler decide
+them on declared labels (`src/flow.rs`; notes 167 to 172 of
+`SPEC-NOTES.md`).
 `plan path/to/module.tsx` prints the plan of each pattern,
 `plan --corpus <patterns directory>` counts the modules a plan is emitted for
 with no unsupported construct and the records that have a template, and

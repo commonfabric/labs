@@ -1137,3 +1137,121 @@ numbers have gaps.
     list a `writer` constraint, 51 of them in `fabrichat/room.tsx`.
     `cfc-flow:write-policy` reports nothing: every such edge is in a
     handler its policy names.
+
+## The label-flow checks of PL §4.4
+
+167. **Where the constraints are read** (PL §1.5). This replaces note 165
+    and the last part of note 149. A write edge of a body and of a cone,
+    and a kept output, has the constraints of the annotations at its
+    target: through a handle of a slot, at a `state` target under the
+    type argument of the cell constructor, at an `argument` target
+    under the argument type of a factory the tag names by a slot, and
+    at a kept output under the result type the pattern declares. A
+    `created` target, a `request` target, an `argument` target of a
+    child a body instantiates, and a state cell whose constructor has
+    no type argument have none: the footprint keeps no type for a site,
+    and the request types the API declares were not read. A
+    `requiredIntegrity` at a kept output gives a `writeFloor`, by the
+    assumption of LS §8.6 that the crate already made for a write edge;
+    PL §1.5 names `writerFit` and `writer` alone for an output.
+168. **A slot that observes a reference declares nothing** (PL §1.5,
+    question 55). An `identity` slot and a `shape` slot in place have no
+    `declared` member. The template of a write a body makes through a
+    handle always has the `identity` slot of that handle, so by PL
+    §4.4 ("evaluated only where every `slot` node it reaches ... has
+    the `declared` member") `cfc-flow:writer-fit` and
+    `cfc-flow:write-floor` are never decided for a write of a handler,
+    an action, or a computation's side-write. They are decided for an
+    output or an edge whose template has `value` slots alone:
+    expression code, and a body that reads values and no handle. For a
+    lower bound of confidentiality the restriction is stricter than
+    soundness needs, since an undeclared slot could count as the empty
+    list; the crate follows PL. The corpus has 9 slots with a declared
+    label where it had 11.
+169. **What an input constraint lists** (PL §1.5, §4.4). This replaces
+    the middle of note 149. The annotations are those of the type the
+    body declares for a formal input, where the emitter has it (a
+    `lift` and an authored function), and otherwise of the type of the
+    slot root the input is bound to, from the root, which for a handler
+    is its event and state type and for a capture stands in for "the
+    static type the checker gives the expression". A constraint lists
+    slots, entries of `Body.computed`, and entries of `Body.handles`
+    with the annotated path below the cell, in either prefix direction.
+    Chosen where PL is silent: an entry of a class other than `value`
+    at or above a handle does not overlap an annotated path below the
+    hop, since it observes the reference and reads nothing through it;
+    PL's "overlaps ... in either prefix direction" does not say whether
+    a path overlaps across a link. Without this a handler that holds a
+    handle to a document with one `RequiresIntegrity` field would be
+    held to that requirement on the pointer label of the handle. A
+    body with no write edge and no output derived by it still has its
+    constraint in `Plan.constraints`, listed nowhere, and the
+    compile-time check runs on it.
+170. **The relations** (PL §4.4, `src/flow.rs`). An atom's type is
+    compared by the last segment of its identifier, so `Expires`,
+    `User`, `PersonalSpace`, `Space`, `Policy`, `Concept` and
+    `TransformedBy` are read alike with and without the prefix
+    `https://commonfabric.org/cfc/atom/`. A variable is a record with
+    the one member `var`. A pattern member given as `undefined` has no
+    canonical form in LS §8.5 and is not read. Where PL says "a check
+    that would compare one is not decided", the crate skips the clause
+    or the pattern that holds the run-time term and still reports
+    another clause or pattern of the same constraint; a run-time term
+    in the ceiling, in the target's declared list, or in an integrity
+    atom of an input leaves the whole constraint undecided, and so does
+    a `Policy` atom anywhere in a confidentiality check. PL §3.2 says a
+    `derive` keeps "the inputs' hereditary atoms" and §4.4 says "the
+    atoms that every input has"; the crate follows §4.4, having no
+    record of which declared atom is hereditary. A template that is
+    `const` alone is not evaluated for integrity.
+171. **`TransformedBy`** (PL §4.4). The crate forms no `Body.code` and
+    no `Cone.code` (note 153), so a pattern that can match the atom, a
+    variable or a record whose `type` is absent, a variable, or
+    `TransformedBy`, is not decided against a template with a `derive`.
+172. **`cfc-flow:ui-contract`** (PL §4.4). The chain of an element is
+    the elements written around it in the JSX. The surface is not
+    decided, and the compiler is silent, where the chain has a tag that
+    is neither a host element nor one of the three helpers, where the
+    element is written between the tags of a pattern or in one of its
+    attributes, where the tree is written anywhere but as the `[UI]`
+    value (a tree held in a constant and placed by a reference is not
+    followed), and inside a pattern called as a function. The handler
+    of an alternative is found by the name of its binding. A pattern
+    with a plan of its own that binds the handler and leaves the
+    surface to the pattern that embeds it is reported, as PL has it
+    ("the chain ends at the root of the pattern's own tree"): both
+    reports of the corpus are of this kind.
+173. **`wish`** (PL §3.19, LS §10.2). A string given as the argument is
+    `subset-type:mismatch`, reported at the argument by the checker,
+    which names the one parameter of `WishFunction`; no document states
+    the rule apart from the API's type. `query`, `scope`, `headless`
+    and `path` are constants where the static initializer of a
+    module-scope constant evaluates, a literal included.
+    `wish:computed-query` is reported at the call for a query that is
+    not a constant, and for a `path` that is not a constant where the
+    query is exactly `#now` or `#profile`.
+174. **Schema identifiers** (PL §1.1, §1.5). This replaces note 146.
+    `Slot.schema`, `Plan.argumentSchema` and `Plan.resultSchema` hold
+    an identifier, the documents are listed once each beside the plan
+    (`PatternPlan.schemas`, and `schemas` in the output of `plan`), and
+    an output has no schema member. The identifier is the placeholder
+    `unhashed:schema/` and the position of the document. PL §1.2 gives
+    the canonical form and names the tagged hash by a runtime function
+    for label documents, with no tag for a schema document, so the
+    crate computes none. `StateCell.schema`, `Child.argumentSchema`,
+    `Child.resultSchema`, `Binding.eventSchema`, `Binding.stateSchema`
+    and `HandleReads.envelope` are not emitted. `$defs` (PL §1.5, SM
+    §5) is not built: the type store holds a recursive reference as an
+    unresolved type with no name, so the emitter has nothing to refer
+    to, and such a position is `{}` as before.
+175. **The path of a `created` edge** (PL §3.11) is read from the `key`
+    calls the receiver is written with at the write, and `*` for an
+    append. A key that is not static leaves the edge at the path above
+    it. A handle of the created cell held in a variable after a `key`
+    call has the empty path, as before.
+176. **The corpus, with the label-flow checks.** 335 modules accepted
+    and 386 errors, as before; plans with no unsupported construct for
+    271 of 288 modules. `cfc-flow:ui-contract` is reported twice
+    (`product/lobby/main.tsx`, `system/fabrichat/room.tsx`) and the
+    four error diagnostics nowhere. The accepted plans have 52 `writer`,
+    9 `writerFit` and 2 `writeFloor` records and no input constraint.
