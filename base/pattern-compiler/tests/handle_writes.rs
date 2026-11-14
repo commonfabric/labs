@@ -126,3 +126,19 @@ fn a_selection_between_stored_places_is_a_reference_and_one_with_a_computed_bran
     // evaluation ... the runtime decides those per write."
     assert_eq!(reports(&analysis, text), []);
 }
+
+#[test]
+fn a_literal_bound_to_a_writable_handle_is_a_value_the_instance_produces() {
+    // LS §10.2, `binding:write-to-computed`: "the path holds a value the
+    // instance produces and can hold no reference: ... a literal".
+    let text = r#"export const P = pattern<{ seen: Writable<string[]> }>(({ seen }) => {
+  return { bad: rename({ name: "fixed" }), read: peek({ name: "fixed", seen }) };
+});
+"#;
+    let analysis = program(text);
+    assert_eq!(cases(&analysis), ["literal: written", "literal: read"]);
+    assert_eq!(
+        reports(&analysis, text),
+        [(Severity::Error, "\"fixed\" }), read: pe".to_string())]
+    );
+}

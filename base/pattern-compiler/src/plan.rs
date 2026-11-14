@@ -5062,13 +5062,22 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
             return;
         }
-        let origin = self.origin_of(place, false);
+        let declared = written.is_some_and(|written| self.declared_writable(written));
+        // A literal or a constant given where a handle that can write is
+        // declared is a value the instance produces.
+        let literal = matches!(place, Place::Const) && declared;
+        let origin = if literal {
+            Origin::Produced
+        } else {
+            self.origin_of(place, false)
+        };
         if matches!(origin, Origin::Stored | Origin::Other) {
             return;
         }
         let writes = self.writes_through(body, path);
-        let declared = written.is_some_and(|written| self.declared_writable(written));
         let case = match (origin, writes) {
+            (Origin::Produced, true) if literal => "literal: written",
+            (Origin::Produced, false) if literal => "literal: read",
             (Origin::Reference, true) => "reference",
             (Origin::Produced, true) => "computed: written",
             (Origin::Mixed, true) => "mixed: written",

@@ -420,7 +420,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
             }
             for write in &plan.handle_writes {
                 let (severity, found) = match write.case {
-                    "computed: written" => (
+                    "computed: written" | "literal: written" => (
                         crate::diagnostics::Severity::Error,
                         "The callee writes through a handle bound to a value the instance computes, and the write is refused when it runs",
                     ),

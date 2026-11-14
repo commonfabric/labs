@@ -1034,6 +1034,36 @@ impl<'a> Resolver<'_, 'a> {
                 | Expression::ObjectExpression(_)
                 | Expression::ArrayExpression(_)
         );
+        // A literal given where a handle that can write is declared: the
+        // instance produces the value, as it does an operator's result
+        // (ruling T3; LS §10.2, `binding:write-to-computed`).
+        if by_reference
+            && literal
+            && !matches!(
+                expression,
+                Expression::ObjectExpression(_) | Expression::ArrayExpression(_)
+            )
+        {
+            let members = match self.shape(self.present(to)) {
+                Shape::Union(members) => members,
+                _ => vec![self.present(to)],
+            };
+            let writable = members.iter().any(|member| {
+                matches!(
+                    self.shape(*member),
+                    Shape::Handle(HandleKind::Cell | HandleKind::WriteonlyCell, _)
+                )
+            });
+            if writable {
+                let what = if self.types.borrow().instantiating {
+                    "an initial value of a child's argument"
+                } else {
+                    "a writable handle bound to"
+                };
+                self.count(module, format!("types:by-reference:{what}:a literal"));
+                self.note(module, format!("{what} a literal"), expression.span());
+            }
+        }
         let to = if by_reference && literal {
             self.value_types(to)
         } else {
