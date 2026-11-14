@@ -51,6 +51,8 @@ type PlanStateEntry = {
 type PlanWrite = {
   target: { kind: string; slot?: number; cell?: number; path?: string[] };
   template?: Template;
+  /** The reference the written value is, where the body passes one on. */
+  reference?: { passes?: number; oneOf?: number[] };
 };
 
 /** The members of a plan this harness reads. */
@@ -193,10 +195,28 @@ export type WriteRow = {
   /** The path below the target's cell, with each `*` an index. */
   path: string[];
   runtime: Label;
+  /**
+   * The edge's template beside the label the target's own type declares
+   * for the written path, which is stored there on both sides (PL §3.1,
+   * "A write edge of a handler"). For an edge with a `reference` member
+   * it is joined with what a value read through the stored link consumes.
+   */
   template: Evaluated;
   comparison: Comparison;
   runtimeByOrigin: { all: Label; withoutStatic: Label };
   comparisonWithoutStatic: Comparison;
+  /**
+   * `template` with the entries of origin `link` left out of the label of
+   * each `identity` slot that no write edge of the body targets: a handle
+   * the body passes on and does not write through. Such an entry holds
+   * what the schema of the link declares, which for a link to a cell is
+   * what the cell's own type declares. PL §2.2 counts it as the label of
+   * the link. The run of a handler reads no link it only passes on, so
+   * its join does not hold the entry (note 228 of `SPEC-NOTES.md`).
+   */
+  templateWithoutPassedLinks: Evaluated;
+  /** `templateWithoutPassedLinks` against `runtime`. */
+  comparisonWithoutPassedLinks: Comparison;
 };
 
 /** Something the harness did not compare, and why. */
@@ -799,6 +819,31 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         }));
       };
 
+      // The label the type of the place declares for the value at `cell`:
+      // the entries of origin `declared` in the document that holds the
+      // value, at the path and below it.
+      const declaredAt = (cell: AnyCell): Label => {
+        const link = hops(cell).at(-1);
+        const metadata = link === undefined
+          ? undefined
+          : readStoredCfcMetadata(read, link);
+        if (link === undefined || metadata === undefined) {
+          return { confidentiality: [], integrity: [] };
+        }
+        return consumed(
+          cfcLabelViewFromMetadata({
+            ...metadata,
+            labelMap: {
+              ...metadata.labelMap,
+              entries: metadata.labelMap.entries.filter((entry) =>
+                entry.origin === "declared"
+              ),
+            },
+          }, link.path),
+          "value",
+        );
+      };
+
       // The cell at a path of the result. "The entries of the enclosing
       // rendered tree at the tag's position are those of the callee's
       // `[UI]`" (PL §1.1): where the run holds the result of a pattern at
@@ -834,8 +879,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           : cell;
       };
 
-      // Ruling U1: a handle that a body passes on without reading through
-      // it adds nothing of the label of its cell to what the body writes.
+      // Whether the evaluation leaves the entries of origin `link` out of
+      // the label of a handle the body passes on
+      // (`WriteRow.templateWithoutPassedLinks`).
+      let omitPassedLinks = false;
       // A handle is passed on where its `identity` slot is in the reads of
       // the handler's body and no write edge of the body has the slot as
       // its target. A handle the body writes through is not passed on: the
@@ -895,7 +942,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         scope: Omit<Context, "elements">,
       ): TemplateInputs => {
         const inputs: TemplateInputs = {
-          slot: (slot, elements) => {
+          slot: (slot, elements, passed) => {
             const context = { ...scope, elements };
             const { root, observes } = plan.slots[slot];
             // An event is not stored. The label of its slot is the label
@@ -916,7 +963,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               }
               const evaluated = evaluateTemplate(
                 entry.template,
-                inputsFor(dereference, {}),
+                inputsFor(dereference && (passed ?? false), {}),
                 elements,
                 { patterns: plan.patterns },
               );
@@ -929,14 +976,20 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return evaluated.label;
             }
             if (observes === "identity") {
-              if (!dereference && passedOn(slot, scope.binding)) {
+              if (omitPassedLinks && passedOn(slot, scope.binding)) {
                 return linkWithoutDeclaration(cell);
               }
+              // The label of the link: what a `followRef` read at the
+              // position that holds the reference consumes, and nothing
+              // of the document the reference leads to (PL §2.2, "The
+              // label of an `identity` slot"). The slot is dereferenced
+              // only where it stands for the reference an output passes
+              // on (PL §3.1, "What is compared").
               const reference = consumed(
                 cfcLabelViewForResolvedCell(cell, { lastNode: "top" }),
                 "followRef",
               );
-              return dereference
+              return dereference && passed
                 ? join([reference, readSlot(slot, cell, "value")])
                 : reference;
             }
@@ -1366,11 +1419,32 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           cfcLabelViewForResolvedCell(cell),
           "value",
         );
-        const template = evaluate(write.template, false, {
-          elements: [],
-          binding,
-          event,
-        });
+        // "The template's side is the edge's template, beside the label
+        // that the target's own type declares for the written path, which
+        // is stored there on both sides" (PL §3.1, "A write edge of a
+        // handler"). An edge whose written value is a reference the body
+        // passes on is joined with what a value read through the stored
+        // link consumes, so that both sides read one target.
+        const beside = [
+          declaredAt(cell),
+          ...(write.reference === undefined ? [] : [runtimeLabel]),
+        ];
+        const side = (): Evaluated => {
+          const evaluated = evaluate(write.template!, false, {
+            elements: [],
+            binding,
+            event,
+          });
+          return { ...evaluated, label: join([evaluated.label, ...beside]) };
+        };
+        const template = side();
+        omitPassedLinks = true;
+        let templateWithoutPassedLinks: Evaluated;
+        try {
+          templateWithoutPassedLinks = side();
+        } finally {
+          omitPassedLinks = false;
+        }
         const withoutStatic = byOrigin(cell, "value", false);
         return {
           binding,
@@ -1387,6 +1461,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           comparisonWithoutStatic: compareLabels(
             template.label,
             withoutStatic,
+          ),
+          templateWithoutPassedLinks,
+          comparisonWithoutPassedLinks: compareLabels(
+            templateWithoutPassedLinks.label,
+            runtimeLabel,
           ),
         };
       };

@@ -203,6 +203,52 @@ describe("evaluateTemplate", () => {
     });
   });
 
+  it("says for each slot whether it stands for the value the template passes on", () => {
+    // PL §3.1, "What is compared": the `slot` node that is the template,
+    // the selected branch of a `select`, and the chosen child of a `pick`
+    // stand for the reference an output passes on. An input of a `derive`,
+    // a condition, a choice, and the body of a `fold` do not.
+    const seen: [number, boolean][] = [];
+    const recording: TemplateInputs = {
+      ...inputs(0),
+      slot: (index, elements, passed) => {
+        seen.push([index, passed ?? false]);
+        return inputs().slot(index, elements);
+      },
+    };
+    const template: Template = {
+      op: "select",
+      selector: 0,
+      condition: slot(0),
+      branches: [
+        {
+          op: "pick",
+          pick: 0,
+          choice: slot(1),
+          body: slot(3),
+        },
+        slot(2),
+      ],
+    };
+    evaluateTemplate(template, recording);
+    evaluateTemplate(
+      { op: "derive", inputs: [slot(2)], by: BODY },
+      recording,
+    );
+    evaluateTemplate({ op: "fold", collection: 0, body: slot(3) }, recording);
+    evaluateTemplate(slot(1), recording);
+
+    expect(seen).toEqual([
+      [0, false],
+      [1, false],
+      [3, true],
+      [2, false],
+      [3, false],
+      [3, false],
+      [1, true],
+    ]);
+  });
+
   it("reports a dynamic node it has no reads for", () => {
     const template: Template = { op: "dynamic", reads: 0 };
 

@@ -57,9 +57,18 @@ export type ElementBinding = {
 export type TemplateInputs = {
   /**
    * The label of slot `slot`. `elements` binds the element of each
-   * collection the evaluation is inside, innermost last.
+   * collection the evaluation is inside, innermost last. `passed` is true
+   * where the slot stands for the value the template passes on: the `slot`
+   * node that is the template, the selected branch of a `select`, or the
+   * chosen child of a `pick` that is one (§3.1, "What is compared"). It is
+   * false for an input of a `derive`, a condition, a choice, and the body
+   * of a `fold`.
    */
-  slot(slot: number, elements: readonly ElementBinding[]): Label;
+  slot(
+    slot: number,
+    elements: readonly ElementBinding[],
+    passed?: boolean,
+  ): Label;
   /** The branch selector `selector` took, or `undefined` where unobserved. */
   selected(
     selector: number,
@@ -235,20 +244,27 @@ export const evaluateTemplate = (
       : { confidentiality, integrity };
   };
 
-  const walk = (node: Template, at: readonly ElementBinding[]): Label => {
+  const walk = (
+    node: Template,
+    at: readonly ElementBinding[],
+    passed: boolean,
+  ): Label => {
     switch (node.op) {
       case "const":
         return NEUTRAL;
       case "slot":
-        return inputs.slot(node.slot, at);
+        return inputs.slot(node.slot, at, passed);
       case "derive":
-        return derive(node.inputs.map((input) => walk(input, at)), node.by);
+        return derive(
+          node.inputs.map((input) => walk(input, at, false)),
+          node.by,
+        );
       case "select": {
-        const condition = walk(node.condition, at);
+        const condition = walk(node.condition, at, false);
         const taken = inputs.selected(node.selector, at);
         const branches = taken === undefined
-          ? node.branches.map((branch) => walk(branch, at))
-          : [walk(node.branches[taken], at)];
+          ? node.branches.map((branch) => walk(branch, at, passed))
+          : [walk(node.branches[taken], at, passed)];
         if (taken === undefined) bound = true;
         return {
           confidentiality: union([
@@ -259,12 +275,13 @@ export const evaluateTemplate = (
         };
       }
       case "pick": {
-        const choice = walk(node.choice, at);
+        const choice = walk(node.choice, at, false);
         const chosen = inputs.picked?.(node.pick, at);
         if (chosen === undefined) bound = true;
         const body = walk(
           node.body,
           chosen === undefined ? at : [...at, chosen],
+          passed,
         );
         return {
           confidentiality: union([
@@ -277,7 +294,7 @@ export const evaluateTemplate = (
       case "fold": {
         const membership = inputs.membership(node.collection, at);
         const bodies = inputs.elementKeys(node.collection, at).map((key) =>
-          walk(node.body, [...at, { collection: node.collection, key }])
+          walk(node.body, [...at, { collection: node.collection, key }], false)
         );
         const met = meet(bodies.map((body) => body.integrity));
         const kept = (met === "neutral" ? [] : met).filter((atom) =>
@@ -306,7 +323,7 @@ export const evaluateTemplate = (
     }
   };
 
-  const label = walk(template, elements);
+  const label = walk(template, elements, true);
   return {
     label: options.kept ? keptOutputLabel(label, patterns) : label,
     bound,

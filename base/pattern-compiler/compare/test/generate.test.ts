@@ -246,17 +246,16 @@ describe("a handler that passes a handle on without reading through it", () => {
   // `fixtures/handle-passed.tsx`: the handler sets `mine` and gives the
   // handles of `mine` and `other` to a child. Ruling U1: a handle a body
   // passes on without reading through it adds nothing of the label of its
-  // cell to what the body writes. The argument's link to the cell of
-  // `other` carries the clause that the cell's own type declares, as an
-  // entry of origin `link`, and the run's join does not hold it.
-  it("has no clause of the cell of the handle in the label of what the handler writes", async () => {
+  // cell to what the body writes. The label of an `identity` slot is the
+  // label of the link the body was given the handle through (PL §2.2).
+  const run = async () => {
     const modules = JSON.parse(
       await Deno.readTextFile(fixture("handle-passed.plan.json")),
     );
     const { plan, schemas } = modules[0].patterns.find((
       pattern: { name: string },
     ) => pattern.name === "default");
-    const run = await runScenario({
+    return await runScenario({
       program: {
         main: fromFileUrl(fixture("handle-passed.tsx")),
         root: fromFileUrl(fixture("")),
@@ -266,23 +265,45 @@ describe("a handler that passes a handle on without reading through it", () => {
       inputs: generateInputs(plan, schemas, await scenarioAudience()),
       events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
     });
-    const clauses = (atoms: unknown[]) =>
-      [...new Set(atoms.flatMap((atom) => atomKey(atom).match(/input:\w+/g)))]
-        .sort();
-    const mine = "input:mine";
+  };
+  const clauses = (atoms: unknown[]) =>
+    [...new Set(atoms.flatMap((atom) => atomKey(atom).match(/input:\w+/g)))]
+      .sort();
 
-    expect(run.events).toEqual([
+  it("compares the write through the handle the body writes through", async () => {
+    const { events, writes } = await run();
+
+    expect(events).toEqual([
       { binding: 0, handler: "join", outcome: "committed" },
     ]);
-    // The write through `mine`. The writes to the child's argument have
-    // no cell the harness can name.
-    expect(run.writes.map((row) => [row.write, row.path])).toEqual([[3, []]]);
-    const [row] = run.writes;
-    expect(clauses(row.runtime.confidentiality)).toEqual([mine]);
-    // The body writes through `mine`, so the reference it writes through
-    // is read, and the template keeps the label of that link.
-    expect(clauses(row.template.label.confidentiality)).toEqual([mine]);
-    expect(row.comparison.confidentiality).toBe("equal");
-    expect(row.comparison.integrity).toBe("equal");
+    // The writes to the child's argument have no cell the harness can
+    // name.
+    expect(writes.map((row) => [row.write, row.path])).toEqual([[3, []]]);
+    expect(clauses(writes[0].runtime.confidentiality)).toEqual(["input:mine"]);
+  });
+
+  it("has the clause of the link to the cell that was passed on, which the run did not read", async () => {
+    // The argument's link to the cell of `other` carries, as an entry of
+    // origin `link`, the clause the link's schema declares, which is the
+    // clause of the cell's own type. PL §2.2 counts it as the label of
+    // the link. The handler's run reads no link it only passes on, so the
+    // runtime's label has no clause of `other` and the template is looser
+    // (note 228 of `SPEC-NOTES.md`).
+    const [row] = (await run()).writes;
+
+    expect(clauses(row.template.label.confidentiality)).toEqual([
+      "input:mine",
+      "input:other",
+    ]);
+    expect(row.comparison.confidentiality).toBe("looser");
+  });
+
+  it("is equal with the link entries of the handle that was passed on left out", async () => {
+    const [row] = (await run()).writes;
+
+    expect(clauses(row.templateWithoutPassedLinks.label.confidentiality))
+      .toEqual(["input:mine"]);
+    expect(row.comparisonWithoutPassedLinks.confidentiality).toBe("equal");
+    expect(row.comparisonWithoutPassedLinks.integrity).toBe("equal");
   });
 });
