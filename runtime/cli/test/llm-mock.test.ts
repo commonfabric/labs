@@ -13,6 +13,19 @@ const ask = (content: string | { type: "text"; text: string }[]) =>
     schema: { type: "object" },
   });
 
+const askWithTools = (content: string) =>
+  client.sendRequest({
+    messages: [{ role: "user", content }],
+    model: "mock",
+    cache: false,
+    tools: {
+      presentResult: {
+        description: "Return the result",
+        inputSchema: { type: "object" },
+      },
+    },
+  });
+
 const say = (content: string) =>
   client.sendRequest({
     messages: [{ role: "user", content }],
@@ -106,6 +119,41 @@ describe("llm-mock", () => {
         "no matching mock response found",
       );
       expect((await ask("hello, object")).object).toEqual({ name: "Wrong" });
+    });
+
+    it("answers a generateObject given tools with a `presentResult` call carrying the object", async () => {
+      using _mocks = installLlmMocks([
+        { promptIncludes: "pot", text: "Not this" },
+        { promptIncludes: "pot", object: { name: "AquaPot" } },
+      ]);
+
+      const reply = await askWithTools("a self-watering pot");
+      expect(reply.content).toEqual([{
+        type: "tool-call",
+        toolCallId: "llm-mock-1",
+        toolName: "presentResult",
+        input: { name: "AquaPot" },
+      }]);
+      // The entry is used up: neither kind of request finds it again.
+      await expect(ask("another pot")).rejects.toThrow(
+        "no matching mock response found",
+      );
+      await expect(askWithTools("another pot")).rejects.toThrow(
+        "no matching mock response found",
+      );
+      // The text entry answers only a request that offers no `presentResult`.
+      expect((await say("a pot, please")).content).toBe("Not this");
+    });
+
+    it("answers one plain generateObject per object entry, leaving none for a tool-backed one", async () => {
+      using _mocks = installLlmMocks([
+        { promptIncludes: "pot", object: { name: "AquaPot" } },
+      ]);
+
+      expect((await ask("a pot")).object).toEqual({ name: "AquaPot" });
+      await expect(askWithTools("a pot")).rejects.toThrow(
+        "no matching mock response found",
+      );
     });
 
     it("leaves no entry behind once disposed", async () => {

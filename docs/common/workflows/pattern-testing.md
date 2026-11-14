@@ -660,7 +660,8 @@ it for the wrong reason.
 A test never reaches a model. A pattern that calls `generateObject`,
 `generateText`, `llm`, or `llmDialog` gets its answers from an `llmMocks` array
 the test file exports at module scope. An entry with `object` answers a
-`generateObject` request, and an entry with `text` answers any of the others
+`generateObject` request, including one given tools, which receives the object
+as its `presentResult` call; an entry with `text` answers any of the others
 with that reply. Each entry answers one request, the first of its kind whose
 last message contains `promptIncludes`, and is then used up. A request no entry answers fails, and the
 builtin reports that as the call's `error`, so an empty array is how a test

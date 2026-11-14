@@ -321,8 +321,8 @@ whose remote profile space is offline.
 > and the renderer throws *"Bidirectionally bound property $profile is not
 > reactive"*, blanking the whole pattern. Build each view as static JSX and switch
 > with `ifElse(cond, staticA, staticB)` as a child of a static wrapper; gate only
-> *siblings* reactively. Working form: section W4 of
-> `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal:
+> *siblings* reactively. Repro:
+> `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in
 > `runtime/runner/test/h-binding-validation.test.ts`.
 
 ### Build the roster by join

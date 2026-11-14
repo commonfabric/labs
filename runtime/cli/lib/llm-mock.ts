@@ -5,10 +5,11 @@
  * runner reads it after compile and puts the `@commonfabric/llm` client in mock
  * mode for the run, so every language-model request the test makes is answered
  * from the list and none reaches a model. An entry with `object` answers a
- * `generateObject` request; an entry with `text` answers a text request
- * (`generateText`, `llm`, `llmDialog`). Each entry answers one request, the
- * first of its kind whose prompt contains the entry's `promptIncludes`, and is
- * used up by it. A request no entry answers fails, and the builtin reports that
+ * `generateObject` request, including one given tools, which the builtin sends
+ * as a text request offering the `presentResult` tool; an entry with `text`
+ * answers any other text request (`generateText`, `llm`, `llmDialog`). Each
+ * entry answers one request, the first of its kind whose prompt contains the
+ * entry's `promptIncludes`, and is used up by it. A request no entry answers fails, and the builtin reports that
  * as its `error`, so an empty list is how a test reaches the error path.
  */
 
@@ -59,6 +60,14 @@ export function readLlmMocks(main: unknown): LlmMockEntry[] | undefined {
   });
 }
 
+/** The tool through which a `generateObject` given tools returns its result. */
+const PRESENT_RESULT_TOOL_NAME = "presentResult";
+
+/** Whether a text request comes from a `generateObject` given tools. */
+function offersPresentResult(request: Pick<LLMRequest, "tools">): boolean {
+  return request.tools?.[PRESENT_RESULT_TOOL_NAME] !== undefined;
+}
+
 /** The text of a request's last message, which carries the prompt. */
 function promptOf(request: Pick<LLMRequest, "messages">): string {
   const content = request.messages.at(-1)?.content ?? "";
@@ -75,16 +84,40 @@ function promptOf(request: Pick<LLMRequest, "messages">): string {
 export function installLlmMocks(entries: LlmMockEntry[]): Disposable {
   enableMockMode();
   entries.forEach((entry, index) => {
+    const id = `llm-mock-${index}`;
     const matches = (request: Pick<LLMRequest, "messages">) =>
       promptOf(request).includes(entry.promptIncludes);
     if ("object" in entry) {
-      addMockObjectResponse(matches, { object: entry.object });
-    } else {
-      addMockResponse(matches, {
-        role: "assistant",
-        content: entry.text,
-        id: `llm-mock-${index}`,
+      // The catalog takes the first entry whose matcher accepts a request, so
+      // the two registrations share one claim and answer one request between
+      // them.
+      let claimed = false;
+      const claim = (accepted: boolean) => {
+        if (claimed || !accepted) return false;
+        claimed = true;
+        return true;
+      };
+      addMockObjectResponse((request) => claim(matches(request)), {
+        object: entry.object,
       });
+      addMockResponse(
+        (request) => claim(offersPresentResult(request) && matches(request)),
+        {
+          role: "assistant",
+          content: [{
+            type: "tool-call",
+            toolCallId: id,
+            toolName: PRESENT_RESULT_TOOL_NAME,
+            input: entry.object,
+          }],
+          id,
+        },
+      );
+    } else {
+      addMockResponse(
+        (request) => !offersPresentResult(request) && matches(request),
+        { role: "assistant", content: entry.text, id },
+      );
     }
   });
   return { [Symbol.dispose]: resetMockMode };

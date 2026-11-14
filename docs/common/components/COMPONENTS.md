@@ -1203,8 +1203,8 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Working form: section W4 of
-  `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal:
+  static wrapper. Repro:
+  `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in
   `runtime/runner/test/h-binding-validation.test.ts`.
 
 ---

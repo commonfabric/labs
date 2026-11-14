@@ -75,8 +75,9 @@ API, so it declares its answers instead: a module-scope `llmMocks` array of
 `runtime/cli/lib/llm-mock.ts` reads the export and turns mock mode on for the
 run, registering each entry as a one-time mock that matches a request whose
 last message contains `promptIncludes`: an `object` entry as a
-`generateObject` answer, and a `text` entry as an assistant reply to a text
-request. Mock mode stays on whatever the array holds, so a
+`generateObject` answer (for a `generateObject` given tools, a `presentResult`
+tool call carrying the object), and a `text` entry as an assistant reply to
+any other text request. Mock mode stays on whatever the array holds, so a
 request no entry answers fails and reaches the pattern as `error`.
 [Pattern testing](../common/workflows/pattern-testing.md#mocking-language-model-calls)
 shows the export.
