@@ -217,7 +217,10 @@ documents exists. An attempt that throws gets the same wait before its throw is
 reported, so a check inside the transaction that refuses when it finds a
 document absent runs again once that document has loaded. A transaction made
 with `Runtime.edit()` and committed directly gets no such wait, nor does a read
-by address alone, which starts no load.
+by address alone, which starts no load. So a stopped piece is set up again in
+`Runtime.editWithRetry()`, as `runtime/runner/test/cfc-result-wiring-stamp.test.ts`
+does after a release pass has dropped the piece's argument and `computed:`
+documents.
 
 ## Measuring
 
