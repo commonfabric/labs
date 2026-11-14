@@ -747,6 +747,12 @@ the element to the cause.
     changed.
   - A moved entry changes the result in general, so the goal of the element
     key rule does not apply to `reduce`.
+- **Plan record:** an `Operation` of kind `reduce` whose implementation
+  is the cone of the step expression, with a `Collection` of its own for
+  the receiver. The step cone is handed the accumulator through a slot
+  that names the operation, and the initial value is stored with the
+  operation's state. `plan-and-label-templates.md` §3.13 has the record,
+  as an assumption (its question 49).
 
 ### `findIndex`
 
@@ -776,6 +782,14 @@ the element to the cause.
   - The predicate's per-element results use the element key rule, so a
     moved entry re-evaluates no predicate. The answer itself is a position
     and changes when entries before the match move.
+- **Plan record:** the record of a scan, which `findIndex`, `some`,
+  `every`, and `find` share (`plan-and-label-templates.md` §3.13). It is a
+  `Collection` of its own, named as the method is, whose source is the
+  receiver; the cones of the predicate, evaluated per element key; a
+  `Selector` of arity 0 that holds the position the runtime's scan
+  found; and an `Output` for the result, which the runtime produces and
+  no value function returns. `find` has in addition a `Pick` that the
+  runtime decides. No operation and no durable state is involved.
 
 ### `some` and `every`
 
@@ -800,6 +814,7 @@ the element to the cause.
   element. Elements after the deciding one do not join. Order affects only
   which prefix that is, not the result. The predicate's per-element results
   use the element key rule. No durable state is needed.
+- **Plan record:** the record of a scan ([`findIndex`](#findindex)).
 
 ### `find`
 
@@ -823,6 +838,8 @@ the element to the cause.
   - `findLast` and `findLastIndex` stay in the function tier: no pattern
     module uses them. The Topics command-line tools, which are not patterns,
     use them three times.
+- **Plan record:** the record of a scan ([`findIndex`](#findindex)), with
+  a `Pick` whose choice the runtime makes.
 
 ### `anchorsOf`
 
@@ -1737,6 +1754,20 @@ counterpart in this inventory.
   A clock value carries no input label, and its granularity is fixed by the
   target. State to store: the one-shot timestamp and whatever the sidecars
   keep.
+- **Plan record:** one `Operation` of kind `wish` per call
+  (`plan-and-label-templates.md` §3.19, as an assumption: its question
+  47). The operands are stored with the operation, and a reader reads
+  `result`, `candidates`, `error`, `errorCode`, and `[UI]` through slots
+  on the operation's result. Every path of the result carries the label
+  of the operands joined with the reads the resolution made, which the
+  runtime journals: the links followed along a path, the tests of whether
+  a target holds anything, and the name and schema of every candidate.
+  That section has the table from a constant query to its part, by the
+  key `parseWishTarget` splits off and the kinds `getResolutionKind`
+  gives, and says what the plan has for each: user scope for a home
+  target and for a search that can reach the home space
+  (`wishTargetMayUseHomeSpace`), a state cell for the one-shot clock,
+  and a `Child` per sidecar the query can launch.
 
 ## Declarations that produce cells
 
@@ -3437,7 +3468,12 @@ with the project owner names its entry in the
    Whether the compiler requires a constant query, so that it can tell a
    path from a search from a clock at compile time and give each its label
    rule, is undecided. *Assumed:* a constant query gets the precise rule,
-   and a computed query gets the join of all of them.
+   and a computed query gets the join of all of them. In the record of
+   `plan-and-label-templates.md` §3.19 the label has one form for both,
+   the operands joined with the reads the resolution made. A constant
+   query lets the compiler leave out the user scope, the state cell of
+   the clock, and the sidecars the query cannot reach, and a computed
+   query has all of them (its question 48).
 3. **Access changes and the cross-space commit.** An `inSpace`
    instantiation commits across the child's space and the parent's
    (`enableCrossSpaceChildCommit`). A staged access change commits as a

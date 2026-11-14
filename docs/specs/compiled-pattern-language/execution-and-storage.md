@@ -175,9 +175,12 @@ body are the stale ones that compute a value among them. They include the
 ones an earlier event of the same batch made stale.
 
 - **The state of a binding of the reactive tier.** Such a binding copies
-  nothing. Every path of the handler's state resolves through
-  `Binding.state` to a slot or an output of the instance, the body of a
-  per-element callback included. Where the path is an output, the cone that
+  nothing. Every path of the handler's state resolves to what the
+  member `place` of its entry of `Binding.state` names
+  (`plan-and-label-templates.md` §1.1): a slot of the instance, an output
+  of the instance, the stream of another binding of the reactive tier, or
+  a constant written at the binding. That holds in the body of a
+  per-element callback too. Where the path is an output, the cone that
   computes it is evaluated, and its value is materialized into the handler's
   argument when the event is delivered. The body sees the value as of the
   event and not as of an earlier evaluation.
@@ -829,6 +832,17 @@ export interface ConeResult {
   readonly writes: Readonly<Record<Index, unknown>>;
 }
 ```
+
+`slot` takes a slot index and no key. The child slots of a `pick` over a
+container slot are bound to the path a dynamic key chose
+(`plan-and-label-templates.md` §3.18), and the function computes that key
+and has to read the child before it returns. How the function reads the
+chosen child is open: it is question 46 of that document, and question
+75 here. *Assumed,* as that document assumes: `host.slot` of such a slot
+returns every child of the container, at the path and class of the child
+slot, keyed by the child's key, and the function reads the one at its
+key. The label is instantiated at the chosen child alone, and the cone
+instance is stale when the chosen child changed (section 3.3).
 
 Six rules hold for an invocation.
 
@@ -1875,7 +1889,7 @@ says how many scope instances exist.
 | Argument document | The instance's argument, as the creator wrote it | Derived from the result cell, linked from it | As today |
 | Parameters document | The private parameters of an instance whose callee is an inline pattern written at an instantiation in a function body (section 4.6) | Derived from the result cell, linked from it | As the argument document |
 | State cell document | The value of one state cell | Section 5.2 | By the cell's declared scope |
-| Operation state document | The durable state of one aggregate, `reduce`, index, effect, forced cache or materializer. For an effect it includes the stored request | Section 6 | By the scope of the operation's cone instance |
+| Operation state document | The durable state of one aggregate, `reduce`, index, effect, `wish`, forced cache or materializer. For an effect it includes the stored request, for a `wish` the stored operands, and for a `reduce` the initial value (`plan-and-label-templates.md` §3.13 and §3.19, where the last two are assumptions) | Section 6 | By the scope of the operation's cone instance |
 | Cache document | The entries of cones the runtime promoted | Section 8.4 | One per scope the promoted cones have |
 | Binding state document | The state of a binding made in a function body: the copied paths, and a link for each cell and each container bound by reference | Section 5.5 | The body's |
 | Instances document | Which instances the evaluations of the instance's computations made | Section 2.8 | One per scope the making cone instances have |
@@ -4674,6 +4688,17 @@ label is concerned:
     the positions that hold the key. The join is ruled, as the third
     deliberate exception to "equal to or tighter", and is to be revisited
     (section 2.5).
+
+75. **How value code reads the child a dynamic key chose** (section
+    2.2). Open, as its question 46. `ConeHost.slot` takes a slot index
+    and no key, and its §3.18 binds the child slots of a `pick` over a
+    container slot to the chosen path. *Assumed:* the function is handed
+    every child of the container at the paths and classes of the child
+    slots and reads the one at its key, which loads every child. The
+    alternative gives `ConeHost` a function that takes the choice point
+    and the key and binds the child slots before it returns. This
+    document owns the host interface, and the interface of section 2.2
+    stays as it is until the question is decided.
 
 <!-- The list restarts so that the numbers stay as cited. -->
 
