@@ -4741,7 +4741,7 @@ export class PieceController<T = unknown> {
       candidate,
       this.#cell,
       this.#pieces,
-      { gatedRelease },
+      { gatedRelease, baseline: prepared.baseline },
     );
     await this.#refuseUnusableArgument(
       review,
@@ -4958,7 +4958,7 @@ export class PieceController<T = unknown> {
         candidate,
         this.#cell,
         this.#pieces,
-        { gatedRelease },
+        { gatedRelease, baseline: confirmed.baseline },
       );
       reviewed = currentReview;
       await this.#refuseUnusableArgument(
@@ -5159,7 +5159,7 @@ export class PieceController<T = unknown> {
           candidate,
           this.#cell,
           this.#pieces,
-          { gatedRelease },
+          { gatedRelease, baseline: prepared.baseline },
         );
         await this.#refuseUnusableArgument(
           review,
@@ -5931,9 +5931,22 @@ async function pieceSourceCompatibilityReview(
   candidate: Pattern,
   piece: Cell<unknown>,
   pieces: PiecesController,
-  options: { gatedRelease: boolean },
+  options: { gatedRelease: boolean; baseline?: PieceSourceTransitionBaseline },
 ): Promise<NonNullable<PreparedPieceSourceChange["review"]>> {
   const issues: PieceSourceCompatibilityIssues = {};
+  // The delegations the update would propose, derived before the reads below
+  // so that nothing they load waits on another `await` before it is read. An
+  // update whose baseline does not retain the current source proposes none.
+  const patternManager = pieces.runtime.patternManager;
+  const entry = patternManager.getArtifactEntryRef(candidate);
+  const proposal =
+    entry === undefined || options.baseline?.kind === "unavailable"
+      ? undefined
+      : await patternManager.proposedSourceUpdateDelegations(
+        piece.space,
+        previous.ref.identity,
+        entry.identity,
+      );
   let schema: string | undefined;
   if (previous.pattern === undefined) {
     schema = `the piece's current pattern ` +
@@ -5979,6 +5992,7 @@ async function pieceSourceCompatibilityReview(
     argumentCell,
     candidate,
     pieces,
+    proposal,
   );
   if (cfc !== undefined) issues.cfc = cfc;
 
@@ -6024,24 +6038,34 @@ async function pieceSourceCompatibilityReview(
  * Each merge is driven for real, in dry run, through
  * `storedCfcEnvelopeMergeIssue` — the fast paths the commit takes before it
  * merges and then the merge itself — so the two cannot disagree about what
- * merges.
+ * merges. The commit's transaction is pinned to the delegations the update
+ * proposes (`proposal`, from the piece's current program to the candidate's),
+ * which decide whether a release may extend a stored write policy; the review
+ * reads through a transaction pinned to the same ones.
  */
 function pieceSourceCfcEnvelopeIssue(
   piece: Cell<unknown>,
   argumentCell: Cell<unknown>,
   candidate: Pattern,
   pieces: PiecesController,
+  proposal: ReadonlyMap<string, ReadonlySet<string>> | undefined,
 ): string | undefined {
-  // `readTx()` cannot write, so the two dry runs stay dry runs; a piece read
-  // as one principal's instance is reviewed through the transaction that
-  // names it.
-  const tx = pieces.runtime.readTx(instanceTx(piece));
   // The modules the release would install, as setup names them.
   const patternManager = pieces.runtime.patternManager;
   const entry = patternManager.getArtifactEntryRef(candidate);
   const programModules = entry === undefined
     ? []
     : patternManager.programModuleIdentities(entry.identity) ?? [];
+  // Neither transaction can write, so the two dry runs stay dry runs; a piece
+  // read as one principal's instance is reviewed as that principal's.
+  const instance = instanceTx(piece);
+  const tx = proposal === undefined
+    ? pieces.runtime.readTx(instance)
+    : pieces.runtime.readTxProposingDelegations(
+      piece.space,
+      proposal,
+      instance?.tx.scopeKeyIdentity,
+    );
   const issues = [
     pieceDocumentCfcEnvelopeIssue(
       "argument",

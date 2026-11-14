@@ -122,6 +122,10 @@ describe("cfc-result-wiring-stamp", () => {
         a: double(x),
         note: "fixed",
       })),
+      remixed: cf.pattern<{ x: number }>(({ x }) => ({
+        a: double(x),
+        note: "changed",
+      })),
     };
   };
 
@@ -924,5 +928,63 @@ describe("cfc-result-wiring-stamp", () => {
         });
       }
     }
+  });
+
+  describe("a value stamp an earlier attempt left on a result that holds data", () => {
+    /**
+     * Adds to `cell`'s stored label map a value stamp at the root naming
+     * `atom`, as an earlier attempt's whole join would leave on a result root
+     * that holds data beside its references.
+     */
+    const plantValueStamp = async (
+      cell: Cell<unknown>,
+      atom: string,
+    ): Promise<void> => {
+      const tx = runtime.edit();
+      const link = cell.getAsNormalizedFullLink();
+      const document: IMemorySpaceAddress = {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: [],
+      };
+      writeSeedEnvelopeDoc(tx, space);
+      const cfc = (storedFields(tx, document).cfc ?? {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      }) as { labelMap: { entries: FabricValue[] } };
+      seedStoredEnvelope(tx, { ...document, path: ["cfc"] }, {
+        ...cfc,
+        labelMap: {
+          ...cfc.labelMap,
+          entries: [
+            ...cfc.labelMap.entries,
+            {
+              path: [],
+              label: { confidentiality: [atom] },
+              origin: "derived",
+              observes: "value",
+            },
+          ],
+        },
+      } as FabricValue);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      expect(derivedOf(cell)).toContain(atom);
+    };
+
+    it("comes off at a setup that rewrites the result", async () => {
+      // The setup compares the result it builds with the stored one to decide
+      // whether to write, and that comparison takes nothing of what it read.
+
+      const { mixed, remixed } = patterns();
+      const result = await setUp("remixed", mixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remixed", remixed);
+
+      expect(derivedOf(result)).not.toContain(BOB);
+    });
   });
 });

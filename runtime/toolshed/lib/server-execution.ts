@@ -11,7 +11,7 @@
 
 import {
   type EnvReader,
-  experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
   type RuntimeFetch,
 } from "@commonfabric/runner";
 import { toolshedClientBuild } from "./build-info.ts";
@@ -538,8 +538,9 @@ export function startServerExecutionHost(options: {
   if (!serverExecutionEnabledFromEnv(envGet)) {
     return undefined;
   }
-  // The other experimental flags still reach the serving runtimes from env.
-  const experimental = experimentalOptionsFromEnv(envGet);
+  // The other experimental flags reach the serving runtimes from env, over
+  // the followed deployment's posture, as the toolshed's own runtime's do.
+  const experimental = experimentalOptionsWithFollowedPosture(envGet);
   console.log(
     `Server-execution v2: serving loop ON (service ${options.identity.did()})`,
   );

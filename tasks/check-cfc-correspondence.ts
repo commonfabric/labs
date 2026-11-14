@@ -172,6 +172,40 @@ export const EXEMPTIONS: readonly Exemption[] = [
       "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
       "that pull request",
   },
+  {
+    file: "runtime/runner/src/cfc/schema-merge.ts",
+    citation: "§8.15.13",
+    reason: "the write-policy merge cites the section " +
+      "https://github.com/commonfabric/specs/pull/52 adds, and the merge in it " +
+      "https://github.com/commonfabric/specs/pull/96 adds, neither of which " +
+      "the pinned snapshot (specs#88's head) holds; its SPEC-PENDING marker " +
+      "names specs#96",
+  },
+  {
+    file: "runtime/runner/src/cfc/schema-merge.ts",
+    citation: "§8.15.6.1",
+    reason: "the write-policy merge cites the section " +
+      "https://github.com/commonfabric/specs/pull/96 adds, which the pinned " +
+      "snapshot (specs#88's head) does not hold; its SPEC-PENDING marker names " +
+      "that pull request",
+  },
+  {
+    file: "runtime/runner/src/cfc/claim-preservation.ts",
+    citation: "§8.15.6.1",
+    reason: "the keep rule's matching of write-policy alternatives cites the " +
+      "section https://github.com/commonfabric/specs/pull/96 adds, which the " +
+      "pinned snapshot (specs#88's head) does not hold; its SPEC-PENDING " +
+      "marker names that pull request",
+  },
+  {
+    file: "runtime/runner/src/cfc/claim-preservation.ts",
+    citation: "§8.15.13",
+    reason: "the keep rule's write-policy admission cites the section " +
+      "https://github.com/commonfabric/specs/pull/52 adds, and the carve-out " +
+      "in it https://github.com/commonfabric/specs/pull/96 adds, neither of " +
+      "which the pinned snapshot (specs#88's head) holds; its SPEC-PENDING " +
+      "marker names specs#96",
+  },
 ];
 
 /** A file this check reads. */
