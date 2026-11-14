@@ -2717,8 +2717,10 @@ writes gets one label:
   that file joins the confidentiality that the schemas of a node's input cells
   declare onto the schemas of its outputs (`applyInputIfcToOutput`). The result
   document holds that join as an entry of origin `declared`, beside the
-  `derived` entry of the transaction's join. It is fixed when the graph is built
-  and does not depend on what a run read. It applies to every node: a `lift`, a
+  `derived` entry of the transaction's join where the run stores one (for
+  `ifElse` it stores none where the selected branch is a reference, section
+  3.5). It is fixed when the graph is built and does not depend on what a run
+  read. It applies to every node: a `lift`, a
   `computed`, `ifElse`, and the result of `map`
   (`runtime/runner/test/cfc-argument-ifc-propagation.test.ts` states it for a
   module). So the result of `ifElse` carries the declared confidentiality of the
@@ -2757,6 +2759,20 @@ separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
 expected.
 
+**Which entries are the static part.** *Assumed* (section 8, question 70): the
+static part is the entries of origin `declared` in the documents a reader passes
+on the way from an output path to its value, the document of the output path
+included. The `declared` entries of the argument document of the instance are
+not part of it: they hold the labels of the inputs, which the slots of a
+template resolve to. An entry of origin `structure` is not part of it either. It
+is a stamp of a run, as a `derived` entry is (`isFlowStageStamp` in
+`runtime/runner/src/cfc/prepare.ts`): `prepareBoundaryCommitSteps` mints one
+with the transaction's join for the membership of a container
+(`observes: "enumerate"`), for the shape of a container that holds references
+alone, and for the slot of a recorded link write (`observes: "followRef"`). A
+stored entry does not say which schema declared it, so the separation is by
+origin and by document, and by nothing else.
+
 The comparison criterion is the overview's: a template label is **equal or
 tighter, never looser**. Tighter means fewer confidentiality clauses, or more
 integrity atoms. Each rule that is tighter says what the narrowing rests on.
@@ -2793,10 +2809,11 @@ integrity atoms. Each rule that is tighter says what the narrowing rests on.
   stored object whole keeps the object's integrity and is not part of the
   exception.
 
-The stage 3 comparison expects these four differences and no other in that
-direction (section 7.5). One further difference in that direction is open, and
-is neither expected nor counted among the four: the integrity of a conditional
-written in a `computed` (section 3.5; section 8, question 64).
+The stage 3 comparison expects these four differences in that direction
+(section 7.5). *Assumed* (section 8, question 64), it expects one more, which is
+not counted among the four because no ruling made it an exception: a promoted
+`computed` mints no `TransformedBy` atom for the code of its callback (section
+3.2, "A promoted `computed`").
 
 ### 3.2 Template semantics
 
@@ -2903,6 +2920,23 @@ Notes on the integrity column:
   transition of §8.9.3 applied to the template's inputs instead of to a
   transaction's reads. The minted atom names `Body.code` for a sandboxed
   body, and `Cone.code` for emitted expression code (section 1.2).
+- **A promoted `computed`.** *Assumed* (section 8, question 64): a `computed`
+  that meets the promotion criterion (`language-subset.md` §6.1) is compiled as
+  expression code of the reactive tier, and its templates are those the same
+  expression has when it is written in the pattern body. No template of it mints
+  a `TransformedBy` atom for the code of the callback. A `derive` in it mints
+  the atom of its cone, `Cone.code`, under the condition below. A path whose
+  template is a `slot`, a `select`, or a `pick` carries the integrity of what it
+  passes on and no minted atom. Today a `computed` is a lift: one transaction
+  writes its whole result, and every path of the result carries the atom of the
+  callback's code where the join is not empty (section 3.1). So the promoted
+  result has fewer atoms at each path that passes a value on, and an atom that
+  names other code at each path a `derive` computes. Fewer atoms is looser, and
+  the comparison expects the difference. The alternative has every template of
+  a promoted `computed` mint the atom of the callback's code, which is equal to
+  today and makes an expression carry an atom inside `computed(...)` that it
+  does not carry in the pattern body. A `computed` that stays a body keeps its
+  atom: its template is a `derive` whose `by` names `Body.code`.
 - **`const` is neutral.** A literal is not an observation, so it does not
   empty the meet. This matches the runtime, where a literal in a function
   body is not a read.
@@ -3159,34 +3193,104 @@ is not read, and so makes no cone instance stale
 the result are functions of the condition and the selected branch alone.
 
 **Today.** `ifElse`, `when` and `unless` share `forwardReference`
-(`runtime/runner/src/builtins/forward-reference.ts`). It reads the
-condition's truthiness at its root (`readsTruthyAtRoot`), resolves only the
-selected input, and writes a link to it. The result slot's label is that
-transaction's join, which holds the condition's label; a reader that follows the
-link consumes the selected branch's label at its own document. That `derived`
-part is **equal**. The result document also holds the static part of section
-3.1: the declared confidentiality of the condition and of both branches,
-whichever branch is selected. By ruling the `select` does not join it, so the
-template is **tighter** where the unselected branch declares a clause that the
-selected branch and the condition lack, and the comparison expects that
-difference.
+(`runtime/runner/src/builtins/forward-reference.ts`). Its action reads the
+condition's truthiness at its root (`readsTruthyAtRoot` in
+`runtime/runner/src/schema.ts`), resolves only the selected input, and makes
+two writes in one transaction.
 
-**A conditional written in a `computed`: open.** `c ? a : b` in the body of a
+- It writes a reference to the selected input's resolved target into a result
+  store the node owns (`ownedCell` in
+  `runtime/runner/src/builtins/runtime-owned-store.ts`), at the store's root,
+  with `setRawUntyped`. Where the selected input is a literal, the reference is
+  a `data:` link, which `setRawUntyped` stores as the literal's value
+  (`findAndInlineDataUriLinks`).
+- Through `sendResult` it writes a link to that store at the node's output
+  binding (`sendValueToBindingInner` in
+  `runtime/runner/src/pattern-binding.ts`, under `preserveLinkOutput`), with
+  `writeValueOrThrow`, and only where the binding does not hold that link
+  already.
+
+The read of the condition is an ordinary read, so the transaction's join
+(`deriveFlowJoinImpl`) holds the condition's label. Where that join is stored
+depends on what the result store holds.
+
+- **The selected branch is a reference.** No entry holds the join. Neither
+  write records a link write: `recordLinkWritePolicyInput`
+  (`runtime/runner/src/data-updating.ts`) is reached from `diffAndUpdate`
+  alone, and both writes bypass it. `prepareBoundaryCommitSteps` stamps the
+  join's confidentiality on the slot of a recorded link write, as a
+  `structure` entry with `observes: "followRef"`, and has no such record for
+  either slot. Its flow stage then takes each written value as link structure
+  (`isPureLinkStructure`), which gets no `derived` entry, and a link at the
+  root of a document is no container (`pureLinkContainerPaths`), so it gets no
+  `structure` entry either. The two probes `forwardReference` and
+  `setRawUntyped` make to elide a write are marked `internalVerifierRead` (in
+  `forwardsNothingToUnwrittenStore` and in `setRawUntyped`), so they add
+  nothing to the join and are not the cause.
+- **The selected branch is a literal.** The result store holds the literal's
+  value, which is content. The flow stage stamps the join at the store's root,
+  as a `derived` entry that a `value` read consumes and one that a `shape`
+  read consumes. No `TransformedBy` atom was observed on either.
+
+A reader of the output path follows the link at the output binding to the
+result store, and the reference there to the selected branch, and consumes the
+label of the selected branch at the branch's own document. So which label of
+the condition reaches a reader is as follows.
+
+| The condition's label is | Selected branch a reference | Selected branch a literal |
+| --- | --- | --- |
+| Declared by the schema of the condition's input | Reaches the reader through the static part alone | Reaches the reader through the static part and the `derived` entries |
+| Stored and not declared, as a `derived` entry on the result of another node is | Does not reach the reader | Reaches the reader through the `derived` entries |
+
+The static part of section 3.1 is an entry of origin `declared` at the root of
+the document the output binding names, with the declared confidentiality of the
+condition and of both branches, whichever branch is selected. Read by origin
+without that entry, a conditional over references carries the selected
+branch's label and nothing of the condition.
+
+These statements were read from the functions named and observed by running a
+pattern over a condition with a stored label, with literal branches and with
+branches that are cells, and over a condition whose input schema declares a
+clause.
+`runtime/runner/test/condition-builtin-reads.test.ts` asserts the literal case
+alone ("stamps the sealed clause on an `ifElse` output").
+
+**Against the template.** Which branch a conditional selects reveals the
+condition, so the `select` joins the condition's confidentiality, by the
+flow-path rule section 3.2 cites. The runtime's own rule for a written
+reference is the same: the comment on the link stamp in
+`prepareBoundaryCommitSteps` says that a written reference is a selection made
+under what the attempt observed, and that the join's confidentiality reaches
+its slot. A conditional over references does not get that stamp, because its
+writes are not recorded as link writes. That is a **finding against the
+runtime**, and the template does not reproduce it.
+
+*Assumed* (section 8, question 69): the template stands, and the comparison for
+a conditional is made with the runtime's static part included. With it, the
+template is **equal** where the selected branch and the condition carry every
+clause the unselected branch declares, and **tighter** where the unselected
+branch declares a clause they lack, which is the difference the ruling of
+section 3.1 expects. Without it the template has the condition's clauses and
+the runtime's label has none of them, which reads as looser and is the
+runtime's omission. Where the condition's label is stored and not declared,
+the static part does not hold it, and the comparison reports the template as
+looser for a conditional over references: that row is the finding, and is not
+a fifth exception.
+
+**A conditional written in a `computed`.** `c ? a : b` in the body of a
 `computed` is part of a lift today. Its transaction reads the condition and both
 operands, writes a copy of the selected value, and mints `TransformedBy` under
 the condition of section 3.1. Where the `computed` is promoted
 (`language-subset.md` §6.1), the template is a `select` over the operands. Its
 confidentiality is equal where the selected branch carries every clause the
 other does, and tighter otherwise. Its integrity is the selected branch's alone,
-which holds no `TransformedBy` atom of the conditional, so the template has
-fewer atoms than today and is looser on integrity. This is none of the four
-exceptions of section 3.1, and the comparison reports it. The question is the
-project owner's and is not assumed either way (section 8, question 64). One
-alternative has the template of a conditional that a promoted `computed` holds
-mint the atom of its cone, which is equal to today and makes a promoted
-conditional carry an atom that the same conditional written in the reactive tier
-does not. The other keeps the `select` as it is and counts the difference as a
-fifth exception.
+which holds no `TransformedBy` atom of the callback, so the template has fewer
+atoms than today and is looser on integrity. *Assumed* (section 8, question
+64): that stands, by the rule for a promoted `computed` of section 3.2, and the
+comparison expects the difference. It is none of the four exceptions of section
+3.1. The alternative has the templates of a promoted `computed` mint the atom of
+the callback's code, which is equal to today and makes a promoted conditional
+carry an atom that the same conditional written in the reactive tier does not.
 
 ### 3.6 `map`
 
@@ -3336,6 +3440,18 @@ class: `length` is not a property the plan names a path for. That holds in
 expression code and in a function body alike (`footprint-analysis.md` §2.2
 and §3.4), so `computed(() => items.length)` has the `enumeration` slot at
 `items` and no entry at `items/length`.
+
+Where the instance computed the collection and no `Collection` record stands for
+it, the template of `.length` is the template of the collection's own
+`enumeration`, as the `output` row of the table in section 3.2 gives it: for an
+assembled entry its `template`, for an array constructed in place the template
+of its container entry (section 3.4), and for the result of one opaque call the
+call's template.
+
+`.length` of a string is not an aggregate. A string has no membership, and its
+length is computed from its content. For a string that is an input the template
+is the `value` slot at the string's path, and for a string the instance computed
+it is the template of the string. In both cases no path `length` is named.
 
 A predicate is observed for truthiness, with the classes of section 3.5. The
 callback of `minBy` and `maxBy` is called the **key function**: it returns
@@ -3866,6 +3982,29 @@ path holds a reference, because one path can hold a reference on one evaluation
 and a computed value on another: a conditional between the two, and a result
 path of a body whose returned reference the identity comparison did not confirm
 (section 3.9), which is then a computed value.
+
+**What the compiler decides.** For each bound path the compiler has three
+answers, and it reports one of them.
+
+- **Produced.** The path can hold no reference on any evaluation. Its template
+  is a `const`, a `derive` of expression code, or a `fold`, or a producing body
+  returns at the path a value it computed (`footprint-analysis.md` §6.2). Where
+  the callee writes through the handle, this is `binding:write-to-computed`.
+- **Reference.** The path holds a reference on every evaluation: an element
+  that a construct passes on from a stored collection, a `select` or a `pick`
+  whose every branch or child is a stored place, the result of a `computed`
+  whose type is a handle, or a result path of a body that `Body.outputs`
+  records as `passes` or `oneOf` on every `return`. Nothing is reported, and
+  the write lands at the reference's target.
+- **Mixed.** The path holds a reference on some evaluations and can hold a
+  produced value on others: a `select` with one branch of each kind, a result
+  path of a body with `oneOf` beside a computed value, and what an authored
+  function returns where its summary does not decide. Nothing is reported, and
+  the runtime decides each write.
+
+The plan has no member that records which of the three holds. The answer is
+used for the report alone, and the runtime decides every write by the reference
+test, the writes of a path the compiler found to be a reference included.
 
 Today no refusal of this kind was found. A value a node computes is stored in a
 document of its own, a handle to it writes like any handle, and the node's next
@@ -5572,7 +5711,7 @@ nothing to compare.
 | --- | --- | --- |
 | Property access | Slot path extension | Equal |
 | Object, array construction | Template per path | Equal in pattern bodies; tighter in promoted expressions |
-| Conditional | `select` | Equal to the `derived` part; tighter than the static part of section 3.1, by ruling. A conditional written in a `computed` is looser on integrity, which is open (question 64) |
+| Conditional | `select` | Equal to the `derived` part; tighter than the static part of section 3.1, by ruling, with the static part included in the comparison (question 69): today a conditional over references stores no label of its condition, a finding against the runtime (section 3.5). A promoted `computed` mints no atom for its callback's code, so a conditional in one is looser on integrity; assumed, and expected by the comparison (question 64) |
 | `map` | Element template; membership slot | Equal to the `derived` part; the container tighter than the static part of section 3.1, by ruling; tighter within an element as above |
 | `filter` | Pass-through elements; membership `fold` of predicates | Equal |
 | `flatMap` | Element template; membership `fold` of segment lengths | Tighter (content of other segments excluded) |
@@ -5607,9 +5746,10 @@ nothing to compare.
 Four things are looser, and all four are decided: the collection index, a slot
 for a read through a handle on a run that throws before the read, what an
 element body stores once per element key, which is to be revisited, and the
-integrity of a slot that reads as a default (section 3.1). A fifth is open and
-not decided: the integrity of a conditional written in a `computed` (section
-3.5; section 8, question 64). Another way a compiled label could be
+integrity of a slot that reads as a default (section 3.1). A fifth is assumed
+and not ruled: a promoted `computed` mints no `TransformedBy` atom for the code
+of its callback (section 3.2; section 8, question 64). Another way a compiled
+label could be
 looser than today's is a static footprint standing in for reads that are
 dynamic today, and `handles` exclude it: a read a body makes through a cell
 on some runs only, or at a path it computes, stays journaled. A widening
@@ -7565,9 +7705,13 @@ clause any of its slots carries.
   handles, including the ones the run did not reach, for what an element body
   stores once per element key it expects the join over the positions that hold
   the key (section 2.6), and for a slot that reads as a default it expects the
-  empty integrity (section 2.5). It compares dereferenced labels and separates
-  the runtime's entries by origin, so that the static part the runtime joins
-  from declarations is expected as a difference (section 3.1).
+  empty integrity (section 2.5). *Assumed,* it also expects that a promoted
+  `computed` carries no `TransformedBy` atom for the code of its callback
+  (section 3.2; section 8, question 64). It compares dereferenced labels and
+  separates the runtime's entries by origin, so that the static part the runtime
+  joins from declarations is expected as a difference (section 3.1). For a
+  conditional it compares with the static part included (section 3.5; section
+  8, question 69).
 
 ## 8. Open questions
 
@@ -8353,15 +8497,22 @@ this document made.
     identity. Whether a `TransformedBy` atom of the compiled path
     carries the hash or a record is for `execution-and-storage.md` and
     the specification change.
-64. **The integrity of a conditional written in a `computed`** (for the project
-    owner). Open, and not assumed either way. Today `c ? a : b` in a `computed`
-    is part of a lift, whose result carries a `TransformedBy` atom. The template
-    of a promoted `computed` is a `select`, with the integrity of the selected
-    branch alone (section 3.5), so it is looser on integrity than today, and
-    that is none of the four exceptions of section 3.1. Either the template of a
-    conditional that a promoted `computed` holds mints the atom of its cone, or
-    the difference is a fifth exception. The stage 3 comparison reports the
-    difference until the question is ruled.
+64. **A promoted `computed` mints no `TransformedBy` for its callback** (for
+    the project owner; the continuation plan's question 116). Today a
+    `computed` is a lift, and every path of its result carries the atom of the
+    callback's code where the join is not empty. A promoted `computed` is
+    compiled as expression code of the reactive tier (section 3.2): a `derive`
+    in it mints the atom of its cone, and a path that passes a value on, as a
+    conditional does (section 3.5), carries the integrity of what it passes on
+    and no minted atom. That is looser on integrity than today, and none of the
+    four exceptions of section 3.1. *Assumed:* that stands, and the stage 3
+    comparison expects the difference. The alternative has every template of a
+    promoted `computed` mint the atom of the callback's code, which is equal to
+    today and makes an expression carry an atom inside `computed(...)` that it
+    does not carry in the pattern body. The corpus has five declared labels
+    that match `TransformedBy` of named code, all exchange-rule preconditions
+    in `patterns/examples/cfc-exchange-rules/`, and each names a `lift`, so
+    none is affected (the continuation plan's count, not reproduced here).
 65. **What the stage 3 comparison compares** (for the project owner). The
     runtime copies a value where the plan passes a reference, so the two sides
     do not store the same thing at an output path. *Assumed:* the comparison is
@@ -8399,3 +8550,34 @@ this document made.
     tighter. The alternative joins the `shape` observation of the enclosing
     object into a test of presence on one of its optional properties, since
     which properties an object has is the object's shape.
+69. **What the label of a conditional is compared with** (for the project
+    owner; the continuation plan's question 119). Today a conditional over
+    references stores no label of its condition: the two writes of
+    `forwardReference` are not recorded as link writes, so no entry holds the
+    transaction's join, and the condition's confidentiality reaches a reader
+    through the static part alone, where the condition's input schema declares
+    it (section 3.5). Over a literal branch the result store holds `derived`
+    entries with the join. The template joins the condition in both cases.
+    *Assumed:* the template stands, the missing stamp is a finding against the
+    runtime, and the comparison for a conditional is made with the static part
+    included. A condition whose label is stored and not declared then reads as
+    a template looser than today over references, and that row is counted as
+    the finding and not as an exception. The alternative makes the comparison
+    without the static part, as for every other operation, and expects the
+    template to be looser by the condition's clauses on every conditional over
+    references. Whether the runtime is corrected, by recording the two writes
+    as link writes so that the slot gets its stamp, is for the runtime and is
+    not decided here. Not verified: a run in which the condition changes
+    between two truthy values, and a conditional whose result is scoped.
+70. **Which stored entries are the static part.** A stored entry holds its
+    origin and not the schema that declared it. *Assumed,* as section 3.1 has
+    it: the static part is the `declared` entries of the documents between an
+    output path and its value, without those of the instance's argument
+    document, and a `structure` entry is a stamp of a run and is compared. The
+    stage 3 comparison of the prototype leaves the `structure` entries out as
+    well, on the observation that the container of a `map` holds `structure`
+    entries with the declared label of its elements, and reports the container
+    as tighter where they are kept. Where those entries come from was not
+    traced in `prepareBoundaryCommitSteps`. If a `structure` entry can hold a
+    clause that no run read, the separation by origin is not sufficient, and
+    the runtime would have to mark such an entry.

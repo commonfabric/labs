@@ -1252,13 +1252,14 @@ instance computes").
   (`language-subset.md` §10.2) where three things hold: the callee declares a
   handle that can write, the body's record has a target or an envelope through
   that handle, and the position can hold no reference on any evaluation. The
-  third holds where the producing template at the position is a `const` or a
-  `derive` of expression code, and where a producing body has the abstract value
-  `Computed`, or a record or a list it built, at the path and `Body.outputs` has
-  no `reference` entry there. It does not hold for a path with a `reference`
-  entry, for a path the body found below a hop whose read is dynamic, for a bag
-  that joins `Computed` with projections, or for a conditional one of whose
-  operands can hold a reference. For those the runtime decides per write.
+  third holds where the producing template at the position is a `const`, a
+  `derive` of expression code, or a `fold`, and where a producing body has the
+  abstract value `Computed`, or a record or a list it built, at the path and
+  `Body.outputs` has no `reference` entry there. It does not hold for a path
+  with a `reference` entry, for a path the body found below a hop whose read is
+  dynamic, for a bag that joins `Computed` with projections, or for a
+  conditional one of whose operands can hold a reference. For those the runtime
+  decides per write.
 
 An argument that a body gives where it instantiates a pattern is none of these
 cases. The body writes it through a write edge with target `argument`

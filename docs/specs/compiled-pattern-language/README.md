@@ -289,8 +289,9 @@ that the arguments of a node declare onto the node's result, whatever a run
 read. A conditional and the container of a `map` are trusted not to join the
 labels of all their arguments, so their templates leave that static part out,
 and the comparison of staging step 3 expects the difference (§3.1, §3.5 and §3.6
-there). Whether a conditional written in a `computed` may carry less integrity
-than today is open (§3.5 there, question 64).
+there). A promoted `computed` mints no `TransformedBy`, so a conditional
+written in one carries the integrity of the chosen branch alone; this is
+*assumed* (§3.2 and §3.5 there, question 64).
 
 Instantiating a template means substituting actual labels for slots and
 combining them. The runtime does this only for what it stores or checks:

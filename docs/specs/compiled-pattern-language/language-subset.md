@@ -1763,13 +1763,24 @@ it is promoted.
 
 ### 6.2 What promotion preserves
 
-A promoted `computed` computes the same value as the unpromoted one. Three
+A promoted `computed` computes the same value as the unpromoted one. Four
 things differ, none of them in the value.
 
 - **Labels.** The unpromoted result has one label, the join over the body's
   footprint. The promoted result has a label template per output path, a
   conditional contributes only the selected branch, and a mapped collection
   has an element template and a membership slot.
+- **The atom for the callback's code.** This is not preserved. The unpromoted
+  result carries, at every path, a `TransformedBy` atom that names the code of
+  the callback, where its label is not empty. The promoted result carries no
+  atom that names the callback. A path that an operator or a call computes
+  carries the atom of the dependency cone it is evaluated in, and a path that
+  passes a value on, as a conditional and a property access do, carries the
+  integrity of that value and no minted atom. *Assumed,* with
+  `plan-and-label-templates.md` (its §3.2, "A promoted `computed`", and its
+  question 64). So a declared label or an exchange rule that requires
+  `TransformedBy` of a named `computed` is not met by a promoted one. One that
+  names a `lift` is not affected, because a `lift` is not promoted.
 - **Cost.** The promoted expression is part of a dependency cone's value
   code and makes no sandboxed call of its own.
 - **Granularity of recomputation.** The body of a promoted `map` is one or
@@ -2224,12 +2235,19 @@ Eight points complete the table.
   instance produces (the result of a `computed` or of an operator, an assembled
   collection, a literal), a write through the handle is refused at run time, and
   the compiler reports the argument where the callee writes through the handle
-  (`binding:write-to-computed`, [§10.2](#102-reactive-tier)). Where the place
-  holds a reference to a stored place, the handle resolves through the reference
-  and the write lands there. An element that a `filter` in a `computed` passes
-  on is such a reference, and so is a handle that a `computed` returns: in the
-  example that follows, `open` filters a stored list, and the write of the
-  handler bound to each of its elements lands in the record of the stored list.
+  (`binding:write-to-computed`, [§10.2](#102-reactive-tier)). A literal in the
+  argument of a pattern called in tier R is such a value, also where the pattern
+  is compiled into the caller: a pattern that declares `count: Writable<number>`
+  and increments it is not given `{ count: 10 }`. The caller creates a state
+  cell that holds the initial value and gives the cell,
+  `const count = new Writable(10)` and then `{ count }`, because by ruling a
+  pattern that changes or owns one of its arguments is given a writable cell
+  for it. Where the place holds a reference to a stored place, the handle
+  resolves through the reference and the write lands there. An element that a
+  `filter` in a `computed` passes on is such a reference, and so is a handle
+  that a `computed` returns: in the example that follows, `open` filters a
+  stored list, and the write of the handler bound to each of its elements lands
+  in the record of the stored list.
 
   ```tsx
   // Shown for illustration only.
@@ -3557,7 +3575,7 @@ none of the other eight.
 | `cell:cause-not-literal` | error | In tier R, the argument of `X.for(cause)` on a cell constructor, or of `h.for(cause)` on a handle, is not a string literal (§4.7) | Write a string literal, which names the cell in place of the variable's name: `Writable.for<number>("count")`. For a cell per element, declare the cell in the body of the collection callback, where the element's key is part of its identifier. A cause computed from data is legal only in a function body | new |
 | `cell:method-tier` | error | A method, a constructor form, or a declaration of §4.7 called in a tier its "Tiers" column leaves out, where no other entry covers the case. In tier R: a write (`set`, `update`, `push`, `pushAll`, `addUnique`, `remove`, `removeByValue`, `removeAll`, `increment`, `applyChanges`, `send`, `exec`), `sample()`, `getArgumentCell()`, or `.for(cause)` on an instantiation. In tier F: `sqliteDatabase(...)`. It is reported in place of `reactive:unsupported-call` and `pattern-context:statement`. Not reported here: a collection method in tier F (`cell:collection-method-in-function`), `query` in a `lift` or a `computed` (`function-body:effect-in-computation`), and a cause in tier R that is not a string literal (`cell:cause-not-literal`) | For a write: move it into an `action(() => ...)` or a `handler`. For `sample()`: read with `get()`, or move the read into `computed(() => ...)`. For `getArgumentCell()`: call it in a function body. For `.for(cause)` on an instantiation: bind the instance to a `const`, whose name identifies it. For `sqliteDatabase`: declare the database in the pattern body and give the handle to the function body | new |
 | `sqlite:tables-not-static` | error | The `tables` option of a `sqliteDatabase` declaration is not static in the sense of §4.7: it is not an object literal with static keys, a value is not a `table(...)` call written in place or bound to a `const`, an argument of a `table` call is not a constant expression, or a row-label rule has a block body or refers to something other than its parameter, constant expressions, and the `cfSqlite` helpers | Write the table declarations from literals and constants. Data that varies belongs in the rows of a table, not in its declaration | new |
-| `binding:write-to-computed` | error | In tier R, an argument path or a state path is bound where the callee declares a handle that can write, the callee's record has a write edge or a write envelope through that handle, and the path holds a value the instance produces and can hold no reference: the result of an operator, of a template literal, or of a standard-library call, a literal, a member of a record or an array assembled in place, or a result path of a `computed` or a `lift` at which the body returns a value it computed (§7.5.2; `plan-and-label-templates.md` §3.11; `footprint-analysis.md` §6.2). Not reported where the path can hold a reference on some evaluation, such as an element a `filter` passes on, a value a body returns unchanged, or a conditional with such an operand: the runtime decides those per write. Not reported for an argument that a function body gives to a pattern it instantiates. *Assumed:* the severity, since the ruling says that the compiler reports the case and the write is refused at run time in every case reported | Bind a state cell, an input, or an element of a stored collection, and derive the computed value from it. Where the callee only reads, declare the property as a value or as a `ReadonlyCell` | new |
+| `binding:write-to-computed` | error | In tier R, an argument path or a state path is bound where the callee declares a handle that can write, the callee's record has a write edge or a write envelope through that handle, and the path holds a value the instance produces and can hold no reference: the result of an operator, of a template literal, or of a standard-library call, a literal, a member of a record or an array assembled in place, or a result path of a `computed` or a `lift` at which the body returns a value it computed (§7.5.2; `plan-and-label-templates.md` §3.11; `footprint-analysis.md` §6.2). A literal in the argument of a pattern called in tier R is covered, whether the pattern gets a plan of its own or is compiled into the caller, and whether the write is in the pattern's body, in a handler it binds, or in a pattern it calls in turn with the same path: `Counter({ value: 10 })` is reported where `Counter` binds `value` to a handler that increments it (`plan-and-label-templates.md` §3.15). A property that the argument leaves out is not a literal and is not reported. Not reported where the path can hold a reference on some evaluation, such as an element a `filter` passes on, a value a body returns unchanged, or a conditional with such an operand: the runtime decides those per write. Not reported for an argument that a function body gives to a pattern it instantiates. Not reported where the callee declares a handle that can write and only reads through it: the binding is legal and no write is refused (*assumed,* [§13](#13-open-questions), question 39). **Position.** *Assumed* ([§13](#13-open-questions), question 40): the report is at the expression of the module being compiled that supplies the produced value, which is the property of the argument or the attribute of the tag at the outermost call that the value passes through, and the message names the binding that writes, by file and line, where that binding is inside a pattern compiled in. *Assumed:* the severity, since the ruling says that the compiler reports the case and the write is refused at run time in every case reported | Bind a state cell, an input, or an element of a stored collection, and derive the computed value from it. For a literal, create a state cell that holds it and give the cell: `const start = new Writable(10)` and `Counter({ value: start })`. Where the callee only reads, declare the property as a value or as a `ReadonlyCell` | new |
 | `collection:nested-scan` | warning | An inline reactive collection callback scans a captured reactive collection | Measure, and consider an index (`keyBy`, `groupBy`) or an aggregate | carries |
 | `pattern-context:get-call` | — | — | — | retired: a `.get()` on a cell is valid at every tier-R expression site (§4.4); the statement case is `pattern-context:statement` and the non-cell case is `opaque-get:invalid-call` |
 | `pattern-context:optional-chaining` | — | — | — | retired: `?.` is a path projection at every tier-R site |
@@ -3729,6 +3747,7 @@ and 2 local type declarations, and nothing else.
 | A cell of `T` given where a cell of a view of `T` is declared | 13 arguments (prototype) | `Cell<Message>` where `quotes?: Cell<RepliedMessage>` is declared, in `patterns/system/fabrichat/room-records.tsx` | Rewrite: declare `ReadonlyCell` of the view where the link is read, and the type the cell has where it is written (§7.5.1) |
 | A writable view wider than the declaration, and a kind test on a key of older data typed `unknown` | 18 errors of one cause (1) (prototype) | `patterns/apps/topics/topic.tsx`: the pattern that repairs stored topics declares `createdBy: Writable<Partial<TopicAuthor> \| undefined>` over a place declared `TopicAuthor`, and narrows `createdByName` and the `authorName` of a comment, both typed `unknown`, with `typeof` | Rewrite: the input declares the shape the stored data has, `createdBy?: Partial<TopicAuthor>`, and each such key as `string`, and the pattern exposes the complete form as an output (§7.5.1, §7.8) |
 | A narrowed optional value given where a writable cell of the narrowed type is declared | 3 arguments (1) (prototype) | `ann.status` in `patterns/apps/annotation-manager/annotation-manager.tsx`, given to three handlers whose state declares `status: Writable<AnnotationStatus>` | Rewrite: the three handlers declare `Writable<AnnotationStatus \| undefined>`, the declared type of the place (§7.5.2) |
+| A literal given to a pattern that writes the argument | 3 (2) | `Counter({ value: 10 })` and `Counter({ value: 30 })` in `patterns/examples/cf-picker/cf-picker.tsx`, and `Counter({ value: 5 })` in `patterns/examples/drag-drop-demo/drag-drop-demo.tsx`. `Counter` in `patterns/examples/counter/counter.tsx` declares `value?: Writable<number \| Default<0>>` and binds it to the handler `increment`, which writes it | Rewrite, by ruling: the caller creates a state cell and gives it, `const start = new Writable(10)` and `Counter({ value: start })` (`binding:write-to-computed`, §7.5.2) |
 | A type name of the DOM library | 4 (3) (prototype) | `Event` in `patterns/apps/annotation/annotation.tsx` and `patterns/examples/form-demo/form-demo.tsx`; `CustomEvent` in `patterns/dev/catalog/stories/cf-chat-story.tsx` | Rewrite: declare the shape of the event the handler reads (`stdlib:unsupported-member`, §7.10) |
 | `.get()` on a stream reached through `key` | 1 (1) (prototype) | `takesOffers` in `patterns/system/fabrichat/manager.tsx` | Rewrite: test presence through a view typed `unknown` ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)) |
 | A default named by `typeof` of a constant whose initializer is a call | 1 (1) (prototype) | `Default<typeof INITIAL_SHOTS>` in `patterns/showcase/battleship/multiplayer/schemas.tsx`, where `INITIAL_SHOTS = createInitialShots()` | Rewrite: write the value as a literal (`default:not-static`, §8.8) |
@@ -4653,3 +4672,27 @@ use, so that the other numbers stay as other documents cite them.
     in `patterns/system/fabrichat/room.tsx` and
     `patterns/system/quick-capture/quick-capture.tsx`, and one module is
     refused for each.
+39. **A hint for a writable handle that is bound to a produced value and only
+    read** (to the project owner; from the prototype). Where a callee declares
+    `Writable<T>`, the argument is a value the instance produces, and the
+    callee's record has no write edge and no write envelope through the handle,
+    nothing is refused, and `binding:write-to-computed` (§10.2) is not
+    reported. *Assumed:* no diagnostic. The declaration is the callee's, the
+    binding is legal, and the message of `binding:write-to-computed` names the
+    correction for the case that is refused. The alternative is a hint at the
+    callee's declaration, and not at each binding, that a property declared
+    `Writable<T>` is never written and can be declared `ReadonlyCell<T>` or as
+    the value. It would be a fourteenth diagnostic computed after the type
+    checker, from the callee's record alone. The prototype counts the bindings
+    of this kind and reports none.
+40. **Where `binding:write-to-computed` is positioned for a pattern compiled
+    in** (to the project owner; from the prototype). A diagnostic of a module
+    has a position in that module, and the binding that writes can be in
+    another module, inside a pattern compiled into the plan. *Assumed,* as
+    §10.2 has it: the position is the expression of the compiled module that
+    supplies the produced value, at the outermost call or tag the value passes
+    through, and the message names the inner binding by file and line. The
+    prototype positions the report at that call or tag as a whole. The
+    alternative reports in the module of the inner binding, which reports a
+    pattern for what one of its callers gives it. A pattern compiled by itself
+    is not reported for the path, since the path is its input there.
