@@ -505,6 +505,57 @@ export const Gate = pattern<{ item: Cell<Item>; on: boolean }>(({ item, on }) =>
     assert_eq!(slot_line(&plan, &of), "argument item : identity");
 }
 
+#[test]
+fn a_scan_is_a_collection_with_a_predicate_cone_and_a_selector_the_runtime_supplies() {
+    // PL §3.13: "`some` is a `fold` of the predicate's template through
+    // the first truthy element". §1.1, `Selector`: "For the `through` of
+    // a `fold` it is 0." "`xs.find(...)`: `pick` over the collection";
+    // `Pick.chosenBy` `runtime`: "the runtime chooses an element of a
+    // collection from per-element results".
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+interface Item { title: string; done: boolean }
+export const Scan = pattern<{ items: Item[] }>(({ items }) => {
+  const anyDone = items.some((item) => item.done);
+  const first = items.find((item) => item.done);
+  const where = items.findIndex((item) => item.title === "x");
+  const all = items.every((item) => item.done);
+  return { anyDone, first, where, all };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Scan");
+    let names: Vec<&str> = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .map(|collection| collection["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(names, ["anyDone", "first", "where", "all"]);
+    for collection in plan["collections"].as_array().expect("collections") {
+        assert_eq!(
+            slot_line(&plan, &collection["source"]["slot"]),
+            "argument items : enumeration"
+        );
+    }
+    assert_eq!(cone_slots(&plan, "anyDone"), ["element done : value"]);
+    assert_eq!(cone_slots(&plan, "where"), ["element title : value"]);
+    assert_eq!(
+        plan["selectors"],
+        json!([{ "arity": 0 }, { "arity": 0 }, { "arity": 0 }, { "arity": 0 }])
+    );
+    assert_eq!(plan["picks"], json!([{ "chosenBy": "runtime" }]));
+    // The result is an output the runtime produces, as it assembles the
+    // result of a `map`: it names the collection and the predicate's cone.
+    let output = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| output["path"] == json!(["anyDone"]))
+        .expect("the output of the scan");
+    assert_eq!(output["collection"], json!(0));
+}
+
 // ----- PL §6.2: the plan for the slice of FabriChat -----
 
 fn fabrichat() -> ProgramAnalysis {

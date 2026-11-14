@@ -86,6 +86,9 @@ struct Computed {
     kept: Vec<Vec<String>>,
     /// The collection the value is the assembled result of.
     collection: Option<usize>,
+    /// The value is the result of a scan of the collection (PL §3.13),
+    /// and not an array of its elements.
+    scan: bool,
     /// Whether a record of the plan refers to the value.
     referred: bool,
     order: usize,
@@ -121,8 +124,8 @@ struct Emitter<'r, 'm, 'a> {
     values: Vec<Computed>,
     cones: Vec<ConeOut>,
     /// The number of selection points and of choice points of the plan.
-    selectors: usize,
-    picks: usize,
+    selectors: Vec<u32>,
+    picks: Vec<&'static str>,
     collections: Vec<Value>,
     plan_bodies: Vec<Value>,
     body_facts: Vec<BodyFact>,
@@ -438,6 +441,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             cone,
             kept: Vec::new(),
             collection: None,
+            scan: false,
             referred: false,
             order,
         });
@@ -448,8 +452,8 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// branches (PL §3.5).
     fn selector(&mut self) {
         if let Some(cone) = self.cone {
-            self.cones[cone].selectors.push(self.selectors);
-            self.selectors += 1;
+            self.cones[cone].selectors.push(self.selectors.len());
+            self.selectors.push(2);
         }
     }
 
@@ -459,8 +463,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         let object = object.clone();
         let key = key.clone();
         self.in_cone(hint, at, |emitter, cone| {
-            emitter.cones[cone].picks.push(emitter.picks);
-            emitter.picks += 1;
+            emitter.cones[cone].picks.push(emitter.picks.len());
+            emitter.picks.push("valueCode");
             emitter.consume(&key);
             match &object {
                 Place::Slot(root, path) => {
@@ -1093,7 +1097,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 None => receiver.clone(),
             },
-            "map" | "filter" | "flatMap" => {
+            "map" | "filter" | "flatMap" | "some" | "every" | "findIndex" | "find" => {
                 match arguments.first().and_then(|first| FunctionLike::of(first)) {
                     Some(function) => self.collection(receiver, name, function, hint, at),
                     None => {
@@ -1159,6 +1163,10 @@ impl<'a> Emitter<'_, '_, 'a> {
         } else {
             hint
         };
+        // A scan (PL §3.13): the predicate is the body, the runtime
+        // evaluates it in order, and a selector holds the position the
+        // scan stopped at.
+        let scan = matches!(via, "some" | "every" | "findIndex" | "find");
         let source = match receiver {
             Place::Slot(root, path) => {
                 let slot = self.slot(root, path, "enumeration");
@@ -1167,8 +1175,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             Place::Value(value, _) => {
                 self.values[*value].referred = true;
                 match self.values[*value].collection {
-                    Some(collection) => json!({ "collection": collection, "via": via }),
-                    None => json!({ "output": { "$value": value } }),
+                    Some(collection) if !scan && !self.values[*value].scan => {
+                        json!({ "collection": collection, "via": via })
+                    }
+                    _ => json!({ "output": { "$value": value } }),
                 }
             }
             Place::Unknown => json!({}),
@@ -1224,13 +1234,26 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .and_then(|statements| self.statements(statements)),
         };
         if let Some(result) = &result {
-            self.pass(result);
+            if scan {
+                self.consume(result);
+            } else {
+                self.pass(result);
+            }
         }
         self.within.pop();
         self.cone = saved_cone;
         self.env = saved_env;
         let value = self.value(name, cone);
         self.values[value].collection = Some(collection);
+        if scan {
+            self.values[value].scan = true;
+            // The `through` of the fold: the runtime supplies it, and no
+            // value function reports it.
+            self.selectors.push(0);
+            if via == "find" {
+                self.picks.push("runtime");
+            }
+        }
         let place = Place::Value(value, Vec::new());
         // A cone outside the construct that uses the collection reads its
         // assembled result.
@@ -2308,8 +2331,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut plan = json!({
             "version": 1,
             "slots": slots,
-            "selectors": vec![json!({ "arity": 2 }); self.selectors],
-            "picks": vec![json!({ "chosenBy": "valueCode" }); self.picks],
+            "selectors": self.selectors.iter().map(|arity| json!({ "arity": arity })).collect::<Vec<Value>>(),
+            "picks": self.picks.iter().map(|by| json!({ "chosenBy": by })).collect::<Vec<Value>>(),
             "collections": self.collections,
             "bodies": self.plan_bodies,
             "dynamicReads": dynamic_reads,
@@ -2448,8 +2471,8 @@ pub fn emit_module<'a>(
             slots: Vec::new(),
             values: Vec::new(),
             cones: Vec::new(),
-            selectors: 0,
-            picks: 0,
+            selectors: Vec::new(),
+            picks: Vec::new(),
             collections: Vec::new(),
             plan_bodies: Vec::new(),
             body_facts: Vec::new(),
