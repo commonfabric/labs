@@ -142,20 +142,49 @@ fn a_value_another_cone_uses_is_an_output_and_an_edge_names_it() {
         .map(|cone| cone["entry"].as_str().expect("an entry"))
         .collect();
     assert_eq!(entries, ["total", "text", "map", "$UI", "result"]);
+    // The template is that of the body `count`: a `derive` over its one
+    // slot.
     assert_eq!(
         plan["outputs"][0],
-        json!({ "path": ["total"], "cone": 0, "kept": true, "constraints": [] })
+        json!({
+            "path": ["total"],
+            "cone": 0,
+            "kept": true,
+            "constraints": [],
+            "template": {
+                "op": "derive",
+                "inputs": [{ "op": "slot", "slot": 0 }],
+                "by": { "body": 0 },
+            },
+        })
     );
+    // `text` is `label(total)`: a `derive` by the body `label` over the
+    // template of `total`.
     assert_eq!(
         plan["outputs"][1],
-        json!({ "path": [], "interim": "text", "cone": 1, "kept": false, "constraints": [] })
+        json!({
+            "path": [],
+            "interim": "text",
+            "cone": 1,
+            "kept": false,
+            "constraints": [],
+            "template": {
+                "op": "derive",
+                "inputs": [plan["outputs"][0]["template"].clone()],
+                "by": { "body": 1 },
+            },
+        })
     );
     // `label(total)`: the input is a value the instance computed, so the
     // body has an entry of `computed` and no slot (PL §3.9).
     assert_eq!(plan["bodies"][1]["reads"], json!([]));
     assert_eq!(
         plan["bodies"][1]["computed"],
-        json!([{ "at": [], "observes": "value" }])
+        json!([{
+            "at": [],
+            "observes": "value",
+            "template": plan["outputs"][0]["template"].clone(),
+        }])
     );
     assert!(plan["edges"]
         .as_array()
@@ -446,11 +475,17 @@ export const Context = pattern<{ a: Cell<Item>; b: Cell<Item>; list: Item[] }>((
     );
     let plan = plan_of(&analysis, "Context");
     // "`spaceOf(x)`: The `identity` slot of `x`, resolved".
-    assert_eq!(cone_slots(&plan, "where"), ["argument a : identity, resolved"]);
+    assert_eq!(
+        cone_slots(&plan, "where"),
+        ["argument a : identity, resolved"]
+    );
     // "`equals(a, b)`: The `identity` slots of both operands, resolved".
     assert_eq!(
         cone_slots(&plan, "same"),
-        ["argument a : identity, resolved", "argument b : identity, resolved"]
+        [
+            "argument a : identity, resolved",
+            "argument b : identity, resolved"
+        ]
     );
     // "`linksOf(list)`: The `enumeration` slot of the list and the
     // `identity` slot of each element".
@@ -462,11 +497,17 @@ export const Context = pattern<{ a: Cell<Item>; b: Cell<Item>; list: Item[] }>((
     // `labelMetadata` slot on it".
     assert_eq!(
         cone_slots(&plan, "who"),
-        ["argument a : identity, resolved", "argument a : labelMetadata"]
+        [
+            "argument a : identity, resolved",
+            "argument a : labelMetadata"
+        ]
     );
     // "`spaceAccess`: `dynamic`, of kind `space`, through the `identity`
     // slot of the operand, resolved".
-    assert_eq!(cone_slots(&plan, "access"), ["argument b : identity, resolved"]);
+    assert_eq!(
+        cone_slots(&plan, "access"),
+        ["argument b : identity, resolved"]
+    );
     let of = plan["dynamicReads"]
         .as_array()
         .expect("dynamic reads")
@@ -497,7 +538,10 @@ export const Same = pattern<{ a: Cell<Item>; b: Cell<Item> }>(({ a, b }) => {
     let plan = plan_of(&analysis, "Same");
     assert_eq!(
         cone_slots(&plan, "same"),
-        ["argument a : identity, resolved", "argument b : identity, resolved"]
+        [
+            "argument a : identity, resolved",
+            "argument b : identity, resolved"
+        ]
     );
     assert_eq!(
         cone_slots(&plan, "stored"),
@@ -815,6 +859,15 @@ fn body_named<'p>(plan: &'p Value, name: &str) -> &'p Value {
         .unwrap_or_else(|| panic!("no body named {name}"))
 }
 
+fn body_index(plan: &Value, name: &str) -> usize {
+    plan["bodies"]
+        .as_array()
+        .expect("bodies")
+        .iter()
+        .position(|body| body["name"] == name)
+        .unwrap_or_else(|| panic!("no body named {name}"))
+}
+
 fn reads_of(plan: &Value, body: &Value) -> Vec<String> {
     body["reads"]
         .as_array()
@@ -868,13 +921,27 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
     // The crate has `identity` at `titles/*`, where the listing has
     // `value`: the title leaves the body in a record a helper built
     // (SPEC-NOTES 71, 104).
+    let computed: Vec<(Value, Value)> = facts["computed"]
+        .as_array()
+        .expect("computed")
+        .iter()
+        .map(|input| (input["at"].clone(), input["observes"].clone()))
+        .collect();
     assert_eq!(
-        facts["computed"],
-        json!([
-            { "at": ["titles"], "observes": "enumeration" },
-            { "at": ["titles", "*"], "observes": "identity" },
-        ])
+        computed,
+        [
+            (json!(["titles"]), json!("enumeration")),
+            (json!(["titles", "*"]), json!("identity")),
+        ]
     );
+    // "computed titles/* : value T_titles": each entry has the template
+    // of what `B1` returned.
+    for input in facts["computed"].as_array().expect("computed") {
+        assert_eq!(
+            input["template"]["by"]["body"],
+            json!(body_index(&plan, "threadTitles#1"))
+        );
+    }
     // "c1 = collection source: output facts.main, bodyUses: { index:
     // false }". The output is interim, at the path `main` below `facts`.
     let main = plan["outputs"]
@@ -990,4 +1057,113 @@ export const Maker = pattern<{ count: Cell<number>; out: Cell<unknown> }>(({ cou
         state,
         ["count link passes [binding count : identity]", "step copy"]
     );
+}
+
+// ----- PL §1.1, `Template`, and §3: the first templates -----
+
+fn output_named<'p>(plan: &'p Value, interim: &str) -> &'p Value {
+    plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .find(|output| {
+            (output["interim"] == interim && output["path"] == json!([]))
+                || output["path"] == json!([interim])
+        })
+        .unwrap_or_else(|| panic!("no output {interim}"))
+}
+
+/// A template in the notation of PL §6.2.
+fn template_line(plan: &Value, template: &Value) -> String {
+    match template["op"].as_str() {
+        Some("const") => "const".to_string(),
+        Some("slot") => format!("[{}]", slot_line(plan, &template["slot"])),
+        Some("dynamic") => {
+            let why = &plan["dynamicReads"][template["reads"].as_u64().unwrap() as usize]["why"];
+            format!("dynamic({})", why["kind"].as_str().unwrap())
+        }
+        Some("derive") => {
+            let inputs: Vec<String> = template["inputs"]
+                .as_array()
+                .expect("inputs")
+                .iter()
+                .map(|input| template_line(plan, input))
+                .collect();
+            let by = match template["by"].get("body") {
+                Some(body) => format!(
+                    "by {}",
+                    plan["bodies"][body.as_u64().unwrap() as usize]["name"]
+                        .as_str()
+                        .unwrap()
+                ),
+                None => "expression".to_string(),
+            };
+            format!("derive({by}) {{ {} }}", inputs.join(" "))
+        }
+        other => panic!("an unexpected template {other:?}"),
+    }
+}
+
+#[test]
+fn an_operator_over_slots_and_a_projection_have_the_templates_of_pl_section_3() {
+    // PL §3.3: "`a.b` is the slot at the extended path". §1.1: "`derive`:
+    // A new value computed from the inputs", by "emitted expression
+    // code"; "`const`: A literal ... Contributes nothing."
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+export const Sum = pattern<{ order: { price: number; count: number } }>(({ order }) => {
+  const total = order.price * order.count + 1;
+  return { total };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Sum");
+    let total = output_named(&plan, "total");
+    assert_eq!(
+        template_line(&plan, &total["template"]),
+        "derive(expression) { derive(expression) { [argument order/price : value] [argument order/count : value] } const }"
+    );
+}
+
+#[test]
+fn a_body_has_the_template_of_its_footprint_as_t_titles_and_t_facts_have() {
+    // PL §6.2: "T_titles = derive(by B1) [ s2 dynamic(handle B1.h0) ]",
+    // "T_facts = derive(by B2) [ s0 T_titles dynamic(handle B2.h0) ]",
+    // "T_empty = derive(expression) [ T_facts, const ]".
+    let analysis = program(
+        r#"import { Cell, computed, pattern } from "commonfabric";
+interface Message { body: string }
+function titlesOf(info: Cell<Record<string, string>>, on: boolean): Record<string, string> {
+  if (on) { return info.get(); }
+  return {};
+}
+function factsOf(messages: Cell<Message[]>, titles: Record<string, string>, on: boolean): { main: string[] } {
+  const main: string[] = [];
+  if (on) { for (const message of messages.get()) { main.push(titles[message.body] ?? ""); } }
+  return { main };
+}
+export const Room = pattern<{ messages: Cell<Message[]>; info: Cell<Record<string, string>>; on: boolean }>(({ messages, info, on }) => {
+  const facts = computed(() => factsOf(messages, titlesOf(info, on), on));
+  const isEmpty = computed(() => facts.main.length === 0);
+  return { isEmpty };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Room");
+    let t_titles =
+        "derive(by titlesOf) { [argument info : identity] [argument on : value] dynamic(handle) }";
+    let t_facts = format!(
+        "derive(by factsOf) {{ [argument messages : identity] [argument on : value] {t_titles} dynamic(handle) }}"
+    );
+    let empty = output_named(&plan, "isEmpty");
+    assert_eq!(
+        template_line(&plan, &empty["template"]),
+        format!("derive(expression) {{ {t_facts} const }}")
+    );
+    // "computed titles/* : value T_titles": the entry of `Body.computed`
+    // has the template of what the other body returned.
+    let body = body_named(&plan, "factsOf");
+    for input in body["computed"].as_array().expect("computed") {
+        assert_eq!(template_line(&plan, &input["template"]), t_titles);
+    }
 }

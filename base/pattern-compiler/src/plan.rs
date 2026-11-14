@@ -25,10 +25,10 @@ use crate::footprint::{
     Seg, UseRecord, WriteRec, WriteTarget,
 };
 use crate::module::{symbol_of, Binding, DefKind};
-use oxc_syntax::symbol::SymbolId;
 use crate::program::Resolver;
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind};
+use oxc_syntax::symbol::SymbolId;
 
 /// The plan of one pattern.
 #[derive(Debug, Clone)]
@@ -91,6 +91,10 @@ struct Computed {
     scan: bool,
     /// Whether a record of the plan refers to the value.
     referred: bool,
+    /// The label of the value in symbolic form (PL §1.1, `Template`),
+    /// where this slice builds it: for expression code of an operator, and
+    /// for a use of a body.
+    template: Option<Value>,
     /// The paths below the value that a collection has as its source: each
     /// is an interim output of its own (PL §1.1, `Output.path`).
     below: Vec<Vec<String>>,
@@ -143,6 +147,12 @@ struct Emitter<'r, 'm, 'a> {
     /// The result paths that hold an input passed through.
     passed: Vec<Vec<String>>,
     unsupported: Vec<(String, u32)>,
+    /// The templates of what the expression code being evaluated
+    /// observed, and whether it observed something with no template.
+    operands: Vec<Value>,
+    opaque: bool,
+    /// The entries of `Plan.dynamicReads` of each body of the plan.
+    body_dynamic: Vec<(usize, usize)>,
 }
 
 /// What the edges of the plan need of a body.
@@ -381,9 +391,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             return None;
         };
         let import = &model.imports[import];
-        let def =
-            self.resolver
-                .resolve_import(self.module, import, &import.bindings[binding].imported)?;
+        let def = self.resolver.resolve_import(
+            self.module,
+            import,
+            &import.bindings[binding].imported,
+        )?;
         let found = self.resolver.model(def.module)?.defs.get(def.def)?;
         if found.symbol.is_some() {
             return None;
@@ -396,9 +408,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             .nodes()
             .iter()
             .filter_map(|node| match node.kind() {
-                AstKind::CallExpression(call)
-                    if from <= call.span.start && call.span.end <= to =>
-                {
+                AstKind::CallExpression(call) if from <= call.span.start && call.span.end <= to => {
                     Some(call)
                 }
                 _ => None,
@@ -445,6 +455,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             kept: Vec::new(),
             collection: None,
             scan: false,
+            template: None,
             below: Vec::new(),
             referred: false,
             order,
@@ -524,7 +535,58 @@ impl<'a> Emitter<'_, '_, 'a> {
             })
     }
 
+    /// An operand of the expression code being evaluated: its template,
+    /// or that it has none.
+    fn operand(&mut self, template: Option<Value>) {
+        match template {
+            Some(template) => self.operands.push(template),
+            None => self.opaque = true,
+        }
+    }
+
+    /// Expression code of an operator: a `derive` over the templates of
+    /// what it observes (PL §1.1, §3.19).
+    fn derived(&mut self, hint: &str, at: u32, evaluate: impl FnOnce(&mut Self, usize)) -> Place {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let place = self.in_cone(hint, at, evaluate);
+        let inputs = std::mem::replace(&mut self.operands, saved.0);
+        let opaque = std::mem::replace(&mut self.opaque, saved.1);
+        if let Place::Value(value, _) = &place {
+            if !opaque {
+                self.values[*value].template = Some(json!({
+                    "op": "derive",
+                    "inputs": inputs,
+                    "by": { "expression": true },
+                }));
+            }
+        }
+        place
+    }
+
+    /// The template of a place that is one value: a slot passed through,
+    /// a value the instance computed, or a constant.
+    fn template_of(&mut self, place: &Place, class: &'static str) -> Option<Value> {
+        match place {
+            Place::Slot(root, path) => {
+                let slot = self.slot(root, path, class);
+                Some(json!({ "op": "slot", "slot": slot }))
+            }
+            // Every path of what one opaque call or one expression
+            // computed has its template (PL §3.3).
+            Place::Value(value, _) => self.values[*value].template.clone(),
+            Place::Const => Some(json!({ "op": "const" })),
+            _ => None,
+        }
+    }
+
     fn observe(&mut self, place: &Place, class: &'static str) {
+        if !matches!(place, Place::Record(_)) {
+            let template = self.template_of(place, class);
+            self.operand(template);
+        }
         match place {
             Place::Slot(root, path) => {
                 let slot = self.slot(root, path, class);
@@ -893,17 +955,17 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let right = emitter.eval(&logical.right, "branch");
                 emitter.pass(&right);
             }),
-            Expression::BinaryExpression(binary) => self.in_cone(hint, at, |emitter, _| {
+            Expression::BinaryExpression(binary) => self.derived(hint, at, |emitter, _| {
                 for operand in [&binary.left, &binary.right] {
                     let place = emitter.eval(operand, "operand");
                     emitter.consume(&place);
                 }
             }),
-            Expression::UnaryExpression(unary) => self.in_cone(hint, at, |emitter, _| {
+            Expression::UnaryExpression(unary) => self.derived(hint, at, |emitter, _| {
                 let place = emitter.eval(&unary.argument, "operand");
                 emitter.consume(&place);
             }),
-            Expression::TemplateLiteral(template) => self.in_cone(hint, at, |emitter, _| {
+            Expression::TemplateLiteral(template) => self.derived(hint, at, |emitter, _| {
                 for operand in &template.expressions {
                     let place = emitter.eval(operand, "operand");
                     emitter.consume(&place);
@@ -1316,10 +1378,23 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 // Promoted: expression code.
                 match function.expression_body() {
-                    Some(expression) => self.in_cone(hint, at, |emitter, _| {
-                        let place = emitter.eval(expression, hint);
-                        emitter.pass(&place);
-                    }),
+                    Some(expression) => {
+                        // A promoted `computed` is its expression, and
+                        // has the expression's template.
+                        let mut inner = None;
+                        let place = self.in_cone(hint, at, |emitter, _| {
+                            let place = emitter.eval(expression, hint);
+                            emitter.pass(&place);
+                            inner = match &place {
+                                Place::Value(..) => emitter.template_of(&place, "identity"),
+                                _ => None,
+                            };
+                        });
+                        if let Place::Value(value, _) = &place {
+                            self.values[*value].template = inner;
+                        }
+                        place
+                    }
                     None => {
                         let statements = function.block_body().unwrap_or(&[]);
                         let saved = self.env.clone();
@@ -1570,6 +1645,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             .map(|(input, _)| input.clone())
             .collect();
         let index = self.plan_bodies.len();
+        let dynamic_from = self.dynamic_reads.len();
         let used: UseRecord = bind_use(record, &computed);
         let mut reads: Vec<usize> = Vec::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
@@ -1629,10 +1705,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                     } else if entry.class == Class::Value {
                         value_names.insert(key, json!({ "computed": computed_inputs.len() }));
                     }
-                    computed_inputs.push(json!({
-                        "at": at_path,
-                        "observes": class_name(entry.class),
-                    }));
+                    let mut input = Map::new();
+                    input.insert("at".to_string(), json!(at_path));
+                    input.insert("observes".to_string(), json!(class_name(entry.class)));
+                    if let Place::Value(value, _) = &place {
+                        if let Some(template) = &self.values[*value].template {
+                            input.insert("template".to_string(), template.clone());
+                        }
+                    }
+                    computed_inputs.push(Value::Object(input));
                 }
             }
         }
@@ -1731,6 +1812,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.dynamic_reads
                 .push(json!({ "why": { "kind": "space", "of": of } }));
         }
+        let dynamic_to = self.dynamic_reads.len();
         // `Body.calls`.
         let mut calls: Vec<Value> = Vec::new();
         let mut child_of_call: HashMap<usize, usize> = HashMap::new();
@@ -1891,6 +1973,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             "widenings": [],
         }));
         self.body_facts.push(fact);
+        self.body_dynamic.push((dynamic_from, dynamic_to));
         // The bindings the body makes (PL §1.1, `Binding`): the handler
         // is a body of the plan, and each path of its state is copied or
         // holds a reference the binding body was given.
@@ -1987,11 +2070,35 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         let prefix = kind != BodyKind::Lift;
-        self.body_record(plan_kind, &name, &record, &inputs, prefix, start, true);
+        let body = self.body_record(plan_kind, &name, &record, &inputs, prefix, start, true);
         if made {
             self.cone = None;
         }
-        Place::Value(self.value(&hint, cone), Vec::new())
+        let value = self.value(&hint, cone);
+        self.values[value].template = self.body_template(body);
+        Place::Value(value, Vec::new())
+    }
+
+    /// The template of what a body returned (PL §3.9, and `T_send` of
+    /// §6.2): a `derive` by the body over its slots, the templates of its
+    /// computed inputs, and its dynamic reads.
+    fn body_template(&self, body: usize) -> Option<Value> {
+        let record = &self.plan_bodies[body];
+        let mut inputs: Vec<Value> = Vec::new();
+        for slot in record["reads"].as_array()? {
+            inputs.push(json!({ "op": "slot", "slot": slot }));
+        }
+        for input in record["computed"].as_array()? {
+            let template = input.get("template")?;
+            if !inputs.contains(template) {
+                inputs.push(template.clone());
+            }
+        }
+        let (from, to) = *self.body_dynamic.get(body)?;
+        for reads in from..to {
+            inputs.push(json!({ "op": "dynamic", "reads": reads }));
+        }
+        Some(json!({ "op": "derive", "inputs": inputs, "by": { "body": body } }))
     }
 
     /// The plan body of a handler: one record however many bindings name
@@ -2309,6 +2416,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                 output.insert("cone".to_string(), json!(cone));
                 if let Some(collection) = value.collection {
                     output.insert("collection".to_string(), json!(collection));
+                } else if let Some(template) = &value.template {
+                    output.insert("template".to_string(), template.clone());
                 }
                 output.insert("kept".to_string(), json!(kept));
                 output.insert("constraints".to_string(), json!([]));
@@ -2580,6 +2689,9 @@ pub fn emit_module<'a>(
             handlers: HashMap::new(),
             passed: Vec::new(),
             unsupported: Vec::new(),
+            operands: Vec::new(),
+            opaque: false,
+            body_dynamic: Vec::new(),
         };
         let Some(function) = emitter.function_at(module, *start) else {
             continue;

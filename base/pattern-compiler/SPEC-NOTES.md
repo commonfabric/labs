@@ -576,3 +576,28 @@ numbers have gaps.
     unsupported constructs of a pattern compiled in from another module
     are offsets in that module, and the plan lists them without the
     module.
+111. **The `Binding` of a `bind` site of a body** (PL §1.1, FA §8.5) is
+    filled in: the handler is a body of the plan, and each path of its
+    state is `copy` or `link`, with the reference a linked path holds
+    where the binding body was given it. This replaces the last two
+    sentences of note 89. A path the body copies from a value it
+    computed has no `template` yet. A handle or a link the body made at
+    a site is `link` with no `reference`, because `reference` names only
+    what the body was given. A binding of a handler received as a
+    factory value is still unsupported.
+112. **The first templates** (PL §1.1 `Template`, §3.3, §3.9, §3.19).
+    Built: `const`; `slot`; `derive` by expression code for a binary or
+    unary operator and a template literal, over the templates of its
+    operands in source order; `derive` by a body, over the slots of
+    `Body.reads`, the templates of its computed inputs, each once, and a
+    `dynamic` node for each entry of `Plan.dynamicReads` the use made,
+    as `T_send` lists them; and the template of a promoted `computed`
+    whose body is one expression, which is that expression's. A path of
+    a value has the value's template (§3.3, for one opaque call). They
+    are on `Output.template` and `ComputedInput.template`, and are left
+    out where an operand has none: a `select`, a `pick`, a `fold`, a
+    collection, a method call, JSX, and a record written in place are
+    not built. A constant operand is one `const` node each time it is
+    written; PL does not say whether inputs are a set. `WriteEdge.template`,
+    `Operation.input`, `Collection.membership`, and
+    `Binding.state.template` are not filled in.

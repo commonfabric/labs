@@ -451,7 +451,13 @@ fn a_constant_cause_is_a_template_an_operator_or_a_local_const_over_constants() 
         ));
         assert_eq!(record.calls, ["createCell:cause (state)"], "{cause}");
     }
-    for cause in ["`total-${x.n}`", "\"a\" + x.n", "changing", "String(1)", "derived"] {
+    for cause in [
+        "`total-${x.n}`",
+        "\"a\" + x.n",
+        "changing",
+        "String(1)",
+        "derived",
+    ] {
         let record = analyze(&format!(
             "const f = lift((x: {{ n: number }}) => {{ let changing = \"k\"; const derived = `${{x.n}}`; const c = Cell.for({cause}); return x.n; }});\n"
         ));
