@@ -1,10 +1,23 @@
-import { assert, handler, pattern, TESTS } from "commonfabric";
-import {
+import { assert, handler, NAME, pattern, TESTS, UI } from "commonfabric";
+import Gallery, {
   CustomerSupportRecipientConfirmExample,
   FinanceRecipientConfirmExample,
   PatientCaseRedactedReleaseExample,
   SecurityIncidentRedactedReleaseExample,
 } from "./confirmation-release-examples.tsx";
+import {
+  childNodes,
+  textContent,
+} from "../../tools/test-support/vnode-helpers.ts";
+
+/** The text of the gallery's card at `index`: the first introduces the
+ * gallery and the second is its catalog. Reached by position, since a search
+ * would also walk every example the gallery renders. */
+const cardText = (view: unknown, index: number): string =>
+  textContent(childNodes(childNodes(view)[0])[index]);
+
+const numbered = (titles: readonly string[]): string =>
+  "Catalog" + titles.map((title, index) => `${index + 1}. ${title}`).join("");
 
 type RecipientSuite = ReturnType<typeof FinanceRecipientConfirmExample>;
 type SupportSuite = ReturnType<typeof CustomerSupportRecipientConfirmExample>;
@@ -44,6 +57,7 @@ const runIncidentRelease = handler<void, { suite: IncidentSuite }>((
 });
 
 export default pattern(() => {
+  const gallery = Gallery({});
   const finance = FinanceRecipientConfirmExample({});
   const support = CustomerSupportRecipientConfirmExample({});
   const patient = PatientCaseRedactedReleaseExample({});
@@ -73,6 +87,22 @@ export default pattern(() => {
     incident.releasedRedactedContent!.includes("[redacted-secret]")
   );
 
+  // The catalog lists each example under the name it goes by, so reading it
+  // reads every example's name.
+  const assert_gallery_catalog = assert(() =>
+    gallery[NAME] === "Confirmation and Redacted Release Examples" &&
+    gallery.exampleCount === 4 &&
+    cardText(gallery[UI], 0).includes(
+      "The gallery currently exposes 4 example patterns.",
+    ) &&
+    cardText(gallery[UI], 1) === numbered([
+        "Finance Recipient Confirmation",
+        "Customer Support Recipient Confirmation",
+        "Patient Case Redacted Release",
+        "Security Incident Redacted Release",
+      ])
+  );
+
   return {
     [TESTS]: [
       { action: runRecipientConfirm({ suite: finance }) },
@@ -83,6 +113,7 @@ export default pattern(() => {
       { assertion: assert_patient_redacted },
       { action: runIncidentRelease({ suite: incident }) },
       { assertion: assert_incident_redacted },
+      { assertion: assert_gallery_catalog },
     ],
     finance,
     support,

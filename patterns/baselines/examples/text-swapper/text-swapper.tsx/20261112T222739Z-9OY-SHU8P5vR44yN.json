@@ -1,0 +1,45 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "leftText": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Hello",
+        "type": "string"
+      },
+      "rightText": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "World",
+        "type": "string"
+      }
+    },
+    "required": [
+      "leftText",
+      "rightText"
+    ],
+    "type": "object"
+  },
+  "pattern": "examples/text-swapper/text-swapper.tsx",
+  "resultSchema": {
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "leftText": {
+        "type": "string"
+      },
+      "rightText": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "leftText",
+      "rightText",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
