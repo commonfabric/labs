@@ -14,6 +14,7 @@ import {
   pattern,
   Stream,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -52,6 +53,8 @@ interface Input {
 
 /** Represents a calendar event with a date, time, and notes. */
 export interface Output {
+  [NAME]: string;
+  [UI]: VNode;
   title: string;
   date: string;
   startTime: string;
@@ -116,8 +119,9 @@ const formatTime12h = (time: string): string => {
 
 const formatDateDisplay = (date: string): string => {
   if (!date) return "";
-  const d = new Date(date + "T12:00:00");
+  const d = new Date(date + "T12:00:00Z");
   return d.toLocaleDateString("en-US", {
+    timeZone: "UTC",
     weekday: "short",
     month: "short",
     day: "numeric",

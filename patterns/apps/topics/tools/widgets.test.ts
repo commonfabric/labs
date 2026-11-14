@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { stripAnsi } from "@commonfabric/cli/view/ansi";
 
 import { Canvas } from "./canvas.ts";
-import { menuBar, pullDown, statusLine } from "./widgets.ts";
+import { frame, menuBar, pullDown, statusLine } from "./widgets.ts";
 import { span } from "./text.ts";
 
 describe("widgets", () => {
@@ -40,6 +40,25 @@ describe("widgets", () => {
       );
 
       expect(stripAnsi(canvas.paint()[0])).toBe("   File connecti");
+    });
+  });
+
+  describe("frame()", () => {
+    it("draws a frame with its title in the top edge, and none in a rectangle too small for one", () => {
+      const canvas = new Canvas<string>(10, 3, [0, 0, 0]);
+      const look = { title: "Oven", active: false, bg: [0, 0, 0] as const };
+      frame(canvas, { x: 0, y: 0, width: 1, height: 3 }, look);
+      frame(canvas, { x: 2, y: 0, width: 8, height: 1 }, look);
+
+      expect(canvas.paint().map(stripAnsi)).toEqual([
+        " ".repeat(10),
+        " ".repeat(10),
+        " ".repeat(10),
+      ]);
+
+      frame(canvas, { x: 0, y: 0, width: 10, height: 3 }, look);
+
+      expect(canvas.paint().map(stripAnsi)[0]).toBe("┌─ Oven ─┐");
     });
   });
 

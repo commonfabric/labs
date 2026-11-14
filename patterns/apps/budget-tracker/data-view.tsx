@@ -13,7 +13,6 @@ interface Input {
   budgets: Reactive<CategoryBudget[]>;
 }
 
-// Use single type param to avoid conflict bug
 export default pattern<Input>(({ expenses, budgets }) => {
   // Computed values
   const totalSpent = computed(() => {

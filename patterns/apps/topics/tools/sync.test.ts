@@ -11,6 +11,7 @@ import {
   applyDocs,
   boardFile,
   fetchedFrom,
+  identityDid,
   loadMirror,
   openDocSource,
   refreshMirror,
@@ -771,6 +772,24 @@ describe("sync", () => {
     });
   });
 
+  describe("identityDid()", () => {
+    it("returns the DID of the identity the keyfile holds", async () => {
+      const path = join(dir, "identity.key");
+      const pkcs8 = await Identity.generatePkcs8();
+      await Deno.writeFile(path, pkcs8);
+
+      expect(await identityDid(path)).toBe(
+        (await Identity.fromPkcs8(pkcs8)).did(),
+      );
+    });
+
+    it("throws naming a keyfile it cannot read", async () => {
+      await expect(identityDid(join(dir, "absent.key"))).rejects.toThrow(
+        "absent.key",
+      );
+    });
+  });
+
   describe("loadMirror()", () => {
     it("returns what `saveMirror()` wrote, to a file only its owner reads", async () => {
       const path = join(dir, "nested", "copy.json");
@@ -811,6 +830,26 @@ describe("sync", () => {
 
       expect(Object.keys((await loadMirror(path)).docs).sort()).toEqual([
         "cid:x",
+        "of:fid1:new",
+      ]);
+    });
+
+    it("lets go of an entry followed before the copy kept what it went through, so that it is followed again", async () => {
+      const path = join(dir, "unrouted.json");
+      const followed = { piece: "of:fid1:p", input: "of:fid1:i" };
+      await Deno.writeTextFile(
+        path,
+        JSON.stringify({
+          pieces: {
+            "of:fid1:old": followed,
+            "of:fid1:odd": { ...followed, via: ["of:fid1:odd", 2] },
+            "of:fid1:new": { ...followed, via: ["of:fid1:new"] },
+          },
+          docs: {},
+        }),
+      );
+
+      expect(Object.keys((await loadMirror(path)).pieces)).toEqual([
         "of:fid1:new",
       ]);
     });

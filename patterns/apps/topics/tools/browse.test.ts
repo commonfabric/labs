@@ -60,15 +60,30 @@ describe("browse", () => {
             at: 2,
           },
         },
-        pending: {
-          "topics-1": {
-            request: { verb: "mention", topic: "1", other: "2" },
+        pending: Object.fromEntries(
+          ([
+            { verb: "mention", topic: "1", other: "2" },
+            { verb: "new", title: "T", body: "B" },
+            { verb: "comment", topic: "1", text: "Hi." },
+            { verb: "body", topic: "1", text: "Body." },
+            { verb: "title", topic: "1", text: "Title" },
+            {
+              verb: "link",
+              topic: "1",
+              url: "https://example.com",
+              label: "",
+              kind: "web",
+            },
+            { verb: "unlink", topic: "1", url: "https://example.com" },
+          ] as const).map((request, index) => [`topics-${index}`, {
+            request,
             agentName: "Ian (person)",
             attempts: 1,
             failure: "Lost.",
             at: 3,
-          },
-        },
+          }]),
+        ),
+        dropped: { "comment:3": { at: 4, when: 5 } },
         agentName: "Ian (person)",
       };
       const path = join(dir, "saved.json");
@@ -88,13 +103,27 @@ describe("browse", () => {
       }
     });
 
+    it("throws what reading failed with for a path it cannot read", async () => {
+      await expect(loadSaved(dir, 7)).rejects.toThrow(Deno.errors.IsADirectory);
+    });
+
     it("returns the file without a pending write or a draft it cannot read", async () => {
       const path = join(dir, "strange.json");
       await Deno.writeTextFile(
         path,
         JSON.stringify({
           ...state(1),
-          pending: { x: { request: { verb: "delete" }, at: 1 } },
+          pending: {
+            x: { request: { verb: "delete" }, at: 1 },
+            y: 7,
+            z: { request: "comment", agentName: "I", attempts: 1, at: 1 },
+            w: {
+              request: { verb: "link", topic: "1", url: "https://e.com" },
+              agentName: "I",
+              attempts: 1,
+              at: 1,
+            },
+          },
           drafts: {
             "comment:1": { fields: ["Hi."], base: "", invocation: 7, at: 2 },
           },

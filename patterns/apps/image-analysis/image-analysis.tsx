@@ -10,6 +10,7 @@ import {
   VNode,
   Writable,
 } from "commonfabric";
+import { contentParts } from "./content-parts.ts";
 
 /**
  * Image Chat - Simple image upload with LLM analysis
@@ -53,33 +54,12 @@ export default pattern<ImageChatInput, ImageChatOutput>(
     const images = new Writable<ImageData[]>([]);
     const prompt = new Writable<string>("");
 
-    // Build content parts array with text and images
-    const contentParts = computed(() => {
-      const parts: Array<
-        { type: "text"; text: string } | { type: "image"; image: string }
-      > = [];
-
-      if (prompt.get()) {
-        parts.push({ type: "text", text: prompt.get() });
-      }
-
-      for (const img of images.get() || []) {
-        const image = img.data || img.url;
-        if (image) {
-          parts.push({ type: "image", image });
-        }
-      }
-
-      return parts;
-    });
-
-    // Generate text from the content parts
     const { result, pending, requestHash: _requestHash } = generateText({
       system: computed(() =>
         systemPrompt ||
         "You are a helpful assistant that can analyze images. Describe what you see."
       ),
-      prompt: contentParts,
+      prompt: computed(() => contentParts(prompt.get(), images.get() || [])),
     });
 
     const ui = (

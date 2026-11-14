@@ -262,6 +262,59 @@ describe("writes", () => {
       expect(saved.drafts).toEqual({});
     });
 
+    it("says that a write landed that another browser settled meanwhile", async () => {
+      const release = Promise.withResolvers<void>();
+      held = release.promise;
+      writes.write(COMMENT, "Sol (agent)");
+      saved.pending = {};
+      release.resolve();
+      await settled();
+
+      expect(saved.pending).toEqual({});
+      expect(told.at(-1)).toEqual({
+        kind: "note",
+        text: "Done.",
+        error: false,
+      });
+    });
+
+    it("goes on to the next write when recording how one went fails, saying why", async () => {
+      let failing = false;
+      const failingWrites = new Writes({
+        saved,
+        write: (request, agentName, invocation) => {
+          sent.push({ request, agentName, invocation });
+          // Recording how the first write went is the save that fails.
+          failing = sent.length === 1;
+          return Promise.resolve({ result: "written", report: "Done." });
+        },
+        save: () => {
+          if (failing) throw new Error("The disk is full.");
+        },
+        persisted: () => Promise.resolve(),
+        now: () => NOW,
+        tell: (told_) => void told.push(told_),
+      });
+      failingWrites.write(COMMENT, "Sol (agent)");
+      failingWrites.write(
+        { verb: "title", topic: "1", text: "Oven" },
+        "Sol (agent)",
+      );
+      await failingWrites.finish(new Promise(() => {}));
+
+      expect(sent.map((s) => s.request.verb)).toEqual(["comment", "title"]);
+      expect(told).toContainEqual({
+        kind: "note",
+        text: "The disk is full.",
+        error: true,
+      });
+      expect(told.at(-1)).toEqual({
+        kind: "note",
+        text: "Done.",
+        error: false,
+      });
+    });
+
     it("keeps a write whose first attempt failed when another browser has made one since", async () => {
       outcomes = [{ result: "failed", message: "Offline." }];
       const release = Promise.withResolvers<void>();
@@ -323,6 +376,17 @@ describe("writes", () => {
 
       expect(writes.pendingFor("body:1")).toBeUndefined();
       expect(saved.dropped[invocation]).toEqual({ at, when: NOW });
+    });
+
+    it("changes nothing when asked to forget a write or throw away a draft it does not hold", () => {
+      writes.keepDraft("comment:1", ["Hi."], "");
+      const before = structuredClone(saved);
+      const savesBefore = saves;
+      writes.forget("topics-unknown");
+      writes.dropDraft("comment:2");
+
+      expect(saved).toEqual(before);
+      expect(saves).toBe(savesBefore);
     });
 
     it("stops waiting once abandoned, returning what is still pending", async () => {
