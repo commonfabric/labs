@@ -49,23 +49,28 @@ next.
   code into tiers, and holds the subset type checker: written types,
   inference, narrowing, assignability, and promotion by the typed
   criterion, which agrees with the syntactic one wherever it decides. At
-  prototype commit `27dde7bf4a`, on 426 corpus modules, it accepts 335
+  prototype commit `def495749e`, on 426 corpus modules, it accepts 335
   without an error and reports 384 errors: `any` in a type (182), 73
   type mismatches, a function type in data from one declaration (35),
   and `patternTool` (31) are most of them. Footprint analysis covers
-  `footprint-analysis.md` §2 to §8: reads, writes, handles, helper
-  calls, the causes of a widening, runtime calls, context reads,
-  resolutions, `Body.outputs`, and the tier of a computation. It finds
-  90 of 1,972 bodies widening (4.6%) where the document's script found
-  83 of 1,962, and 12 computations that are materializers. Its listing
-  for FabriChat's `commitEdit` equals the one in §12.3. Five of the
-  twelve diagnostics that need the footprint are emitted, as hints and
-  warnings; one needs the plan's edges and six need label templates,
-  which the crate does not build. Not in it: `Body.computed`, which
-  needs a pass per use of a body, write edges with references (§6.5),
-  and the narrowing of a copy by a handler's footprint (§8.5). The
+  `footprint-analysis.md` §2 to §8, with the record of each use of a
+  body, and finds 90 of 1,972 bodies widening (4.6%) where the
+  document's script found 83 of 1,962. Its listing for FabriChat's
+  `commitEdit` equals the one in §12.3. Plan emission is started: a
+  `plan` command emits slots, state cells, collections, bodies per use,
+  bindings, operations, selectors, picks, cones, outputs, edges, and
+  dynamic reads as JSON, with no label templates, hashes, or
+  constraints. It emits a plan with no unsupported construct for 183 of
+  the 288 accepted modules that hold a pattern; the most frequent
+  unsupported constructs are a call the emitter does not resolve,
+  `wish`, and an element construct over a constant. Six of the twelve
+  diagnostics that need more than types are emitted; the six
+  `cfc-flow:*` need label templates. The prototype differs from the
+  documents in three known places: it reports `addUnique` under
+  read-then-push, its constant cause is narrower, and it misses
+  destructuring and keyed access for widening by a recursive type. The
   crate's `SPEC-NOTES.md` lists the places where it found the documents
-  ambiguous.
+  ambiguous; notes 86 to 97 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
