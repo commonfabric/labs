@@ -73,28 +73,38 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `88093e68ed`, under
+  computes exists at prototype commit `1ab9fe992f`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
-  no browser. It generates a scenario per module, with a distinct atom
-  per input and one event per handler. Of the 270 modules with a full
-  plan, 213 run; 33 need `wish`, 14 request an effect, and the runtime
-  refuses the commit of 10. Of 1,314 outputs compared, none is looser
-  and none incomparable. In 124 the atom names the pattern where the
-  runtime's names a callback; the other 1,190 have the confidentiality
-  of the runtime or less, and one atom more, the pattern's, by the
-  ruling on kept outputs. Of 61 write edges compared, 56 are equal and
-  5 tighter. The comparison is partial. The runtime refuses the commit
-  of 90 of the 226 events sent, which is not examined, so most write
-  edges are not compared. 53 outputs have no stored value; for 7 of
-  them the template has a clause where the runtime stores no label,
-  because an action threw or a conditional rendered nothing.
-  Per-element handlers get no event. The crate accepts 333 modules and
-  reports 389 errors. It does not yet follow a created cell's
-  reference through a body that passes it on
-  (`plan-and-label-templates.md` §3.10). The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; notes 208
-  to 216 are not yet written into the documents.
+  no browser. It generates a scenario per module, with a distinct
+  clause per input and one event per handler. Of the 270 modules with
+  a full plan, 213 run; 33 need `wish`, 14 request an effect, and the
+  runtime refuses the commit of 10. Of 1,313 outputs compared, none is
+  looser and none incomparable. In 124 the atom names the pattern
+  where the runtime's names a callback; the other 1,189 have the
+  confidentiality of the runtime or less, and one atom more, the
+  pattern's, by the ruling on kept outputs. Of 226 events sent, 212
+  commit. Of the 14 refused, 6 are refused by a pattern written to be
+  refused or for a trusted event the harness does not send, 5 by the
+  handler's own validation of the generated values, and 3 by gaps in
+  the crate, the harness, and the generator. Of 354 write edges of
+  the handlers that get an event, 145 are compared: 131 equal, 11
+  tighter, 2 looser, and 1 a bound. The 2 looser are in
+  `showcase/battleship/multiplayer/repro-minimal.tsx`, where a
+  handler passes a handle on without reading through it and the
+  template includes the label of that handle's cell; whether the
+  runtime journals a read there is not determined. 133 write edges
+  are of a write the run did not make, 107 of them in events that
+  commit, which is not examined. 53 outputs have no stored value; for
+  7 of them the template has a clause where the runtime stores no
+  label, because an action threw or a conditional rendered nothing.
+  Per-element handlers (385 bindings, 511 write edges) get no event.
+  The crate accepts 333 modules and reports 389 errors. It does not
+  yet follow a created cell's reference through a body that passes it
+  on (`plan-and-label-templates.md` §3.9), and its harness does not
+  yet separate the static part by document (§3.1). The crate's
+  `SPEC-NOTES.md` lists the places where it found the documents
+  ambiguous; notes 217 to 227 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
