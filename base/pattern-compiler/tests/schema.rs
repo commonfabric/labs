@@ -33,14 +33,60 @@ fn slot(path: &[&str]) -> Value {
         path: "case.tsx".to_string(),
         text: SOURCE.to_string(),
     }]);
-    let plan = &analysis.modules[0].plans[0].plan;
-    plan["slots"]
+    let emitted = &analysis.modules[0].plans[0];
+    let mut slot = emitted.plan["slots"]
         .as_array()
         .expect("slots")
         .iter()
         .find(|slot| slot["path"] == json!(path))
         .unwrap_or_else(|| panic!("no slot at {path:?}"))
-        .clone()
+        .clone();
+    // PL §1.5: "The plan holds the hash and never the document. The
+    // compiler emits each schema document a plan names once, beside the
+    // plan." The slot is returned with the document its identifier
+    // names.
+    if let Some(id) = slot["schema"].as_str().map(str::to_string) {
+        let (_, document) = emitted
+            .schemas
+            .iter()
+            .find(|(other, _)| *other == id)
+            .unwrap_or_else(|| panic!("no schema document {id}"));
+        slot["schema"] = document.clone();
+    }
+    slot
+}
+
+#[test]
+fn the_plan_names_each_schema_and_the_documents_are_beside_it() {
+    // PL §1.1: `Slot.schema`, `Plan.argumentSchema` and
+    // `Plan.resultSchema` are of type `Hash`, and `Output` has no schema
+    // member. The crate forms no content address (note 153), so the
+    // identifier is a marked placeholder.
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: SOURCE.to_string(),
+    }]);
+    let emitted = &analysis.modules[0].plans[0];
+    let mut named: Vec<&str> = Vec::new();
+    for slot in emitted.plan["slots"].as_array().expect("slots") {
+        if let Some(schema) = slot.get("schema") {
+            named.push(schema.as_str().expect("an identifier, not a document"));
+        }
+    }
+    named.push(emitted.plan["argumentSchema"].as_str().expect("the argument schema"));
+    assert!(!named.is_empty());
+    for id in &named {
+        assert!(id.starts_with("unhashed:schema/"), "{id}");
+        assert_eq!(emitted.schemas.iter().filter(|(other, _)| other == id).count(), 1);
+    }
+    // Equal documents are one document.
+    let mut documents: Vec<&Value> = emitted.schemas.iter().map(|(_, document)| document).collect();
+    let all = documents.len();
+    documents.dedup();
+    assert_eq!(documents.len(), all);
+    for output in emitted.plan["outputs"].as_array().expect("outputs") {
+        assert!(output.get("schema").is_none());
+    }
 }
 
 #[test]
@@ -172,14 +218,12 @@ export const P = pattern<{ n: number }, { label: Confidential<string, ["secret"]
         plan.result_schema.as_ref().expect("a result schema")["properties"]["label"],
         json!({ "type": "string", "ifc": { "confidentiality": ["secret"] } })
     );
-    let label = plan.plan["outputs"]
-        .as_array()
-        .expect("outputs")
+    // `Plan.resultSchema` names that document.
+    let id = plan.plan["resultSchema"].as_str().expect("the result schema");
+    let (_, document) = plan
+        .schemas
         .iter()
-        .find(|output| output["path"] == json!(["label"]))
-        .expect("the output label");
-    assert_eq!(
-        label["schema"],
-        json!({ "type": "string", "ifc": { "confidentiality": ["secret"] } })
-    );
+        .find(|(other, _)| other == id)
+        .expect("the document");
+    assert_eq!(Some(document), plan.result_schema.as_ref());
 }

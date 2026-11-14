@@ -56,6 +56,51 @@ pub struct PatternPlan {
     /// `Child.resultSchema` are their content addresses).
     pub argument_schema: Option<Value>,
     pub result_schema: Option<Value>,
+    /// The schema documents the plan names, each once, with the
+    /// identifier the plan holds in its place (PL §1.5, "Schemas"). PL
+    /// has the hash of the document in canonical form there, under a
+    /// tagged hash it names by a runtime function and no tag for a
+    /// schema, so the identifier is a placeholder, `unhashed:schema/`
+    /// and the position of the document in this list.
+    pub schemas: Vec<(String, Value)>,
+}
+
+/// Moves the schema documents of a plan beside it: `Slot.schema`,
+/// `Plan.argumentSchema` and `Plan.resultSchema` hold the identifier of
+/// the document, and an output has no schema member (PL §1.1).
+fn name_schemas(
+    plan: &mut Value,
+    argument: Option<&Value>,
+    result: Option<&Value>,
+) -> Vec<(String, Value)> {
+    let mut schemas: Vec<(String, Value)> = Vec::new();
+    let mut name = |document: &Value| -> Value {
+        let position = schemas
+            .iter()
+            .position(|(_, other)| other == document)
+            .unwrap_or_else(|| {
+                schemas.push((format!("unhashed:schema/{}", schemas.len()), document.clone()));
+                schemas.len() - 1
+            });
+        json!(schemas[position].0)
+    };
+    if let Some(argument) = argument {
+        plan["argumentSchema"] = name(argument);
+    }
+    if let Some(result) = result {
+        plan["resultSchema"] = name(result);
+    }
+    for slot in plan["slots"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = slot.get("schema").cloned() {
+            slot["schema"] = name(&document);
+        }
+    }
+    for output in plan["outputs"].as_array_mut().into_iter().flatten() {
+        if let Some(output) = output.as_object_mut() {
+            output.remove("schema");
+        }
+    }
+    schemas
 }
 
 /// Where the data of a slot lives (`SlotRoot`).
@@ -6041,7 +6086,8 @@ pub fn emit_module<'a>(
             .get(&Root::Argument)
             .map(|ty| resolver.schema_of(*ty));
         let result_schema = emitter.result_type.map(|ty| resolver.schema_of(ty));
-        let (plan, unsupported, cycles, flows) = emitter.finish(&parsed.path);
+        let (mut plan, unsupported, cycles, flows) = emitter.finish(&parsed.path);
+        let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
         plans.push(PatternPlan {
             name: body.name.clone(),
             line: body.line,
@@ -6052,6 +6098,7 @@ pub fn emit_module<'a>(
             flows,
             argument_schema,
             result_schema,
+            schemas,
         });
     }
     plans
@@ -6271,7 +6318,7 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
         for output in plan["outputs"].as_array().into_iter().flatten() {
             if output["kept"] == json!(true) {
                 kept += 1;
-                kept_with_schema += usize::from(output.get("schema").is_some());
+                kept_with_schema += usize::from(plan.get("resultSchema").is_some());
             }
         }
         for constraint in plan["constraints"].as_array().into_iter().flatten() {
@@ -6299,7 +6346,7 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
         }
     }
     out.push_str(&format!(
-        "slots: {slots}, {with_schema} with a schema, {with_declared} with a declared label; kept outputs: {kept}, {kept_with_schema} with a schema\n"
+        "slots: {slots}, {with_schema} with a schema, {with_declared} with a declared label; kept outputs: {kept}, {kept_with_schema} in a plan with a result schema\n"
     ));
     out.push_str(
         "constraints, by kind (records, those whose every listed slot declares the label):\n",
