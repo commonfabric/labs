@@ -1632,7 +1632,7 @@ impl<'a> Resolver<'_, 'a> {
         self.constant_value(home, init?, depth)
     }
 
-    fn constant_value(
+    pub(crate) fn constant_value(
         &self,
         module: usize,
         expression: &Expression<'a>,

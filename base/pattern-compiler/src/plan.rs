@@ -242,9 +242,87 @@ struct Emitter<'r, 'm, 'a> {
     root_types: HashMap<Root, TypeId>,
     /// The type the pattern declares for its result.
     result_type: Option<TypeId>,
+    /// The value type of a state cell, where its constructor is written
+    /// with one (PL §1.5, `StateCell.schema`).
+    state_types: HashMap<usize, TypeId>,
+    /// The argument type of a child, where the emitter has the type of
+    /// its factory (PL §1.5, `Child.argumentSchema`).
+    child_types: HashMap<usize, TypeId>,
+    /// The input constraints of each body of the plan (PL §1.5, "At an
+    /// input").
+    body_guards: Vec<Vec<Value>>,
+    /// The elements that enclose the JSX being evaluated, outermost
+    /// first (PL §4.4, "The chain of an element"). `None` stands for
+    /// something whose rendered tree the emitter does not have at this
+    /// place: the tree of a pattern around the children written between
+    /// its tags, and whatever a tree built outside the `[UI]` value is
+    /// placed under.
+    ui_chain: Vec<Option<UiElement>>,
+    /// The elements that bind a handler on an `on*` attribute: the
+    /// binding, the chain of the element where its surface is decided,
+    /// and the offset of the attribute.
+    ui_bound: Vec<(usize, Option<Vec<UiElement>>, u32)>,
     /// The entries of the constructed value the expression code being
     /// built computes, for the value `build` makes.
     pending_entries: Option<Entries>,
+}
+
+/// What a host element of the rendered tree says of its surface (PL
+/// §4.4, "The surface of an element"): the value of each of the
+/// attributes the renderer reads, `None` where it is not a constant,
+/// and whether the element has a spread attribute.
+#[derive(Debug, Clone, Default)]
+struct UiElement {
+    attributes: BTreeMap<&'static str, Option<String>>,
+    spread: bool,
+}
+
+const UI_CONTRACT_ATTRIBUTES: &[&str] = &[
+    "data-ui-action",
+    "data-ui-surface",
+    "data-ui-role",
+    "data-ui-disclosure-kind",
+];
+
+/// Whether the element with this chain, outermost first, satisfies a
+/// `uiContract` of the helper `UiAction` (PL §4.4, "An element
+/// satisfies a `uiContract`").
+fn satisfies_contract(chain: &[UiElement], contract: &Value) -> bool {
+    let nearest = |name: &str| {
+        chain
+            .iter()
+            .rev()
+            .find_map(|element| element.attributes.get(name).cloned().flatten())
+    };
+    if let Some(pattern) = contract["trustedPattern"].as_str() {
+        if nearest("data-ui-pattern").as_deref() != Some(pattern) {
+            return false;
+        }
+    }
+    let names: Vec<&str> = chain
+        .iter()
+        .filter_map(|element| element.attributes.get("data-ui-event-integrity")?.as_deref())
+        .flat_map(|value| value.split(|ch: char| ch.is_whitespace() || ch == ','))
+        .collect();
+    let required = contract["requiredEventIntegrity"].as_array();
+    if !required
+        .into_iter()
+        .flatten()
+        .all(|name| name.as_str().is_some_and(|name| names.contains(&name)))
+    {
+        return false;
+    }
+    let attributes = chain.iter().rev().find(|element| {
+        UI_CONTRACT_ATTRIBUTES
+            .iter()
+            .any(|name| element.attributes.contains_key(name))
+    });
+    match contract["action"].as_str() {
+        Some(action) => attributes.is_some_and(|element| {
+            element.attributes.get("data-ui-action").cloned().flatten().as_deref() == Some(action)
+        }),
+        None => true,
+    }
 }
 
 /// What the edges of the plan need of a body.
@@ -1685,7 +1763,14 @@ impl<'a> Emitter<'_, '_, 'a> {
             Expression::JSXElement(_) | Expression::JSXFragment(_) => {
                 // A rendered tree has a template per path (PL §3.4), and
                 // none as one value.
-                self.build(hint, at, |emitter, _| {
+                // A tree written anywhere but as the `[UI]` value is
+                // placed by whatever uses it, under elements the
+                // emitter does not follow.
+                let placed = self.ui_chain.is_empty() && hint != "@$UI";
+                if placed {
+                    self.ui_chain.push(None);
+                }
+                let built = self.build(hint, at, |emitter, _| {
                     let tree = match expression {
                         Expression::JSXElement(element) => emitter.jsx_element(element),
                         Expression::JSXFragment(fragment) => {
@@ -1694,7 +1779,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                         _ => Place::Const,
                     };
                     emitter.constructed(&tree)
-                })
+                });
+                if placed {
+                    self.ui_chain.pop();
+                }
+                built
             }
             Expression::ConditionalExpression(conditional) => self.select(
                 hint,
@@ -1807,6 +1896,227 @@ impl<'a> Emitter<'_, '_, 'a> {
         Place::Slot(Root::State(self.state_cells.len() - 1), Vec::new())
     }
 
+    /// Records the value type of the state cell made last: the first
+    /// type argument of its constructor.
+    fn state_type(&mut self, arguments: Option<&TSTypeParameterInstantiation<'a>>) {
+        if let Some(ty) = arguments.and_then(|arguments| arguments.params.first()) {
+            let ty = self.resolver.resolve_type(self.module, ty);
+            self.state_types.insert(self.state_cells.len() - 1, ty);
+        }
+    }
+
+    /// The types on the way from a type to a path below it, each with
+    /// the path it is at. A handle on the way is crossed, and its value
+    /// is a node of its own at the handle's path followed by `@`.
+    fn typed_way(&self, start: TypeId, path: &[String]) -> Option<Vec<(Vec<String>, TypeId)>> {
+        let mut nodes = vec![(Vec::new(), start)];
+        let cross = |nodes: &mut Vec<(Vec<String>, TypeId)>| {
+            for _ in 0..4 {
+                let (at, last) = nodes[nodes.len() - 1].clone();
+                match self.resolver.shape(self.resolver.present(last)) {
+                    Shape::Handle(_, value) => {
+                        let mut at = at;
+                        at.push("@".to_string());
+                        nodes.push((at, value));
+                    }
+                    _ => break,
+                }
+            }
+        };
+        for segment in path {
+            cross(&mut nodes);
+            let (mut at, last) = nodes[nodes.len() - 1].clone();
+            at.push(segment.clone());
+            nodes.push((at, self.type_below(last, segment)?));
+        }
+        Some(nodes)
+    }
+
+    /// The annotations written on a type node, around it and on the
+    /// type that is present.
+    fn node_annotations(&self, node: TypeId) -> Vec<Annotation> {
+        let mut found = self.resolver.annotations_of(node);
+        let present = self.resolver.present(node);
+        if present != node {
+            found.extend(self.resolver.annotations_of(present));
+        }
+        found
+    }
+
+    /// The nodes below a type that carry an input annotation, each with
+    /// its path below the type.
+    fn annotated_below(
+        &self,
+        ty: TypeId,
+        cross: bool,
+        at: &mut Vec<String>,
+        seen: &mut Vec<TypeId>,
+        found: &mut Vec<(Vec<String>, TypeId)>,
+    ) {
+        let present = self.resolver.present(ty);
+        if at.len() > 6 || seen.contains(&present) {
+            return;
+        }
+        seen.push(present);
+        let mut below: Vec<(String, TypeId)> = Vec::new();
+        match self.resolver.shape(present) {
+            Shape::Object(properties, index) => {
+                below.extend(properties.iter().map(|property| (property.name.clone(), property.ty)));
+                below.extend(index.map(|index| ("*".to_string(), index)));
+            }
+            Shape::Array(element) => below.push(("*".to_string(), element)),
+            // A slot that observes a reference does not read through
+            // the handle below it.
+            Shape::Handle(_, value) if cross => below.push(("@".to_string(), value)),
+            _ => {}
+        }
+        for (segment, ty) in below {
+            at.push(segment);
+            let input = self
+                .node_annotations(ty)
+                .iter()
+                .any(|annotation| matches!(annotation.key, "requiredIntegrity" | "maxConfidentiality"));
+            if input {
+                found.push((at.clone(), ty));
+            }
+            self.annotated_below(ty, cross, at, seen, found);
+            at.pop();
+        }
+        seen.pop();
+    }
+
+    /// The input constraints of one use of a body (PL §1.5, "At an
+    /// input"; §4.4, "What an input constraint lists"): one per
+    /// `requiredIntegrity` and `maxConfidentiality` annotation of the
+    /// types of the formal inputs, over the entries of the footprint
+    /// whose path overlaps the annotated path in either prefix
+    /// direction. An entry is a slot of `Body.reads`, an entry of
+    /// `Body.computed`, or an entry of `Body.handles` with the annotated
+    /// path below the handle's cell.
+    fn input_guards(
+        &self,
+        body: usize,
+        inputs: &HashMap<String, Place>,
+        placed: &[(crate::footprint::Entry, Result<usize, usize>)],
+        handles: &[(usize, String, Vec<Seg>)],
+    ) -> Vec<Value> {
+        // The annotated node, the key and the list, and what is listed.
+        type Listed = (Vec<usize>, Vec<usize>, Vec<(usize, Vec<String>)>);
+        let mut guards: Vec<((String, Vec<String>), &'static str, Value, Listed)> = Vec::new();
+        // The way to a position of a formal input: under the type the
+        // body declares for the input where the emitter has it, and
+        // otherwise under the type of the slot root the input is bound
+        // to.
+        let way = |input: &str, path: &[Seg]| -> Option<(String, Vec<(Vec<String>, TypeId)>)> {
+            if let Some(ty) = self.formal_types.get(input) {
+                return Some((input.to_string(), self.typed_way(*ty, &slot_path(&[], path))?));
+            }
+            match self.bound(inputs, input, path) {
+                Place::Slot(root, full) => {
+                    let ty = *self.root_types.get(&root)?;
+                    Some((format!("{root:?}"), self.typed_way(ty, &full)?))
+                }
+                _ => None,
+            }
+        };
+        let mut list = |anchor: (String, Vec<String>),
+                        node: TypeId,
+                        add: &dyn Fn(&mut Listed, &[String])| {
+            for annotation in self.node_annotations(node) {
+                let key = match annotation.key {
+                    "requiredIntegrity" => "requiredIntegrity",
+                    "maxConfidentiality" => "maxConfidentiality",
+                    _ => continue,
+                };
+                let Some(value) = crate::schema::label_list(&annotation) else {
+                    continue;
+                };
+                let position = guards
+                    .iter()
+                    .position(|(at, other, list, _)| *at == anchor && *other == key && *list == value);
+                let position = position.unwrap_or_else(|| {
+                    guards.push((anchor.clone(), key, value, Listed::default()));
+                    guards.len() - 1
+                });
+                add(&mut guards[position].3, &anchor.1);
+            }
+        };
+        for (entry, at) in placed {
+            let Some((base, nodes)) = way(&entry.input, &entry.path) else {
+                continue;
+            };
+            let add = |listed: &mut Listed, _: &[String]| match at {
+                Ok(slot) if !listed.0.contains(slot) => listed.0.push(*slot),
+                Err(computed) if !listed.1.contains(computed) => listed.1.push(*computed),
+                _ => {}
+            };
+            for (path, node) in &nodes {
+                list((base.clone(), path.clone()), *node, &add);
+            }
+            if let Some((path, last)) = nodes.last() {
+                let mut found = Vec::new();
+                let cross = entry.class == Class::Value;
+                self.annotated_below(*last, cross, &mut path.clone(), &mut Vec::new(), &mut found);
+                for (path, node) in found {
+                    list((base.clone(), path), node, &add);
+                }
+            }
+        }
+        for (handle, input, path) in handles {
+            let Some((base, nodes)) = way(input, path) else {
+                continue;
+            };
+            let Some((cell, last)) = nodes.last().cloned() else {
+                continue;
+            };
+            let add = |listed: &mut Listed, annotated: &[String]| {
+                let below: Vec<String> = annotated
+                    .strip_prefix(cell.as_slice())
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|segment| *segment != "@")
+                    .cloned()
+                    .collect();
+                if !listed.2.contains(&(*handle, below.clone())) {
+                    listed.2.push((*handle, below));
+                }
+            };
+            for (path, node) in &nodes {
+                list((base.clone(), path.clone()), *node, &add);
+            }
+            let mut found = Vec::new();
+            self.annotated_below(last, true, &mut cell.clone(), &mut Vec::new(), &mut found);
+            for (path, node) in found {
+                list((base.clone(), path), node, &add);
+            }
+        }
+        guards
+            .into_iter()
+            .map(|(_, key, value, (slots, computed, handles))| {
+                let member = if key == "requiredIntegrity" { "patterns" } else { "ceiling" };
+                let mut constraint = Map::new();
+                constraint.insert("kind".to_string(), json!(key));
+                constraint.insert(member.to_string(), value);
+                constraint.insert("slots".to_string(), json!(slots));
+                if !handles.is_empty() {
+                    let handles: Vec<Value> = handles
+                        .iter()
+                        .map(|(handle, path)| json!({ "body": body, "handle": handle, "path": path }))
+                        .collect();
+                    constraint.insert("handles".to_string(), json!(handles));
+                }
+                if !computed.is_empty() {
+                    let computed: Vec<Value> = computed
+                        .iter()
+                        .map(|computed| json!({ "body": body, "computed": computed }))
+                        .collect();
+                    constraint.insert("computed".to_string(), json!(computed));
+                }
+                Value::Object(constraint)
+            })
+            .collect()
+    }
+
     /// The scope a cell constructor names: `X`, `X.perUser`, and so on.
     fn constructor_scope(&self, callee: &Expression<'a>) -> Option<&'static str> {
         let (object, scope) = match unwrap(callee) {
@@ -1843,7 +2153,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         );
                     }
                 }
-                self.state_cell(scope, hint)
+                let place = self.state_cell(scope, hint);
+                self.state_type(new.type_arguments.as_deref());
+                place
             }
             None => {
                 self.unsupported("a constructor in the reactive tier", new.span.start);
@@ -1884,7 +2196,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                     Some((home, start, DefKind::Pattern)) => {
                         let name = base_name(hint, identifier.name.as_str()).to_string();
-                        self.inline_pattern(home, start, &name, &arguments, at)
+                        // The tree of a pattern called as a function is
+                        // placed by whatever uses its result.
+                        self.ui_chain.push(None);
+                        let result = self.inline_pattern(home, start, &name, &arguments, at);
+                        self.ui_chain.pop();
+                        result
                     }
                     _ => {
                         let global = self.resolver.parsed(self.module).is_some_and(|parsed| {
@@ -1924,7 +2241,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                             _ => fallback_name(hint, "cell").to_string(),
                         };
-                        return self.state_cell(scope, &cause);
+                        let place = self.state_cell(scope, &cause);
+                        self.state_type(call.type_arguments.as_deref());
+                        return place;
                     }
                 }
                 let receiver = self.eval(&member.object, hint);
@@ -3061,7 +3380,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let at = element.span.start;
         let name = identifier.name.to_string();
         if let Some(factory @ (Place::Slot(..) | Place::Value(..))) = self.env.get(&name).cloned() {
+            self.ui_chain.push(None);
             let argument = self.tag_argument(element);
+            self.ui_chain.pop();
             let child = self.children.len();
             let callee = match &factory {
                 Place::Slot(root, path) => {
@@ -3108,7 +3429,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let Some((home, start, DefKind::Pattern)) = self.def_function(identifier) else {
             return None;
         };
+        self.ui_chain.push(None);
         let argument = self.tag_argument(element);
+        self.ui_chain.pop();
         // What the pattern declares is in cones of its own, as the
         // declarations of a call written as a statement are.
         let saved_cone = self.cone.take();
@@ -3253,6 +3576,81 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(rendered) = self.jsx_pattern(element) {
             return rendered;
         }
+        let surface = self.ui_element(element);
+        self.ui_chain.push(surface);
+        let tree = self.host_element(element);
+        self.ui_chain.pop();
+        tree
+    }
+
+    /// What a tag says of its surface: a host element, or one of the
+    /// helpers `UiAction`, `UiPromptSlot` and `UiDisclosure`, which
+    /// "are host elements with the data attribute each one sets" (PL
+    /// §4.4). `None` for any other tag.
+    fn ui_element(&self, element: &JSXElement<'a>) -> Option<UiElement> {
+        let helper: &[(&str, &'static str)] = match &element.opening_element.name {
+            JSXElementName::Identifier(_) => &[],
+            JSXElementName::IdentifierReference(identifier) => match identifier.name.as_str() {
+                "UiAction" => &[("action", "data-ui-action")],
+                "UiPromptSlot" => &[("surface", "data-ui-surface"), ("role", "data-ui-role")],
+                "UiDisclosure" => &[("kind", "data-ui-disclosure-kind")],
+                _ => return None,
+            },
+            _ => return None,
+        };
+        const READ: &[&str] = &[
+            "data-ui-pattern",
+            "data-ui-event-integrity",
+            "data-ui-action",
+            "data-ui-surface",
+            "data-ui-role",
+            "data-ui-disclosure-kind",
+        ];
+        let mut found = UiElement::default();
+        for attribute in &element.opening_element.attributes {
+            let JSXAttributeItem::Attribute(attribute) = attribute else {
+                found.spread = true;
+                continue;
+            };
+            let JSXAttributeName::Identifier(name) = &attribute.name else {
+                continue;
+            };
+            let name = name.name.as_str();
+            let key = helper
+                .iter()
+                .find(|(prop, _)| *prop == name)
+                .map(|(_, attribute)| *attribute)
+                .or_else(|| READ.iter().find(|read| **read == name).copied());
+            let Some(key) = key else {
+                continue;
+            };
+            let value = match &attribute.value {
+                Some(JSXAttributeValue::StringLiteral(text)) => Some(text.value.to_string()),
+                Some(JSXAttributeValue::ExpressionContainer(container)) => container
+                    .expression
+                    .as_expression()
+                    .and_then(|expression| self.resolver.constant_value(self.module, expression, 0))
+                    .and_then(|value| value.as_str().map(str::to_string)),
+                _ => None,
+            };
+            found.attributes.insert(key, value);
+        }
+        Some(found)
+    }
+
+    /// The chain of the element being evaluated, where its surface is
+    /// decided: "every one of those attributes on its chain is a
+    /// constant ... and no element of the chain has a spread attribute"
+    /// (PL §4.4).
+    fn decided_chain(&self) -> Option<Vec<UiElement>> {
+        let chain: Vec<UiElement> = self.ui_chain.iter().cloned().collect::<Option<_>>()?;
+        chain
+            .iter()
+            .all(|element| !element.spread && element.attributes.values().all(Option::is_some))
+            .then_some(chain)
+    }
+
+    fn host_element(&mut self, element: &JSXElement<'a>) -> Place {
         let mut props = BTreeMap::new();
         for attribute in &element.opening_element.attributes {
             match attribute {
@@ -3271,6 +3669,17 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     None => {
                                         let place = self.eval(expression, &format!("@{name}"));
                                         self.pass(&place);
+                                        // "An element binds a handler
+                                        // where an `on*` attribute of a
+                                        // host element holds the stream
+                                        // of an entry of `Plan.bindings`"
+                                        // (PL §4.4).
+                                        if let (Place::Stream(binding), true) =
+                                            (&place, name.starts_with("on"))
+                                        {
+                                            let chain = self.decided_chain();
+                                            self.ui_bound.push((*binding, chain, attribute.span.start));
+                                        }
                                         place
                                     }
                                 },
@@ -3363,6 +3772,10 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut names: Names = HashMap::new();
         // The `value` entries, for an operand that names a space.
         let mut value_names: Names = HashMap::new();
+        // Where each entry of the use is: a slot, or an entry of
+        // `Body.computed`.
+        let mut placed: Vec<(crate::footprint::Entry, Result<usize, usize>)> = Vec::new();
+        let mut handle_entries: Vec<(usize, String, Vec<Seg>)> = Vec::new();
 
         for entry in used.reads.iter().chain(&used.computed) {
             let place = if entry.input == "cause" && !inputs.contains_key("cause") {
@@ -3388,6 +3801,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if !reads.contains(&slot) {
                         reads.push(slot);
                     }
+                    placed.push((entry.clone(), Ok(slot)));
                     if let (Class::Value, true, Some(cone)) = (entry.class, computation, self.cone)
                     {
                         let view = self
@@ -3464,6 +3878,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if let Some(template) = template {
                         input.insert("template".to_string(), template);
                     }
+                    placed.push((entry.clone(), Err(computed_inputs.len())));
                     computed_inputs.push(Value::Object(input));
                 }
             }
@@ -3484,6 +3899,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             };
             match named {
                 Some(named) => {
+                    if let HandleAt::Entry(input, path) = &handle.at {
+                        handle_entries.push((handles.len(), input.clone(), path.clone()));
+                    }
                     dynamic.push(self.dynamic(json!({
                         "why": { "kind": "handle", "body": index, "handle": handles.len() },
                     })));
@@ -3772,6 +4190,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         }));
         self.body_facts.push(fact);
         self.body_dynamic.push(dynamic);
+        let guards = self.input_guards(index, inputs, &placed, &handle_entries);
+        self.body_guards.push(guards);
         // "The label of the written value is the edge's template ... the
         // body's template when a sandboxed body performs the write" (PL
         // §3.11). For an edge that names a reference, the template
@@ -4575,7 +4995,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                             found
                         })
                         .collect();
-                    if let Some(declared) = crate::schema::declared_label(&annotations) {
+                    // "An `identity` slot and a `shape` slot in place have
+                    // no `declared` member" (PL §1.5, question 55).
+                    let reference = *class == "identity" || (*class == "shape" && *in_place);
+                    if let (false, Some(declared)) =
+                        (reference, crate::schema::declared_label(&annotations))
+                    {
                         slot.insert("declared".to_string(), declared);
                     }
                 }
@@ -4679,20 +5104,46 @@ impl<'a> Emitter<'_, '_, 'a> {
         )
     }
 
-    /// `Plan.constraints` (PL §4.4, "Where a constraint comes from"), and
-    /// the constraints that fail at compile time. For each static write
-    /// edge of a body through a handle of a slot: a `writer` constraint
-    /// from `writeAuthorizedBy` on the path it writes, a `writerFit`
-    /// constraint where the path declares a confidentiality, and a
-    /// `writeFloor` from `requiredIntegrity` there
-    /// (`language-subset.md` §8.6, assumed). For each `requiredIntegrity`
-    /// and `maxConfidentiality` annotation on the way to a slot the body
-    /// reads: a constraint over the slots under that annotation, listed on
-    /// every write edge of the body, which are the writes it guards.
+    /// The annotations on the way to the path a write targets (PL §1.5,
+    /// "At a write target"): of the handle's value type for a `handle`
+    /// target, of the cell's value type for a `state` target, and of the
+    /// child's argument type for an `argument` target. One list per
+    /// node, the root first.
+    fn target_annotations(&self, target: &Value) -> Option<Vec<Vec<Annotation>>> {
+        let below: Vec<String> = target["path"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|segment| segment.as_str().map(str::to_string))
+            .collect();
+        let ty = match target["kind"].as_str()? {
+            "handle" => return self.annotations_at(target["slot"].as_u64()? as usize, &below),
+            "state" => *self.state_types.get(&(target["cell"].as_u64()? as usize))?,
+            "argument" => *self.child_types.get(&(target["child"].as_u64()? as usize))?,
+            _ => return None,
+        };
+        Some(
+            self.typed_way(ty, &below)?
+                .iter()
+                .map(|(_, node)| self.node_annotations(*node))
+                .collect(),
+        )
+    }
+
+    /// `Plan.constraints` (PL §1.5 and §4.4), and the constraints that
+    /// fail at compile time (PL §4.4, "What the compiler decides"). At a
+    /// write target, which is a write edge of a body or of a cone and a
+    /// kept output: a `writer` constraint from `writeAuthorizedBy` and
+    /// `writePolicyAnyOf` on the path, a `writerFit` constraint where
+    /// the path declares a confidentiality, and a `writeFloor` from
+    /// `requiredIntegrity` there (`language-subset.md` §8.6, assumed).
+    /// At an input: the constraints of `input_guards`, listed on every
+    /// write edge of the body and on every output whose template has a
+    /// `derive` by the body.
     fn constraints(&self, plan: &mut Value) -> Vec<(&'static str, u32, String)> {
         let mut constraints: Vec<Value> = Vec::new();
         let mut flows: Vec<(&'static str, u32, String)> = Vec::new();
-        let mut index_of = |constraint: Value| -> usize {
+        fn index_of(constraints: &mut Vec<Value>, constraint: Value) -> usize {
             match constraints.iter().position(|other| *other == constraint) {
                 Some(index) => index,
                 None => {
@@ -4700,55 +5151,156 @@ impl<'a> Emitter<'_, '_, 'a> {
                     constraints.len() - 1
                 }
             }
-        };
+        }
+        fn report(
+            flows: &mut Vec<(&'static str, u32, String)>,
+            id: &'static str,
+            at: u32,
+            found: String,
+        ) {
+            if !flows.iter().any(|(other, start, _)| *other == id && *start == at) {
+                flows.push((id, at, found));
+            }
+        }
+        let slots = plan["slots"].as_array().cloned().unwrap_or_default();
         let bodies = plan["bodies"].as_array().cloned().unwrap_or_default();
-        for (number, body) in bodies.iter().enumerate() {
-            let name = body["name"].as_str().unwrap_or("");
-            let kind = body["kind"].as_str().unwrap_or("");
-            // The input constraints: one per annotation, over the slots
-            // of `Body.reads` under it.
-            let mut inputs: Vec<(&'static str, Value, Vec<usize>)> = Vec::new();
-            for slot in body["reads"].as_array().into_iter().flatten() {
-                let slot = slot.as_u64().unwrap_or(0) as usize;
-                let Some(nodes) = self.annotations_at(slot, &[]) else {
-                    continue;
-                };
-                for annotation in nodes.iter().flatten() {
-                    let key = match annotation.key {
-                        "requiredIntegrity" => "requiredIntegrity",
-                        "maxConfidentiality" => "maxConfidentiality",
-                        _ => continue,
-                    };
-                    let Some(list) = crate::schema::label_list(annotation) else {
-                        continue;
-                    };
-                    match inputs
-                        .iter_mut()
-                        .find(|(other, argument, _)| *other == key && *argument == list)
-                    {
-                        Some((_, _, slots)) => {
-                            if !slots.contains(&slot) {
-                                slots.push(slot);
-                            }
+        // Where a body is reported: a handler at its function where that
+        // is in the module of the pattern, and any other body at its use.
+        let body_at = |number: usize| -> u32 {
+            match self.handlers.iter().find(|(_, index)| **index == number) {
+                Some(((home, start), _)) if *home == self.module => *start,
+                Some(_) => 0,
+                None => self.body_facts.get(number).map_or(0, |fact| fact.at),
+            }
+        };
+        let guards: Vec<Vec<usize>> = (0..bodies.len())
+            .map(|number| {
+                self.body_guards
+                    .get(number)
+                    .into_iter()
+                    .flatten()
+                    .map(|guard| index_of(&mut constraints, guard.clone()))
+                    .collect()
+            })
+            .collect();
+        for (number, listed) in guards.iter().enumerate() {
+            for index in listed {
+                if let Some((id, found)) = input_failure(&constraints[*index], &slots, &bodies) {
+                    report(&mut flows, id, body_at(number), found);
+                }
+            }
+        }
+        // What the annotations at a write target give: the constraints,
+        // and what the two write checks compare the template with.
+        struct AtTarget {
+            listed: Vec<usize>,
+            /// The confidentiality declared at the target, where the
+            /// crate reads every list.
+            declared: Option<Vec<Value>>,
+            floors: Vec<Vec<Value>>,
+            /// The path declares `addIntegrity`, `exactCopyOf` or
+            /// `projection`, which credit the floor at run time.
+            credited: bool,
+            policies: Vec<Vec<Value>>,
+        }
+        let at_target = |constraints: &mut Vec<Value>, nodes: &[Vec<Annotation>]| -> AtTarget {
+            let mut found = AtTarget {
+                listed: Vec::new(),
+                declared: None,
+                floors: Vec::new(),
+                credited: false,
+                policies: Vec::new(),
+            };
+            let mut fit = false;
+            for annotation in nodes.iter().flatten() {
+                match annotation.key {
+                    "writeAuthorizedBy" | "writePolicyAnyOf" => {
+                        // The alternatives: one policy, or the members
+                        // of `WritePolicyAnyOf`. A policy the checker
+                        // did not resolve gives no record.
+                        let policies = match (&annotation.value, annotation.key) {
+                            (Some(Value::Array(policies)), "writePolicyAnyOf") => policies.clone(),
+                            (Some(policy), "writeAuthorizedBy") => vec![policy.clone()],
+                            _ => continue,
+                        };
+                        found.listed.push(index_of(
+                            constraints,
+                            json!({ "kind": "writer", "anyOf": policies }),
+                        ));
+                        found.policies.push(policies);
+                    }
+                    "confidentiality" => fit = true,
+                    "requiredIntegrity" => {
+                        if let Some(Value::Array(patterns)) = crate::schema::label_list(annotation) {
+                            found.listed.push(index_of(
+                                constraints,
+                                json!({ "kind": "writeFloor", "patterns": patterns }),
+                            ));
+                            found.floors.push(patterns);
                         }
-                        None => inputs.push((key, list, vec![slot])),
+                    }
+                    "addIntegrity" | "exactCopyOf" | "projection" => found.credited = true,
+                    _ => {}
+                }
+            }
+            if fit {
+                found.listed.push(index_of(constraints, json!({ "kind": "writerFit" })));
+                found.declared = crate::schema::declared_label(nodes)
+                    .and_then(|declared| declared.get("confidentiality")?.as_array().cloned());
+            }
+            found
+        };
+        // The two checks on what a write edge or a kept output writes.
+        let write_checks = |flows: &mut Vec<(&'static str, u32, String)>,
+                            found: &AtTarget,
+                            write: &Value,
+                            what: &str,
+                            at: u32| {
+            let Some(template) = write.get("template") else {
+                return;
+            };
+            // An edge with a `reference`: the label stays with the linked
+            // value, and the floor is held to the declared integrity of
+            // the referenced slot, an `identity` slot, which has none
+            // (PL §1.5, question 55).
+            if write.get("reference").is_some() {
+                return;
+            }
+            if let Some(declared) = &found.declared {
+                if let Some(clause) = writer_misfit(template, declared, &slots) {
+                    report(
+                        flows,
+                        "cfc-flow:writer-fit",
+                        at,
+                        format!(
+                            "{what} is computed from a slot that declares the confidentiality clause `{clause}`, and the target declares {}, which does not admit it",
+                            display_list(declared)
+                        ),
+                    );
+                }
+            }
+            if !found.credited {
+                for patterns in &found.floors {
+                    if let Some((pattern, had)) = floor_failure(template, patterns, &slots) {
+                        report(
+                            flows,
+                            "cfc-flow:write-floor",
+                            at,
+                            format!(
+                                "{what} has the declared integrity {}, and the target requires `{pattern}`, which no atom of it satisfies",
+                                display_list(&had)
+                            ),
+                        );
                     }
                 }
             }
-            let guards: Vec<usize> = inputs
-                .into_iter()
-                .map(|(key, list, slots)| {
-                    let member = if key == "requiredIntegrity" {
-                        "patterns"
-                    } else {
-                        "ceiling"
-                    };
-                    index_of(json!({ "kind": key, member: list, "slots": slots }))
-                })
-                .collect();
+        };
+        for (number, body) in bodies.iter().enumerate() {
+            let name = body["name"].as_str().unwrap_or("");
+            let kind = body["kind"].as_str().unwrap_or("");
             let writes = body["writes"].as_array().cloned().unwrap_or_default();
             for (position, write) in writes.iter().enumerate() {
-                let mut listed = guards.clone();
+                let mut listed = guards[number].clone();
                 let target = &write["target"];
                 let below: Vec<String> = target["path"]
                     .as_array()
@@ -4756,83 +5308,364 @@ impl<'a> Emitter<'_, '_, 'a> {
                     .flatten()
                     .filter_map(|segment| segment.as_str().map(str::to_string))
                     .collect();
-                let nodes = match (target["kind"].as_str(), target["slot"].as_u64()) {
-                    (Some("handle"), Some(slot)) => self.annotations_at(slot as usize, &below),
-                    _ => None,
-                };
-                let mut fit = false;
-                for annotation in nodes.iter().flatten().flatten() {
-                    match annotation.key {
-                        "writeAuthorizedBy" | "writePolicyAnyOf" => {
-                            // The alternatives: one policy, or the
-                            // members of `WritePolicyAnyOf`. A policy the
-                            // checker did not resolve gives no record.
-                            let policies = match (&annotation.value, annotation.key) {
-                                (Some(Value::Array(policies)), "writePolicyAnyOf") => {
-                                    policies.clone()
-                                }
-                                (Some(policy), "writeAuthorizedBy") => vec![policy.clone()],
-                                _ => continue,
-                            };
-                            // "`Body.code` of the writing body is one the
-                            // policy names": the handler, or the function,
-                            // a binding denotes, by the record of its
-                            // module and its name (PL §1.5).
-                            let named = matches!(kind, "handler" | "function")
-                                && policies.iter().any(|policy| {
-                                    policy["body"]["binding"] == json!(name)
-                                        && body["at"]["file"]
-                                            .as_str()
-                                            .is_none_or(|file| policy["body"]["module"] == file)
-                                });
-                            listed.push(index_of(json!({ "kind": "writer", "anyOf": policies })));
-                            if !named {
-                                let site = self.body_facts.get(number).and_then(|fact| {
-                                    let slot = target["slot"].as_u64()? as usize;
-                                    fact.targets
-                                        .iter()
-                                        .find(|other| other.slot == slot && other.below == below)
-                                        .and_then(|other| other.site)
-                                        .filter(|(module, _)| *module == self.module)
-                                        .map(|(_, start)| start)
-                                });
-                                let at = site.unwrap_or(0);
-                                let writers: Vec<String> = policies
-                                    .iter()
-                                    .filter_map(|policy| policy["body"]["binding"].as_str())
-                                    .map(|binding| format!("`{binding}`"))
-                                    .collect();
-                                let found = format!(
-                                    "The path `{}` may be written by {} alone, and this write is in the {kind} `{name}`",
-                                    below.join("/"),
-                                    writers.join(" or ")
-                                );
-                                if !flows.iter().any(|(_, other, _)| *other == at) {
-                                    flows.push(("cfc-flow:write-policy", at, found));
-                                }
-                            }
+                let nodes = self.target_annotations(target).unwrap_or_default();
+                let found = at_target(&mut constraints, &nodes);
+                listed.extend(found.listed.iter().copied());
+                let site = self.body_facts.get(number).and_then(|fact| {
+                    let slot = target["slot"].as_u64()? as usize;
+                    fact.targets
+                        .iter()
+                        .find(|other| other.slot == slot && other.below == below)
+                        .and_then(|other| other.site)
+                        .filter(|(module, _)| *module == self.module)
+                        .map(|(_, start)| start)
+                });
+                for policies in &found.policies {
+                    if target["kind"] != "handle" {
+                        continue;
+                    }
+                    // "`Body.code` of the writing body is one the policy
+                    // names": the handler, or the function, a binding
+                    // denotes, by the record of its module and its name
+                    // (PL §1.5).
+                    let named = matches!(kind, "handler" | "function")
+                        && policies.iter().any(|policy| {
+                            policy["body"]["binding"] == json!(name)
+                                && body["at"]["file"]
+                                    .as_str()
+                                    .is_none_or(|file| policy["body"]["module"] == file)
+                        });
+                    if !named {
+                        let at = site.unwrap_or(0);
+                        let writers: Vec<String> = policies
+                            .iter()
+                            .filter_map(|policy| policy["body"]["binding"].as_str())
+                            .map(|binding| format!("`{binding}`"))
+                            .collect();
+                        let found = format!(
+                            "The path `{}` may be written by {} alone, and this write is in the {kind} `{name}`",
+                            below.join("/"),
+                            writers.join(" or ")
+                        );
+                        if !flows.iter().any(|(_, other, _)| *other == at) {
+                            flows.push(("cfc-flow:write-policy", at, found));
                         }
-                        "confidentiality" => fit = true,
-                        "requiredIntegrity" => {
-                            if let Some(patterns) = crate::schema::label_list(annotation) {
-                                listed.push(index_of(
-                                    json!({ "kind": "writeFloor", "patterns": patterns }),
-                                ));
-                            }
-                        }
-                        _ => {}
                     }
                 }
-                if fit {
-                    listed.push(index_of(json!({ "kind": "writerFit" })));
-                }
+                let what = format!("What the {kind} `{name}` writes to `{}`", below.join("/"));
+                write_checks(&mut flows, &found, write, &what, site.unwrap_or_else(|| body_at(number)));
                 listed.sort();
                 listed.dedup();
                 plan["bodies"][number]["writes"][position]["constraints"] = json!(listed);
             }
         }
+        // The write edges of the cones: the paths of a child's argument
+        // and of a request.
+        let cones = plan["cones"].as_array().cloned().unwrap_or_default();
+        for (number, cone) in cones.iter().enumerate() {
+            let at = cone["at"]["start"].as_u64().unwrap_or(0) as u32;
+            let writes = cone["writes"].as_array().cloned().unwrap_or_default();
+            for (position, write) in writes.iter().enumerate() {
+                let nodes = self.target_annotations(&write["target"]).unwrap_or_default();
+                let mut found = at_target(&mut constraints, &nodes);
+                let what = format!(
+                    "What the cone `{}` writes to the {} path `{}`",
+                    cone["entry"].as_str().unwrap_or(""),
+                    write["target"]["kind"].as_str().unwrap_or(""),
+                    write["target"]["path"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("/")
+                );
+                write_checks(&mut flows, &found, write, &what, at);
+                found.listed.sort();
+                found.listed.dedup();
+                plan["cones"][number]["writes"][position]["constraints"] = json!(found.listed);
+            }
+        }
+        // The kept outputs, against the type the pattern declares for
+        // its result.
+        let outputs = plan["outputs"].as_array().cloned().unwrap_or_default();
+        for (number, output) in outputs.iter().enumerate() {
+            let mut listed: Vec<usize> = Vec::new();
+            // "Every output whose template has a `derive` by that body."
+            let mut by: Vec<usize> = Vec::new();
+            if let Some(template) = output.get("template") {
+                derived_by(template, &mut by);
+            }
+            for body in by {
+                listed.extend(guards.get(body).into_iter().flatten().copied());
+            }
+            if output["kept"] == json!(true) {
+                let path: Vec<String> = output["path"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|segment| segment.as_str().map(str::to_string))
+                    .collect();
+                let nodes: Vec<Vec<Annotation>> = self
+                    .result_type
+                    .and_then(|result| self.typed_way(result, &path))
+                    .map(|nodes| {
+                        nodes
+                            .iter()
+                            .map(|(_, node)| self.node_annotations(*node))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let found = at_target(&mut constraints, &nodes);
+                listed.extend(found.listed.iter().copied());
+                let at = output["cone"]
+                    .as_u64()
+                    .and_then(|cone| cones.get(cone as usize)?["at"]["start"].as_u64())
+                    .unwrap_or(0) as u32;
+                let what = format!("The output `{}`", path.join("/"));
+                write_checks(&mut flows, &found, output, &what, at);
+            }
+            listed.sort();
+            listed.dedup();
+            plan["outputs"][number]["constraints"] = json!(listed);
+        }
+        // `cfc-flow:ui-contract` (PL §4.4): "the plan has at least one
+        // element that binds the handler, none of them satisfies the
+        // contract, and the surface of each is decided."
+        let bindings = plan["bindings"].as_array().cloned().unwrap_or_default();
+        for constraint in &constraints {
+            for policy in constraint["anyOf"].as_array().into_iter().flatten() {
+                let (Some(contract), Some(binding)) =
+                    (policy.get("uiContract"), policy["body"]["binding"].as_str())
+                else {
+                    continue;
+                };
+                // "`WriterPolicy.uiContract` has no member for the
+                // surface and the role of `UiPromptSlot` or the kind of
+                // `UiDisclosure`, so an alternative with one of those
+                // helpers is not decided."
+                if contract["helper"] != "UiAction" {
+                    continue;
+                }
+                let handler = bodies
+                    .iter()
+                    .position(|body| body["kind"] == "handler" && body["name"] == json!(binding));
+                let Some(handler) = handler else {
+                    continue;
+                };
+                let bound: Vec<&(usize, Option<Vec<UiElement>>, u32)> = self
+                    .ui_bound
+                    .iter()
+                    .filter(|(binding, ..)| bindings[*binding]["handler"]["body"] == json!(handler))
+                    .collect();
+                let decided: Option<Vec<&Vec<UiElement>>> =
+                    bound.iter().map(|(_, chain, _)| chain.as_ref()).collect();
+                let (Some(decided), Some((_, _, at))) = (decided, bound.first()) else {
+                    continue;
+                };
+                if decided.iter().any(|chain| satisfies_contract(chain, contract)) {
+                    continue;
+                }
+                report(
+                    &mut flows,
+                    "cfc-flow:ui-contract",
+                    *at,
+                    format!(
+                        "The handler `{binding}` may write under the UI contract `{contract}`, and none of the {} elements of this pattern that bind it sits under a surface with that pattern, those integrity names, and that action",
+                        bound.len()
+                    ),
+                );
+            }
+        }
         plan["constraints"] = Value::Array(constraints);
         flows
+    }
+}
+
+/// The bodies the `derive` nodes of a template are by.
+fn derived_by(template: &Value, by: &mut Vec<usize>) {
+    match template {
+        Value::Object(node) => {
+            if let (Some("derive"), Some(body)) = (
+                node.get("op").and_then(Value::as_str),
+                node.get("by").and_then(|by| by.get("body")).and_then(Value::as_u64),
+            ) {
+                if !by.contains(&(body as usize)) {
+                    by.push(body as usize);
+                }
+            }
+            for member in node.values() {
+                derived_by(member, by);
+            }
+        }
+        Value::Array(members) => members.iter().for_each(|member| derived_by(member, by)),
+        _ => {}
+    }
+}
+
+fn display_list(list: &[Value]) -> String {
+    format!("`{}`", Value::Array(list.to_vec()))
+}
+
+const RESIDENCY: &[&str] = &["Space", "PersonalSpace", "User"];
+
+/// `cfc-flow:writer-fit` (PL §4.4): "a clause of the lower bound of
+/// `C(template)` is subsumed by no clause declared at the target, and no
+/// alternative of that clause is an atom of type `Space`,
+/// `PersonalSpace` or `User`". Not decided where the template is not
+/// evaluated, and where "a `Policy` atom or another run-time term is
+/// involved".
+fn writer_misfit(template: &Value, declared: &[Value], slots: &[Value]) -> Option<Value> {
+    let bound = crate::flow::confidentiality_bound(template, slots)?;
+    let policy = |clause: &Value| crate::flow::holds_type(clause, &["Policy"]);
+    if bound.iter().chain(declared).any(policy) || declared.iter().any(crate::flow::run_time_term) {
+        return None;
+    }
+    bound
+        .into_iter()
+        .filter(|clause| {
+            !crate::flow::run_time_term(clause) && !crate::flow::holds_type(clause, RESIDENCY)
+        })
+        .find(|clause| {
+            !declared
+                .iter()
+                .any(|allowed| crate::flow::clause_subsumes(allowed, clause))
+        })
+}
+
+/// `cfc-flow:write-floor` (PL §4.4): "`I(template)` evaluates and does
+/// not satisfy `patterns`". The pattern that fails, and the atoms the
+/// declarations give. A pattern that holds a run-time term is not
+/// compared, and neither is one that can match the `TransformedBy` atom
+/// of a `derive`, whose code hash the crate does not form.
+fn floor_failure(
+    template: &Value,
+    patterns: &[Value],
+    slots: &[Value],
+) -> Option<(Value, Vec<Value>)> {
+    let integrity = crate::flow::integrity_of(template, slots)?;
+    if integrity.atoms.iter().any(crate::flow::run_time_term) {
+        return None;
+    }
+    patterns
+        .iter()
+        .filter(|pattern| !crate::flow::run_time_term(pattern))
+        .filter(|pattern| !(integrity.minted && crate::flow::may_match_transformed_by(pattern)))
+        .find(|pattern| {
+            !integrity
+                .atoms
+                .iter()
+                .any(|atom| crate::flow::atom_satisfies(atom, pattern))
+        })
+        .map(|pattern| (pattern.clone(), integrity.atoms.clone()))
+}
+
+/// `cfc-flow:max-confidentiality` and `cfc-flow:required-integrity` (PL
+/// §4.4) on one input constraint: the diagnostic and what was found,
+/// where the declared labels of the listed inputs fail it. Not decided
+/// where the constraint lists a handle entry, where an input declares
+/// nothing for the dimension or its template is not evaluated, and
+/// where a run-time term or, for a ceiling, a `Policy` atom is involved.
+fn input_failure(
+    constraint: &Value,
+    slots: &[Value],
+    bodies: &[Value],
+) -> Option<(&'static str, String)> {
+    if constraint["handles"].as_array().is_some_and(|handles| !handles.is_empty()) {
+        return None;
+    }
+    let listed = constraint["slots"].as_array()?;
+    let computed: Vec<&Value> = constraint["computed"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            &bodies[entry["body"].as_u64().unwrap_or(0) as usize]["computed"]
+                [entry["computed"].as_u64().unwrap_or(0) as usize]
+        })
+        .collect();
+    let name = |slot: &Value| {
+        let slot = &slots[slot.as_u64().unwrap_or(0) as usize];
+        let path: Vec<&str> = slot["path"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        format!("the slot `{}`", path.join("/"))
+    };
+    match constraint["kind"].as_str()? {
+        "maxConfidentiality" => {
+            let ceiling = constraint["ceiling"].as_array()?;
+            let mut inputs: Vec<(String, Vec<Value>)> = Vec::new();
+            for slot in listed {
+                let declared = slots.get(slot.as_u64()? as usize)?["declared"]["confidentiality"]
+                    .as_array()?
+                    .clone();
+                inputs.push((name(slot), declared));
+            }
+            for entry in &computed {
+                let bound = crate::flow::confidentiality_bound(entry.get("template")?, slots)?;
+                inputs.push(("a value the instance computed".to_string(), bound));
+            }
+            let policy = |clause: &Value| crate::flow::holds_type(clause, &["Policy"]);
+            if ceiling.iter().any(policy)
+                || ceiling.iter().any(crate::flow::run_time_term)
+                || inputs.iter().any(|(_, label)| label.iter().any(policy))
+            {
+                return None;
+            }
+            inputs.iter().find_map(|(input, label)| {
+                let clause = label
+                    .iter()
+                    .filter(|clause| !crate::flow::run_time_term(clause))
+                    .find(|clause| {
+                        !ceiling
+                            .iter()
+                            .any(|allowed| crate::flow::clause_subsumes(allowed, clause))
+                    })?;
+                Some((
+                    "cfc-flow:max-confidentiality",
+                    format!(
+                        "The body reads {input}, which declares the confidentiality clause `{clause}`, under `maxConfidentiality` {}, which does not admit it",
+                        display_list(ceiling)
+                    ),
+                ))
+            })
+        }
+        "requiredIntegrity" => {
+            let patterns = constraint["patterns"].as_array()?;
+            let mut labels: Vec<Vec<Value>> = Vec::new();
+            let mut minted = false;
+            for slot in listed {
+                labels.push(
+                    slots.get(slot.as_u64()? as usize)?["declared"]["integrity"]
+                        .as_array()?
+                        .clone(),
+                );
+            }
+            for entry in &computed {
+                let integrity = crate::flow::integrity_of(entry.get("template")?, slots)?;
+                minted |= integrity.minted;
+                labels.push(integrity.atoms);
+            }
+            if labels.iter().flatten().any(crate::flow::run_time_term) {
+                return None;
+            }
+            let pattern = patterns
+                .iter()
+                .filter(|pattern| !crate::flow::run_time_term(pattern))
+                .filter(|pattern| !(minted && crate::flow::may_match_transformed_by(pattern)))
+                .find(|pattern| {
+                    crate::flow::coherent_failure(&labels, std::slice::from_ref(pattern)).is_some()
+                })?;
+            let inputs: Vec<String> = listed.iter().map(name).collect();
+            let declared: Vec<String> = labels.iter().map(|label| display_list(label)).collect();
+            Some((
+                "cfc-flow:required-integrity",
+                format!(
+                    "The body reads {} under `requiredIntegrity` with the pattern `{pattern}`, and the declared integrity {} has no one atom that satisfies it",
+                    inputs.join(", "),
+                    declared.join(", ")
+                ),
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -5137,6 +5970,11 @@ pub fn emit_module<'a>(
             hints: Vec::new(),
             root_types: HashMap::new(),
             result_type: None,
+            state_types: HashMap::new(),
+            child_types: HashMap::new(),
+            body_guards: Vec::new(),
+            ui_chain: Vec::new(),
+            ui_bound: Vec::new(),
             pending_entries: None,
         };
         // The type the pattern declares for its result: the second type

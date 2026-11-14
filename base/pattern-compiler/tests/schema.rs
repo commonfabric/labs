@@ -22,7 +22,9 @@ interface Input {
   events: Stream<{ n: number }>;
 }
 export const S = pattern<Input>(({ items, note, box, count, mode, maybe, size, atom, events }) => {
-  return { items, note, inner: box.inner, count, mode, maybe, size, atom, events };
+  // `note`, `box.inner` and `atom` are read for their value: a slot that
+  // observes a reference has no declared label (PL §1.5, question 55).
+  return { items, note: note + "", inner: box.inner + "", count, mode, maybe, size, atom: atom + "", events };
 });
 "#;
 

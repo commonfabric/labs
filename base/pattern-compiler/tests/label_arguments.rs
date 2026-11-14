@@ -38,7 +38,9 @@ const rogue = handler<{ text: string }, { note: Cell<Note> }>((event, state) => 
   state.note.key("text").set(event.text);
 });
 export const P = pattern<Input>(({ a, b, c, d, e, note }) => ({
-  a, b, c, d, e,
+  // Each is read for its value: a slot that observes a reference has no
+  // declared label (PL §1.5, question 55).
+  a: a + "", b: b + "", c: c + "", d: d + "", e: e + "",
   send: send({ note }),
   edit: edit({ note }),
   rogue: rogue({ note }),

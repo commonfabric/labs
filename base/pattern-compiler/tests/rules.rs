@@ -11,7 +11,8 @@ use pattern_compiler::program::{analyze, SourceFile};
 const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, wish, \
 handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, \
 type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy, \
-exchangeRules, UI, type Integrity, type PolicyOf, type VNode } from \"commonfabric\";\n";
+exchangeRules, UI, UiAction, type Integrity, type MaxConfidentiality, type PolicyOf, type RequiresIntegrity, \
+type TrustedActionWrite, type VNode } from \"commonfabric\";\n";
 const MARKER: &str = "/*!*/";
 
 struct Case {
@@ -598,6 +599,31 @@ const CASES: &[Case] = &[
         "cfc-flow:write-policy",
         "interface Note { body: WriteAuthorizedBy<string, typeof save> }\nconst save = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"body\").set(event.text); });\nconst other = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { /*!*/state.note.key(\"body\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ save: save({ note }), other: other({ note }) }));",
         "interface Note { body: WriteAuthorizedBy<string, typeof save> }\nconst save = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"body\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ save: save({ note }) }));",
+    ),
+    case(
+        "cfc-flow:max-confidentiality",
+        "const gate = handler<{ t: string }, { v: MaxConfidentiality<Confidential<string, [\"secret\"]>, [\"public\"]>; n: Cell<number> }>(/*!*/(event, state) => { if (state.v) state.n.set(1); });\nexport const P = pattern<{ v: MaxConfidentiality<Confidential<string, [\"secret\"]>, [\"public\"]>; n: Cell<number> }>(({ v, n }) => ({ gate: gate({ v, n }) }));",
+        "const gate = handler<{ t: string }, { v: MaxConfidentiality<Confidential<string, [\"secret\"]>, [\"secret\"]>; n: Cell<number> }>((event, state) => { if (state.v) state.n.set(1); });\nexport const P = pattern<{ v: MaxConfidentiality<Confidential<string, [\"secret\"]>, [\"secret\"]>; n: Cell<number> }>(({ v, n }) => ({ gate: gate({ v, n }) }));",
+    ),
+    case(
+        "cfc-flow:required-integrity",
+        "const gate = handler<{ t: string }, { v: RequiresIntegrity<Integrity<string, [\"draft\"]>, [\"reviewed\"]>; n: Cell<number> }>(/*!*/(event, state) => { if (state.v) state.n.set(1); });\nexport const P = pattern<{ v: RequiresIntegrity<Integrity<string, [\"draft\"]>, [\"reviewed\"]>; n: Cell<number> }>(({ v, n }) => ({ gate: gate({ v, n }) }));",
+        "const gate = handler<{ t: string }, { v: RequiresIntegrity<Integrity<string, [\"reviewed\"]>, [\"reviewed\"]>; n: Cell<number> }>((event, state) => { if (state.v) state.n.set(1); });\nexport const P = pattern<{ v: RequiresIntegrity<Integrity<string, [\"reviewed\"]>, [\"reviewed\"]>; n: Cell<number> }>(({ v, n }) => ({ gate: gate({ v, n }) }));",
+    ),
+    case(
+        "cfc-flow:write-floor",
+        "export const P = pattern<{ a: Integrity<string, [\"reviewed\"]>; b: Integrity<string, [\"draft\"]> }, { out: RequiresIntegrity<string, [\"reviewed\"]> }>(({ a, b }) => ({ out: /*!*/a + b }));",
+        "export const P = pattern<{ a: Integrity<string, [\"reviewed\"]>; b: Integrity<string, [\"reviewed\"]> }, { out: RequiresIntegrity<string, [\"reviewed\"]> }>(({ a, b }) => ({ out: a + b }));",
+    ),
+    case(
+        "cfc-flow:writer-fit",
+        "export const P = pattern<{ v: Confidential<string, [\"secret\"]> }, { out: Confidential<string, [\"public\"]> }>(({ v }) => ({ out: /*!*/v + \"!\" }));",
+        "export const P = pattern<{ v: Confidential<string, [\"secret\"]> }, { out: Confidential<string, [\"secret\"]> }>(({ v }) => ({ out: v + \"!\" }));",
+    ),
+    case(
+        "cfc-flow:ui-contract",
+        "const SEND = \"send\";\nconst SURFACE = \"compose\";\ninterface Note { text: TrustedActionWrite<string, typeof send, typeof SEND, typeof SURFACE> }\nconst send = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"text\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ [UI]: (<div><button /*!*/onClick={send({ note })}>Send</button></div>) }));",
+        "const SEND = \"send\";\nconst SURFACE = \"compose\";\ninterface Note { text: TrustedActionWrite<string, typeof send, typeof SEND, typeof SURFACE> }\nconst send = handler<{ text: string }, { note: Cell<Note> }>((event, state) => { state.note.key(\"text\").set(event.text); });\nexport const P = pattern<{ note: Cell<Note> }>(({ note }) => ({ [UI]: (<div><section data-ui-pattern=\"compose\" data-ui-event-integrity=\"compose\"><UiAction action=\"send\" onClick={send({ note })}>Send</UiAction></section></div>) }));",
     ),
     case(
         "side-write:cycle",

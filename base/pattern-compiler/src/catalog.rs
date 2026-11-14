@@ -94,6 +94,9 @@ const fn retired(id: &'static str) -> Entry {
 
 use Severity::{Error, Hint, Warning};
 
+const FLOW_REST: &str = "decided on declared labels by the rules of `plan-and-label-templates.md` §4.4; a \
+         template with an `identity` slot is not evaluated, so a write through a handle is \
+         left to the runtime, and a `created` and a `request` target have no constraint";
 const LABEL_TEMPLATES: &str =
     "the label templates of the plan, which are built from footprints and declared labels";
 const PROMOTION_REST: &str = "decided by syntax and by method names, as the measurement of \
@@ -464,19 +467,40 @@ pub const CATALOG: &[Entry] = &[
     retired("cfc-label:unread"),
     retired("cfc-schema:recursion-limit"),
     retired("cfc-schema:recursive-alias-of-any"),
-    footprint("cfc-flow:max-confidentiality", Error, LABEL_TEMPLATES),
-    footprint("cfc-flow:required-integrity", Error, LABEL_TEMPLATES),
+    part(
+        "cfc-flow:max-confidentiality",
+        Error,
+        FLOW_REST,
+    ),
+    part(
+        "cfc-flow:required-integrity",
+        Error,
+        FLOW_REST,
+    ),
     part(
         "cfc-flow:write-policy",
         Error,
-        "decided for `WriteAuthorizedBy` on a path a body writes through a handle of a slot \
-         whose root has a declared type; the policies of `WritePolicyAnyOf` and of the \
-         trusted-action aliases are not read, and a write that is in another module than \
-         the pattern is reported at the start of the module",
+        "decided for a path a body writes through a handle of a slot whose root has a \
+         declared type; a write that is in another module than the pattern is reported at \
+         the start of the module",
     ),
-    footprint("cfc-flow:write-floor", Error, LABEL_TEMPLATES),
-    footprint("cfc-flow:writer-fit", Error, LABEL_TEMPLATES),
-    footprint("cfc-flow:ui-contract", Warning, LABEL_TEMPLATES),
+    part(
+        "cfc-flow:write-floor",
+        Error,
+        FLOW_REST,
+    ),
+    part(
+        "cfc-flow:writer-fit",
+        Error,
+        FLOW_REST,
+    ),
+    part(
+        "cfc-flow:ui-contract",
+        Warning,
+        "decided for the helper `UiAction` and for the elements written under the `[UI]` \
+         value of the pattern and of the patterns compiled in by a tag; a tree built \
+         elsewhere and placed by a reference is not followed",
+    ),
     part(
         "default:not-static",
         Error,

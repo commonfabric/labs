@@ -314,6 +314,25 @@ pub fn rewrite(id: &str) -> &'static str {
             "Make the write in the handler the policy names, or name this writer in the \
              policy of the path."
         }
+        "cfc-flow:max-confidentiality" => {
+            "Declare a ceiling that admits the clause, or do not pass a value with that \
+             confidentiality to this input."
+        }
+        "cfc-flow:required-integrity" => {
+            "Declare the integrity on the source, or change the requirement of the input."
+        }
+        "cfc-flow:write-floor" => {
+            "Declare the integrity on every source the value derives from, or change the \
+             floor declared on the target."
+        }
+        "cfc-flow:writer-fit" => {
+            "Declare the confidentiality on the target, or write a value that does not derive \
+             from that slot."
+        }
+        "cfc-flow:ui-contract" => {
+            "Bind the handler on an element inside the surface the contract names, or name in \
+             the policy the handler that the surface's control does bind."
+        }
         _ => "",
     }
 }
