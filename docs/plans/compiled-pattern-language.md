@@ -700,6 +700,15 @@ as an assumption.
     scan, the positions after an array spread, and a write through a
     link that an instantiation or an effect returned. Each is assumed
     as PL states it.
+107. **The template entries of a constructed value** (PL question 53):
+    a rendered tree under `$UI`, or a record used as one value.
+    *Assumed:* an entry per path, with view-node paths `props/<name>`
+    and `children/<n>`, and a join where the value is observed whole.
+    `execution-and-storage.md` has to agree on the view-node paths.
+108. **What the hash of a body's code covers, and which slots carry a
+    declared label** (PL questions 54 and 55). *Assumed:* the module
+    and the binding; and no declared label on an `identity` slot or an
+    in-place `shape` slot.
 
 ## Open, and not needing the owner
 
