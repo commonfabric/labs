@@ -79,7 +79,7 @@ implemented as written, with the reading this crate chose.
 evaluator of the templates of `plan-and-label-templates.md` §3.2
 (`compare/template.ts`), a harness that runs a pattern through the existing
 transformer and builder and reads the stored labels of its slots and outputs
-(`compare/harness.ts`), and two fixtures. Run the tests from the repository
+(`compare/harness.ts`), and three fixtures. Run the tests from the repository
 root with `deno test -A base/pattern-compiler/compare/test/`, and print the
 tables with `deno run -A base/pattern-compiler/compare/report.ts`. Notes 177
 to 186 and 191 to 193 of `SPEC-NOTES.md` say what the comparison takes as
