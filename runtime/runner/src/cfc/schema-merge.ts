@@ -511,8 +511,49 @@ export const writePolicyAlternativeAdmissible = (
       isObjectNotArray(base) && isObjectNotArray(added) &&
       sameKeys(base, added) &&
       deepEqual(base.uiContract, added.uiContract) &&
+      writerClaimsDifferOnlyInSymbol(
+        base.writeAuthorizedBy,
+        added.writeAuthorizedBy,
+      ) &&
       (baseModule === module || release.succeeds(module, baseModule));
   });
+};
+
+/**
+ * Helper for `writePolicyAlternativeAdmissible()`: whether the writer claim
+ * `added` binds a symbol, a nonempty path of names, and is otherwise the claim
+ * `base` is, its stamp and file spelling apart.
+ */
+const writerClaimsDifferOnlyInSymbol = (
+  base: unknown,
+  added: unknown,
+): boolean => {
+  if (!isWriterIdentityClaim(base) || !isWriterIdentityClaim(added)) {
+    return false;
+  }
+  const baseBinding = base.__ctWriterIdentityOf;
+  const addedBinding = added.__ctWriterIdentityOf;
+  const { path } = addedBinding;
+  if (
+    !Array.isArray(path) || path.length === 0 ||
+    !path.every((name) => typeof name === "string") ||
+    typeof addedBinding.file !== typeof baseBinding.file ||
+    !sameKeys(baseBinding, addedBinding)
+  ) {
+    return false;
+  }
+  const withoutSymbol = (
+    claim: Record<string, unknown>,
+    binding: Record<string, unknown>,
+  ) => {
+    const rest = writerClaimWithoutStampAndFile(binding);
+    delete rest.path;
+    return { ...claim, __ctWriterIdentityOf: rest };
+  };
+  return deepEqual(
+    withoutSymbol(base, baseBinding),
+    withoutSymbol(added, addedBinding),
+  );
 };
 
 /** A stamped writer claim's module identity and file, if it is one. */

@@ -1003,6 +1003,29 @@ describe("cfc-write-policy-any-of", () => {
         ).toThrow(CfcEnvelopeStabilityError);
       });
 
+      it("throws for an appended alternative whose writer claim binds no symbol", () => {
+        for (
+          const binding of [
+            { moduleIdentity: "new" },
+            { moduleIdentity: "new", file: "/records.tsx", path: [] },
+            { moduleIdentity: "new", file: "/records.tsx", path: "reply" },
+            {
+              moduleIdentity: "new",
+              file: "/records.tsx",
+              path: ["reply"],
+              extra: true,
+            },
+          ]
+        ) {
+          expect(() =>
+            merge(candidateAdding({
+              writeAuthorizedBy: { __ctWriterIdentityOf: binding },
+              uiContract: contract("Send"),
+            }))
+          ).toThrow(CfcEnvelopeStabilityError);
+        }
+      });
+
       it("throws for a candidate that drops a stored alternative while appending one", () => {
         expect(() =>
           merge(
@@ -1133,6 +1156,17 @@ describe("cfc-write-policy-any-of", () => {
             ...STORED,
             { ...alternative("reply", "Send", "new"), intent: "reply" },
           ]),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative whose writer claim binds no symbol", () => {
+        expect(
+          kept([...STORED, {
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { moduleIdentity: "new" },
+            },
+            uiContract: contract("Send"),
+          }]),
         ).toContain("writePolicyAnyOf");
       });
 
