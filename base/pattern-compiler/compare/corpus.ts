@@ -69,6 +69,12 @@ export type ResultRow = {
    * of a kept output is added to it.
    */
   templateAlone?: Category;
+  /**
+   * For a write edge: the category with the entries of origin `link` left
+   * out of the label of each handle the body passes on
+   * (`WriteRow.comparisonWithoutPassedLinks`).
+   */
+  withoutPassedLinks?: Category;
   /** A selector or a pick of the template was not found from the run. */
   bound: boolean;
 };
@@ -146,7 +152,9 @@ const resultRow = (
     withoutStatic: categoryOf(row.comparisonWithoutStatic),
     ...("comparisonOfTemplateAlone" in row
       ? { templateAlone: categoryOf(row.comparisonOfTemplateAlone) }
-      : {}),
+      : {
+        withoutPassedLinks: categoryOf(row.comparisonWithoutPassedLinks),
+      }),
     bound: evaluated.bound,
   };
 };
@@ -325,6 +333,65 @@ const count = <T>(items: T[], key: (item: T) => string) => {
   return [...counts.entries()].sort((a, b) => b[1].length - a[1].length);
 };
 
+const CATEGORIES = [
+  "equal",
+  "tighter",
+  "atom names the pattern",
+  "looser",
+  "incomparable",
+] as const;
+
+type Counts = Record<Category, number>;
+
+/** The rows of one kind, counted by category. */
+export type Tally = {
+  /** The rows whose label is not a bound. */
+  compared: number;
+  /** The rows whose label is a bound, which are counted in no category. */
+  bounds: number;
+  /**
+   * For an output: the classification on the template's label without
+   * the atom of a kept output, which is the test of the rule the row's
+   * template follows (PL §3.1, "The atom of a kept output").
+   */
+  withoutAtom: Counts;
+  /** The classification on the label the design stores. */
+  withAtom: Counts;
+  /** `withAtom` against the runtime's label without its static part. */
+  withoutStatic: Counts;
+  /** For a write edge: with the link entries of a passed handle left out. */
+  withoutPassedLinks?: Counts;
+};
+
+/** Counts the rows of `kind` by each classification. */
+export const tally = (
+  rows: readonly ResultRow[],
+  kind: "output" | "write",
+): Tally => {
+  const of = rows.filter((row) => row.kind === kind);
+  const compared = of.filter((row) => !row.bound);
+  const by = (category: (row: ResultRow) => Category | undefined): Counts => {
+    const counts = Object.fromEntries(
+      CATEGORIES.map((category) => [category, 0]),
+    ) as Counts;
+    for (const row of compared) {
+      const found = category(row);
+      if (found !== undefined) counts[found]++;
+    }
+    return counts;
+  };
+  return {
+    compared: compared.length,
+    bounds: of.length - compared.length,
+    withoutAtom: by((row) => row.templateAlone ?? row.category),
+    withAtom: by((row) => row.category),
+    withoutStatic: by((row) => row.withoutStatic),
+    ...(kind === "write"
+      ? { withoutPassedLinks: by((row) => row.withoutPassedLinks) }
+      : {}),
+  };
+};
+
 const report = async (file: string) => {
   const results = await readResults(file);
   const ran = results.filter((result) => result.rows !== undefined);
@@ -344,32 +411,35 @@ const report = async (file: string) => {
   );
   for (const kind of ["output", "write"] as const) {
     const of = rows.filter((row) => row.kind === kind && !row.bound);
-    const by = (category: Category, field: "category" | "withoutStatic") =>
-      of.filter((row) => row[field] === category).length;
+    const counts = tally(rows, kind);
     console.log(
       `${
         kind === "output" ? "outputs" : "write edges"
-      } compared: ${of.length}` +
-        `, and ${
-          rows.filter((row) => row.kind === kind && row.bound).length
-        } more whose label is a bound`,
+      } compared: ${counts.compared}` +
+        `, and ${counts.bounds} more whose label is a bound`,
     );
-    for (
-      const category of [
-        "equal",
-        "tighter",
-        "atom names the pattern",
-        "looser",
-        "incomparable",
-      ] as const
-    ) {
+    // An output is classified twice (PL §3.1, "The atom of a kept
+    // output"). A write edge gets no atom of the pattern.
+    const columns: [string, Counts][] = kind === "output"
+      ? [
+        ["without the atom of a kept output", counts.withoutAtom],
+        ["with it", counts.withAtom],
+        ["with it, without the static part", counts.withoutStatic],
+      ]
+      : [
+        ["", counts.withAtom],
+        ["without the static part", counts.withoutStatic],
+        [
+          "without the link entries of a passed handle",
+          counts.withoutPassedLinks!,
+        ],
+      ];
+    for (const category of CATEGORIES) {
       console.log(
-        `  ${category.padEnd(22)} ${
-          `${by(category, "category")}`.padStart(6)
-        }` +
-          `   without the static part ${
-            `${by(category, "withoutStatic")}`.padStart(6)
-          }`,
+        `  ${category.padEnd(22)}` +
+          columns.map(([title, column]) =>
+            `   ${title} ${`${column[category]}`.padStart(6)}`
+          ).join(""),
       );
     }
     // What each row was before the atom of a kept output was added.
