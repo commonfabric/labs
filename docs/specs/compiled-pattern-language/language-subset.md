@@ -1317,6 +1317,21 @@ refused under the identifier that refuses it in a computation
 to request it in a `handler`, an `action`, or an inline event handler: a
 pattern that a computation instantiates cannot request it either.
 
+`wish` is none of the five kinds. It is a structural built-in that tier R
+calls (§4.4), and its record is an operation of the plan, which a
+function body has no site for (`plan-and-label-templates.md` §3.19). A
+call of `wish` in tier F is refused (`function-body:wish`), in a
+`handler`, an `action`, and an inline event handler as in a `lift` and a
+`computed`, directly or through an authored function they call. The
+body of an authored function is tier F wherever it is called from, so a
+call there is refused too. The correction is to call `wish` in the
+pattern body and read its result in the function body, or, where the
+query depends on what the body computes, to call it in the body of a
+pattern the function body instantiates. *Assumed,* with
+`plan-and-label-templates.md` (its question 47): the project owner has
+not ruled on it, and the corpus has no call of `wish` in a function body
+(`builtin-inventory.md`, "Calls inside function bodies").
+
 `equals(a, b)` is a context read because it observes the identity of both
 operands and reads neither value (`plan-and-label-templates.md`, §3.16). It
 is the function form of the comparison that §4.7 lists as the methods
@@ -3397,6 +3412,7 @@ none of the other seven.
 | `function-body:cell-needs-cause` | error | A cell created without an explicit cause in a `lift`, a `computed`, an `assert`, or an authored function that one of them or tier R calls (§5.2) | Name it: `Writable.for<T>(cause)`, with a cause that is the same on every evaluation | new (a run-time throw today) |
 | `function-body:effect-in-computation` | error | An effectful built-in requested in a `lift`, a `computed`, or an `assert`, directly or through an authored function that one of them or tier R calls (§5.2). `query` on a SQLite handle is such a request (§4.7). An effect in the body of a pattern the computation instantiates is not reported. Also a staged change (`grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob`) requested in tier R, directly or through an authored function tier R calls: only a `handler`, an `action`, or an inline event handler requests one (§4.4, §5.2) | Write the effect in a pattern, inline or named, and instantiate the pattern in the computation: `PriceQuote({ url: priceUrl(order) })`, where the body of `PriceQuote` calls `fetchJson`. Or request the effect in the pattern body, with the computed value as its input: `const price = computed(...); const quote = fetchJson({ url: priceUrl(price) });`. For a staged change, in a computation or in tier R: request it in a `handler` or an `action` | new |
 | `function-body:event-context-in-computation` | error | `eventKey()` or `currentPrincipal()` in a `lift`, a `computed`, an `assert`, or the pattern body, directly or through an authored function they call | Read it in the `handler` or `action` and pass or store the value | new (a run-time throw today) |
+| `function-body:wish` | error | A call of `wish` in tier F: in a `handler`, an `action`, an inline event handler, a `lift`, a `computed`, an `assert`, or an authored function, whatever calls it (§5.2). `wish` is a structural built-in of tier R, and a function body has no record for one. *Assumed* (§5.2) | Call `wish` in the pattern body and read its result in the function body: `const profile = wish({ query: "#profile" });`. Where the query depends on a value the body computes, call it in the body of a pattern the function body instantiates | new |
 | `collection:shared-element-state` | error | The body of a per-element construct over a collection of plain values (§4.4.1) declares a state cell without using the index parameter, so elements with equal values would share the cell. A module-scope constant is such a collection whether the module declares it or imports it. A body that binds a handler and declares no state cell is not reported: equal elements bind equal state and share one stream. *Assumed* (§4.4.1): neither is a state cell in a body that instantiates a child, whose key holds the position. A state cell that a statically resolved pattern called in the body declares is a state cell of the body | Declare the index parameter and use it in the body, which puts the position in the element's key. Or make the elements cells: keep the list in a cell that a handler writes records into | new |
 | `function-body:instantiation-without-cause` | warning | A pattern instantiation without `.for(cause)` inside a loop, or inside a function written in the body, such as the callback of a JavaScript `map`, in a `lift`, a `computed`, an `assert`, or an authored function that one of them or tier R calls (§5.2). The instances of such a site are named by the order in which an evaluation makes them. Not reported in a `handler`, an `action`, or an inline event handler, and not for the callback of an inline `pattern(...)`, which is a tier-R body | Give each instance a cause taken from the record it belongs to: `PriceQuote({ url }).for(order.id)`. Without one, removing or inserting a record gives each later instance the argument of another record. Leave the site as it is where the list only grows at its end | new |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
