@@ -179,6 +179,117 @@ function fixture() {
   };
 }
 
+/** A write-policy alternative: its writer claim, its contract, and the rest. */
+type Alternative = {
+  writeAuthorizedBy: { __ctWriterIdentityOf: Record<string, unknown> };
+  [key: string]: unknown;
+};
+
+/** `alternative` with its writer's binding as `change` makes it. */
+function rebound(
+  alternative: Alternative,
+  change: (binding: Record<string, unknown>) => Record<string, unknown>,
+): Alternative {
+  return {
+    ...alternative,
+    writeAuthorizedBy: {
+      ...alternative.writeAuthorizedBy,
+      __ctWriterIdentityOf: change({
+        ...alternative.writeAuthorizedBy.__ctWriterIdentityOf,
+      }),
+    },
+  };
+}
+
+/**
+ * Ways an appended alternative can differ from the stored alternative it pairs
+ * with, each made to an alternative that differs from that one only in the
+ * symbol its writer binds, and whether a release may append the result. Only
+ * the symbol and the file its stamped writer claim spells may differ.
+ */
+const APPENDED_VARIANTS: readonly {
+  name: string;
+  admitted: boolean;
+  vary: (paired: Alternative) => Alternative;
+}[] = [
+  // The symbol is what makes the alternative an appended writer: refusing a
+  // change to it would refuse every append.
+  { name: "a writer binding another symbol", admitted: true, vary: (a) => a },
+  // A stamped claim's file is a spelling, which depends on the resolver that
+  // compiled the module, and the stamp already names the module by its
+  // content. Two stamped claims reconcile whatever their files spell, as
+  // `reconcileWriterClaimStamp()` in `schema-merge.ts` states, and a writer is
+  // authorized by its module and binding path alone (`prepare.ts`).
+  {
+    name: "a writer naming another file",
+    admitted: true,
+    vary: (a) => rebound(a, (b) => ({ ...b, file: "/elsewhere.tsx" })),
+  },
+  {
+    name: "a key beside the writer's binding's own",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, extra: true })),
+  },
+  {
+    name: "a legacy stamp beside the writer's module identity",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, bundleId: "legacy" })),
+  },
+  {
+    name: "a writer's binding without its file",
+    admitted: false,
+    vary: (a) => rebound(a, ({ file: _file, ...b }) => b),
+  },
+  {
+    name: "a writer's file that is not a string",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, file: 7 })),
+  },
+  {
+    name: "a writer's binding without its module identity",
+    admitted: false,
+    vary: (a) => rebound(a, ({ moduleIdentity: _module, ...b }) => b),
+  },
+  {
+    name: "a writer's path that is not a list",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, path: "reply" })),
+  },
+  {
+    name: "an empty writer's path",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, path: [] })),
+  },
+  {
+    name: "a writer's path holding a name that is not a string",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, path: ["reply", 1] })),
+  },
+  {
+    name: "a key beside the writer claim's binding",
+    admitted: false,
+    vary: (a) => ({
+      ...a,
+      writeAuthorizedBy: { ...a.writeAuthorizedBy, extra: true },
+    }),
+  },
+  {
+    name: "a key beside the alternative's own",
+    admitted: false,
+    vary: (a) => ({ ...a, intent: "reply" }),
+  },
+  {
+    name: "a contract no stored alternative names",
+    admitted: false,
+    vary: (a) => ({ ...a, uiContract: contract("Archive") }),
+  },
+  {
+    name: "no contract",
+    admitted: false,
+    vary: ({ uiContract: _contract, ...a }) => a as Alternative,
+  },
+];
+
 /** Runs `body` against a fresh fixture, disposing of it after. */
 async function withFixture(
   body: (f: ReturnType<typeof fixture>) => Promise<void>,
@@ -841,6 +952,57 @@ describe("cfc-write-policy-any-of", () => {
         );
       });
     });
+
+    describe("an appended alternative against the stored one it pairs with", () => {
+      // Each case appends a variant of `reply` through `send`'s action, as
+      // `APPENDED_VARIANTS` makes it, under the authorized marker.
+
+      /** What the write appending `variant` returns as its error. */
+      const appending = async (
+        f: ReturnType<typeof fixture>,
+        variant: (paired: Alternative) => Alternative,
+      ) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const schema = {
+          type: "string",
+          ifc: {
+            writePolicyAnyOf: [
+              ...SCHEMA.ifc!.writePolicyAnyOf!,
+              variant(policy("reply", "Send") as Alternative),
+            ],
+          },
+        } as JSONSchemaObj;
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema },
+          (tx) => markRelease(f.runtime, tx, true),
+        );
+        return error;
+      };
+
+      for (
+        const { name, vary } of APPENDED_VARIANTS.filter((v) => v.admitted)
+      ) {
+        it(`commits the write appending ${name}`, async () => {
+          await withFixture(async (f) => {
+            expect(await appending(f, vary)).toBeUndefined();
+          });
+        });
+      }
+
+      for (
+        const { name, vary } of APPENDED_VARIANTS.filter((v) => !v.admitted)
+      ) {
+        it(`refuses the write appending ${name}`, async () => {
+          await withFixture(async (f) => {
+            expect((await appending(f, vary))?.message).toContain(
+              "the release adds an alternative no stored alternative admits",
+            );
+          });
+        });
+      }
+    });
   });
 
   describe("a release appending alternatives", () => {
@@ -1173,6 +1335,48 @@ describe("cfc-write-policy-any-of", () => {
       it("returns a refusal for a merged policy that drops a stored alternative", () => {
         expect(kept([STORED[0], alternative("reply", "Send", "new")]))
           .toContain("drops the stored writePolicyAnyOf");
+      });
+    });
+
+    describe("an appended alternative against the stored one it pairs with", () => {
+      // Each case appends a variant of `reply`, of `new`, through `send`'s
+      // action, as `APPENDED_VARIANTS` makes it.
+
+      const variants = APPENDED_VARIANTS.map(({ name, admitted, vary }) => ({
+        name,
+        admitted,
+        appended: vary(alternative("reply", "Send", "new") as Alternative),
+      }));
+
+      describe("the merge", () => {
+        for (const { name, appended } of variants.filter((v) => v.admitted)) {
+          it(`returns the stored alternatives and ${name} after them`, () => {
+            expect(merge(candidateAdding(appended)).ifc?.writePolicyAnyOf)
+              .toEqual([...STORED, appended]);
+          });
+        }
+
+        for (const { name, appended } of variants.filter((v) => !v.admitted)) {
+          it(`throws for ${name}`, () => {
+            expect(() => merge(candidateAdding(appended))).toThrow(
+              "the release adds an alternative no stored alternative admits",
+            );
+          });
+        }
+      });
+
+      describe("the keep rule", () => {
+        for (const { name, appended } of variants.filter((v) => v.admitted)) {
+          it(`returns \`undefined\` for ${name}`, () => {
+            expect(kept([...STORED, appended])).toBeUndefined();
+          });
+        }
+
+        for (const { name, appended } of variants.filter((v) => !v.admitted)) {
+          it(`returns a refusal for ${name}`, () => {
+            expect(kept([...STORED, appended])).toContain("writePolicyAnyOf");
+          });
+        }
       });
     });
   });
