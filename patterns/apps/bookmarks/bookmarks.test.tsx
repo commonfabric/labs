@@ -79,15 +79,21 @@ const urlsOf = (bookmarks: readonly Bookmark[]) =>
   bookmarks.map((bookmark) => bookmark.url).join(",");
 
 export default pattern(() => {
-  const bookmarks = new Writable<Bookmark[]>([
-    {
+  const bookmarks = new Writable<Bookmark[]>([]);
+  const board = Bookmarks({ bookmarks });
+
+  const assert_starts_empty = assert(() =>
+    board[NAME] === "🔖 Bookmarks (0)" && showsExactly(board[UI], [])
+  );
+  // A titled, described bookmark, appended as the URL input appends: stored
+  // as a document of its own, which is what removal matches by.
+  const action_seed = action(() =>
+    bookmarks.push({
       url: "https://alpha.example",
       title: "Alpha",
       description: "Recipes I like",
-    },
-  ]);
-  const board = Bookmarks({ bookmarks });
-
+    })
+  );
   const assert_starts_with_seed = assert(() =>
     board[NAME] === "🔖 Bookmarks (1)" &&
     board.count === 1 &&
@@ -177,6 +183,8 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_starts_empty },
+      { action: action_seed },
       { assertion: assert_starts_with_seed },
       { action: action_add_blank },
       { assertion: assert_blank_ignored },

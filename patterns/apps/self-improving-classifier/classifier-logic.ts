@@ -155,10 +155,33 @@ export function isRegexSafe(pattern: string): boolean {
     return false;
   }
 
-  // Reject nested quantifiers, which can cause catastrophic backtracking:
-  // patterns like (a+)+, (.*)+, (a*)*
-  const nestedQuantifiers = /\([^)]*[+*][^)]*\)[+*]/;
-  return !nestedQuantifiers.test(pattern);
+  // Reject a group repeated by +, *, or {…} that holds an alternation or a
+  // quantifier, at any depth, which can cause catastrophic backtracking:
+  // patterns like (a|aa)+, (a+)+, (.*)+, ((a|b)c)*. For each open group, and
+  // the pattern itself at the bottom, whether it holds one.
+  const holds = [false];
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === "[") {
+      // A character class: its contents are literal
+      for (i++; i < pattern.length && pattern[i] !== "]"; i++) {
+        if (pattern[i] === "\\") i++;
+      }
+    } else if (c === "(") {
+      holds.push(false);
+      // The ? of (?:, (?=, (?!, and (?< opens the group, not a quantifier
+      if (pattern[i + 1] === "?") i++;
+    } else if ("|+*?{".includes(c)) {
+      holds[holds.length - 1] = true;
+    } else if (c === ")" && holds.length > 1) {
+      const held = holds.pop() ?? false;
+      if (held && "+*{".includes(pattern[i + 1] ?? "")) return false;
+      holds[holds.length - 1] ||= held;
+    }
+  }
+  return true;
 }
 
 /**
@@ -380,19 +403,22 @@ export function scoreRules(
 /**
  * The rules `item` was scored against. An item stored without its scoring
  * was scored against every rule there was then, matched by name, so it is
- * taken to have been scored against every rule in `rules`, matching those
- * named in its `matchedRules`.
+ * taken to have been scored against the rules in `rules` created by the time
+ * it was classified, matching those named in its `matchedRules`.
  */
 export function scoringOf(
   item: {
     readonly matchedRules: readonly string[];
+    readonly classifiedAt: number;
     readonly scoring?: Readonly<RuleScoring> | undefined;
   },
   rules: readonly ClassificationRule[],
 ): Readonly<RuleScoring> {
-  return item.scoring ?? {
-    ruleIds: rules.map((rule) => rule.id),
-    matchedRuleIds: rules
+  if (item.scoring) return item.scoring;
+  const then = rules.filter((rule) => rule.createdAt <= item.classifiedAt);
+  return {
+    ruleIds: then.map((rule) => rule.id),
+    matchedRuleIds: then
       .filter((rule) => item.matchedRules.includes(rule.name))
       .map((rule) => rule.id),
   };
@@ -437,6 +463,8 @@ export function matchRulesAgainstInput(
     if (regex && regex.test(fieldValue)) {
       matchedRules.push(rule.name);
       matchedRuleIds.push(rule.id);
+      // A tier-0 rule is silent: it is scored, but it does not vote
+      if (rule.tier === 0) continue;
       votes.push({
         name: rule.name,
         predicts: rule.predicts,
@@ -564,7 +592,8 @@ export function classificationFailure(
  * the model has not answered, when the answer is for another item, or when
  * the answer is malformed (logged). The answer is model output, so no field
  * of it is trusted to have its declared type. Rules that match with at least
- * `autoClassifyThreshold` confidence decide over the model.
+ * `autoClassifyThreshold` confidence, one of them at tier 2 or higher, decide
+ * over the model.
  */
 export function deriveClassification(
   llm: Generation<Partial<Record<keyof LLMClassificationResult, unknown>>>,
@@ -608,8 +637,11 @@ export function deriveClassification(
   const rulesResult = matchRulesAgainstInput(item, rules, threshold);
   const matchedRules = rulesResult.matchedRules;
 
+  // Rules decide in place of the model from tier 2, where their prediction is
+  // the default the user confirms
   if (
-    rulesResult.prediction !== null && rulesResult.confidence >= threshold
+    rulesResult.prediction !== null && rulesResult.highestTier >= 2 &&
+    rulesResult.confidence >= threshold
   ) {
     return {
       inputId: item.id,

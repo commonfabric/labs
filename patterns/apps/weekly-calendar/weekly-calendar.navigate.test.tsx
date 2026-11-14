@@ -23,6 +23,7 @@ import { COLORS } from "./event.tsx";
 import {
   headerButton,
   headerOf,
+  headers,
   inputValue,
   placement,
   shownColumns,
@@ -57,9 +58,13 @@ export default pattern(() => {
     headerOf(cal[UI], 6).startsWith("Sun,") &&
     todayBadges(cal[UI]).replace(/0/g, "") === "1"
   );
+  // Every column, the one carrying today's badge among them, is headed by
+  // its own date.
   const assert_monday_noted = assert(() =>
-    headerOf(cal[UI], 0) === formatDateHeader(thisMonday.get()) &&
-    headerOf(cal[UI], 6) === formatDateHeader(addDays(thisMonday.get(), 6))
+    headers(cal[UI]) ===
+      [0, 1, 2, 3, 4, 5, 6]
+        .map((i) => formatDateHeader(addDays(thisMonday.get(), i)))
+        .join(" / ")
   );
   const assert_next_week = assert(() =>
     headerOf(cal[UI], 0) === formatDateHeader(addDays(thisMonday.get(), 7)) &&

@@ -11,7 +11,6 @@ import {
   action,
   computed,
   Default,
-  equals,
   handler,
   NAME,
   pattern,
@@ -46,16 +45,13 @@ function matchesQuery(bookmark: Bookmark, query: string): boolean {
   );
 }
 
-// Removes the bookmark itself rather than whatever sits at its position, so a
-// search hiding others, or another user's edit, cannot redirect the removal.
+// Removes the bookmark itself, by its cell, as an element-level operation: a
+// search hiding others cannot redirect it, and it merges with another user's
+// concurrent edits to the list instead of rewriting it.
 const removeBookmark = handler<
   unknown,
-  { bookmarks: Writable<Bookmark[]>; bookmark: Bookmark }
->((_event, { bookmarks, bookmark }) => {
-  const current = bookmarks.get() ?? [];
-  const index = current.findIndex((el) => equals(bookmark, el));
-  if (index >= 0) bookmarks.set(current.toSpliced(index, 1));
-});
+  { bookmarks: Writable<Bookmark[]>; bookmark: Writable<Bookmark> }
+>((_event, { bookmarks, bookmark }) => bookmarks.removeByValue(bookmark));
 
 // ===== The Pattern =====
 export const Bookmarks = pattern<BookmarksInput, BookmarksOutput>(

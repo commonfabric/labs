@@ -107,8 +107,37 @@ describe("classifier-logic", () => {
       expect(isRegexSafe("a".repeat(501))).toBe(false);
     });
 
-    it("returns false for nested quantifiers", () => {
-      expect(isRegexSafe("(a+)+")).toBe(false);
+    it("returns false for a repeated group holding an alternation or a quantifier", () => {
+      for (
+        const pattern of [
+          "^(a|aa)+$",
+          "(a+)+",
+          "(.*)+",
+          "(a*)*",
+          "(a?)+",
+          "(a|b){2,}",
+          "((a|b)c)+",
+          "(?:x|xy)*",
+        ]
+      ) {
+        expect([pattern, isRegexSafe(pattern)]).toEqual([pattern, false]);
+      }
+    });
+
+    it("returns true for groups that are not repeated or hold no choice", () => {
+      for (
+        const pattern of [
+          "(invoice|bill) due",
+          "(\\d+)?",
+          "(ab)+",
+          "\\d+ [a-z]+",
+          "\\(a|b\\)+",
+          "[(|)]+",
+          "[\\](|]+",
+        ]
+      ) {
+        expect([pattern, isRegexSafe(pattern)]).toEqual([pattern, true]);
+      }
     });
   });
 
@@ -338,22 +367,24 @@ describe("classifier-logic", () => {
 
   describe("scoringOf()", () => {
     const rules = [
-      rule({ id: "a", name: "Alpha" }),
-      rule({ id: "b", name: "Beta" }),
+      rule({ id: "a", name: "Alpha", createdAt: 10 }),
+      rule({ id: "b", name: "Beta", createdAt: 20 }),
+      rule({ id: "later", name: "Beta", createdAt: 31 }),
     ];
 
     it("returns the scoring the item recorded", () => {
       const scoring = { ruleIds: ["a"], matchedRuleIds: [] };
-      expect(scoringOf({ matchedRules: ["Alpha"], scoring }, rules)).toBe(
-        scoring,
-      );
+      expect(
+        scoringOf(
+          { matchedRules: ["Alpha"], classifiedAt: 30, scoring },
+          rules,
+        ),
+      ).toBe(scoring);
     });
 
-    it("returns every rule, matching by name, for an item stored without a scoring", () => {
-      expect(scoringOf({ matchedRules: ["Beta"] }, rules)).toEqual({
-        ruleIds: ["a", "b"],
-        matchedRuleIds: ["b"],
-      });
+    it("returns the rules created by the time of classification, matching by name, for an item stored without a scoring", () => {
+      expect(scoringOf({ matchedRules: ["Beta"], classifiedAt: 30 }, rules))
+        .toEqual({ ruleIds: ["a", "b"], matchedRuleIds: ["b"] });
     });
   });
 
@@ -387,13 +418,14 @@ describe("classifier-logic", () => {
         input({ subject: "Invoice due" }),
         [
           rule({ id: "a", name: "a", precision: 0.9, tier: 3 }),
-          rule({ id: "c", name: "c", pattern: "absent" }),
+          rule({ id: "c", name: "c", pattern: "absent", tier: 1 }),
           rule({
             id: "b",
             name: "b",
             pattern: "due",
             predicts: false,
             precision: 0.1,
+            tier: 1,
           }),
         ],
         0.85,
@@ -432,6 +464,18 @@ describe("classifier-logic", () => {
       expect(result.prediction).toBe(false);
       expect(result.confidence).toBe(0.5);
       expect(result.shouldAutoClassify).toBe(true);
+    });
+
+    it("scores a matching tier-0 rule without letting it vote", () => {
+      const result = matchRulesAgainstInput(
+        input({ subject: "invoice" }),
+        [rule({ id: "quiet", name: "quiet", tier: 0 })],
+        0.85,
+      );
+      expect(result.matchedRules).toEqual(["quiet"]);
+      expect(result.scoring.matchedRuleIds).toEqual(["quiet"]);
+      expect(result.votes).toEqual([]);
+      expect(result.prediction).toBeNull();
     });
   });
 
@@ -559,7 +603,7 @@ describe("classifier-logic", () => {
       const result = deriveClassification(
         done(answer),
         item,
-        [rule({ name: "bills", precision: 0.9 })],
+        [rule({ name: "bills", precision: 0.9, tier: 2 })],
         0.85,
       );
       expect(result).toEqual({
@@ -572,10 +616,28 @@ describe("classifier-logic", () => {
       });
     });
 
+    it("returns the model's answer when only rules below tier 2 match", () => {
+      const tiers: Tier[] = [0, 1];
+      for (const tier of tiers) {
+        expect(
+          deriveClassification(
+            done(answer),
+            item,
+            [rule({ name: "fresh", tier })],
+            0.85,
+          ),
+        ).toMatchObject({
+          decidedBy: "llm",
+          classification: false,
+          matchedRules: ["fresh"],
+        });
+      }
+    });
+
     it("returns the rules' prediction at any confidence for a threshold of 0", () => {
       const split = [
-        rule({ id: "y", name: "yes", precision: 0.6 }),
-        rule({ id: "n", name: "no", predicts: false, precision: 0.4 }),
+        rule({ id: "y", name: "yes", precision: 0.6, tier: 2 }),
+        rule({ id: "n", name: "no", predicts: false, precision: 0.4, tier: 2 }),
       ];
       expect(deriveClassification(done(answer), item, split, 0)).toMatchObject(
         { decidedBy: "rules", classification: true, confidence: 0.6 },

@@ -85,8 +85,14 @@ export const placement = (ui: unknown, title: string): string => {
 export const moveSource = (ui: unknown, title: string) =>
   kids(block(ui, title)).find((node) => propValue(node, "type") === "event");
 
+/** The date label heading the column at `index`, without the "Today" badge
+ * that may sit under it. */
 export const headerOf = (ui: unknown, index: number): string =>
-  textContent(kids(columns(ui)[index])[0]);
+  textContent(kids(kids(columns(ui)[index])[0])[0]);
+
+/** The date labels of all seven columns, joined by " / ". */
+export const headers = (ui: unknown): string =>
+  columns(ui).map((_, index) => headerOf(ui, index)).join(" / ");
 
 /** Which day columns carry the "Today" badge under their date, as a string
  * of 0s and 1s, Monday first. */
@@ -134,5 +140,7 @@ export const headerButton = (ui: unknown, label: string) =>
   );
 
 /** The weekday 0-6 of a YYYY-MM-DD date, or -1 for anything else. */
-export const weekdayOf = (date: unknown): number =>
-  typeof date === "string" ? parseDate(date).getUTCDay() : -1;
+export const weekdayOf = (date: unknown): number => {
+  const day = typeof date === "string" ? parseDate(date).getUTCDay() : NaN;
+  return Number.isNaN(day) ? -1 : day;
+};

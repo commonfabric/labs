@@ -4,8 +4,8 @@
  * An auto-classified item stored before items recorded which rules they were
  * scored against carries only the names of the rules that matched. Undoing
  * it, and accepting or correcting such an undone item, takes it to have been
- * scored against every current rule, matching by name, as the version that
- * stored it did.
+ * scored against every rule created by the time it was classified, matching
+ * by name, as the version that stored it did.
  *
  * The undo state is the pattern's own, so the test binds the pattern's
  * handlers to cells it seeds with the stored shape.
@@ -54,6 +54,16 @@ export default pattern(() => {
         truePositives: 0,
         trueNegatives: 5,
       },
+      // Created after the stored items were classified, so none of their
+      // outcomes was recorded against it
+      {
+        ...INVOICE_RULE,
+        id: "rule-later",
+        name: "Later invoice word",
+        createdAt: 1,
+        evaluationCount: 5,
+        truePositives: 5,
+      },
     ],
     pendingClassifications: [],
     currentItem: null,
@@ -92,10 +102,10 @@ export default pattern(() => {
 
   // === Assertions ===
 
-  // The undo takes the outcome back from every current rule: a true
+  // The undo takes the outcome back from every rule there was then: a true
   // positive from the invoice rule, which matched by name, and a true
-  // negative from the lunch rule, which did not. It records the scoring it
-  // used on the undone item.
+  // negative from the lunch rule, which did not. The later rule keeps its
+  // counts. The undo records the scoring it used on the undone item.
   const assert_undone = assert(() =>
     subject.examples.length === 0 &&
     recent.get().length === 0 &&
@@ -103,6 +113,7 @@ export default pattern(() => {
     subject.rules[0]?.truePositives === 29 &&
     subject.rules[1]?.evaluationCount === 4 &&
     subject.rules[1]?.trueNegatives === 4 &&
+    subject.rules[2]?.evaluationCount === 5 &&
     undone.get()?.scoring?.ruleIds.join() === "rule-invoice,rule-lunch" &&
     undone.get()?.scoring?.matchedRuleIds.join() === "rule-invoice"
   );
@@ -112,6 +123,7 @@ export default pattern(() => {
     subject.rules[0]?.evaluationCount === 30 &&
     subject.rules[0]?.truePositives === 30 &&
     subject.rules[1]?.trueNegatives === 5 &&
+    subject.rules[2]?.evaluationCount === 5 &&
     storedUndoneToAccept.get() === null
   );
   const assert_corrected = assert(() =>
@@ -121,6 +133,7 @@ export default pattern(() => {
     subject.rules[0]?.falsePositives === 1 &&
     subject.rules[1]?.falseNegatives === 1 &&
     subject.rules[1]?.evaluationCount === 6 &&
+    subject.rules[2]?.evaluationCount === 5 &&
     storedUndoneToCorrect.get() === null
   );
 
