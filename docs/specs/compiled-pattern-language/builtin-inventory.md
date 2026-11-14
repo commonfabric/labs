@@ -2623,8 +2623,15 @@ name, or a generated ordinal (`factoryFromPattern`).
   and a link. The reference rule above decides it per path. A path bound to
   a cell handle, or to a container the body read and passes on unchanged,
   is written as a reference: the write edge records which `identity` slot
-  the reference is (`WriteEdge.reference`), the path carries the label of
-  the reference, and the content keeps its own label where it is stored. A
+  the reference is (`WriteEdge.reference`), and the content keeps its own
+  label where it is stored. By ruling, a handle the body passes on without
+  reading through it adds nothing of the label of its cell to what the
+  body writes. The link written at the path carries the label of the
+  reference, which is the label of the link the body was given the handle
+  through, joined with the body's template, because a handler wrote it:
+  the link carries the label of the event
+  (`plan-and-label-templates.md` §2.2 and §3.9, "A handle a body passes
+  on"). A
   path bound to a scalar, or to a value the body computed, is written as a
   value with the body's template. A reference inside a computed container
   stays a reference.
@@ -2960,11 +2967,13 @@ salted value on the second (`plan-and-label-templates.md` §3.14).
   an element key among its `within` steps holds a value.
 - **Label:** a copied path is stored in the binding's state document and
   carries the body's template. A path bound by reference holds a
-  reference and carries the label of that reference: the body observes
+  reference and carries the label of that reference, joined with the
+  body's template where a handler makes the binding: the body observes
   the cell or the container for identity, and the content keeps its own
   label where it is stored. The identity label of the stream is the join
   of the templates of the state paths, which is the body's template
-  unless every path is a reference the body passes on. For a handler
+  unless a re-evaluated body makes the binding and every path is a
+  reference it passes on. For a handler
   received as a factory value, the label of the slot that holds the
   factory joins it (`plan-and-label-templates.md` §3.14 and §3.21). An
   event later handled by the binding reads its state as slots with the
@@ -2993,8 +3002,9 @@ result pattern and runs as it would in a pattern body.
   §3.14). A path that holds a scalar or a value the body computed carries
   the body's template: a sandboxed body has one template for every value
   it computes. A path that holds a reference the body passes on is
-  written as a reference and carries the label of the reference, by the
-  reference rule above.
+  written as a reference, by the reference rule above. In a handler it
+  carries the label of the reference joined with the body's template, and
+  nothing of the label of the cell behind the reference.
 - **The egress ceiling covers the content followed.** The templates of
   the request hold the label of a pointer where the request holds a
   reference, and the effect serializes the content. The ceiling is

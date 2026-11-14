@@ -259,6 +259,12 @@ observation class (value, shape, enumeration, identity, or label metadata).
   observes, and of what the body read dynamically through the cell handles
   it was given. A reference the body passes on unchanged keeps its own label
   ([plan format and label templates](plan-and-label-templates.md), §3.9).
+  By ruling, a handle that a body passes on without reading through it adds
+  nothing of the label of its cell to what the body writes: the label stays
+  at the cell and reaches only a reader that follows the handle. The link
+  the body writes is labeled all the same, with the label of the link the
+  body was given the handle through, and in a handler with the body's
+  template, which holds the label of the event (§2.2 and §3.9 there).
 
 A template label is equal to the label the runtime computes today or tighter,
 with four deliberate exceptions
@@ -946,7 +952,9 @@ Each stage can be checked before the next begins.
    direction. It compares dereferenced labels, and it expects a template
    to be tighter than the runtime where the runtime joins the labels that
    the arguments of a node declare, as for a conditional and the
-   container of a `map`.
+   container of a `map`. The slot of a handle that a body holds and does
+   not read through is not dereferenced: by ruling it adds nothing of the
+   label of its cell (§2.2 and §3.1 there).
 4. Run one pattern with one transaction per cause and with only its keep set
    stored. Then do the same for `map`. FabriChat is the reference pattern for
    this stage and the previous one, because it exercises event integrity,

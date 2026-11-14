@@ -829,6 +829,20 @@ footprint has at the path, and nothing where it has none.
 [§8.5](#85-binding-a-handler) gives the rule for a binding, and
 [§8.1](#81-instantiating-a-pattern) for an inline pattern.
 
+**What `identity` at a handle costs.** By ruling, a handle that a body
+passes on without reading through it adds nothing of the label of its cell
+to what the body writes. The `identity` entry the body records for the
+handle is the label of the link the body was given the handle through: the
+entries of class `followRef` at the position that holds the reference, and
+nothing of the document the reference leads to, neither the label that
+cell's type declares nor the labels of its content
+(`plan-and-label-templates.md` §2.2, "The label of an `identity` slot"). So
+the table above records the same entry for a handle the body passes on,
+compares, or writes through, and the entry is the same whatever the cell
+holds. The label of the cell reaches a body only through a hop: `get()`,
+`sample()`, or a read below a `key` chain
+([§7.1](#71-what-a-body-may-do-with-a-handle)).
+
 One kind of call consumes what it is given and keeps nothing by reference:
 the options of an `inSpace` request
 ([§8.1](#81-instantiating-a-pattern)).
@@ -1469,6 +1483,16 @@ entry the reference came from, joined with the body's template as the
 label of the choice. A path that holds a reference the body found below a
 hop whose read is dynamic ([§2.1](#21-abstract-values)) is neither. It has
 the body's template, like a computed value.
+
+In a `handler`, an `action`, or an inline event handler, a path of the
+first kind carries the body's template as well, joined with the entry. A
+handler writes the link because an event arrived, and by ruling the link
+carries the label of at least the event. The entry itself holds nothing of
+the label of the cell the reference leads to (§3.8), so the join adds the
+body's reads and not the cell's label. The analysis records the same
+`passes` member for every kind of body, and the runtime applies the rule
+by the kind of the body (`plan-and-label-templates.md` §3.9, "A handle a
+body passes on").
 
 The plan records a path of the first two kinds as a `WriteEdge` of its
 own. Its target is the sub-path, and its `reference` member names the
