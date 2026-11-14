@@ -32,6 +32,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   fabricAwareEqual,
+  hashStringOf,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
 import {
@@ -616,6 +617,8 @@ const comparableIfc = (ifc: unknown): unknown => {
       continue;
     }
     if (role === "writerAlternatives" && Array.isArray(value)) {
+      // The alternatives are a set, whose order carries no meaning, so they
+      // are compared in an order their contents decide.
       const normalized = value.map((policy) => {
         if (!isObjectNotArray(policy)) return policy;
         const writer = writerClaimWithoutVolatileIdentity(
@@ -624,7 +627,9 @@ const comparableIfc = (ifc: unknown): unknown => {
         return writer === policy.writeAuthorizedBy
           ? policy
           : { ...policy, writeAuthorizedBy: writer };
-      });
+      }).map((policy) => ({ policy, order: hashStringOf(policy) }))
+        .sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : 0)
+        .map(({ policy }) => policy);
       if (normalized.some((policy, index) => policy !== value[index])) {
         changed = true;
       }
@@ -697,9 +702,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with one exception: a writer
- * claim's volatile identity, in a `writeAuthorizedBy` or in each member of a
- * `writePolicyAnyOf`, is normalized out before the `ifc` comparison. That
+ * `writeOnly`) are compared for exact equality, with two exceptions, both
+ * made in the reduction `comparableIfc()` applies before the `ifc`
+ * comparison. The members of a `writePolicyAnyOf` are a set, compared in an
+ * order their contents decide, so a candidate listing them in another order
+ * declares the same contract. And a writer claim's volatile identity, in a
+ * `writeAuthorizedBy` or in each member of a `writePolicyAnyOf`, is
+ * normalized out. That
  * identity is the content-addressed module hash (`moduleIdentity`, and the
  * legacy `bundleId`), which rehashes on any edit to the authoring module,
  * together with the source-file spelling (`file`), which changes with the
