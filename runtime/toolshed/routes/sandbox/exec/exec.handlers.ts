@@ -115,7 +115,13 @@ export function createSandboxExecHandlers(deps: SandboxExecHandlerDeps) {
       ...environment,
     };
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("Sandbox exec timed out", "TimeoutError"),
+        ),
+      timeout,
+    );
     const signal = controller.signal;
     const exec = () =>
       execInSandbox(sandboxId, command, workingDirectory, env, signal);

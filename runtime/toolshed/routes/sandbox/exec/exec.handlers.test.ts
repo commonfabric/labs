@@ -154,7 +154,7 @@ describe("exec.handlers", () => {
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
             aborted = true;
-            reject(new Error("the sandbox call was aborted"));
+            reject(init.signal?.reason);
           });
         }),
       sandboxUrl: SANDBOX_URL,
@@ -186,7 +186,7 @@ describe("exec.handlers", () => {
     expect(aborted).toBe(true);
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
-      error: "Exec failed: the sandbox call was aborted",
+      error: "Exec failed: Sandbox exec timed out",
     });
   });
 
