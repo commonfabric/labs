@@ -2995,12 +2995,14 @@ export class PatternManager {
             compiledBodiesServed = true;
             return storageBodiesNeedingRepair;
           }
-          // Process byte cache (cross-runtime, cross-space): a full hit skips
+          // Shared byte cache (cross-runtime, cross-space): a full hit skips
           // the transform-and-emit step (`compileToModules`: TS program build,
-          // type-check, CF transform, emit). Trust by provenance: bytes this
-          // process compiled were SES-verified then; bytes a test seeded from a
-          // CI disk file are trusted via the workflow cache key, which
-          // fingerprints every compile input.
+          // type-check, CF transform, emit). Trust by provenance: bytes a
+          // runtime compiled were SES-verified then, and the cache holds only
+          // what this process or another toolshed on the host put, in a
+          // directory that belongs to the user the toolsheds run as; bytes a
+          // test seeded from a CI disk file are trusted via the workflow cache
+          // key, which fingerprints every compile input.
           const { bodies: processBodies, endTurn } = await this
             .#byteCacheBodiesOrTurn(cacheOpts.runtimeVersion, identities);
           endCompileTurn = endTurn;
