@@ -60,6 +60,12 @@ pub struct Record {
     /// `write:dynamic`, `key:dynamic`, and `widen:` and the cause. The
     /// measurement counts each site once, for the innermost body around it.
     pub sites: Vec<(u32, String)>,
+    /// What a function the body calls brought into it (FA §3.6, "A
+    /// summary has no tier"): the call in the body's own text, what was
+    /// found, in the words of `sites`, and the module and position inside
+    /// the function. Where calls nest, the call is the one written in the
+    /// body.
+    pub brought: Vec<(u32, String, usize, u32)>,
     /// The sites of the runtime calls that create something (FA §8), in
     /// source order: `instantiate:order`, `instantiate:tag`,
     /// `createCell:order`, `createCell:cause`, `createCell:cause (state)`,
@@ -740,6 +746,12 @@ struct Analyzer<'r, 'm, 'a> {
     handler: bool,
     /// How many bindings the body is analyzed below, for a bound handler.
     depth: u32,
+    /// The calls written in the body's own text that are being evaluated,
+    /// innermost last.
+    calls_in_text: Vec<u32>,
+    /// A site outside the body's text, and the call in the body's text
+    /// whose evaluation reached it.
+    reached: RefCell<BTreeMap<(usize, u32), u32>>,
 }
 
 impl<'a> Analyzer<'_, '_, 'a> {
@@ -865,7 +877,25 @@ impl<'a> Analyzer<'_, '_, 'a> {
     // ----- observations -----
 
     fn site(&self, start: u32) -> (usize, u32) {
-        (self.module(), start)
+        let site = (self.module(), start);
+        self.reach(site);
+        site
+    }
+
+    fn in_text(&self, site: (usize, u32)) -> bool {
+        let (module, (from, to)) = self.root;
+        site.0 == module && from <= site.1 && site.1 < to
+    }
+
+    /// Records the call of the body's text that reached a site in a
+    /// function the body calls.
+    fn reach(&self, site: (usize, u32)) {
+        if self.in_text(site) {
+            return;
+        }
+        if let Some(call) = self.calls_in_text.last() {
+            self.reached.borrow_mut().entry(site).or_insert(*call);
+        }
     }
 
     fn observe(&mut self, val: &Val, class: Class) {
@@ -920,6 +950,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
 
     fn widen(&mut self, cause: &str, start: u32) {
         let site = (cause.to_string(), self.module(), start);
+        self.reach((self.module(), start));
         let (module, (from, to)) = self.root;
         if self.module() == module && from <= start && start < to {
             self.store.direct.insert(site.clone());
@@ -2459,6 +2490,18 @@ impl<'a> Analyzer<'_, '_, 'a> {
     // ----- calls -----
 
     fn call(&mut self, call: &CallExpression<'a>) -> Val {
+        let written = self.in_text((self.module(), call.span.start));
+        if written {
+            self.calls_in_text.push(call.span.start);
+        }
+        let val = self.call_inner(call);
+        if written {
+            self.calls_in_text.pop();
+        }
+        val
+    }
+
+    fn call_inner(&mut self, call: &CallExpression<'a>) -> Val {
         let arguments: Vec<&Expression<'a>> = call
             .arguments
             .iter()
@@ -3874,6 +3917,41 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .filter(|site| own(site))
                 .map(|site| (site.1, "read-then-push".to_string())),
         );
+        // What a function the body calls brought into it.
+        let mut brought: Vec<(u32, String, usize, u32)> = Vec::new();
+        {
+            let reached = self.reached.borrow();
+            let mut bring = |site: &(usize, u32), what: String| {
+                if let Some(call) = reached.get(site) {
+                    brought.push((*call, what, site.0, site.1));
+                }
+            };
+            for (site, reason) in &store.dynamic_reads {
+                let reason = reason.rsplit(": ").next().unwrap_or("");
+                bring(site, format!("read:dynamic:{reason}"));
+            }
+            for (cause, module, start) in &store.widenings {
+                bring(&(*module, *start), format!("widen:{cause}"));
+            }
+            if computation {
+                for (site, fixed) in &store.write_sites {
+                    if !*fixed {
+                        bring(site, "materializer".to_string());
+                    }
+                }
+                for site in &store.materializer {
+                    bring(site, "materializer".to_string());
+                }
+            }
+            for (site, shape) in &store.not_idempotent {
+                bring(site, format!("not-idempotent:{shape}"));
+            }
+            for site in &store.read_then_push {
+                bring(site, "read-then-push".to_string());
+            }
+        }
+        brought.sort();
+        brought.dedup();
         let mut other_dynamic: Vec<String> = Vec::new();
         if store.label_metadata {
             other_dynamic.push("labelMetadata".to_string());
@@ -3913,6 +3991,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .collect(),
             read_then_push: store.read_then_push.len(),
             sites,
+            brought,
             reads: normal_form(&store.entries, store),
             envelope: normal_form(&store.envelope, store),
             static_reads: store.static_reads.len(),
@@ -4270,6 +4349,8 @@ fn analyze_body<'a>(
         ),
         handler: kind != BodyKind::AuthoredFunction,
         depth,
+        calls_in_text: Vec::new(),
+        reached: RefCell::new(BTreeMap::new()),
     };
     let function = analyzer.function_at(module, start)?;
     let span = function.span();

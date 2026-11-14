@@ -324,8 +324,14 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         if let Some(check) = check {
             let records = crate::footprint::analyze_module(&resolver, module, &check.bodies);
             footprint_counts(&check.bodies, &records, &mut check.counts);
-            if let Some(parsed) = &parsed[module] {
-                footprint_diagnostics(parsed, &check.bodies, &records, &mut check.diagnostics);
+            if let Some(current) = &parsed[module] {
+                footprint_diagnostics(
+                    current,
+                    &parsed,
+                    &check.bodies,
+                    &records,
+                    &mut check.diagnostics,
+                );
             }
             found = records;
         }
@@ -453,9 +459,13 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
 
 /// The diagnostics that need only the footprint of a body
 /// (`language-subset.md` §10.3): each is reported at a site in the body's
-/// own text, once, for the innermost body around it.
+/// own text, once, for the innermost body around it. What a function the
+/// body calls brought into it is reported at the call in the body's text,
+/// and the message names the position inside the function
+/// (`footprint-analysis.md` §3.6).
 fn footprint_diagnostics(
     parsed: &Parsed<'_>,
+    modules: &[Option<Parsed<'_>>],
     bodies: &[Body],
     records: &[(usize, crate::footprint::Record)],
     diagnostics: &mut Vec<Diagnostic>,
@@ -469,7 +479,12 @@ fn footprint_diagnostics(
     };
     let mut seen: BTreeSet<(u32, &'static str)> = BTreeSet::new();
     for (index, record) in records {
-        for (site, what) in &record.sites {
+        let own = record.sites.iter().map(|(site, what)| (site, what, None));
+        let brought = record
+            .brought
+            .iter()
+            .map(|(site, what, module, start)| (site, what, Some((*module, *start))));
+        for (site, what, inside) in own.chain(brought) {
             if innermost(*site) != Some(*index) {
                 continue;
             }
@@ -517,6 +532,14 @@ fn footprint_diagnostics(
                 continue;
             }
             let position = parsed.lines.position(parsed.source, *site);
+            let found = match inside.and_then(|(module, start)| {
+                let other = modules.get(module)?.as_ref()?;
+                let at = other.lines.position(other.source, start);
+                Some(format!("{}:{}:{}", other.path, at.0, at.1))
+            }) {
+                Some(at) => format!("{found}, in the function called here, at {at}"),
+                None => found,
+            };
             diagnostics.push(Diagnostic::new(
                 id,
                 &parsed.path,

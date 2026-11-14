@@ -1319,3 +1319,27 @@ fn get_on_a_stream_names_the_presence_test_through_a_view_typed_unknown() {
     );
     assert_eq!(ids(&diagnostics), [] as [&str; 0]);
 }
+
+#[test]
+fn what_a_called_function_brings_into_a_body_is_reported_at_the_call_in_the_body() {
+    // FA §3.6: "A write, a read through a handle, or a widening that a
+    // summary brought into a body is reported at the call in the body's
+    // own text, and the message also names the position inside the
+    // function. Where calls nest, the call named is the outermost one,
+    // the one written in the body."
+    let source = "function inner(rows: Cell<number[]>, n: number) { if (rows.get().length < 3) { rows.push(n); } }\n\
+function outer(rows: Cell<number[]>, n: number) { inner(rows, n); }\n\
+const add = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { outer(state.rows, event.n); });\n";
+    let diagnostics = check(source);
+    let found: Vec<&Diagnostic> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.id == "mergeable-push:read-then-push")
+        .collect();
+    assert_eq!(found.len(), 1, "{diagnostics:?}");
+    let prelude_lines = PRELUDE.matches('\n').count() as u32;
+    assert_eq!(found[0].line, prelude_lines + 3);
+    let text = "const add = handler<{ n: number }, { rows: Cell<number[]> }>((event, state) => { ";
+    assert_eq!(found[0].column, text.len() as u32 + 1);
+    let inside = format!("case.tsx:{}:", prelude_lines + 1);
+    assert!(found[0].message.contains(&inside), "{}", found[0].message);
+}
