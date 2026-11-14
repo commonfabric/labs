@@ -10,10 +10,12 @@ import {
   createGraphQueryWalkStats,
   createSchemaMemo,
   GraphQueryWalk,
+  type GraphQueryWalkOptions,
   type IAttestation,
   MapSetStringToPathSelectors,
   type ObjectStorageManager,
   schemaTrackerKey,
+  trackedRecordKey,
 } from "../src/graph-query.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 
@@ -56,7 +58,12 @@ class StubObjectManager implements ObjectStorageManager {
     if (value === undefined) {
       return null;
     }
-    return { address: { ...address, path: [] }, value: { value } };
+    // A storage engine names every document it serves with its scope, so
+    // that a link inside one resolves in that scope.
+    return {
+      address: { ...address, scope: address.scope ?? "space", path: [] },
+      value: { value },
+    };
   }
 }
 
@@ -79,6 +86,7 @@ const walkOver = (
     schemaTracker?: MapSetStringToPathSelectors;
     memo?: ReturnType<typeof createSchemaMemo>;
     stats?: ReturnType<typeof createGraphQueryWalkStats>;
+    onTrackedDoc?: GraphQueryWalkOptions["onTrackedDoc"];
   } = {},
 ) => {
   const manager = new StubObjectManager(documents);
@@ -91,6 +99,9 @@ const walkOver = (
     identity: TEST_SCOPE_IDENTITY,
     ...(overrides.memo === undefined ? {} : { memo: overrides.memo }),
     ...(overrides.stats === undefined ? {} : { stats: overrides.stats }),
+    ...(overrides.onTrackedDoc === undefined
+      ? {}
+      : { onTrackedDoc: overrides.onTrackedDoc }),
   });
   return { manager, schemaTracker, walk };
 };
@@ -252,7 +263,8 @@ describe("graph-query", () => {
 
         it("names the stored document as the referrer of a missing document linked from inside the object", () => {
           // A miss is retired when its referrer is walked again without the
-          // link, so the referrer has to be a document a walk can visit.
+          // link, so the referrer has to be a record of a document a walk
+          // can visit: the stored document under the visit's selector.
           const manager = new StubObjectManager(
             new Map<string, FabricValue>([
               [keyFor("of:root"), { donuts: [{ glaze: linkTo("of:absent") }] }],
@@ -272,7 +284,10 @@ describe("graph-query", () => {
           walk.visit(documentFor(manager, "of:root"), selector);
 
           expect(misses).toEqual([
-            { missKey: keyFor("of:absent"), referrerKey: keyFor("of:root") },
+            {
+              missKey: keyFor("of:absent"),
+              referrerKey: trackedRecordKey(keyFor("of:root"), selector),
+            },
           ]);
         });
       });
@@ -453,6 +468,243 @@ describe("graph-query", () => {
           keyFor("of:one"),
           keyFor("of:two"),
         ]);
+      });
+
+      describe("attributing by record", () => {
+        // `of:x` links first to `of:y`, which links back to `of:x`, and
+        // then to `of:z`. The root's schema reaches back into `of:x` under
+        // a selector of its own, so `of:x` is entered under a second
+        // record while its first is still being walked.
+
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:x"),
+            { first: linkTo("of:y"), last: linkTo("of:z"), tag: "x" },
+          ],
+          [keyFor("of:y"), { back: linkTo("of:x") }],
+          [keyFor("of:z"), { n: 1 }],
+        ]);
+        const selector = {
+          path: ["value"],
+          schema: {
+            type: "object",
+            properties: {
+              first: {
+                type: "object",
+                properties: {
+                  back: {
+                    type: "object",
+                    properties: { tag: { type: "string" } },
+                  },
+                },
+              },
+              last: { type: "object", properties: { n: { type: "number" } } },
+            },
+          },
+        } satisfies SchemaPathSelector;
+
+        /** Visits `of:x` under `selector`, and returns each document's
+         * referrers other than itself. */
+        const referrers = () => {
+          const recorded = new Map<string, Set<string>>();
+          const { manager, walk } = walkOver(documents, {
+            onTrackedDoc: (key, _selector, referrer, kind) => {
+              if (
+                referrer === undefined || referrer === "root" ||
+                kind !== "walked" || referrer.startsWith(`${key}\0`)
+              ) {
+                return;
+              }
+              let set = recorded.get(key);
+              if (set === undefined) {
+                set = new Set();
+                recorded.set(key, set);
+              }
+              set.add(referrer);
+            },
+          });
+          walk.visit(documentFor(manager, "of:x"), selector, undefined, "root");
+          return recorded;
+        };
+
+        it("attributes a linked document to the record whose walk followed the link", () => {
+          expect([...referrers().get(keyFor("of:y")) ?? []]).toEqual([
+            trackedRecordKey(keyFor("of:x"), selector),
+          ]);
+        });
+
+        it("attributes to the outer record what its walk reaches after a walk of another record of the document ends", () => {
+          const recorded = referrers();
+          const inner = [...recorded.get(keyFor("of:x")) ?? []];
+
+          // `of:x` is entered again under a record of its own, through
+          // `of:y`, before the outer walk reaches `of:z`.
+          expect(inner).toHaveLength(1);
+          expect(inner[0].startsWith(`${keyFor("of:y")}\0`)).toBe(true);
+          expect([...recorded.get(keyFor("of:z")) ?? []]).toEqual([
+            trackedRecordKey(keyFor("of:x"), selector),
+          ]);
+        });
+
+        it("attributes what a document entered again reaches to that record when the root names an explicit instance", () => {
+          // The root's own record is kept under the instance's key, and the
+          // record a link enters under the key the tracker resolves, so a
+          // lookup by either key finds the record walking the document.
+
+          const explicitKey = `${SPACE}/user:did%3Atest%3Abob/of:x` as const;
+          const inner = {
+            type: "object",
+            properties: {
+              last: { type: "object", properties: { n: { type: "number" } } },
+            },
+          } as const;
+          const outer = {
+            path: ["value"],
+            schema: {
+              type: "object",
+              properties: {
+                first: { type: "object", properties: { back: inner } },
+              },
+            },
+          } satisfies SchemaPathSelector;
+          const reports: [string, SchemaPathSelector, string | undefined][] =
+            [];
+          const { manager, walk } = walkOver(documents, {
+            onTrackedDoc: (key, selector, referrer, kind) => {
+              if (kind === "walked") reports.push([key, selector, referrer]);
+            },
+          });
+
+          walk.visit(documentFor(manager, "of:x"), outer, explicitKey, "root");
+
+          const entered = reports.filter(([key, , referrer]) =>
+            key === keyFor("of:x") &&
+            referrer?.startsWith(`${keyFor("of:y")}\0`)
+          );
+          expect(entered).toHaveLength(1);
+          expect(
+            reports.filter(([key]) => key === keyFor("of:z")).map((
+              [, , referrer],
+            ) => referrer),
+          ).toEqual([trackedRecordKey(keyFor("of:x"), entered[0][1])]);
+        });
+      });
+
+      describe("over a document two documents link to", () => {
+        // `of:one` and `of:two` each link to `of:glaze`, which links on to
+        // `of:sprinkles`. The walks share a tracker and nothing else, so
+        // only the tracker can spare the second walk the shared documents.
+
+        const documents = new Map<string, FabricValue>([
+          [keyFor("of:one"), { glaze: linkTo("of:glaze") }],
+          [keyFor("of:two"), { glaze: linkTo("of:glaze") }],
+          [
+            keyFor("of:glaze"),
+            { flavor: "maple", topping: linkTo("of:sprinkles") },
+          ],
+          [keyFor("of:sprinkles"), { color: "rainbow" }],
+        ]);
+        const flavor = { flavor: { type: "string" } } as const;
+        const topping = {
+          topping: {
+            type: "object",
+            properties: { color: { type: "string" } },
+          },
+        } as const;
+        /** A schema reaching `of:glaze`'s flavor, and its topping's color
+         * with `withTopping`. */
+        const glazeSchema = (
+          withTopping: boolean,
+        ): SchemaPathSelector["schema"] => ({
+          type: "object",
+          properties: {
+            glaze: {
+              type: "object",
+              properties: withTopping ? { ...flavor, ...topping } : flavor,
+            },
+          },
+        });
+
+        /** Walks `of:one` and then `of:two` under `linkSelector` over one
+         * tracker, after `of:glaze` under `glazeSelector` when one is given,
+         * and returns the distinct attributions of `of:glaze` to other
+         * documents, and the loads the second walk made. */
+        const walkBoth = (
+          linkSelector: SchemaPathSelector,
+          glazeSelector?: SchemaPathSelector,
+        ) => {
+          const schemaTracker = new MapSetStringToPathSelectors(true);
+          const attributions = new Set<string>();
+          const onTrackedDoc: GraphQueryWalkOptions["onTrackedDoc"] = (
+            key,
+            _selector,
+            referrer,
+            kind,
+          ) => {
+            // A referrer is a record; its key leads with its document's.
+            const document = referrer?.split("\0")[0];
+            if (
+              key === keyFor("of:glaze") && document !== undefined &&
+              document !== key
+            ) {
+              attributions.add(`${kind} ${document}`);
+            }
+          };
+          if (glazeSelector !== undefined) {
+            const root = walkOver(documents, { schemaTracker, onTrackedDoc });
+            root.walk.visit(
+              documentFor(root.manager, "of:glaze"),
+              glazeSelector,
+            );
+          }
+          const first = walkOver(documents, { schemaTracker, onTrackedDoc });
+          first.walk.visit(documentFor(first.manager, "of:one"), linkSelector);
+          const second = walkOver(documents, { schemaTracker, onTrackedDoc });
+          second.walk.visit(
+            documentFor(second.manager, "of:two"),
+            linkSelector,
+          );
+          return {
+            attributions: [...attributions].toSorted(),
+            secondLoads: second.manager.requested,
+            schemaTracker,
+          };
+        };
+
+        it("attributes the shared document to each linking document as a walker, and loads it once", () => {
+          const { attributions, secondLoads, schemaTracker } = walkBoth({
+            path: ["value"],
+            schema: glazeSchema(true),
+          });
+
+          expect(attributions).toEqual([
+            `walked ${keyFor("of:one")}`,
+            `walked ${keyFor("of:two")}`,
+          ]);
+          expect(secondLoads).not.toContain(keyFor("of:glaze"));
+          expect(secondLoads).not.toContain(keyFor("of:sprinkles"));
+          expect(trackedKeys(schemaTracker)).toEqual([
+            keyFor("of:glaze"),
+            keyFor("of:one"),
+            keyFor("of:sprinkles"),
+            keyFor("of:two"),
+          ]);
+        });
+
+        it("attributes the shared document to a linking document as covered when a wider record covers it", () => {
+          // The linking walks need `of:glaze`'s flavor alone; a walk of
+          // `of:glaze` itself made a record under `true`, which covers that.
+          const { attributions, secondLoads } = walkBoth(
+            { path: ["value"], schema: glazeSchema(false) },
+            { path: ["value"], schema: true },
+          );
+
+          expect(attributions).toEqual([
+            `covered ${keyFor("of:one")}`,
+            `covered ${keyFor("of:two")}`,
+          ]);
+          expect(secondLoads).not.toContain(keyFor("of:glaze"));
+        });
       });
 
       it("reports a memo hit when a later walk sharing the memo re-reaches a document", () => {

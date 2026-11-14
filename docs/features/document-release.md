@@ -163,19 +163,22 @@ middle of reading it finishes with the value it had; the first release pass to
 find it held by nothing drops it, and a read after that loads it as it now
 stands. One nothing holds is emptied and dropped at once.
 
-The server attributes each document it tracks to what reached it: a watch's
-root to the watch, a document reached through a link to the document holding
-the link, a schema document to the document whose selector or `cfc` envelope
-names it, and the schema closure a delivered document's content refers to, to
-that document. A removal releases the removed watches' roots. A document whose
-last reaching watch, link, or schema reference lets go leaves the session,
-together with what only it reached, and the answer names each in `removes`. A
-document another watch or link still reaches stays. One that lost a record and
-keeps another is walked again under the records it keeps once the retirements
-have settled, so that what only the lost record's walk reached is released; a
-document that lost nothing is not walked. A watch whose root a permissive watch
-already covered was never walked; when that cover goes, the server walks the
-root on its own, so the documents it names stay delivered.
+The server attributes each document it tracks to what reached it: a watch's root
+to the watch, a document reached through a link to the record of the document
+holding the link whose walk followed it (one document under one selector), a
+schema document to the record whose selector or `cfc` envelope names it, and the
+schema closure a delivered document's content refers to, to that document. A
+link whose target a wider record of the target already holds attributes to that
+record, whose walk stands for its own; when that record goes, the server walks
+the target under the link's selector, as it does a covered root. A removal
+releases the removed watches' roots. A record whose last reaching watch, link,
+or schema reference lets go leaves the tracker, and what its walk reached is
+released with it, without walking anything; a document left with no record
+leaves the session, and the answer names each in `removes`. A document another
+watch or link still reaches stays, and so does what the records it keeps
+reached. A watch whose root a permissive watch already covered was never walked;
+when that cover goes, the server walks the root on its own, so the documents it
+names stay delivered.
 
 A write that edits a link away retracts in the same way: the refresh that
 re-walks the changed document releases what the walk no longer reaches, and the
