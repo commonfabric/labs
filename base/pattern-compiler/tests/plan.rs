@@ -2828,3 +2828,32 @@ export const Read = pattern<{ n: number }>(({ n }) => {
         .iter()
         .any(|diagnostic| diagnostic.id == "side-write:cycle"));
 }
+
+#[test]
+fn the_child_slots_of_a_pick_are_at_the_path_read_below_the_chosen_child() {
+    // PL §3.18: "the chosen child's slots are slots of the plan whose
+    // path is the path of `a`, `*` at the position of the key, and the
+    // path the surrounding expression reads below the child, each with
+    // the class of that read."
+    let analysis = program(
+        r#"import { pattern } from "commonfabric";
+export const P = pattern<{ rows: { title: string; n: number }[]; i: number }>(({ rows, i }) => {
+  const label = rows[i].title + "!";
+  return { label };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        template_line(&plan, &kept(&plan, json!(["label"]))["template"]),
+        "derive(expression) { pick(container [argument rows/* : shape], choice derive(expression) { [argument i : value] [argument rows/* : shape] }, body [argument rows/*/title : value]) const }"
+    );
+    assert_eq!(
+        cone_slots(&plan, "label"),
+        [
+            "argument i : value",
+            "argument rows/* : shape",
+            "argument rows/*/title : value"
+        ]
+    );
+}

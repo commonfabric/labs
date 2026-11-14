@@ -118,6 +118,11 @@ struct Computed {
     /// and a JSX element: its entries, the container entry first (PL
     /// §3.4, "The entries of a constructed value").
     entries: Option<Entries>,
+    /// For a `pick` over a container slot: the root and the path of the
+    /// chosen child, `*` at the position of the key. The body of the
+    /// node is the slot at the path a reader reads below the child, with
+    /// the class of that read (PL §3.18).
+    chosen: Option<(Root, Vec<String>)>,
     /// For the assembled result of a `map` whose callback returns a
     /// constructed value: the entries of one element.
     element_entries: Option<Entries>,
@@ -639,6 +644,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             template: None,
             element: None,
             entries: None,
+            chosen: None,
             element_entries: None,
             below: Vec::new(),
             step: false,
@@ -801,7 +807,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                 select_node(selector, condition, branches)
             });
         }
-        self.build(hint, at, |emitter, cone| {
+        let chosen = match &object {
+            Place::Slot(root, path) => {
+                let mut child = path.clone();
+                child.push("*".to_string());
+                Some((root.clone(), child))
+            }
+            _ => None,
+        };
+        let place = self.build(hint, at, |emitter, cone| {
             let pick = emitter.picks.len();
             emitter.cones[cone].picks.push(pick);
             emitter.picks.push("valueCode");
@@ -813,10 +827,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // what is read of it.
                     let mut child = path.clone();
                     child.push("*".to_string());
+                    // The body's slot is the one at the path a reader
+                    // reads below the child (`value_template`).
                     let shape = emitter.slot(root, &child, "shape");
                     let value = emitter.slot(root, &child, "value");
                     emitter.cones[cone].slots.insert(shape);
-                    emitter.cones[cone].slots.insert(value);
                     let choice = joined(vec![choice?, json!({ "op": "slot", "slot": shape })]);
                     Some(json!({
                         "op": "pick",
@@ -856,7 +871,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                     None
                 }
             }
-        })
+        });
+        if let Place::Value(value, _) = &place {
+            self.values[*value].chosen = chosen;
+        }
+        place
     }
 
     /// The cone being evaluated reads a place in full.
@@ -949,7 +968,17 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// join of the entries at and below it. An observation of class
     /// `shape`, `enumeration` or `identity` at a container has the
     /// container entry's template alone (PL §3.4).
-    fn value_template(&self, value: usize, path: &[String], class: &str) -> Option<Value> {
+    fn value_template(
+        &mut self,
+        value: usize,
+        path: &[String],
+        class: &'static str,
+    ) -> Option<Value> {
+        if let Some(slot) = self.chosen_slot(value, path, class) {
+            let mut node = self.values[value].template.clone()?;
+            node["body"] = json!({ "op": "slot", "slot": slot });
+            return Some(node);
+        }
         let Some(entries) = &self.values[value].entries else {
             return self.values[value].template.clone();
         };
@@ -967,6 +996,19 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some((_, template)) => template.clone(),
             None => Some(json!({ "op": "const" })),
         }
+    }
+
+    /// The child slot of a `pick` over a container slot that a read of
+    /// a path below the chosen child observes (PL §3.18).
+    fn chosen_slot(&mut self, value: usize, path: &[String], class: &'static str) -> Option<usize> {
+        let (root, child) = self.values[value].chosen.clone()?;
+        let mut at = child;
+        at.extend(path.iter().cloned());
+        // A child passed on whole is read for `value`: what a later
+        // reader observes through the reference is not followed, so the
+        // slot covers all of the child.
+        let class = if class == "identity" { "value" } else { class };
+        Some(self.slot(&root, &at, class))
     }
 
     /// The entries of a constructed value (PL §3.4): a container entry
@@ -1076,12 +1118,18 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cones[cone].slots.insert(slot);
                 }
             }
-            Place::Value(value, _) => {
+            Place::Value(value, path) => {
                 if let Some(cone) = self.cone {
                     if self.values[*value].cone != cone {
                         self.cones[cone].uses.insert(*value);
                         self.values[*value].referred = true;
                     }
+                }
+                // The cone that reads a path of a chosen child has the
+                // slot at that path.
+                if let Some(slot) = self.chosen_slot(*value, path, class) {
+                    let cone = self.cone.unwrap_or(self.values[*value].cone);
+                    self.cones[cone].slots.insert(slot);
                 }
             }
             Place::Record(fields) => {
