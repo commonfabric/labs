@@ -212,6 +212,22 @@ is relitigated.
   a property that declares a default gets a link, not a copy, and the
   link holds the schema with the default, so the callee reads the
   default where nothing is stored, whether or not it declares one.
+- A read of a default carries no integrity. Where a stored object has
+  an absent property and a default fills it, the defaulted part carries
+  the empty integrity, not the object's claims. The specification has no
+  rule for a default that is read and not stored, and needs this one.
+- `elementById` yields a handle of the element type or `undefined`,
+  because the record for a key may never have been written or may have
+  been cleared.
+- An argument bound by reference takes the declared type of its path. A
+  condition that narrows the value does not narrow the handle, and `!`
+  does not change the type of a place.
+- On a value of type `unknown` the only test is against `undefined`. A
+  `typeof` test does not narrow it, and a legacy key read for a string
+  is declared `string`.
+- A writable view wider than a place's declaration is refused, with no
+  exception for migration code. An input that holds data of an older
+  shape declares that shape.
 - `typeof NAME` in a label argument, outside a writer or rule-set
   position, stands for the value of a module-scope constant with a
   static initializer.
@@ -619,10 +635,8 @@ as an assumption.
     assignable to `ReadonlyCell<unknown>`. Raised by the owner, not
     ruled. The prototype is counting the corpus sites that write through
     such a handle.
-94. **The integrity of a default read through a link** (PL question 41).
-    *Assumed:* the read keeps the integrity of the observation at the
-    bound address. The alternative is empty integrity, because the value
-    comes from a link's schema.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
 95. **A write through a handle bound to a value the instance computes**
     (PL question 42; LS question 28): a `computed` result, an operator
     result, or a literal given where a handler, a `lift`, or a
