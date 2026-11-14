@@ -25,6 +25,7 @@ import {
   readRefusal,
   type RenderLabelSummary,
   type RenderPolicy,
+  UNREADABLE_LABELS,
 } from "@commonfabric/html/worker";
 import { fabricAwareEqual, type FabricValue } from "@commonfabric/data-model";
 import { isPlainObject } from "@commonfabric/js-values/types";
@@ -84,13 +85,6 @@ function displayCeilingRefusal(refusal: RenderLabelSummary): CellReadRefusal {
     labelSource: refusal.labelSource,
   });
 }
-
-/** The decision on a read whose labels could not be read. */
-const UNREADABLE_LABELS: RenderLabelSummary = Object.freeze({
-  labelSource: "unreadable",
-  confidentiality: [],
-  integrity: [],
-});
 
 /**
  * Reads `cell` once through `project`, as `readProjected()` does, or returns

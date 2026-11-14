@@ -1285,10 +1285,10 @@ describe("RuntimeInternals", () => {
       }).iframeOuterFrameUrl,
     ).toBe("/outer-frame");
     // With the render ceiling off, the worker is told it has none, which is
-    // `null`: one told nothing gives itself the default ceiling. With no
-    // ceiling, no declassification policy is weighed, so none is sent. The
+    // `null`: one told nothing gives itself the default ceiling. Author
+    // declassification is honored, which a worker told nothing denies. The
     // case below reads the same two fields with the ceiling on.
-    expect(options.renderDeclassificationPolicy).toBeUndefined();
+    expect(options.renderDeclassificationPolicy).toBe("allow");
     expect(options.renderConfidentialityCeiling).toBeNull();
   });
 
@@ -1381,7 +1381,7 @@ describe("RuntimeInternals", () => {
       apiUrl: new URL("http://shell.test/"),
       cfcRenderCeiling: false,
     });
-    expect(off.renderDeclassificationPolicy).toBeUndefined();
+    expect(off.renderDeclassificationPolicy).toBe("allow");
     expect(off.renderConfidentialityCeiling).toBeNull();
   });
 

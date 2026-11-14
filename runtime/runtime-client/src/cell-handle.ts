@@ -240,7 +240,7 @@ export class CellReadRefusedError extends Error {
     super(
       call === undefined
         ? `The worker refused this read of a cell (${by}).`
-        : `The worker refused the read of a cell behind \`${call}\` (${by}).`,
+        : `The worker refused this read of a cell, through \`${call}\` (${by}).`,
     );
     this.name = "CellReadRefusedError";
     this.#refusal = refusal;

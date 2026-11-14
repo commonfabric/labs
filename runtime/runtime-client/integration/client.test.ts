@@ -1611,10 +1611,12 @@ export default pattern<Record<string, never>>(() => {
     // Guards the field-by-field copy in RuntimeClient.initialize() and the
     // RuntimeProcessor.initialize() -> WorkerReconciler plumbing. An
     // initialize() payload that dropped renderDeclassificationPolicy would
-    // make {renderDeclassificationPolicy: "deny"} behave as "allow" (fail
-    // open). This exercises the REAL threading end to end: initialize ->
-    // worker InitializationData -> RuntimeProcessor -> every mount's
-    // reconciler.
+    // make {renderDeclassificationPolicy: "allow"} behave as the "deny" an
+    // absent policy means, and one that dropped the ceiling would hold every
+    // mount to the default ceiling. This exercises the REAL threading end to
+    // end: initialize -> worker InitializationData -> RuntimeProcessor ->
+    // every mount's reconciler. Each case declares no root ceiling (`null`),
+    // so that the secret is read and only the boundary around it decides.
     const SECRET_TEXT = "Sensitive diagnosis: migraine";
     const SECRET_ATOM = "s15-threading-secret";
     const BLOCKED_TEXT = "Content hidden by policy";
@@ -1672,6 +1674,7 @@ export default pattern<Record<string, never>>(() => {
     it("threads renderDeclassificationPolicy 'deny' through initialize to the worker reconciler", async () => {
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session, {
+        renderConfidentialityCeiling: null,
         renderDeclassificationPolicy: "deny",
       });
 
@@ -1695,11 +1698,35 @@ export default pattern<Record<string, never>>(() => {
       }
     });
 
-    it("absent renderDeclassificationPolicy keeps the 'allow' default (control)", async () => {
-      // Same fixtures as the deny case: proves the block above comes from the
-      // threaded policy, not from broken fixtures or an always-blocking gate.
+    it("denies the author's declassification where the host names no renderDeclassificationPolicy", async () => {
       const session = await createTestSession();
-      await using rt = await createRuntimeClient(session);
+      await using rt = await createRuntimeClient(session, {
+        renderConfidentialityCeiling: null,
+      });
+
+      const { root, cancel } = await renderAuthorDeclassifiedSecret(
+        rt,
+        session.space,
+      );
+      try {
+        await waitFor(
+          () => Promise.resolve(root.innerHTML.includes(BLOCKED_TEXT)),
+        );
+        assertEquals(root.innerHTML.includes(SECRET_TEXT), false);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("threads renderDeclassificationPolicy 'allow' through initialize to the worker reconciler (control)", async () => {
+      // Same fixtures as the deny cases: proves the block above comes from
+      // the threaded policy, not from broken fixtures or an always-blocking
+      // gate.
+      const session = await createTestSession();
+      await using rt = await createRuntimeClient(session, {
+        renderConfidentialityCeiling: null,
+        renderDeclassificationPolicy: "allow",
+      });
 
       const { root, cancel } = await renderAuthorDeclassifiedSecret(
         rt,

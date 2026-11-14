@@ -1432,7 +1432,7 @@ describe("cell-handle", () => {
           await expect(
             call === "initialize" ? cell.initialize({}) : cell[call](),
           ).rejects.toThrow(
-            `The worker refused the read of a cell behind \`${call}()\` ` +
+            `The worker refused this read of a cell, through \`${call}()\` ` +
               "(display-ceiling: a label stored at the cell or above it).",
           );
         });
@@ -1446,7 +1446,7 @@ describe("cell-handle", () => {
         });
 
         expect(() => cell.get()).toThrow(
-          "The worker refused the read of a cell behind `get()` " +
+          "The worker refused this read of a cell, through `get()` " +
             "(display-ceiling: a label the read consumed).",
         );
       });
@@ -1458,7 +1458,7 @@ describe("cell-handle", () => {
         );
 
         await expect(cell.fields()).rejects.toThrow(
-          "The worker refused the read of a cell behind `fields()` " +
+          "The worker refused this read of a cell, through `fields()` " +
             "(display-ceiling).",
         );
       });

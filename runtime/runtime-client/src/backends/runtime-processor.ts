@@ -635,8 +635,8 @@ export function renderCeilingFor(
  * resolves no manifest, and every `PolicyOf` label stays sealed. Service DIDs
  * are NOT threaded to the worker today (design §9), so `serviceDids` is `[]`
  * and service principals — which rarely render — fail closed. Returns
- * undefined when no ceiling is configured (no render gating — today's
- * behavior).
+ * undefined where no ceiling is in force, as for a host that declares `null`
+ * (see {@link renderCeilingFor}): nothing is gated.
  */
 export function renderConfidentialityResolverFor(
   runtime: Runtime,
@@ -680,7 +680,7 @@ export function renderConfidentialityResolverFor(
  * the render lookup. Built once per worker (same lifetime as the resolver) and
  * threaded to BOTH `renderConfidentialityResolverFor` (as the resolver's
  * lookup) and the reconciler (for ACL-change subscriptions), so the two share
- * one instance. Undefined when no ceiling is configured — no render gating, so
+ * one instance. Undefined where no ceiling is in force — no render gating, so
  * no membership lookup. Service DIDs are not threaded to the worker
  * (design §9), so service principals fail closed.
  */
@@ -702,8 +702,8 @@ export function renderMembershipProviderFor(
  * The module-policy manifest source for a worker's renders, shared like
  * {@link renderMembershipProviderFor}'s provider: the resolver reads verified
  * manifests through it, and the reconciler subscribes to a manifest a sealed
- * `PolicyOf` cell is still waiting on. Undefined when no ceiling is
- * configured.
+ * `PolicyOf` cell is still waiting on. Undefined where no ceiling is in
+ * force.
  */
 export function renderModulePolicySourceFor(
   runtime: Runtime,

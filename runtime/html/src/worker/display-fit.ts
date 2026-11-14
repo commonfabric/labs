@@ -88,6 +88,13 @@ export type RenderLabelSummary = {
   integrity: readonly CfcAtom[];
 };
 
+/** The decision on a read whose labels could not be read at all. */
+export const UNREADABLE_LABELS: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: Object.freeze([]),
+  integrity: Object.freeze([]),
+});
+
 /**
  * How a decision that is made again watches what it consulted: each label it
  * fits names documents its outcome depends on, such as a space's membership
@@ -292,7 +299,7 @@ export function cellLabelRefusal(
     labelSources === undefined ||
     labelSources.some((source) => source.readFailed)
   ) {
-    return { labelSource: "unreadable", confidentiality: [], integrity: [] };
+    return UNREADABLE_LABELS;
   }
   if (labelSources.every((source) => source.view === undefined)) {
     const confidentiality = confidentialityLabelsFromCellSchema(cell);

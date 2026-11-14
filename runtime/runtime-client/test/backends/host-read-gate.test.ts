@@ -21,7 +21,10 @@ import {
   rendererVDOMSchema,
   stringSchema,
 } from "@commonfabric/runner/schemas";
-import type { SpaceMembershipProvider } from "@commonfabric/runner/cfc";
+import {
+  CFC_LABEL_READ_FAILED_ATOM,
+  type SpaceMembershipProvider,
+} from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
@@ -878,8 +881,26 @@ describe("HostReadGate", () => {
         refused: { refusedBy: "display-ceiling", labelSource: "unreadable" },
       };
 
+      const value = unknown.asSchema({ type: "string" });
+      await gate.settle(value);
+      expect(gate.read(value)).toEqual(refusal);
       expect(gate.readMetadata(unknown, "internal")).toEqual(refusal);
       expect(await gate.fields(unknown)).toEqual(refusal);
+    });
+
+    it("names a consumed label for a value stored under the read-failure marker, as a runtime secret is", async () => {
+      // A runtime secret's label is the read-failure marker, which no ceiling
+      // admits; the read that consumes it read its label, so what refused it
+      // is a label, not a failure to read one.
+      await using docs = await shelf();
+      const secret = await docs.write("secret-under-the-marker", "a secret", [
+        [[], [CFC_LABEL_READ_FAILED_ATOM as unknown as CfcAtom]],
+      ]);
+
+      expect(gateFor(docs.runtime, owner).read(secret.asSchema(true)))
+        .toEqual({
+          refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+        });
     });
 
     it("names the kind in a subscription's refusal", async () => {
