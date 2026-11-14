@@ -794,15 +794,18 @@ as an assumption.
     module's argument schema is separated by its origin and expected
     as a difference, by ruling.
 
-119. **What the label of an `ifElse` result is compared with.** The
-    runtime's result document holds only the static part joined from
-    the argument schema, and no label derived from the condition. The
-    template joins the condition and the chosen branch. *Assumed:* the
-    template is right, since which branch is chosen reveals the
-    condition, and the comparison is made with the runtime's static
-    part included for a conditional. Whether the runtime labels the
-    condition anywhere else, such as on the link it writes, is not
-    verified.
+119. **The runtime does not label an `ifElse` result with its
+    condition** (PL question 69). Where the chosen branch is a
+    reference, `forwardReference` writes the reference and a link to it
+    with two raw writes that are not recorded as link writes, and no
+    stored entry holds the condition's label. It reaches a reader only
+    through the static entry joined from the argument schema, and only
+    where the condition's input schema declares it. Where the branch is
+    a literal, the stored value gets the join. This is confirmed by a
+    test over three cases, not committed. It is a finding against the
+    runtime. *Assumed:* the template, which joins the condition and the
+    chosen branch, stands, and the comparison is made with the
+    runtime's static part included for a conditional.
 
 ## Open, and not needing the owner
 
