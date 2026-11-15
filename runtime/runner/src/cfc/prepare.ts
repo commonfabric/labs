@@ -4738,13 +4738,14 @@ const resultWiringsByTarget = (
  * slots that changed, while the wiring's membership is the root container's:
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
- * verifier read that consumes nothing. A root holding data as well as
- * references is taken too, where the setup is an asking one (`#isAsking` in
- * `runner.ts`) that the runtime did not start on its own: one holding the reads
- * that chose what the data shows. The persist region re-derives that root's
- * value entries from the transaction's join, as the setup's write of the root
- * would, and leaves its existence entry as it is (`restatedDataRoot` there). A
- * document the transaction does not hold a value for is left out.
+ * verifier read that consumes nothing. A root holding data, beside
+ * references or alone, is taken too, where the setup is an asking one
+ * (`#isAsking` in `runner.ts`) that the runtime did not start on its own: one
+ * holding the reads that chose what the data shows. The persist region
+ * re-derives that root's value entries from the transaction's join, as the
+ * setup's write of the root would, and leaves its existence entry as it is
+ * (`restatedDataRoot` there). A document the transaction does not hold a value
+ * for is left out.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
@@ -13236,8 +13237,8 @@ export function* prepareBoundaryCommitSteps(
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
     // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
-    // A result wiring a setup restates, on a document holding data as well
-    // as references, without writing its root
+    // A result wiring a setup restates, on a document holding data, beside
+    // references or alone, without writing its root
     // (`withRestatedResultWirings`). Its derived value entries, at the root
     // and below it, are replaced by one at the root (below), as a write of
     // the root would replace them, but the root is not a written path: no

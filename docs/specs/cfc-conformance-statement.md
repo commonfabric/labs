@@ -788,10 +788,10 @@ narrows what is stored and so does not satisfy the correspondence procedure's
 step 4, which asks for a default-off dial; the two deciding sites carry its
 `SPEC-PENDING` marker.
 
-A recorded wiring whose document holds data beside its references is taken
-too, at its root, from a setup the runtime did not start on its own, but its
-root is not treated as written: only an asking setup restates a wiring it
-finds unchanged, and the persist region's `restatedDataRoot` replaces the
+A recorded wiring whose document holds data, beside references or alone, is
+taken too, at its root, from a setup the runtime did not start on its own,
+but its root is not treated as written: only an asking setup restates a wiring
+it finds unchanged, and the persist region's `restatedDataRoot` replaces the
 derived value entries at and below the root with one at the root re-derived
 from the transaction's whole flow join, the entry a write of the root would
 leave, or with none where the join is empty. The existence entries at and
@@ -861,8 +861,8 @@ request's `SPEC-PENDING` marker.
   the attempt's whole join.
 - A result wiring at a path below its document's root is restated and
   narrowed only at the root.
-- A result document holding data beside its references has its value entry
-  re-derived at a restatement and none of its membership, so a setup that
+- A result document holding data, beside references or alone, has its value
+  entry re-derived at a restatement and none of its membership, so a setup that
   leaves it unchanged keeps the stored membership: an over-taint where an
   earlier attempt's stamp is wider than the setup's own.
 - A release the source reconciler adopts, on open or while a piece runs, is

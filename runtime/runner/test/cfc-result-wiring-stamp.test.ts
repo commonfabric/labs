@@ -101,7 +101,8 @@ describe("cfc-result-wiring-stamp", () => {
    * `forwarding` returns a nested `named` piece as its whole result, so its
    * result document stores a reference. `mixed`, `remixed`, `sameMixed` and
    * `namedMixed` hold data beside their references; `sameMixed` is another
-   * pattern with the result `mixed` has.
+   * pattern with the result `mixed` has. `dataOnly` holds data and no
+   * reference, and `sameDataOnly` is another pattern with its result.
    */
   const patterns = () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
@@ -142,6 +143,11 @@ describe("cfc-result-wiring-stamp", () => {
         a: double(x),
         note: "fixed",
       })),
+      dataOnly: cf.pattern<{ x: number }>(() => ({ note: "fixed" })),
+      sameDataOnly: cf.pattern<{ x: number }>(({ x }) => {
+        triple(x);
+        return { note: "fixed" };
+      }),
     };
   };
 
@@ -433,6 +439,22 @@ describe("cfc-result-wiring-stamp", () => {
 
       expect(derivedOf(result)).toContain(BOB);
       expect(membershipOf(result)).not.toContain(BOB);
+    });
+
+    it("stamps it on the value of an unchanged result that holds data and no reference", async () => {
+      // A root holding data alone is restated as one holding references too
+      // (§8.9.1.3's `restateResultWiring` keys the value entry on the data,
+      // not on the references beside it).
+
+      const { dataOnly, sameDataOnly } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("data-only-reads-bob", dataOnly);
+      expect(derivedOf(result)).not.toContain(BOB);
+
+      await setUp("data-only-reads-bob", sameDataOnly, bobs);
+
+      expect(derivedOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([]);
     });
 
     it("records no existence of an unchanged result that holds data beside its references", async () => {
@@ -1287,6 +1309,19 @@ describe("cfc-result-wiring-stamp", () => {
       await plantValueStamp(result, BOB);
 
       await setUp("remint-unchanged", sameMixed);
+
+      expect(derivedOf(result)).toEqual([]);
+    });
+
+    it("comes off a result that holds data and no reference, at a setup of another pattern that finds it unchanged", async () => {
+      // As for a result holding references too: the value entry is
+      // re-derived from a join that read nothing labeled.
+
+      const { dataOnly, sameDataOnly } = patterns();
+      const result = await setUp("remint-data-only", dataOnly);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-data-only", sameDataOnly);
 
       expect(derivedOf(result)).toEqual([]);
     });
