@@ -3280,3 +3280,168 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
         .1;
     assert_eq!(document["properties"]["by"]["type"], "number");
 }
+
+/// The bindings of `plan` named `name`, each with its `within` and its
+/// `result` as text.
+fn results_of(plan: &Value, name: &str) -> Vec<(String, String)> {
+    plan["bindings"]
+        .as_array()
+        .expect("bindings")
+        .iter()
+        .filter(|binding| binding["name"] == name)
+        .map(|binding| (binding["within"].to_string(), binding["result"].to_string()))
+        .collect()
+}
+
+/// PL §1.1, "The result paths of a binding in an element body": "the path
+/// of what the callback returns, with `*` at the position of each
+/// enclosing collection. The path has one `*` for each `element` step of
+/// `within` whose collection the path passes through, in the order of the
+/// steps, outermost first."
+#[test]
+fn a_binding_of_an_element_body_has_a_result_path_with_a_star_per_enclosing_collection() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.item.title);
+});
+export const P = pattern<{ items: Item[]; groups: { items: Item[] }[]; chosen: Writable<string> }>(
+  ({ items, groups, chosen }) => {
+    return {
+      [UI]: (
+        <div>
+          <h1>t</h1>
+          <ul>{items.map((item) => <li onClick={select({ item, chosen })}>{item.title}</li>)}</ul>
+          <section>
+            <h2>g</h2>
+            {groups.map((group) => (
+              <ol>{group.items.map((item) => <li onClick={select({ item, chosen })} />)}</ol>
+            ))}
+          </section>
+        </div>
+      ),
+      rows: items.map((item) => ({ pick: select({ item, chosen }) })),
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        results_of(&plan, "select"),
+        [
+            (
+                r#"[{"element":0}]"#.to_string(),
+                r#"[["$UI","children","1","children","*","props","onClick"]]"#.to_string()
+            ),
+            (
+                r#"[{"element":1},{"element":2}]"#.to_string(),
+                r#"[["$UI","children","2","children","*","children","*","props","onClick"]]"#
+                    .to_string()
+            ),
+            (
+                r#"[{"element":3}]"#.to_string(),
+                r#"[["rows","*","pick"]]"#.to_string()
+            ),
+        ]
+    );
+}
+
+/// PL §1.1: "A `site` step adds no segment, because the callee's tree is
+/// in place at the call." A tag at a child position has the callee's
+/// `[UI]` there, and a tag the callback returns is the callee's result,
+/// with the tree below `$UI`.
+#[test]
+fn a_site_step_adds_no_segment_to_the_result_path_of_a_binding() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.item.title);
+});
+const Row = pattern<{ item: Item; chosen: Writable<string> }>(({ item, chosen }) => {
+  return { [UI]: <li onClick={select({ item, chosen })}>{item.title}</li> };
+});
+export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, chosen }) => {
+  return {
+    [UI]: (
+      <div>
+        <ul>{items.map((item) => <div><Row item={item} chosen={chosen} /></div>)}</ul>
+        <ol>{items.map((item) => <Row item={item} chosen={chosen} />)}</ol>
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        results_of(&plan, "select"),
+        [
+            (
+                r#"[{"element":0},{"site":"Row"}]"#.to_string(),
+                r#"[["$UI","children","0","children","*","children","0","props","onClick"]]"#
+                    .to_string()
+            ),
+            (
+                r#"[{"element":1},{"site":"Row"}]"#.to_string(),
+                r#"[["$UI","children","1","children","*","$UI","props","onClick"]]"#.to_string()
+            ),
+        ]
+    );
+}
+
+/// PL §8, question 78: "where two collections are spread into one array
+/// of children ... the path alone does not say" which positions are whose.
+/// The emitter gives such a binding no path, and none to a binding whose
+/// stream is at no kept path of what the callback returns, and counts
+/// each under its reason.
+#[test]
+fn a_binding_of_an_element_body_has_no_result_path_where_the_rule_gives_none() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.item.title);
+});
+export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string> }>(
+  ({ items, more, chosen }) => {
+    const hidden = items.map((item) => <li onClick={select({ item, chosen })} />);
+    return {
+      [UI]: (
+        <ul>
+          {items.map((item) => <li onClick={select({ item, chosen })} />)}
+          {more.map((item) => <li onClick={select({ item, chosen })} />)}
+        </ul>
+      ),
+      count: hidden.length,
+    };
+  },
+);
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    for binding in found.plan["bindings"].as_array().expect("bindings") {
+        assert!(binding.get("result").is_none(), "{binding}");
+    }
+    let mut reasons: Vec<&str> = found
+        .element_bindings
+        .iter()
+        .map(|(_, reason)| reason.as_str())
+        .collect();
+    reasons.sort_unstable();
+    assert_eq!(
+        reasons,
+        [
+            "its stream is at no kept path of the result",
+            "two collections are spread into one array",
+            "two collections are spread into one array",
+        ]
+    );
+}

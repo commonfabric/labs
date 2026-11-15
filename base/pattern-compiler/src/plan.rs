@@ -54,6 +54,10 @@ pub struct PatternPlan {
     /// The handles of a binding's state that are bound to a computed
     /// value, by case (ruling T3).
     pub handle_writes: Vec<HandleWrite>,
+    /// The bindings of a handler in an element body that have no `result`
+    /// path (PL §1.1, "The result paths of a binding in an element body"):
+    /// the index of the binding in the plan, and why it has none.
+    pub element_bindings: Vec<(usize, String)>,
     /// The schemas of the pattern's argument and of its result, where
     /// the pattern declares the type (PL §1.1, `Child.argumentSchema` and
     /// `Child.resultSchema` are their content addresses).
@@ -256,8 +260,12 @@ struct Computed {
     step: bool,
     /// What the value holds, where the emitter decided it (ruling T3).
     origin: Option<Declared>,
-    /// For a rendered tree: the paths below the value that hold the
-    /// stream of a binding, and the binding (PL §1.1, `Binding.result`).
+    /// The paths below the value that hold the stream of a binding, and
+    /// the binding (PL §1.1, `Binding.result`). A rendered tree has the
+    /// positions that hold a stream. The assembled result of a `map` has
+    /// the paths of what its callback returns below `*`, and so do the
+    /// children of a view node from a spread on, where one collection is
+    /// spread there ("The result paths of a binding in an element body").
     streams: Vec<(Vec<String>, usize)>,
     order: usize,
 }
@@ -368,6 +376,11 @@ struct Emitter<'r, 'm, 'a> {
     hints: Vec<(String, u32)>,
     /// The handles bound to a computed value (ruling T3).
     handle_writes: Vec<HandleWrite>,
+    /// The bindings whose stream is below an element of a collection that
+    /// is spread into an array of children beside another spread, where
+    /// the path alone does not say which positions are whose (PL §8,
+    /// question 78).
+    spread_beside_another: BTreeSet<usize>,
     /// The patterns whose source the plan holds code of, by the module
     /// and the start of the function: the pattern the plan is compiled
     /// from, then each pattern compiled in, in the order of its first
@@ -2138,7 +2151,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         _ => Place::Const,
                     };
-                    stream_paths(&tree, &mut Vec::new(), &mut streams);
+                    emitter.stream_paths(&tree, &mut Vec::new(), &mut streams);
                     emitter.constructed(&tree)
                 });
                 if let Place::Value(value, _) = &built {
@@ -3036,6 +3049,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             None => Place::Const,
         });
         let element_entries = self.entries_of(&result);
+        // The paths of what the callback returns that hold a stream.
+        let mut element_streams = Vec::new();
+        self.stream_paths(&result, &mut Vec::new(), &mut element_streams);
         // The element as the source has it, passed through.
         let source_element = |emitter: &mut Self| {
             let slot = emitter.slot(&Root::Element(collection), &[], "identity");
@@ -3140,6 +3156,15 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.values[value].element = Some(element);
             if via == "map" {
                 self.values[value].element_entries = element_entries;
+                // "The path of what the callback returns, with `*` at the
+                // position of each enclosing collection" (PL §1.1).
+                self.values[value].streams = element_streams
+                    .into_iter()
+                    .map(|(mut path, binding)| {
+                        path.insert(0, "*".to_string());
+                        (path, binding)
+                    })
+                    .collect();
             }
         }
         let place = Place::Value(value, Vec::new());
@@ -3893,6 +3918,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut fields = BTreeMap::new();
         let mut position = 0usize;
         let mut later: Option<Vec<Option<Value>>> = None;
+        // The spread children, and the streams below an element of one.
+        let mut spreads = 0usize;
+        let mut element_streams: Vec<(Vec<String>, usize)> = Vec::new();
         for child in children {
             let (place, spread) = match child {
                 // Text that is white space with a line break is no
@@ -3934,6 +3962,18 @@ impl<'a> Emitter<'_, '_, 'a> {
             };
             if spread && later.is_none() {
                 later = Some(Vec::new());
+            }
+            if spread {
+                spreads += 1;
+                if let Place::Value(value, path) = &place {
+                    if path.is_empty() {
+                        for (at, binding) in &self.values[*value].streams {
+                            if at.first().is_some_and(|first| first == "*") {
+                                element_streams.push((at[1..].to_vec(), *binding));
+                            }
+                        }
+                    }
+                }
             }
             match &mut later {
                 None => {
@@ -3982,6 +4022,18 @@ impl<'a> Emitter<'_, '_, 'a> {
             let star = self.build("children", at, |_, _| {
                 Some(joined(later.into_iter().collect::<Option<Vec<Value>>>()?))
             });
+            // "The positions from a spread on are at `children/*`" (PL
+            // §1.1). Where two collections are spread into one array the
+            // path does not say which positions are whose (PL §8,
+            // question 78), and the binding gets no path.
+            match &star {
+                Place::Value(value, _) if spreads == 1 => {
+                    self.values[*value].streams = element_streams;
+                }
+                _ => self
+                    .spread_beside_another
+                    .extend(element_streams.into_iter().map(|(_, binding)| binding)),
+            }
             fields.insert("*".to_string(), star);
         }
         Place::Record(fields)
@@ -5474,6 +5526,37 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
     }
 
+    /// The paths of a rendered tree that hold the stream of a binding. A
+    /// member that is a value with such paths of its own has them below
+    /// its position: a tree held in a variable, the tree of a pattern
+    /// compiled in at a tag, "because the callee's tree is in place at the
+    /// call", and the children from a spread on (PL §1.1).
+    fn stream_paths(
+        &self,
+        place: &Place,
+        path: &mut Vec<String>,
+        found: &mut Vec<(Vec<String>, usize)>,
+    ) {
+        match place {
+            Place::Stream(binding) => found.push((path.clone(), *binding)),
+            Place::Record(fields) => {
+                for (name, member) in fields {
+                    path.push(name.clone());
+                    self.stream_paths(member, path, found);
+                    path.pop();
+                }
+            }
+            Place::Value(value, below) if below.is_empty() => {
+                for (position, binding) in &self.values[*value].streams {
+                    let mut at = path.clone();
+                    at.extend(position.iter().cloned());
+                    found.push((at, *binding));
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Where the result holds the stream of a binding, the binding names
     /// the path (PL §1.1, `Binding.result`), "in source order". The
     /// emitter holds the members of a record by name, so the order is
@@ -6703,21 +6786,6 @@ fn rendered_at_child(place: Place) -> Place {
     }
 }
 
-/// The paths of a rendered tree that hold the stream of a binding.
-fn stream_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<(Vec<String>, usize)>) {
-    match place {
-        Place::Stream(binding) => found.push((path.clone(), *binding)),
-        Place::Record(fields) => {
-            for (name, member) in fields {
-                path.push(name.clone());
-                stream_paths(member, path, found);
-                path.pop();
-            }
-        }
-        _ => {}
-    }
-}
-
 /// A `fold` over a collection, which names the pattern it is written in
 /// as a `derive` does (PL §1.1).
 fn fold_node(collection: usize, body: Value, through: Option<usize>) -> Value {
@@ -7036,6 +7104,7 @@ pub fn emit_module<'a>(
             iterated: Vec::new(),
             hints: Vec::new(),
             handle_writes: Vec::new(),
+            spread_beside_another: BTreeSet::new(),
             patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),
@@ -7093,6 +7162,7 @@ pub fn emit_module<'a>(
         }
         let hints = std::mem::take(&mut emitter.hints);
         let handle_writes = std::mem::take(&mut emitter.handle_writes);
+        let spread_beside_another = std::mem::take(&mut emitter.spread_beside_another);
         tags.push((*start, std::mem::take(&mut emitter.tags)));
         let argument_schema = emitter
             .root_types
@@ -7101,6 +7171,28 @@ pub fn emit_module<'a>(
         let result_schema = emitter.result_type.map(|ty| resolver.schema_of(ty));
         let (mut plan, unsupported, cycles, flows) = emitter.finish(&parsed.path);
         let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
+        // The bindings of an element body that have no result path.
+        let element_bindings = plan["bindings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, binding)| {
+                binding.get("handler").is_some()
+                    && binding.get("result").is_none()
+                    && binding["within"]
+                        .as_array()
+                        .is_some_and(|steps| steps.iter().any(|step| step.get("element").is_some()))
+            })
+            .map(|(index, _)| {
+                let reason = if spread_beside_another.contains(&index) {
+                    "two collections are spread into one array"
+                } else {
+                    "its stream is at no kept path of the result"
+                };
+                (index, reason.to_string())
+            })
+            .collect();
         plans.push(PatternPlan {
             name: body.name.clone(),
             line: body.line,
@@ -7110,6 +7202,7 @@ pub fn emit_module<'a>(
             hints,
             flows,
             handle_writes,
+            element_bindings,
             argument_schema,
             result_schema,
             schemas,
