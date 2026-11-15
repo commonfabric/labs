@@ -337,6 +337,16 @@ export const buildCluePrompt = (
   ].join("\n");
 };
 
+/** The clue request for the `round`th ask about the same board: later asks
+ * want different ideas, and differ in text so they are not served from the
+ * cache. */
+export const withRound = (prompt: string, round: number): string =>
+  prompt === "" || round <= 0
+    ? prompt
+    : `${prompt}\n\nAsk ${
+      round + 1
+    }: suggest different clues from the obvious ones.`;
+
 /** The usable clues in an LLM answer: one-word clues with a number and at
  * least one target. */
 export const cluesFrom = (

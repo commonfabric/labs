@@ -10,9 +10,11 @@
  *
  * Ported from jkomoros/community-patterns (`codenames-helper.tsx`). The board
  * logic now lives in `board.ts` as pure functions. Clue ideas are requested
- * with a button rather than regenerated on every reveal, and a guessed card
- * can be tapped again to undo a mis-tap. The photo "corrections" box, which
- * was never sent to the model, is gone: fix a misread card in the grid.
+ * with a button rather than regenerated on every reveal (asking again about
+ * the same board asks for different ideas), a guessed card can be tapped again
+ * to undo a mis-tap, and each viewer picks their own team. The photo
+ * "corrections" box, which was never sent to the model, is gone: fix a
+ * misread card in the grid.
  */
 import {
   action,
@@ -25,6 +27,7 @@ import {
   NAME,
   pattern,
   type PerSpace,
+  type PerUser,
   type Stream,
   UI,
   type VNode,
@@ -45,6 +48,7 @@ import {
   normalizeBoard,
   type Owner,
   ownerCounts,
+  OWNERS,
   PHOTO_SYSTEM_PROMPT,
   PHOTO_USER_PROMPT,
   type PhotoReading,
@@ -53,6 +57,7 @@ import {
   withColorsCleared,
   withOwner,
   withRevealToggled,
+  withRound,
   withWord,
 } from "./board.ts";
 
@@ -86,14 +91,6 @@ const OWNER_LABEL: Record<Owner, string> = {
   unassigned: "Clear",
 };
 
-const PALETTE: readonly Owner[] = [
-  "red",
-  "blue",
-  "neutral",
-  "assassin",
-  "unassigned",
-];
-
 const styles = {
   page: {
     padding: "16px",
@@ -117,16 +114,6 @@ const styles = {
     gridTemplateColumns: "repeat(5, 1fr)",
     gap: "4px",
   },
-  wordInput: {
-    width: "100%",
-    textAlign: "center",
-    fontSize: "11px",
-    fontWeight: "600",
-    textTransform: "uppercase",
-    border: "none",
-    background: "transparent",
-    color: "inherit",
-  },
   wordLabel: {
     fontSize: "11px",
     fontWeight: "600",
@@ -144,6 +131,7 @@ const styles = {
   },
   panelTitle: { fontSize: "14px", fontWeight: "600" },
   hint: { fontSize: "12px", color: "#6b7280" },
+  stack: { display: "flex", flexDirection: "column", gap: "6px" },
   warning: { fontSize: "12px", color: "#92400e" },
   error: { fontSize: "12px", color: "#991b1b" },
   counts: {
@@ -233,6 +221,19 @@ const cardStyle = (owner: Owner, revealed: boolean, selected: boolean) => ({
   boxShadow: selected ? "0 0 0 2px #fde68a" : "none",
 });
 
+/** The word input's own box is in cf-input's shadow DOM; its colors come from
+ * these custom properties, so the card color shows through. */
+const wordInputStyle = (owner: Owner) => ({
+  width: "100%",
+  textAlign: "center",
+  fontSize: "11px",
+  fontWeight: "600",
+  textTransform: "uppercase",
+  "--cf-input-color-background": "transparent",
+  "--cf-input-color-border": "transparent",
+  "--cf-input-color-text": INK[owner],
+});
+
 const miniCellStyle = (owner: Owner) => ({
   aspectRatio: "1",
   background: FILL[owner],
@@ -255,11 +256,14 @@ interface CardView {
   word: string;
   label: string;
   style: Record<string, string>;
+  inputStyle: Record<string, string>;
 }
 
 interface CodenamesHelperInput {
   board?: PerSpace<Writable<BoardCard[] | Default<[]>>>;
-  myTeam?: PerSpace<Writable<Team | Default<"red">>>;
+  /** Each spymaster's own team, so two sharing one board don't flip it for
+   * each other. */
+  myTeam?: PerUser<Writable<Team | Default<"red">>>;
   mode?: PerSpace<Writable<Mode | Default<"setup">>>;
 }
 
@@ -282,7 +286,7 @@ export interface CodenamesHelperOutput {
   /** What is off about the colors entered so far; empty when the key looks
    * complete. */
   keyWarnings: string[];
-  /** The prompt clue ideas were last requested for, or "". */
+  /** The board prompt clue ideas were last requested for, or "". */
   clueRequest: string;
   /** Setup: pick the card to color. Play: mark it guessed, or undo that. */
   tapCard: Stream<{ index: number }>;
@@ -290,7 +294,7 @@ export interface CodenamesHelperOutput {
   assignOwner: Stream<{ owner: Owner }>;
   setWord: Stream<{ index: number; word: string }>;
   /** Apply what the LLM read from a board or key-card photo. */
-  applyPhotoReading: Stream<{ reading: PhotoReading; photoIndex?: number }>;
+  applyPhotoReading: Stream<{ reading: PhotoReading; photoId?: string }>;
   clearColors: Stream<void>;
   resetBoard: Stream<void>;
   startPlay: Stream<void>;
@@ -334,22 +338,24 @@ const setWordHandler = handler<
   board.set(withWord(board.get(), index, word ?? ""));
 });
 
+type PhotoStatus = Record<string, "applied" | "discarded">;
+
+// Photos are marked rather than removed from the list: removing one would
+// shift the others' positions in the mapped list and make them read again.
 const applyReadingHandler = handler<
-  { reading: PhotoReading; photoIndex?: number },
-  { board: Writable<BoardCard[]>; photos: Writable<ImageData[]> }
->(({ reading, photoIndex }, { board, photos }) => {
+  { reading: PhotoReading; photoId?: string },
+  { board: Writable<BoardCard[]>; photoStatus: Writable<PhotoStatus> }
+>(({ reading, photoId }, { board, photoStatus }) => {
   if (checkReading(reading).errors.length > 0) return;
   board.set(applyReading(board.get(), reading));
-  if (typeof photoIndex === "number") {
-    photos.set(photos.get().filter((_, i) => i !== photoIndex));
-  }
+  if (photoId) photoStatus.set({ ...photoStatus.get(), [photoId]: "applied" });
 });
 
 const discardPhotoHandler = handler<
-  { photoIndex: number },
-  { photos: Writable<ImageData[]> }
->(({ photoIndex }, { photos }) => {
-  photos.set(photos.get().filter((_, i) => i !== photoIndex));
+  { photoId: string },
+  { photoStatus: Writable<PhotoStatus> }
+>(({ photoId }, { photoStatus }) => {
+  photoStatus.set({ ...photoStatus.get(), [photoId]: "discarded" });
 });
 
 const addPhotosHandler = handler<
@@ -364,9 +370,13 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
   ({ board, myTeam, mode }) => {
     const selectedIndex = new Writable.perSession<number>(-1);
     const photos = new Writable.perSession<ImageData[]>([]);
+    const photoStatus = new Writable.perSession<PhotoStatus>({});
     /** The clue prompt last asked for. Clue ideas are on demand, so a reveal
      * does not start a new LLM call by itself. */
     const clueRequest = new Writable.perSession<string>("");
+    /** How many times ideas were asked for this same board, so asking again
+     * yields new ideas rather than the cached answer. */
+    const clueRound = new Writable.perSession<number>(0);
 
     const cards = computed(() => normalizeBoard(board.get()));
     const isSetup = computed(() => mode.get() !== "play");
@@ -378,6 +388,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
         word: card.word,
         label: card.word || "—",
         style: cardStyle(card.owner, card.revealed, index === selected),
+        inputStyle: wordInputStyle(card.owner),
       }));
     });
 
@@ -405,7 +416,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
 
     const tapCard = tapCardHandler({ board, mode, selectedIndex });
     const setWord = setWordHandler({ board });
-    const applyPhotoReading = applyReadingHandler({ board, photos });
+    const applyPhotoReading = applyReadingHandler({ board, photoStatus });
 
     const assignOwner = assignOwnerHandler({ board, selectedIndex });
 
@@ -418,6 +429,9 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
       mode.set("setup");
       selectedIndex.set(-1);
       clueRequest.set("");
+      clueRound.set(0);
+      photos.set([]);
+      photoStatus.set({});
     });
     const startPlay = action(() => {
       mode.set("play");
@@ -426,16 +440,19 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
     const editBoard = action(() => mode.set("setup"));
     const chooseRed = action(() => myTeam.set("red"));
     const chooseBlue = action(() => myTeam.set("blue"));
-    const requestClues = action(() =>
-      clueRequest.set(buildCluePrompt(board.get(), myTeam.get()))
-    );
+    const requestClues = action(() => {
+      const prompt = buildCluePrompt(board.get(), myTeam.get());
+      clueRound.set(prompt === clueRequest.get() ? clueRound.get() + 1 : 0);
+      clueRequest.set(prompt);
+    });
     const addPhotos = addPhotosHandler({ photos });
-    const discardPhoto = discardPhotoHandler({ photos });
+    const discardPhoto = discardPhotoHandler({ photoStatus });
 
     // --- LLM: photo reading ---------------------------------------------
 
     const readings = photos.map((photo, photoIndex) => {
       const reading = generateObject<PhotoReading>({
+        model: "default",
         system: PHOTO_SYSTEM_PROMPT,
         prompt: computed(() => {
           const image = photo?.data || photo?.url;
@@ -446,8 +463,10 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           ];
         }),
       });
+      const photoId = computed(() => photo?.id || photo?.url || "");
       const view = computed(() => {
         const result = reading.result as PhotoReading | undefined;
+        const status = photoStatus.get()[photo?.id || photo?.url || ""];
         const check = checkReading(result);
         return {
           title: `Photo ${photoIndex + 1}: ${
@@ -461,20 +480,23 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           warnings: check.warnings,
           notes: typeof result?.notes === "string" ? result.notes : "",
           canApply: check.errors.length === 0,
+          applied: status === "applied",
+          hidden: status === "discarded",
           cells: readingGrid(result).map((cell) => ({
             text: cell.word.slice(0, 8),
             style: miniCellStyle(cell.owner),
           })),
         };
       });
-      return { photoIndex, reading, view };
+      return { photoIndex, photoId, reading, view };
     });
 
     // --- LLM: clue ideas ------------------------------------------------
 
     const clueIdeas = generateObject<ClueSuggestions>({
+      model: "default",
       system: CLUE_SYSTEM_PROMPT,
-      prompt: clueRequest,
+      prompt: computed(() => withRound(clueRequest.get(), clueRound.get())),
     });
     const clues = computed((): ClueIdea[] =>
       cluesFrom(clueIdeas.result as Partial<ClueSuggestions> | undefined)
@@ -499,7 +521,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
         <div style={styles.panelTitle}>Key colors</div>
         <div style={styles.hint}>{selectedLine}</div>
         <div style={styles.row}>
-          {PALETTE.map((owner) => (
+          {OWNERS.map((owner) => (
             <button
               type="button"
               style={swatchButton(owner)}
@@ -529,7 +551,6 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
         </div>
         <cf-image-input
           multiple
-          maxImages={5}
           maxSizeBytes={4000000}
           includeData
           showPreview={false}
@@ -537,68 +558,71 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           variant="secondary"
           oncf-change={addPhotos}
         />
-        {readings.map(({ photoIndex, reading, view }) => (
-          <div style={styles.photoCard}>
-            {reading.pending
-              ? (
+        {readings.map(({ photoIndex, photoId, reading, view }) =>
+          view.hidden ? null : view.applied
+            ? (
+              <div style={styles.hint}>
+                ✓ Photo {photoIndex + 1} applied to the board
+              </div>
+            )
+            : (
+              <div style={styles.photoCard}>
+                {reading.pending
+                  ? (
+                    <div style={styles.row}>
+                      <cf-loader size="sm" showElapsed></cf-loader>
+                      Reading photo {photoIndex + 1}...
+                    </div>
+                  )
+                  : reading.error
+                  ? (
+                    <div style={styles.error}>
+                      Photo {photoIndex + 1} could not be read: {reading.error}
+                    </div>
+                  )
+                  : (
+                    <div style={styles.stack}>
+                      <div style={styles.panelTitle}>{view.title}</div>
+                      <div style={styles.miniGrid}>
+                        {view.cells.map((cell) => (
+                          <div style={cell.style}>{cell.text}</div>
+                        ))}
+                      </div>
+                      {view.errors.map((e) => (
+                        <div style={styles.error}>✗ {e}</div>
+                      ))}
+                      {view.warnings.map((w) => (
+                        <div style={styles.warning}>⚠ {w}</div>
+                      ))}
+                      {view.notes
+                        ? <div style={styles.hint}>Note: {view.notes}</div>
+                        : null}
+                    </div>
+                  )}
                 <div style={styles.row}>
-                  <cf-loader size="sm" showElapsed></cf-loader>
-                  Reading photo {photoIndex + 1}...
+                  <button
+                    type="button"
+                    style={styles.primary}
+                    disabled={!view.canApply}
+                    onClick={() =>
+                      applyPhotoReading.send({
+                        reading: reading.result as PhotoReading,
+                        photoId,
+                      })}
+                  >
+                    Apply to board
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.button}
+                    onClick={() => discardPhoto.send({ photoId })}
+                  >
+                    Discard
+                  </button>
                 </div>
-              )
-              : reading.error
-              ? (
-                <div style={styles.error}>
-                  Photo {photoIndex + 1} could not be read: {reading.error}
-                </div>
-              )
-              : (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                  }}
-                >
-                  <div style={styles.panelTitle}>{view.title}</div>
-                  <div style={styles.miniGrid}>
-                    {view.cells.map((cell) => (
-                      <div style={cell.style}>{cell.text}</div>
-                    ))}
-                  </div>
-                  {view.errors.map((e) => <div style={styles.error}>✗ {e}
-                  </div>)}
-                  {view.warnings.map((w) => (
-                    <div style={styles.warning}>⚠ {w}</div>
-                  ))}
-                  {view.notes
-                    ? <div style={styles.hint}>Note: {view.notes}</div>
-                    : null}
-                </div>
-              )}
-            <div style={styles.row}>
-              <button
-                type="button"
-                style={styles.primary}
-                disabled={!view.canApply}
-                onClick={() =>
-                  applyPhotoReading.send({
-                    reading: reading.result as PhotoReading,
-                    photoIndex,
-                  })}
-              >
-                Apply to board
-              </button>
-              <button
-                type="button"
-                style={styles.button}
-                onClick={() => discardPhoto.send({ photoIndex })}
-              >
-                Discard
-              </button>
-            </div>
-          </div>
-        ))}
+              </div>
+            )
+        )}
       </div>
     );
 
@@ -705,7 +729,8 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
                       value={card.word}
                       placeholder={`${card.index + 1}`}
                       timingStrategy="blur"
-                      style={styles.wordInput}
+                      size="sm"
+                      style={card.inputStyle}
                       oncf-change={(e: { detail?: { value?: string } }) =>
                         setWord.send({
                           index: card.index,

@@ -74,10 +74,11 @@
         "asCell": [
           {
             "kind": "cell",
-            "scope": "space"
+            "scope": "user"
           }
         ],
-        "default": "red"
+        "default": "red",
+        "description": "Each spymaster's own team, so two sharing one board don't flip it for\neach other."
       }
     },
     "type": "object"
@@ -245,8 +246,8 @@
         ],
         "description": "Apply what the LLM read from a board or key-card photo.",
         "properties": {
-          "photoIndex": {
-            "type": "number"
+          "photoId": {
+            "type": "string"
           },
           "reading": {
             "$ref": "#/$defs/PhotoReading"
@@ -287,7 +288,7 @@
         "tier": "wrapper"
       },
       "clueRequest": {
-        "description": "The prompt clue ideas were last requested for, or \"\".",
+        "description": "The board prompt clue ideas were last requested for, or \"\".",
         "type": "string"
       },
       "editBoard": {

@@ -8,7 +8,12 @@
  * Run: deno task cf test patterns/apps/codenames-helper/codenames-helper.test.tsx --verbose
  */
 import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
-import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
+import {
+  clickButton,
+  findElement,
+  fireEvent,
+  hasText,
+} from "../../tools/test-support/vnode-helpers.ts";
 import {
   applyReading,
   type BoardCard,
@@ -20,6 +25,7 @@ import {
   ownerCounts,
   type PhotoReading,
   withRevealToggled,
+  withRound,
   withWord,
 } from "./board.ts";
 import CodenamesHelper, { type Mode, type Team } from "./codenames-helper.tsx";
@@ -139,6 +145,11 @@ export default pattern(() => {
     return clues.length === 1 && clues[0].clue === "OCEAN" &&
       clues[0].targetWords[1] === "SHIP";
   });
+  const assert_round_varies_prompt = assert(() =>
+    withRound("P", 0) === "P" && withRound("", 3) === "" &&
+    withRound("P", 1).startsWith("P\n\nAsk 2") &&
+    withRound("P", 1) !== withRound("P", 2)
+  );
   const assert_clues_from_nothing = assert(() =>
     cluesFrom(undefined).length === 0
   );
@@ -191,6 +202,28 @@ export default pattern(() => {
   const assert_bad_reading_ignored = assert(() =>
     helper.board[0].word === "WORD1"
   );
+
+  // A photo upload shows a reading card; Discard hides it.
+  const action_upload_photo = action(() =>
+    fireEvent(findElement(helper[UI], "cf-image-input"), "oncf-change", {
+      detail: {
+        images: [{
+          id: "photo-1",
+          name: "board.jpg",
+          url: "",
+          data: "data:image/png;base64,AAAA",
+          timestamp: 0,
+          size: 4,
+          type: "image/png",
+        }],
+      },
+    })
+  );
+  const assert_photo_card_shown = assert(() =>
+    hasText(helper[UI], "Discard") && hasText(helper[UI], "hoto 1")
+  );
+  const action_discard_photo = action(() => clickButton(helper[UI], "Discard"));
+  const assert_photo_hidden = assert(() => !hasText(helper[UI], "Discard"));
 
   // Clear colors keeps the words.
   const action_clear_colors = action(() =>
@@ -272,6 +305,7 @@ export default pattern(() => {
       { assertion: assert_clue_prompt_empty_without_words },
       { assertion: assert_clues_filtered },
       { assertion: assert_clues_from_nothing },
+      { assertion: assert_round_varies_prompt },
       { assertion: assert_starts_blank },
       { action: action_type_word },
       { action: action_select_first },
@@ -285,6 +319,10 @@ export default pattern(() => {
       { assertion: assert_photos_applied },
       { action: action_apply_bad_reading },
       { assertion: assert_bad_reading_ignored },
+      { action: action_upload_photo },
+      { assertion: assert_photo_card_shown },
+      { action: action_discard_photo },
+      { assertion: assert_photo_hidden },
       { action: action_clear_colors },
       { assertion: assert_colors_cleared },
       { action: action_reapply_key },

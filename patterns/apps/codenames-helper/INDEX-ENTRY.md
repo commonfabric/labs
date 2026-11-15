@@ -6,8 +6,8 @@ its key-card color (tap a card, then a color), or photograph the board and the
 key card and apply what an LLM reads from each after checking it. The color
 counts flag a key that is not 9/8/7/1. Play: tap a card when it is guessed to
 mark it out of play (tap again to undo), and ask for one-word clue ideas that
-connect your team's remaining words while avoiding the rest. Board logic is pure
-functions in `board.ts`.
+connect your team's remaining words while avoiding the rest (ask again for
+different ideas). Board logic is pure functions in `board.ts`.
 
 **Keywords:** game companion, board game, word game, spymaster, LLM,
 generateObject, image input, 5x5 grid
@@ -27,7 +27,7 @@ interface BoardCard {
 
 interface CodenamesHelperInput {
   board?: PerSpace<Writable<BoardCard[] | Default<[]>>>; // padded to 25
-  myTeam?: PerSpace<Writable<Team | Default<"red">>>;
+  myTeam?: PerUser<Writable<Team | Default<"red">>>; // each spymaster's own
   mode?: PerSpace<Writable<Mode | Default<"setup">>>;
 }
 ```
@@ -42,11 +42,11 @@ interface CodenamesHelperOutput {
   selectedIndex: number; // card picked for coloring, or -1
   inPlay: Record<Owner, number>;
   keyWarnings: string[];
-  clueRequest: string; // prompt clue ideas were last requested for
+  clueRequest: string; // board prompt clue ideas were last requested for
   tapCard: Stream<{ index: number }>;
   assignOwner: Stream<{ owner: Owner }>;
   setWord: Stream<{ index: number; word: string }>;
-  applyPhotoReading: Stream<{ reading: PhotoReading; photoIndex?: number }>;
+  applyPhotoReading: Stream<{ reading: PhotoReading; photoId?: string }>;
   clearColors: Stream<void>;
   resetBoard: Stream<void>;
   startPlay: Stream<void>;
