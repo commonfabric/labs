@@ -15,6 +15,7 @@
  */
 import {
   computed,
+  eventKey,
   handler,
   NAME,
   pattern,
@@ -130,9 +131,9 @@ export const requestGetIt = handler<
   if (latest && (!answer || answer.state === "started")) return;
   if (answer?.state === "placed") return;
   getItRequests.set([...requests, {
-    requestId: `${Date.now().toString(36)}-${
-      Math.random().toString(36).slice(2, 10)
-    }`,
+    // The same on every run of this tap (a conflict retry, the client's echo
+    // and the served run), so a host sees one request per tap.
+    requestId: eventKey(),
     patternId,
     destination,
   }]);
