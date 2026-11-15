@@ -49,6 +49,7 @@ import {
   EXTRACTION_SYSTEM,
   extractionParts,
   extractionText,
+  fromWire,
   type GroupNumberField,
   ingredientLine,
   inputText,
@@ -61,6 +62,7 @@ import {
   type OvenField,
   ovenRequirements,
   type RecipeExtraction,
+  type RecipeExtractionWire,
   recipeMarkdown,
   scalarChanges,
   scalarUpdates,
@@ -362,7 +364,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       { text: string; images: string[] } | null
     >(null);
 
-    const extractLlm = generateObject<RecipeExtraction>({
+    const extractLlm = generateObject<RecipeExtractionWire>({
       model: STRUCTURED_MODEL,
       system: EXTRACTION_SYSTEM,
       prompt: computed(() => {
@@ -371,7 +373,9 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       }),
     });
     const extraction = computed((): RecipeExtraction | null =>
-      extractRequest.get() && extractLlm.result ? extractLlm.result : null
+      extractRequest.get() && extractLlm.result
+        ? fromWire(extractLlm.result as Partial<RecipeExtractionWire>)
+        : null
     );
     const extracting = computed(() => !!extractLlm.pending);
     const extractError = computed(() =>
@@ -588,14 +592,22 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       },
     );
 
-    // One cooking view per recipe, so progress survives going back to edit.
-    const cookingView = Viewer({
-      recipeName: name,
-      servings,
-      ingredients,
-      stepGroups,
-    });
-    const cook = action(() => navigateTo(cookingView));
+    // The cooking view is made when Cook is pressed, as navigateTo expects
+    // (docs/common/patterns/navigation.md): a view made in the pattern body
+    // and navigated to from an action did nothing live. Its checked steps
+    // live here, so progress survives going back to edit and cooking again.
+    const cookProgress = new Writable.perSpace<string[]>([]);
+    const cook = action(() =>
+      navigateTo(
+        Viewer({
+          recipeName: name,
+          servings,
+          ingredients,
+          stepGroups,
+          done: cookProgress,
+        }),
+      )
+    );
 
     const fsContent = computed(() =>
       recipeMarkdown({
@@ -757,7 +769,19 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
               <h1 style={styles.title}>{displayName}</h1>
               <cf-hstack gap="2" align="center">
                 <span style={styles.muted}>{totalLabel}</span>
-                <cf-button variant="secondary" onClick={cook}>
+                <cf-button
+                  variant="secondary"
+                  onClick={() =>
+                    navigateTo(
+                      Viewer({
+                        recipeName: name,
+                        servings,
+                        ingredients,
+                        stepGroups,
+                        done: cookProgress,
+                      }),
+                    )}
+                >
                   👨‍🍳 Cook
                 </cf-button>
               </cf-hstack>

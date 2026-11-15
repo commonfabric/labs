@@ -39,11 +39,19 @@ import type { StepGroup } from "./schemas.tsx";
 export const llmMocks = [
   {
     promptIncludes: "Grandma's roast chicken",
+    // The all-required wire shape the model fills: "" and 0 mean unknown.
     object: {
       name: "Roast Chicken",
+      cuisine: "",
       servings: 6,
-      category: "main",
+      yield: "",
+      difficulty: "",
+      prepTime: 0,
       cookTime: 75,
+      restTime: 0,
+      holdTime: 0,
+      category: "main",
+      source: "",
       ingredients: [
         { item: "chicken", amount: "1", unit: "piece" },
         { item: "butter", amount: "1/2", unit: "cup" },
@@ -51,8 +59,10 @@ export const llmMocks = [
       stepGroups: [
         {
           name: "Roast",
+          nightsBeforeServing: 0,
           minutesBeforeServing: 90,
           duration: 75,
+          maxWaitMinutes: 0,
           oven: {
             temperature: 425,
             duration: 75,

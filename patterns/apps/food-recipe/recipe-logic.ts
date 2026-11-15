@@ -264,10 +264,101 @@ export interface RecipeExtraction {
   remainingNotes?: string;
 }
 
+/**
+ * What the model is asked to fill: `RecipeExtraction` with every field
+ * required. A structured-output schema may hold only so many optional fields
+ * (Anthropic answers "Schema is too complex" past its limit), and the
+ * optional version has about two dozen, so here "" and 0 mean "not in the
+ * recipe" and `fromWire` turns them back into absent fields.
+ */
+export interface WireStepGroup {
+  name: string;
+  nightsBeforeServing: number;
+  minutesBeforeServing: number;
+  duration: number;
+  maxWaitMinutes: number;
+  /** temperature 0 when the phase does not use the oven. */
+  oven: OvenNeed;
+  steps: string[];
+}
+
+export interface RecipeExtractionWire {
+  name: string;
+  cuisine: string;
+  servings: number;
+  yield: string;
+  difficulty: Difficulty | "";
+  prepTime: number;
+  cookTime: number;
+  restTime: number;
+  holdTime: number;
+  category: RecipeCategory | "";
+  source: string;
+  ingredients: Ingredient[];
+  stepGroups: WireStepGroup[];
+  tags: string[];
+  remainingNotes: string;
+}
+
+const present = <T>(value: T | "" | 0 | null | undefined): T | undefined =>
+  value === "" || value === 0 || value === null ? undefined : value as T;
+
+/** `value` without its undefined fields (optional fields must be absent). */
+const compact = <T extends object>(
+  value: { [K in keyof T]: T[K] | undefined },
+): T =>
+  Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined),
+  ) as T;
+
+/** The model's all-required answer as a `RecipeExtraction`: "" and 0 become
+ * absent, and an oven at 0°F becomes no oven. */
+export const fromWire = (
+  wire: Partial<RecipeExtractionWire> | null | undefined,
+): RecipeExtraction | null => {
+  if (!wire) return null;
+  const groups = (wire.stepGroups ?? []).map((g) =>
+    compact<ExtractedStepGroup>({
+      name: g?.name ?? "",
+      nightsBeforeServing: present(g?.nightsBeforeServing),
+      minutesBeforeServing: g?.nightsBeforeServing
+        ? undefined
+        : typeof g?.minutesBeforeServing === "number"
+        ? g.minutesBeforeServing
+        : undefined,
+      duration: present(g?.duration),
+      maxWaitMinutes: present(g?.maxWaitMinutes),
+      oven: g?.oven && g.oven.temperature > 0 ? g.oven : undefined,
+      steps: g?.steps ?? [],
+    })
+  );
+  return compact<RecipeExtraction>({
+    name: present(wire.name),
+    cuisine: present(wire.cuisine),
+    servings: present(wire.servings),
+    yield: present(wire.yield),
+    difficulty: present(wire.difficulty),
+    prepTime: present(wire.prepTime),
+    cookTime: present(wire.cookTime),
+    restTime: present(wire.restTime),
+    holdTime: present(wire.holdTime),
+    category: present(wire.category),
+    source: present(wire.source),
+    ingredients: wire.ingredients?.length ? wire.ingredients : undefined,
+    stepGroups: groups.length ? groups : undefined,
+    tags: wire.tags?.length ? wire.tags : undefined,
+    remainingNotes: typeof wire.remainingNotes === "string"
+      ? wire.remainingNotes
+      : undefined,
+  });
+};
+
 export const EXTRACTION_SYSTEM =
   `You extract structured recipes from unstructured text and photos of recipes.
 
-Fill only the fields you can read with confidence:
+Fill only the fields you can read with confidence. Every field must be
+present: use "" for unknown text, 0 for an unknown number, [] for no items, and
+an oven with temperature 0 for a phase that does not use the oven.
 - name, cuisine (e.g. "Italian"), servings (number), yield (e.g. "12 cookies")
 - difficulty: "easy", "medium" or "hard"
 - prepTime, cookTime, restTime (after cooking, before serving), holdTime (how long
@@ -278,7 +369,7 @@ Fill only the fields you can read with confidence:
 - stepGroups: the steps in 2-5 phases that happen at different times, such as
   "Night Before", "Prep", "Cook", "Finish". Each phase has name, steps (strings),
   duration (minutes), and EITHER nightsBeforeServing (overnight work) OR
-  minutesBeforeServing (day-of: 240, 60, 30, 0), never both. Add oven when the
+  minutesBeforeServing (day-of: 240, 60, 30, 0), never both (0 for the unused one). Add oven when the
   phase uses it: temperature (°F), duration (minutes), heightSlots (1 sheet pan,
   2 casserole, 5 turkey) and width ("full" or "half").
 - tags: e.g. "vegetarian", "quick"
