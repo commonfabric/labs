@@ -157,6 +157,8 @@ export const longestStreak = (days: readonly DayRecord[]): number => {
 const milestoneMessage = (streak: number): string =>
   MILESTONES.find((m) => m.days === streak)?.message ?? "";
 
+const daysLabel = (n: number): string => `${n} day${n === 1 ? "" : "s"}`;
+
 const randomTilt = (): number => Math.round(Math.random() * 30 - 15);
 
 /**
@@ -541,9 +543,8 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
     );
     const bestStreak = computed(() => longestStreak(days.get()));
     const milestone = computed(() => milestoneMessage(currentStreak));
-    const streakLabel = computed(() =>
-      `🔥 ${currentStreak} day${currentStreak === 1 ? "" : "s"}!`
-    );
+    const streakLabel = computed(() => `🔥 ${daysLabel(currentStreak)}!`);
+    const bestLabel = computed(() => `Best: ${daysLabel(bestStreak)}`);
 
     const timeline = computed((): DayView[] => {
       const all = days.get();
@@ -692,7 +693,7 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
           ? (
             <div style={styles.streak}>
               <div style={styles.streakCount}>{streakLabel}</div>
-              <div style={styles.subtle}>Best: {bestStreak} days</div>
+              <div style={styles.subtle}>{bestLabel}</div>
             </div>
           )
           : null}
