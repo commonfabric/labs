@@ -141,8 +141,10 @@ travel through a presence room and are stored nowhere),
 item only by sending the pattern's `addItem` verb, which writes the pattern's
 own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
 `examples/profile-group-chat/`, `apps/project-list/`, `apps/star-chart/` (a
-kids' daily-habit sticker chart), `apps/assumption-surfacer/` (a chat that
-surfaces the assistant's assumptions for you to confirm or correct),
+kids' daily-habit sticker chart), `apps/redactor/` (asks a model about personal
+matters with every personal value swapped out, enforced by CFC; the CFC design
+and debt are in its README), `apps/assumption-surfacer/` (a chat that surfaces
+the assistant's assumptions for you to confirm or correct),
 `apps/reward-spinner/` (a kids' prize spinner with parent-set odds),
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
@@ -1084,6 +1086,49 @@ interface AssumptionSurfacerOutput {
   addMessage: Stream<BuiltInLLMMessage>;
   cancelGeneration: Stream<void>;
   clearChat: Stream<void>;
+}
+```
+
+## `apps/redactor/redactor.tsx`
+
+Ask a language model about something personal without sending it anything
+personal. Names, emails, phone numbers, SSNs, card numbers and addresses in a
+draft, from the embedded PII vault (`vault.tsx`) or found by format, are swapped
+for realistic stand-ins; only that redacted draft may be sent to the model, and
+the reply comes back with the originals restored for the owner. CFC enforces the
+boundary: the draft and vault are `Confidential` under `policy.tsx`, whose one
+exchange rule releases only what the `redactDraft` lift computes, and the
+model's prompt is a `MaxConfidentiality` store. See the README's CFC design and
+CFC debt sections.
+
+**Keywords:** privacy, PII, redaction, pseudonymization, llm, CFC, exchangeRule,
+TransformedBy, MaxConfidentiality
+
+### Input Schema
+
+```ts
+interface RedactorInput {
+  vaultEntries?: Writable<Default<Secret<PIIEntry>[], []>>;
+  draft: Writable<Secret<string>>; // no Default: see README, CFC debt 2
+  autoDetect?: Writable<Default<boolean, true>>;
+  modelPrompt?: Writable<Default<PublicText, "">>;
+  pastedReply?: Writable<Default<string, "">>;
+}
+```
+
+### Output Schema
+
+```ts
+interface RedactorOutput {
+  redacted: string; // released
+  found: Detection[]; // secret
+  leaks: string[];
+  modelPrompt: PublicText;
+  reply: string;
+  restored: string; // secret
+  send: Stream<void>;
+  sendRawDraft: Stream<void>; // refused by the runtime
+  typeDraft: Stream<{ text: string }>;
 }
 ```
 
