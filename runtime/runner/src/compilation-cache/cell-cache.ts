@@ -1247,6 +1247,36 @@ export function writeSourceDocs(
 }
 
 /**
+ * Stores `link` under `key` in the product annotations of the source record of
+ * `entryIdentity` in `space`, keeping the annotations already there. The write
+ * is the compile-cache writer's, like every write of a cache record, so the
+ * record keeps the claim that no schema declares a policy on it.
+ */
+export function writeSourceAnnotation(
+  runtime: Runtime,
+  space: MemorySpace,
+  entryIdentity: string,
+  key: string,
+  link: unknown,
+  tx: IExtendedStorageTransaction,
+): void {
+  withCompileCacheBuiltin(tx, () => {
+    const cell = runtime.getCell<{ annotations?: Record<string, unknown> }>(
+      space,
+      sourceDocKey(entryIdentity),
+      undefined,
+      tx,
+    );
+    recordUndeclarablePolicyStore(tx, cell);
+    const current = cell.get();
+    cell.key("annotations").set({
+      ...(isObjectOrArray(current?.annotations) ? current!.annotations : {}),
+      [key]: link,
+    });
+  });
+}
+
+/**
  * Writes a cache record whole, and only when the stored record differs.
  *
  * The write is raw: each `imports` element is stored inline in the record,

@@ -4478,6 +4478,19 @@ async function startRequest(
       tx,
       messagesCell.getAsNormalizedFullLink(),
     );
+    const stamped = runtime.cfcEnforcementMode !== "disabled";
+    if (stamped) {
+      // Attribute the writes to the builtin: `LlmDerived` is a runtime-minted
+      // evidence family, so the persist-time gate
+      // (`gateRuntimeMintedIntegrity`, audit S4) admits it only from builtin
+      // authors — the same gating that stops pattern code from forging the
+      // stamp. A write made before the identity is set is another identity's,
+      // which the gate keeps no evidence over.
+      setCfcImplementationIdentity(tx, {
+        kind: "builtin",
+        builtinId: "llmDialog",
+      });
+    }
     messagesCell.withTx(tx).pushAll(
       messages.map((message) => {
         const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
@@ -4494,17 +4507,9 @@ async function startRequest(
         return messageCell;
       }),
     );
-    if (runtime.cfcEnforcementMode === "disabled") {
+    if (!stamped) {
       return;
     }
-    // Attribute the writes to the builtin: `LlmDerived` is a runtime-minted
-    // evidence family, so the persist-time gate (`gateRuntimeMintedIntegrity`,
-    // audit S4) admits it only from builtin authors — the same gating that
-    // stops pattern code from forging the stamp.
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: "llmDialog",
-    });
     // Record the stamping schema for each pushed message's own entity doc
     // (every message is appended as a link to a document of its own, so each
     // one is separately addressable). The messages link carries its own schema,

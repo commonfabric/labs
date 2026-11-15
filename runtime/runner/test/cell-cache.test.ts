@@ -3303,5 +3303,27 @@ describe("cell-cache", () => {
     it("commits the cache writer's records alone after a labeled read", async () => {
       expect(await commitWith(true, () => {})).toBeUndefined();
     });
+
+    it("stores an annotation on a source record that holds a flow stamp", async () => {
+      // `annotatePattern()` reads the record, and so its stamp, and writes
+      // as the cache writer does, which keeps the record's claim.
+
+      expect(await commitWith(true, () => {})).toBeUndefined();
+      await runtime.patternManager.annotatePattern(
+        entryIdentity,
+        space,
+        "name",
+        { "/": "name-doc-link" },
+      );
+
+      const tx = runtime.edit();
+      try {
+        expect(record("source", tx).getRaw()?.annotations).toEqual({
+          name: { "/": "name-doc-link" },
+        });
+      } finally {
+        tx.abort();
+      }
+    });
   });
 });
