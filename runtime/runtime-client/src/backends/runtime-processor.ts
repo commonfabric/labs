@@ -4860,6 +4860,14 @@ export class RuntimeProcessor {
       if (!active) cancel?.();
       else cancelView = cancel;
       return render();
+    }, (error) => {
+      // A space deleted before its view registered admits no one again, so
+      // there is no coverage to wait for. The view renders all the same, and
+      // the reconciler shows the space's deleted placeholder, as it does for
+      // a view that was up when the deletion landed. A failed registration
+      // holds nothing, so the mount has no view registration to cancel.
+      if (active && isDeletedSpaceError(error)) return render();
+      throw error;
     }).catch((error) => {
       mount.cancel();
       reconciler.unmount();
