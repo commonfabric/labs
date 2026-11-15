@@ -603,7 +603,11 @@ describe("convertible-js", () => {
       {
         name: "`FabricKeyPair` JSON",
         codec: FabricKeyPair[JSON_CODEC],
-        state: { algorithm: "Ed25519", publicKey: "!", privateKey: "!" },
+        state: {
+          algorithm: "",
+          publicKey: new FabricBytes(new Uint8Array([1])),
+          privateKey: new FabricBytes(new Uint8Array([2])),
+        },
       },
       {
         name: "`FabricUnavailable` JSON",

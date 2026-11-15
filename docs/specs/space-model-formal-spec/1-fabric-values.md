@@ -130,8 +130,8 @@ indices and keys, while a `FabricInstance` holds its contents privately and
 exposes them through the protocol of Section 2.3. Arms (a) and (b) are the
 non-containers. A `FabricPrimitive` may hold `FabricValue`s of its own — a
 `FabricKeyPair` holding material has two
-`FabricBytes` — but holds them privately and self-freezes at construction, so it
-exposes none of them and a walk stops there (Section 2.3).
+`FabricBytes` — but self-freezes at construction, and a walk stops there rather
+than descending into them (Section 2.3).
 
 > **Fabric values are deeply read-only, with one intentional hole.** The plain
 > container arms are read-only, and because their element and property types are
@@ -457,7 +457,7 @@ included in `FabricValue` via the `FabricPrimitive` arm of the union (Section
 | `FabricDurationDay` | `FabricPrimitive` | `DurationDay@1` | `bigint` (signed days) | Span of time, the companion to `FabricEpochDay`: the difference between two days. When `Temporal` is available, `Temporal.Duration` covers the same ground, though it counts in calendar and clock fields rather than one count of days. See Section 1.4.14. |
 | `FabricHash` | `FabricPrimitive` | `Hash@1` | `Uint8Array` (hash bytes, private) + `string` (algorithm tag) | Content identifier / hash. Stringifies as `<tag>:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5). The first algorithm tag is `fid1` ("fabric ID, v1"). Wire state is `{ tag, hash }` (see Section 1.4.9). |
 | `FabricBytes` | `FabricPrimitive` | `Bytes@1` | `Uint8Array` (private byte storage) | Immutable byte sequence. The instance owns its bytes outright: input is copied at construction time, unless the caller cedes it with `transfer`. Callers access bytes via `slice()`, `sliceBuffer()`, `copyInto()`, and `length`. |
-| `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | Either two `CryptoKey` handles, or an algorithm name and the two keys' bytes | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair` (see Section 1.4.11). |
+| `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | One frozen state record: an `algorithm` string, and either two `CryptoKey` handles or the two keys' bytes as `FabricBytes` | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair`. For the material state, the state record, exposed as `.state`, is the JSON wire state: `{ algorithm, publicKey, privateKey }` (see Section 1.4.11). |
 | `FabricUnavailable` | `FabricPrimitive` | `Unavailable@1` | One frozen state record: a `reason` string; for reason `error`, an `errorKind` string and an optional `message` string | Marker standing in for data that is not available, saying why: `pending`, `syncing`, or `error`, the last sorted by a kind. Only the `error` reason carries a kind and a message. The state record, exposed as `.state`, is the wire state: `{ reason }`, `{ reason, errorKind }`, or `{ reason, errorKind, message }` (see Section 1.4.12). |
 
 #### Extra Enumerable Properties
@@ -1261,9 +1261,9 @@ field, a cell — has nothing to narrow.
 // file: base/data-model/src/fabric-primitives/FabricKeyPair.ts
 
 export class FabricKeyPair extends FabricPrimitive {
-  readonly #algorithm: string;
-  readonly #publicKey: CryptoKey | FabricBytes;
-  readonly #privateKey: CryptoKey | FabricBytes;
+  readonly #state:
+    | { algorithm: string; publicKey: FabricBytes; privateKey: FabricBytes }
+    | { algorithm: string; publicKey: CryptoKey; privateKey: CryptoKey };
 
   constructor(pair: CryptoKeyPair);
   constructor(
@@ -1277,6 +1277,12 @@ export class FabricKeyPair extends FabricPrimitive {
 
   /** Whether this instance holds key material, as opposed to handles. */
   get hasMaterial(): boolean;
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * Throws when this instance holds handles.
+   */
+  get state(): KeyPairState;
 
   /**
    * A `CryptoKeyPair` holding this instance's two keys: a new record each
@@ -1301,7 +1307,7 @@ export class FabricKeyPair extends FabricPrimitive {
 
 A pair holding handles is constructed from a `CryptoKeyPair` whose two keys are
 a public/private pair agreeing on their algorithm; anything else is refused.
-`algorithm` is then read from the keys rather than stored beside them. A pair
+`algorithm` is then taken from the keys rather than given separately. A pair
 holding material is constructed from an algorithm name and the two keys' bytes,
 which it copies unless handed a `FabricBytes`, that being already immutable and
 sole-owned.
@@ -1321,6 +1327,20 @@ non-extractable key refuses outright. So:
 - The **realm encoding** carries the keys themselves (Section 3.4 of
   [4-realm-encoding.md](./4-realm-encoding.md)), which is what a transport
   preserving `CryptoKey` makes possible.
+
+**The state is one frozen record**, held by the instance: the algorithm name
+beside the two keys, as `FabricBytes` for a pair holding material and as
+`CryptoKey`s for a pair holding handles. The other members read from it.
+`.state` returns it for a pair holding material, `{ algorithm, publicKey,
+privateKey }`, and throws for a pair holding handles, as the material arm's
+other accessors do.
+
+**Wire state** under JSON is that record, under the tag `KeyPair@1`. It is a
+record of `FabricValue`s, so the JSON codec is nonterminal over it, and each key
+is written as a `Bytes@1` value of its own. The hashing layer hashes a pair
+holding material as though it were a `FabricInstance` with that tag and that
+state (Section 4.17 of [2-hash-byte-format.md](./2-hash-byte-format.md)), so it
+hashes alike with an `UnknownValue` carrying the same tag and state.
 
 The refusals are the point rather than a gap, and they follow from the key
 rather than from any policy about formats. A pair holding handles has no bytes
@@ -2254,8 +2274,8 @@ The generic top-level utility
    Section 1.4.6) self-freeze at
    construction and expose no `FabricValue` for a walk to descend into.
    Short-circuits unchanged. (A `FabricKeyPair` holding material does hold
-   two `FabricBytes`, but privately, and each froze itself in its own
-   constructor.)
+   two `FabricBytes`, in its frozen state record, and each froze itself in its
+   own constructor.)
 
 3. **`FabricInstance`** — Delegates to the instance's `[DEEP_FREEZE]` member
    with a `subFreeze` callback that recurses back through the same utility,

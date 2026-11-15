@@ -75,7 +75,7 @@ The tags are organized into four categories by high nibble:
 | `TAG_HASH`        | `0x29` | 41      | `FabricHash`                      |
 | `TAG_SYMBOL`      | `0x2A` | 42      | `symbol` (registry-interned only) |
 | _(retired)_       | `0x2B` | 43      | nothing; never to be reassigned   |
-| `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
+| _(retired)_       | `0x2C` | 44      | nothing; never to be reassigned   |
 | _(retired)_       | `0x2D` | 45      | nothing; never to be reassigned   |
 | `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
 | `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
@@ -250,9 +250,8 @@ threshold when deciding which form to emit.
 
 The hashed form applies everywhere this spec encodes a string via the
 `TAG_STRING` layout: standalone strings (this section), `symbol` keys (Section
-4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14),
-`FabricHash` algorithm tags (Section 4.11), and `FabricKeyPair` algorithm
-names (Section 4.17).
+4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14), and
+`FabricHash` algorithm tags (Section 4.11).
 
 ### 4.5 `bigint`
 
@@ -455,13 +454,14 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
   recursively as a complete tagged value.
 
 > **Note on types with dedicated tags.** `FabricBytes`, `FabricEpochNsec`,
-> `FabricEpochDay`, `FabricHash`, `FabricKeyPair`, `FabricDurationNsec`, and
-> `FabricDurationDay` are **not** hashed via `TAG_INSTANCE`. Each has a
-> dedicated type tag and is encoded directly (see Sections 4.8, 4.9, 4.10,
-> 4.11, 4.17, 4.20 and 4.21 respectively). These are all `FabricPrimitive`
-> subclasses — at this layer they are hashed from their own stored values, not
-> via their wire codecs. `FabricUnavailable` is a `FabricPrimitive` subclass
-> too, but has no dedicated tag: it is hashed in this layout (Section 4.18).
+> `FabricEpochDay`, `FabricHash`, `FabricDurationNsec`, and `FabricDurationDay`
+> are **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
+> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.20 and 4.21
+> respectively). These are all `FabricPrimitive` subclasses — at this layer
+> they are hashed from their own stored values, not via their wire codecs.
+> `FabricKeyPair` and `FabricUnavailable` are `FabricPrimitive` subclasses too,
+> but have no dedicated tag: each is hashed in this layout (Sections 4.17 and
+> 4.18).
 
 ### 4.15 Holes (sparse array elements)
 
@@ -494,27 +494,14 @@ theirs.
 
 ### 4.17 `FabricKeyPair`
 
-```
-Bytes: TAG_KEY_PAIR  ALGORITHM_STRING  PUBLIC_KEY      PRIVATE_KEY
-       0x2C          <string, §4.4>    <bytes, §4.8>   <bytes, §4.8>
-```
-
-`FabricKeyPair` represents an asymmetric key pair. It is a `FabricPrimitive`
-subclass and has a dedicated type tag; it is hashed from its own stored values
-(below) and is **not** hashed via `TAG_INSTANCE`.
-
-- **Algorithm**: The algorithm name (e.g. `"Ed25519"`), encoded as a complete
-  tagged string value per Section 4.4.
-- **Public key**: The public key's bytes, encoded as a complete tagged
-  `FabricBytes` value per Section 4.8 — `TAG_BYTES`, a LEB128 length, then the
-  raw bytes.
-- **Private key**: The private key's bytes, in the same form.
-
-The three fields are fed in order — algorithm, then public key, then private
-key — with no enclosing container and no `TAG_END` terminator, since the field
-count is fixed. The two keys are self-delimiting through their own length
-prefixes, so a pair holding the two keys the other way round hashes
-differently.
+A `FabricKeyPair` holding key material is hashed exactly as a `FabricInstance`
+(Section 4.14) whose type tag is `KeyPair@1` and whose encoded state is its
+state record (`1-fabric-values.md` Section 1.4.11): a plain object holding
+`algorithm`, `privateKey`, and `publicKey`, hashed per Section 4.13, each key
+a `FabricBytes` per Section 4.8. It therefore hashes alike with an
+`UnknownValue` carrying the same tag and state. The two keys are fed under
+their own names, so a pair holding them the other way round hashes
+differently. Section 7.13 works an example.
 
 **Only a pair holding key material has a hash.** A `FabricKeyPair` holding
 `CryptoKey` handles has no hash at all, and computing one throws: its material
@@ -783,27 +770,38 @@ theirs.
 
 ### 7.13 `FabricKeyPair("Ed25519", [DE AD], [BE EF 01])`
 
-`FabricKeyPair` is a `FabricPrimitive` with the dedicated tag `TAG_KEY_PAIR`
-(`0x2C`); it is hashed by feeding its algorithm name and then its two keys —
-public first, then private — in that order (Section 4.17). The algorithm name
-is under the 64-byte threshold, so it uses the direct string form; each key is
-a complete tagged `FabricBytes` value.
+`FabricKeyPair` is hashed in the `FabricInstance` layout (Section 4.17):
+`TAG_INSTANCE`, the type tag `KeyPair@1`, then its state record as an object
+with sorted keys, each key of the pair a complete tagged `FabricBytes` value.
+All strings here are under the 64-byte threshold, so each uses the direct
+string form.
 
-- KeyPair tag: `2C`
-- Algorithm `"Ed25519"` (7 bytes UTF-8): `24 07 45 64 32 35 35 31 39`
-- Public key (2 bytes): `25 02 DE AD`
-- Private key (3 bytes): `25 03 BE EF 01`
+The state is `{ algorithm: "Ed25519", publicKey: <DE AD>, privateKey:
+<BE EF 01> }`:
 
-There is no enclosing object and no `TAG_END` terminator — the three fields are
-fed positionally. The two keys carry their own length prefixes, so a pair
-holding them the other way round produces a different byte stream.
+- Instance tag: `12`
+- Type tag `"KeyPair@1"` (9 bytes UTF-8): `24 09 4B 65 79 50 61 69 72 40 31`
+- Object tag: `11`
+- Key `"algorithm"` (9 bytes UTF-8): `24 09 61 6C 67 6F 72 69 74 68 6D`
+- Value `"Ed25519"` (7 bytes UTF-8): `24 07 45 64 32 35 35 31 39`
+- Key `"privateKey"` (10 bytes UTF-8): `24 0A 70 72 69 76 61 74 65 4B 65 79`
+- Value, the private key (3 bytes): `25 03 BE EF 01`
+- Key `"publicKey"` (9 bytes UTF-8): `24 09 70 75 62 6C 69 63 4B 65 79`
+- Value, the public key (2 bytes): `25 02 DE AD`
+- End: `00`
 
 Full byte stream:
 ```
-2C
+12
+24 09 4B 65 79 50 61 69 72 40 31
+11
+24 09 61 6C 67 6F 72 69 74 68 6D
 24 07 45 64 32 35 35 31 39
-25 02 DE AD
+24 0A 70 72 69 76 61 74 65 4B 65 79
 25 03 BE EF 01
+24 09 70 75 62 6C 69 63 4B 65 79
+25 02 DE AD
+00
 ```
 
 ### 7.14 `[1, , 3]` (sparse array)
@@ -890,10 +888,10 @@ hashed form.
 
 This rule applies to every string the hasher feeds, including standalone strings
 (Section 4.4), `symbol` keys (Section 4.6), object keys (Section 4.13),
-`FabricInstance` type tags (Section 4.14), `FabricHash` algorithm tags (Section
-4.11), and `FabricKeyPair` algorithm names (Section 4.17). The threshold is evaluated
-per-string independently: an object may mix short keys (direct form) and long
-keys (hashed form) in the same key-value sequence.
+`FabricInstance` type tags (Section 4.14), and `FabricHash` algorithm tags
+(Section 4.11). The threshold is evaluated per-string independently: an object
+may mix short keys (direct form) and long keys (hashed form) in the same
+key-value sequence.
 
 ### 7.20 `FabricUnavailable("error", "network", "boom")` and `FabricUnavailable("pending")`
 

@@ -259,6 +259,35 @@ describe("FabricKeyPair", () => {
         expect(() => pair.privateKeyBytes).toThrow(/holds handles/);
       });
     });
+
+    describe(".state", () => {
+      it("returns the algorithm name and the two keys' bytes", () => {
+        const pair = materialPair();
+        const state = pair.state;
+
+        expect(Object.keys(state).sort()).toEqual([
+          "algorithm",
+          "privateKey",
+          "publicKey",
+        ]);
+        expect(state.algorithm).toBe("ExampleAlgorithm");
+        expect(state.publicKey).toBe(pair.publicKeyBytes);
+        expect(state.privateKey).toBe(pair.privateKeyBytes);
+      });
+
+      it("returns the same frozen record on each call", () => {
+        const pair = materialPair();
+
+        expect(Object.isFrozen(pair.state)).toBe(true);
+        expect(pair.state).toBe(pair.state);
+      });
+
+      it("throws for an instance holding handles", async () => {
+        const pair = new FabricKeyPair(await generatePair());
+
+        expect(() => pair.state).toThrow(/holds handles/);
+      });
+    });
   });
 
   describe("static members", () => {
@@ -281,12 +310,10 @@ describe("FabricKeyPair", () => {
       });
 
       describe("encode()", () => {
-        it("encodes material to an `{ algorithm, publicKey, privateKey }` object", () => {
-          expect(codec.encode(materialPair(), env)).toEqual({
-            algorithm: "ExampleAlgorithm",
-            publicKey: "AQID",
-            privateKey: "-vv8_Q",
-          });
+        it("encodes material to its state, the keys left as `FabricBytes`", () => {
+          const pair = materialPair();
+
+          expect(codec.encode(pair, env)).toBe(pair.state);
         });
 
         it("returns a frozen record", () => {
@@ -303,12 +330,12 @@ describe("FabricKeyPair", () => {
       });
 
       describe("canDecode()", () => {
-        it("returns `true` for a record of three strings", () => {
+        it("returns `true` for an algorithm name and two `FabricBytes`", () => {
           expect(
             codec.canDecode({
               algorithm: "ExampleAlgorithm",
-              publicKey: "AQID",
-              privateKey: "AQID",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
             }),
           ).toBe(true);
         });
@@ -321,7 +348,7 @@ describe("FabricKeyPair", () => {
           expect(
             codec.canDecode({
               algorithm: "ExampleAlgorithm",
-              publicKey: "AQID",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
             }),
           )
             .toBe(false);
@@ -331,12 +358,12 @@ describe("FabricKeyPair", () => {
           // Read as an own property, so a `privateKey` reachable only through
           // the prototype chain does not stand in for one.
           const polluted = Object.prototype as { privateKey?: unknown };
-          polluted.privateKey = "AQID";
+          polluted.privateKey = new FabricBytes(PRIVATE_BYTES);
           try {
             expect(
               codec.canDecode({
                 algorithm: "ExampleAlgorithm",
-                publicKey: "AQID",
+                publicKey: new FabricBytes(PUBLIC_BYTES),
               }),
             ).toBe(false);
           } finally {
@@ -344,25 +371,35 @@ describe("FabricKeyPair", () => {
           }
         });
 
-        it("returns `false` for a record with a non-string field", () => {
+        it("returns `false` for a record with a non-string algorithm", () => {
+          expect(
+            codec.canDecode({
+              algorithm: 7,
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
+            }),
+          ).toBe(false);
+        });
+
+        it("returns `false` for a record whose keys are strings rather than `FabricBytes`", () => {
           expect(
             codec.canDecode({
               algorithm: "ExampleAlgorithm",
               publicKey: "AQID",
-              privateKey: 7,
+              privateKey: "-vv8_Q",
             }),
           ).toBe(false);
         });
       });
 
       describe("decode()", () => {
-        it("decodes malformed base64url to a `ProblematicValue`", () => {
+        it("decodes a state with an empty algorithm name to a `ProblematicValue`", () => {
           const decoded = codec.decode(
             expectedTag,
             {
-              algorithm: "ExampleAlgorithm",
-              publicKey: "not valid base64!!",
-              privateKey: "AQID",
+              algorithm: "",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
             },
             env,
           );
@@ -577,7 +614,9 @@ describe("FabricKeyPair", () => {
         expect(handles[name]).toBeDefined();
       }
 
-      for (const name of ["publicKeyBytes", "privateKeyBytes"] as const) {
+      for (
+        const name of ["publicKeyBytes", "privateKeyBytes", "state"] as const
+      ) {
         expect(() => handles[name]).toThrow(/holds handles/);
         expect(material[name]).toBeDefined();
       }

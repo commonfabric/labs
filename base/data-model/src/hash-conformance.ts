@@ -562,7 +562,10 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
   {
     name: "key pair",
     section: SECTION_KEY_PAIR,
-    spec: "2C  24 07 45 64 32 35 35 31 39  25 02 DE AD  25 03 BE EF 01",
+    spec: "12  24 09 4B 65 79 50 61 69 72 40 31  11  " +
+      "24 09 61 6C 67 6F 72 69 74 68 6D  24 07 45 64 32 35 35 31 39  " +
+      "24 0A 70 72 69 76 61 74 65 4B 65 79  25 03 BE EF 01  " +
+      "24 09 70 75 62 6C 69 63 4B 65 79  25 02 DE AD  00",
     make: () =>
       new FabricKeyPair(
         "Ed25519",
