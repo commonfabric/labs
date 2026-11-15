@@ -120,9 +120,12 @@ const styles = {
     textAlign: "center",
     wordBreak: "break-word",
   },
+  // The panels are light in either theme, so they set their own text color
+  // rather than inheriting the shell's (light text in dark mode).
   panel: {
     padding: "12px",
     background: "#f9fafb",
+    color: "#111827",
     borderRadius: "8px",
     border: "1px solid #e5e7eb",
     display: "flex",
@@ -146,6 +149,7 @@ const styles = {
     borderRadius: "6px",
     border: "1px solid #d1d5db",
     background: "#ffffff",
+    color: "#111827",
     fontWeight: "600",
     cursor: "pointer",
   },
@@ -231,6 +235,8 @@ const wordInputStyle = (owner: Owner) => ({
   textTransform: "uppercase",
   "--cf-input-color-background": "transparent",
   "--cf-input-color-border": "transparent",
+  // A filled input otherwise draws cf-input's green "valid" border.
+  "--cf-input-color-success": "transparent",
   "--cf-input-color-text": INK[owner],
 });
 
