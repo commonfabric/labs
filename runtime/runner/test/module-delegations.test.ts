@@ -177,7 +177,7 @@ describe("module-delegations", () => {
       expect(inheritedAlongStamps(stamped(triples), "d0").size).toBe(1999);
     });
 
-    it("never inherits less once an edge or a stamp is added", () => {
+    it("never inherits less once an edge or a stamp of either kind is added", () => {
       // Edges and stamps are only ever added, so what a module inherits only
       // grows: the invariant the record rests on.
       for (let seed = 1; seed <= 300; seed++) {
@@ -188,9 +188,20 @@ describe("module-delegations", () => {
           nodes.map((node) => [node, inheritedAlongStamps(edges, node)]),
         );
         for (
-          const [identity, predecessor, stamp] of randomTriples(seed + 7, 10, 5)
+          const [index, [identity, predecessor, stamp]] of randomTriples(
+            seed + 7,
+            10,
+            6,
+          ).entries()
         ) {
-          recordEdge(edges, identity, predecessor, stamp);
+          // Both kinds of edge, since both are only ever added.
+          recordEdge(
+            edges,
+            identity,
+            predecessor,
+            stamp,
+            index % 2 === 0 ? "at" : "terminal",
+          );
         }
         for (const [node, inherited] of before) {
           const after = inheritedAlongStamps(edges, node);

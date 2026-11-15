@@ -17726,8 +17726,8 @@ export function getPieceSourceRecord(
 ): PieceSourceRecord {
   let position = 0;
   try {
-    // One past the history's length, so that no real position is 0, the
-    // stamp a listed entry's terminal edge takes (`composeRecordedEdges()`).
+    // One past the history's length, so that a piece with no history yet
+    // still records at a position above 0.
     position = getPieceSourceRevisions(resultCell).length + 1;
   } catch {
     // An invalid history admits no stamp; the transition reports it.

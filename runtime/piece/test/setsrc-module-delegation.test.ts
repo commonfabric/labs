@@ -111,6 +111,32 @@ export const setName = handler<
   };
 }
 
+/**
+ * `splitWriterProgram(writer, entry)` under a new entry, `/app/main2.tsx`,
+ * that re-exports it, so that the old entry stays in the closure as a module
+ * of it, and `tag` picks the new entry's content.
+ */
+function wrappedWriterProgram(
+  writer: string,
+  entry: string,
+  tag: string,
+): RuntimeProgram {
+  return {
+    main: "/app/main2.tsx",
+    files: [
+      {
+        name: "/app/main2.tsx",
+        contents: `/// <cts-enable />
+import inner from "./main.tsx";
+export const entry2 = ${JSON.stringify(tag)};
+export default inner;
+`,
+      },
+      ...splitWriterProgram(writer, entry).files,
+    ],
+  };
+}
+
 function confidentialArgumentProgram(version: string): RuntimeProgram {
   return {
     main: "/main.tsx",
@@ -1500,6 +1526,52 @@ export default pattern<{seed?: ${seedType}}>(() => {
       } finally {
         await atV.dispose({ closeStorage: false });
         await atT.dispose({ closeStorage: false });
+      }
+    });
+
+    it("grants a module that stays in the closure nothing another piece added to its predecessor's record after it succeeded it", async () => {
+      // Piece `a` goes X to Y; piece `b` goes Q to X, so X's record lists Q;
+      // `a` reverts to X and goes on to Z, a new entry over Y's, so Y stays
+      // in the closure as a module. Z's new entry gets Q, through X, as
+      // `main`'s record of it lists; Y, which succeeded X before Q was added,
+      // does not.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const a = await pieces.create(splitWriterProgram("wX", "eX"), {
+          input: {},
+        });
+        const eX = getPatternIdentityRef(a.getCell())!.identity;
+        await a.setPattern(splitWriterProgram("wY", "eY"));
+        const eY = getPatternIdentityRef(a.getCell())!.identity;
+        const b = await pieces.create(splitWriterProgram("wQ", "eQ"), {
+          input: {},
+        });
+        const eQ = getPatternIdentityRef(b.getCell())!.identity;
+        await b.setPattern(splitWriterProgram("wX", "eX"));
+        await a.setPattern(splitWriterProgram("wX", "eX"));
+        await a.setPattern(wrappedWriterProgram("wY", "eY", "z"));
+        const eZ = getPatternIdentityRef(a.getCell())!.identity;
+        expect(await moduleAt(eZ, "/app/main.tsx")).toBe(eY);
+        const space = pieces.getSpace();
+
+        await freshPieces.get(a.id, true);
+
+        for (
+          const [module, predecessor, granted] of [
+            [eY, eX, true],
+            [eY, eQ, false],
+            [eZ, eX, true],
+            [eZ, eQ, true],
+            [eZ, eY, true],
+          ] as const
+        ) {
+          expect(
+            fresh.grantsModuleDelegation(space, module, predecessor),
+            `${module} <- ${predecessor}`,
+          ).toBe(granted);
+        }
+      } finally {
+        await fresh.dispose({ closeStorage: false });
       }
     });
 

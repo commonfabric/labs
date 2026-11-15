@@ -173,8 +173,7 @@ type SourceUpdatePreparation = {
  * past the piece's history length as read, which the next transition stamps
  * the edges it records with. The history only grows, and every transition, a
  * source update or not, appends to it, so `position` exceeds every stamp
- * already recorded, and it is never 0, the stamp of a listed entry's
- * terminal edge.
+ * already recorded.
  */
 export type PieceSourceRecord = {
   delegations: ModuleDelegationMap;
@@ -2641,7 +2640,9 @@ export class PatternManager {
    * the unstaged record decides (`setsrc-module-delegation.test.ts`, "loses a grant
    * whose staging failed when a runtime from before the record makes the
    * piece's next update", and "…moves the piece without a source update");
-   * and a write that a module of another piece
+   * a source update of another piece from the ungranted module, which takes
+   * in its unstaged record and so carries the loss into that piece's record
+   * and on to its successors; and a write that a module of another piece
    * makes, through a link, into a field the granting module protects, since
    * that runtime registers the grant only from the records. Each needs the
    * failed staging first, and each refuses, never grants.

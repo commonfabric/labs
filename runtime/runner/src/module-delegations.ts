@@ -302,9 +302,9 @@ export function copyStampedEdges(edges: StampedEdges): MutableStampedEdges {
  * succeeded the predecessor earlier sees the list, the edge being the
  * successor's; and no module that reached the successor at an earlier
  * position sees it either, its bound being below the stamp, as its own record
- * froze the successor's list at its own time. The list being closed, every
- * module a listed module inherited when it was written is itself listed, so
- * stopping loses nothing. Each module of
+ * froze the successor's list at its own time. That is what a fresh `main`
+ * runtime grants from the successor's record, which holds the list as written
+ * and is not followed further. Each module of
  * `candidate` is then closed
  * over the result along non-increasing stamps (`inheritedAlongStamps()`): a
  * module the update leaves unchanged, or one that returns, is closed over its
