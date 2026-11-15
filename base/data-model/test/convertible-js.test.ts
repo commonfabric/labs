@@ -77,6 +77,7 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
+  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
@@ -713,6 +714,7 @@ describe("convertible-js", () => {
     const MINTED: ReadonlyArray<[string, unknown, FabricClass]> = [
       ["a `Date`", new Date(1234), FabricEpochNsec],
       ["a `Uint8Array`", new Uint8Array([1, 2, 3]), FabricBytes],
+      ["a `RegExp`", /abc/gi, FabricRegExp],
       ["an `Error`", new Error("boom"), FabricError],
       [
         "a custom `Error` subclass instance",
@@ -934,6 +936,11 @@ describe("convertible-js", () => {
         expect(result).toBeInstanceOf(FabricEpochNsec);
       });
 
+      it("converts a `RegExp` to a `FabricRegExp`", () => {
+        const result = shallowFabricFromConvertibleJsValue(/abc/gi);
+        expect(result).toBeInstanceOf(FabricRegExp);
+      });
+
       it("converts a `Uint8Array` to a `FabricBytes`", () => {
         const bytes = new Uint8Array([1, 2, 3]);
         const result = shallowFabricFromConvertibleJsValue(bytes);
@@ -1018,12 +1025,6 @@ describe("convertible-js", () => {
       it("throws for a class instance", () => {
         class Plain {}
         expect(() => shallowFabricFromConvertibleJsValue(new Plain())).toThrow(
-          "not a recognized fabric type",
-        );
-      });
-
-      it("throws for a `RegExp`", () => {
-        expect(() => shallowFabricFromConvertibleJsValue(/abc/gi)).toThrow(
           "not a recognized fabric type",
         );
       });

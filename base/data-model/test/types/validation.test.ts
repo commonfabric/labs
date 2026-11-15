@@ -671,11 +671,14 @@ describe("validation", () => {
       );
     });
 
+    it("returns `true` for `RegExp`", () => {
+      expect(isValidFabricConvertibleJsObject(/abc/)).toBe(true);
+    });
+
     it("returns `false` for non-convertible types", () => {
       expect(isValidFabricConvertibleJsObject({})).toBe(false);
       expect(isValidFabricConvertibleJsObject([])).toBe(false);
       expect(isValidFabricConvertibleJsObject(new WeakMap())).toBe(false);
-      expect(isValidFabricConvertibleJsObject(/abc/)).toBe(false);
     });
 
     it("returns `false` for a plain object carrying `toJSON()`", () => {
@@ -712,6 +715,7 @@ describe("validation", () => {
       VALUE_TAGS.JsSet,
       VALUE_TAGS.JsDate,
       VALUE_TAGS.JsUint8Array,
+      VALUE_TAGS.JsRegExp,
     ];
 
     for (const [label, value] of LAYER_CORPUS) {
@@ -979,6 +983,7 @@ describe("validation", () => {
         const [label, value] of [
           ["a `Date`", new Date(0)],
           ["a `Uint8Array`", new Uint8Array([1])],
+          ["a `RegExp`", /x/],
           ["an `Error`", new Error("x")],
           ["a `Map`", new Map()],
           ["a `Set`", new Set()],

@@ -32,6 +32,7 @@ import {
   FabricBytes,
   FabricHash,
   FabricKeyPair,
+  FabricRegExp,
   type FabricUnavailable,
 } from "@/fabric-primitives";
 
@@ -63,7 +64,7 @@ const TAG_EPOCH_NSEC = 0x27;
 const TAG_EPOCH_DAY = 0x28;
 const TAG_HASH = 0x29;
 const TAG_SYMBOL = 0x2a;
-// 0x2b: retired; never to be reassigned.
+const TAG_REGEXP = 0x2b;
 const TAG_KEY_PAIR = 0x2c;
 const TAG_UNAVAILABLE = 0x2d;
 const TAG_DURATION_NSEC = 0x2e;
@@ -93,6 +94,7 @@ const TAG_EPOCH_NSEC_BYTES = new Uint8Array([TAG_EPOCH_NSEC]);
 const TAG_EPOCH_DAY_BYTES = new Uint8Array([TAG_EPOCH_DAY]);
 const TAG_HASH_BYTES = new Uint8Array([TAG_HASH]);
 const TAG_SYMBOL_BYTES = new Uint8Array([TAG_SYMBOL]);
+const TAG_REGEXP_BYTES = new Uint8Array([TAG_REGEXP]);
 const TAG_KEY_PAIR_BYTES = new Uint8Array([TAG_KEY_PAIR]);
 const TAG_UNAVAILABLE_BYTES = new Uint8Array([TAG_UNAVAILABLE]);
 const TAG_DURATION_NSEC_BYTES = new Uint8Array([TAG_DURATION_NSEC]);
@@ -458,6 +460,15 @@ export class ValueHasher {
         this.feedValue(fab.algorithm);
         this.feedValue(fab.publicKeyBytes);
         this.feedValue(fab.privateKeyBytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricRegExp: {
+        const fab = value as FabricRegExp;
+        hasher.update(TAG_REGEXP_BYTES);
+        this.feedValue(fab.source);
+        this.feedValue(fab.flags);
+        this.feedValue(fab.flavor);
         return;
       }
 

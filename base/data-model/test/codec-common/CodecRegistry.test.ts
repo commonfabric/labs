@@ -38,7 +38,7 @@ import {
   type WireFormat,
 } from "@/codec-common";
 import { SELF_REP } from "@/codec-common/CodecRegistry.ts";
-import { FabricEpochDay } from "@/fabric-primitives";
+import { FabricRegExp } from "@/fabric-primitives";
 
 /**
  * Test codec that matches a single pre-set value (by `===`) and records
@@ -142,7 +142,7 @@ class TestTerminalCodec extends BaseTerminalCodec<string> {
  */
 const UNCLASSIFIABLE_CODEC: FabricCodec<never, string> = {
   get uniqueHandledClass(): Constructor | undefined {
-    return FabricEpochDay;
+    return FabricRegExp;
   },
 
   get recognizedTypeTag(): string | undefined {
@@ -199,7 +199,7 @@ describe("CodecRegistry", () => {
     });
 
     it("finds a class's codec when one is passed to `extend()`", () => {
-      const codec = new TestTerminalCodec("ViaExtend@1", FabricEpochDay);
+      const codec = new TestTerminalCodec("ViaExtend@1", FabricRegExp);
       class Extended {
         static get [TEST_CODEC](): TerminalCodec<string> {
           return codec;
@@ -212,7 +212,7 @@ describe("CodecRegistry", () => {
     });
 
     it("registers codecs of either kind through `extend()`", () => {
-      const nonterminal = new TestCodec("Nonterm@1", FabricEpochDay);
+      const nonterminal = new TestCodec("Nonterm@1", FabricRegExp);
       const terminal = new TestTerminalCodec("Term@1");
       const registry = new CodecRegistry(TEST_FORMAT).extend(
         nonterminal,
@@ -228,7 +228,7 @@ describe("CodecRegistry", () => {
       // and the decoder reports it as one. A codec registered under it could
       // encode a value that this same system would then refuse to read back.
 
-      const codec = new TestCodec("", FabricEpochDay);
+      const codec = new TestCodec("", FabricRegExp);
       const registry = new CodecRegistry(TEST_FORMAT);
 
       expect(() => registry.register(codec)).toThrow(
@@ -241,7 +241,7 @@ describe("CodecRegistry", () => {
       // meta-tag rather than a type, so a decoder refuses it, and a codec
       // indexed under it would emit exactly what the decoder refuses.
 
-      const codec = new TestCodec("hole", FabricEpochDay);
+      const codec = new TestCodec("hole", FabricRegExp);
       const registry = new CodecRegistry(TEST_FORMAT);
 
       expect(() => registry.register(codec)).toThrow(
@@ -253,7 +253,7 @@ describe("CodecRegistry", () => {
       // Not a tag, and not an error: it marks a codec whose tag is read from
       // each value rather than fixed.
 
-      const codec = new TestCodec(undefined, FabricEpochDay);
+      const codec = new TestCodec(undefined, FabricRegExp);
       const registry = new CodecRegistry(TEST_FORMAT);
 
       expect(() => registry.register(codec)).not.toThrow();
@@ -309,7 +309,7 @@ describe("CodecRegistry", () => {
   describe("instance members", () => {
     describe("registerClass()", () => {
       it("registers the codec bound under the format's own symbol", () => {
-        const codec = new TestTerminalCodec("FromFormat@1", FabricEpochDay);
+        const codec = new TestTerminalCodec("FromFormat@1", FabricRegExp);
         class Formatted {
           static get [TEST_CODEC](): TerminalCodec<string> {
             return codec;
@@ -323,7 +323,7 @@ describe("CodecRegistry", () => {
       });
 
       it("registers a class's `[CODEC]` when it has one", () => {
-        const codec = new TestCodec("FromCodec@1", FabricEpochDay);
+        const codec = new TestCodec("FromCodec@1", FabricRegExp);
         class Neutral {
           static get [CODEC](): NonterminalCodec {
             return codec;
@@ -340,8 +340,8 @@ describe("CodecRegistry", () => {
         // The format-neutral codec is the one that serves every format, so it
         // wins wherever a class offers a choice.
 
-        const neutral = new TestCodec("Neutral@1", FabricEpochDay);
-        const formatted = new TestTerminalCodec("Formatted@1", FabricEpochDay);
+        const neutral = new TestCodec("Neutral@1", FabricRegExp);
+        const formatted = new TestTerminalCodec("Formatted@1", FabricRegExp);
         class Both {
           static get [CODEC](): NonterminalCodec {
             return neutral;
@@ -372,7 +372,7 @@ describe("CodecRegistry", () => {
         // serve; a registry reads only its own.
 
         const other: unique symbol = Symbol("other.codec");
-        const codec = new TestTerminalCodec("Other@1", FabricEpochDay);
+        const codec = new TestTerminalCodec("Other@1", FabricRegExp);
         class OtherFormatOnly {
           static get [other](): TerminalCodec<string> {
             return codec;
@@ -399,8 +399,8 @@ describe("CodecRegistry", () => {
             counter: undefined,
           },
           {
-            classSource: FabricEpochDay, // a `FabricPrimitive`
-            example: new FabricEpochDay(123n),
+            classSource: FabricRegExp, // a `FabricPrimitive`
+            example: new FabricRegExp(/123/),
             counter: { a: "boop" },
           },
           {
@@ -442,8 +442,8 @@ describe("CodecRegistry", () => {
 
       it("returns `undefined` for a `null`-prototype object", () => {
         const { registry } = buildRegistry(
-          FabricEpochDay,
-          new FabricEpochDay(1n),
+          FabricRegExp,
+          new FabricRegExp(/x/),
         );
         const nullProto = Object.create(null) as Record<string, FabricValue>;
         nullProto.a = 1;

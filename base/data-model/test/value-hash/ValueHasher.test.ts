@@ -31,6 +31,7 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
+  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
@@ -628,6 +629,47 @@ describe("ValueHasher", () => {
           const days = new FabricDurationDay(100n);
           const nsec = new FabricDurationNsec(100n);
           expect(hex(hashBytesOf(days))).not.toBe(hex(hashBytesOf(nsec)));
+        });
+      });
+      describe("FabricRegExp (dedicated TAG_REGEXP primitive tag)", () => {
+        it("matches a hand-computed byte stream for `FabricRegExp(/abc/gi)`", () => {
+          // TAG_REGEXP (0x2B), then source, flags, and flavor, each a direct
+          // string (TAG_STRING + length + UTF-8), fed positionally with no
+          // terminator. Mirrored in Section 7.12 of `2-hash-byte-format.md`,
+          // so the two have to be changed together.
+          const expected = sha256([
+            0x2b,
+            0x24,
+            0x03,
+            0x61,
+            0x62,
+            0x63,
+            0x24,
+            0x02,
+            0x67,
+            0x69,
+            0x24,
+            0x06,
+            0x65,
+            0x73,
+            0x32,
+            0x30,
+            0x32,
+            0x35,
+          ]);
+          expect(hashBytesOf(new FabricRegExp(/abc/gi))).toEqual(expected);
+        });
+
+        it("produces different hashes for different sources", () => {
+          const r1 = new FabricRegExp(/foo/);
+          const r2 = new FabricRegExp(/bar/);
+          expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
+        });
+
+        it("produces different hashes for different flags", () => {
+          const r1 = new FabricRegExp(/foo/g);
+          const r2 = new FabricRegExp(/foo/i);
+          expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
         });
       });
 

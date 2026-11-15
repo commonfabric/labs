@@ -298,8 +298,8 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   omit it everywhere), has no runtime existence and counts as present on any
   `FabricSpecialObject`. Property sub-schemas are
   still not walked against a primitive: presence is checked, shapes are not, so
-  `{ "type": "object", "properties": { "length": { "type": "string" } } }`
-  matches a `FabricBytes` even though its `length` is a number. Schemas
+  `{ "type": "object", "properties": { "source": { "type": "number" } } }`
+  matches a `FabricRegExp` even though its `source` is a string. Schemas
   generated from the real class types cannot express such a mismatch; only
   hand-written schemas can, and they get no shape enforcement on opaque
   leaves. Each name is the one its class's instances report as `.schemaType`,

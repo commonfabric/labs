@@ -29,6 +29,7 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
+  FabricRegExp,
   FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
 import { createBuilder } from "../src/builder/factory.ts";
@@ -54,6 +55,7 @@ const expectedBindings: Record<string, unknown> = {
   FabricHash,
   FabricLink,
   FabricBytes,
+  FabricRegExp,
   FabricKeyPair,
   FabricUnavailable,
   FabricError,
@@ -118,6 +120,32 @@ describe("commonfabric `FabricSpecialObject` classes", () => {
 
       expect(instance).toBeInstanceOf(FabricLink);
       expect(instance.payload).toEqual(payload);
+    });
+  });
+
+  describe("FabricRegExp", () => {
+    // Both declared constructor overloads, since the pattern-visible
+    // declaration offers both and only one of them is the obvious one.
+
+    it("constructs an instance from a JS `RegExp`", () => {
+      const BoundFabricRegExp = commonfabric
+        .FabricRegExp as typeof FabricRegExp;
+      const instance = new BoundFabricRegExp(/ab+c/gi);
+
+      expect(instance).toBeInstanceOf(FabricRegExp);
+      expect(instance.source).toBe("ab+c");
+      expect(instance.flags).toBe("gi");
+      expect(instance.value).toEqual(/ab+c/gi);
+    });
+
+    it("constructs an instance from an explicit flavor, source and flags", () => {
+      const BoundFabricRegExp = commonfabric
+        .FabricRegExp as typeof FabricRegExp;
+      const instance = new BoundFabricRegExp("es2025", "a.c", "s");
+
+      expect(instance.flavor).toBe("es2025");
+      expect(instance.source).toBe("a.c");
+      expect(instance.flags).toBe("s");
     });
   });
 

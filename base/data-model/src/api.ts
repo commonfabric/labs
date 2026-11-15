@@ -22,6 +22,9 @@
  * the one name its class reports, and the interface is a member of
  * `ConcreteFabricPrimitive`.
  *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: its
+ * interface narrows `.schemaType` to `object`, and is not a member.
+ *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
  * sandbox is served inlines this text rather than following a specifier out of
@@ -259,7 +262,9 @@ export interface FabricPrimitive {
    * a schema names to admit this value by its class. Every instance of a class
    * reports the same name, which need not be the name of the class.
    */
-  readonly schemaType: FabricPrimitiveSchemaType;
+  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
+  // `FabricPrimitiveSchemaType`.
+  readonly schemaType: FabricPrimitiveSchemaType | "object";
 }
 
 export interface FabricPrimitiveConstructor {
@@ -484,6 +489,37 @@ export interface FabricKeyPairConstructor {
 export declare const FabricKeyPair: FabricKeyPairConstructor;
 
 /**
+ * An immutable regular expression.
+ *
+ * The pattern is held as a flavor / source / flags triple rather than as a
+ * JS `RegExp`, so that flavors with no JS representation can still be
+ * carried. `value` reconstitutes a JS `RegExp` where one exists.
+ */
+export interface FabricRegExp extends FabricPrimitive {
+  /** @inheritDoc */
+  readonly schemaType: "object";
+
+  readonly source: string;
+  readonly flags: string;
+  readonly flavor: string;
+
+  /**
+   * A fresh JS `RegExp` equivalent to this value, returned anew on each
+   * call so the internal instance is never aliased out. Throws for a flavor
+   * with no JS `RegExp` representation.
+   */
+  readonly value: RegExp;
+}
+
+export interface FabricRegExpConstructor {
+  new (regex: RegExp): FabricRegExp;
+  new (flavor: string, source: string, flags: string): FabricRegExp;
+  prototype: FabricRegExp;
+}
+
+export declare const FabricRegExp: FabricRegExpConstructor;
+
+/**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
  * transient reasons say the data is on its way; `error` says producing it
  * failed, and is the one reason that carries a kind and a message.
@@ -576,6 +612,8 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  * Union of the concrete `FabricPrimitive` classes this module declares. Every
  * type that ranges over those classes is derived from this one.
  */
+// TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: it is the
+// one class declared here that this union leaves out.
 export type ConcreteFabricPrimitive =
   | FabricBytes
   | FabricDurationDay

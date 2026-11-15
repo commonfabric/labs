@@ -2918,7 +2918,7 @@ const THE_VALUE_ITSELF = "the value itself";
  *   misses, every number looking alike to `typeof`.
  * - `boolean`, `string` and `null` survive whole.
  * - Among objects: a `FabricSpecialObject` — every `FabricBytes`,
- *   `FabricLink`, `FabricHash` and the rest — keeps its state where a
+ *   `FabricLink`, `FabricRegExp` and the rest — keeps its state where a
  *   serializer cannot see it and writes as `{}`, so its content is gone and
  *   the check is on the base class the admission test itself branches on,
  *   which is what covers a subclass added later. An array is walked for holes

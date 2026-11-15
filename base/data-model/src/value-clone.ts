@@ -259,6 +259,7 @@ export function cloneHelper(
     case VALUE_TAGS.FabricDurationDay:
     case VALUE_TAGS.FabricBytes:
     case VALUE_TAGS.FabricKeyPair:
+    case VALUE_TAGS.FabricRegExp:
     case VALUE_TAGS.FabricHash:
     case VALUE_TAGS.FabricUnavailable:
       return value;

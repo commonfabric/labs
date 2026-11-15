@@ -9,6 +9,7 @@ import type {
   FabricHash,
   FabricKeyPair,
   FabricPrimitiveValueTag,
+  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import type {
@@ -182,6 +183,16 @@ export abstract class DefaultValueVisitor<
     value: FabricPlainObjectPlus<PlusType>,
   ): VisitResult<PlusType, ResultType> {
     return this.visitFabricContainerValue(value, VALUE_TAGS.Object);
+  }
+
+  /**
+   * Visits a value of type `FabricRegExp`. If not overridden, this calls
+   * `visitFabricPrimitiveValue()`.
+   */
+  visitFabricRegExp(
+    value: FabricRegExp,
+  ): VisitResult<PlusType, ResultType> {
+    return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricRegExp);
   }
 
   /**
@@ -463,6 +474,10 @@ export abstract class DefaultValueVisitor<
 
       case VALUE_TAGS.FabricKeyPair: {
         return this.visitFabricKeyPair(value as FabricKeyPair);
+      }
+
+      case VALUE_TAGS.FabricRegExp: {
+        return this.visitFabricRegExp(value as FabricRegExp);
       }
 
       case VALUE_TAGS.FabricUnavailable: {

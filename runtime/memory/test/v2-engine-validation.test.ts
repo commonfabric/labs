@@ -23,7 +23,7 @@ import {
 } from "../v2.ts";
 import {
   FabricBytes,
-  FabricEpochDay,
+  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
@@ -291,17 +291,17 @@ Deno.test("rejects a content-addressed document whose content hashes to neither 
 
 Deno.test("rejects a content-addressed set whose value is not a document", async () => {
   await withEngine((engine) => {
-    // A `FabricEpochDay` where the document belongs. Its `value` member is
-    // the `bigint` it holds, and the id is that `bigint`'s hash, so under this
+    // A `FabricRegExp` where the document belongs. Its `value` member is a JS
+    // `RegExp`, which hashes as the `FabricRegExp` itself does, so under this
     // id the content check alone would pass it.
-    const day = new FabricEpochDay(20_000n);
-    const id = `cid:${taggedHashStringOf(day.value)}`;
+    const pattern = new FabricRegExp(/a+/g);
+    const id = `cid:${taggedHashStringOf(pattern)}`;
     assertThrows(
       () =>
         applyCommit(engine, {
           sessionId: "s:a",
           commit: commit(1, {
-            operations: [{ op: "set", id, value: day }],
+            operations: [{ op: "set", id, value: pattern }],
           }),
         }),
       ProtocolError,

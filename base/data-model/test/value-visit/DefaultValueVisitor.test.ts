@@ -43,6 +43,7 @@ const TRACED_METHODS = [
   "visitFabricKeyPair",
   "visitFabricPlainObject",
   "visitFabricPrimitiveValue",
+  "visitFabricRegExp",
   "visitFabricUnavailable",
   "visitJsPrimitiveValue",
   "visitNull",

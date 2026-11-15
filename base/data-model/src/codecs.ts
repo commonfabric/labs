@@ -15,23 +15,49 @@
  * other half of why the rule above is absolute rather than stylistic.
  */
 
-import { isInstance, isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  type Constructor,
+  isInstance,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { FabricValue } from "@/interface.ts";
-import type { LiveEnvironment } from "./codec-interface/interface.ts";
+import {
+  CODEC,
+  type LiveEnvironment,
+  type WireFormat,
+} from "./codec-interface/interface.ts";
 import { NULL_LIVE_ENVIRONMENT } from "./codec-interface/NullLiveEnvironment.ts";
 import type { CodecRegistry } from "./codec-common/CodecRegistry.ts";
-import type { JsonCodecValue } from "./codec-json/interface.ts";
+import { JSON_FORMAT, type JsonCodecValue } from "./codec-json/interface.ts";
 import { JsonCodecEngine } from "./codec-json/JsonCodecEngine.ts";
 import { createBaseJsonRegistry } from "./codec-json/createBaseJsonRegistry.ts";
-import type {
-  RealmCodecValue,
-  RealmEncodedValue,
+import {
+  REALM_FORMAT,
+  type RealmCodecValue,
+  type RealmEncodedValue,
 } from "./codec-realm/interface.ts";
 import { RealmCodecEngine } from "./codec-realm/RealmCodecEngine.ts";
 import { createBaseRealmRegistry } from "./codec-realm/createBaseRealmRegistry.ts";
 import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
 import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
+
+/**
+ * Returns the classes of the two curated `codecClasses()` lists that supply a
+ * codec for `format`, under `[CODEC]` or under the format's own symbol. A class
+ * supplying neither is left out, where `CodecRegistry.registerClass()` would
+ * refuse it.
+ *
+ * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this, and have each
+ * caller register the two `codecClasses()` lists directly.
+ */
+export function codecClassesFor(
+  format: WireFormat<unknown>,
+): readonly Constructor[] {
+  return [...primitiveClasses(), ...instanceClasses()].filter((cls) =>
+    (CODEC in cls) || (format.codecSymbol in cls)
+  );
+}
 
 /**
  * Creates a registry pairing the JSON format with the fabric classes this
@@ -40,10 +66,11 @@ import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
  * accident.
  *
  * The two curated `codecClasses()` lists are the source of truth for which
- * classes participate, so the wire-format surface is decided where those are
- * written rather than here. The registry reads each class's codec for itself,
- * under `[CODEC]` where a class has one and under this format's own symbol
- * otherwise, so the same two lists serve any format.
+ * classes participate, less any that supply no codec for this format (see
+ * {@link codecClassesFor}), so the wire-format surface is decided where those
+ * are written rather than here. The registry reads each class's codec for
+ * itself, under `[CODEC]` where a class has one and under this format's own
+ * symbol otherwise, so the same two lists serve any format.
  *
  * `UnknownValue` and `ProblematicValue` are among them, but their codecs
  * recognize no single wire tag: the encode path resolves an instance's tag
@@ -51,10 +78,7 @@ import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
  * `UnknownValue` by the engine rather than tag-routed.
  */
 export function createDefaultJsonRegistry(): CodecRegistry<JsonCodecValue> {
-  return createBaseJsonRegistry().extend(
-    primitiveClasses(),
-    instanceClasses(),
-  );
+  return createBaseJsonRegistry().extend(codecClassesFor(JSON_FORMAT));
 }
 
 /**
@@ -144,10 +168,7 @@ export function fabricFromJsonValue(
  * format asking.
  */
 export function createDefaultRealmRegistry(): CodecRegistry<RealmCodecValue> {
-  return createBaseRealmRegistry().extend(
-    primitiveClasses(),
-    instanceClasses(),
-  );
+  return createBaseRealmRegistry().extend(codecClassesFor(REALM_FORMAT));
 }
 
 /**

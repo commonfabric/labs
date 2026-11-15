@@ -194,6 +194,7 @@
     "FabricMount",
     "FabricNativeWrapper",
     "FabricRef",
+    "FabricRegExp",
     "FabricValueLayer",
     "FabricValuePlus",
     "Fact",

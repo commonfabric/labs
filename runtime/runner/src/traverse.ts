@@ -6508,8 +6508,8 @@ function schemaTypeIncludesObject(type: JSONSchemaObj["type"]): boolean {
  *
  * Presence is the whole check: property sub-schemas are NOT enforced
  * against a primitive's accessor values, so
- * `{type: "object", properties: {length: {type: "string"}}}` matches a
- * `FabricBytes` even though its `length` is a number. Schemas generated
+ * `{type: "object", properties: {source: {type: "number"}}}` matches a
+ * `FabricRegExp` even though its `source` is a string. Schemas generated
  * from the real class types cannot express that mismatch, so enforcement
  * would only ever act on hand-written schemas; until that is worth the
  * accessor walk, shape errors of this kind pass validation.

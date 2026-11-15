@@ -53,6 +53,7 @@ import {
   FabricHash,
   FabricKeyPair,
   type FabricPrimitiveClassesByName,
+  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import {
@@ -186,6 +187,13 @@ export const FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
           new Uint8Array([5, 6]),
           new Uint8Array([7, 8]),
         ),
+    ] as const,
+  ),
+
+  FabricRegExp: Object.freeze(
+    [
+      () => new FabricRegExp(/a+/g),
+      () => new FabricRegExp("es2025", "^x$", ""),
     ] as const,
   ),
 

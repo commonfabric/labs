@@ -134,7 +134,8 @@ is declared:
   `UnknownValue` and `ProblematicValue` under `codec-common/`; the
   `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
   `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
-  `FabricKeyPair`, `FabricUnavailable`) under `fabric-primitives/`.
+  `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) under
+  `fabric-primitives/`.
 
 **Where a thing is declared is not where it is imported from**, and the modules
 named here divide on that point. The whole `FabricValue` vocabulary comes from
@@ -207,11 +208,11 @@ The files and directories, in more detail:
 - `fabric-primitives/`: Concrete `FabricPrimitive` subclasses, each in its own
   file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`,
   `FabricEpochDay.ts`, `FabricDurationNsec.ts`, `FabricDurationDay.ts`,
-  `FabricKeyPair.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag
-  vocabularies that range over those classes and imports nothing, the classes
-  being its importers; `impl.ts` holds the set of classes and what derives from
-  it, `codecClasses()` and the schema `type` names among them; and `index.ts` is
-  the barrel.
+  `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts`
+  holds the tag vocabularies that range over those classes and imports nothing,
+  the classes being its importers; `impl.ts` holds the set of classes and what
+  derives from it, `codecClasses()` and the schema `type` names among them; and
+  `index.ts` is the barrel.
 - `for-testing-only.ts`: What the package offers to tests alone, under an
   export-map entry of its own and in no barrel: makers of examples of every
   concrete `FabricPrimitive` and `FabricInstance` class, each table typed so

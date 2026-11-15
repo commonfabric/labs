@@ -43,11 +43,11 @@ type ProblematicValueState = {
  * `toReportableState()` for the state, `toReportableTag()` for the tag.
  *
  * A rendering is deliberately not a conversion. A `Uint8Array` could be turned
- * into a `FabricBytes`, and doing so would misreport the wire: a reader would
- * find a `FabricBytes` in `state` and conclude the payload carried one, when it
- * carried raw bytes this format does not accept. A string plainly reads as a
- * description of the value rather than the value, which is the honest answer
- * where fidelity is not available.
+ * into a `FabricBytes` and a `RegExp` into a `FabricRegExp`, and doing so would
+ * misreport the wire: a reader would find a `FabricBytes` in `state` and
+ * conclude the payload carried one, when it carried raw bytes this format does
+ * not accept. A string plainly reads as a description of the value rather than
+ * the value, which is the honest answer where fidelity is not available.
  *
  * **This class encodes under a tag of its own**, `Problematic@1`, and carries
  * the preserved tag as data beside the state and the error. `UnknownValue` does
