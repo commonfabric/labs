@@ -1958,10 +1958,17 @@ path has `*` at the position of each enclosing collection, as
 `$UI/children/*/props/onClick` for a row of a `map` spread into the
 root's children, and the link stored at each position is to the stream
 of the element key there (that document's §1.1, "The result paths of a
-binding in an element body", assumed there under its question 78). A
-child position whose value is the result of a pattern compiled into the
-plan holds the callee's tree in place, with no `$UI` level between the
-position and the tree's paths (its §1.1). That document assumes them
+binding in an element body", assumed there under its question 78).
+Where the callback writes the stream of a binding made outside it, the
+binding has one stream and every position of the collection holds a
+link to it. A child position whose value is the result of a pattern
+compiled into the plan holds the callee's tree in place, with no `$UI`
+level between the position and the tree's paths (its §1.1). An element
+of an assembled collection is no child position, also where the
+collection is spread into the children: where the callback returns the
+result of a pattern, the element is that result, with the callee's tree
+below `$UI`, as `$UI/children/*/$UI/props/onClick`. That document
+assumes them
 (its §8, question 53: how fine the entries are, and that the paths of a
 view node are part of the plan),
 and this document assumes the same paths with it. The alternative there

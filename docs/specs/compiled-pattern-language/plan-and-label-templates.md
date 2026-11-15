@@ -1094,10 +1094,13 @@ export interface Binding {
   /**
    * The paths of the result at which the instance stores a link to the
    * stream, in source order. Absent where the result holds none
-   * (section 8, question 75). For a binding in an element body, a path
-   * has `*` at the position of each enclosing collection, as the path of
-   * a per-element output has (section 1.4), and stands for one position
-   * per element (below; section 8, question 78).
+   * (section 8, question 75). A path that is listed is one the stream is
+   * stored at under some selection of each conditional above it. A path
+   * has `*` at the position of each collection it passes through, as the
+   * path of a per-element output has (section 1.4). Where an `element`
+   * step of `within` names the collection, the path stands for one
+   * position per element, and otherwise every position of the
+   * collection holds the one stream (below; section 8, question 78).
    */
   readonly result?: readonly Path[];
 }
@@ -1212,34 +1215,122 @@ positions. No behavior depends on the order. It is fixed so that the
 record, and with it the hash of the plan, is a function of the source and
 not of how a compiler holds the members of a record.
 
+**A binding with a `within` step is of one of two kinds.** A binding
+whose `within` has `site` steps alone is a binding of a pattern compiled
+in at a tag or a call. It is made once per instance, as a binding with no
+step is, and it has one stream. A binding whose `within` has an `element`
+step is a binding of an element body, or of a pattern compiled into one.
+It is made once per element key, and it has a stream per key. The rules
+for a `site` step and for an `element` step below are separate, and a
+binding of a pattern compiled into an element body follows both.
+
+**The result paths of a binding of a pattern compiled in.** The paths
+are those at which the enclosing pattern places what the callee returns,
+each followed by the path of the stream in what the callee returns. What
+a `site` step adds to the path is decided by the rule for a tag above.
+
+- Where the tag, the call, or a variable that holds the result of either
+  is written at a child position of a view node, the callee's tree is in
+  place at that position. The path is the position followed by the path
+  of the stream below the callee's `$UI`, and the `site` step adds no
+  segment. A stream at a path of the callee's result outside `$UI` is
+  not stored at such a position.
+- At every other place the value is the callee's result, with the
+  callee's tree below `$UI`. The path is the path of that place followed
+  by the path of the stream in the callee's result, so a stream of the
+  callee's tree has the segment `$UI` after the place. What the callback
+  of an element construct returns is such a place: the element of the
+  assembled collection is the callee's result, whether or not the
+  collection is then spread into the children of a view node.
+
+A result held in a variable has a path for each position the variable is
+written at, by the rule for that position.
+
 **The result paths of a binding in an element body.** A binding whose
 `within` has an `element` step is made once per element key, and each of
 its streams is stored at a position inside one element of the assembled
 collection. `Binding.result` names those positions by one path, formed as
 the path of a per-element output is (section 1.4): the path of what the
-callback returns, with `*` at the position of each enclosing collection.
-The path has one `*` for each `element` step of `within` whose collection
-the path passes through, in the order of the steps, outermost first. A
-`site` step adds no segment, because the callee's tree is in place at the
-call (above). For a row rendered as
+callback returns, with `*` at the position of each collection the path
+passes through, outermost first. For a row rendered as
 `<ul>{items.map((item) => <li onClick={select({ item })} />)}</ul>` at the
 root of the tree, the path is
 `["$UI", "children", "*", "props", "onClick"]`: the assembled array is a
 spread child, and the positions from a spread on are at `children/*`
-(section 3.4).
+(section 3.4). For a callback that returns a tag,
+`<ul>{items.map((item) => <Row item={item} />)}</ul>`, a stream at
+`props/onClick` of the root of the tree of `Row` has the path
+`["$UI", "children", "*", "$UI", "props", "onClick"]`, by the second rule
+for a `site` step above.
+
+**A path through a collection the binding is not within.** A `*` of a
+path stands for a collection, and an `element` step of the binding's
+`within` names that collection or does not.
+
+- **The callback writes a stream of an outer binding.** In
+  `items.map((item) => <li onClick={inc} />)`, where `inc` is a binding
+  made outside the callback, the binding has no `element` step and one
+  stream, and what the callback returns holds that stream for every
+  element. `Binding.result` lists the paths at which the instance stores
+  a link to the stream, and the path of what a callback returns has `*`
+  at the collection (section 1.4), so the path is listed, with `*`, and
+  every position of the collection holds a link to the one stream. The
+  same holds for an inner collection of a binding of an outer element
+  body: the `*` of the outer collection selects the stream, and every
+  position of the inner one holds it.
+- **The stream is reached through a member of the element.** A stream
+  can be inside a value that the elements of a collection hold, and not
+  in what the callback constructs. The case in the corpus is an array
+  literal of the results of patterns compiled in, rendered as
+  `renderedExamples.map((example) => <div>{example[UI]}</div>)`
+  (`patterns/examples/cfc-trusted-component-examples/`). The stream of a
+  binding of one of those patterns is stored inside the one element that
+  is that pattern's result, and at no other position of the collection.
+  No rule of the documents forms a path for it: a path with `*` would
+  stand for positions that do not hold the stream. *Assumed* (section 8,
+  question 84): such a binding has no `result` path through the
+  collection. It has the paths at which the result holds the pattern's
+  result without passing through the collection, and no `result` member
+  where there are none.
+
+**A position below a conditional.** A position that holds the stream
+under one branch of a `select` is a result path of the binding.
+`Binding.result` exists because the instance has to store a link to the
+stream at those positions and no other record says where (section 8,
+question 75), and that holds for a position the instance fills on some
+evaluations as for one it fills on all. The plan
+is the same for every evaluation, so the path is listed whichever branch
+a run selects. While another branch is selected the position holds what
+that branch has there, which can be nothing or the stream of another
+binding. A reader that finds no link to the stream at one path of
+`result` reads the next.
 
 *Assumed* (section 8, question 78), since no other rule of the documents
 says how such a path is resolved to one stream:
 
-- **From a path to a position.** A reader that wants the stream of one
-  element chooses, for each `*`, a position of the collection that the
-  matching `element` step names. The stored path has the index of that
-  position in the stored array in the place of the `*`: the position in
-  the collection, plus the number of children stored before the spread
-  where the array is the children of a view node. Where two collections
-  are spread into one array, the `*` of each binding's path stands for
-  the positions of its own collection alone, which the runtime knows from
-  how it assembled the array (section 3.6).
+- **From a path to a position.** This is the rule of the compiled path,
+  for the layout it stores (`execution-and-storage.md` §4.2). Where the
+  runtime stores the same positions today is in section 3.1 ("A binding
+  with a `within` step"), and the two differ. A reader that wants the
+  stream of one element chooses, for each `*` whose collection an
+  `element` step names, a position of that collection. For a `*` whose
+  collection no `element` step names, every position of the collection
+  holds the stream, and the reader chooses any. The stored path has the
+  index of that position in the stored array in the place of the `*`:
+  the position in the collection, plus the number of children stored
+  before the spread where the array is the children of a view node. The
+  path does not hold that number, because every position from the first
+  spread on is at `*` (section 3.4). The runtime knows it from how it
+  assembled the array, and a reader that has the plan alone does not.
+- **Two collections spread into one array of children.** The path is a
+  result path of each binding all the same: the instance stores the
+  links at those positions, and section 3.4 gives each the path
+  `children/*`. The `*` of each binding's path stands for the positions
+  of its own collection alone, which the runtime knows from how it
+  assembled the array (section 3.6). The path does not say which
+  positions those are, so a reader that has the plan alone cannot
+  resolve it. The same holds for a member written after a spread, whose
+  path is `children/*` as well and whose stream is at one position.
 - **From a position to a stream.** The link stored there is to the stream
   of the binding for the element key at that position: the stream named
   by the binding's `name` and `within`, with that key at the `element`
@@ -1250,9 +1341,11 @@ says how such a path is resolved to one stream:
   hold the key, resolved to the join over them (section 2.6).
 - **Where the result holds none.** A binding of an element body whose
   stream is at no path of what the callback returns, or whose collection
-  is not a kept part of the result, has no `result` path. An event
-  reaches such a stream only through a link stored elsewhere, such as a
-  child's argument.
+  is not a kept part of the result, has no `result` path. So has a
+  binding whose stream the result holds only inside a member of the
+  elements of a collection (above). An event reaches such a stream only
+  through a link stored elsewhere, such as a child's argument or the
+  state of another binding whose handler sends to it.
 
 This document defines the footprint *record* (`Body.reads`, `computed`,
 `handles`, `writes`, `envelopes`, `outputs`, `calls`, `widenings`). The
@@ -2245,6 +2338,25 @@ follows the handle. The definition above gives that rule, read as follows.
   `followRef` at the position is a label declared for the reference
   itself, and it is consumed with them. The label says which cell the
   handle names, and under what label that was decided.
+- **The position of a slot of root `element`.** A handler of an element
+  body that is given the handle of its element has that state path bound
+  to a slot of root `element`. In a run of today the position that holds
+  the reference is not the element's position in the source collection.
+  Each run of an element callback is an instance with an argument
+  document of its own, which holds the element at `element` as a link to
+  the position in the source (`createRunInput` in
+  `runtime/runner/src/builtins/map.ts`). The handler is given the handle
+  from there, so the slot is read at `element` of the argument document
+  of the element's instance, and the link to the source position and
+  each link below it are links crossed from there. The `link` entry at
+  `element` holds what the reference to the source position declares,
+  which in the case observed below is the clause the cell of the source
+  list declares. The compiled path has no argument document per element.
+  *Assumed* (section 8, question 85): the slot's label in the compiled
+  path holds what those positions hold in a run of today, with the
+  label that the declaration of the source collection gives the element
+  in the place of that `link` entry, under the rules for a `link` entry
+  below.
 - **The `link` entry of a handle that is only passed on is not in it.**
   The runtime stores, at the position of a link, an entry of origin `link`
   that holds what the reference declares (`prepareBoundaryCommitSteps` in
@@ -2252,8 +2364,33 @@ follows the handle. The definition above gives that rule, read as follows.
   the cell's own, so that entry repeats the label the cell's type
   declares. By the ruling it is the label of the cell and stays out of
   the slot's label where the body neither reads nor writes through the
-  handle. *Assumed* (section 8, question 81): the same holds where the
-  `link` entry holds more than the target's declaration.
+  handle and does not resolve it. *Assumed* (section 8, question 81):
+  the same holds where the `link` entry holds more than the target's
+  declaration.
+- **The `link` entry of a handle the body resolves is in it.** A slot
+  with `resolved` is read at the link: resolution starts from the
+  reference at the position and follows it, and the runtime's
+  transaction makes a `followRef` read of that position, which consumes
+  the `link` entry with the other entries of class `followRef` there.
+  The definition above therefore puts the entry in the slot's label,
+  although the body reads no content through the handle. The case the
+  stage 3 comparison observed is the handler `askToRetire` of
+  `patterns/system/profile-picker/profile-picker.tsx`, which calls
+  `spaceOf(profile)` on the handle of its element and sets a state cell
+  (`spaceOf` in `runtime/runner/src/builder/space-access.ts` calls
+  `resolveAsCell()`). Its transaction reads `element` of the argument
+  document of the element's instance, the position in the list that the
+  link there names, and the link below that position. What it stores
+  for the write has the clause the input list declares, which the `link`
+  entry at `element` holds, and with that entry in the slot the template
+  is **equal**. The same holds for every call that section 3.16 records
+  with a resolved `identity` slot, and for a call it records as
+  journaled, whose slot is not `resolved` and is named by a `dynamic`
+  node of kind `link` or `space`: the run follows the reference there
+  too. `equalLinks` has slots that are not resolved, follows nothing,
+  and makes no read at either position (section 3.16), so a handle that
+  a body only compares with it is treated as one that is only passed on
+  (section 8, question 81).
 - **Nothing of the target document is in it.** The slot is not resolved to
   the cell the reference leads to, and no entry of that cell's document
   joins it: not the `declared` entries that the cell's own type gives it,
@@ -2263,13 +2400,13 @@ follows the handle. The definition above gives that rule, read as follows.
   or at the position (`readConsumesEntry` in
   `runtime/runner/src/cfc/observation-classes.ts`).
 - **A `resolved` slot** joins the `followRef` entries of each further link
-  that resolution follows (section 2.5), and nothing of the cell where
-  resolution ends.
+  that resolution follows (section 2.5), the `link` entry at each of
+  them included, and nothing of the cell where resolution ends.
 - **What brings the target's label in** is a read through the handle: a
   slot whose path continues past the reference, or a `dynamic` node
   (sections 2.5 and 3.10). A body that holds a handle in order to pass it
-  on, to compare it, or to write through it has the `identity` slot in its
-  template and no such read.
+  on, to compare it, to resolve it, or to write through it has the
+  `identity` slot in its template and no such read.
 
 This is **equal** to today in the case the stage 3 comparison observed, in
 `patterns/showcase/battleship/multiplayer/repro-minimal.tsx`. The handler
@@ -2999,12 +3136,13 @@ label of section 2.2, the label of the link, because the code that holds
 the handle did not read through it, and by ruling the label of the
 handle's cell is not in what that code writes. Where the handle is only
 passed on, that label leaves out the `link` entry of the position, which
-repeats the label the cell's type declares (section 2.2). For an entry
+repeats the label the cell's type declares, and where the slot is
+`resolved` it holds that entry (section 2.2). For an entry
 that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Eleven more rules fix what a row of the comparison is.
+expected. Twelve more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -3091,8 +3229,9 @@ expected. Eleven more rules fix what a row of the comparison is.
   root `binding` resolves through the binding the event was sent to, and
   each `identity` slot among the inputs of the body's `derive` has the
   label of the link and is not dereferenced (section 2.2). For a handle
-  that the body neither reads nor writes through, that label leaves out
-  the `link` entry of the position. Only an edge
+  that the body neither reads nor writes through, and whose slot is not
+  `resolved`, that label leaves out the `link` entry of the position.
+  Only an edge
   with a `reference` member, whose written value is the reference, is
   joined with what a value read through the stored link consumes, so that
   both sides read one target. The integrity of such a row is that of the
@@ -3125,6 +3264,57 @@ expected. Eleven more rules fix what a row of the comparison is.
   (section 8, question 80). A member of an event that is declared as a
   handle is given a handle or left out, because a plain value there reads
   as a handle that cannot be written.
+- **A binding with a `within` step.** The rule for a write edge holds for
+  a binding of a pattern compiled in (`site` steps alone) and for a
+  binding of an element body (an `element` step) as for a binding with
+  no step. Three things differ, and each is where the run of today
+  stores something, not what a template holds.
+  - **Where the stream is.** A scenario sends an event to the stream
+    that a link at a path of `Binding.result` leads to. The rule of
+    section 1.1, "From a path to a position", is for the layout of the
+    compiled path. The runtime does not store the children of a view
+    node that way. The JSX factory flattens the children it is given
+    when the pattern is built (`children.flat()` in `h` in
+    `runtime/runner/src/builder/h.ts`). The result of a `map` over a
+    cell is no array at that time, so it is one child, at the position
+    the expression is written at, and the stored child holds the
+    assembled array. The stream of element `i` is then at
+    `children/k/i` followed by the rest of the path, where `k` is the
+    position of that child, and not at `children/*` counted from the
+    spread. A `map` over a constant array of the module is evaluated
+    when the pattern is built, its result is an array, and its elements
+    are stored in place among the children, at the positions section
+    1.1 gives. The path does not hold the number of children written
+    before them (section 1.1), so a harness that has the plan and the
+    stored tree alone sends such a binding no event. At a child
+    position that holds the result of a pattern, the runtime's path has
+    `$UI` after the position, by the rule above for such a position. A
+    path below a `select` holds no stream while another branch is
+    selected, and the harness then reads the binding's next path.
+  - **Where a state cell or an output of another instance is.** In the
+    plan a pattern compiled in has no result cell, and what it declares
+    is named by the enclosing instance and the steps of `within`
+    (section 1.3). In the runtime each pattern at a tag or a call, and
+    each run of an element callback, is an instance with a result
+    document of its own. The `internal` metadata of that document lists
+    the cells the instance's body made, and their identifiers derive
+    from the result cell and the name of the declaration
+    (`runtime/runner/src/derived-internal-cell-ids.ts`); its `argument`
+    metadata links to the instance's argument document. The plan has no
+    record that says where the runtime stores the result of a `site`
+    step. The comparison finds the instance among the documents that
+    the stored links lead through from the result to the row's
+    position: the path of the stream for a write edge, and the path of
+    the output for an output.
+  - **Where a slot of root `element` is read.** An `identity` slot that
+    is the handle of the handler's element is read at `element` of the
+    argument document of the element's instance, and not at the
+    element's position in the source collection (section 2.2).
+
+  A write edge whose target is the stream of another binding, as a
+  handler that sends to a stream of its state has, stores nothing at
+  the target and is no row. The write of the handler that the stream
+  reaches belongs to that handler's own event.
 - **An existence entry that an earlier write left.** The runtime's side of
   a row can hold clauses of a write that is not the one the row is about.
   The runtime mints a `derived` entry of class `shape` once, with the join
@@ -3159,7 +3349,7 @@ nothing else, because a stored entry does not say which schema declared it.
 | `declared`, in a document that a slot of the template is bound in, or that a reference the output passes on leads to: the argument document of the instance, a cell the argument links to, the document of a state cell, and a cell that a site of a body created | Compared. These are the labels of the places a template reads, which its slots resolve to |
 | `derived` | Compared. The stamp of a run's join |
 | `structure` | Compared. The stamp of a run, as below |
-| `link` | Compared where a slot reads through the link or a write edge targets the handle. Left out of the label of an `identity` slot whose handle the body only passes on: the entry holds what the reference declares, which for a link to a cell repeats the label of the cell's type, and by ruling that label is not in the slot (section 2.2). The stamp of the run that wrote the link is an entry of origin `structure`, and it is compared |
+| `link` | Compared where a slot reads through the link, a write edge targets the handle, or the slot is `resolved`. Left out of the label of an `identity` slot whose handle the body only passes on: the entry holds what the reference declares, which for a link to a cell repeats the label of the cell's type, and by ruling that label is not in the slot (section 2.2). The stamp of the run that wrote the link is an entry of origin `structure`, and it is compared |
 | `minted`, `external-ingest` | Compared. Atoms the runtime or a builtin wrote for a value |
 | `label-metadata` | Not compared. No read of content consumes it; a `labelMetadata` slot resolves to it (section 2.4) |
 | No origin | Compared. An entry written before entries had origins |
@@ -3586,9 +3776,13 @@ the array literal of the children. So the template of the path
 `props/title` of an element is the template of the expression written
 at the attribute `title`, and the template of `children/0` is that of
 the first child. A child whose type is an array, the assembled result of
-a `map` among them, is a spread child: the factory flattens it into the
+a `map` among them, is a spread child: its elements are stored among the
 children, and the rule for a spread in an array literal gives the
-positions from it on. A fragment is the same record with the fragment's
+positions from it on. That is the layout of the compiled path. The
+factory flattens the arrays it is given when the pattern is built, and
+the result of a `map` over a cell is no array then, so the runtime
+stores it as one child (section 3.1, "A binding with a `within` step").
+A fragment is the same record with the fragment's
 name. The rendered tree under `$UI` is such a construction, and its paths
 are these.
 
@@ -4262,7 +4456,11 @@ ruling: the link itself carries the label of at least the event.
   holds neither the `link` entry there nor the stamp of the run that wrote
   the link. The slot leaves the `link` entry out and holds the stamp
   (section 2.2). **Equal** for a handler where that stamp has no clause,
-  and looser by the stamp where it has one (section 8, question 81).
+  and looser by the stamp where it has one (section 8, question 81). A
+  handle the body resolves, as the operand of `spaceOf` is, is not only
+  passed on: the transaction reads the position, its join holds the
+  `link` entry and the stamp, and the `resolved` slot holds both
+  (section 2.2). **Equal.**
   **Tighter** for a re-evaluated body and for expression code, where the
   runtime stamps the join of the whole run.
 
@@ -4468,7 +4666,12 @@ the label of the link the body was given the handle through, without the
 `link` entry of that position, which repeats what the cell's type declares
 (section 2.2), and it adds nothing of the cell's label to what the body
 writes. No `followRef` observation is made for such a handle today, at the
-position or at the cell. The link a
+position or at the cell. A handle the body resolves without reading
+content through it, by `resolveAsCell()` or by a call that section 3.16
+records with a resolved slot, is followed and not only passed on: a
+`followRef` observation is made today at the position and at each link
+below it, and the `resolved` slot holds the `link` entry of each (section
+2.2). Nothing of the cell where resolution ends joins it. The link a
 body stores when it passes the handle on is labeled all the same, with the
 slot and, in a handler, with the body's template, which holds the label of
 the event (section 3.9, "A handle a body passes on").
@@ -4497,10 +4700,11 @@ handle names (section 2.2). So a write through one handle does not carry
 the label of the cell behind another handle of the body, and a write
 through a handle does not carry the label of what the written cell held.
 The slot of a handle the body writes through keeps the `link` entry of
-its position, which the slot of a handle that is only passed on leaves
-out (section 2.2). That entry repeats what the type of the written cell
-declares, and the runtime's transaction reads the position of a handle it
-writes through, so the template is equal to today there.
+its position, and so does a `resolved` slot. The slot of a handle that is
+only passed on leaves it out (section 2.2). That entry repeats what the
+type of the written cell declares, and the runtime's transaction reads
+the position of a handle it writes through or resolves, so the template
+is equal to today there.
 Where the written value is itself a reference the body passes on, the
 edge's `reference` member records it, and the link written carries the
 label section 3.9 gives it ("A handle a body passes on"): in a handler the
@@ -5931,9 +6135,12 @@ each operand for `value` (`footprint-analysis.md` §3.4).
 and follows no link, so it has no journaled part: in a body as in the
 reactive tier, its record is the plain `identity` slot of each operand.
 `equals` resolves both operands first, which is why its slots are
-resolved. Today `equalLinks` compares the links without a transaction
-(`equalLinks` in `runtime/runner/src/cell.ts`), and the label it joins is
-that of the reads that handed the body the two references.
+resolved. A resolved slot holds the `link` entry of the position it is
+read at, and the slot of an operand of `equalLinks` that the body does
+nothing else with leaves it out (section 2.2). Today `equalLinks`
+compares the links without a transaction (`equalLinks` in
+`runtime/runner/src/cell.ts`), and the label it joins is that of the
+reads that handed the body the two references.
 
 **`resultOwnerOf`.** The call resolves the operand to the document a write
 to it lands in, reads that document's `result` back-link, and with a field
@@ -9487,10 +9694,28 @@ this document made.
     which positions are whose. The alternative gives the path a segment
     that names the collection, in the place of `*`.
     `execution-and-storage.md` and `scheduler-and-serving-loop.md` have to
-    agree, since a client resolves the same path to send an event. Not
-    verified: that the prototype can form the address of the state cells
-    of an element body, which a write row of a per-element handler needs
-    as well.
+    agree, since a client resolves the same path to send an event. Three
+    more things the path does not hold, each stated in section 1.1. It
+    does not hold the number of children written before a spread. A `*`
+    whose collection no `element` step of the binding names stands for
+    every position where the callback writes the stream of an outer
+    binding, and for one position where the stream belongs to a member
+    written after a spread, and the path does not tell the two apart. A
+    position below a `select` is a result path and holds the stream
+    under one branch only. Section 1.1 takes each of the three as a
+    result path, because the instance stores the link there. A reader
+    that has the plan and no knowledge of how the array was assembled
+    cannot resolve the first two, as it cannot resolve two collections
+    spread into one array. The prototype lists no path for a binding of
+    two collections spread into one array. The alternative that names
+    the collection in the path resolves these too, if a member written
+    after a spread is given its position among the members written. Not
+    verified: that the prototype can form the
+    address of a state cell that a pattern compiled into an element body
+    declares, which a write edge of a handler bound in such a pattern
+    needs. A state cell of a pattern compiled in under `site` steps
+    alone is found in the run of today as section 3.1 describes ("A
+    binding with a `within` step").
 79. **How much of a handler's template is on a link it writes** (for the
     project owner). By ruling, a handle that a body passes on adds nothing
     of the label of its cell, and the link itself carries the label of at
@@ -9530,7 +9755,12 @@ this document made.
     the stamp of the run that wrote the link is. The runtime's transaction
     reads nothing at such a position, so with the stamp the template can
     be looser than today, and without it the label of which cell was
-    chosen would be lost.
+    chosen would be lost. A handle the body resolves is not only passed
+    on, and its slot holds the entry (section 2.2), which the comparison
+    found equal to today for `spaceOf`. *Assumed* as well: a handle that
+    a body only compares with `equalLinks` is treated as one that is only
+    passed on, because that call follows nothing and reads neither
+    position. The comparison met no such row.
 82. **The event type of an inline handler that declares none** (for the
     project owner). Section 1.5 takes the event type of an inline event
     handler from the annotation of its parameter, or from the type the
@@ -9565,3 +9795,45 @@ this document made.
     label is then tighter than today, and that a path existed under a
     label is no longer recorded at the path, only in the membership
     label of the container.
+84. **A result path of a stream that the elements of a collection hold.**
+    Section 1.1 gives a path with `*` to a stream that a callback writes
+    for every element, and to a stream of a binding of the element body.
+    A third case has no rule: the stream is inside a value that one
+    element of the collection holds, and the tree reaches it through a
+    member of the element, as
+    `renderedExamples.map((example) => <div>{example[UI]}</div>)` over an
+    array literal of the results of patterns compiled in
+    (`patterns/examples/cfc-trusted-component-examples/`). The binding
+    has `site` steps alone, the path passes through a collection the
+    binding is not within, and the stream is at one position of it.
+    *Assumed:* such a binding has no `result` path through the
+    collection, so where the array is at no other path of the result the
+    binding has no `result` member, and no reader finds its stream from
+    the plan. The alternatives: where the source is an array literal and
+    the construct keeps positions, as `map` does, the path has the
+    position of the member in the place of `*`; or the path has `*` and
+    a reader tries each position. `execution-and-storage.md` and
+    `scheduler-and-serving-loop.md` have to agree, as for question 78.
+    The corpus has 208 such bindings, all in that directory.
+85. **The label of the handle of an element in the compiled path** (for
+    the project owner and the specification change). Section 2.2 defines
+    the label of an `identity` slot by what a journaled read consumes
+    today at the position that holds the reference. For a slot of root
+    `element` that position is, in a run of today, `element` of the
+    argument document of the element's instance, which holds a link to
+    the position in the source collection, with a `link` entry that
+    holds what that reference declares. The compiled path has no
+    argument document per element, and an element slot is bound to the
+    position in the source. *Assumed:* the label of the slot in the
+    compiled path is the `followRef` entries at the position in the
+    source and at each link resolution follows, joined, where the slot
+    is `resolved` or the body reads or writes through the handle, with
+    the label that the declaration of the source collection gives the
+    element, which is what the `link` entry at `element` holds today.
+    That is equal to today for `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx`. Without that
+    part the template of that handler's write has no clause of the input
+    list and mints no atom, which is tighter in confidentiality and
+    looser in integrity. Not stated by any document: which record of the
+    plan holds that declared label, since question 55 assumes no
+    `Slot.declared` on an `identity` slot.
