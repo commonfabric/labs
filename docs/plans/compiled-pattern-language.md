@@ -73,7 +73,7 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `b739a377dc`, under
+  computes exists at prototype commit `190943404e`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
   no browser. It generates a scenario per module, with a distinct
@@ -92,26 +92,36 @@ next.
   be refused or for a trusted event the harness does not send, and
   the rest by the handler on the generated values or by gaps in the
   crate, the harness, and the generator. Of 234 write edges compared,
-  219 are equal, 15 tighter, and none looser. The 9 tighter that were
-  examined each have a label an earlier event of the scenario left on
-  the shape of the target; the 6 of element bodies are not examined.
-  169 write edges are of a write the run did not make; a sample of 40
+  219 are equal, 15 tighter, and none looser. Of the 15 tighter, 10
+  have a label an earlier event of the scenario left on the shape of
+  the target. In 4, of `examples/map-demo/map-demo.tsx`, a handler of
+  an element body writes a cell it captured, and the runtime's join
+  holds the clauses of the list the element is of, which the handler's
+  transaction reads with the element's arguments; the template has
+  none of them (question 132). In 1 the runtime stored a link with no
+  atom where the template mints the body's.
+  151 write edges are of a write the run did not make; a sample of 40
   found a write of an equal value, a branch not taken on the generated
   values, or a random choice, and no error. The comparison is partial
   in these ways. 208 bindings of patterns reached through elements of
   an array of pattern results have no result path, and 37 write edges
   target the stream of another binding and 52 hold a slot over all
   elements; neither kind is compared. Outputs below the elements of a
-  collection are not compared. Three rows of
-  `examples/map-demo/map-demo.tsx` were looser in confidentiality
-  when the events ran in another order, and a read after one of them
-  threw in `traverseWithSelector`; neither is examined. 53 outputs
+  collection are not compared. With the events sent in the order of
+  the plan, no row is looser either, and one row differs because the
+  event reaches another element. In that order `map-demo.tsx` stores
+  two links that form a cycle, and a read of the cell that holds one
+  of them throws in `traverseWithSelector`
+  (`runtime/runner/src/traverse.ts`) where `resolveLink` reports the
+  cycle; that is a finding against the runtime, reduced to a test that
+  is not committed. 53 outputs
   have no stored value; for 7 of them the template has a clause where
   the runtime stores no label, because an action threw or a
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous.
+  lists the places where it found the documents ambiguous; notes 252
+  to 260 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -903,6 +913,16 @@ as an assumption.
     position in the source, with the label the source collection's
     declaration gives the element. No record of the plan holds that
     declared label.
+132. **What a handler of an element body takes from the list** (PL has
+    no question yet; prototype note 257). Today such a handler's
+    transaction reads the element's arguments, whose stored label
+    holds every clause the `map` run read, so `zoom.set(14)` in an
+    element of `stops` is written under the clauses of `stops`. The
+    template has the event, the handles the body holds, and what the
+    body reads, and so none of those clauses where the body reads
+    nothing of the element. *Assumed:* the template stands, tighter
+    than today: that the element exists is in the label of the
+    position its stream is stored at, not in what its handler writes.
 
 ## Open, and not needing the owner
 
