@@ -618,7 +618,9 @@ the lease:
 - The worker posts a heartbeat every 10 s from a timer of its own.
 - The main thread checks each worker every 10 s. After six consecutive
   intervals with no message of any kind from a worker, which is at least 60 s
-  of silence, it terminates that worker and releases its leases, then places
+  of silence (`watchdogLimitMs` sets another limit, in whole intervals;
+  `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS` in the toolshed), it terminates
+  that worker and releases its leases, then places
   its spaces again under a fresh component through the path a worker failure
   takes (§1, Workers). The other workers are not affected.
 - The check counts its own firings rather than reading a clock, so nothing but
