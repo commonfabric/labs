@@ -253,6 +253,17 @@ const miniCellStyle = (owner: Owner) => ({
   overflow: "hidden",
 });
 
+/**
+ * The model both LLM calls use, named rather than left to a default because
+ * neither default returns structured output today (runtime problem, not this
+ * pattern's): the "default" alias resolves to gateway:claude-sonnet-5, which
+ * the gateway's provider refuses structured outputs for, and generateObject's
+ * own default (gateway:gpt-5.4-mini) rejects any schema that does not set
+ * `additionalProperties: false` on every object, which toolshed does not add.
+ * Go back to the default once one of them answers generateObject.
+ */
+const STRUCTURED_MODEL = "anthropic:claude-haiku-4-5";
+
 // ---------------------------------------------------------------------------
 // Pattern
 // ---------------------------------------------------------------------------
@@ -458,7 +469,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
 
     const readings = photos.map((photo, photoIndex) => {
       const reading = generateObject<PhotoReading>({
-        model: "default",
+        model: STRUCTURED_MODEL,
         system: PHOTO_SYSTEM_PROMPT,
         prompt: computed(() => {
           const image = photo?.data || photo?.url;
@@ -500,7 +511,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
     // --- LLM: clue ideas ------------------------------------------------
 
     const clueIdeas = generateObject<ClueSuggestions>({
-      model: "default",
+      model: STRUCTURED_MODEL,
       system: CLUE_SYSTEM_PROMPT,
       prompt: computed(() => withRound(clueRequest.get(), clueRound.get())),
     });
