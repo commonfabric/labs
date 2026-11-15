@@ -204,6 +204,7 @@ import {
 } from "./pattern-binding.ts";
 import {
   closeDelegationsFor,
+  type EdgeStamps,
   type StampedEdges,
 } from "./module-delegations.ts";
 import {
@@ -2213,7 +2214,7 @@ export interface PieceSourceDelegations {
    */
   edges: {
     identity: string;
-    predecessors: { identity: string; at: number[] }[];
+    predecessors: { identity: string; at: number[]; terminal: number[] }[];
   }[];
 }
 
@@ -17740,16 +17741,17 @@ export function getPieceSourceRecord(
  * The stamped edges of {@link PieceSourceDelegations}, or `undefined` where
  * they are malformed: anything but an array of entries each naming a module
  * once, with at least one predecessor, each named once, none the module, and
- * each with at least one stamp, every stamp a whole number below `position`
- * (no edge can have been recorded at one past the history's length or
- * later) and the stamps strictly ascending.
+ * each with an `at` and a `terminal` list holding at least one stamp between
+ * them, every stamp a whole number below `position` (no edge can have been
+ * recorded at one past the history's length or later) and each list
+ * strictly ascending.
  */
 function pieceSourceStampedEdges(
   value: unknown,
   position: number,
 ): StampedEdges | undefined {
   if (!Array.isArray(value)) return undefined;
-  const edges = new Map<string, Map<string, readonly number[]>>();
+  const edges = new Map<string, Map<string, EdgeStamps>>();
   for (const entry of value as unknown[]) {
     if (
       !isObjectOrArray(entry) || Array.isArray(entry) ||
@@ -17759,7 +17761,7 @@ function pieceSourceStampedEdges(
     ) {
       return undefined;
     }
-    const predecessors = new Map<string, readonly number[]>();
+    const predecessors = new Map<string, EdgeStamps>();
     for (const predecessor of entry.predecessors as unknown[]) {
       if (
         !isObjectOrArray(predecessor) || Array.isArray(predecessor) ||
@@ -17767,20 +17769,34 @@ function pieceSourceStampedEdges(
         predecessor.identity.length === 0 ||
         predecessor.identity === entry.identity ||
         predecessors.has(predecessor.identity) ||
-        !Array.isArray(predecessor.at) || predecessor.at.length === 0 ||
-        !(predecessor.at as unknown[]).every((stamp, index, stamps) =>
-          Number.isInteger(stamp) && (stamp as number) >= 0 &&
-          (stamp as number) < position &&
-          (index === 0 || (stamp as number) > (stamps[index - 1] as number))
-        )
+        !validStamps(predecessor.at, position) ||
+        !validStamps(predecessor.terminal, position) ||
+        (predecessor.at as unknown[]).length +
+              (predecessor.terminal as unknown[]).length === 0
       ) {
         return undefined;
       }
-      predecessors.set(predecessor.identity, [...predecessor.at as number[]]);
+      predecessors.set(predecessor.identity, {
+        at: [...predecessor.at as number[]],
+        terminal: [...predecessor.terminal as number[]],
+      });
     }
     edges.set(entry.identity, predecessors);
   }
   return edges;
+}
+
+/**
+ * Whether `value` is a list of stamps: whole numbers from 0 to below
+ * `position`, strictly ascending.
+ */
+function validStamps(value: unknown, position: number): boolean {
+  return Array.isArray(value) &&
+    (value as unknown[]).every((stamp, index, stamps) =>
+      Number.isInteger(stamp) && (stamp as number) >= 0 &&
+      (stamp as number) < position &&
+      (index === 0 || (stamp as number) > (stamps[index - 1] as number))
+    );
 }
 
 /** `edges` as {@link PieceSourceDelegations.edges}, canonically ordered. */
@@ -17791,9 +17807,10 @@ function pieceSourceStampedEdgeList(
     .map(([identity, predecessors]) => ({
       identity,
       predecessors: [...predecessors].sort(([a], [b]) => utf8Compare(a, b))
-        .map(([predecessor, stamps]) => ({
+        .map(([predecessor, { at, terminal }]) => ({
           identity: predecessor,
-          at: [...stamps].sort((a, b) => a - b),
+          at: [...at].sort((a, b) => a - b),
+          terminal: [...terminal].sort((a, b) => a - b),
         })),
     }));
 }

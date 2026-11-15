@@ -4,17 +4,24 @@ import {
   closeDelegationsFor,
   composeRecordedEdges,
   inheritedAlongStamps,
+  type MutableStampedEdges,
   recordEdge,
   type StampedEdges,
 } from "../src/module-delegations.ts";
 
-/** Stamped edges from `[successor, predecessor, stamp]` triples. */
+/**
+ * Stamped edges from `[successor, predecessor, stamp]` triples, each a
+ * derivation unless a fourth element says "terminal".
+ */
 const stamped = (
-  triples: readonly (readonly [string, string, number])[],
-): Map<string, Map<string, number[]>> => {
-  const edges = new Map<string, Map<string, number[]>>();
-  for (const [identity, predecessor, stamp] of triples) {
-    recordEdge(edges, identity, predecessor, stamp);
+  triples: readonly (
+    | readonly [string, string, number]
+    | readonly [string, string, number, "at" | "terminal"]
+  )[],
+): MutableStampedEdges => {
+  const edges: MutableStampedEdges = new Map();
+  for (const [identity, predecessor, stamp, kind] of triples) {
+    recordEdge(edges, identity, predecessor, stamp, kind ?? "at");
   }
   return edges;
 };
@@ -26,8 +33,11 @@ const canonical = (edges: StampedEdges): string =>
   JSON.stringify(
     [...edges].map(([identity, predecessors]) => [
       identity,
-      [...predecessors].map(([predecessor, stamps]) => [predecessor, stamps])
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      [...predecessors].map(([predecessor, { at, terminal }]) => [
+        predecessor,
+        at,
+        terminal,
+      ]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     ]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
 
@@ -117,6 +127,34 @@ describe("module-delegations", () => {
       });
     }
 
+    it("reaches a terminal edge's predecessor at or above its stamp, and goes no further", () => {
+      // n took "listed" in at 4, and "listed" was granted "later" at 2.
+      const edges = stamped([
+        ["n", "listed", 4, "terminal"],
+        ["listed", "later", 2],
+        ["after", "n", 5],
+        ["before", "n", 3],
+      ]);
+
+      expect(sorted(inheritedAlongStamps(edges, "n"))).toEqual(["listed"]);
+      expect(sorted(inheritedAlongStamps(edges, "after"))).toEqual([
+        "listed",
+        "n",
+      ]);
+      expect(sorted(inheritedAlongStamps(edges, "before"))).toEqual(["n"]);
+    });
+
+    it("continues through an edge recorded both ways only along its derivations", () => {
+      const edges = stamped([
+        ["n", "m", 2],
+        ["n", "m", 5, "terminal"],
+        ["m", "older", 1],
+        ["m", "newer", 4],
+      ]);
+
+      expect(sorted(inheritedAlongStamps(edges, "n"))).toEqual(["m", "older"]);
+    });
+
     it("ends on a cycle, itself excepted", () => {
       const edges = stamped([["a", "b", 3], ["b", "c", 2], ["c", "a", 1]]);
 
@@ -171,10 +209,14 @@ describe("module-delegations", () => {
         expect(canonical(stamped(shuffled(triples, seed))), `seed ${seed}`)
           .toBe(canonical(stamped(triples)));
       }
-      expect([
-        ...stamped([["a", "b", 4], ["a", "b", 1], ["a", "b", 4]])
-          .get("a")!.get("b")!,
-      ]).toEqual([1, 4]);
+      expect(
+        stamped([["a", "b", 4], ["a", "b", 1], ["a", "b", 4], [
+          "a",
+          "b",
+          2,
+          "terminal",
+        ]]).get("a")!.get("b")!,
+      ).toEqual({ at: [1, 4], terminal: [2] });
     });
   });
 
@@ -189,7 +231,7 @@ describe("module-delegations", () => {
   });
 
   describe("composeRecordedEdges()", () => {
-    it("stamps each successor's edge with the position, and makes a listed entry the edges do not reach the successor's edge at 0", () => {
+    it("stamps each successor's edge with the position, and makes a listed entry the edges do not reach the successor's terminal edge at the position", () => {
       const recorded = {
         edges: stamped([["p", "older", 2], ["older", "oldest", 1]]),
         position: 4,
@@ -208,7 +250,7 @@ describe("module-delegations", () => {
         ["p", "older", 2],
         ["older", "oldest", 1],
         ["n", "p", 4],
-        ["n", "foreign", 0],
+        ["n", "foreign", 4, "terminal"],
       ])));
       expect(sorted(delegations.get("n")!)).toEqual([
         "foreign",

@@ -566,7 +566,7 @@ describe("module identity delegation", () => {
             delegations: new Map(),
             edges: new Map([[
               previous.identity,
-              new Map([["recorded-since", [0]]]),
+              new Map([["recorded-since", { at: [0], terminal: [] }]]),
             ]]),
             position: 0,
           },
@@ -632,9 +632,9 @@ describe("module identity delegation", () => {
     const recorded = {
       delegations: new Map([[previous.identity, new Set(["older", "oldest"])]]),
       edges: new Map([
-        [previous.identity, new Map([["older", [2]]])],
-        ["older", new Map([["oldest", [1]]])],
-        ["stray", new Map([["elsewhere", [1]]])],
+        [previous.identity, new Map([["older", { at: [2], terminal: [] }]])],
+        ["older", new Map([["oldest", { at: [1], terminal: [] }]])],
+        ["stray", new Map([["elsewhere", { at: [1], terminal: [] }]])],
       ]),
       position: 3,
     };
@@ -662,17 +662,20 @@ describe("module identity delegation", () => {
           new Set([previous.identity, "older", "oldest", "foreign"]),
         ]]),
       );
-      // The successor's edge takes the record's position; an entry of the
+      // The successor's edge takes the record's position, and an entry of the
       // record's list the edges did not already reach becomes the
-      // successor's edge at 0, which the walk stops at.
+      // successor's terminal edge there, which the walk stops at.
       expect(next.edges).toStrictEqual(
         new Map([
-          [previous.identity, new Map([["older", [2]]])],
-          ["older", new Map([["oldest", [1]]])],
-          ["stray", new Map([["elsewhere", [1]]])],
+          [previous.identity, new Map([["older", { at: [2], terminal: [] }]])],
+          ["older", new Map([["oldest", { at: [1], terminal: [] }]])],
+          ["stray", new Map([["elsewhere", { at: [1], terminal: [] }]])],
           [
             candidate.identity,
-            new Map([[previous.identity, [3]], ["foreign", [0]]]),
+            new Map([
+              [previous.identity, { at: [3], terminal: [] }],
+              ["foreign", { at: [], terminal: [3] }],
+            ]),
           ],
         ]),
       );

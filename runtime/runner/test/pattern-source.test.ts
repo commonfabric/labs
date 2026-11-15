@@ -361,7 +361,7 @@ describe("patternSource meta accessors", () => {
     it("reads every field for a recording transition at one past the history's length, and no field where any is malformed", async () => {
       const edges = [{
         identity: "recorded-module",
-        predecessors: [{ identity: "older", at: [0, 2] }],
+        predecessors: [{ identity: "older", at: [0, 2], terminal: [3] }],
       }];
       const cell = await pieceWith("recorded-record", {
         identity: pattern,
@@ -370,38 +370,43 @@ describe("patternSource meta accessors", () => {
       }, 3);
       expect(getPieceSourceRecord(cell, pattern)).toStrictEqual({
         delegations: new Map([["recorded-module", new Set(["earlier"])]]),
-        edges: new Map([["recorded-module", new Map([["older", [0, 2]]])]]),
+        edges: new Map([[
+          "recorded-module",
+          new Map([["older", { at: [0, 2], terminal: [3] }]]),
+        ]]),
         position: 4,
       });
 
-      const edge = (predecessor: unknown) => [{
+      // One predecessor, with `fields` over a well-formed default.
+      const edge = (fields: Record<string, unknown>) => [{
         identity: "m",
-        predecessors: [predecessor],
+        predecessors: [{ identity: "a", at: [1], terminal: [], ...fields }],
       }];
       for (
         const [name, malformed] of [
           ["absent", undefined],
           ["unstamped", [{ identity: "m", predecessors: ["a"] }]],
-          ["self-edge", edge({ identity: "m", at: [1] })],
-          ["duplicate-module", [
-            ...edge({ identity: "a", at: [1] }),
-            ...edge({ identity: "b", at: [1] }),
-          ]],
+          ["self-edge", edge({ identity: "m" })],
+          ["duplicate-module", [...edge({}), ...edge({ identity: "b" })]],
           ["duplicate-predecessor", [{
             identity: "m",
-            predecessors: [{ identity: "a", at: [1] }, {
-              identity: "a",
-              at: [2],
-            }],
+            predecessors: [
+              { identity: "a", at: [1], terminal: [] },
+              { identity: "a", at: [2], terminal: [] },
+            ],
           }]],
           ["empty-predecessors", [{ identity: "m", predecessors: [] }]],
-          ["no-stamp", edge({ identity: "a", at: [] })],
-          ["non-numeric-stamp", edge({ identity: "a", at: ["1"] })],
-          ["fractional-stamp", edge({ identity: "a", at: [1.5] })],
-          ["negative-stamp", edge({ identity: "a", at: [-1] })],
-          ["decreasing-stamps", edge({ identity: "a", at: [2, 1] })],
-          ["repeated-stamp", edge({ identity: "a", at: [1, 1] })],
-          ["stamp-past-the-history", edge({ identity: "a", at: [4] })],
+          ["no-stamp", edge({ at: [], terminal: [] })],
+          ["no-terminal-list", edge({ terminal: undefined })],
+          ["non-numeric-stamp", edge({ at: ["1"] })],
+          ["non-numeric-terminal-stamp", edge({ terminal: ["1"] })],
+          ["fractional-stamp", edge({ at: [1.5] })],
+          ["negative-stamp", edge({ at: [-1] })],
+          ["decreasing-stamps", edge({ at: [2, 1] })],
+          ["decreasing-terminal-stamps", edge({ terminal: [3, 2] })],
+          ["repeated-stamp", edge({ at: [1, 1] })],
+          ["stamp-past-the-history", edge({ at: [4] })],
+          ["terminal-stamp-past-the-history", edge({ terminal: [4] })],
         ] as const
       ) {
         const bad = await pieceWith(`recorded-record-${name}`, {
@@ -476,6 +481,7 @@ describe("patternSource meta accessors", () => {
         predecessors: predecessors.map((predecessor) => ({
           identity: predecessor,
           at: [0],
+          terminal: [],
         })),
       }));
 

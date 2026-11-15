@@ -202,8 +202,12 @@ function stampedEdgesKey(edges: StampedEdges): string {
     [...edges].map(([identity, predecessors]) =>
       [
         identity,
-        [...predecessors].map(([predecessor, stamps]) =>
-          [predecessor, [...stamps].sort((a, b) => a - b)] as const
+        [...predecessors].map(([predecessor, { at, terminal }]) =>
+          [
+            predecessor,
+            [...at].sort((a, b) => a - b),
+            [...terminal].sort((a, b) => a - b),
+          ] as const
         ).sort(([a], [b]) => utf8Compare(a, b)),
       ] as const
     ).sort(([a], [b]) => utf8Compare(a, b)),

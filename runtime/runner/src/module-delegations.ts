@@ -108,12 +108,24 @@ export function inheritedThrough(
 }
 
 /**
- * A piece's recorded delegation edges: successor → predecessor → the history
- * positions at which a transition recorded that edge, ascending, each once.
+ * The history positions at which a piece's transitions recorded one edge,
+ * each list ascending, each position once: `at`, where a transition derived
+ * the successor from the predecessor, which a walk continues through; and
+ * `terminal`, where the successor took the predecessor in from another
+ * record's closed list, which a walk reaches and does not continue past.
  */
-export type StampedEdges = ReadonlyMap<
+export type EdgeStamps = {
+  readonly at: readonly number[];
+  readonly terminal: readonly number[];
+};
+
+/** A piece's recorded delegation edges: successor → predecessor → stamps. */
+export type StampedEdges = ReadonlyMap<string, ReadonlyMap<string, EdgeStamps>>;
+
+/** {@link StampedEdges} under construction. */
+export type MutableStampedEdges = Map<
   string,
-  ReadonlyMap<string, readonly number[]>
+  Map<string, { at: number[]; terminal: number[] }>
 >;
 
 /** The largest of `stamps`, ascending, that is at most `bound`, if any. */
@@ -141,7 +153,8 @@ function latestStampWithin(
  * stamps do not increase: an edge recorded at position p is followed only
  * by edges recorded at or before p, so a module takes what its predecessor
  * held when the module was granted it, and nothing the predecessor was granted
- * later. Itself excepted.
+ * later. A terminal recording at or below the bound reaches its predecessor
+ * and goes no further. Itself excepted.
  *
  * The walk takes the identity it can reach with the largest bound first, so
  * it expands each identity once, with the largest bound any path gives it:
@@ -193,11 +206,18 @@ export function inheritedAlongStamps(
     const [node, bound] = pop();
     if (expanded.has(node)) continue;
     expanded.add(node);
-    for (const [predecessor, stamps] of edges.get(node) ?? []) {
-      const stamp = latestStampWithin(stamps, bound);
-      if (stamp === undefined) continue;
+    for (const [predecessor, { at, terminal }] of edges.get(node) ?? []) {
+      const stamp = latestStampWithin(at, bound);
+      if (
+        stamp === undefined &&
+        latestStampWithin(terminal, bound) === undefined
+      ) {
+        continue;
+      }
       if (predecessor !== identity) reached.add(predecessor);
-      if (!expanded.has(predecessor)) push([predecessor, stamp]);
+      if (stamp !== undefined && !expanded.has(predecessor)) {
+        push([predecessor, stamp]);
+      }
     }
   }
   return reached;
@@ -221,16 +241,19 @@ export function closeDelegationsFor(
 
 /**
  * Records in `edges` that `identity` was granted `predecessor` at `stamp`,
- * keeping every stamp the edge was recorded at, in order. Edges and stamps are
- * only ever added, here and everywhere a piece's record is written, so what
- * any identity inherits over the edges only grows: that invariant is what the
- * record's correctness rests on.
+ * as a derivation (`kind` "at", which a walk continues through) or as an
+ * entry of a closed list taken in ("terminal", which it does not), keeping
+ * every stamp of each kind, in order. Edges and stamps are only ever added,
+ * here and everywhere a piece's record is written, so what any identity
+ * inherits over the edges only grows: that invariant is what the record's
+ * correctness rests on.
  */
 export function recordEdge(
-  edges: Map<string, Map<string, number[]>>,
+  edges: MutableStampedEdges,
   identity: string,
   predecessor: string,
   stamp: number,
+  kind: "at" | "terminal" = "at",
 ): void {
   if (!admissiblePredecessor(identity, predecessor)) return;
   let out = edges.get(identity);
@@ -238,12 +261,28 @@ export function recordEdge(
     out = new Map();
     edges.set(identity, out);
   }
-  const stamps = out.get(predecessor) ?? [];
-  if (!stamps.includes(stamp)) {
-    stamps.push(stamp);
-    stamps.sort((a, b) => a - b);
+  const stamps = out.get(predecessor) ?? { at: [], terminal: [] };
+  const list = stamps[kind];
+  if (!list.includes(stamp)) {
+    list.push(stamp);
+    list.sort((a, b) => a - b);
   }
   out.set(predecessor, stamps);
+}
+
+/** A copy of `edges` to record into. */
+export function copyStampedEdges(edges: StampedEdges): MutableStampedEdges {
+  return new Map(
+    [...edges].map(([identity, predecessors]) => [
+      identity,
+      new Map(
+        [...predecessors].map(([predecessor, { at, terminal }]) => [
+          predecessor,
+          { at: [...at], terminal: [...terminal] },
+        ]),
+      ),
+    ]),
+  );
 }
 
 /**
@@ -253,17 +292,19 @@ export function recordEdge(
  * position the update records at.
  *
  * Each successor gets an edge to the module it succeeds, stamped with
- * `recorded.position`, which is never 0. The predecessor record's attested
- * list is closed as of when it was written, and is what the successor takes
- * in now: so an entry of it the edges do not already reach from the
- * successor becomes the SUCCESSOR's edge at stamp 0. The walk follows that
- * edge from the successor and from anything that later reaches the
- * successor, and stops at the entry, since nothing is recorded at or below
- * 0: the successor gets the list as written, and nothing a listed module was
- * granted afterward, and no module that succeeded the predecessor earlier
- * sees the list at all, as its own record froze the list at its own time.
- * The list being closed, every module a listed module inherited when it was
- * written is itself listed, so stopping loses nothing. Each module of
+ * `recorded.position`. The predecessor record's attested list is closed as of
+ * when it was written, and is what the successor takes in now: so an entry of
+ * it the edges do not already reach from the successor becomes the
+ * SUCCESSOR's terminal edge at `recorded.position`. A walk reaches the entry
+ * from the successor, and from whatever reaches the successor at that
+ * position or later, and goes no further: the successor gets the list as
+ * written, and nothing a listed module was granted afterward; no module that
+ * succeeded the predecessor earlier sees the list, the edge being the
+ * successor's; and no module that reached the successor at an earlier
+ * position sees it either, its bound being below the stamp, as its own record
+ * froze the successor's list at its own time. The list being closed, every
+ * module a listed module inherited when it was written is itself listed, so
+ * stopping loses nothing. Each module of
  * `candidate` is then closed
  * over the result along non-increasing stamps (`inheritedAlongStamps()`): a
  * module the update leaves unchanged, or one that returns, is closed over its
@@ -281,17 +322,7 @@ export function composeRecordedEdges(
   delegations: Map<string, ReadonlySet<string>>;
   edges: StampedEdges;
 } {
-  const edges = new Map<string, Map<string, number[]>>(
-    [...recorded.edges].map(([identity, predecessors]) => [
-      identity,
-      new Map(
-        [...predecessors].map(([predecessor, stamps]) => [
-          predecessor,
-          [...stamps],
-        ]),
-      ),
-    ]),
-  );
+  const edges = copyStampedEdges(recorded.edges);
   for (const [identity, { predecessor }] of matched) {
     recordEdge(edges, identity, predecessor, recorded.position);
   }
@@ -306,7 +337,7 @@ export function composeRecordedEdges(
   for (const [identity, { inherited }] of matched) {
     for (const entry of inherited) {
       if (!reached.get(identity)!.has(entry)) {
-        recordEdge(edges, identity, entry, 0);
+        recordEdge(edges, identity, entry, recorded.position, "terminal");
       }
     }
   }

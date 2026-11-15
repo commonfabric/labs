@@ -484,7 +484,11 @@ export default pattern<{seed?: ${seedType}}>(() => {
           delegations: { identity: string; predecessors: string[] }[];
           edges: {
             identity: string;
-            predecessors: { identity: string; at: number[] }[];
+            predecessors: {
+              identity: string;
+              at: number[];
+              terminal: number[];
+            }[];
           }[];
         }
         | undefined;
@@ -1437,6 +1441,65 @@ export default pattern<{seed?: ${seedType}}>(() => {
         expect(fresh.grantsModuleDelegation(space, wS, wM)).toBe(false);
       } finally {
         await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("grants a module nothing of a list its predecessor took in after the module succeeded it, nor stages it on later records", async () => {
+      // Piece `b` goes L to P, so P's record lists L. Piece `a` goes S to T,
+      // moves to P by a transition that is no source update, goes P to S,
+      // where S takes P's list in, and moves back to T the same way. T
+      // succeeded S before S took the list in: `main`'s record of T is [S].
+      // Then `a` goes T to W, and a piece `c` goes W to V: neither W's
+      // record nor V's lists L, as on `main`.
+      const { on: atT, controller: atTPieces } = await freshController();
+      const { on: atV, controller: atVPieces } = await freshController();
+      try {
+        const b = await pieces.create(splitWriterProgram("wL", "eL"), {
+          input: {},
+        });
+        const eL = getPatternIdentityRef(b.getCell())!.identity;
+        const wL = await moduleAt(eL, "/app/writer.ts");
+        await b.setPattern(splitWriterProgram("wP", "eP"));
+        const a = await pieces.create(splitWriterProgram("wS", "eS"), {
+          input: {},
+        });
+        const eS = getPatternIdentityRef(a.getCell())!.identity;
+        const wS = await moduleAt(eS, "/app/writer.ts");
+        await a.setPattern(splitWriterProgram("wT", "eT"));
+        const eT = getPatternIdentityRef(a.getCell())!.identity;
+        const wT = await moduleAt(eT, "/app/writer.ts");
+        await moveWithoutUpdate(a, splitWriterProgram("wP", "eP"));
+        await a.setPattern(splitWriterProgram("wS", "eS"));
+        await moveWithoutUpdate(a, splitWriterProgram("wT", "eT"));
+        expect(getPatternIdentityRef(a.getCell())?.identity).toBe(eT);
+        const space = pieces.getSpace();
+
+        await atTPieces.get(a.id, true);
+
+        expect(atT.grantsModuleDelegation(space, wT, wS)).toBe(true);
+        expect(atT.grantsModuleDelegation(space, wT, wL)).toBe(false);
+        expect(atT.grantsModuleDelegation(space, eT, eL)).toBe(false);
+
+        await a.setPattern(splitWriterProgram("wW", "eW"));
+        const eW = getPatternIdentityRef(a.getCell())!.identity;
+        const wW = await moduleAt(eW, "/app/writer.ts");
+        expect((await closureRecords(eW))[`source ${wW}`].sort()).toEqual(
+          [wS, wT].sort(),
+        );
+        const c = await pieces.create(splitWriterProgram("wW", "eW"), {
+          input: {},
+        });
+        await c.setPattern(splitWriterProgram("wV", "eV"));
+        const eV = getPatternIdentityRef(c.getCell())!.identity;
+        const wV = await moduleAt(eV, "/app/writer.ts");
+
+        await atVPieces.get(c.id, true);
+
+        expect(atV.grantsModuleDelegation(space, wV, wW)).toBe(true);
+        expect(atV.grantsModuleDelegation(space, wV, wL)).toBe(false);
+      } finally {
+        await atV.dispose({ closeStorage: false });
+        await atT.dispose({ closeStorage: false });
       }
     });
 
