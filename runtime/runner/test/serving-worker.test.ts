@@ -415,6 +415,30 @@ describe("serving-worker", () => {
     expect(held.length).toBe(size);
   });
 
+  it("writes a heap snapshot of each worker's isolate with the spaces placed on it, and its watchdog does not count the time that takes", async () => {
+    // A watchdog that kills a worker silent for 40 ms: far shorter than a
+    // snapshot of a serving worker's heap takes to write.
+    await start({ watchdogIntervalMs: 20, watchdogLimitMs: 40 });
+    await startParent(space, 1);
+    await readTotal(space, 2);
+
+    const snapshots = await worker.heapSnapshots(directory);
+    expect(snapshots.map((each) => each.spaces)).toEqual([[space]]);
+    const [{ outcome }] = snapshots;
+    if (!("path" in outcome)) throw new Error(outcome.error);
+    expect(outcome.path.startsWith(`${directory}/heap-`)).toBe(true);
+    const file = await Deno.open(outcome.path);
+    try {
+      const head = new Uint8Array(16);
+      await file.read(head);
+      expect(new TextDecoder().decode(head)).toBe('{"snapshot":{"me');
+    } finally {
+      file.close();
+    }
+    expect(closures.entries).toEqual([]);
+    expect(worker.stats().workers).toMatchObject({ serving: 1, failed: 0 });
+  });
+
   it("serves two spaces from a worker each, which commit under a lease holder each", async () => {
     await start();
     await startParent(space, 1);

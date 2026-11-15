@@ -57,6 +57,7 @@
     "./space-host": "./src/space-host.ts",
     "./blob-record": "./src/blob-record.ts",
     "./collected-memory": "./src/collected-memory.ts",
+    "./heap-snapshot": "./src/heap-snapshot.ts",
     "./pattern-release-time": "./src/pattern-release-time.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",

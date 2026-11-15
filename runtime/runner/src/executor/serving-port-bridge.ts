@@ -220,6 +220,17 @@ export class ServingPortBridge {
   }
 
   /**
+   * Has the worker write a heap snapshot of its isolate into `directory`, and
+   * returns the file's path.
+   */
+  async requestHeapSnapshot(directory: string): Promise<string> {
+    const { path } = await this.#endpoint.request("host.heapSnapshot", {
+      directory,
+    });
+    return path;
+  }
+
+  /**
    * Runs a lifecycle verb on the worker's host; its receipt and the steps the
    * worker timed come back as data.
    */

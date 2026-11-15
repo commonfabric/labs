@@ -343,6 +343,12 @@ export type BridgeRequests = {
   "host.stats": { params: null; result: ServingLoopStats };
   "host.diagnostics": { params: null; result: ServingLoopDiagnostics };
   "host.collectedMemory": { params: null; result: CollectedMemory };
+
+  /** Writes a heap snapshot of the worker's isolate into `directory`. */
+  "host.heapSnapshot": {
+    params: { directory: string };
+    result: { path: string };
+  };
   "host.runLifecycleVerb": {
     params: { space: MemorySpace; verb: LifecycleVerbDescriptor };
     result: LifecycleVerbRun;

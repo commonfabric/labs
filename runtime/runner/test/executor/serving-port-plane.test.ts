@@ -83,6 +83,7 @@ const fakeHost = (
     counters: emptyCounters,
     diagnostics: () => diagnostics,
     collectedMemory: () => ({ heapUsed: 0, external: 0 }),
+    heapSnapshot: () => "",
     runLifecycleVerb: () => Promise.reject(new Error("no verbs")),
     occupancy,
     noteSpaceAclChanged: () => {},

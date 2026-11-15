@@ -90,6 +90,12 @@ export type ServingPlaneHost = {
   counters: () => ServingLoopCounters;
   diagnostics: () => ServingLoopDiagnostics;
   collectedMemory: () => CollectedMemory;
+
+  /**
+   * Writes a heap snapshot of the worker's isolate into `directory` and
+   * returns the file's path.
+   */
+  heapSnapshot: (directory: string) => string;
   runLifecycleVerb: (
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
@@ -756,6 +762,10 @@ export class ServingPlane {
     this.#endpoint.onRequest(
       "host.collectedMemory",
       () => host.collectedMemory(),
+    );
+    this.#endpoint.onRequest(
+      "host.heapSnapshot",
+      ({ directory }) => ({ path: host.heapSnapshot(directory) }),
     );
     this.#endpoint.onRequest(
       "host.runLifecycleVerb",
