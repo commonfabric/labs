@@ -681,6 +681,19 @@ export const canonicalizePreparedDigestInput = (
       ),
     }
     : {}),
+  // A set, like the containers: what preparation decides from it depends on
+  // which paths were written outside a builtin, not on the order.
+  ...(input.unattestedWrites !== undefined &&
+      input.unattestedWrites.length > 0
+    ? {
+      unattestedWrites: dedupeSorted(
+        [...input.unattestedWrites].map(canonicalizeAttemptedWrite).sort(
+          compareAddress,
+        ),
+        compareAddress,
+      ),
+    }
+    : {}),
 });
 
 const cfcLogger = getLogger("cfc", { enabled: false });

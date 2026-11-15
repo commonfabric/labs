@@ -4,6 +4,9 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-integrity-mint-gate");
 
@@ -202,5 +205,108 @@ describe("CFC integrity mint gate", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("for a builtin's write that a write by another identity overlaps in its transaction", () => {
+    // A builtin's write keeps the runtime-minted evidence its schema names.
+    // Another identity's write in the same transaction, at a path the
+    // evidence covers, makes the stored value partly that identity's choice,
+    // so the evidence must not persist there; elsewhere it still does.
+
+    const BUILTIN = {
+      kind: "builtin",
+      builtinId: "mint-gate-builtin",
+    } as const;
+    const recordSchema = {
+      type: "object",
+      properties: {
+        note: { type: "string" },
+        tag: {
+          type: "string",
+          ifc: { addIntegrity: [INJECTION_SAFE_ATOM] },
+        },
+      },
+      ifc: { addIntegrity: [INJECTION_SAFE_ATOM] },
+    } as const satisfies JSONSchema;
+
+    /**
+     * Commits a transaction in which the builtin writes the record `name`
+     * through `recordSchema`, and then `after` runs under no identity, and
+     * returns the paths the stored label map holds the evidence at.
+     */
+    const evidenceAfter = async (
+      name: string,
+      after: (tx: IExtendedStorageTransaction, runtime: Runtime) => void,
+    ): Promise<string[][]> => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const tx = runtime.edit();
+        setCfcImplementationIdentity(tx, BUILTIN);
+        const record = runtime.getCell(signer.did(), name, recordSchema, tx);
+        record.set({ note: "builtin", tag: "builtin" });
+        setCfcImplementationIdentity(tx, undefined);
+        after(tx, runtime);
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const rtx = runtime.edit();
+        try {
+          const id = runtime.getCell(signer.did(), name, undefined, rtx)
+            .getAsNormalizedFullLink().id;
+          return (readStoredCfcMetadata(rtx, { space: signer.did(), id })
+            ?.labelMap.entries ?? [])
+            .filter((entry) =>
+              (entry.label.integrity ?? []).some((atom) =>
+                (atom as { type?: string }).type === INJECTION_SAFE_ATOM.type
+              )
+            )
+            .map((entry) => [...entry.path]);
+        } finally {
+          rtx.abort();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    it("persists the evidence at every path when nothing else writes the record", async () => {
+      const paths = await evidenceAfter("mint-gate-alone", () => {});
+
+      expect(paths).toEqual(expect.arrayContaining([[], ["tag"]]));
+    });
+
+    it("persists the evidence when another identity writes another document", async () => {
+      const paths = await evidenceAfter(
+        "mint-gate-other-doc",
+        (tx, runtime) => {
+          runtime.getCell(signer.did(), "mint-gate-elsewhere", undefined, tx)
+            .set({ note: "other" });
+        },
+      );
+
+      expect(paths).toEqual(expect.arrayContaining([[], ["tag"]]));
+    });
+
+    it("drops the evidence at the root and keeps it at a field the other write does not reach", async () => {
+      const paths = await evidenceAfter("mint-gate-sibling", (tx, runtime) => {
+        runtime.getCell(signer.did(), "mint-gate-sibling", undefined, tx)
+          .key("note").set("chosen");
+      });
+
+      expect(paths).toEqual([["tag"]]);
+    });
+
+    it("drops the evidence at the field the other write reaches", async () => {
+      const paths = await evidenceAfter("mint-gate-field", (tx, runtime) => {
+        runtime.getCell(signer.did(), "mint-gate-field", undefined, tx)
+          .key("tag").set("chosen");
+      });
+
+      expect(paths).toEqual([]);
+    });
   });
 });

@@ -30,13 +30,18 @@ import {
   sourceDocKey,
   verifySourceDocs,
   writeCompiledDocs,
+  writeSourceAndCompiledDocs,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { compileCachePersistenceSlotKey } from "../src/pattern-manager.ts";
 import type { URI } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 import { observeCacheWriteBacks } from "./support/telemetry-observers.ts";
@@ -3087,6 +3092,216 @@ describe("cell-cache", () => {
       rtx.abort?.();
 
       expect(loaded.size).toBe(0);
+    });
+  });
+
+  describe("a record another identity writes in the cache writer's transaction", () => {
+    // The cache writer's claim that no schema declares a policy on its
+    // records, and the compiler's attestation its writes mint, stand for
+    // what it wrote. A write another identity makes to the record in the
+    // same transaction is measured and attested as that identity's write on
+    // a transaction of its own is: writer-fit refuses it after a labeled
+    // read, and it keeps no attestation at a path it reaches.
+
+    const space = signer.did();
+    const RTVER = "rt-attestation-scope";
+    const SECRET_OWNER = "did:example:secret-owner";
+    const SECRET_ID = "of:attestation-scope-secret" as URI;
+
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+    let modules: CacheableModule[];
+    let entryIdentity: string;
+
+    beforeEach(async () => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+        trustSnapshotProvider: () => ({
+          id: "cell-cache-test",
+          actingPrincipal: signer.did(),
+        }),
+      });
+      ({ modules, entryIdentity } = toModules(PROGRAM));
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: SECRET_ID,
+        path: [],
+      }, {
+        value: { s: "hush" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              origin: "declared",
+              label: { confidentiality: [SECRET_OWNER] },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit().settled).error).toBeUndefined();
+    });
+
+    afterEach(async () => {
+      await runtime?.dispose();
+      await storageManager?.close();
+    });
+
+    /**
+     * Commits one transaction that reads the labeled document first when
+     * `labeled`, writes the program's records through the cache writer, and
+     * then runs `after` outside it, and returns the commit's error.
+     */
+    const commitWith = async (
+      labeled: boolean,
+      after: (tx: IExtendedStorageTransaction) => void,
+    ) => {
+      const tx = runtime.edit();
+      if (labeled) {
+        tx.readOrThrow({ space, scope: "space", id: SECRET_ID, path: [] });
+      }
+      writeSourceAndCompiledDocs(
+        runtime,
+        space,
+        modules,
+        entryIdentity,
+        { runtimeVersion: RTVER },
+        tx,
+      );
+      after(tx);
+      tx.prepareCfc();
+      return (await tx.commit().settled).error;
+    };
+
+    /** The entry's record in the source set, or the compiled set. */
+    const record = (
+      set: "source" | "compiled",
+      tx: IExtendedStorageTransaction,
+    ) =>
+      runtime.getCell<Record<string, unknown>>(
+        space,
+        set === "source"
+          ? sourceDocKey(entryIdentity)
+          : compiledDocKey(RTVER, entryIdentity),
+        undefined,
+        tx,
+      );
+
+    /** An extra cache-root edge on the entry, to a module of the program. */
+    const rootLinkOf = (set: "source" | "compiled") => {
+      const target = modules.find((m) => m.identity !== entryIdentity)!;
+      return {
+        specifier: `${ROOT_LINK_SPECIFIER}${target.identity}`,
+        link: runtime.getCell(
+          space,
+          set === "source"
+            ? sourceDocKey(target.identity)
+            : compiledDocKey(RTVER, target.identity),
+        ).getAsLink(),
+      };
+    };
+
+    /** The entry's compiled closure, as an integrity-checked load reads it. */
+    const compiledEntryLoads = async () => {
+      const rtx = runtime.edit();
+      try {
+        return (await loadCompiledClosure(
+          runtime,
+          space,
+          entryIdentity,
+          { runtimeVersion: RTVER },
+          rtx,
+        )).has(entryIdentity);
+      } finally {
+        rtx.abort();
+      }
+    };
+
+    it("commits the cache writer's records alone and keeps their attestation", async () => {
+      expect(await commitWith(false, () => {})).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(true);
+    });
+
+    for (
+      const [what, write] of [
+        [
+          "writes its `exportNames`",
+          (tx: IExtendedStorageTransaction) =>
+            record("compiled", tx).key("exportNames").set(["hush"]),
+        ],
+        [
+          "adds a cache-root edge to it",
+          (tx: IExtendedStorageTransaction) => {
+            const raw = record("compiled", tx).getRaw() as {
+              imports: unknown[];
+            };
+            record("compiled", tx).key("imports").set(
+              [...raw.imports, rootLinkOf("compiled")] as never,
+            );
+          },
+        ],
+      ] as const
+    ) {
+      it(`keeps no attestation on a compiled record when another identity ${what}`, async () => {
+        expect(await commitWith(false, write)).toBeUndefined();
+
+        expect(await compiledEntryLoads()).toBe(false);
+      });
+
+      it(`refuses a compiled record when another identity ${what} after a labeled read`, async () => {
+        const error = await commitWith(true, write);
+
+        expect(error?.message).toContain("writer-fit confidentiality misfit");
+      });
+    }
+
+    for (
+      const [what, write] of [
+        [
+          "changes one of its import specifiers",
+          (tx: IExtendedStorageTransaction) => {
+            const raw = record("source", tx).getRaw() as {
+              imports: { specifier: string; link: unknown }[];
+            };
+            record("source", tx).key("imports").set(
+              raw.imports.map((edge, index) =>
+                index === 0 ? { ...edge, specifier: "hush" } : edge
+              ) as never,
+            );
+          },
+        ],
+        [
+          "adds a cache-root edge to it",
+          (tx: IExtendedStorageTransaction) => {
+            const raw = record("source", tx).getRaw() as {
+              imports: unknown[];
+            };
+            record("source", tx).key("imports").set(
+              [...raw.imports, rootLinkOf("source")] as never,
+            );
+          },
+        ],
+      ] as const
+    ) {
+      it(`refuses a source record when another identity ${what} after a labeled read`, async () => {
+        const error = await commitWith(true, write);
+
+        expect(error?.message).toContain("writer-fit confidentiality misfit");
+      });
+    }
+
+    it("commits the cache writer's records alone after a labeled read", async () => {
+      expect(await commitWith(true, () => {})).toBeUndefined();
     });
   });
 });

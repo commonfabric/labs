@@ -750,6 +750,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
+    unattestedWrites: [],
     attributedInitialization: false,
     attributedPieces: [],
     pieceCreators: [],
@@ -1922,12 +1923,29 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * cannot borrow a later one). Privileged persistence writes (label maps,
    * `cid:` schema docs) are bookkeeping, not authorship, and are skipped — also
    * keeping the summary stable across prepare, invalidate, and re-prepare.
+   *
+   * A value write `address` names, made under any identity but a builtin's,
+   * is also recorded on its own (`CfcTxState.unattestedWrites`): the
+   * runtime-minted evidence a builtin's write stamps, and the runtime's claim
+   * that no schema declares a policy on a document, stand for what the
+   * builtin wrote, and preparation withholds both where such a write reached.
    */
-  #noteWriteIdentity(): void {
+  #noteWriteIdentity(address: IMemorySpaceAddress): void {
     if (this.#privilegedSystemWriteDepth > 0) return;
+    const current = this.#cfcState.implementationIdentity;
+    if (current?.kind !== "builtin") {
+      const path = canonicalizeDocumentPath(toDocumentPath(address.path));
+      if (path !== undefined) {
+        this.#cfcState.unattestedWrites.push(deepFreeze({
+          space: address.space,
+          id: address.id,
+          scope: normalizeCellScope(address.scope),
+          path,
+        }));
+      }
+    }
     const summary = this.#cfcState.writeIdentity;
     if (summary.multiple) return;
-    const current = this.#cfcState.implementationIdentity;
     if (!summary.sawWrite) {
       summary.sawWrite = true;
       summary.identity = current;
@@ -2629,9 +2647,15 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // Acted on rather than measured, so it takes the runtime's mark like the
     // recorders do.
     if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    // The marker is the runtime's claim about what it wrote, so a value
+    // write another identity made on the document falls outside it and is
+    // measured as any writer's is.
     return this.#markedUndeclarableStores.has(
       runtimeOwnedStoreKey(space, id),
-    );
+    ) &&
+      !this.#cfcState.unattestedWrites.some((write) =>
+        write.space === space && write.id === id
+      );
   }
 
   recordCfcConsultedGrant(consulted: ConsultedGrant): void {
@@ -3259,6 +3283,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           : {}),
         ...(this.#cfcState.structureContainers.length > 0
           ? { structureContainers: [...this.#cfcState.structureContainers] }
+          : {}),
+        ...(this.#cfcState.unattestedWrites.length > 0
+          ? { unattestedWrites: [...this.#cfcState.unattestedWrites] }
           : {}),
         implementationIdentity: this.#cfcState.implementationIdentity,
         trustSnapshot: this.#cfcState.trustSnapshot,
@@ -4224,7 +4251,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value = this.#storedLinkSchemaForm(address, value);
     this.#noteCfcActivity();
     this.#noteSystemWrite(address, value, options);
-    this.#noteWriteIdentity();
+    this.#noteWriteIdentity(address);
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("write-after-prepare");
     }
@@ -4253,7 +4280,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value = this.#storedLinkSchemaForm(address, value);
     this.#noteCfcActivity();
     this.#noteSystemWrite(address, value, options);
-    this.#noteWriteIdentity();
+    this.#noteWriteIdentity(address);
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("write-after-prepare");
     }
@@ -4338,9 +4365,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // counts a write that leaves the value unchanged among the attempted
       // writes, and has any write after a preparation invalidate it;
       // `docs/specs/cfc-commit-preparation.md` covers the arrangement.
-      const noteWriteIdentity = () => {
+      const noteWriteIdentity = (address: IMemorySpaceAddress) => {
         this.#noteCfcActivity();
-        this.#noteWriteIdentity();
+        this.#noteWriteIdentity(address);
         if (this.#cfcState.prepare.status === "prepared") {
           this.invalidateCfc("write-after-prepare");
         }
@@ -4377,7 +4404,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
             const address = toMemorySpaceAddress(write.address);
             const value = storedLinkSchemaForm(address, write.value);
             noteSystemWrite(address, value);
-            noteWriteIdentity();
+            noteWriteIdentity(address);
             if (!write.delete) {
               refuseMalformedSchemaMeta(address, value);
               if (getContentAddressedSchemasConfig()) {
@@ -4465,6 +4492,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     state.dereferenceTraces = [];
     state.structureContainers = [];
     state.assertedValueRoots = [];
+    state.unattestedWrites = [];
     state.triggerReads = [];
     state.writePolicyInputs = [];
     state.writePolicyInputIdentities = new Map();

@@ -3094,6 +3094,25 @@ const identityForSchemaPath = (
   return undefined;
 };
 
+/**
+ * The payload paths of `target` that the transaction wrote under an identity
+ * other than a builtin's (`CfcTxState.unattestedWrites`). Runtime-minted
+ * evidence a builtin's schema names at a path one of them overlaps would
+ * stand for a value that identity chose, so `gateRuntimeMintedIntegrity`
+ * answers it as for an unattributed write.
+ */
+const unattestedWritePaths = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): readonly (readonly string[])[] =>
+  tx.getCfcState().unattestedWrites.filter((write) =>
+    sameDocument(write, target)
+  ).map((write) => write.path);
+
 const targetKey = (target: {
   space: MemorySpace;
   id: string;
@@ -13044,6 +13063,17 @@ export function* prepareBoundaryCommitSteps(
       return undefined;
     };
 
+    // The identity a schema's runtime-minted evidence answers to at a path:
+    // the schema input's, unless a write another identity made overlaps the
+    // path (`unattestedWritePaths()`), where it answers to none.
+    const unattested = unattestedWritePaths(tx, target);
+    const mintingIdentityForPath = (
+      path: readonly string[],
+    ): ImplementationIdentity | undefined =>
+      unattested.some((written) => pathsOverlap(written, path))
+        ? undefined
+        : identityForSchemaPath(writeAuthorIdentities.get(key), path);
+
     // The stamps this transaction's own schemas name for the values it
     // writes, decided once: floor enforcement and persistence consume the
     // same branch selection and the same author-gated atoms.
@@ -13062,7 +13092,7 @@ export function* prepareBoundaryCommitSteps(
               ),
             ],
           },
-          identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          mintingIdentityForPath(path),
         ).integrity ?? [];
         if (integrity.length === 0) continue;
         valueStamps.push({
@@ -13192,8 +13222,7 @@ export function* prepareBoundaryCommitSteps(
       let floorFailures: WriteFloorFailure[] = [];
       for (const schema of verificationSchemas) {
         const failures = yield* verifyWriteFloor(tx, schema, target, {
-          identityForPath: (path) =>
-            identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          identityForPath: mintingIdentityForPath,
           // A commit that stores none of its payload's claims stores none
           // of its stamps either, so they credit nothing.
           valueStamps: ingestVerificationFailed ? [] : valueStamps,
@@ -13368,7 +13397,7 @@ export function* prepareBoundaryCommitSteps(
               target.space,
               { ...mint, mintValueStamps: false },
             ),
-            identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
+            mintingIdentityForPath(entry.path),
           );
           const carriedClaims = mint.attributeCurrentPrincipal === false
             ? existingPrincipalClaims.get(
