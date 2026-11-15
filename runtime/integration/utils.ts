@@ -37,10 +37,36 @@ const WAIT_FOR_CONDITION_TIMEOUT = 300_000; // 5 minutes
  */
 function waitForConditionTimeout(): number {
   try {
-    const raw = Number(Deno.env.get("CF_WAIT_FOR_CONDITION_TIMEOUT_MS"));
+    const raw = Number(Deno.env.get(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE));
     return Number.isFinite(raw) && raw > 0 ? raw : WAIT_FOR_CONDITION_TIMEOUT;
   } catch {
     return WAIT_FOR_CONDITION_TIMEOUT;
+  }
+}
+
+/** The variable {@link waitForConditionTimeout} reads the net's length from. */
+const WAIT_FOR_CONDITION_TIMEOUT_VARIABLE = "CF_WAIT_FOR_CONDITION_TIMEOUT_MS";
+
+/**
+ * Runs `work` with every wait it starts given a safety net of `ms`
+ * milliseconds, so that a test can drive a stuck wait's failure without
+ * waiting five minutes for it, and returns what `work` returns. It puts back
+ * whatever the run was started with rather than removing it: somebody running
+ * a file with a net of their own chose that, and a test that dropped it would
+ * change every wait after itself.
+ */
+export async function withWaitForConditionTimeout<T>(
+  ms: number,
+  work: () => Promise<T>,
+): Promise<T> {
+  const before = Deno.env.get(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE);
+  Deno.env.set(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE, String(ms));
+  try {
+    return await work();
+  } finally {
+    if (before === undefined) {
+      Deno.env.delete(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE);
+    } else Deno.env.set(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE, before);
   }
 }
 
@@ -220,7 +246,8 @@ export interface ProbeApi {
    * of the event loop, delivered through a message channel. It has to be a
    * real turn rather than a resolved promise: what the page does next arrives
    * by a timer or a task, and a loop that only yields to the microtask queue
-   * never lets either run.
+   * never lets either run. A document hidden while its frame is awaited ends
+   * the step then, since that frame will not come either.
    */
   nextFrame(): Promise<void>;
 }
@@ -330,11 +357,24 @@ function createProbe(): RecordingProbeApi {
     nextFrame() {
       return new Promise((resolve) => {
         if (document.visibilityState !== "hidden") {
-          requestAnimationFrame(() => resolve());
+          const onHidden = () => {
+            if (document.visibilityState !== "hidden") return;
+            cancelAnimationFrame(frame);
+            document.removeEventListener("visibilitychange", onHidden);
+            resolve();
+          };
+          const frame = requestAnimationFrame(() => {
+            document.removeEventListener("visibilitychange", onHidden);
+            resolve();
+          });
+          document.addEventListener("visibilitychange", onHidden);
           return;
         }
         const channel = new MessageChannel();
-        channel.port1.onmessage = () => resolve();
+        channel.port1.onmessage = () => {
+          channel.port1.close();
+          resolve();
+        };
         channel.port2.postMessage(0);
       });
     },
