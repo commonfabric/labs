@@ -407,7 +407,7 @@ export interface RewardSpinnerOutput {
   /** Each prize's chance at the current generosity. */
   odds: PrizeOdds[];
   /** The strip this session's latest spin scrolls through; empty before one. */
-  reel: string[];
+  reel: PerSession<string[]>;
   /** Spin the reel: picks the prize and records the spin. */
   spin: Stream<void>;
   moreGenerous: Stream<void>;
@@ -426,15 +426,7 @@ const RewardSpinner = pattern<RewardSpinnerInput, RewardSpinnerOutput>(
 
     const lastPrize = computed(() => lastSpinEmoji(spinHistory.get()));
 
-    // Everything the view reads from `sessionSpin` or `oddsShown` differs by
-    // session, so it is derived at session scope: each session maps its own
-    // reel cells and binds its own classes.
-    //
-    // `reel` is the exception. It is an output, recorded space-scoped in the
-    // update baselines, and changing an output's scope is an update break that
-    // has to be accepted in `tasks/pattern-compat-accepted-breaks.ts`. Nothing
-    // maps or renders it; it is there for tests and callers.
-    const reel = computed(() => sessionSpin.get().reel);
+    const reel = computed((): PerSession<string[]> => sessionSpin.get().reel);
 
     // At rest (no spin yet this session) the reel is the single last prize.
     const reelCells = computed((): PerSession<ReelCell[]> => {

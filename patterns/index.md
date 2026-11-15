@@ -955,10 +955,12 @@ interface HabitTrackerOutput {
 ## `apps/star-chart/star-chart.tsx`
 
 A reward calendar for a child learning one daily habit: tap the big star to earn
-today's sticker, watch the streak grow, and celebrate at 3, 7, 14 and 30 days. A
-single missed day after a streak of three or more is forgiven as a dimmed
-"protected" day, and a parent can correct past days. Today is the viewer's local
-date from the `#now` clock; `todayOverride` pins it.
+today's sticker, watch the streak grow, and celebrate at 3, 7, 14 and 30 days.
+Until today's star is earned the streak shown is the one it would continue. A
+single missed day after three or more earned days is forgiven (derived, never
+stored) and shown as a dimmed "protected" day; a parent can correct past days.
+The timeline shows the last 30 days. Today is the viewer's local date from the
+`#now` clock; `todayOverride` pins it.
 
 **Keywords:** kids, rewards, streaks, daily-habit, calendar, #now
 
@@ -968,7 +970,7 @@ date from the `#now` clock; `todayOverride` pins it.
 interface DayRecord {
   date: string; // YYYY-MM-DD, local
   earned: boolean;
-  protected: boolean;
+  protected: boolean; // written false and ignored: see protectedDays
   rotation: number; // sticker tilt, -15..15
 }
 
@@ -990,6 +992,7 @@ interface StarChartOutput {
   today: string;
   currentStreak: number;
   bestStreak: number;
+  protectedDays: string[]; // forgiven days, derived from the record
   todayHasStar: boolean;
   milestone: string;
   earnStar: Stream<void>;
@@ -1034,7 +1037,7 @@ interface RewardSpinnerOutput {
   spinHistory: SpinRecord[];
   lastPrize: string; // emoji the reel rests on; 🎁 before any spin
   odds: { emoji: string; dots: string; percent: number }[];
-  reel: string[]; // this session's latest reel strip; empty before one
+  reel: PerSession<string[]>; // this session's latest reel strip; empty before one
   spin: Stream<void>;
   moreGenerous: Stream<void>;
   lessGenerous: Stream<void>;
@@ -1071,6 +1074,9 @@ interface Assumption {
 interface AssumptionSurfacerInput {
   messages?: PerSpace<Writable<BuiltInLLMMessage[] | Default<[]>>>;
   assumptions?: PerSpace<Writable<Assumption[] | Default<[]>>>;
+  // Each message of assumption updates sent; one counts as told only once it
+  // appears in `messages` (the dialog drops a send made mid-reply).
+  updates?: PerSpace<Writable<SentUpdate[] | Default<[]>>>;
   systemPrompt?: PerSpace<Writable<string | Default<"">>>;
 }
 ```
@@ -1083,12 +1089,14 @@ interface AssumptionSurfacerOutput {
   assumptions: Assumption[];
   openCount: number;
   settled: string[]; // settled facts, as fed to the model
+  unsent: string[]; // verdicts not yet told to the assistant in the chat
   system: string; // the full system prompt
   pending: boolean | undefined;
   recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }, string>;
   confirmAssumption: Stream<{ id: string }>;
   rejectAssumption: Stream<{ id: string }>;
   chooseAlternative: Stream<{ id: string; index: number }>;
+  sendUpdates: Stream<void>; // tell the assistant every unsent verdict now
   addMessage: Stream<BuiltInLLMMessage>;
   cancelGeneration: Stream<void>;
   clearChat: Stream<void>;

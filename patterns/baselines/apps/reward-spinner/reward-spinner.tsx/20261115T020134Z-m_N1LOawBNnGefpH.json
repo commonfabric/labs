@@ -180,6 +180,7 @@
         "items": {
           "type": "string"
         },
+        "scope": "session",
         "type": "array"
       },
       "spin": {
