@@ -263,7 +263,9 @@ Its words are its own: from `patternTitle` (or `patternId` when there is no
 title), an optional `author`, and `destinationName` (left out when absent), it
 shows "Install “title” by author onto loom". It takes no button text, so a
 caller chooses which pattern and which loom it names but cannot make it say
-anything else. Each name is flattened to one line, with its double quotation
+anything else. The element does not know what its host's `onClick` does, so
+the surface placing it passes the title of the pattern a tap installs, taken
+from the same source as the action. Each name is flattened to one line, with its quotation
 marks turned into apostrophes, cut short when long, and drawn in a chip of its
 own, so it cannot pass for the words around it.
 

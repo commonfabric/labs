@@ -8,7 +8,7 @@
  * a request is open adds nothing, and a failed request can be tapped again.
  * The host's answer shows on the button. A request names the host and the
  * time of its tap, a host leaves a request naming another host alone, and
- * with no host the button says so and adds nothing. The button names the
+ * with no host or no pattern id the button says so and adds nothing. The button names the
  * pattern by the catalog's own title for its id, whatever text a caller
  * passes, and the place it installs onto by the name the caller gives.
  *
@@ -102,6 +102,11 @@ export default pattern(() => {
     patternId: "gone-1",
     destination: "board-a",
   });
+  const nameless = GetItButton({
+    catalog,
+    patternId: "",
+    destination: "board-a",
+  });
   const nowhere = GetItButton({
     catalog,
     patternId: "read-1",
@@ -193,6 +198,9 @@ export default pattern(() => {
 
   const assert_nowhere_says_why_and_adds_nothing = assert(() =>
     hasText(nowhere[UI], "There is nowhere to put it") &&
+    hasText(nameless[UI], "There is no pattern to get") &&
+    propValue(findElement(nameless[UI], "cf-pattern-install"), "disabled") ===
+      true &&
     catalog.getItRequests.length === 3
   );
 
@@ -273,6 +281,7 @@ export default pattern(() => {
       { action: missing.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_placed_tap_adds_nothing_failed_tap_retries },
       { action: nowhere.getIt, trustedUi: TRUSTED_TAP },
+      { action: nameless.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_nowhere_says_why_and_adds_nothing },
       { action: action_go_unavailable },
       { action: later.getIt, trustedUi: TRUSTED_TAP },

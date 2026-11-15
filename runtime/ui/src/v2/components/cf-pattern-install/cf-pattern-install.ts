@@ -17,21 +17,25 @@ const SHOWN_ID_END_LENGTH = 8;
  * pattern or named the loom, so it must not be able to reorder, hide or break
  * those words, or close the quotation it sits in and carry on as if it were
  * them. So: control and formatting characters (bidirectional overrides,
- * zero-width joiners, line breaks) become spaces; double quotation marks of
- * every kind become a plain apostrophe; a run of combining marks is cut to
- * two; whitespace collapses; and anything past {@link MAX_NAME_LENGTH} is cut
- * short with an ellipsis.
+ * zero-width joiners, line breaks) become spaces; quotation marks of every
+ * kind, opening and closing punctuation and quotation ornaments included,
+ * become a plain apostrophe; a run of combining marks is cut to two;
+ * whitespace collapses; and anything past `maxLength` (by default
+ * {@link MAX_NAME_LENGTH}) is cut short with an ellipsis.
  */
-export const plainName = (text: string | undefined): string => {
+export const plainName = (
+  text: string | undefined,
+  maxLength = MAX_NAME_LENGTH,
+): string => {
   const flat = (text ?? "")
     .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
-    .replace(/["“”„‟«»〝〞〟＂]/gu, "'")
+    .replace(/["＂〃〝〞〟❛❜❝❞❟❠🙶🙷🙸\p{Pi}\p{Pf}]/gu, "'")
     .replace(/(\p{M}{2})\p{M}+/gu, "$1")
     .replace(/\s+/g, " ")
     .trim();
   const chars = [...flat];
-  return chars.length > MAX_NAME_LENGTH
-    ? `${chars.slice(0, MAX_NAME_LENGTH - 1).join("").trimEnd()}…`
+  return chars.length > maxLength
+    ? `${chars.slice(0, maxLength - 1).join("").trimEnd()}…`
     : flat;
 };
 
@@ -57,7 +61,7 @@ export const installWording = (inputs: {
   destinationName?: string;
 }): PatternInstallWording => {
   const title = plainName(inputs.patternTitle);
-  const id = [...plainName(inputs.patternId)];
+  const id = [...plainName(inputs.patternId, Infinity)];
   const shownId = id.length > 2 * SHOWN_ID_END_LENGTH + 1
     ? `${id.slice(0, SHOWN_ID_END_LENGTH).join("")}…${
       id.slice(-SHOWN_ID_END_LENGTH).join("")
@@ -89,11 +93,16 @@ export const installSentence = (wording: PatternInstallWording): string =>
  * host and `data-ui-pattern` / `data-ui-event-integrity` on an ancestor).
  *
  * What makes it trustworthy to show is that its words are its own. It renders
- * "Install “title” onto loom" from its inputs — the pattern's title (its id
- * when it has none), optionally its author, and the destination loom's name
- * (left out when not given) — and takes no free text for its button. A pattern
- * placing it can choose which pattern and which loom it names, but not make it
- * say something other than what a tap does. Each name is flattened to one
+ * "Install “title” onto loom" from its inputs — the pattern's title (both
+ * ends of its id when the title is missing or blank), optionally its author,
+ * and the destination loom's name (left out when not given) — and takes no
+ * free text for its button, so it always says it installs a named pattern
+ * onto a named place. It does not know what its host's `onClick` does: the
+ * trusted surface placing it is responsible for passing the title of the
+ * pattern a tap installs and the name of the place it goes, taken from the
+ * same source as the action (the pattern catalog's `GetItButton` takes the
+ * title from the catalog's entry for the id it requests). Each name is
+ * flattened to one
  * plain line (see {@link plainName}) and drawn in its own bounded chip, so it
  * cannot reorder, break or pass for the words around it.
  *

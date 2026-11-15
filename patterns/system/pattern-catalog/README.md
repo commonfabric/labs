@@ -39,7 +39,10 @@ a pattern later both implement the same shape.
 - The button is a `cf-pattern-install`, which says in its own words what a tap
   does: "Install “title” onto loom". The title is the catalog's own, from the
   entry in `entries` with the button's `patternId`; when the window does not
-  hold that entry, it shows the pattern's id instead. The place is named by
+  hold that entry or its title is blank, it shows the pattern's id instead, as
+  the id's first and last eight characters when it is longer than seventeen.
+  Each name is flattened to one line, its quotation marks turned into
+  apostrophes, and cut short past sixty characters. The place is named by
   `destinationName`, which the caller passes as the person knows it (such as the
   loom's name); without one, the button names no place. The caller gives no text
   for the button. Beside it, the button shows the answer to its latest request

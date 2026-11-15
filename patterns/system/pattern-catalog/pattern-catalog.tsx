@@ -256,6 +256,7 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
         { state: "started" };
     });
     const blocked = computed((): string => {
+      if (!patternId) return "There is no pattern to get";
       if (!destination) return "There is nowhere to put it";
       if (catalog.status?.state !== "ready") {
         const reason = catalog.status?.reason ??

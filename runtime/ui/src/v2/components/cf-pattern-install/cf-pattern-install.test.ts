@@ -136,6 +136,20 @@ describe("CFPatternInstall", () => {
   });
 
   describe("installWording()", () => {
+    it("shows the true ends of an id longer than a name may run", () => {
+      const head = "bafy" + "a".repeat(70);
+      expect(installWording({ patternId: `${head}tail0001` }).pattern).toBe(
+        "pattern bafyaaaa…tail0001",
+      );
+    });
+
+    it("falls back to the id when the title is blank", () => {
+      expect(
+        installWording({ patternTitle: "  ", patternId: "split-1" }).pattern,
+      )
+        .toBe("pattern split-1");
+    });
+
     it("falls back to `this pattern` with neither a title nor an id", () => {
       expect(installSentence(installWording({}))).toBe(
         "Install “this pattern”",
@@ -154,6 +168,10 @@ describe("CFPatternInstall", () => {
       expect(plainName("Notes” onto Work. Install “Other")).toBe(
         "Notes' onto Work. Install 'Other",
       );
+    });
+
+    it("turns quotation ornaments and paired quotes into apostrophes", () => {
+      expect(plainName("❝A❞ ‹B› ‘C’ «D»")).toBe("'A' 'B' 'C' 'D'");
     });
 
     it("cuts a run of combining marks to two", () => {
