@@ -106,6 +106,13 @@ type FabricUnavailableState = {
 type TransientReason = Exclude<UnavailableReason, "error">;
 
 /**
+ * Token the codecs hand the constructor, with a state already validated, to
+ * have it stored as it stands. Not exported, so only this module can construct
+ * that way.
+ */
+const AS_DECODED: unique symbol = Symbol("data-model.FabricUnavailableDecoded");
+
+/**
  * A marker standing in for data that is not available, saying why. It holds
  * no data of its own: the reason, and for the `error` reason the kind of
  * error and a message, are the whole of what it says, so it is a
@@ -122,63 +129,49 @@ export class FabricUnavailable extends BaseFabricPrimitive
   implements ApiFabricUnavailable {
   /**
    * The state, frozen, in exactly the shape both codecs encode. Its `message`
-   * is absent when none was given. The constructor also stores a message
-   * equal to the kind's default as none; a decoded instance holds its state as
-   * it arrived, such a message included. Written only by the constructor and
-   * by `#instanceForState()`.
+   * is absent when none is stored.
    */
-  #state: UnavailableState;
+  readonly #state: UnavailableState;
 
   /**
    * Constructs an instance with the given reason, kind of error, and
-   * message. Throws when `reason` is not one of the reasons; when it is
-   * `error` and `errorKind` is not one of the kinds; or when it is a
-   * transient reason and either `errorKind` or `message` is not `null`.
+   * message. A message equal to the kind's default is stored as none. Throws
+   * when `reason` is not one of the reasons; when it is `error` and
+   * `errorKind` is not one of the kinds; or when it is a transient reason and
+   * either `errorKind` or `message` is not `null`.
    */
   constructor(
     reason: UnavailableReason,
-    errorKind: UnavailableErrorKind | null = null,
-    message: string | null = null,
+    errorKind?: UnavailableErrorKind | null,
+    message?: string | null,
+  );
+
+  /**
+   * Constructs an instance holding `state` as it stands, for the codecs, which
+   * hold `AS_DECODED` and have validated `state` with `#validatedState()`.
+   */
+  constructor(token: typeof AS_DECODED, state: UnavailableState);
+
+  constructor(
+    ...args:
+      | [
+        UnavailableReason,
+        (UnavailableErrorKind | null | undefined)?,
+        (string | null | undefined)?,
+      ]
+      | [typeof AS_DECODED, UnavailableState]
   ) {
     super(BLESSING_TOKEN, FabricUnavailable);
 
-    if (
-      (typeof reason !== "string") ||
-      !Object.hasOwn(UNAVAILABLE_REASONS, reason)
-    ) {
-      throw new Error(
-        debugStr`Not an \`UnavailableReason\`: $quote${reason}`,
+    this.#state = (args[0] === AS_DECODED)
+      ? args[1]
+      : FabricUnavailable.#withoutDefaultMessage(
+        FabricUnavailable.#validatedState(
+          args[0],
+          args[1] ?? null,
+          args[2] ?? null,
+        ),
       );
-    }
-
-    if (reason === UNAVAILABLE_REASONS.error) {
-      if (
-        (typeof errorKind !== "string") ||
-        !Object.hasOwn(UNAVAILABLE_ERROR_KINDS, errorKind)
-      ) {
-        throw new Error(
-          debugStr`Reason \`error\` requires an \`UnavailableErrorKind\`, not $quote${errorKind}.`,
-        );
-      }
-      if ((message !== null) && (typeof message !== "string")) {
-        throw new Error(
-          debugStr`Not a \`message\`: $quote${message}`,
-        );
-      }
-      // A message equal to the kind's default is stored as none.
-      this.#state = (
-          (message === null) ||
-          (message === FabricUnavailable.#DEFAULT_ERROR_MESSAGES[errorKind])
-        )
-        ? Object.freeze({ reason, errorKind })
-        : Object.freeze({ reason, errorKind, message });
-    } else if ((errorKind !== null) || (message !== null)) {
-      throw new Error(
-        debugStr`Reason $quote${reason} takes neither an \`errorKind\` nor a \`message\`.`,
-      );
-    } else {
-      this.#state = Object.freeze({ reason });
-    }
   }
 
   //
@@ -465,6 +458,69 @@ export class FabricUnavailable extends BaseFabricPrimitive
       (typeof message === "string");
   }
 
+  /**
+   * Helper for the constructor and `#instanceForState()`, which returns the
+   * frozen state the given reason, kind of error, and message make, the
+   * message stored as given. Throws when `reason` is not one of the reasons;
+   * when it is `error` and `errorKind` is not one of the kinds; or when it is
+   * a transient reason and either `errorKind` or `message` is not `null`.
+   */
+  static #validatedState(
+    reason: UnavailableReason,
+    errorKind: UnavailableErrorKind | null,
+    message: string | null,
+  ): UnavailableState {
+    if (
+      (typeof reason !== "string") ||
+      !Object.hasOwn(UNAVAILABLE_REASONS, reason)
+    ) {
+      throw new Error(
+        debugStr`Not an \`UnavailableReason\`: $quote${reason}`,
+      );
+    }
+
+    if (reason === UNAVAILABLE_REASONS.error) {
+      if (
+        (typeof errorKind !== "string") ||
+        !Object.hasOwn(UNAVAILABLE_ERROR_KINDS, errorKind)
+      ) {
+        throw new Error(
+          debugStr`Reason \`error\` requires an \`UnavailableErrorKind\`, not $quote${errorKind}.`,
+        );
+      }
+      if ((message !== null) && (typeof message !== "string")) {
+        throw new Error(
+          debugStr`Not a \`message\`: $quote${message}`,
+        );
+      }
+      return (message === null)
+        ? Object.freeze({ reason, errorKind })
+        : Object.freeze({ reason, errorKind, message });
+    } else if ((errorKind !== null) || (message !== null)) {
+      throw new Error(
+        debugStr`Reason $quote${reason} takes neither an \`errorKind\` nor a \`message\`.`,
+      );
+    }
+
+    return Object.freeze({ reason });
+  }
+
+  /**
+   * Helper for the constructor, which returns `state` with a message equal to
+   * its kind's default removed, and `state` itself when it has no such
+   * message.
+   */
+  static #withoutDefaultMessage(state: UnavailableState): UnavailableState {
+    return (
+        (state.reason === UNAVAILABLE_REASONS.error) &&
+        (state.message === FabricUnavailable.#DEFAULT_ERROR_MESSAGES[
+          state.errorKind
+        ])
+      )
+      ? Object.freeze({ reason: state.reason, errorKind: state.errorKind })
+      : state;
+  }
+
   /** Helper for `#instanceForState()`, which reports whether `reason` is transient. */
   static #isTransientReason(
     reason: UnavailableReason,
@@ -513,29 +569,16 @@ export class FabricUnavailable extends BaseFabricPrimitive
       return FabricUnavailable.#prefabFor(reason);
     }
 
-    const result = new FabricUnavailable(
-      reason,
-      errorKind ?? null,
-      message ?? null,
+    // Constructed with the state as it arrived, a message equal to the
+    // kind's default included, so that it encodes and hashes as it did.
+    return new FabricUnavailable(
+      AS_DECODED,
+      FabricUnavailable.#validatedState(
+        reason,
+        errorKind ?? null,
+        message ?? null,
+      ),
     );
-    const constructed = result.#state;
-
-    // The constructor stores a message equal to the kind's default as none,
-    // which a decode does not: the state is kept as it arrived, so that it
-    // encodes and hashes as it did.
-    if (
-      (message !== undefined) &&
-      (constructed.reason === UNAVAILABLE_REASONS.error) &&
-      (constructed.message === undefined)
-    ) {
-      result.#state = Object.freeze({
-        reason: constructed.reason,
-        errorKind: constructed.errorKind,
-        message,
-      });
-    }
-
-    return result;
   }
 }
 
