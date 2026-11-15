@@ -73,6 +73,18 @@ type WriteOptions = {
   initialization?: "setup" | "default" | "seed";
   value?: string;
   recordedValue?: string;
+
+  /**
+   * Where `schema` applies: to the document itself, or to its `tag` field,
+   * which the write then sets.
+   */
+  at?: "document" | "tag";
+
+  /**
+   * Whether the write puts a link to a document holding the value, rather than
+   * the value itself.
+   */
+  link?: boolean;
 };
 
 /**
@@ -108,13 +120,26 @@ function fixture() {
       sourceFile: "/main.tsx",
       bindingPath: [writer],
     });
-    const cell = runtime.getCell(
+    const atTag = options.at === "tag";
+    const document = runtime.getCell<unknown>(
       signer.did(),
       "protected-value",
-      schema,
+      atTag ? { type: "object", properties: { tag: schema } } : schema,
       tx,
     );
-    cell.set(value);
+    const cell = atTag ? document.key("tag" as never) : document;
+    if (options.link === true) {
+      const source = runtime.getCell<string>(
+        signer.did(),
+        "linked-value",
+        { type: "string" },
+        tx,
+      );
+      source.set(value);
+      cell.set(source as never);
+    } else {
+      cell.set(value as never);
+    }
     const target = cell.getAsNormalizedFullLink();
     if (options.initialization === "setup") {
       tx.recordCfcWritePolicyInput({
@@ -956,6 +981,90 @@ describe("cfc-write-policy-any-of", () => {
       });
     });
 
+    describe("putting a link where the policy is declared", () => {
+      // The document's `tag` field carries the policy, and each write sets it
+      // to a link to a document holding the value, or to the value itself for
+      // the cases' twins. A link answers to its writer's own schema as a
+      // value does, so the two refuse the same writers.
+
+      /** `SCHEMA`, with `edit` stamped by another module. */
+      const RESTAMPED: JSONSchemaObj = {
+        type: "string",
+        ifc: {
+          writePolicyAnyOf: [
+            policy("send", "Send"),
+            rebound(
+              policy("edit", "Edit") as Alternative,
+              (binding) => ({ ...binding, moduleIdentity: "module-2" }),
+            ),
+          ],
+        },
+      };
+
+      /** Seeds the document through `send`, then returns `f`. */
+      const seeded = async (f: ReturnType<typeof fixture>) => {
+        expect(await f.write("send", "Send", { at: "tag" })).toBeUndefined();
+        return f;
+      };
+
+      it("commits a listed writer's link under the schema omitting one, and stores both alternatives", async () => {
+        await withFixture(async (f) => {
+          await seeded(f);
+
+          expect(
+            await f.write("send", "Send", {
+              at: "tag",
+              schema: NARROWED,
+              link: true,
+            }),
+          ).toBeUndefined();
+          expect(storedAlternatives(f.runtime, "protected-value", ["tag"]))
+            .toEqual(["send/Send", "edit/Edit"]);
+        });
+      });
+
+      it("commits the omitted writer's link under a schema listing it", async () => {
+        await withFixture(async (f) => {
+          await seeded(f);
+
+          expect(await f.write("edit", "Edit", { at: "tag", link: true }))
+            .toBeUndefined();
+        });
+      });
+
+      it("refuses the omitted writer's link, and its value, under the schema omitting it", async () => {
+        await withFixture(async (f) => {
+          await seeded(f);
+
+          for (const link of [true, false]) {
+            expect(
+              await f.write("edit", "Edit", {
+                at: "tag",
+                schema: NARROWED,
+                link,
+              }),
+            ).toContain("writePolicyAnyOf failed at /tag");
+          }
+        });
+      });
+
+      it("refuses a writer's link, and its value, under a schema stamping it with another module", async () => {
+        await withFixture(async (f) => {
+          await seeded(f);
+
+          for (const link of [true, false]) {
+            expect(
+              await f.write("edit", "Edit", {
+                at: "tag",
+                schema: RESTAMPED,
+                link,
+              }),
+            ).toContain("writePolicyAnyOf failed at /tag");
+          }
+        });
+      });
+    });
+
     describe("through links", () => {
       // A strict runtime with its own store. A document holding links
       // stores the policy of what they name beneath them, which the
@@ -1029,8 +1138,19 @@ describe("cfc-write-policy-any-of", () => {
       const SEND_ONLY: Alternatives = [policy("send", "Send")];
 
       it("commits a list's link write under a schema omitting one, and stores both alternatives beneath the links", async () => {
+        // The list's writer is of a module no alternative names: the
+        // policy beneath a link binds the writers of the document the link
+        // names, which its own envelope holds them to, and not the writer of
+        // the link.
+
         await withStrictRuntime(async (runtime) => {
           const seed = runtime.edit();
+          setCfcImplementationIdentity(seed, {
+            kind: "verified",
+            moduleIdentity: "list-module",
+            sourceFile: "/list.tsx",
+            bindingPath: ["openList"],
+          });
           const first = runtime.getCell(
             signer.did(),
             "message-1",
@@ -1044,6 +1164,12 @@ describe("cfc-write-policy-any-of", () => {
           expect((await seed.commit().settled).error).toBeUndefined();
 
           const later = runtime.edit();
+          setCfcImplementationIdentity(later, {
+            kind: "verified",
+            moduleIdentity: "list-module",
+            sourceFile: "/list.tsx",
+            bindingPath: ["openList"],
+          });
           const second = runtime.getCell(
             signer.did(),
             "message-2",
@@ -1265,6 +1391,46 @@ describe("cfc-write-policy-any-of", () => {
         expect(() =>
           mergeCfcSchemaEnvelopes(widened, SCHEMA, { storedSide: "candidate" })
         ).toThrow("the candidate adds an alternative outside a release");
+      });
+
+      it("returns the stored stamp where the stored side is the candidate, for an alternative and a lone writer claim alike", () => {
+        const stamped = (module: string) =>
+          rebound(
+            policy("edit", "Edit") as Alternative,
+            (binding) => ({ ...binding, moduleIdentity: module }),
+          );
+        const stampOf = (claim: unknown) =>
+          (claim as Alternative["writeAuthorizedBy"]).__ctWriterIdentityOf
+            .moduleIdentity;
+        const list = (module: string): JSONSchemaObj => ({
+          type: "string",
+          ifc: { writePolicyAnyOf: [stamped(module)] },
+        });
+        const lone = (module: string): JSONSchemaObj => ({
+          type: "string",
+          ifc: { writeAuthorizedBy: stamped(module).writeAuthorizedBy },
+        });
+
+        const mergedList = mergeCfcSchemaEnvelopes(
+          list("writer-module"),
+          list("stored-module"),
+          { storedSide: "candidate" },
+        ) as JSONSchemaObj;
+        const mergedLone = mergeCfcSchemaEnvelopes(
+          lone("writer-module"),
+          lone("stored-module"),
+          { storedSide: "candidate" },
+        ) as JSONSchemaObj;
+
+        expect(
+          stampOf(
+            (mergedList.ifc?.writePolicyAnyOf as Alternative[])[0]
+              .writeAuthorizedBy,
+          ),
+        ).toBe("stored-module");
+        expect(stampOf(mergedLone.ifc?.writeAuthorizedBy)).toBe(
+          "stored-module",
+        );
       });
 
       it("returns no issue from the dry run of a write omitting one", () => {
@@ -1572,6 +1738,7 @@ describe("cfc-write-policy-any-of", () => {
       release: WritePolicyRelease | null = RELEASE,
     ) {
       return mergeCfcSchemaEnvelopes(schemaOf(STORED), candidate, {
+        storedSide: "existing",
         ...(release === null ? {} : { writePolicyRelease: release }),
       }) as JSONSchemaObj;
     }
@@ -1695,15 +1862,15 @@ describe("cfc-write-policy-any-of", () => {
         }
       });
 
-      it("throws for a candidate that drops a stored alternative while appending one", () => {
-        expect(() =>
+      it("returns the stored alternatives, then the appended one, for a candidate omitting one while appending one", () => {
+        expect(
           merge(
             schemaOf([
               alternative("send", "Send", "new"),
               alternative("reply", "Send", "new"),
             ]),
-          )
-        ).toThrow("the candidate drops a stored alternative");
+          ).ifc?.writePolicyAnyOf,
+        ).toEqual([...STORED, alternative("reply", "Send", "new")]);
       });
 
       describe("an artifact pairing taken from two stored alternatives", () => {

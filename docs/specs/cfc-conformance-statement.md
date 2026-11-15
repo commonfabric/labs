@@ -913,10 +913,11 @@ envelope with the schema the transaction writes it under
 which merges the writer's schema with the claims the merged envelope holds where
 the write puts links, names those claims. A merge of two schemas neither of
 which is stored, such as two inputs of one transaction to the same document,
-refuses a candidate that lacks an alternative. Every write is still verified
-against its writer's own schema as well as the stored envelope, so a writer the
-candidate omits writes only under a schema that lists it. It appends a
-candidate's alternative that matches none only in a release, and only where
+refuses a candidate that lacks an alternative. Every write, a link write too, is
+verified against its writer's own schema as well as the stored envelope, so a
+writer the candidate omits writes only under a schema that lists it, and only
+with the stamp that schema gives it. It appends a candidate's alternative that
+matches none only in a release, and only where
 `writePolicyAlternativeAdmissible` admits it: its writer carries a module stamp
 the release installs, and one stored alternative names the same keys and the
 same contract with a writer stamped with that module or with one the space
