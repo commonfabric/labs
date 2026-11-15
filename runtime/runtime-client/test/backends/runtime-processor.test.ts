@@ -105,7 +105,11 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
-import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import {
+  clientScopedKey,
+  ownerClient,
+  type WorkerClient,
+} from "@/backends/worker-client.ts";
 import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
@@ -11602,9 +11606,11 @@ describe("runtime-processor", () => {
           client: WorkerClient,
           mountId: number,
         ) => {
-          processor.accessForTestingOnly.vdomMounts.get(
-            `${client.id} ${mountId}`,
-          )?.reconciler.flush();
+          const mount = processor.accessForTestingOnly.vdomMounts.get(
+            clientScopedKey(client, mountId),
+          );
+          expect(mount).toBeDefined();
+          mount!.reconciler.flush();
         };
 
         it("renders the deleted placeholder when the space is deleted while its view registers", async () => {
