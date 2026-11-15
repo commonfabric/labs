@@ -1009,6 +1009,146 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     });
 
+    // The identity of the module at `filename` in the closure of `entry`.
+    const moduleAt = async (entry: string, filename: string) => {
+      await runtime.patternManager.flushCompileCacheWrites();
+      await pieces.synced();
+      const tx = runtime.edit();
+      try {
+        const closure = await loadVerifiedSourceClosure(
+          runtime,
+          pieces.getSpace(),
+          entry,
+          tx,
+        );
+        const found = [...(closure ?? [])].find(([, doc]) =>
+          doc.filename === filename
+        );
+        expect(found, filename).toBeDefined();
+        return found![0];
+      } finally {
+        tx.abort();
+      }
+    };
+
+    // Moves `piece` to `next` through a transition that is no source update:
+    // its baseline does not retain the running pattern, as for an update
+    // from an origin nobody gates.
+    const moveWithoutUpdate = async (
+      piece: Piece,
+      next: RuntimeProgram,
+    ): Promise<void> => {
+      await pieces.synced();
+      const cell = piece.getCell();
+      const compiled = await runtime.patternManager.compilePattern(next, {
+        space: pieces.getSpace(),
+      });
+      const expected = getPieceSourceSnapshot(
+        cell,
+        runtime.runner.sessionPatternPointerFor(cell),
+      )!;
+      await runtime.runSynced(cell, compiled, {}, {
+        expectedPatternIdentity: expected.pattern,
+        pieceSourceTransition: {
+          revisionId: crypto.randomUUID(),
+          baseline: { kind: "unavailable" },
+          timestamp: Date.now(),
+          operation: "edit",
+          origin: null,
+          expected,
+        },
+      });
+      await pieces.synced();
+    };
+
+    it("grants new modules nothing over transitions that are no source update, and keeps an unchanged module's grant", async () => {
+      // v0 to v1 changes the writer, and its staging never lands. Two
+      // transitions that are no source update follow: one to an unrelated
+      // writer, and one back to v1's writer, byte for byte, under a new
+      // entry. Only that writer's grant from w0 holds, as `main`'s records
+      // of it would give.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const e0 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w0 = await moduleAt(e0, "/app/writer.ts");
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        const e1 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w1 = await moduleAt(e1, "/app/writer.ts");
+        await moveWithoutUpdate(piece, splitWriterProgram("w9", "eC"));
+        const eC = getPatternIdentityRef(piece.getCell())!.identity;
+        const w9 = await moduleAt(eC, "/app/writer.ts");
+        await moveWithoutUpdate(piece, splitWriterProgram("w1", "eC2"));
+        const eC2 = getPatternIdentityRef(piece.getCell())!.identity;
+        expect(await moduleAt(eC2, "/app/writer.ts")).toBe(w1);
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+        const space = pieces.getSpace();
+        expect(fresh.grantsModuleDelegation(space, w1, w0)).toBe(true);
+        for (
+          const [module, predecessor] of [
+            [eC2, e0],
+            [eC2, e1],
+            [eC2, eC],
+            [w9, w0],
+            [w1, w9],
+          ]
+        ) {
+          expect(
+            fresh.grantsModuleDelegation(space, module, predecessor),
+            `${module} <- ${predecessor}`,
+          ).toBe(false);
+        }
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("grants a pattern a transition that is no source update reverts to nothing from the entries it carries", async () => {
+      // v1 to v2 is a source update whose staging lands; a transition that
+      // is no source update then reverts to v1. The member carries v2's
+      // entries back, keyed by v2's modules, and v1's modules get none of
+      // them: w1 keeps only what its own record grants.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const e0 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w0 = await moduleAt(e0, "/app/writer.ts");
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        await piece.setPattern(splitWriterProgram("w1", "e1"));
+        const e1 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w1 = await moduleAt(e1, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("w2", "e2"));
+        const e2 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w2 = await moduleAt(e2, "/app/writer.ts");
+        await moveWithoutUpdate(piece, splitWriterProgram("w1", "e1"));
+        expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(e1);
+        expect(recordedMember(piece)?.identity).toBe(e1);
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+        const space = pieces.getSpace();
+        expect(fresh.grantsModuleDelegation(space, w1, w0)).toBe(true);
+        expect(fresh.grantsModuleDelegation(space, w1, w2)).toBe(false);
+        expect(fresh.grantsModuleDelegation(space, e1, e2)).toBe(false);
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
     it("keeps the recorded grant of a module two updates leave unchanged", async () => {
       const runtimes = [0, 1].map(() =>
         new Runtime({
