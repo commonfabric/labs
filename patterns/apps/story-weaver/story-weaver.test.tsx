@@ -18,6 +18,7 @@ import {
 import StoryWeaver, { type Level, type Spindle } from "./story-weaver.tsx";
 import {
   boardPaths,
+  boardView,
   buildPrompt,
   pinsLostByBranch,
   storyMarkdown,
@@ -114,9 +115,18 @@ export default pattern(() => {
       pinned("1.0", "c", "b"),
     ];
     const next = withBranch(LEVELS, records, 0, 1);
-    return pinsLostByBranch(records, 0, 1) === 2 &&
+    const hidden = [pinned("1.0", "c", "b")];
+    return pinsLostByBranch(LEVELS, "seed", records, 0, 1) === 2 &&
+      pinsLostByBranch(LEVELS, "seed", hidden, 0, 1) === 0 &&
       next.levels[0].branch === 1 &&
       next.spindles.map((s) => s.path).join() === "0";
+  });
+  const assert_stale_carries_down = assert(() => {
+    const view = boardView(LEVELS, "new seed", [
+      pinned("0", "a", "seed"),
+      pinned("0.0", "b", "a"),
+    ]);
+    return view[0].spindles[0].stale && view[1].spindles[0].stale;
   });
   const assert_remove_level_drops_its_spindles = assert(() => {
     const next = withLastLevelRemoved(LEVELS, [
@@ -234,6 +244,7 @@ export default pattern(() => {
       { assertion: assert_pin_twice_unpins },
       { assertion: assert_respin_drops_pin },
       { assertion: assert_lower_branch_cuts_subtree },
+      { assertion: assert_stale_carries_down },
       { assertion: assert_remove_level_drops_its_spindles },
       { assertion: assert_story_markdown_lists_pins },
       { assertion: assert_starts_empty },

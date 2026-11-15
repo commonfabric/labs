@@ -254,6 +254,9 @@ export const boardView = (
 ): LevelView[] => {
   const index = byPath(spindles);
   const paths = boardPaths(levels, synopsis, spindles);
+  // Levels are built in order, so a parent's staleness is known before its
+  // children's: a pin built on a stale pin is stale too.
+  const stale = new Set<string>();
   return levels.map((level, levelIndex) => ({
     index: levelIndex,
     title: level.title,
@@ -268,6 +271,9 @@ export const boardView = (
       const ready = input.trim() !== "" &&
         (levelIndex === 0 || record.requested);
       const pinned = isPinned(record);
+      const isStale = pinned &&
+        (record.parentHash !== textHash(input) || stale.has(parentOf(path)));
+      if (isStale) stale.add(path);
       return {
         path,
         level: levelIndex,
@@ -280,7 +286,7 @@ export const boardView = (
         pinned: pinned ? record.pinned : -1,
         pinnedText: pinned ? record.pinnedText : "",
         extraPrompt: record.extraPrompt,
-        stale: pinned && record.parentHash !== textHash(input),
+        stale: isStale,
         ready,
         prompt,
         activePrompt: ready ? prompt : "",
@@ -378,12 +384,45 @@ const cutByBranch = (
     return parts.length > level && parts[level] >= branch;
   });
 
-/** Pinned spindles a branch change would remove. */
+/** Pinned spindles on the board that `doomed` would remove. Records hidden
+ * under an unpinned parent are not counted: the person can't see them. */
+const pinsOnBoard = (
+  levels: readonly Level[],
+  synopsis: string,
+  spindles: readonly Spindle[],
+  doomed: readonly Spindle[],
+): number => {
+  const shown = new Set(boardPaths(levels, synopsis, spindles).flat());
+  return doomed.filter((s) => isPinned(s) && shown.has(s.path)).length;
+};
+
+/** Pinned spindles on the board a branch change would remove. */
 export const pinsLostByBranch = (
+  levels: readonly Level[],
+  synopsis: string,
   spindles: readonly Spindle[],
   level: number,
   branch: number,
-): number => cutByBranch(spindles, level, branch).filter(isPinned).length;
+): number =>
+  pinsOnBoard(
+    levels,
+    synopsis,
+    spindles,
+    cutByBranch(spindles, level, branch),
+  );
+
+/** Pinned spindles on the board that removing the last level would remove. */
+export const pinsLostByRemovingLevel = (
+  levels: readonly Level[],
+  synopsis: string,
+  spindles: readonly Spindle[],
+): number =>
+  pinsOnBoard(
+    levels,
+    synopsis,
+    spindles,
+    spindles.filter((s) => levelOf(s.path) >= levels.length - 1),
+  );
 
 export const clampBranch = (branch: number): number =>
   Math.min(MAX_BRANCH, Math.max(1, Math.round(branch)));

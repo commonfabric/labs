@@ -41,6 +41,7 @@ import {
   OPTIONS_SYSTEM,
   parentText,
   pinsLostByBranch,
+  pinsLostByRemovingLevel,
   type Spindle,
   storyMarkdown,
   suggestedLevel,
@@ -315,12 +316,16 @@ export interface StoryWeaverOutput {
 const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
   ({ title, synopsis, synopsisDraft, levels, spindles }) => {
     // Transient UI state: per session.
+    // Counts up for good, so every Inspire me asks for a fresh batch.
     const ideasAttempt = new Writable.perSession<number>(0);
+    const ideasOpen = new Writable.perSession<boolean>(false);
     const editingLevel = new Writable.perSession<number | null>(null);
     const levelTitleDraft = new Writable.perSession<string>("");
     const levelPromptDraft = new Writable.perSession<string>("");
     const editingPrompt = new Writable.perSession<string | null>(null);
     const promptDraft = new Writable.perSession<string>("");
+    // A change that would drop pinned spindles, waiting for a yes. Branch 0
+    // means removing the level.
     const pendingBranch = new Writable.perSession<
       { level: number; branch: number; lost: number } | null
     >(null);
@@ -356,11 +361,13 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
       prompt: computed(() => ideasPrompt(ideasAttempt.get())),
     });
     const ideaList = computed(() => ideas.result?.ideas ?? []);
-    const showIdeas = computed(() => ideasAttempt.get() > 0);
-    const inspire = action(() => ideasAttempt.set(ideasAttempt.get() + 1));
+    const inspire = action(() => {
+      ideasAttempt.set(ideasAttempt.get() + 1);
+      ideasOpen.set(true);
+    });
     const chooseIdea = action((event: { synopsis: string }) => {
       synopsisDraft.set(event.synopsis);
-      ideasAttempt.set(0);
+      ideasOpen.set(false);
     });
 
     // --- Spindles ------------------------------------------------------------
@@ -416,6 +423,13 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
       spindles.set(next.spindles);
       pendingBranch.set(null);
     });
+    const removeLastLevel = action(() => {
+      const next = withLastLevelRemoved(levels.get(), spindles.get());
+      levels.set(next.levels);
+      spindles.set(next.spindles);
+      editingLevel.set(null);
+      pendingBranch.set(null);
+    });
     // The steppers: lowering a branch that would drop pinned spindles asks
     // first.
     const stepBranch = action((event: { level: number; delta: number }) => {
@@ -423,7 +437,13 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
       if (!current) return;
       const branch = clampBranch(current.branch + event.delta);
       if (branch === current.branch) return;
-      const lost = pinsLostByBranch(spindles.get(), event.level, branch);
+      const lost = pinsLostByBranch(
+        levels.get(),
+        synopsis.get(),
+        spindles.get(),
+        event.level,
+        branch,
+      );
       if (lost > 0) {
         pendingBranch.set({ level: event.level, branch, lost });
       } else {
@@ -432,18 +452,22 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
     });
     const confirmBranch = action(() => {
       const pending = pendingBranch.get();
-      if (pending) {
+      if (pending && pending.branch === 0) removeLastLevel.send();
+      else if (pending) {
         setBranch.send({ level: pending.level, branch: pending.branch });
       }
     });
     const cancelBranch = action(() => pendingBranch.set(null));
     const pendingMessage = computed(() => {
       const pending = pendingBranch.get();
-      return pending
-        ? `Lowering to ${pending.branch} removes ${pending.lost} pinned spindle${
-          pending.lost === 1 ? "" : "s"
-        } and everything under them.`
-        : "";
+      const lost = `${pending?.lost} pinned spindle${
+        pending?.lost === 1 ? "" : "s"
+      }`;
+      return !pending
+        ? ""
+        : pending.branch === 0
+        ? `Removing this level removes ${lost}.`
+        : `Lowering to ${pending.branch} removes ${lost} and everything under them.`;
     });
     const pendingLevel = computed(() => pendingBranch.get()?.level ?? -1);
 
@@ -499,11 +523,17 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
     });
     const cancelLevel = action(() => editingLevel.set(null));
 
-    const removeLastLevel = action(() => {
-      const next = withLastLevelRemoved(levels.get(), spindles.get());
-      levels.set(next.levels);
-      spindles.set(next.spindles);
-      editingLevel.set(null);
+    const askRemoveLastLevel = action(() => {
+      const lost = pinsLostByRemovingLevel(
+        levels.get(),
+        synopsis.get(),
+        spindles.get(),
+      );
+      if (lost > 0) {
+        pendingBranch.set({ level: levels.get().length - 1, branch: 0, lost });
+      } else {
+        removeLastLevel.send();
+      }
     });
 
     const editingLevelIndex = computed(() => editingLevel.get() ?? -1);
@@ -537,13 +567,13 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
           {started
             ? (
               <span style={styles.hint}>
-                Updating the synopsis rebuilds the first level; pins below it
-                are marked stale.
+                Updating the synopsis rebuilds the first level and marks the
+                pins built on the old one stale.
               </span>
             )
             : null}
         </div>
-        {showIdeas
+        {ideasOpen
           ? (
             <div style={styles.ideas}>
               <div style={{ fontWeight: "600", color: "#7c3aed" }}>
@@ -623,7 +653,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                 ? (
                   <button
                     type="button"
-                    onClick={removeLastLevel}
+                    onClick={askRemoveLastLevel}
                     style={styles.secondary}
                   >
                     Remove level
@@ -871,9 +901,23 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                 {pinnedAside
                   ? (
                     <div style={optionStyle(true, false)}>
-                      <span style={{ fontSize: "12px", color: "#1d4ed8" }}>
-                        📌 Pinned
-                      </span>
+                      <div style={styles.row}>
+                        <span style={{ fontSize: "12px", color: "#1d4ed8" }}>
+                          📌 Pinned
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            pin.send({
+                              path: spindle.path,
+                              option: spindle.pinned,
+                              text: spindle.pinnedText,
+                            })}
+                          style={styles.secondary}
+                        >
+                          Unpin
+                        </button>
+                      </div>
                       <cf-markdown content={spindle.pinnedText} />
                     </div>
                   )
