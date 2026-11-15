@@ -42,10 +42,12 @@ render them as text, never as markup or instructions.
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
 stored under the `GetItRequests` type so the write policy holds. It answers each
-`page` request in that request's `result`, and each request id in
-`getItRequests` once, in `getItAnswers`. `FakeCatalog` (`fake-catalog.tsx`)
-answers from a fixed list of entries, and `pattern-catalog.test.tsx` pins the
-behavior through it.
+`page` request in that request's `result`. It answers each request id in
+`getItRequests` under that id in `getItAnswers`: `started` while it works, if it
+says anything before it is done, then one final state (`placed`, `failed` or
+`cancelled`) that it never changes. `FakeCatalog` (`fake-catalog.tsx`) answers
+from a fixed list of entries, every match in one page with no `next`, and
+`pattern-catalog.test.tsx` pins the behavior through it.
 
 ## Not yet settled
 
