@@ -89,6 +89,12 @@ type Clause = keyof typeof CLAUSE_MARK;
 /** How the sub-pattern declares the slot it is handed the labeled cell in. */
 type Slot = "declared" | "plain";
 
+/**
+ * What the sub-pattern does with the labeled cell: nothing, read it into a
+ * computed it returns beside its view, or render that computed in its view.
+ */
+type Reading = "none" | "returns" | "renders";
+
 /** An owner cell typed so its writer is named, or plainly. */
 const OWNERS = {
   "authorized": "WriteAuthorizedBy<Record<string, never>, typeof retainOwner>",
@@ -99,8 +105,9 @@ type Owner = keyof typeof OWNERS;
 
 /**
  * The piece's program: a labeled cell and an owner cell, both handed to the
- * sub-pattern `View`, whose view shows only the owner cell. `version` changes
- * the main module; with `editView` it changes `View`'s own body too.
+ * sub-pattern `View`, whose view shows the owner cell and, by `reading`, what
+ * it computes from the labeled one. `version` changes the main module; with
+ * `editView` it changes `View`'s own body too.
  */
 const program = (
   options: {
@@ -109,6 +116,7 @@ const program = (
     owner: Owner;
     version: string;
     editView: boolean;
+    reading?: Reading;
   },
 ): RuntimeProgram => {
   const labeled = options.clause === "policy" ? "BySealedPolicy" : "ByAtom";
@@ -116,6 +124,18 @@ const program = (
     ? `${labeled}<number> | undefined`
     : "number | undefined";
   const title = options.editView ? options.version : "";
+  const reading = options.reading ?? "none";
+  const view = reading === "none"
+    ? `({ owner }) => ({ [UI]: <div title="${title}">{owner}</div> })`
+    : `({ secret, owner }) => {
+    const shown = computed(() => ((secret ?? 0) > 0 ? "on" : "off"));
+    return {
+      [UI]: <div title="${title}">{owner}${
+      reading === "renders" ? "{shown}" : ""
+    }</div>,
+      shown,
+    };
+  }`;
   return {
     main: "/main.tsx",
     files: [
@@ -123,6 +143,7 @@ const program = (
         name: "/main.tsx",
         contents: `/// <cts-enable />
 import {
+  computed,
   handler,
   NAME,
   pattern,
@@ -136,7 +157,7 @@ export const retainOwner = handler<void, Record<string, never>>(() => {});
 type Owner = ${OWNERS[options.owner]};
 
 const View = pattern<{ secret: ${slotType}; owner: Owner }, any>(
-  ({ owner }) => ({ [UI]: <div title="${title}">{owner}</div> }),
+  ${view},
 );
 
 export default pattern<Record<string, never>, any>(() => {
@@ -237,13 +258,28 @@ const stampedRootClasses = (runtime: Runtime, piece: Cell<unknown>) =>
     .sort();
 
 /**
- * Whether a display not cleared for the policy clause is kept from a piece's
- * view: the label it reads for `$UI` carries the clause. No label hides
- * nothing.
+ * Whether a display not cleared for the clause `clause` is kept from a
+ * piece's view: the label it reads for `$UI` carries the clause.
  */
-const viewHidden = (piece: Cell<unknown>): boolean => {
-  const view = cfcLabelViewForResolvedCell(piece.key("$UI"));
-  return view !== undefined && carries(view, "policy");
+const viewHidden = (piece: Cell<unknown>, clause: Clause): boolean =>
+  carries(cfcLabelViewForResolvedCell(piece.key("$UI")) ?? [], clause);
+
+/**
+ * Every stored label entry on the document of the computed the sub-pattern
+ * of `piece` returns beside its view.
+ */
+const shownEntries = (runtime: Runtime, piece: Cell<unknown>): unknown[] => {
+  const tx = runtime.edit();
+  try {
+    const view = piece.key("$UI").withTx(tx).resolveAsCell()
+      .getAsNormalizedFullLink();
+    return documentEntries(
+      runtime,
+      runtime.getCellFromLink({ ...view, path: ["shown"] }),
+    );
+  } finally {
+    tx.abort("address read");
+  }
 };
 
 /** The address of the sub-pattern's result document of `piece`. */
@@ -401,6 +437,57 @@ describe("sub-pattern-update-labels", () => {
       expect(after).toEqual(before);
     });
 
+    describe("a view that reads the labeled cell", () => {
+      // The sub-pattern computes from the labeled cell, so its setup
+      // instantiates an action over it, and certifies that action's reads by
+      // resolving the cell through the sub-pattern's argument. The action's
+      // own run reads the cell and labels what it computes; the sub-pattern's
+      // result, which only refers to that, stays as a fresh piece has it.
+
+      const options = {
+        clause: "policy" as const,
+        slot: "declared" as const,
+        owner: "plain" as const,
+      };
+
+      for (const reading of ["returns", "renders"] as const) {
+        for (const editView of [true, false]) {
+          it(`keeps the result document's labels as created across an update that ${editView ? "edits the view" : "changes only the parent"} (the computed ${reading === "renders" ? "rendered" : "returned"})`, async () => {
+            const piece = await pieces.create(
+              program({ ...options, version: "v1", editView, reading }),
+              { input: {} },
+            );
+            await runtime.idle();
+            const cell = piece.getCell();
+            await cell.key("$UI").pull();
+            await runtime.idle();
+            const created = viewEntries(runtime, cell);
+            expect(viewHidden(cell, "policy")).toBe(false);
+
+            await piece.setPattern(
+              program({ ...options, version: "v2", editView, reading }),
+            );
+            await runtime.idle();
+            await cell.key("$UI").pull();
+            await runtime.idle();
+
+            expect(viewEntries(runtime, cell)).toEqual(created);
+            expect(viewHidden(cell, "policy")).toBe(false);
+            // The computed's output keeps the cell's clause. The cell's own
+            // label and the slot's carry the one clause, so this does not
+            // tell which of them its run took; the runner's
+            // `cfc-static-read-targets` tests pin the slot's, under an atom
+            // of its own.
+            if (reading === "renders") {
+              expect(carries(shownEntries(runtime, cell), "policy")).toBe(
+                true,
+              );
+            }
+          });
+        }
+      }
+    });
+
     describe("a view an earlier update hid", () => {
       // An earlier update of such a piece, which read the labeled cell into
       // the sub-pattern's setup, stamped the cell's clause on the root of the
@@ -417,7 +504,7 @@ describe("sub-pattern-update-labels", () => {
         const piece = await pieces.create(first, { input: {} });
         await runtime.idle();
         await plantStamp(runtime, piece.getCell());
-        expect(viewHidden(piece.getCell())).toBe(true);
+        expect(viewHidden(piece.getCell(), "policy")).toBe(true);
         expect(stampedRootClasses(runtime, piece.getCell())).toEqual([
           "shape",
           "value",
@@ -442,7 +529,7 @@ describe("sub-pattern-update-labels", () => {
           );
           await runtime.idle();
 
-          expect(viewHidden(piece.getCell())).toBe(false);
+          expect(viewHidden(piece.getCell(), "policy")).toBe(false);
           expect(stampedRootClasses(runtime, piece.getCell())).toEqual([
             "shape",
           ]);
@@ -480,7 +567,7 @@ describe("sub-pattern-update-labels", () => {
             await piece.setPattern(splitProgram(next));
             await runtime.idle();
 
-            expect(viewHidden(piece.getCell())).toBe(hidden);
+            expect(viewHidden(piece.getCell(), "policy")).toBe(hidden);
           });
         }
       });
@@ -494,7 +581,7 @@ describe("sub-pattern-update-labels", () => {
         await piece.setPattern(same);
         await runtime.idle();
 
-        expect(viewHidden(piece.getCell())).toBe(true);
+        expect(viewHidden(piece.getCell(), "policy")).toBe(true);
       });
 
       it("keeps the view hidden across a restart", async () => {
@@ -515,7 +602,7 @@ describe("sub-pattern-update-labels", () => {
         await piece.getCell().key("$UI").pull();
         await runtime.idle();
 
-        expect(viewHidden(piece.getCell())).toBe(true);
+        expect(viewHidden(piece.getCell(), "policy")).toBe(true);
       });
 
       it("keeps the view hidden across a render", async () => {
@@ -528,7 +615,7 @@ describe("sub-pattern-update-labels", () => {
         await piece.getCell().key("$UI").pull();
         await runtime.idle();
 
-        expect(viewHidden(piece.getCell())).toBe(true);
+        expect(viewHidden(piece.getCell(), "policy")).toBe(true);
       });
     });
   });
@@ -703,7 +790,8 @@ describe("sub-pattern-update-labels", () => {
           await plantStamp(runtime, piece.getCell(), view);
         },
       });
-      expect(viewHidden((await servedPiece(created.pieceId)).cell)).toBe(true);
+      expect(viewHidden((await servedPiece(created.pieceId)).cell, "policy"))
+        .toBe(true);
 
       await servedUpdate(
         created.pieceId,
@@ -711,8 +799,55 @@ describe("sub-pattern-update-labels", () => {
       );
 
       const after = await servedPiece(created.pieceId);
-      expect(viewHidden(after.cell)).toBe(false);
+      expect(viewHidden(after.cell, "policy")).toBe(false);
       expect(stampedRootClasses(after.runtime, after.cell)).toEqual(["shape"]);
+    });
+
+    it("leaves the result document of a view that reads the labeled cell unlabeled across an edit of the sub-pattern", async () => {
+      // The serving runtime sets the sub-pattern up again at its swap to the
+      // new pattern, which instantiates the action the view computes with.
+      // The update the piece's own runtime runs, above, is the case that
+      // stamps the view when that instantiation joins the slot's label; this
+      // pins the served route's outcome, which that join does not reach.
+
+      const options = {
+        clause: "policy" as const,
+        slot: "declared" as const,
+        owner: "plain" as const,
+        editView: true,
+        reading: "renders" as const,
+      };
+      const created = await served(
+        "instantiate",
+        (pieces) =>
+          servedInstantiatePiece(pieces, {
+            source: { program: program({ ...options, version: "v1" }) },
+            actingUser: signer.did(),
+          }),
+        (runtime, receipt) =>
+          confirmServedInstantiate(runtime, space, receipt, signer.did()),
+      );
+      expect(carries(await servedViewEntries(created.pieceId), "policy"))
+        .toBe(false);
+      const candidate = (await served(
+        "upload",
+        (pieces) =>
+          servedUploadPattern(pieces, program({ ...options, version: "v2" })),
+      )).ref;
+
+      await served(
+        "setsrc",
+        (pieces) =>
+          servedSetPieceSource(pieces, {
+            pieceId: created.pieceId,
+            pattern: candidate,
+            actingUser: signer.did(),
+          }),
+        (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
+      );
+
+      expect(carries(await servedViewEntries(created.pieceId), "policy"))
+        .toBe(false);
     });
   });
 });

@@ -761,9 +761,9 @@ graph. Captured `FabricLink`s are atomic planner values. Arrays inside a link
 payload, including a cell subpath, are not split into child cells.
 
 The `FabricValue` hash distinguishes undefined values, sparse array holes,
-special numbers, bigints, bytes, dates, regular expressions, errors, and other
-accepted `FabricValue`s. Object key order does not affect the hash. Array order
-is preserved.
+special numbers, bigints, bytes, dates, errors, and other accepted
+`FabricValue`s. Object key order does not affect the hash. Array order is
+preserved.
 
 ### Graph commits and hydration
 

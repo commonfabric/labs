@@ -213,11 +213,19 @@ through a cell made after the stop, syncs or pulls that cell first
 (`Cell.sync()`, `Cell.pull()`). A read inside `Runtime.editWithRetry()` needs
 neither: before the transaction commits, the runtime waits for the loads its
 reads of absent documents started, and runs the attempt again if any of those
-documents exists. An attempt that throws gets the same wait before its throw is
-reported, so a check inside the transaction that refuses when it finds a
-document absent runs again once that document has loaded. A transaction made
-with `Runtime.edit()` and committed directly gets no such wait, nor does a read
-by address alone, which starts no load.
+documents exists. That wait covers the absent documents the attempt does not
+write. One it reads as absent and then writes is one it would create, which
+`SpaceReplica.unexaminedAbsences()` does not count, so the attempt goes on to
+its commit, the store refuses it, and the next attempt runs once the documents
+the refusal named have loaded. An attempt that throws gets the same wait before
+its throw is reported, so a check inside the transaction that refuses when it
+finds a document absent runs again once that document has loaded. A transaction
+made with `Runtime.edit()` and committed directly gets no such wait, nor does a
+read by address alone, which starts no load. So a stopped piece is set up again
+in `Runtime.editWithRetry()`, as
+`runtime/runner/test/cfc-result-wiring-stamp.test.ts` does after a release pass
+has dropped the piece's argument and `computed:` documents: that setup writes
+them, so it takes two attempts.
 
 ## Measuring
 

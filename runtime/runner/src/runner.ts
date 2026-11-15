@@ -122,6 +122,7 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
+import { STATIC_READ_TARGET_READ } from "./cfc/static-read-target-read.ts";
 import {
   flowJoinObservationsOf,
   servedRunActsForNoOne,
@@ -13392,7 +13393,24 @@ export class Runner {
     // through an ordinary link to the effective source cell. Resolve the full
     // static chain so the completeness certificate covers the same target the
     // action transaction will record at runtime.
-    return tx.runWithAmbientReadMeta(machineryRead, () => {
+    //
+    // A dependency-discovery read (specs#100's §18.6.2 class), as
+    // `#populateDeclaredSchedulerReads()` is: it carries that site's
+    // `schedulerDependencyRead`, which decides what it consumes, beside
+    // `machineryRead` (`STATIC_READ_TARGET_READ`, whose module holds the
+    // marker naming that pull request). Both
+    // read the action's declared inputs through their links; that one makes
+    // the reactivity log cover them for the scheduler's subscriptions, and
+    // this one names the cells they reach in the scheduler's certificate of
+    // the action's reads. Either record decides only whether and when the
+    // action runs, and nothing the transaction resolving it writes is taken
+    // from it. The action's own run reads the same links as ordinary reads,
+    // so their labels and the read ceiling are weighed there, where the value
+    // is consumed. The class is narrower than §8.10.1, which excludes such
+    // reads from a transaction used only for dependency discovery: inside
+    // this committing one the read leaves the flow join and read ceilings
+    // only, and stays a consumed input and a conflict dependency.
+    return tx.runWithAmbientReadMeta(STATIC_READ_TARGET_READ, () => {
       const targets: NormalizedFullLink[] = [];
       let complete = true;
       for (const input of inputCells) {

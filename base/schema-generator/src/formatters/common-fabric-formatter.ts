@@ -1638,10 +1638,10 @@ export class CommonFabricFormatter implements TypeFormatter {
         const defaultType = typeWithAlias.aliasTypeArguments[1]!;
         const defaultValue = this.#extractDefaultValue(defaultType, context);
         // TODO(danfuzz): A default for a fabric-backed native disagrees with
-        // the value its type actually stores. `Date`, `RegExp`, and
-        // `Uint8Array` map to `{ type: "object" }` because they are stored as
-        // `FabricEpochNsec` / `FabricRegExp` / `FabricBytes`, but the default
-        // captured here is the authored TS literal. So
+        // the value its type actually stores. `Date` and `Uint8Array` map to
+        // `{ type: "object" }` because they are stored as `FabricEpochNsec` /
+        // `FabricBytes`, but the default captured here is the authored TS
+        // literal. So
         // `Default<Date, "2020-01-01T00:00:00.000Z">` emits
         // `{ type: "object", default: "2020-01-01T00:00:00.000Z" }` -- a string
         // standing in for an object, and not the form a read of that slot would

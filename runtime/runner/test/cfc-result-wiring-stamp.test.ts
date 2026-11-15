@@ -16,7 +16,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 
 import { NAME } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
-import { isCellLink } from "../src/link-utils.ts";
+import { isCellLink, parseLink } from "../src/link-utils.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
@@ -146,27 +146,64 @@ describe("cfc-result-wiring-stamp", () => {
   };
 
   /**
+   * Has the storage manager record holds only for the documents whose ids
+   * `kept` names, as it is by the time the cells holding every other document
+   * have been collected. A release pass then drops the documents a stopped
+   * piece leaves that no action reads, whenever the test runs, and keeps the
+   * ones the test holds a cell for. `kept` may grow while the case runs.
+   */
+  const holdOnly = (kept: ReadonlySet<string>): void => {
+    const recorded = storageManager.holdDocument.bind(storageManager);
+    storageManager.holdDocument = (address, identity) =>
+      kept.has(address.id) ? recorded(address, identity) : {};
+  };
+
+  /** The id of the result document `cause` names. */
+  const resultIdOf = (cause: string): string =>
+    runtime.getCell(space, cause).getAsNormalizedFullLink().id;
+
+  /**
+   * How many attempts the latest {@link setUp} took. Only a case that forces
+   * the release before a setup checks it: in any other, whether a release pass
+   * drops the stopped piece's documents before its next setup is a matter of
+   * timing, so that setup may take one attempt or two.
+   */
+  let setUpAttempts = 0;
+
+  /**
    * Sets `pattern` up on the result document `cause`, in a transaction that
    * first reads Bob's document when `bobs` is given, and returns the result
    * cell once the transaction commits. The piece is stopped again, so the
    * next call sets it up afresh.
+   *
+   * The transaction is `editWithRetry()`'s. A stop asks for a release pass,
+   * which can drop the stopped piece's argument and `computed:` documents, and
+   * a later setup of the same piece reads them as absent. Its commit is then
+   * refused, and only an attempt that can run again once they have loaded
+   * converges ("Reading a released document again" in
+   * `docs/features/document-release.md`). How many attempts it took is left
+   * in {@link setUpAttempts}.
    */
   const setUp = async (
     cause: string,
     pattern: ReturnType<typeof patterns>[keyof ReturnType<typeof patterns>],
     bobs?: IMemorySpaceAddress,
   ): Promise<Cell<unknown>> => {
-    const tx = runtime.edit();
-    if (bobs !== undefined) {
-      runtime.getCellFromLink(bobs, undefined, tx).get();
-    }
-    const resultCell = runtime.getCell(space, cause, undefined, tx);
-    const result = runtime.run(tx, pattern, { x: 1 }, resultCell);
-    tx.prepareCfc();
-    expect((await tx.commit().settled).ok).toBeDefined();
+    let result: Cell<unknown> | undefined;
+    setUpAttempts = 0;
+    const { error } = await runtime.editWithRetry((tx) => {
+      setUpAttempts += 1;
+      if (bobs !== undefined) {
+        runtime.getCellFromLink(bobs, undefined, tx).get();
+      }
+      const resultCell = runtime.getCell(space, cause, undefined, tx);
+      result = runtime.run(tx, pattern, { x: 1 }, resultCell);
+    });
+    expect(error).toBeUndefined();
+    expect(result).toBeDefined();
     await runtime.idle();
-    runtime.runner.stop(result);
-    return result;
+    runtime.runner.stop(result!);
+    return result!;
   };
 
   /** The label entries stored on `cell`'s document. */
@@ -888,9 +925,20 @@ describe("cfc-result-wiring-stamp", () => {
     });
 
     it("stays where the setup carries over the stored name it guards, and rewrites another slot", async () => {
+      // The second setup runs after a release pass has dropped the stopped
+      // piece's argument and `computed:` documents, which a release does
+      // once the cells holding them are collected. Recording holds only for
+      // the result document, which the test holds, stands in for that
+      // collection, so the pass awaited below drops them whenever the test
+      // runs. The second setup writes them as well, so its first commit is
+      // refused and a second attempt reads them; the first setup, which
+      // creates them, takes one.
+
+      holdOnly(new Set([resultIdOf("name-carried-rewritten")]));
       const { named } = patterns();
       const bobs = await seedBobsDocument();
       const result = await setUp("name-carried-rewritten", named);
+      expect(setUpAttempts).toBe(1);
       const tx = runtime.edit();
       const link = result.getAsNormalizedFullLink();
       writeSeedEnvelopeDoc(tx, space);
@@ -918,9 +966,23 @@ describe("cfc-result-wiring-stamp", () => {
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).ok).toBeDefined();
       await plantStamp(result, BOB);
+      await runtime.releaseUnreadDocuments();
 
       await setUp("name-carried-rewritten", named);
+      expect(setUpAttempts).toBe(2);
 
+      await result.sync();
+      const read = runtime.edit();
+      const stored = storedFields(read, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: [],
+      }).value as Record<string, unknown>;
+      read.abort("stored value read");
+      expect(parseLink(stored[NAME], link)?.id).toBe(bobs.id);
+      expect(isCellLink(stored.a)).toBe(true);
+      expect(parseLink(stored.a, link)?.id).not.toBe(bobs.id);
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
@@ -995,6 +1057,13 @@ describe("cfc-result-wiring-stamp", () => {
     const routes: {
       name: string;
       running: boolean;
+      /**
+       * Whether the route's setup runs in the asking transaction, committed
+       * once, so that the case loads what the setup reads first, as a caller
+       * staging a setup over a stopped piece must
+       * (`Runner.syncStoredPieceCells()`).
+       */
+      loadsFirst: boolean;
       run: (
         tx: ReturnType<Runtime["edit"]>,
         cell: Cell<unknown>,
@@ -1005,17 +1074,20 @@ describe("cfc-result-wiring-stamp", () => {
       {
         name: "a run in the transaction that read the data",
         running: false,
+        loadsFirst: true,
         run: (tx, cell, same) => runtime.run(tx, same, { x: 1 }, cell),
       },
       {
         name: "a run deferred until its pattern is named",
         running: false,
+        loadsFirst: false,
         run: (tx, cell, _same, fresh) =>
           runtime.run(tx, fresh(), { x: 1 }, cell),
       },
       {
         name: "a start after the asking transaction commits",
         running: false,
+        loadsFirst: false,
         run: (tx, cell, same) => {
           runtime.runner.accessForTestingOnly.runPatternAfterSuccessfulCommit(
             tx,
@@ -1031,11 +1103,13 @@ describe("cfc-result-wiring-stamp", () => {
       {
         name: "a run given no transaction",
         running: false,
+        loadsFirst: false,
         run: (_tx, cell, same) => runtime.run(undefined, same, { x: 1 }, cell),
       },
       {
         name: "a swap of the running piece",
         running: true,
+        loadsFirst: false,
         run: (tx, cell, _same, fresh) =>
           runtime.run(tx, fresh(), { x: 1 }, cell),
       },
@@ -1044,6 +1118,12 @@ describe("cfc-result-wiring-stamp", () => {
     for (const nested of [false, true]) {
       for (const route of routes) {
         it(`keeps it through ${route.name}${nested ? ", on a nested child" : ""}`, async () => {
+          // A release pass awaited before the asking transaction drops what
+          // the stopped piece left that no action reads, whenever the test
+          // runs; the documents the test holds a cell for stay.
+
+          const kept = new Set<string>();
+          holdOnly(kept);
           const same = patterns();
           const pattern = nested ? same.outer : same.plain;
           // A pattern built afresh, after the first setup, is one this
@@ -1052,6 +1132,7 @@ describe("cfc-result-wiring-stamp", () => {
             nested ? patterns().outer : patterns().plain;
           const bobs = await seedBobsDocument();
           const cause = `kept-${nested ? "child" : "top"}-${route.name}`;
+          kept.add(resultIdOf(cause));
 
           const first = runtime.edit();
           const result = runtime.run(
@@ -1066,8 +1147,13 @@ describe("cfc-result-wiring-stamp", () => {
           // Reading the result would name the families its graph runs, and a
           // run deferred until its pattern is named would then not defer.
           const target = nested ? result.key("child").resolveAsCell() : result;
+          kept.add(target.getAsNormalizedFullLink().id);
           if (!route.running) runtime.runner.stop(result);
           await plantStamp(target, BOB);
+          await runtime.releaseUnreadDocuments();
+          if (route.loadsFirst) {
+            await runtime.runner.syncStoredPieceCells(result, pattern);
+          }
 
           const tx = runtime.edit();
           runtime.getCellFromLink(bobs, undefined, tx).get();

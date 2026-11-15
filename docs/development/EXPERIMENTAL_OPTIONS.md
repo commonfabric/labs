@@ -2086,8 +2086,13 @@ the per-epic implementation notes).
   is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
-  `cfcRenderCeiling` localStorage key records. The end state is to remove the
-  toggle and make the ceiling unconditional.
+  `cfcRenderCeiling` localStorage key records. Opting out declares no ceiling to
+  the worker (`renderConfidentialityCeiling: null`) and allows author
+  declassification (`renderDeclassificationPolicy: "allow"`): a host that
+  declares nothing is given the same default ceiling the toggle populates, with
+  declassification denied, so a host's renders and reads go ungated only where
+  it declares `null`, as the toggle does. The end state is to remove the toggle
+  and make the ceiling unconditional.
 - **Status on 2026-09-23.** Exchange resolution is implemented, including
   module policies. Where reader membership is required, missing or unsynced
   ACL evidence keeps the content blocked; a reader grant admits it and a
@@ -2277,7 +2282,7 @@ the per-epic implementation notes).
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
-  The pool that places spaces on workers takes four more variables from the
+  The pool that places spaces on workers takes five more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
   already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
@@ -2291,7 +2296,11 @@ the per-epic implementation notes).
   serving memory server tests build starts), and
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
-  (default none). The serving memory server tests build reads the first.
+  (default none), and `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, how long a
+  worker may send no message, its heartbeats included, before it is killed
+  (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
+  comes at the first check at or past that many seconds of silence in a row:
+  15 kills at 20. The serving memory server tests build reads the first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and

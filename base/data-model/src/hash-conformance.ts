@@ -67,7 +67,6 @@ import {
   type FixtureJson,
   fixtureTextOf,
   hexOf,
-  type JsonCodecClassName,
   requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
@@ -986,8 +985,7 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
-  readonly [Name in JsonCodecClassName<FabricPrimitiveClassesByName>]:
-    ClassCaseNotes;
+  readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
 } = {
   FabricBytes: { section: SECTION_BYTES },
   FabricDurationDay: { section: SECTION_DURATION_DAY },
