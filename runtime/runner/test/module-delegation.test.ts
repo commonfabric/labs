@@ -25,6 +25,7 @@ import {
   deriveModuleDelegations,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
+  type ModuleDelegationMap,
   setCompileCacheRuntimeVersionForTesting,
   type SourceDoc,
   sourceDocKey,
@@ -1417,7 +1418,11 @@ describe("module identity delegation", () => {
     )!;
     const successor = moduleFor(moduleProgram("new"));
 
-    const storeSuccessorSource = async (): Promise<void> => {
+    const storeSuccessorSource = async (
+      delegations: ModuleDelegationMap = new Map([
+        [successor.identity, new Set([oldIdentity])],
+      ]),
+    ): Promise<void> => {
       const sourceTx = runtime.edit();
       writeSourceDocs(
         runtime,
@@ -1425,7 +1430,7 @@ describe("module identity delegation", () => {
         [successor],
         successor.identity,
         sourceTx,
-        new Map([[successor.identity, new Set([oldIdentity])]]),
+        delegations,
       );
       runtime.prepareTxForCommit(sourceTx);
       expect((await sourceTx.commit().settled).error).toBeUndefined();
@@ -1607,6 +1612,92 @@ describe("module identity delegation", () => {
       expect(
         runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
       ).toBe(false);
+    });
+
+    describe("given the delegations a source revision records", () => {
+      it("registers each recorded entry whose successor is a module of the successor's closure, though the closure's records carry none", async () => {
+        await storeSuccessorSource(new Map());
+
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map([[successor.identity, new Set([oldIdentity])]]),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(true);
+      });
+
+      it("registers no recorded entry whose successor is not a module of the successor's closure", async () => {
+        await storeSuccessorSource(new Map());
+
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map([
+            [successor.identity, new Set([oldIdentity])],
+            ["outside-the-closure", new Set([oldIdentity])],
+          ]),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(true);
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            "outside-the-closure",
+            oldIdentity,
+          ),
+        ).toBe(false);
+      });
+
+      it("registers no recorded entry when the space holds no verified closure for the successor", async () => {
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map([[successor.identity, new Set([oldIdentity])]]),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(false);
+      });
+
+      it("registers what the successor's records carry when it records none", async () => {
+        await storeSuccessorSource();
+
+        await runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+          new Map(),
+        );
+
+        expect(
+          runtime.grantsModuleDelegation(
+            space,
+            successor.identity,
+            oldIdentity,
+          ),
+        ).toBe(true);
+      });
     });
 
     it("settles without a grant when reading the successor's closure fails", async () => {
