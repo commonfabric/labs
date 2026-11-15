@@ -2030,9 +2030,8 @@ unify them.
 
 ### Pattern-index client
 
-The shared signed client, successor resolution, search-body composition, and
-feedback vocabulary live in
-[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+The shared signed client, search-body composition, and feedback vocabulary live
+in [`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
 configuration and identity loading live in `src/pattern-index/factory.ts`;
 composition, publication gates, the session ledger, probes, retrieval scoring,
 and tools remain in this package.
@@ -2075,27 +2074,26 @@ establish either an entry's intended audience or who evaluated it.
 
 ### Pattern generations in search
 
-The shared index client resolves discovery for `search_patterns`, private
-research, and the console's Index search. It reads the discoverable catalog and
-follows each entry's `priorPatternId` to find replacements, including a
-successor outside the original query's result limit. Only same-owner links
-participate. An unambiguous chain contributes its final generation once, at the
-earliest matching position. A penalized final generation removes that chain from
-the answer; a branch or cycle fails the affected search instead of choosing a
-generation arbitrarily.
+The pattern index resolves discovery itself, for `search_patterns`, private
+research, and the console's Index search alike: the shared client returns its
+`searchPatterns` answer as given. Each matched generation whose same-owner
+successor chain is unambiguous is replaced by the chain's final discoverable
+generation, once, at the earliest position any generation of the chain matched,
+and the replacement names the matched generation in `supersedes`. A chain that
+branches or cycles is withheld from the answer rather than failing the search,
+and a replacement below the search's quality floor is withheld without bringing
+back the generation it replaced. Resolution runs over the whole ranked list
+before the result limit, so a successor outside the limit still takes its
+predecessor's place. The service's `docs/api.md` states the rule.
 
-Replacement metadata, schemas, quality, and signals describe the successor.
-Where the index supports generation evidence, its combined signal summary
-includes an attributed `inherited` portion: predecessor ID, publication cutoff,
-event counts, and score. The harness preserves that attribution; a proven tier
-can come entirely from predecessor evidence before the successor has run. Older
-deployments supply only that generation's own event counts and score. Query-term
-counts are omitted on a replacement because the index measured them against the
-predecessor. The catalog is refreshed for every nonempty search; create-only
-metadata is cached by identity within the client, and failed reads are not
-cached. This requires one metadata read per catalog entry on the first search
-and for each newly discovered identity thereafter. No source is requested. An
-unavailable catalog or metadata read fails discovery explicitly.
+Replacement metadata, quality, and signals describe the successor, and a row
+carries a display `name` when the index holds or can derive one. Where the index
+supports generation evidence, its combined signal summary includes an attributed
+`inherited` portion: predecessor ID, publication cutoff, event counts, and
+score. The harness preserves that attribution; a proven tier can come entirely
+from predecessor evidence before the successor has run. Query-term counts on a
+replacement are those of the generation that matched. A search is one signed
+request; no catalog or metadata read accompanies it.
 
 `getPattern`, attached pattern references, and `cf:pattern:` imports continue to
 resolve the exact requested identity. Search resolution changes recommendations,

@@ -337,6 +337,7 @@ describe("servingWorkerPoolFromEnv()", () => {
         SERVER_EXECUTION_SPARE_WORKERS: "",
         SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "",
         SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB: "",
+        SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS: "",
       }]
     ) {
       expect(servingWorkerPoolFromEnv(envOf(env), (m) => warnings.push(m)))
@@ -354,6 +355,7 @@ describe("servingWorkerPoolFromEnv()", () => {
           SERVER_EXECUTION_SPARE_WORKERS: "0",
           SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "512",
           SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB: "2048",
+          SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS: "300",
         }),
         (m) => warnings.push(m),
       ),
@@ -362,6 +364,7 @@ describe("servingWorkerPoolFromEnv()", () => {
       spareWorkers: 0,
       heapLimitMb: 512,
       heapBudgetBytes: 2048 * 1024 * 1024,
+      watchdogLimitMs: 300_000,
     });
     expect(warnings).toEqual([]);
   });
@@ -381,6 +384,18 @@ describe("servingWorkerPoolFromEnv()", () => {
         ],
         ["SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", "1.5"],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "0"],
+        // Shorter than the interval a worker posts heartbeats at.
+        ["SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", "9"],
+        ["SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", "1.5"],
+        // A safe integer whose milliseconds or bytes are not.
+        [
+          "SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS",
+          String(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1),
+        ],
+        [
+          "SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB",
+          String(Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024)) + 1),
+        ],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "2e3"],
         // Long enough a run of digits to parse to `Infinity`.
         ["SERVER_EXECUTION_MAX_WORKERS", "9".repeat(400)],

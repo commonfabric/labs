@@ -324,7 +324,11 @@ export const DEFAULT_MAX_TOOLSHED_SERVING_WORKERS = 4;
 /** The serving-worker pool's knobs a toolshed reads from its environment. */
 export type ServingWorkerPoolEnv = Pick<
   ServingWorkerPoolOptions,
-  "maxWorkers" | "spareWorkers" | "heapBudgetBytes" | "heapLimitMb"
+  | "maxWorkers"
+  | "spareWorkers"
+  | "heapBudgetBytes"
+  | "heapLimitMb"
+  | "watchdogLimitMs"
 >;
 
 /**
@@ -348,6 +352,10 @@ export type ServingWorkerPoolEnv = Pick<
  * - `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, a positive integer: how
  *   large the workers' heaps may be together, in megabytes, before workers
  *   holding only parked runtimes are closed. Default: no budget.
+ * - `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, an integer of 10 or more: how
+ *   long a worker may send nothing, its heartbeats included, before the pool
+ *   kills it (`ServingWorkerPoolOptions.watchdogLimitMs`). Default: the
+ *   pool's own, a minute.
  *
  * Anything else warns and takes the default.
  */
@@ -357,20 +365,24 @@ export function servingWorkerPoolFromEnv(
 ): ServingWorkerPoolEnv {
   const read = (
     name: string,
-    { least }: { least: number },
+    { least, most = Number.MAX_SAFE_INTEGER }: {
+      least: number;
+      most?: number;
+    },
   ): number | undefined => {
     const raw = envGet(name);
     if (raw === undefined || raw === "") return undefined;
     const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : undefined;
     // A run of digits long enough parses to `Infinity`, which is no count.
     if (
-      value !== undefined && Number.isSafeInteger(value) && value >= least
+      value !== undefined && Number.isSafeInteger(value) && value >= least &&
+      value <= most
     ) {
       return value;
     }
     warn(
       `Server-execution v2: ignoring ${name}=${JSON.stringify(raw)} ` +
-        `(expected an integer of ${least} or more); using the default`,
+        `(expected an integer from ${least} to ${most}); using the default`,
     );
     return undefined;
   };
@@ -383,8 +395,15 @@ export function servingWorkerPoolFromEnv(
     : read("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", {
       least: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
     }) ?? DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB;
+  // Each bounded above so that it is still a safe integer once converted.
   const heapBudgetMb = read("SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", {
     least: 1,
+    most: Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024)),
+  });
+  // No shorter than the ten seconds a worker posts its heartbeats at.
+  const watchdogSeconds = read("SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", {
+    least: 10,
+    most: Math.floor(Number.MAX_SAFE_INTEGER / 1000),
   });
   return {
     maxWorkers,
@@ -393,6 +412,9 @@ export function servingWorkerPoolFromEnv(
     ...(heapBudgetMb === undefined
       ? {}
       : { heapBudgetBytes: heapBudgetMb * 1024 * 1024 }),
+    ...(watchdogSeconds === undefined
+      ? {}
+      : { watchdogLimitMs: watchdogSeconds * 1000 }),
   };
 }
 
@@ -637,7 +659,12 @@ export function startServerExecutionHost(options: {
         `, with ${pool.spareWorkers} spare, ` +
         (pool.heapLimitMb === undefined
           ? "no heap limit per worker by SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB=0"
-          : `each worker's heap limited to ${pool.heapLimitMb} MB`),
+          : `each worker's heap limited to ${pool.heapLimitMb} MB`) +
+        (pool.watchdogLimitMs === undefined
+          ? ""
+          : `, a worker killed after ${
+            pool.watchdogLimitMs / 1000
+          } s without a message by SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`),
     );
     // The workers' entry adds the lifecycle verbs and the self-directed fetch
     // (lib/serving-worker.ts); they compile in this process's compile workers
