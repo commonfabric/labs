@@ -386,25 +386,28 @@ holding data beside its references unchanged re-derives the root's value entry
 from its transaction's flow join, as its write of the root would, and drops
 the derived value entries below the root as that write would. A setup that is
 not asking restates no unchanged result, and one the runtime starts on its
-own, to repair a piece or to carry on with a pattern an earlier transaction
-chose (`runtimeStarted` in `runner.ts`), takes no value entry, so both leave
-it as stored: for the value entry, labs' asking setup is the ruling's. A
-runtime-started setup handed a transaction still re-mints an unchanged
-wiring's membership, which is what specs#98's `restateResultWiring` requires
-of every restating setup. The restatement mints no existence entry, and
-leaves the existence entry as it is. It changes what is stored at strict,
-with no default-off dial, and it is not fail-closed: asked, it lowers a stale
-value stamp, and it can raise one from a restating setup's decision reads. So
-it does not satisfy step 4 above. Its four deciding sites, in
-`cfc/prepare.ts`, carry the `SPEC-PENDING` marker. The snapshot stays pinned
-at specs#88's head (`239fc839`), whose `restateResultWiring` lacks the
-value re-derivation specs#98 adds, so the kernel manifest's row for that
-function records today's decision until the next regeneration after the
-ruling. @danfuzz authorized landing
-this ahead of the ruling, without a flag, on 2026-11-14. His reason, in his
-words: "we should define the spec change and still accept doing the change in
-`labs` while pending and without a flag." The conformance statement's §9
-records the gap.
+own, to repair a piece, to adopt a newer release of the source a piece
+follows when it is opened, or to carry on with a pattern an earlier
+transaction chose (`runtimeStarted` in `runner.ts`), takes no value entry, so
+both leave it as stored. A runtime-started setup handed a transaction still
+re-mints an unchanged wiring's membership, which is what specs#98's
+`restateResultWiring` requires of every restating setup. Whether a release
+adopted on open is an asking setup is a question put on specs#98; until it
+is answered, the runtime treats it as not asking. So a hidden view heals at an
+update a caller asks for, whether or not the update touches the view, and not
+at a release adopted on open that leaves the view unchanged; any update that
+rewrites the view replaces its value entry as a write does. The restatement
+mints no existence entry, and leaves the existence entry as it is. It changes
+what is stored at strict, with no default-off dial, and it is not
+fail-closed: asked, it lowers a stale value stamp, and it can raise one from a
+restating setup's decision reads. So it does not satisfy step 4 above, and is
+recorded here as an exception. Its four deciding sites, in `cfc/prepare.ts`,
+carry the `SPEC-PENDING` marker. The snapshot stays pinned at specs#88's head
+(`239fc839`), whose `restateResultWiring` lacks the value re-derivation
+specs#98 adds, so the kernel manifest's row for that function records today's
+decision until the next regeneration after the ruling. @danfuzz authorized
+landing this ahead of the ruling, without a flag, on 2026-11-14. The
+conformance statement's §9 records the gap.
 
 The owner release by intent (§8.12.7 route 2d) implements
 [specs#90](https://github.com/commonfabric/specs/pull/90) ahead of its ruling.
