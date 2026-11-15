@@ -628,7 +628,10 @@ describe("fabrichat-four-writer-room-update", () => {
       });
 
       expect(refusals).toEqual([]);
-      const windows = room.key("messages").key("windows");
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const windows = today.key("messages").key("windows");
       expect(await windows.key("main").key("requestId").pull()).toBe("w2");
       expect(
         storedPolicy(
