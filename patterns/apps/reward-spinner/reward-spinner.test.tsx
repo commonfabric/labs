@@ -9,7 +9,10 @@
  * Run: deno task cf test patterns/apps/reward-spinner/reward-spinner.test.tsx --verbose
  */
 import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
-import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
+import {
+  clickButton,
+  hasText,
+} from "../../tools/test-support/vnode-helpers.ts";
 import RewardSpinner, {
   buildReel,
   clampGenerosity,
@@ -73,8 +76,12 @@ export default pattern(() => {
   });
   const assert_spin_lock = assert(() =>
     !isReelTurning(undefined, 1_000_000) &&
+    isReelTurning(1_000_000, 1_000_000) &&
     isReelTurning(1_000_000, 1_000_000 + SPIN_MS - 1) &&
-    !isReelTurning(1_000_000, 1_000_000 + SPIN_MS)
+    !isReelTurning(1_000_000, 1_000_000 + SPIN_MS) &&
+    // A spin stamped ahead of this clock (another device's) does not lock it.
+    !isReelTurning(1_000_000 + 1, 1_000_000) &&
+    !isReelTurning(1_000_000 + 60 * SPIN_MS, 1_000_000)
   );
 
   // --- Through the pattern --------------------------------------------------
@@ -134,6 +141,31 @@ export default pattern(() => {
     return history.length === 2 && spinner.reel[0] === first;
   });
 
+  // A spin recorded by a device whose clock runs a minute ahead does not lock
+  // this one: the next tap spins.
+  const action_future_spin_then_tap = action(() => {
+    const history = spinHistory.get();
+    const last = history[history.length - 1];
+    spinHistory.set([
+      ...history.slice(0, -1),
+      { ...last, timestamp: last.timestamp + 60_000 },
+    ]);
+    spinner.spin.send();
+  });
+  const assert_not_locked = assert(() => spinner.spinHistory.length === 3);
+
+  // The reel is mapped from a session-scoped list: the rendered strip is this
+  // session's latest spin, ending on its prize.
+  const assert_reel_rendered = assert(() => {
+    const history = spinner.spinHistory;
+    const prize = PRIZES.find((p) =>
+      p.id === history[history.length - 1]?.prize
+    );
+    return spinner.reel.length === REEL_LENGTH &&
+      spinner.reel[REEL_LENGTH - 1] === prize?.emoji &&
+      hasText(spinner[UI], "🤗") === spinner.reel.includes("🤗");
+  });
+
   return {
     [TESTS]: [
       { assertion: assert_weights_at_extremes },
@@ -154,6 +186,9 @@ export default pattern(() => {
       { assertion: assert_still_one_spin },
       { action: action_age_and_spin },
       { assertion: assert_second_spin },
+      { action: action_future_spin_then_tap },
+      { assertion: assert_not_locked },
+      { assertion: assert_reel_rendered },
     ],
     spinner,
   };

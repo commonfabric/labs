@@ -23,6 +23,7 @@ import {
   FS,
   NAME,
   pattern,
+  type PerSession,
   type PerSpace,
   type Stream,
   UI,
@@ -142,11 +143,17 @@ const lastSpinEmoji = (history: readonly SpinRecord[]): string =>
     ? GIFT
     : prizeById(history[history.length - 1].prize)?.emoji ?? GIFT;
 
-/** Whether a reel started at `lastTimestamp` is still turning at `now`. */
+/** Whether a reel started at `lastTimestamp` is still turning at `now`. A
+ * spin stamped in the future (by a device whose clock runs ahead) is not
+ * turning here, so it cannot lock this device's spinner. */
 export const isReelTurning = (
   lastTimestamp: number | undefined,
   now: number,
-): boolean => lastTimestamp !== undefined && now - lastTimestamp < SPIN_MS;
+): boolean => {
+  if (lastTimestamp === undefined) return false;
+  const elapsed = now - lastTimestamp;
+  return elapsed >= 0 && elapsed < SPIN_MS;
+};
 
 // Viewer-local timestamp for the [FS] projection; `toLocale*` would be UTC.
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -419,10 +426,18 @@ const RewardSpinner = pattern<RewardSpinnerInput, RewardSpinnerOutput>(
 
     const lastPrize = computed(() => lastSpinEmoji(spinHistory.get()));
 
+    // Everything the view reads from `sessionSpin` or `oddsShown` differs by
+    // session, so it is derived at session scope: each session maps its own
+    // reel cells and binds its own classes.
+    //
+    // `reel` is the exception. It is an output, recorded space-scoped in the
+    // update baselines, and changing an output's scope is an update break that
+    // has to be accepted in `tasks/pattern-compat-accepted-breaks.ts`. Nothing
+    // maps or renders it; it is there for tests and callers.
     const reel = computed(() => sessionSpin.get().reel);
 
     // At rest (no spin yet this session) the reel is the single last prize.
-    const reelCells = computed((): ReelCell[] => {
+    const reelCells = computed((): PerSession<ReelCell[]> => {
       const strip = sessionSpin.get().reel;
       const cells = strip.length > 0
         ? strip
@@ -433,8 +448,10 @@ const RewardSpinner = pattern<RewardSpinnerInput, RewardSpinnerOutput>(
       }));
     });
 
-    const spunThisSession = computed(() => sessionSpin.get().count > 0);
-    const reelClass = computed(() => {
+    const spunThisSession = computed((): PerSession<boolean> =>
+      sessionSpin.get().count > 0
+    );
+    const reelClass = computed((): PerSession<string> => {
       const count = sessionSpin.get().count;
       return count === 0
         ? "reel"
@@ -442,10 +459,10 @@ const RewardSpinner = pattern<RewardSpinnerInput, RewardSpinnerOutput>(
         ? "reel reel-a"
         : "reel reel-b";
     });
-    const burstClass = computed(() =>
+    const burstClass = computed((): PerSession<string> =>
       sessionSpin.get().count % 2 === 0 ? "burst burst-a" : "burst burst-b"
     );
-    const payoutClass = computed(() =>
+    const payoutClass = computed((): PerSession<string> =>
       oddsShown.get() % 2 === 0 ? "payout payout-a" : "payout payout-b"
     );
 

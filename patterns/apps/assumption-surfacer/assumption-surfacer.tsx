@@ -21,6 +21,20 @@
  * writes the caller's state), so the list is durable, per reply and complete.
  * The original's "user context" notes were collected but never read; settled
  * assumptions now reach the model through the system prompt instead.
+ *
+ * Telling the assistant: the dialog drops a message added while a turn is
+ * running, and cards appear mid-turn (the tool runs before the reply), so a
+ * verdict cannot simply be sent the moment it is made. What the assistant has
+ * been told is derived from the chat itself: each send is logged in `updates`
+ * with what it says, and counts once its message is in `messages`. A send the
+ * dialog dropped never lands, so its verdicts stay unsent; marking them told
+ * at send time would lose them, because a verdict made in the same tick as
+ * another send runs before the dialog has set `pending`. Unsent updates go out
+ * together in one message when a verdict is made while the dialog is idle,
+ * with the user's next message, or from the sidebar's "Tell it now" button.
+ * Nothing runs when a turn ends (a pattern has no effect to hang that on), but
+ * nothing is lost: the system prompt already carries every verdict, and the
+ * sidebar says how many updates are waiting.
  */
 import {
   action,
@@ -65,6 +79,18 @@ export interface Assumption {
   chosenIndex: number;
 }
 
+/** One message of assumption updates, as sent to the dialog. */
+export interface SentUpdate {
+  /** The message's update part, exactly as sent. */
+  text: string;
+  /** How many messages the chat held when it was sent: the message lands at
+   * this index or later, or never if the dialog dropped it. */
+  from: number;
+  /** What it told the assistant: for each assumption, the alternative that
+   * stands, -1 for "none of these". */
+  beliefs: { id: string; index: number }[];
+}
+
 /** One assumption as the assistant's tool call reports it. */
 export interface ReportedAssumption {
   label: string;
@@ -85,6 +111,10 @@ const MAX_PER_REPLY = 3;
 const MAX_ALTERNATIVES = 4;
 const TITLE_LENGTH = 30;
 const ABOUT_LENGTH = 60;
+
+/** Marks the part of a user message that carries assumption updates rather
+ * than words the user typed. The model reads it too. */
+export const UPDATE_TAG = "[Assumption update]";
 
 const TOOL_DESCRIPTION =
   "Record the implicit assumptions your next reply rests on, so the user can confirm or correct them. Call it before replying, at most once per reply.";
@@ -122,9 +152,32 @@ const truncate = (text: string, length: number): string => {
   return flat.length > length ? `${flat.slice(0, length)}…` : flat;
 };
 
-/** The chat's title: the start of its first message. */
+const isUpdatePart = (text: string): boolean => text.startsWith(UPDATE_TAG);
+
+/** What the user typed in a message, leaving out any assumption updates sent
+ * with it: "" for an update-only message. */
+export const userText = (message: BuiltInLLMMessage | undefined): string => {
+  if (message?.role !== "user") return "";
+  const content = message.content;
+  if (typeof content === "string") return isUpdatePart(content) ? "" : content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) =>
+      part && part.type === "text" && "text" in part ? String(part.text) : ""
+    )
+    .filter((text) => text !== "" && !isUpdatePart(text))
+    .join(" ");
+};
+
+/** The messages the user wrote, as opposed to updates sent on their behalf. */
+export const realUserMessages = (
+  messages: readonly BuiltInLLMMessage[],
+): BuiltInLLMMessage[] => messages.filter((m) => userText(m).trim() !== "");
+
+/** The chat's title: the start of the user's first message. */
 export const chatTitle = (messages: readonly BuiltInLLMMessage[]): string =>
-  truncate(messageText(messages[0]), TITLE_LENGTH) || DEFAULT_TITLE;
+  truncate(userText(realUserMessages(messages)[0]), TITLE_LENGTH) ||
+  DEFAULT_TITLE;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -202,49 +255,129 @@ export const settledValue = (a: Assumption): string =>
   ] ??
     "";
 
-/** The record after a verdict on assumption `id`, and the message to tell the
- * assistant, "" when there is nothing new to say. A verdict that changes
- * nothing is a no-op. */
+/** The alternative an assumption now stands for, -1 for "none of these". */
+const belief = (a: Assumption): number =>
+  a.status === "rejected"
+    ? -1
+    : a.status === "corrected"
+    ? a.chosenIndex
+    : a.assumedIndex;
+
+/** The record after a verdict on assumption `id`. A verdict that changes
+ * nothing, or names no such assumption or alternative, is a no-op. */
 export const applyVerdict = (
   existing: readonly Assumption[],
   id: string,
   verdict: Verdict,
-): { assumptions: Assumption[]; message: string } => {
+): Assumption[] => {
   const target = existing.find((a) => a.id === id);
-  const unchanged = { assumptions: [...existing], message: "" };
-  if (!target) return unchanged;
-
+  if (!target) return [...existing];
   const choice = verdict.kind === "choose" ? verdict.index : -1;
   if (
     verdict.kind === "choose" &&
     (choice < 0 || choice >= target.alternatives.length)
-  ) return unchanged;
+  ) return [...existing];
   const next: Assumption = verdict.kind === "reject"
     ? { ...target, status: "rejected", chosenIndex: -1 }
     : verdict.kind === "confirm" || choice === target.assumedIndex
     ? { ...target, status: "confirmed", chosenIndex: -1 }
     : { ...target, status: "corrected", chosenIndex: choice };
-  if (
-    next.status === target.status && next.chosenIndex === target.chosenIndex
-  ) return unchanged;
+  return existing.map((a) => (a.id === id ? next : a));
+};
 
-  const topic = target.label.toLowerCase();
-  const assumed = target.alternatives[target.assumedIndex] ?? "";
-  const message = next.status === "corrected"
-    ? `Regarding ${topic}: ${settledValue(next)} rather than ${assumed}.`
-    : next.status === "rejected"
+/** The sends whose message reached the chat, oldest first. */
+export const landedUpdates = (
+  sent: readonly SentUpdate[],
+  messages: readonly BuiltInLLMMessage[],
+): SentUpdate[] =>
+  sent.filter((update) =>
+    messages.slice(update.from).some((m) =>
+      m.role === "user" && Array.isArray(m.content) &&
+      m.content.some((part) =>
+        part && part.type === "text" && "text" in part &&
+        part.text === update.text
+      )
+    )
+  );
+
+/** The alternative the assistant was last told stands for each assumption
+ * that any landed update mentions. */
+const toldIndexes = (landed: readonly SentUpdate[]): Map<string, number> =>
+  new Map(landed.flatMap((u) => u.beliefs.map((b) => [b.id, b.index])));
+
+/** What the assistant has yet to hear about one assumption, given the
+ * alternative it was last told (its own guess, until told otherwise), or ""
+ * when it already knows. */
+export const updateFor = (a: Assumption, told: number): string => {
+  const now = belief(a);
+  if (now === told) return "";
+  const topic = a.label.toLowerCase();
+  const assumed = a.alternatives[a.assumedIndex] ?? "";
+  return now === -1
     ? `Regarding ${topic}: not ${assumed}, and none of ${
-      target.alternatives.join(", ")
+      a.alternatives.join(", ")
     }.`
-    // A plain confirmation tells the assistant nothing new, unless it takes
-    // back an earlier correction.
-    : target.status === "open"
-    ? ""
-    : `Regarding ${topic}: ${assumed} after all.`;
+    : now === a.assumedIndex
+    ? `Regarding ${topic}: ${assumed} after all.`
+    : `Regarding ${topic}: ${
+      a.alternatives[now] ?? ""
+    } rather than ${assumed}.`;
+};
 
-  return {
-    assumptions: existing.map((a) => (a.id === id ? next : a)),
-    message,
+/** The assumptions the assistant has yet to hear about, oldest first, each
+ * with its update and the belief that update carries. */
+const pendingBeliefs = (
+  assumptions: readonly Assumption[],
+  sent: readonly SentUpdate[],
+  messages: readonly BuiltInLLMMessage[],
+): { id: string; index: number; text: string }[] => {
+  const told = toldIndexes(landedUpdates(sent, messages));
+  return assumptions
+    .map((a) => ({
+      id: a.id,
+      index: belief(a),
+      text: updateFor(a, told.get(a.id) ?? a.assumedIndex),
+    }))
+    .filter((p) => p.text !== "");
+};
+
+/** Every update the assistant has yet to hear, oldest assumption first. */
+export const unsentUpdates = (
+  assumptions: readonly Assumption[],
+  sent: readonly SentUpdate[],
+  messages: readonly BuiltInLLMMessage[],
+): string[] => pendingBeliefs(assumptions, sent, messages).map((p) => p.text);
+
+/** The log entry for sending every unsent update now, or null when there is
+ * nothing to send. */
+export const nextUpdate = (
+  assumptions: readonly Assumption[],
+  sent: readonly SentUpdate[],
+  messages: readonly BuiltInLLMMessage[],
+): SentUpdate | null => {
+  const pending = pendingBeliefs(assumptions, sent, messages);
+  return pending.length === 0 ? null : {
+    text: `${UPDATE_TAG} ${pending.map((p) => p.text).join(" ")}`,
+    from: messages.length,
+    beliefs: pending.map(({ id, index }) => ({ id, index })),
+  };
+};
+
+/** One user message carrying the update part `update` and the user's own
+ * `text`, either of which may be empty; null when both are. The update goes
+ * in a part of its own, tagged, so `userText` can tell it from what the user
+ * typed and `landedUpdates` can find it. */
+export const composeMessage = (
+  update: string,
+  text: string,
+): BuiltInLLMMessage | null => {
+  const parts = [
+    ...(update !== "" ? [update] : []),
+    ...(text.trim() !== "" ? [text] : []),
+  ];
+  return parts.length === 0 ? null : {
+    role: "user",
+    content: parts.map((part) => ({ type: "text" as const, text: part })),
   };
 };
 
@@ -450,6 +583,8 @@ const cardView = (a: Assumption): CardView => {
 interface AssumptionSurfacerInput {
   messages?: PerSpace<Writable<BuiltInLLMMessage[] | Default<[]>>>;
   assumptions?: PerSpace<Writable<Assumption[] | Default<[]>>>;
+  /** Every message of assumption updates sent, landed or not. */
+  updates?: PerSpace<Writable<SentUpdate[] | Default<[]>>>;
   /** The assistant's persona. The assumption instructions are added to it. */
   systemPrompt?: PerSpace<Writable<string | Default<"">>>;
 }
@@ -468,6 +603,8 @@ export interface AssumptionSurfacerOutput {
   openCount: number;
   /** What the user has settled, as fed to the model. */
   settled: string[];
+  /** Verdicts the assistant has not been told yet, as they will be sent. */
+  unsent: string[];
   /** The full system prompt the dialog runs with. */
   system: string;
   pending: boolean | undefined;
@@ -479,6 +616,8 @@ export interface AssumptionSurfacerOutput {
   rejectAssumption: Stream<{ id: string }>;
   /** Pick an alternative; a different one than assumed tells the assistant. */
   chooseAlternative: Stream<{ id: string; index: number }>;
+  /** Tell the assistant the unsent verdicts now, if no turn is running. */
+  sendUpdates: Stream<void>;
   addMessage: Stream<BuiltInLLMMessage>;
   cancelGeneration: Stream<void>;
   clearChat: Stream<void>;
@@ -494,51 +633,71 @@ const recordAssumptionsHandler = handler<
 >((event, { assumptions, messages }) => {
   const reported = normalizeReported(event);
   if (reported.length === 0) return "No assumptions recorded.";
-  const userMessages = messages.get().filter((m) => m.role === "user");
+  // Only what the user wrote counts: a reply to an update-only message rests
+  // on the user's last own words.
+  const userMessages = realUserMessages(messages.get());
   assumptions.set(
     withRecorded(
       assumptions.get(),
       reported,
       userMessages.length,
-      truncate(
-        messageText(userMessages[userMessages.length - 1]),
-        ABOUT_LENGTH,
-      ),
+      truncate(userText(userMessages[userMessages.length - 1]), ABOUT_LENGTH),
     ),
   );
   return `Recorded ${reported.length} assumption(s); the user will see them.`;
 });
 
-/** Applies a verdict and, when it changes what the assistant should know,
- * tells it in the chat. */
+/** The state a send reads and writes. */
+interface Outbox {
+  assumptions: Writable<Assumption[]>;
+  updates: Writable<SentUpdate[]>;
+  messages: Writable<BuiltInLLMMessage[]>;
+  addMessage: Stream<BuiltInLLMMessage>;
+}
+
+/** Sends the unsent updates with the user's `text` (which may be empty) as
+ * one message, and logs the send. Nothing is marked told here: the updates
+ * count as told once the message is in the chat, so a send the dialog drops
+ * leaves them unsent. While a turn runs the dialog would drop the message, so
+ * then nothing is sent. */
+const tellAssistant = (
+  { assumptions, updates, messages, addMessage }: Outbox,
+  pending: boolean | undefined,
+  text: string,
+): void => {
+  if (pending) return;
+  const sent = updates.get();
+  const update = nextUpdate(assumptions.get(), sent, messages.get());
+  const message = composeMessage(update?.text ?? "", text);
+  if (message === null) return;
+  addMessage.send(message);
+  if (update) updates.set([...sent, update]);
+};
+
+/** Applies a verdict, and tells the assistant at once if it is idle. */
 const settle = (
-  assumptions: Writable<Assumption[]>,
-  addMessage: Stream<BuiltInLLMMessage>,
+  outbox: Outbox,
+  pending: boolean | undefined,
   id: string,
   verdict: Verdict,
 ): void => {
-  const result = applyVerdict(assumptions.get(), id, verdict);
-  assumptions.set(result.assumptions);
-  if (result.message !== "") {
-    addMessage.send({
-      role: "user",
-      content: [{ type: "text" as const, text: result.message }],
-    });
-  }
+  outbox.assumptions.set(applyVerdict(outbox.assumptions.get(), id, verdict));
+  tellAssistant(outbox, pending, "");
 };
 
 const sendMessage = handler<
   PromptSendEvent,
-  { addMessage: Stream<BuiltInLLMMessage> }
->((event, { addMessage }) => {
-  if (!event.detail.text.trim()) return;
-  addMessage.send(promptInputMessage(event));
+  Outbox & { pending: Writable<boolean | undefined> }
+>((event, { pending, ...outbox }) => {
+  const text = userText(promptInputMessage(event));
+  if (!text.trim()) return;
+  tellAssistant(outbox, pending.get(), text);
 });
 
 const AssumptionSurfacer = pattern<
   AssumptionSurfacerInput,
   AssumptionSurfacerOutput
->(({ messages, assumptions, systemPrompt }) => {
+>(({ messages, assumptions, updates, systemPrompt }) => {
   const system = computed(() =>
     buildSystemPrompt(systemPrompt.get(), assumptions.get())
   );
@@ -558,20 +717,23 @@ const AssumptionSurfacer = pattern<
     },
   });
 
+  const outbox = { assumptions, updates, messages, addMessage };
   const confirmAssumption = action(({ id }: { id: string }) =>
-    settle(assumptions, addMessage, id, { kind: "confirm" })
+    settle(outbox, pending, id, { kind: "confirm" })
   );
   const rejectAssumption = action(({ id }: { id: string }) =>
-    settle(assumptions, addMessage, id, { kind: "reject" })
+    settle(outbox, pending, id, { kind: "reject" })
   );
   const chooseAlternative = action(
     ({ id, index }: { id: string; index: number }) =>
-      settle(assumptions, addMessage, id, { kind: "choose", index }),
+      settle(outbox, pending, id, { kind: "choose", index }),
   );
+  const sendUpdates = action(() => tellAssistant(outbox, pending, ""));
   const clearChat = action(() => {
     cancelGeneration.send();
     messages.set([]);
     assumptions.set([]);
+    updates.set([]);
   });
 
   const title = computed(() => chatTitle(messages.get()));
@@ -586,6 +748,17 @@ const AssumptionSurfacer = pattern<
       : `${n} settled fact${n === 1 ? "" : "s"} guide replies`;
   });
   const openNote = computed(() => (openCount > 0 ? `${openCount} open` : ""));
+  const unsent = computed(() =>
+    unsentUpdates(assumptions.get(), updates.get(), messages.get())
+  );
+  const unsentNote = computed(() => {
+    const n = unsent.length;
+    return n === 0
+      ? ""
+      : `${n} update${n === 1 ? "" : "s"} for the assistant ${
+        pending ? "after this reply" : "not sent yet"
+      }`;
+  });
   // Newest first, so the reply just given is at the top.
   const cards = computed(() => [...assumptions.get()].reverse().map(cardView));
   const hasCards = computed(() => assumptions.get().length > 0);
@@ -686,6 +859,24 @@ const AssumptionSurfacer = pattern<
                 )}
             </cf-vscroll>
 
+            {unsentNote
+              ? (
+                <div style={styles.footerNote}>
+                  <cf-hstack align="center" gap="2">
+                    <span>{unsentNote}</span>
+                    {pending ? null : (
+                      <cf-button
+                        size="sm"
+                        variant="outline"
+                        onClick={sendUpdates}
+                      >
+                        Tell it now
+                      </cf-button>
+                    )}
+                  </cf-hstack>
+                </div>
+              )
+              : null}
             {settledNote
               ? <div style={styles.footerNote}>{settledNote}</div>
               : null}
@@ -696,7 +887,13 @@ const AssumptionSurfacer = pattern<
           slot="footer"
           placeholder="Ask a question..."
           pending={pending}
-          oncf-send={sendMessage({ addMessage })}
+          oncf-send={sendMessage({
+            assumptions,
+            updates,
+            messages,
+            addMessage,
+            pending,
+          })}
           oncf-stop={cancelGeneration}
         />
       </cf-screen>
@@ -710,12 +907,14 @@ const AssumptionSurfacer = pattern<
     assumptions,
     openCount,
     settled,
+    unsent,
     system,
     pending,
     recordAssumptions,
     confirmAssumption,
     rejectAssumption,
     chooseAlternative,
+    sendUpdates,
     addMessage,
     cancelGeneration,
     clearChat,
