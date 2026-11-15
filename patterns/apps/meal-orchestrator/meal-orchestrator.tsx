@@ -256,7 +256,10 @@ const DIET_LABEL: Record<string, string> = {
 const styles = {
   page: "padding: 12px; max-width: 900px;",
   title: { margin: "0 0 2px 0", fontSize: "20px", fontWeight: "700" },
-  muted: { fontSize: "13px", color: "#666" },
+  muted: {
+    fontSize: "13px",
+    color: "var(--cf-theme-color-text-secondary, #666)",
+  },
   section: { margin: "0", fontSize: "14px", fontWeight: "600" },
   sectionHeader: {
     display: "flex",
@@ -282,16 +285,20 @@ const styles = {
     gap: "8px",
     alignItems: "end",
     padding: "8px",
-    border: "1px solid #e5e7eb",
+    border: "1px solid var(--cf-theme-color-border, #e5e7eb)",
     borderRadius: "4px",
-    background: "#f9fafb",
+    background: "var(--cf-theme-color-surface-tertiary, #f9fafb)",
   },
-  ovenName: { fontWeight: "600", color: "#666", fontSize: "14px" },
+  ovenName: {
+    fontWeight: "600",
+    color: "var(--cf-theme-color-text-secondary, #666)",
+    fontSize: "14px",
+  },
   guest: {
     padding: "8px",
-    border: "1px solid #e5e7eb",
+    border: "1px solid var(--cf-theme-color-border, #e5e7eb)",
     borderRadius: "4px",
-    background: "#f9fafb",
+    background: "var(--cf-theme-color-surface-tertiary, #f9fafb)",
   },
   guestHeader: { display: "flex", gap: "8px", alignItems: "center" },
   dishRow: {
@@ -300,34 +307,37 @@ const styles = {
     alignItems: "center",
     gap: "8px",
     padding: "8px",
-    border: "1px solid #e5e7eb",
+    border: "1px solid var(--cf-theme-color-border, #e5e7eb)",
     borderRadius: "4px",
   },
   dishName: { fontWeight: "600" },
   chips: { display: "flex", flexWrap: "wrap", gap: "6px" },
   chip: {
     padding: "4px 10px",
-    background: "#eef2ff",
+    background: "var(--cf-theme-color-primary-subtle, #eef2ff)",
+    color: "var(--cf-theme-color-text, #111)",
     borderRadius: "12px",
     fontSize: "13px",
   },
   warning: {
     padding: "8px 12px",
-    background: "#fef3c7",
-    border: "1px solid #fcd34d",
+    background: "var(--cf-theme-color-status-warning-subtle, #fef3c7)",
+    color: "var(--cf-theme-color-text, #111)",
+    border: "1px solid var(--cf-theme-color-warning, #fcd34d)",
     borderRadius: "4px",
     fontSize: "13px",
   },
   conflict: {
     padding: "8px 12px",
-    background: "#fee2e2",
-    border: "1px solid #fca5a5",
+    background: "var(--cf-theme-color-status-error-subtle, #fee2e2)",
+    color: "var(--cf-theme-color-text, #111)",
+    border: "1px solid var(--cf-theme-color-error, #fca5a5)",
     borderRadius: "4px",
     fontSize: "13px",
   },
   check: {
     padding: "8px",
-    border: "1px solid #e5e7eb",
+    border: "1px solid var(--cf-theme-color-border, #e5e7eb)",
     borderRadius: "4px",
     fontSize: "13px",
   },
@@ -335,12 +345,12 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     fontSize: "11px",
-    color: "#666",
+    color: "var(--cf-theme-color-text-secondary, #666)",
   },
   lane: {
     position: "relative",
     height: "26px",
-    background: "#f3f4f6",
+    background: "var(--cf-theme-color-surface-tertiary, #f3f4f6)",
     borderRadius: "2px",
   },
   rowLabel: {
@@ -349,17 +359,26 @@ const styles = {
     gap: "8px",
     fontSize: "12px",
   },
-  legend: { display: "flex", gap: "16px", fontSize: "11px", color: "#666" },
+  legend: {
+    display: "flex",
+    gap: "16px",
+    fontSize: "11px",
+    color: "var(--cf-theme-color-text-secondary, #666)",
+  },
   reviewItem: {
     display: "flex",
     gap: "8px",
     alignItems: "flex-start",
     padding: "8px",
-    border: "1px solid #e5e7eb",
+    border: "1px solid var(--cf-theme-color-border, #e5e7eb)",
     borderRadius: "4px",
   },
-  quote: { fontSize: "12px", color: "#666", fontStyle: "italic" },
-  error: { fontSize: "13px", color: "#dc2626" },
+  quote: {
+    fontSize: "12px",
+    color: "var(--cf-theme-color-text-secondary, #666)",
+    fontStyle: "italic",
+  },
+  error: { fontSize: "13px", color: "var(--cf-theme-color-error, #dc2626)" },
 } as const;
 
 const NORMAL_BAR = "linear-gradient(90deg, #93c5fd, #60a5fa)";
@@ -389,7 +408,12 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     );
     const needsTitle = computed(() =>
       `Dietary Needs (${
-        plural(dietaryProfiles.get().length, "guest", "guests")
+        plural(
+          dietaryProfiles.get().filter((p) => (p.requirements ?? []).length > 0)
+            .length,
+          "guest",
+          "guests",
+        )
       } with needs)`
     );
     const recipeCount = computed(() => recipes.get().filter(Boolean).length);
@@ -567,7 +591,9 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     const hasDishes = computed(() => allDishes.length > 0);
     const balance = computed(() => mealBalance(allDishes, guestCount.get()));
     const servingsLine = computed(() =>
-      `${balance.dishCount} dishes, ${balance.totalServings} servings in all, for ${guestCount.get()} guests`
+      `${plural(balance.dishCount, "dish", "dishes")}, ${
+        plural(balance.totalServings, "serving", "servings")
+      } in all, for ${plural(guestCount.get(), "guest", "guests")}`
     );
     const dietary = computed(() =>
       dietaryChecks(allDishes, dietaryProfiles.get())
@@ -606,6 +632,10 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     const suggestLlm = generateObject<MenuSuggestions>({
       system: SUGGESTIONS_SYSTEM,
       prompt: suggestRequest,
+      // The default model rejects this schema in strict mode
+      // (`additionalProperties` must be false, which toolshed does not add),
+      // so name one that accepts it. Remove once top/3114 is fixed.
+      model: "anthropic:claude-haiku-4-5",
     });
     const suggestions = computed((): MenuSuggestions | null =>
       suggestRequest.get() && suggestLlm.result ? suggestLlm.result : null
@@ -649,6 +679,10 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     const linkLlm = generateObject<LinkAnalysis>({
       system: LINKING_SYSTEM,
       prompt: linkRequest,
+      // The default model rejects this schema in strict mode
+      // (`additionalProperties` must be false, which toolshed does not add),
+      // so name one that accepts it. Remove once top/3114 is fixed.
+      model: "anthropic:claude-haiku-4-5",
     });
     const linkAnalysis = computed((): LinkAnalysis | null =>
       linkRequest.get() && linkLlm.result ? linkLlm.result : null

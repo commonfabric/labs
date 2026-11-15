@@ -131,6 +131,14 @@ export default pattern(() => {
     meal.linkAnalysis === null
   );
 
+  // A guest with no needs yet is not counted as one with needs.
+  const action_blank_guest = action(() => meal.addGuest.send());
+  const assert_blank_not_counted = assert(() =>
+    meal.dietaryProfiles.length === 2 &&
+    hasText(meal[UI], "Dietary Needs (1 guest with needs)")
+  );
+  const action_drop_blank = action(() => meal.removeGuest.send({ index: 1 }));
+
   // One oven: the pie wants 425°F while the turkey holds it at 325°F.
   const assert_oven_conflict = assert(() =>
     meal.ovenPlan.conflicts.length === 1 &&
@@ -276,6 +284,9 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_starts },
+      { action: action_blank_guest },
+      { assertion: assert_blank_not_counted },
+      { action: action_drop_blank },
       { assertion: assert_oven_conflict },
       { action: action_add_oven },
       { assertion: assert_resolved },
