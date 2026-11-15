@@ -95,6 +95,10 @@ export interface GetItRequest {
   requestId: string;
   patternId: string;
   destination: CatalogDestination;
+  /** When the tap happened (ms since the epoch); a host acts within a window. */
+  requestedAt: number;
+  /** The catalog's `host` at the tap: only that host acts on the request. */
+  host: string;
 }
 
 /**
@@ -116,11 +120,17 @@ export const requestGetIt = handler<
     getItRequests: Writable<GetItRequest[]>;
     getItAnswers: Record<string, GetItAnswer>;
     status: CatalogStatus;
+    host: string | undefined;
     patternId: string;
     destination: CatalogDestination;
   }
->((_, { getItRequests, getItAnswers, status, patternId, destination }) => {
-  if (!patternId || !destination || status?.state !== "ready") return;
+>((
+  _,
+  { getItRequests, getItAnswers, status, host, patternId, destination },
+) => {
+  if (!patternId || !destination || !host || status?.state !== "ready") {
+    return;
+  }
   const requests = getItRequests.get() ?? [];
   const latest = latestRequest(requests, patternId, destination);
   const answer = latest ? getItAnswers?.[latest.requestId] : undefined;
@@ -139,6 +149,8 @@ export const requestGetIt = handler<
     requestId,
     patternId,
     destination,
+    requestedAt: Date.now(),
+    host,
   }]);
 });
 
@@ -165,6 +177,11 @@ export interface PatternCatalog {
   getItRequests: GetItRequests;
   /** The host's answer to each request, by `requestId`. */
   getItAnswers: Record<string, GetItAnswer>;
+  /**
+   * An opaque id naming the host instance that will act on get requests;
+   * absent means no host acts yet.
+   */
+  host?: string;
 }
 
 /** The viewer's catalog, or undefined when their home has none. */
@@ -204,7 +221,8 @@ export interface GetItButtonOutput {
  * The one way to get a pattern: a person's tap on this button. It shows the
  * answer to the latest request for its pattern and destination, and stays
  * disabled while that request is open, once it is placed, and while the
- * catalog cannot answer or there is nowhere to put the pattern.
+ * catalog cannot answer, no host acts on its requests, or there is nowhere to
+ * put the pattern.
  */
 export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
   ({ catalog, patternId, destination, label }) => {
@@ -212,6 +230,7 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       getItRequests: catalog.getItRequests,
       getItAnswers: catalog.getItAnswers,
       status: catalog.status,
+      host: catalog.host,
       patternId,
       destination,
     });
@@ -232,6 +251,7 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
         const remedy = catalog.status?.remedy;
         return remedy ? `${reason}. ${remedy}` : reason;
       }
+      if (!catalog.host) return "Nothing can get patterns here yet";
       return "";
     });
     const disabled = computed(() =>

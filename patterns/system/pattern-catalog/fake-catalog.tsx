@@ -1,8 +1,8 @@
 /**
  * A pattern catalog over a fixed list of entries, for tests and for building
  * callers without a host. It answers `page` by filtering its entries by
- * substring, and answers each get request once: placed for an id it holds,
- * failed for one it does not.
+ * substring, and answers each get request that names its `host` once: placed
+ * for an id it holds, failed for one it does not.
  */
 import {
   action,
@@ -31,6 +31,7 @@ export interface FakeCatalogInput {
   getItAnswers?: Writable<
     Record<string, GetItAnswer> | Default<Record<string, never>>
   >;
+  host?: Writable<string | Default<"fake-host">>;
 }
 
 /** The catalog, plus the stream that stands in for a host acting. */
@@ -42,7 +43,8 @@ export interface FakeCatalogOutput {
   page: Stream<CatalogPageRequest>;
   getItRequests: GetItRequests;
   getItAnswers: Record<string, GetItAnswer>;
-  /** Answers every get request that has no answer yet. */
+  host: string;
+  /** Answers every get request naming `host` that has no answer yet. */
   answerGetItRequests: Stream<void>;
 }
 
@@ -53,7 +55,7 @@ const matches = (entry: CatalogEntry, needle: string): boolean =>
 
 /** A catalog that answers from `entries`, for tests. */
 export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
-  ({ entries, status, getItRequests, getItAnswers }) => {
+  ({ entries, status, getItRequests, getItAnswers, host }) => {
     const page = action(({ text, result }: CatalogPageRequest) => {
       const current = status.get();
       if (current.state !== "ready") {
@@ -71,8 +73,9 @@ export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
     const answerGetItRequests = action(() => {
       const held = new Set((entries.get() ?? []).map((e) => e.patternId));
       const answers = { ...(getItAnswers.get() ?? {}) };
+      const self = host.get();
       for (const request of getItRequests.get() ?? []) {
-        if (answers[request.requestId]) continue;
+        if (request.host !== self || answers[request.requestId]) continue;
         answers[request.requestId] = held.has(request.patternId)
           ? {
             state: "placed",
@@ -97,6 +100,7 @@ export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
       page,
       getItRequests,
       getItAnswers,
+      host,
       answerGetItRequests,
     };
   },

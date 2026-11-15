@@ -6,7 +6,9 @@
  * to get a pattern is appended only by a trusted tap on `GetItButton`: a
  * forged push and an untrusted send leave the list alone, a second tap while
  * a request is open adds nothing, and a failed request can be tapped again.
- * The host's answer shows on the button.
+ * The host's answer shows on the button. A request names the host and the
+ * time of its tap, a host leaves a request naming another host alone, and
+ * with no host the button says so and adds nothing.
  *
  * Run: deno task cf test patterns/system/pattern-catalog/pattern-catalog.test.tsx --verbose
  */
@@ -56,6 +58,8 @@ const forgeRequest = handler<void, { getItRequests: Writable<GetItRequest[]> }>(
       requestId: "forged",
       patternId: "split-1",
       destination: "board-b",
+      requestedAt: 0,
+      host: "fake-host",
     });
   },
 );
@@ -63,7 +67,8 @@ const forgeRequest = handler<void, { getItRequests: Writable<GetItRequest[]> }>(
 export default pattern(() => {
   const entries = new Writable<CatalogEntry[]>(ENTRIES);
   const status = new Writable<CatalogStatus>({ state: "ready" });
-  const catalog = FakeCatalog({ entries, status });
+  const host = new Writable<string>("fake-host");
+  const catalog = FakeCatalog({ entries, status, host });
 
   const searched = new Writable<CatalogPage | null>(null);
   const listed = new Writable<CatalogPage | null>(null);
@@ -88,6 +93,11 @@ export default pattern(() => {
     catalog,
     patternId: "read-1",
     destination: "board-a",
+  });
+  const swapped = GetItButton({
+    catalog,
+    patternId: "read-1",
+    destination: "board-b",
   });
   const forge = forgeRequest({ getItRequests: catalog.getItRequests });
 
@@ -164,6 +174,34 @@ export default pattern(() => {
     catalog.getItRequests.length === 3
   );
 
+  const action_ready_again = action(() => {
+    status.set({ state: "ready" });
+  });
+  const assert_request_names_host_and_time = assert(() => {
+    const request = catalog.getItRequests[3];
+    return catalog.getItRequests.length === 4 &&
+      request?.patternId === "read-1" && request?.host === "fake-host" &&
+      typeof request?.requestedAt === "number" && request.requestedAt > 0;
+  });
+
+  const action_another_host_answers = action(() => {
+    host.set("other-host");
+    catalog.answerGetItRequests.send();
+  });
+  const assert_request_for_another_host_unanswered = assert(() =>
+    swapped.answer?.state === "started" &&
+    catalog.getItAnswers[catalog.getItRequests[3]?.requestId ?? ""] ===
+      undefined
+  );
+
+  const action_no_host = action(() => {
+    host.set("");
+  });
+  const assert_no_host_says_why_and_adds_nothing = assert(() =>
+    hasText(later[UI], "Nothing can get patterns here yet") &&
+    catalog.getItRequests.length === 4
+  );
+
   return {
     [TESTS]: [
       { action: action_page },
@@ -187,6 +225,14 @@ export default pattern(() => {
       { action: action_go_unavailable },
       { action: later.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_unavailable_says_why },
+      { action: action_ready_again },
+      { action: swapped.getIt, trustedUi: TRUSTED_TAP },
+      { assertion: assert_request_names_host_and_time },
+      { action: action_another_host_answers },
+      { assertion: assert_request_for_another_host_unanswered },
+      { action: action_no_host },
+      { action: later.getIt, trustedUi: TRUSTED_TAP },
+      { assertion: assert_no_host_says_why_and_adds_nothing },
     ],
     // The forged push and the untrusted send are refused, and the runtime
     // warns as it drops them.
