@@ -358,6 +358,9 @@ const styles = {
     border: "1px solid #e2e8f0",
     borderRadius: "2px",
     background: "white",
+    // Explicit, or the − and + take the UA's `buttontext`, which is white
+    // under a dark color scheme and vanishes on the white button.
+    color: "#64748b",
     cursor: "pointer",
   },
 } as const;
