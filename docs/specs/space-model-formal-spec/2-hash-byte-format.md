@@ -338,7 +338,7 @@ Bytes: TAG_EPOCH_NSEC  LENGTH_LEB128  TWO_COMP_BYTES
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
 `FabricEpochNsec` represents a nanosecond-precision Unix epoch timestamp. It
-is a `FabricPrimitive` subclass and has a dedicated type tag.
+is a leaf type with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -359,7 +359,7 @@ Bytes: TAG_EPOCH_DAY   LENGTH_LEB128  TWO_COMP_BYTES
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
 `FabricEpochDay` represents a day-precision Unix epoch timestamp. It is a
-`FabricPrimitive` subclass and has a dedicated type tag.
+leaf type with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -379,7 +379,7 @@ Bytes: TAG_HASH  ALG_TAG_STRING   HASH_LEN_LEB128  HASH_BYTES
 ```
 
 `FabricHash` represents a content identifier — a hash with an algorithm
-tag. It is a `FabricPrimitive` subclass and has a dedicated type tag.
+tag. It is a leaf type with a dedicated type tag.
 
 - **Algorithm tag**: The algorithm tag string (e.g., `"fid1"`) encoded as a
   complete tagged string value per Section 4.4. Concretely, this emits either
@@ -457,11 +457,10 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
 > `FabricEpochDay`, `FabricHash`, `FabricDurationNsec`, and `FabricDurationDay`
 > are **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
 > encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.20 and 4.21
-> respectively). These are all `FabricPrimitive` subclasses — at this layer
-> they are hashed from their own stored values, not via their wire codecs.
-> `FabricKeyPair` and `FabricUnavailable` are `FabricPrimitive` subclasses too,
-> but have no dedicated tag: each is hashed in this layout (Sections 4.17 and
-> 4.18).
+> respectively). These are the format's leaf types: they are hashed from their
+> own stored values, not via their wire codecs, and none is a container
+> (Section 4.19). `FabricKeyPair` and `FabricUnavailable` have no dedicated
+> tag: each is an instance, hashed in this layout (Sections 4.17 and 4.18).
 
 ### 4.15 Holes (sparse array elements)
 
@@ -532,7 +531,8 @@ Total: 1 + len(LEB128) bytes (typically 2).
 A value may hold a cycle (`1-fabric-values.md` Section 1.6). At any point in the
 traversal, the **path** is the sequence of containers whose encodings enclose
 that point, outermost first. The containers are arrays (Section 4.12), plain
-objects (Section 4.13), and `FabricInstance`s (Section 4.14). An instance
+objects (Section 4.13), and `FabricInstance`s (Section 4.14), a `FabricKeyPair`
+and a `FabricUnavailable` among them (Sections 4.17 and 4.18). An instance
 encloses its encoded state, so when that state is an array or an object, the
 instance and the state are two entries on the path.
 
@@ -565,7 +565,7 @@ Bytes: TAG_DURATION_NSEC  LENGTH_LEB128  TWO_COMP_BYTES
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
 `FabricDurationNsec` represents a span of time in nanoseconds. It is a
-`FabricPrimitive` subclass and has a dedicated type tag.
+leaf type with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -587,8 +587,8 @@ Bytes: TAG_DURATION_DAY  LENGTH_LEB128  TWO_COMP_BYTES
 
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
-`FabricDurationDay` represents a span of time in days. It is a
-`FabricPrimitive` subclass and has a dedicated type tag.
+`FabricDurationDay` represents a span of time in days. It is a leaf type
+with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
