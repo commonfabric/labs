@@ -495,3 +495,38 @@ describe("a handler whose write leaves a cycle of links", () => {
     ]);
   });
 });
+
+describe("an event whose transaction the runtime does not commit", () => {
+  // `fixtures/handler-throws.tsx`: the handler throws before its write
+  // while its target holds no value. The target holds none after the event
+  // either, which is no sign of a write: the event wrote nothing.
+  it("has no write edge compared", async () => {
+    const { plan, schemas } = await planOf("handler-throws");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("handler-throws.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
+    });
+
+    expect(run.events).toMatchObject([
+      {
+        handler: "record",
+        outcome: "refused",
+        aborted: "Error: nothing recorded yet",
+      },
+    ]);
+    expect(run.writes).toEqual([]);
+    expect(
+      run.skipped.filter(({ binding }) => binding === 0).map((
+        { what, reason },
+      ) => [what, reason]),
+    ).toEqual([
+      ["event of record, write 0", "a write edge of an event not committed"],
+    ]);
+  });
+});

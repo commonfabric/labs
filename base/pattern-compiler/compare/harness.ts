@@ -2040,6 +2040,17 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             );
             return;
           }
+          // An event whose transaction was not committed wrote nothing. A
+          // target that holds no value before and after it, or one the
+          // harness cannot read, is no sign of a write.
+          if (outcome.outcome !== "committed") {
+            skipped.push({
+              what,
+              reason: "a write edge of an event not committed",
+              binding,
+            });
+            return;
+          }
           // The paths the event's run wrote: a target whose value changed,
           // and for an element target the elements it added.
           const paths: string[][] = [];
