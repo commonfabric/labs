@@ -28,7 +28,9 @@ export interface FakeCatalogInput {
   entries?: Writable<CatalogEntry[] | Default<[]>>;
   status?: Writable<CatalogStatus | Default<{ state: "ready" }>>;
   getItRequests?: Writable<GetItRequests | Default<[]>>;
-  getItAnswers?: Writable<Record<string, GetItAnswer> | Default<{}>>;
+  getItAnswers?: Writable<
+    Record<string, GetItAnswer> | Default<Record<string, never>>
+  >;
 }
 
 /** The catalog, plus the stream that stands in for a host acting. */

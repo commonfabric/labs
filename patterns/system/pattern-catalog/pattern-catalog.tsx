@@ -120,19 +120,22 @@ export const requestGetIt = handler<
   }
 >((_, { getItRequests, getItAnswers, status, patternId, destination }) => {
   if (!patternId || !destination || status?.state !== "ready") return;
-  const latest = latestRequest(getItRequests.get(), patternId, destination);
+  const requests = getItRequests.get() ?? [];
+  const latest = latestRequest(requests, patternId, destination);
   const answer = latest ? getItAnswers?.[latest.requestId] : undefined;
   // One request at a time per pattern and destination: an unanswered or
-  // started request is still being acted on, and a placed one is done.
+  // started request is still being acted on, and a placed one is done. The
+  // append depends on that read, so it is a read-modify-write: two taps that
+  // race conflict, and the retried one sees the first.
   if (latest && (!answer || answer.state === "started")) return;
   if (answer?.state === "placed") return;
-  getItRequests.push({
+  getItRequests.set([...requests, {
     requestId: `${Date.now().toString(36)}-${
       Math.random().toString(36).slice(2, 10)
     }`,
     patternId,
     destination,
-  });
+  }]);
 });
 
 /** The id of `GetItButton`'s surface, as its trusted writes name it. */
