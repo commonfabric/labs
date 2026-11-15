@@ -153,6 +153,31 @@ describe("module-delegations", () => {
       }
     });
 
+    it("adds one edge for a forged dense relation whose inputs all reach one another", () => {
+      // Two thousand identities, each with twenty edges, all in one cycle:
+      // the walks are linear in the edges, so this is as cheap as the size of
+      // the relation, and every input but one is left out.
+      const size = 2000;
+      const edges = new Map<string, Set<string>>();
+      for (let index = 0; index < size; index++) {
+        edges.set(
+          `d${index}`,
+          new Set(
+            Array.from(
+              { length: 20 },
+              (_, step) => `d${(index + step * 97 + 1) % size}`,
+            ),
+          ),
+        );
+      }
+      const inputs = Array.from({ length: size }, (_, index) => `d${index}`);
+
+      addDirectEdges(edges, "forged", inputs);
+
+      expect([...edges.get("forged")!]).toEqual(["d0"]);
+      expect(inheritedThrough(edges, "forged").size).toBe(size);
+    });
+
     it("adds the same edges whatever order the inputs and the recorded edges come in", () => {
       for (let seed = 1; seed <= 200; seed++) {
         const { edges, identity, inputs } = randomCase(seed, 12);
