@@ -256,14 +256,14 @@ const styles = {
     gap: "8px",
     alignItems: "center",
   },
-  group: { background: "#f9fafb" },
+  group: { background: "var(--cf-theme-color-surface, #f9fafb)" },
   groupHeader: { display: "flex", alignItems: "center", gap: "8px" },
   timing: {
     display: "grid",
     gridTemplateColumns: "repeat(4, 1fr)",
     gap: "8px",
     padding: "8px",
-    background: "#fff",
+    background: "var(--cf-theme-color-surface, #fff)",
     border: "1px solid #e5e7eb",
     borderRadius: "4px",
   },
@@ -275,6 +275,7 @@ const styles = {
     background: "#fff8e1",
     border: "1px solid #fcd34d",
     borderRadius: "4px",
+    color: "#78350f",
   },
   ovenTitle: {
     gridColumn: "1 / -1",
@@ -286,7 +287,7 @@ const styles = {
   stepNumber: { fontWeight: "bold", color: "#666", minWidth: "22px" },
   change: {
     padding: "6px 10px",
-    background: "#f9fafb",
+    background: "var(--cf-theme-color-surface, #f9fafb)",
     border: "1px solid #e5e7eb",
     borderRadius: "4px",
     fontSize: "13px",

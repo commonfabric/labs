@@ -130,12 +130,14 @@ const styles = {
     background: "#d1fae5",
     borderRadius: "12px",
     fontSize: "12px",
+    color: "#065f46",
   },
   bad: {
     padding: "2px 8px",
     background: "#fee2e2",
     borderRadius: "12px",
     fontSize: "12px",
+    color: "#991b1b",
   },
   warnings: { margin: "0", paddingLeft: "20px", fontSize: "13px" },
   stale: {
