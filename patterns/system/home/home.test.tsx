@@ -363,12 +363,16 @@ export default pattern(() => {
   );
   // While Home holds no inbox and the refused inbox is its own, which the
   // button's click never takes, the notice says so and hides the button.
+  // Home's own holder keeps the link a creation returns and the refusal the
+  // result document's own, as the host names it: the forms production stores.
   const action_refuse_homes_own_inbox = action(() => {
     home.ownPrivateInbox.set({ piece: linkOf(refusedInbox) });
+    const own = home.ownPrivateInbox.get().piece;
+    if (own === undefined) return;
     home.privateInboxRefusal.set({
       refusal: {
         reason: "inbox-adoption-acl-mismatch",
-        inbox: linkOf(refusedInbox),
+        inbox: own.resolveAsCell(),
         refusedAt: REFUSED_AT,
       },
     });

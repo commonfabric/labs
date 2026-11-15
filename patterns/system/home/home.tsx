@@ -77,6 +77,7 @@ import {
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
   ensurePrivateInboxOnly,
+  isHomesOwnInbox,
   pointProfilesAtPrivateInbox,
   PrivateInboxAnswering,
   type PrivateInboxHolder,
@@ -525,17 +526,16 @@ const Home = pattern(
     const refused = computed(() => typeof refusedAt.get() === "number");
     // Whether the refused inbox is Home's own while Home holds none, which the
     // button's click never takes: the notice then hides the button and says
-    // why. It compares the stored links, read typed as the click reads them,
-    // with `Writable.equalLinks()`, which follows neither: `equals()` resolves
-    // both, and would read the refused inbox. The markup stays static, and
-    // this decides only which part of it displays, so that Home's anonymous
-    // cells keep their numbers.
+    // why. It reads both links typed, as the click does, and compares them as
+    // `isHomesOwnInbox()` does, resolving Home's own and never the refused
+    // inbox. The markup stays static, and this decides only which part of it
+    // displays, so that Home's anonymous cells keep their numbers.
     const ownRefusedStyles = computed(() => {
       const own = ownPrivateInbox.get()?.piece;
       const refusedInbox = privateInboxRefusal.get()?.refusal?.inbox;
       const ownRefused = privateInbox.get()?.piece === undefined &&
         own !== undefined && refusedInbox !== undefined &&
-        Writable.equalLinks(own, refusedInbox);
+        isHomesOwnInbox(own, refusedInbox);
       return {
         replace: { display: ownRefused ? "none" : "flex" },
         ownRefused: {

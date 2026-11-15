@@ -1864,11 +1864,18 @@ export default pattern(() => {
     ownlessRefusal.set({
       refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
     });
-    ownRefusedAdvertising.setInbox.send({ inbox: refused });
-    ownRefusedOwn.set({ piece: refused });
-    ownRefusedRefusal.set({
-      refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
-    });
+    // An own inbox the creating step made, as its holder stores it, and the
+    // result document's own link, as the host names it in a refusal and a
+    // profile's pointer holds it: the two forms production stores.
+    const created = ensureCreating.own.piece;
+    if (created !== undefined) {
+      const createdInbox = created.resolveAsCell();
+      ownRefusedAdvertising.setInbox.send({ inbox: createdInbox });
+      ownRefusedOwn.set({ piece: created });
+      ownRefusedRefusal.set({
+        refusal: { reason: REFUSED, inbox: createdInbox, refusedAt: EARLIER },
+      });
+    }
   });
   const action_replace_the_refused_inbox = action(() => {
     replaceRefused.replace.send();
@@ -1920,8 +1927,9 @@ export default pattern(() => {
   const assert_replacing_while_holding_none_leaves_a_refused_own_inbox = assert(
     () =>
       ownRefused.get().piece === undefined &&
-      equals(ownRefusedOwn.get().piece, elsewhere.get().piece) &&
-      equals(ownRefusedAdvertising.inbox?.piece, elsewhere.get().piece) &&
+      ensureCreating.own.piece !== undefined &&
+      equals(ownRefusedOwn.get().piece, ensureCreating.own.piece) &&
+      equals(ownRefusedAdvertising.inbox?.piece, ensureCreating.own.piece) &&
       ownRefusedRefusal.get().refusal?.reason === REFUSED &&
       replaceOwnRefused.replacement.replacement === undefined,
   );

@@ -1169,6 +1169,23 @@ export const requestPrivateInbox = handler<
 });
 
 /**
+ * Whether `inbox`, as a refusal record or a profile's pointer stores it, is
+ * Home's own inbox `own`, as `ownPrivateInbox` stores it. The two are stored
+ * in different forms: `ownPrivateInbox` keeps the link the creation returned,
+ * which reaches the inbox's result document through another cell, while the
+ * host names the result document's own link. So `own`, an inbox Home made,
+ * is resolved, and `inbox` is compared as stored and never resolved, as
+ * `equals()` would resolve it: nothing of an inbox Home did not make is read.
+ */
+export function isHomesOwnInbox(
+  own: Cell<PrivateInboxPiece>,
+  inbox: Cell<PrivateInboxPiece>,
+): boolean {
+  return Writable.equalLinks(own, inbox) ||
+    Writable.equalLinks(own.resolveAsCell(), inbox);
+}
+
+/**
  * Replaces the inbox Home's refusal record names, for the owner, from the
  * button Home's refusal notice carries: Home keeps the inbox it holds, or
  * takes its own when it holds none, clears the refusal, records it as replaced
@@ -1217,9 +1234,9 @@ export const replaceRefusedPrivateInbox = handler<
   if (refusal === undefined) return;
   if (privateInbox.get()?.piece === undefined) {
     const own = ownPrivateInbox?.piece;
-    // By the stored links, which `equalLinks()` does not resolve: the run
-    // reads nothing of the refused inbox before it writes Home's holder.
-    if (own === undefined || Writable.equalLinks(own, refusal.inbox)) return;
+    // The refused inbox is compared as stored, never resolved, so the run reads
+    // nothing of it before it writes Home's holder.
+    if (own === undefined || isHomesOwnInbox(own, refusal.inbox)) return;
     privateInbox.set({ piece: own });
   }
   privateInboxRefusal.set({});
