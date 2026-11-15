@@ -2068,3 +2068,197 @@ numbers have gaps.
     edges that were tighter and are equal are `submit` and `plantBrief` of
     `examples/cfc-exchange-rules/witnessed-chain.tsx`, whose target declares
     a policy clause that the template's side now has (note 229).
+
+## Events for handlers bound in an element body or in a pattern compiled in
+
+241. **What the 385 bindings of note 227 are** (corrects notes 227 and 237).
+     Note 227 calls them "per-element handlers". Of the 385 bindings of the
+     modules run that have a `within` step, 71 have an `element` step, with 117
+     write edges, and 314 have `site` steps alone, with 394: handlers bound in a
+     pattern compiled in at a tag or a call. The corpus run sent no event to
+     either kind because it left out every binding with a step. Likewise no
+     state cell of the modules run has an `element` step: the 723 with a step
+     have `site` steps alone, and the 88 rows not compared for "a state cell of
+     a per-element body" were output rows that read a state cell of a pattern
+     compiled in.
+242. **`Binding.result` for a binding of an element body** (PL §1.1 "The result
+     paths of a binding in an element body"; question 78). The assembled result
+     of a `map` holds the stream paths of what its callback returns below `*`
+     (`collection` in `src/plan.rs`), the children of a view node from a spread
+     on hold them where one collection is spread there (`jsx_children`), and
+     `stream_paths` reads the paths of a member that is a value with paths of
+     its own. Three things follow that PL does not state.
+
+     - A callback that returns the tag `<Row item={item} />` has the path
+       `children/*/$UI/props/onClick`. PL has "a `site` step adds no segment,
+       because the callee's tree is in place at the call", and also that a tag
+       anywhere but at a child position "evaluates to the callee's result ...
+       with the callee's tree below `$UI`". What a callback returns is no child
+       position, so the element is the callee's result. The run of today stores
+       the stream at that path (`compare/fixtures/element-handlers.tsx`).
+     - The same walk gives a path to a binding in a tree held in a variable and
+       in the tree of a pattern compiled in at a child position. Neither had one
+       before: 65 more bindings with `site` steps alone have a path (76 of 314).
+     - A binding made outside every element body whose stream is written in an
+       element body, `items.map((item) => <li onClick={inc} />)`, has a path
+       with `*` and no `element` step. PL forms the path with "one `*` for each
+       `element` step of `within` whose collection the path passes through",
+       which says nothing of a collection the binding is not within. The emitter
+       lists the path; every position holds the one stream
+       (`compare/fixtures/outer-stream.tsx`).
+
+     Over every accepted plan, 127 of 202 bindings of a handler in an element
+     body have a path, and `plan --corpus` prints the count. In the modules run,
+     65 of 71 have one.
+243. **Where the rule gives no path** (PL §8, question 78). The emitter gives a
+     binding of an element body no path, and lists it with the reason in
+     `PatternPlan.element_bindings` and as `noResultPath` in the JSON, in two
+     cases. Two collections spread into one array of children: 15 bindings over
+     every plan, 2 in the modules run. PL gives a path there too, "the `*` of
+     each binding's path stands for the positions of its own collection alone",
+     and says the path alone does not resolve it; the emitter emits none, as the
+     task for this work asked. A stream at no kept path of what the callback
+     returns: 60 over every plan, 4 in the modules run (one `detachRow` of
+     `apps/person-workbench/main.tsx`, `toggleEmojiPicker` and one
+     `toggleReaction` of `examples/group-chat-room/group-chat-room.tsx`,
+     `setProfileRetired` of `system/profile-picker/profile-picker.tsx`). The
+     four were not read one by one, so some may be at a position the emitter
+     does not follow, as through a `computed`. A third case is outside the rule:
+     208 bindings with `site` steps alone in
+     `examples/cfc-trusted-component-examples/` are made in patterns whose
+     results an array literal holds, and the tree reaches them through the
+     elements of that array,
+     `renderedExamples.map((example) => <div>{example[UI]}</div>)`. The path
+     passes through a collection the binding is not within, at a member of the
+     element and not of what the callback constructs. They have no path.
+244. **A stream in a branch of a `select`** (PL §1.1). PL has "the paths of the
+     result at which the instance stores a link to the stream" and does not say
+     whether a position that holds the stream under one selection is one. The
+     emitter lists it (`select_in`): 27 more bindings of an element body in the
+     modules run have a path, and 10 more of no step. The run holds no stream
+     there while the other branch is selected, and the harness then tries the
+     binding's next path.
+245. **From a path to a position, in the run of today** (PL §1.1 "From a path to
+     a position"). PL has "the index of that position in the stored array ...
+     plus the number of children stored before the spread". The run of today
+     does not store the children as one array. The assembled array of a `map`
+     over a cell is one child, at the position the expression is written at, so
+     the stream of element `i` is at `children/k/i/...` (`streamAt` in
+     `compare/harness.ts`, which finds `k` as the one child whose value is an
+     array). A `map` over an array of the module, `COLORS.map(...)`, is
+     evaluated when the tree is built and its elements are stored in place among
+     the children; the path does not say how many children are stored before
+     them, and the harness sends no event (2 bindings: `selectColor` of
+     `apps/weekly-calendar/event.tsx`, `toggleReaction` of
+     `examples/group-chat-room/group-chat-room.tsx`). The harness chooses the
+     last position of each enclosing collection. The generator gives an array
+     two elements, so that is position 1 unless an earlier event of the scenario
+     added or removed one.
+246. **How the run of today addresses a state cell of another instance.** Each
+     instance of a pattern has a result document of its own: the pattern of the
+     scenario, each run of an element callback, and each pattern at a tag or a
+     call. The `internal` metadata of that document lists the cells the
+     instance's body made, a state cell under the name of its declaration
+     (`partialCause`), and its `argument` metadata links to the instance's
+     argument document. The plan has no record that says where the result of a
+     `site` step is stored, so the harness finds the instance among the
+     documents the stored links lead through on the way from the result to the
+     row (`instancesAlong`, `stateCell`): the stream's path for a write row, the
+     output's path for an output row. Where the way has one instance for each
+     step of the binding's `within`, the cell's instance is the one at the depth
+     of the cell's own steps, and otherwise the one instance on the way that
+     names the cell. 88 more output rows are compared, 87 and one bound, each
+     tighter with the atom of a kept output and equal without it.
+247. **Where a handler is given the handle of its element** (PL §2.2 "It is the
+     label of the link": "the position that holds the reference: the path of the
+     document the body was given the handle from, such as a path of the argument
+     document or of a binding's state document"). The plan binds such a state
+     path to a slot of root `element`, and the harness read the slot at the
+     position in the source list. The run of today reads it elsewhere: the
+     argument document of the element's instance holds the element at `element`,
+     a link to the position in the source, with an entry of origin `link` that
+     holds the clause the source's cell declares. `askToRetire` of
+     `system/profile-picker/profile-picker.tsx` calls `spaceOf(profile)` on the
+     handle of its element and sets a state cell. Its transaction reads the
+     instance's argument document at `value/element` and `value/params`, and the
+     list document at `value/1` and at the link probe below it, and what it
+     stores for the write has the clause of the input `profiles` and a
+     `TransformedBy` atom. With the slot read at the source position the
+     template had no clause and minted no atom: tighter in confidentiality and
+     looser in integrity. The harness now reads the `identity` slot of a state
+     path that is the element itself at `element` of the instance's argument
+     document (`elementHeldAt`), in a write row, and the row is equal. PL does
+     not say which stored position an `element` slot of class `identity` has in
+     a run of today.
+248. **One rule for a write row, and a `resolved` slot** (PL §2.2 "The `link`
+     entry of a handle that is only passed on is not in it"; replaces the two
+     columns of notes 228 and 233). `WriteRow.template` takes the `identity`
+     slot of a handle the body only passes on as the entries of class
+     `followRef` at the position that are not of origin `link`.
+     `WriteRow.looserByLinkStamp` says whether a row is looser or incomparable
+     and is not with the label of each such slot left empty; the corpus has no
+     such row. The harness takes a handle as only passed on where no write edge
+     of the body targets its slot and the slot has no `resolved`. PL has the
+     entry out "where the body neither reads nor writes through the handle". A
+     body that calls `spaceOf` on a handle reads nothing through it, so by that
+     sentence the entry is out, and the run of note 247 consumed it. PL does not
+     say whether the `link` entry is in the label of a `resolved` slot, or of a
+     handle the body compares.
+249. **The comparison over the corpus, with events for the handlers of an
+     element body and of a pattern compiled in** (adds to note 240). The events
+     of the bindings with no step are sent first, so that what their runs find
+     stored is what it was.
+
+    | | no step | `site` steps alone | an `element` step |
+    | --- | --- | --- | --- |
+    | bindings of a handler, write edges | 266, 413 | 314, 394 | 71, 117 |
+    | with a result path, write edges | 236, 371 | 76, 102 | 65, 108 |
+    | events committed | 214 | 75 | 55 |
+    | refused | 14 | 0 | 1 |
+    | not sent | 8 | 1 | 9 |
+    | write edges compared | 154, and 1 bound | 66 | 14 |
+    | equal | 145 | 66 | 8 |
+    | tighter | 9 | 0 | 6 |
+    | looser, incomparable | 0, 0 | 0, 0 | 0, 0 |
+    | write edges the event's run did not make | 120 | 19 | 30 |
+    | a write edge whose target is the stream of a binding | 7 | 7 | 23 |
+    | a slot below a child no pick chose | 32 | 0 | 20 |
+
+    The 152 rows of note 240 are unchanged under the one rule: 143 equal
+    and 9 tighter. The two rows more are of bindings that have a path
+    through a `select` (`toggleSidebar` of `dev/catalog/catalog.tsx`,
+    `incrementHandler` of
+    `dev/gideon-tests/test-onclick-ifelse-simple-cell-working.tsx`). The
+    14 refused events are those of note 224. The one refused event of an
+    element body is `setProfileRetired` of
+    `system/profile-picker/profile-picker.tsx`, which throws on the
+    generated lists. The 8 and 9 not sent are paths in a branch that is
+    not selected, a collection with no element, and the two of note 245.
+    The outputs are 1,388 compared and 125 bounds, with 0 looser and 0
+    incomparable with the atom, and the 1,425 rows of note 240 are
+    unchanged. The 6 tighter rows of an element body were not examined
+    one by one: four are writes of `center` and `zoom` in
+    `examples/map-demo/map-demo.tsx`, whose documents hold entries of
+    earlier events of the scenario, as the rows of note 238 do.
+
+250. **What is still not compared of those handlers.** A write edge whose target
+     is the stream of another binding, as an inline handler that calls
+     `remove.send({ index })` has: nothing is stored at the target, and the
+     write of the handler it reaches belongs to another event. A binding with no
+     result path may be reached this way alone, as `boundIncrement` of
+     `examples/nested-counter/nested-counter.tsx` is, and the harness sends it
+     no event. A slot whose path has `*` for every element of a list the handler
+     reads, `expenses/*/id`: the harness has no reading for it outside a `pick`.
+     A collection whose source is an output, `filter(...).map(...)`: 4 rows. The
+     outputs below `children/*` are not compared either ("an element of no
+     listed collection", 113): the plan has no output with a `collection` at the
+     path of the children, and the run stores the element at `children/k/i`
+     (note 245).
+251. **A read of the result that failed after an event.** In one run of the
+     corpus, with the events in the order of the plan, the read of the result
+     after `onClick#1` of `examples/map-demo/map-demo.tsx` for the third element
+     of `areasOfInterest` (`center.set(area.center); zoom.set(13)`) threw
+     `Doc path should never exceed selector path` (`traverseWithSelector` in
+     `runtime/runner/src/traverse.ts`). With the events of the bindings with no
+     step sent first it did not. It was not examined. The harness records such a
+     failure with the event (`EventOutcome.afterwards`) and goes on.
