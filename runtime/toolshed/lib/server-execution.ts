@@ -365,20 +365,24 @@ export function servingWorkerPoolFromEnv(
 ): ServingWorkerPoolEnv {
   const read = (
     name: string,
-    { least }: { least: number },
+    { least, most = Number.MAX_SAFE_INTEGER }: {
+      least: number;
+      most?: number;
+    },
   ): number | undefined => {
     const raw = envGet(name);
     if (raw === undefined || raw === "") return undefined;
     const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : undefined;
     // A run of digits long enough parses to `Infinity`, which is no count.
     if (
-      value !== undefined && Number.isSafeInteger(value) && value >= least
+      value !== undefined && Number.isSafeInteger(value) && value >= least &&
+      value <= most
     ) {
       return value;
     }
     warn(
       `Server-execution v2: ignoring ${name}=${JSON.stringify(raw)} ` +
-        `(expected an integer of ${least} or more); using the default`,
+        `(expected an integer from ${least} to ${most}); using the default`,
     );
     return undefined;
   };
@@ -391,12 +395,15 @@ export function servingWorkerPoolFromEnv(
     : read("SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", {
       least: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
     }) ?? DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB;
+  // Each bounded above so that it is still a safe integer once converted.
   const heapBudgetMb = read("SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", {
     least: 1,
+    most: Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024)),
   });
   // No shorter than the ten seconds a worker posts its heartbeats at.
   const watchdogSeconds = read("SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", {
     least: 10,
+    most: Math.floor(Number.MAX_SAFE_INTEGER / 1000),
   });
   return {
     maxWorkers,

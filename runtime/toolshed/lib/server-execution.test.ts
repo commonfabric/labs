@@ -387,6 +387,15 @@ describe("servingWorkerPoolFromEnv()", () => {
         // Shorter than the interval a worker posts heartbeats at.
         ["SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", "9"],
         ["SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", "1.5"],
+        // A safe integer whose milliseconds or bytes are not.
+        [
+          "SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS",
+          String(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1),
+        ],
+        [
+          "SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB",
+          String(Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024)) + 1),
+        ],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "2e3"],
         // Long enough a run of digits to parse to `Infinity`.
         ["SERVER_EXECUTION_MAX_WORKERS", "9".repeat(400)],

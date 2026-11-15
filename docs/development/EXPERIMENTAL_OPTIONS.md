@@ -2298,8 +2298,9 @@ the per-epic implementation notes).
   be together before workers kept only for parked runtimes are closed
   (default none), and `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, how long a
   worker may send no message, its heartbeats included, before it is killed
-  (default 60, at least 10). The serving memory server tests build reads the
-  first.
+  (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
+  comes at the first check at or past that many seconds of silence in a row:
+  15 kills at 20. The serving memory server tests build reads the first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and
