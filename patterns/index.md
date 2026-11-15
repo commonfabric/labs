@@ -141,7 +141,9 @@ travel through a presence room and are stored nowhere),
 item only by sending the pattern's `addItem` verb, which writes the pattern's
 own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
 `examples/profile-group-chat/`, `apps/project-list/`, `apps/star-chart/` (a
-kids' daily-habit sticker chart),
+kids' daily-habit sticker chart), `apps/assumption-surfacer/` (a chat that
+surfaces the assistant's assumptions for you to confirm or correct),
+`apps/reward-spinner/` (a kids' prize spinner with parent-set odds),
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
 `examples/scoped-group-chat/`, `examples/scoped-user-directory/`,
@@ -984,6 +986,104 @@ interface StarChartOutput {
   milestone: string;
   earnStar: Stream<void>;
   toggleDay: Stream<{ date: string }>;
+}
+```
+
+## `apps/reward-spinner/reward-spinner.tsx`
+
+A slot-machine prize spinner for kids: tap the reel and it whirs through prizes
+for six seconds before landing on three jelly beans, one jelly bean or a big
+hug, with a burst of stars. A parent sets the odds with a quiet generosity
+control (0 = mostly hugs, 10 = mostly candy) that briefly shows the resulting
+odds, and every spin is recorded with its time and generosity. The prize and the
+reel strip are decided once in the spin action; the reel is a CSS animation to
+that strip's last cell, played only for spins made in the current session.
+
+**Keywords:** kids, rewards, random, weighted-odds, animation, css-keyframes
+
+### Input Schema
+
+```ts
+type PrizeId = "three-beans" | "one-bean" | "hug";
+
+interface SpinRecord {
+  timestamp: number; // ms since epoch
+  generosity: number; // 0-10, at the time of the spin
+  prize: PrizeId;
+}
+
+interface RewardSpinnerInput {
+  generosity?: PerSpace<Writable<number | Default<10>>>;
+  spinHistory?: PerSpace<Writable<SpinRecord[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface RewardSpinnerOutput {
+  generosity: number;
+  spinHistory: SpinRecord[];
+  lastPrize: string; // emoji the reel rests on; 🎁 before any spin
+  odds: { emoji: string; dots: string; percent: number }[];
+  reel: string[]; // this session's latest reel strip; empty before one
+  spin: Stream<void>;
+  moreGenerous: Stream<void>;
+  lessGenerous: Stream<void>;
+}
+```
+
+## `apps/assumption-surfacer/assumption-surfacer.tsx`
+
+A chat that shows, beside the conversation, the assumptions the assistant is
+making about you. Before each reply the assistant records its few most
+consequential guesses (your language, skill level, goal…) through a
+`recordAssumptions` tool, each with alternatives. The sidebar lists them, newest
+first; pick the right alternative or "None of these". A correction is also sent
+to the chat, and every settled assumption is folded into the system prompt so
+later replies build on it.
+
+**Keywords:** llm, chat, llmDialog, tools, assumptions, clarification
+
+### Input Schema
+
+```ts
+interface Assumption {
+  id: string; // a1, a2, … in recording order
+  turn: number; // which user message (1-based) the reply answered
+  about: string; // excerpt of that message
+  label: string;
+  description: string;
+  alternatives: string[];
+  assumedIndex: number;
+  status: "open" | "confirmed" | "corrected" | "rejected";
+  chosenIndex: number; // when corrected, else -1
+}
+
+interface AssumptionSurfacerInput {
+  messages?: PerSpace<Writable<BuiltInLLMMessage[] | Default<[]>>>;
+  assumptions?: PerSpace<Writable<Assumption[] | Default<[]>>>;
+  systemPrompt?: PerSpace<Writable<string | Default<"">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface AssumptionSurfacerOutput {
+  messages: BuiltInLLMMessage[];
+  assumptions: Assumption[];
+  openCount: number;
+  settled: string[]; // settled facts, as fed to the model
+  system: string; // the full system prompt
+  pending: boolean | undefined;
+  recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }, string>;
+  confirmAssumption: Stream<{ id: string }>;
+  rejectAssumption: Stream<{ id: string }>;
+  chooseAlternative: Stream<{ id: string; index: number }>;
+  addMessage: Stream<BuiltInLLMMessage>;
+  cancelGeneration: Stream<void>;
+  clearChat: Stream<void>;
 }
 ```
 
