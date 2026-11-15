@@ -547,6 +547,16 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
       )
     );
     const drawn = computed(() => timeline(ovenPlan, mealTime.get()));
+    // Bar offsets as CSS strings, made here: a template literal over a row
+    // field inside the bar's style object reaches the DOM as
+    // "[object Object]%".
+    const bars = computed(() =>
+      drawn.rows.map((row) => ({
+        ...row,
+        leftCss: `${row.left}%`,
+        widthCss: `${row.width}%`,
+      }))
+    );
     const hasTimeline = computed(() => ovenPlan.events.length > 0);
     const hasOvenNotes = computed(() =>
       ovenPlan.events.length + ovenPlan.offTimeline.length > 0
@@ -1290,7 +1300,7 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                             <span>{drawn.axis[1]}</span>
                             <span>{drawn.axis[2]}</span>
                           </div>
-                          {drawn.rows.map((row) => (
+                          {bars.map((row) => (
                             <div>
                               <div style={styles.rowLabel}>
                                 <span>
@@ -1304,8 +1314,8 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                                     position: "absolute",
                                     top: "0",
                                     height: "100%",
-                                    left: `${row.left}%`,
-                                    width: `${row.width}%`,
+                                    left: row.leftCss,
+                                    width: row.widthCss,
                                     background: row.conflict
                                       ? CONFLICT_BAR
                                       : NORMAL_BAR,

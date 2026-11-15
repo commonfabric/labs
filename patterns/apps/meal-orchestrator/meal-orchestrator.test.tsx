@@ -19,7 +19,9 @@ import {
 } from "commonfabric";
 import {
   clickButton,
+  findNodes,
   hasText,
+  styleOf,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
 import FoodRecipe from "../food-recipe/food-recipe.tsx";
@@ -150,6 +152,15 @@ export default pattern(() => {
   );
 
   const action_add_oven = action(() => clickButton(meal[UI], "+ Add Oven"));
+  // Each timeline bar is placed by a CSS percentage, not "[object Object]%".
+  const assert_bars_placed = assert(() => {
+    const lefts = findNodes(
+      meal[UI],
+      (node) => styleOf(node, "position") === "absolute",
+    ).map((node) => styleOf(node, "left"));
+    return lefts.length === 2 &&
+      lefts.every((l) => typeof l === "string" && /^[\d.]+%$/.test(l));
+  });
   const assert_resolved = assert(() =>
     meal.ovens.length === 2 &&
     meal.ovenPlan.conflicts.length === 0 &&
@@ -290,6 +301,7 @@ export default pattern(() => {
       { assertion: assert_oven_conflict },
       { action: action_add_oven },
       { assertion: assert_resolved },
+      { assertion: assert_bars_placed },
       { action: action_shrink_oven },
       { assertion: assert_shrunk },
       { action: action_more_guests },
