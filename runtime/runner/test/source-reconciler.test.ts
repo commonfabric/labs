@@ -659,22 +659,25 @@ describe("piece source reconciliation", () => {
       });
 
       it("stays where a running piece swaps to a newer release that leaves the result unchanged", async () => {
-        // The swap sets up in a transaction of its own, carrying the
-        // adoption's decision, and with it that the runtime started it.
+        // A running piece also takes the release through its pattern
+        // watcher's swap.
 
         expect(
           await stampAfterAdopting(sourceWithNote("v2"), { running: true }),
         ).toEqual(["bob-secret"]);
       });
 
-      it("stays on a sub-pattern's result the newer release leaves unchanged", async () => {
-        // A sub-pattern set up in the adoption's transaction takes its mark,
-        // so a view the update hid stays hidden there.
+      it("stays on a running piece's sub-pattern result the newer release leaves unchanged", async () => {
+        // The swap sets the sub-pattern up again in a transaction of its own,
+        // which carries the adoption's decision and with it that the runtime
+        // started it (`#runDecisionOf` in `runner.ts`), so a view an earlier
+        // update hid stays hidden there.
 
         expect(
           await stampAfterAdopting(sourceWithNestedNote("v2"), {
             first: sourceWithNestedNote("v1"),
             nested: true,
+            running: true,
           }),
         ).toEqual(["bob-secret"]);
       });
