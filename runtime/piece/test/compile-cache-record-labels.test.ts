@@ -231,58 +231,121 @@ describe("compile-cache-record-labels", () => {
     }
   });
 
-  it("refuses a fresh setup of a program whose records already store a label, and leaves that label stored", async () => {
-    // Records an earlier runtime stamped, at the delegation field and at the
-    // root, as a labeled transition and a later write-back leave them. A setup
-    // reading them consumes the label, and its argument write misfits.
-    // TODO(danfuzz): This pins a refusal that is wrong for the setup (see the
-    // `TODO` on `stageModuleDelegations()`): flip it to a committed setup once
-    // a repair drops the stamps the compile-cache builtin's writes left.
+  describe("with the successor's records storing a label an earlier runtime left", () => {
+    // A runtime that staged a source update's delegations in the transition's
+    // own transaction left the piece data's label on the successor's records,
+    // and a later write-back of a record moved part of it to the root. The
+    // entries planted here are the ones such a runtime was measured to leave.
+    // A setup that reads them consumes the label, and its argument write
+    // misfits, unless the load ahead of it repairs the records.
 
-    const first = strictRuntime();
-    const firstPieces = await controllerOn(first);
-    const program = confidentialArgumentProgram("v2");
-    const existing = await firstPieces.create(program, {
-      input: { seed: "b" },
-    });
-    await first.idle();
-    const identity = getPatternIdentityRef(existing.getCell())!.identity;
-    await first.patternManager.flushCompileCacheWrites();
-    await firstPieces.synced();
-    const version = await first.patternManager.compileCacheRuntimeVersion({
-      patternCoverage: false,
-    });
-    const keys = [sourceDocKey(identity), compiledDocKey(version!, identity)];
-    for (const key of keys) {
-      const { id } = recordConfidentiality(first, key);
-      await plantEntries(
-        first,
-        id,
-        [["delegatedModuleIdentities"], []].flatMap((path) => [
-          {
-            path,
-            origin: "derived",
-            observes: "shape",
-            label: { confidentiality: [UNDECLARED_ATOM] },
-          },
-          {
-            path,
-            origin: "derived",
-            observes: "value",
-            label: { confidentiality: [UNDECLARED_ATOM] },
-          },
-        ]),
-      );
-    }
+    /** The confidentiality entries a source update's staging left. */
+    const updateStamp = (atom: unknown): FabricValue[] =>
+      ([
+        [["delegatedModuleIdentities"], "structure", "enumerate"],
+        [["delegatedModuleIdentities"], "structure", "shape"],
+        [["delegatedModuleIdentities", "*"], "structure", "followRef"],
+        [["delegatedModuleIdentities", "*"], "structure", "shape"],
+        [["delegatedModuleIdentities", "*"], "structure", "value"],
+        [["delegatedModuleIdentities", "0"], "derived", "shape"],
+        [["delegatedModuleIdentities", "0"], "derived", "value"],
+      ] as const).map(([path, origin, observes]) => ({
+        path: [...path],
+        origin,
+        observes,
+        label: { confidentiality: [atom as FabricValue] },
+      }));
 
-    const second = strictRuntime();
-    const secondPieces = await controllerOn(second);
-    await expect(secondPieces.create(program, { input: { seed: "c" } }))
-      .rejects.toThrow("writer-fit confidentiality misfit");
-    for (const key of keys) {
-      expect(recordConfidentiality(second, key).atoms, key).toContain(
-        UNDECLARED_ATOM,
+    /**
+     * The confidentiality entries a write-back of a record carrying
+     * {@link updateStamp} left: its root's, the compile-cache writer's
+     * transformation on the value entry, and the existence entries the
+     * write kept.
+     */
+    const writeBackStamp = (atom: unknown): FabricValue[] => [
+      {
+        path: [],
+        origin: "derived",
+        observes: "shape",
+        label: { confidentiality: [atom as FabricValue] },
+      },
+      {
+        path: [],
+        origin: "derived",
+        observes: "value",
+        label: {
+          confidentiality: [atom as FabricValue],
+          integrity: [{
+            type: "https://commonfabric.org/cfc/atom/TransformedBy",
+            identity: { kind: "builtin", builtinId: "compile-cache" },
+          }],
+        },
+      },
+      ...updateStamp(atom).filter((entry) =>
+        (entry as { observes: string }).observes === "shape"
+      ),
+    ];
+
+    /**
+     * Updates a piece onto `confidentialArgumentProgram("v2")` and plants
+     * `entries` on the successor's source and compiled records, and returns
+     * their keys.
+     */
+    const stampedSuccessor = async (
+      entries: FabricValue[],
+    ): Promise<string[]> => {
+      const first = strictRuntime();
+      const firstPieces = await controllerOn(first);
+      const piece = await firstPieces.create(
+        confidentialArgumentProgram("v1"),
+        {
+          input: { seed: "a" },
+        },
       );
+      await first.idle();
+      await piece.setPattern(confidentialArgumentProgram("v2"));
+      await first.idle();
+      const successor = getPatternIdentityRef(piece.getCell())!.identity;
+      await first.patternManager.flushCompileCacheWrites();
+      await firstPieces.synced();
+      const version = await first.patternManager.compileCacheRuntimeVersion({
+        patternCoverage: false,
+      });
+      const keys = [
+        sourceDocKey(successor),
+        compiledDocKey(version!, successor),
+      ];
+      for (const key of keys) {
+        await plantEntries(
+          first,
+          recordConfidentiality(first, key).id,
+          entries,
+        );
+      }
+      return keys;
+    };
+
+    for (
+      const [left, entries] of [
+        ["a source update", updateStamp(UNDECLARED_ATOM)],
+        ["a write-back", writeBackStamp(UNDECLARED_ATOM)],
+      ] as const
+    ) {
+      it(`commits a fresh setup of the successor over the label ${left} left, and leaves no label stored`, async () => {
+        const keys = await stampedSuccessor(entries);
+        const second = strictRuntime();
+        const secondPieces = await controllerOn(second);
+        const fresh = await secondPieces.create(
+          confidentialArgumentProgram("v2"),
+          { input: { seed: "c" } },
+        );
+        await second.idle();
+
+        expect(await fresh.result.get(["label"])).toBe("v2:c");
+        for (const key of keys) {
+          expect(recordConfidentiality(second, key).atoms, key).toEqual([]);
+        }
+      });
     }
   });
 });

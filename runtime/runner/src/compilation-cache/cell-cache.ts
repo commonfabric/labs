@@ -8,7 +8,8 @@ import type {
 } from "@commonfabric/ts-transformers";
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
@@ -16,6 +17,7 @@ import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
+  type LabelMapEntry,
   runtimeWritePolicyAuthorization,
 } from "../cfc/types.ts";
 import {
@@ -38,7 +40,7 @@ import {
   deriveModuleRecordFields,
   SOURCE_ROOT_SPECIFIER,
 } from "../sandbox/module-record-compiler.ts";
-import type { SigilLink } from "../sigil-types.ts";
+import type { SigilLink, URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   COMPILE_CACHE_RUNTIME_VERSION,
@@ -1058,7 +1060,177 @@ export function codeFieldVerifies(
   if (typeof code !== "string") return false;
   const stored = (cell.getRaw() as { code?: unknown } | undefined)?.code;
   if (typeof stored === "string") return stored === code;
-  return parseLink(stored, cell)?.id === `cid:${taggedHashStringOf(code)}`;
+  return parseLink(stored, cell)?.id === codeDocumentId(code);
+}
+
+/** The id of the code document holding `code`. */
+function codeDocumentId(code: string): URI {
+  return `cid:${taggedHashStringOf(code)}`;
+}
+
+/**
+ * The link a record the cache writes in `space` stores for the code document
+ * holding `code`, as `codeLink()` returns it.
+ */
+export function codeDocumentLink(space: MemorySpace, code: string): SigilLink {
+  return createSigilLinkFromParsedLink({
+    id: codeDocumentId(code),
+    path: [],
+    space,
+  });
+}
+
+/**
+ * A compile-cache record as a verifying load read it, which
+ * {@link cacheRecordStampsRepairable} judges.
+ */
+export interface CacheRecordReading {
+  /** Which set the record belongs to. */
+  readonly set: "source" | "compiled";
+
+  /** The space the record is stored in. */
+  readonly space: MemorySpace;
+
+  /** The identity the record is keyed by, which the load verified. */
+  readonly identity: string;
+
+  /** The record's stored value, as `getRaw()` returns it. */
+  readonly stored: unknown;
+
+  /** The module code the load verified the record's `code` field against. */
+  readonly code: string;
+
+  /**
+   * The import edges the cache writes for the record: each import the load
+   * verified, in its stored order, with the link the cache stores for the
+   * record it names.
+   */
+  readonly imports: readonly { specifier: string; link: unknown }[];
+
+  /** The payload entries of the record's stored label map. */
+  readonly entries: readonly LabelMapEntry[];
+}
+
+/**
+ * Whether the confidentiality the flow stamps left on a compile-cache record
+ * may be removed: whether the record holds such a stamp, and its value holds
+ * nothing a writer chose. The value must be the one the cache writes for its
+ * verified module. That is every field the cache writes and no other, product
+ * annotations included, with the identity it is keyed by, the code it
+ * verified, and the import edges it verified, each stored as the cache stores
+ * it. A compiled record must carry the compiler's attestation at its root.
+ * A delegation list must carry it at the list, and hold distinct module
+ * identities other than the record's own, sorted, as the cache writes one.
+ * Every entry holding confidentiality must be a `derived` or `structure` one,
+ * at the record's root or under a field the cache writes.
+ *
+ * The bound: the verification covers what a module's identity hashes, and
+ * the attestation stands for what the compile-cache writer wrote. Two
+ * choices are left to the record's last writer and are not checked here.
+ * One is the order of the import edges, which the identity does not fix.
+ * The other is the cache-root links an entry record holds beside its
+ * authored imports (`ROOT_LINK_SPECIFIER`). Only a writer the store admits
+ * without the cache's own claim on the record can make either choice, which
+ * `enforce-strict` refuses where the writer's transaction read a label.
+ */
+export function cacheRecordStampsRepairable(
+  record: CacheRecordReading,
+): boolean {
+  const { set, identity, stored, entries } = record;
+  if (!isPlainObject(stored)) return false;
+  const fields = recordFields(set);
+  const value = stored as Record<string, unknown>;
+  if (!Object.keys(value).every((field) => fields.has(field))) return false;
+  const kindWritten = set === "source"
+    ? value.kind === "source"
+    : value.kind === "compiled" || value.kind === "data";
+  if (
+    !kindWritten || value.identity !== identity ||
+    typeof value.filename !== "string" ||
+    !(value.code === record.code ||
+      deepEqual(value.code, codeDocumentLink(record.space, record.code))) ||
+    !deepEqual(value.imports, record.imports)
+  ) {
+    return false;
+  }
+  const attested = (path: readonly string[]) =>
+    entries.some((entry) =>
+      entry.origin === "minted" && deepEqual(entry.path, path) &&
+      (entry.label.integrity ?? []).includes(COMPILED_INTEGRITY_ATOM)
+    );
+  if (set === "compiled" && !attested([])) return false;
+  if ("delegatedModuleIdentities" in value) {
+    const list = value.delegatedModuleIdentities;
+    if (
+      !Array.isArray(list) || list.length === 0 ||
+      !deepEqual(list, validDelegatedModuleIdentities(identity, list)) ||
+      !attested(SOURCE_DELEGATION_PATH)
+    ) {
+      return false;
+    }
+  }
+  const stamps = entries.filter((entry) =>
+    (entry.label.confidentiality?.length ?? 0) > 0
+  );
+  return stamps.length > 0 &&
+    stamps.every((entry) =>
+      (entry.origin === "derived" || entry.origin === "structure") &&
+      (entry.path.length === 0 || fields.has(entry.path[0]))
+    );
+}
+
+/**
+ * Reads the record of `identity`'s module in `space`, which a verifying load
+ * read as `doc`, through `tx`: from the source set, or from the compiled set
+ * of `runtimeVersion` when one is given. The import edges are the ones the
+ * cache writes for `doc`'s imports.
+ */
+export function readCacheRecord(
+  runtime: Runtime,
+  space: MemorySpace,
+  identity: string,
+  doc: Pick<ModuleDocBase, "code" | "imports">,
+  runtimeVersion: string | undefined,
+  tx: IExtendedStorageTransaction,
+): CacheRecordReading {
+  const keyOf = (module: string) =>
+    runtimeVersion === undefined
+      ? sourceDocKey(module)
+      : compiledDocKey(runtimeVersion, module);
+  const cell = runtime.getCell(space, keyOf(identity), undefined, tx);
+  const link = cell.getAsNormalizedFullLink();
+  return {
+    set: runtimeVersion === undefined ? "source" : "compiled",
+    space,
+    identity,
+    stored: cell.getRaw(),
+    code: doc.code,
+    imports: doc.imports.map((imp) => ({
+      specifier: imp.specifier,
+      link: runtime.getCell(space, keyOf(imp.identity), undefined, tx)
+        .getAsLink(),
+    })),
+    entries: readStoredCfcMetadata(tx, {
+      space: link.space,
+      id: link.id,
+      scope: link.scope,
+    })?.labelMap.entries ?? [],
+  };
+}
+
+/**
+ * Helper for {@link cacheRecordStampsRepairable}, which returns the fields a
+ * record of `set` holds as the cache writes it: those its schema declares,
+ * less product annotations.
+ */
+function recordFields(set: "source" | "compiled"): ReadonlySet<string> {
+  return new Set(
+    Object.keys(
+      set === "source"
+        ? SOURCE_DOC_SCHEMA.$defs.sourceDoc.properties
+        : compiledDocProperties,
+    ).filter((field) => field !== "annotations"),
+  );
 }
 
 /**
