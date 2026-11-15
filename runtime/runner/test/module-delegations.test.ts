@@ -189,7 +189,7 @@ describe("module-delegations", () => {
   });
 
   describe("composeRecordedEdges()", () => {
-    it("stamps each successor's edge, and a listed entry the edges do not reach, with the position", () => {
+    it("stamps each successor's edge with the position, and makes a listed entry the edges do not reach the successor's edge at 0", () => {
       const recorded = {
         edges: stamped([["p", "older", 2], ["older", "oldest", 1]]),
         position: 4,
@@ -208,7 +208,7 @@ describe("module-delegations", () => {
         ["p", "older", 2],
         ["older", "oldest", 1],
         ["n", "p", 4],
-        ["p", "foreign", 4],
+        ["n", "foreign", 0],
       ])));
       expect(sorted(delegations.get("n")!)).toEqual([
         "foreign",

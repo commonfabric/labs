@@ -17722,7 +17722,9 @@ export function getPieceSourceRecord(
 ): PieceSourceRecord {
   let position = 0;
   try {
-    position = getPieceSourceRevisions(resultCell).length;
+    // One past the history's length, so that no real position is 0, the
+    // stamp a listed entry's terminal edge takes (`composeRecordedEdges()`).
+    position = getPieceSourceRevisions(resultCell).length + 1;
   } catch {
     // An invalid history admits no stamp; the transition reports it.
   }
@@ -17739,8 +17741,8 @@ export function getPieceSourceRecord(
  * they are malformed: anything but an array of entries each naming a module
  * once, with at least one predecessor, each named once, none the module, and
  * each with at least one stamp, every stamp a whole number below `position`
- * (no edge can have been recorded at or after the history's length) and
- * the stamps strictly ascending.
+ * (no edge can have been recorded at one past the history's length or
+ * later) and the stamps strictly ascending.
  */
 function pieceSourceStampedEdges(
   value: unknown,

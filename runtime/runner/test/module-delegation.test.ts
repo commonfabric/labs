@@ -662,14 +662,18 @@ describe("module identity delegation", () => {
           new Set([previous.identity, "older", "oldest", "foreign"]),
         ]]),
       );
-      // The successor's edge takes the record's position, and so does an
-      // entry of the record's list the edges did not already reach.
+      // The successor's edge takes the record's position; an entry of the
+      // record's list the edges did not already reach becomes the
+      // successor's edge at 0, which the walk stops at.
       expect(next.edges).toStrictEqual(
         new Map([
-          [previous.identity, new Map([["older", [2]], ["foreign", [3]]])],
+          [previous.identity, new Map([["older", [2]]])],
           ["older", new Map([["oldest", [1]]])],
           ["stray", new Map([["elsewhere", [1]]])],
-          [candidate.identity, new Map([[previous.identity, [3]]])],
+          [
+            candidate.identity,
+            new Map([[previous.identity, [3]], ["foreign", [0]]]),
+          ],
         ]),
       );
     } finally {

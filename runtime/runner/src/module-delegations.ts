@@ -253,12 +253,17 @@ export function recordEdge(
  * position the update records at.
  *
  * Each successor gets an edge to the module it succeeds, stamped with
- * `recorded.position`. The predecessor record's attested list is what that
- * record holds now, which another piece, or a runtime from before the member,
- * may have added to, so an entry of it the edges do not already reach from
- * the predecessor becomes the predecessor's edge at `recorded.position` too:
- * a module that succeeded the predecessor earlier, at a lower stamp, does not
- * follow it, as its own record froze the list at its own time. Each module of
+ * `recorded.position`, which is never 0. The predecessor record's attested
+ * list is closed as of when it was written, and is what the successor takes
+ * in now: so an entry of it the edges do not already reach from the
+ * successor becomes the SUCCESSOR's edge at stamp 0. The walk follows that
+ * edge from the successor and from anything that later reaches the
+ * successor, and stops at the entry, since nothing is recorded at or below
+ * 0: the successor gets the list as written, and nothing a listed module was
+ * granted afterward, and no module that succeeded the predecessor earlier
+ * sees the list at all, as its own record froze the list at its own time.
+ * The list being closed, every module a listed module inherited when it was
+ * written is itself listed, so stopping loses nothing. Each module of
  * `candidate` is then closed
  * over the result along non-increasing stamps (`inheritedAlongStamps()`): a
  * module the update leaves unchanged, or one that returns, is closed over its
@@ -293,16 +298,15 @@ export function composeRecordedEdges(
   // Reached before any listed entry is added, so that what is added does not
   // depend on the order of the matches.
   const reached = new Map(
-    [...new Set([...matched.values()].map(({ predecessor }) => predecessor))]
-      .map((predecessor) => [
-        predecessor,
-        inheritedAlongStamps(edges, predecessor),
-      ]),
+    [...matched.keys()].map((identity) => [
+      identity,
+      inheritedAlongStamps(edges, identity),
+    ]),
   );
-  for (const { predecessor, inherited } of matched.values()) {
+  for (const [identity, { inherited }] of matched) {
     for (const entry of inherited) {
-      if (!reached.get(predecessor)!.has(entry)) {
-        recordEdge(edges, predecessor, entry, recorded.position);
+      if (!reached.get(identity)!.has(entry)) {
+        recordEdge(edges, identity, entry, 0);
       }
     }
   }

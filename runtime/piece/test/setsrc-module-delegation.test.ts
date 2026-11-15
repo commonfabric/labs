@@ -1400,6 +1400,46 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     });
 
+    it("grants a module a predecessor record's list as it was written, and nothing a listed module gained afterward", async () => {
+      // Piece `b` goes L to P, so P's record lists L, as L stood then. Piece
+      // `a` then goes M to L, so L gains M, and on to X; a move that is no
+      // source update brings `a` to P, which `a`'s own history never derived
+      // from L; and `a` goes P to S. S takes P's list in: L, and not M, which
+      // L gained after P's record was written. `main`'s record of S lists P
+      // and L.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const b = await pieces.create(splitWriterProgram("wL", "eL"), {
+          input: {},
+        });
+        const eL = getPatternIdentityRef(b.getCell())!.identity;
+        const wL = await moduleAt(eL, "/app/writer.ts");
+        await b.setPattern(splitWriterProgram("wP", "eP"));
+        const eP = getPatternIdentityRef(b.getCell())!.identity;
+        const wP = await moduleAt(eP, "/app/writer.ts");
+        const a = await pieces.create(splitWriterProgram("wM", "eM"), {
+          input: {},
+        });
+        const eM = getPatternIdentityRef(a.getCell())!.identity;
+        const wM = await moduleAt(eM, "/app/writer.ts");
+        await a.setPattern(splitWriterProgram("wL", "eL"));
+        await a.setPattern(splitWriterProgram("wX", "eX"));
+        await moveWithoutUpdate(a, splitWriterProgram("wP", "eP"));
+        await a.setPattern(splitWriterProgram("wS", "eS"));
+        const eS = getPatternIdentityRef(a.getCell())!.identity;
+        const wS = await moduleAt(eS, "/app/writer.ts");
+
+        await freshPieces.get(a.id, true);
+
+        const space = pieces.getSpace();
+        expect(fresh.grantsModuleDelegation(space, wS, wP)).toBe(true);
+        expect(fresh.grantsModuleDelegation(space, wS, wL)).toBe(true);
+        expect(fresh.grantsModuleDelegation(space, wS, wM)).toBe(false);
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
     it("keeps the grant of a module a source update reverts to after a successor replaced it", async () => {
       // v0 to v1's staging never lands; v2's writer succeeds w1; a source
       // update reverts to v1. w1 keeps w0, and gains w2, as `main` stages.

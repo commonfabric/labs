@@ -169,11 +169,12 @@ type SourceUpdatePreparation = {
  * for a transition that records the member: `delegations`, the closed
  * delegations of the modules of that pattern's closure, which a start
  * registers; `edges`, every delegation edge the piece's history recorded,
- * each with the history positions it was recorded at; and `position`, the
- * piece's history length as read, which the next transition stamps the edges
- * it records with. The history only grows, and every transition, a source
- * update or not, appends to it, so `position` exceeds every stamp already
- * recorded.
+ * each with the history positions it was recorded at; and `position`, one
+ * past the piece's history length as read, which the next transition stamps
+ * the edges it records with. The history only grows, and every transition, a
+ * source update or not, appends to it, so `position` exceeds every stamp
+ * already recorded, and it is never 0, the stamp of a listed entry's
+ * terminal edge.
  */
 export type PieceSourceRecord = {
   delegations: ModuleDelegationMap;

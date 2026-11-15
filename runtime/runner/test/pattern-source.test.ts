@@ -358,7 +358,7 @@ describe("patternSource meta accessors", () => {
       ).toStrictEqual(new Map());
     });
 
-    it("reads every field for a recording transition at the history's length, and no field where any is malformed", async () => {
+    it("reads every field for a recording transition at one past the history's length, and no field where any is malformed", async () => {
       const edges = [{
         identity: "recorded-module",
         predecessors: [{ identity: "older", at: [0, 2] }],
@@ -371,7 +371,7 @@ describe("patternSource meta accessors", () => {
       expect(getPieceSourceRecord(cell, pattern)).toStrictEqual({
         delegations: new Map([["recorded-module", new Set(["earlier"])]]),
         edges: new Map([["recorded-module", new Map([["older", [0, 2]]])]]),
-        position: 3,
+        position: 4,
       });
 
       const edge = (predecessor: unknown) => [{
@@ -401,7 +401,7 @@ describe("patternSource meta accessors", () => {
           ["negative-stamp", edge({ identity: "a", at: [-1] })],
           ["decreasing-stamps", edge({ identity: "a", at: [2, 1] })],
           ["repeated-stamp", edge({ identity: "a", at: [1, 1] })],
-          ["stamp-at-the-history-length", edge({ identity: "a", at: [3] })],
+          ["stamp-past-the-history", edge({ identity: "a", at: [4] })],
         ] as const
       ) {
         const bad = await pieceWith(`recorded-record-${name}`, {
@@ -412,7 +412,7 @@ describe("patternSource meta accessors", () => {
         expect(getPieceSourceRecord(bad, pattern), name).toStrictEqual({
           delegations: new Map(),
           edges: new Map(),
-          position: 3,
+          position: 4,
         });
         // A start reads the delegations alone, which are well-formed.
         expect(getPieceSourceDelegations(bad, pattern).size, name).toBe(1);
