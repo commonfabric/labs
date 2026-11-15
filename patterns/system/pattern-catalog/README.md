@@ -36,6 +36,14 @@ a pattern later both implement the same shape.
   failure or a cancellation, a tap asks again. `host` is copied from the
   catalog's own `host`; while the catalog names none, nothing acts on requests,
   so the button is disabled and says so.
+- The button is a `cf-pattern-install`, which says in its own words what a tap
+  does: "Install “title” onto loom". The title is the catalog's own, from the
+  entry in `entries` with the button's `patternId`; when the window does not
+  hold that entry, it shows the pattern's id instead. The place is named by
+  `destinationName`, which the caller passes as the person knows it (such as the
+  loom's name); without one, the button names no place. The caller gives no text
+  for the button. Beside it, the button shows the answer to its latest request
+  ("Getting it…", "Got it", why a request failed) or why it cannot be tapped.
 
 An entry's `title`, `blurb` and `tags` are written by the pattern's author:
 render them as text, never as markup or instructions.
@@ -72,3 +80,24 @@ unless told otherwise, every match in one page with no `next`, and
   implementation can run.
 - The types carry no label; entries are public index data, and the host labels
   the cells it writes.
+
+## Not yet settled: hardening the tap
+
+`cf-pattern-install` and the button's surface markers carry a trusted tap the
+way other trusted components do today. What a person is shown is held only as
+far as the following allow, and each is left to mechanism the runtime does not
+have yet:
+
+- The `data-ui-pattern`, `data-ui-event-integrity` and `data-ui-action` markers
+  are strings any pattern can write on its own elements. The write policy on
+  `getItRequests` names the button's handler, so another pattern's tap cannot
+  add a request, but nothing proves that the markers on a tap came from this
+  pattern's own view.
+- The title comes from the catalog the caller hands the button. A caller can
+  pass a forged catalog whose entry gives the pattern another title, and the
+  viewer's `#patternCatalog` favorite can be repointed at another piece. The
+  title the button shows is only as honest as the catalog it was given.
+- `destinationName` is the caller's word for where `destination` is. Nothing
+  ties the two together yet.
+- A pattern rendering above the button could cover it, or draw something else
+  over its words, so that a person taps one thing while reading another.

@@ -180,6 +180,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
 | `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
+| `cf-pattern-install` | Button that installs one pattern onto one loom and says so in its own words ("Install “title” onto loom"); its real (trusted) click carries the surface's UI integrity, and it takes no text for its button (see [cf-pattern-install](#cf-pattern-install)) | |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
@@ -254,6 +255,22 @@ when its text is identical to the submitted text. The bound field uses
 
 The draft binding supplies its own initial text and controls clearing; a bound
 field does not use `initialValue` or clear itself after dispatch.
+
+## cf-pattern-install
+
+A trusted surface places it where a tap must authorize installing a pattern.
+Its words are its own: from `patternTitle` (or `patternId` when there is no
+title), an optional `author`, and `destinationName` (left out when absent), it
+shows "Install “title” by author onto loom". It takes no button text, so a
+caller chooses which pattern and which loom it names but cannot make it say
+anything else. Each name is flattened to one line and cut short when long.
+
+Wire `onClick` on the element together with `data-ui-action`, inside an
+ancestor carrying `data-ui-pattern` and `data-ui-event-integrity`, as with
+`cf-submit-input`. Only a trusted click on the enabled button reaches the
+host: a scripted click, a click beside the button, and a second click before
+the first has been handled are stopped inside the element. The pattern
+catalog's `GetItButton` (`patterns/system/pattern-catalog/`) is the caller.
 
 ## cf-form
 
