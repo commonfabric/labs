@@ -69,10 +69,14 @@ export const revision = ${JSON.stringify(version)};
  */
 /**
  * `authorizedWriterProgram()`'s contract with the handler in a module of its
- * own: `writer` picks that module's content and `entry` the entry's, so an
- * update can change one and leave the other as it was.
+ * own, `/app/<file>`: `writer` picks that module's content and `entry` the
+ * entry's, so an update can change one and leave the other as it was.
  */
-function splitWriterProgram(writer: string, entry: string): RuntimeProgram {
+function splitWriterProgram(
+  writer: string,
+  entry: string,
+  file = "writer.ts",
+): RuntimeProgram {
   return {
     main: "/app/main.tsx",
     files: [
@@ -80,7 +84,7 @@ function splitWriterProgram(writer: string, entry: string): RuntimeProgram {
         name: "/app/main.tsx",
         contents: `/// <cts-enable />
 import { pattern, Writable, WriteAuthorizedBy } from "commonfabric";
-import { setName } from "./writer.ts";
+import { setName } from "./${file}";
 export const entry = ${JSON.stringify(entry)};
 export default pattern<{ seed?: string }>(() => {
   const name = new Writable<
@@ -91,7 +95,7 @@ export default pattern<{ seed?: string }>(() => {
 `,
       },
       {
-        name: "/app/writer.ts",
+        name: `/app/${file}`,
         contents: `/// <cts-enable />
 import { handler, Writable } from "commonfabric";
 export const setName = handler<
@@ -646,6 +650,43 @@ export default pattern<{seed?: ${seedType}}>(() => {
         }
         const cold = await observerPieces.get(piece.id, false);
         await cold.setPattern(splitWriterProgram("w1", "e2"));
+        await observer.patternManager.flushCompileCacheWrites();
+        await observerPieces.synced();
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the recorded grant of a module that leaves the pattern and returns", async () => {
+      // v1's writer module is gone from v2, which writes through a module of
+      // another name, and back, byte for byte, in v3. v0 to v1's staging never
+      // lands, so only the member, through v2, holds w1's grant from w0.
+      const fresh = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+      });
+      try {
+        const freshPieces = new PiecesController(
+          createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+          fresh,
+        );
+        await freshPieces.synced();
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        await piece.setPattern(splitWriterProgram("w2", "e2", "other.ts"));
+        const cold = await observerPieces.get(piece.id, false);
+        await cold.setPattern(splitWriterProgram("w1", "e3"));
         await observer.patternManager.flushCompileCacheWrites();
         await observerPieces.synced();
 
