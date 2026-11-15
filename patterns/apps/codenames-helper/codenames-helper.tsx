@@ -516,7 +516,11 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
       prompt: computed(() => withRound(clueRequest.get(), clueRound.get())),
     });
     const clues = computed((): ClueIdea[] =>
-      cluesFrom(clueIdeas.result as Partial<ClueSuggestions> | undefined)
+      cluesFrom(
+        clueIdeas.result as Partial<ClueSuggestions> | undefined,
+        cards,
+        myTeam.get(),
+      )
     );
     const hasRequest = computed(() => clueRequest.get() !== "");
     const cluesStale = computed(() =>

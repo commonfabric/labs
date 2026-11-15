@@ -348,22 +348,39 @@ export const withRound = (prompt: string, round: number): string =>
     }: suggest different clues from the obvious ones.`;
 
 /** The usable clues in an LLM answer: one-word clues with a number and at
- * least one target. */
+ * least one target. Given the board and team, a target that is not one of the
+ * team's words still in play is dropped (models sometimes name a word that is
+ * not on the board), the number counts the targets left, and a clue that is
+ * itself a board word is dropped. */
 export const cluesFrom = (
   result: Partial<ClueSuggestions> | undefined,
-): ClueIdea[] =>
-  (Array.isArray(result?.clues) ? result.clues : [])
+  board?: readonly Partial<BoardCard>[],
+  team?: Team,
+): ClueIdea[] => {
+  const cards = board && team ? normalizeBoard(board) : undefined;
+  const mine = cards && team ? new Set(wordsOf(cards, team)) : undefined;
+  const onBoard = new Set(cards?.map((c) => c.word).filter((w) => w !== ""));
+  return (Array.isArray(result?.clues) ? result.clues : [])
     .filter((c) =>
       typeof c?.clue === "string" && c.clue.trim() !== "" &&
-      !/\s/.test(c.clue.trim()) && Array.isArray(c.targetWords) &&
-      c.targetWords.length > 0
+      !/\s/.test(c.clue.trim()) && Array.isArray(c.targetWords)
     )
-    .map((c) => ({
-      clue: c.clue.trim().toUpperCase(),
-      number: typeof c.number === "number" ? c.number : c.targetWords.length,
-      targetWords: c.targetWords.map(normalizeWord),
-      reasoning: typeof c.reasoning === "string" ? c.reasoning : "",
-    }));
+    .map((c) => {
+      const targets = c.targetWords.map(normalizeWord)
+        .filter((w) => w !== "" && (!mine || mine.has(w)));
+      return {
+        clue: c.clue.trim().toUpperCase(),
+        number: mine
+          ? targets.length
+          : typeof c.number === "number"
+          ? c.number
+          : targets.length,
+        targetWords: targets,
+        reasoning: typeof c.reasoning === "string" ? c.reasoning : "",
+      };
+    })
+    .filter((c) => c.targetWords.length > 0 && !onBoard.has(c.clue));
+};
 
 // ---------------------------------------------------------------------------
 // Text projection
