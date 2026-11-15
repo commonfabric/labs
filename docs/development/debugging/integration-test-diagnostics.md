@@ -22,7 +22,10 @@ What the failure probe contains, and where each piece lives:
   — per-selector progress through the fill (settled → found → visible → filled
   → committed), naming the exact await that hung, with how many attempts the
   fill made and when its first and latest began. A fill on a page that never
-  exposes `commonfabric.viewSettled` stops at the settle and says so.
+  exposes `commonfabric.viewSettled` stops at the settle and says so, and one
+  waiting on animation frames says `awaiting-frame`; the probe reports the
+  page's `visibilityState` and `hasFocus()` beside it, since a hidden page
+  renders no frames.
 - **Host/bound-cell state** (`readCfInputProbe`, same file) — whether the
   `cf-input` host has a bound cell and a pending commit, alongside DOM
   value/visibility/disabled. Where nothing matches the selector, it lists the

@@ -284,7 +284,9 @@ const fillAndVerify = async (
   await hostElement.commit?.();
   phase("committed");
   await hostElement.requestUpdate?.();
-  phase("update-requested");
+  // Named apart from the update, so a fill stalled on frames that never come
+  // says so.
+  phase("awaiting-frame");
   await new Promise((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(resolve))
   );
@@ -3080,6 +3082,12 @@ export type CfInputProbe = {
    */
   hostValueBinding?: unknown;
 
+  /** The page's `document.visibilityState` at probe time. */
+  visibilityState?: string;
+
+  /** Whether the page had focus at probe time (`document.hasFocus()`). */
+  hasFocus?: boolean;
+
   /** Progress ledger left by fillAndVerify for this selector (see there). */
   fill?: unknown;
 
@@ -3185,7 +3193,11 @@ export async function readCfInputProbe(
       subscriptionTotals = `unavailable: ${error}`;
     }
     const consoleTail = (g.__cfConsoleTail ?? []).slice(-40);
+    // Whether the page is being rendered, which a fill waiting on frames
+    // needs, comes first: the rest of the context is unbounded.
     const context = {
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
       fill,
       pendingIpc,
       completedIpc,

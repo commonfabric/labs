@@ -3123,8 +3123,12 @@ describe("CFC browser helpers", () => {
         // ledger come ahead of the IPC counts.
         const keys = Object.keys(probe);
         expect(keys.indexOf("presentIdCount")).toBeLessThan(
-          keys.indexOf("fill"),
+          keys.indexOf("visibilityState"),
         );
+        expect(keys.indexOf("visibilityState")).toBeLessThan(
+          keys.indexOf("hasFocus"),
+        );
+        expect(keys.indexOf("hasFocus")).toBeLessThan(keys.indexOf("fill"));
         expect(keys.indexOf("fill")).toBeLessThan(keys.indexOf("pendingIpc"));
       } finally {
         await probePage.close();
@@ -3250,6 +3254,76 @@ describe("CFC browser helpers", () => {
 
       expect(message).toContain("The page kept no console tail.");
       expect(message).not.toContain("undefined");
+    });
+
+    it("reports whether the page is shown and focused", async () => {
+      // A second tab in front hides the first, which then renders no frames.
+      const behind = await browser.newPage();
+      const front = await browser.newPage();
+      try {
+        const hidden = await readCfInputProbe(behind, "#absent-input");
+        const shown = await readCfInputProbe(front, "#absent-input");
+
+        expect([hidden.visibilityState, hidden.hasFocus]).toEqual([
+          "hidden",
+          false,
+        ]);
+        expect([shown.visibilityState, shown.hasFocus]).toEqual([
+          "visible",
+          true,
+        ]);
+      } finally {
+        await front.close();
+        await behind.close();
+      }
+    });
+
+    it("names the frame wait in the ledger while a fill waits on frames", async () => {
+      // The page records the fill's phase as of each frame request it makes.
+      await page.evaluate(() => {
+        const host = document.createElement("div");
+        host.id = "frame-phase-input";
+        Object.assign(host.style, {
+          display: "block",
+          height: "40px",
+          width: "240px",
+        });
+        const root = host.attachShadow({ mode: "open" });
+        const input = document.createElement("input");
+        Object.assign(input.style, {
+          display: "block",
+          height: "32px",
+          width: "200px",
+        });
+        root.append(input);
+        document.body.append(host);
+        const scope = globalThis as unknown as {
+          commonfabric: { viewSettled: () => Promise<void> };
+          __cfFillDiag?: Record<string, { phase: string }>;
+          __framePhases: string[];
+          __requestFrame: typeof requestAnimationFrame;
+        };
+        scope.commonfabric = { viewSettled: () => Promise.resolve() };
+        scope.__framePhases = [];
+        scope.__requestFrame = globalThis.requestAnimationFrame;
+        globalThis.requestAnimationFrame = (callback) => {
+          const phase = scope.__cfFillDiag?.["#frame-phase-input"]?.phase;
+          if (phase !== undefined) scope.__framePhases.push(phase);
+          return scope.__requestFrame.call(globalThis, callback);
+        };
+      });
+
+      await fillCfInput(page, "#frame-phase-input", "Bob");
+      const phases = await page.evaluate(() => {
+        const scope = globalThis as unknown as {
+          __framePhases: string[];
+          __requestFrame: typeof requestAnimationFrame;
+        };
+        globalThis.requestAnimationFrame = scope.__requestFrame;
+        return scope.__framePhases;
+      });
+
+      expect(phases[0]).toBe("awaiting-frame");
     });
 
     it("dates a fill's first attempt and its latest, and starts the count again for the next fill", async () => {
