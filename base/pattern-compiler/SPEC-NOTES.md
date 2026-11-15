@@ -1943,13 +1943,15 @@ numbers have gaps.
      function returns, with the handle at `children/0/children/3/props/$value`
      below it. The harness takes every link stored below the path in the
      document that holds the value, and cannot tell the link of the reference
-     from another link there. The three rows are equal in confidentiality.
-     Without the atom of a kept output they are looser in integrity, as before
-     (note 203): the document of the tree has stamps with the caveat on every
-     path and an atom beside them, so the run of the node that built the tree
-     had the caveat in its join. Which read brought it in was not examined; PL
-     §3.9 expects it ("tighter for a re-evaluated body ... where the runtime
-     stamps the join of the whole run").
+     from another link there. The three rows are equal in confidentiality, and
+     so are five outputs of `examples/cfc-render-policy-demo/main.tsx` that were
+     tighter by a clause a created cell's type declares. Without the atom of a
+     kept output they are looser in integrity, as before (note 203): the
+     document of the tree has stamps with the caveat on every path and an atom
+     beside them, so the run of the node that built the tree had the caveat in
+     its join. Which read brought it in was not examined; PL §3.9 expects it
+     ("tighter for a re-evaluated body ... where the runtime stamps the join of
+     the whole run").
 233. **The two classifications of a row** (PL §3.1 "The atom of a kept output").
      `corpus.ts report` prints for each category the outputs classified without
      the atom of a kept output and with it, and for write edges a column with
