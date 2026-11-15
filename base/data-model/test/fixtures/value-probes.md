@@ -75,9 +75,11 @@ or a value of one of the format's leaf types, as section 12 of
 [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
 lists them. These are `Bytes@1`, `Hash@1`, the four temporal quantities, and the
 types that carry a JavaScript primitive, which are `BigInt@1`,
-`SpecialNumber@1`, `Symbol@1` and `Undefined@1`. Every other tagged value is an
-instance, `KeyPair@1` and `Unavailable@1` among them. Only a leaf has a
-fragment, and every leaf has one, unless a patch states it.
+`SpecialNumber@1`, `Symbol@1` and `Undefined@1`. A value of any other type the
+format defines is an instance, `KeyPair@1` and `Unavailable@1` among them, and a
+value under a tag no codec claims is an unknown value (see "Special forms"
+below). Only a leaf has a fragment, and every leaf has one, unless a patch
+states it.
 
 A fragment is the leaf's canonical `fvj1:` text, written on its own, prefix and
 all, as sections 10 and 11 of
