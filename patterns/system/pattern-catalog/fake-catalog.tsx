@@ -1,8 +1,8 @@
 /**
  * A pattern catalog over a fixed list of entries, for tests and for building
- * callers without a host. It answers `page` by filtering its entries and
- * answers every get request by marking it placed (or failed, for an id it
- * does not hold). A host's catalog must pass the same conformance tests.
+ * callers without a host. It answers `page` by filtering its entries by
+ * substring, and answers each get request once: placed for an id it holds,
+ * failed for one it does not.
  */
 import {
   action,
@@ -19,24 +19,29 @@ import {
   type CatalogEntry,
   type CatalogPageRequest,
   type CatalogStatus,
-  type GetItRequest,
+  type GetItAnswer,
+  type GetItRequests,
 } from "./pattern-catalog.tsx";
 
+/** What `FakeCatalog` takes; every input has a default. */
 export interface FakeCatalogInput {
   entries?: Writable<CatalogEntry[] | Default<[]>>;
   status?: Writable<CatalogStatus | Default<{ state: "ready" }>>;
-  getRequests?: Writable<GetItRequest[] | Default<[]>>;
+  getItRequests?: Writable<GetItRequests | Default<[]>>;
+  getItAnswers?: Writable<Record<string, GetItAnswer> | Default<{}>>;
 }
 
+/** The catalog, plus the stream that stands in for a host acting. */
 export interface FakeCatalogOutput {
   [NAME]: string;
   [UI]: VNode;
   status: CatalogStatus;
   entries: CatalogEntry[];
   page: Stream<CatalogPageRequest>;
-  getRequests: Writable<GetItRequest[]>;
-  /** Answers every get request not yet answered. */
-  answerGetRequests: Stream<void>;
+  getItRequests: GetItRequests;
+  getItAnswers: Record<string, GetItAnswer>;
+  /** Answers every get request that has no answer yet. */
+  answerGetItRequests: Stream<void>;
 }
 
 const matches = (entry: CatalogEntry, needle: string): boolean =>
@@ -44,8 +49,9 @@ const matches = (entry: CatalogEntry, needle: string): boolean =>
     typeof field === "string" && field.toLowerCase().includes(needle)
   );
 
+/** A catalog that answers from `entries`, for tests. */
 export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
-  ({ entries, status, getRequests }) => {
+  ({ entries, status, getItRequests, getItAnswers }) => {
     const page = action(({ text, result }: CatalogPageRequest) => {
       const current = status.get();
       if (current.state !== "ready") {
@@ -60,17 +66,19 @@ export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
       });
     });
 
-    const answerGetRequests = action(() => {
+    const answerGetItRequests = action(() => {
       const held = new Set((entries.get() ?? []).map((e) => e.patternId));
-      for (const request of getRequests.get() ?? []) {
-        const result = request.result;
-        if (result.get() !== null) continue;
-        result.set(
-          held.has(request.patternId)
-            ? { state: "placed" }
-            : { state: "failed", reason: "no such pattern" },
-        );
+      const answers = { ...(getItAnswers.get() ?? {}) };
+      for (const request of getItRequests.get() ?? []) {
+        if (answers[request.requestId]) continue;
+        answers[request.requestId] = held.has(request.patternId)
+          ? {
+            state: "placed",
+            placed: `${request.destination}/${request.patternId}`,
+          }
+          : { state: "failed", reason: "no such pattern" };
       }
+      getItAnswers.set(answers);
     });
 
     return {
@@ -85,8 +93,9 @@ export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
       status,
       entries,
       page,
-      getRequests,
-      answerGetRequests,
+      getItRequests,
+      getItAnswers,
+      answerGetItRequests,
     };
   },
 );
