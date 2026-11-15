@@ -25,15 +25,17 @@ a pattern later both implement the same shape.
   `after`, asks for what follows. The answer is written into the `result` cell
   the caller sends, never into anything shared.
 - `GetItButton` is the only way to get a pattern. A person's tap appends
-  `{requestId, patternId, destination}` to the catalog's `getItRequests`, whose
-  type (`GetItRequests`) declares the button's handler as its one trusted
-  writer: a push from anywhere else, or a send to the button without a trusted
-  tap, is refused. `destination` is defined by the host; a host that places
-  patterns on boards takes the board's id. The host writes its answer to
-  `getItAnswers` under the request's id (`started`, then `placed`, `failed` or
-  `cancelled`), and the button shows the answer to its latest request. While
-  that request is open or placed, a tap adds nothing; after a failure or a
-  cancellation, a tap asks again.
+  `{requestId, patternId, destination, requestedAt, host}` to the catalog's
+  `getItRequests`, whose type (`GetItRequests`) declares the button's handler as
+  its one trusted writer: a push from anywhere else, or a send to the button
+  without a trusted tap, is refused. `destination` is defined by the host; a
+  host that places patterns on boards takes the board's id. The host writes its
+  answer to `getItAnswers` under the request's id (`started`, then `placed`,
+  `failed` or `cancelled`), and the button shows the answer to its latest
+  request. While that request is open or placed, a tap adds nothing; after a
+  failure or a cancellation, a tap asks again. `host` is copied from the
+  catalog's own `host`; while the catalog names none, nothing acts on requests,
+  so the button is disabled and says so.
 
 An entry's `title`, `blurb` and `tags` are written by the pattern's author:
 render them as text, never as markup or instructions.
@@ -41,13 +43,17 @@ render them as text, never as markup or instructions.
 ## Implementing it
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
-stored under the `GetItRequests` type so the write policy holds. It answers each
-`page` request in that request's `result`. It answers each request id in
+stored under the `GetItRequests` type so the write policy holds, and `host` set
+to an opaque id for the host instance that acts on get requests. It answers each
+`page` request in that request's `result`. It acts only on a request that names
+its own `host`, so a cloned host instance never acts on another's requests, and
+only within a window it chooses by `requestedAt`. It answers each request id in
 `getItRequests` under that id in `getItAnswers`: `started` while it works, if it
 says anything before it is done, then one final state (`placed`, `failed` or
 `cancelled`) that it never changes. `FakeCatalog` (`fake-catalog.tsx`) answers
-from a fixed list of entries, every match in one page with no `next`, and
-`pattern-catalog.test.tsx` pins the behavior through it.
+from a fixed list of entries, as host `fake-host` unless told otherwise, every
+match in one page with no `next`, and `pattern-catalog.test.tsx` pins the
+behavior through it.
 
 ## Not yet settled
 
