@@ -456,3 +456,42 @@ describe("a handler that sends to the stream of another binding", () => {
     ]);
   });
 });
+
+describe("a handler whose write leaves a cycle of links", () => {
+  // `fixtures/link-cycle.tsx`: `keep` stores a link to `center` in `area`,
+  // and `go` then sets `center` to a link to that position. A read of
+  // `center` resolves no value, and the runtime's read of the label there
+  // says that it failed (`cfcLabelViewForResolvedCellWithStatus`).
+  const cycle = async (bindings: number[]) => {
+    const { plan, schemas } = await planOf("link-cycle");
+    return runScenario({
+      program: {
+        main: fromFileUrl(fixture("link-cycle.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: bindings.map((binding) => ({
+        binding,
+        event: generateEvent(plan, schemas, binding),
+      })),
+    });
+  };
+
+  it("does not take a label the runtime fails to read as the label of the write", async () => {
+    const run = await cycle([0, 1]);
+
+    expect(run.events.map(({ handler, outcome }) => [handler, outcome]))
+      .toEqual([["keep", "committed"], ["go", "committed"]]);
+    expect(run.writes.filter((row) => row.handler === "go")).toEqual([]);
+    expect(
+      run.skipped.filter(({ binding }) => binding === 1).map((
+        { what, reason },
+      ) => [what, reason]),
+    ).toEqual([
+      ["event of go, write 0, ", "a label the runtime fails to read"],
+      ["event of go, write 1, ", "a label the runtime fails to read"],
+    ]);
+  });
+});

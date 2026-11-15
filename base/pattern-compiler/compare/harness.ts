@@ -11,7 +11,7 @@ import { Identity } from "@commonfabric/identity";
 import { atomPropagationClass } from "../../../runtime/runner/src/cfc/atom-classes.ts";
 import type { CfcLabelView } from "../../../runtime/runner/src/cfc/label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "../../../runtime/runner/src/cfc/label-view-state.ts";
-import { cfcLabelViewForResolvedCell } from "../../../runtime/runner/src/cfc/label-view.ts";
+import { cfcLabelViewForResolvedCellWithStatus } from "../../../runtime/runner/src/cfc/label-view.ts";
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
 import { resolveLink } from "../../../runtime/runner/src/link-resolution.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
@@ -373,6 +373,25 @@ const consumed = (
     for (const atom of entry.label.integrity ?? []) integrity.push(atom);
   }
   return { confidentiality, integrity };
+};
+
+/**
+ * The label view the runtime reads for `cell`: the labels of the document
+ * its path is in and of the document its value resolves to. The runtime
+ * says where the read failed, as it does at a path whose links are a
+ * cycle, and what it returns then is the part it read before the failure.
+ * That is no label of the value, so a row that needs it is not compared.
+ */
+const labelView = (
+  cell: AnyCell,
+  options?: Parameters<typeof cfcLabelViewForResolvedCellWithStatus>[1],
+): CfcLabelView | undefined => {
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    cell,
+    options,
+  );
+  if (readFailed) throw new Unsupported("a label the runtime fails to read");
+  return view;
 };
 
 const join = (labels: Label[]): Label => ({
@@ -862,7 +881,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         cell: AnyCell,
         observes: "value" | "shape",
       ): Label => {
-        const label = consumed(cfcLabelViewForResolvedCell(cell), observes);
+        const label = consumed(labelView(cell), observes);
         return filledByDefault(slot) ? { ...label, integrity: [] } : label;
       };
 
@@ -1245,7 +1264,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         where: "at" | "below",
       ): Label[] => {
         if (where === "at") {
-          return [consumed(cfcLabelViewForResolvedCell(cell), "value")];
+          return [consumed(labelView(cell), "value")];
         }
         const last = hops(cell).at(-1);
         if (last === undefined) return [];
@@ -1254,7 +1273,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           if (value === null || typeof value !== "object") return;
           if (path.length > 0 && parseLink(value, last) !== undefined) {
             found.push(
-              consumed(cfcLabelViewForResolvedCell(at(cell, path)), "value"),
+              consumed(labelView(at(cell, path)), "value"),
             );
             return;
           }
@@ -1328,7 +1347,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               // only where it stands for the reference an output passes
               // on (PL §3.1, "What is compared").
               const reference = consumed(
-                cfcLabelViewForResolvedCell(held, { lastNode: "top" }),
+                labelView(held, { lastNode: "top" }),
                 "followRef",
               );
               return dereference && passed
@@ -1435,7 +1454,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return evaluated.label;
             }
             return consumed(
-              cfcLabelViewForResolvedCell(
+              labelView(
                 sourceCell(collection, { ...scope, elements }),
               ),
               "shape",
@@ -1656,14 +1675,17 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                   raw,
                   rawAtAbsent,
                   rawAbove,
-                  runtime: consumed(cfcLabelViewForResolvedCell(cell), "value"),
+                  runtime: consumed(
+                    cfcLabelViewForResolvedCellWithStatus(cell).view,
+                    "value",
+                  ),
                   template: label,
                   afterPull: false,
                 });
                 throw new Unsupported("an output the run holds no value at");
               }
               const runtimeLabel = consumed(
-                cfcLabelViewForResolvedCell(cell),
+                labelView(cell),
                 observes,
               );
               // A kept output carries the atom of the plan's pattern (PL
@@ -1802,7 +1824,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         }
         rowKey = `write ${binding}/${index}/${path.join("/")}`;
         const runtimeLabel = consumed(
-          cfcLabelViewForResolvedCell(cell),
+          labelView(cell),
           "value",
         );
         // "The template's side is the edge's template, beside the label
