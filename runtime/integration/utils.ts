@@ -211,6 +211,18 @@ export interface ProbeApi {
    * placed on the same element. Adding a token twice leaves one copy.
    */
   addToken(element: Element, attribute: string, token: string): void;
+
+  /**
+   * Resolves after one step of page progress. While the document is being
+   * rendered that step is an animation frame. A document that is not being
+   * rendered, such as a tab behind another, produces no frames, so waiting for
+   * one waits for something that will not arrive; the step there is one turn
+   * of the event loop, delivered through a message channel. It has to be a
+   * real turn rather than a resolved promise: what the page does next arrives
+   * by a timer or a task, and a loop that only yields to the microtask queue
+   * never lets either run.
+   */
+  nextFrame(): Promise<void>;
 }
 
 /**
@@ -315,6 +327,17 @@ function createProbe(): RecordingProbeApi {
     },
     isRendered,
     isDisabled,
+    nextFrame() {
+      return new Promise((resolve) => {
+        if (document.visibilityState !== "hidden") {
+          requestAnimationFrame(() => resolve());
+          return;
+        }
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => resolve();
+        channel.port2.postMessage(0);
+      });
+    },
     isVisible(element) {
       if (!isRendered(element)) return false;
       const rect = element.getBoundingClientRect();

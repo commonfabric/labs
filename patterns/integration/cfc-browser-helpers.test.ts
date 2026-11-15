@@ -1592,6 +1592,54 @@ describe("CFC browser helpers", () => {
     assertEquals(value, "Bob");
   });
 
+  it("fills a cf input in a tab behind another", async () => {
+    // A tab behind another is not rendered and gets no animation frames, so a
+    // fill that waited on frames there would wait out the safety net, which
+    // is shortened here so that such a fill fails in seconds.
+    const behind = await browser.newPage();
+    const front = await browser.newPage();
+    const net = "CF_WAIT_FOR_CONDITION_TIMEOUT_MS";
+    const before = Deno.env.get(net);
+    Deno.env.set(net, "10000");
+    try {
+      await behind.evaluate(() => {
+        const host = document.createElement("div");
+        host.id = "behind-tab-input";
+        Object.assign(host.style, {
+          display: "block",
+          height: "40px",
+          width: "240px",
+        });
+        const root = host.attachShadow({ mode: "open" });
+        const input = document.createElement("input");
+        Object.assign(input.style, {
+          display: "block",
+          height: "32px",
+          width: "200px",
+        });
+        root.append(input);
+        document.body.append(host);
+        (globalThis as typeof globalThis & {
+          commonfabric: { viewSettled: () => Promise<void> };
+        }).commonfabric = { viewSettled: () => Promise.resolve() };
+      });
+
+      await fillCfInput(behind, "#behind-tab-input", "Bob");
+
+      const result = await behind.evaluate(() => ({
+        visibilityState: document.visibilityState,
+        value: document.querySelector("#behind-tab-input")?.shadowRoot
+          ?.querySelector("input")?.value,
+      }));
+      expect(result).toEqual({ visibilityState: "hidden", value: "Bob" });
+    } finally {
+      if (before === undefined) Deno.env.delete(net);
+      else Deno.env.set(net, before);
+      await front.close();
+      await behind.close();
+    }
+  });
+
   it("fills the live input when a commit replaces the one it typed into", async () => {
     await page.evaluate(() => {
       const host = document.createElement("div") as HTMLDivElement & {
