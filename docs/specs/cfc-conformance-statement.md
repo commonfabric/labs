@@ -892,27 +892,30 @@ registry of module delegations (`ModuleDelegationRegistry` in
 **What the runtime does.** The transition, `applyPieceSourceTransition` in
 `runner.ts`, reads the piece's data and writes no cache document. It records
 what it grants in the piece's `pieceSourceDelegations` meta member, through the
-runtime's meta seam, naming the pattern it is for, in two fields: `edges`, the
-direct predecessor edges of every module the piece's history has delegated to,
-never pruned; and `delegations`, each module of that pattern's closure closed
-over `edges`. `PatternManager.prepareSourceUpdate` adds the edges the update
-derives (the predecessor and the predecessor record's attested list, each taken
-only where the edges do not already reach it) to the member's, and closes the
-candidate's modules over them, before the transaction opens, so the transaction
-is pinned to the closed set; the transition is refused as a source that moved if
-either field has changed since. Any other transition carries `edges` and closes
-the next pattern's modules over them, so a module the next pattern keeps or
-brings back keeps its grant and a new module gets none. Once a source update's
-transition commits, the runtime registers its delegations and stages them on the
-successor's source and compiled cache records, on a cache transaction of its own
-that reads only those records (`#stageCommittedDelegations`). A staging that
-fails is not retried; the piece's next committed update stages what it closes,
-which includes what was missed. A runtime that starts or swaps the piece to the
-member's pattern registers the `delegations` entries whose module is in the
-successor's closure, verified as it loads it
-(`PatternManager.readInheritedAuthority`), reads nothing else of the member,
-closes nothing, and writes nothing. A member that is absent or names another
-pattern registers nothing, and the records' own lists decide.
+runtime's meta seam, naming the pattern it is for, in two fields: `edges`, every
+delegation edge the piece's history recorded, each with every position in the
+piece's source history at which a transition recorded it, never removed; and
+`delegations`, each module of that pattern's closure closed over `edges` along
+non-increasing positions (`inheritedAlongStamps` in `module-delegations.ts`), so
+a module takes what its predecessor held when the module was granted it.
+`PatternManager.prepareSourceUpdate` records each successor's edge to the module
+it succeeds at the piece's history length, and an entry of the predecessor
+record's attested list the edges do not already reach as the predecessor's edge
+at position 0 (`composeRecordedEdges`), and closes the candidate's modules,
+before the transaction opens, so the transaction is pinned to the closed set;
+the transition is refused as a source that moved if the member has changed
+since. Any other transition carries `edges` and closes the next pattern's
+modules over them, so a module the next pattern keeps or brings back keeps its
+grant and a new module gets none. Once a source update's transition commits, the
+runtime registers its delegations and stages them on the successor's source and
+compiled cache records, on a cache transaction of its own that reads only those
+records (`#stageCommittedDelegations`). A staging that fails is not retried; the
+piece's next committed update stages the closed entries of the modules it then
+runs. A runtime that starts or swaps the piece to the member's pattern registers
+the `delegations` entries whose module is in the successor's closure, verified
+as it loads it (`PatternManager.readInheritedAuthority`), reads nothing else of
+the member, closes nothing, and writes nothing. A member that is absent or names
+another pattern registers nothing, and the records' own lists decide.
 
 This implements a specification change, `TBD-succession-record` until its pull
 request has a number, ahead of its ruling, at strict and with no dial. @danfuzz
@@ -942,12 +945,25 @@ procedure's step 4. Its two deciding sites, the recording in
   when the piece's next honest update composes it into its own and stages it
   there under the compiler's attestation, after which it cannot be told apart
   from an attested entry.
-- Growth. `edges` grows by one edge per module an update replaces, and
-  `delegations` by one predecessor per earlier version of each module of the
-  running pattern, so both grow linearly with the piece's updates; nothing
-  bounds the number of updates over a long-lived piece. A record's attested list
-  adds an edge only for a predecessor the piece's own history does not already
-  reach, as one another piece's update gave a shared successor.
+- Growth. `edges` grows by one edge, or one position on an edge already
+  recorded, per module an update replaces, and `delegations` by one predecessor
+  per earlier version of each module of the running pattern, so both grow
+  linearly with the piece's updates; nothing bounds the number of updates over a
+  long-lived piece. A record's attested list adds an edge only for a predecessor
+  the piece's own history does not already reach, as one another piece's update
+  gave a shared successor. The closure expands each module once, taking first
+  the module it reaches with the largest position, so its cost is linear in the
+  edges and their positions, times a logarithm, forged members included.
+- A grant whose staging failed. The piece's own authority does not depend on the
+  staging, but the grant stays missing from the cache records where nothing of
+  the piece's carries it to them, so what reads only the records is refused it,
+  where `main`'s staging in the transition would have kept it: a runtime from
+  before the member that makes the piece's next update ignores the member and
+  derives from the unstaged record (pinned by a test that expects the refusal);
+  and a module of another piece that writes, through a link, into a field the
+  granting module protects is refused, since that runtime registers the grant
+  only from the records. Each needs the failed staging first, and each refuses,
+  never grants.
 - Records an earlier transition stamped keep their clause, and the setups
   that read them keep refusing, until a separate repair. A write-back still
   re-stamps the root of a record that already carries a clause.

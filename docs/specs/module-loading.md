@@ -668,32 +668,39 @@ flow label. It records what it grants in the piece's `pieceSourceDelegations`
 meta member instead, which names the pattern it is for and which every source
 transition writes for the next pattern (see
 [piece-source-lifecycle.md](piece-source-lifecycle.md)). The member has two
-fields. `edges` holds the direct predecessor edges of every module the piece's
-history has delegated to; nothing is pruned from it. `delegations` holds, for
-each module of the named pattern's closure, every predecessor it reaches over
-`edges`. When the update is prepared, it adds to the recorded edges the ones it
-derives: each successor's predecessor, and the predecessor record's own attested
-list, taking as an edge only what the edges do not already reach, so that a
-record's list never removes anything and its closed lists add no edge the
-piece's own history holds. It then closes the candidate's modules over the
-result, and the transaction is pinned to them. A transition that is no source
-update carries `edges` as they are and closes the next pattern's modules over
-them, in its own transaction, so a module it keeps or brings back keeps what the
-piece's history granted it and a new module gets nothing. The runtime registers
-the update's delegations once its transaction commits. A cache transaction of
-its own then computes a union of those entries and authenticated entries already
-stored in either document set under `editWithRetry`, and writes the same union
-to both sets. A runtime that starts or swaps a piece to the member's pattern
-registers the `delegations` entries whose module is in the closure it verifies,
-reads nothing else of the member, closes nothing, and writes nothing, so the
-authority holds before that second transaction lands, and when it never does. A
-staging that fails is not retried: the piece's next committed update stages the
-entries it closes, which include the missed ones. A member that is absent or
-names another pattern registers nothing, and the stored entries decide. General
-cache saves ([`writeSourceAndCompiledDocs`][c14]) preserve authenticated
-authority already present in either set. Entries accumulate because one
-content-addressed successor can be shared by patterns updated from different
-predecessors.
+fields. `edges` holds every delegation edge the piece's history recorded, each
+with every position in the piece's source history at which a transition recorded
+it; nothing is removed from it. `delegations` holds, for each module of the
+named pattern's closure, every predecessor it reaches over `edges` along a path
+whose positions do not increase, so a module takes what its predecessor held
+when the module was granted it, and nothing the predecessor was granted later.
+When the update is prepared, it records each successor's edge to the module it
+succeeds at the piece's history length, which every transition increases. The
+predecessor record's attested list states what that record held when it was
+staged, so an entry of it the edges do not already reach becomes the
+predecessor's edge at position 0, which nothing after it continues from. It then
+closes the candidate's modules, and the transaction is pinned to them. A
+transition that is no source update carries `edges` as they are and closes the
+next pattern's modules over them, in its own transaction, so a module it keeps
+or brings back keeps what the piece's history granted it and a new module gets
+nothing. The runtime registers the update's delegations once its transaction
+commits. A cache transaction of its own then computes a union of those entries
+and authenticated entries already stored in either document set under
+`editWithRetry`, and writes the same union to both sets. A runtime that starts
+or swaps a piece to the member's pattern registers the `delegations` entries
+whose module is in the closure it verifies, reads nothing else of the member,
+closes nothing, and writes nothing, so the authority holds before that second
+transaction lands, and when it never does. A staging that fails is not retried,
+and the piece's own authority does not depend on it; the piece's next committed
+update stages the closed entries of the modules it then runs. A grant whose
+staging failed stays missing from the records where nothing of the piece's
+carries it to them, and a reader of the records alone is refused it: a runtime
+from before the member that makes the piece's next update, and a write that
+another piece's module makes through a link. A member that is absent or names
+another pattern registers nothing, and the stored entries decide. General cache
+saves ([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority
+already present in either set. Entries accumulate because one content-addressed
+successor can be shared by patterns updated from different predecessors.
 
 Because `identity` is a one-way Merkle hash, internal source links are
 load-bearing and stored explicitly. The parent hash commits to those children's
