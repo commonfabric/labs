@@ -815,9 +815,11 @@ describe("cfc-result-wiring-stamp", () => {
       // piece's argument and `computed:` documents, which a release does
       // once the cells holding them are collected. A storage manager that
       // records no hold stands in for that collection, so the pass awaited
-      // below drops them whenever the test runs. The second setup writes
-      // them as well, so its first commit is refused and a second attempt
-      // reads them; the first setup, which creates them, takes one.
+      // below drops them whenever the test runs, along with every other
+      // document nothing reads, the result document among them. The second
+      // setup writes them as well, so its first commit is refused and a
+      // second attempt reads them; the first setup, which creates them,
+      // takes one.
 
       storageManager.holdDocument = () => ({});
       const { named } = patterns();
