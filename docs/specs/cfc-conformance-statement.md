@@ -901,22 +901,23 @@ a module takes what its predecessor held when the module was granted it.
 `PatternManager.prepareSourceUpdate` records each successor's edge to the module
 it succeeds at one past the piece's history length, never 0, and an entry of the
 predecessor record's attested list the edges do not already reach as the
-successor's own edge at position 0, which the walk follows and stops at, so the
-successor gets the list as written and no earlier successor sees it
-(`composeRecordedEdges`), and closes the candidate's modules, before the
-transaction opens, so the transaction is pinned to the closed set; the
-transition is refused as a source that moved if the member has changed since.
-Any other transition carries `edges` and closes the next pattern's modules over
-them, so a module the next pattern keeps or brings back keeps its grant and a
-new module gets none. Once a source update's transition commits, the runtime
-registers its delegations and stages them on the successor's source and compiled
-cache records, on a cache transaction of its own that reads only those records
-(`#stageCommittedDelegations`). A staging that fails is not retried; the piece's
-next committed update stages the closed entries of the modules it then runs. A
-runtime that starts or swaps the piece to the member's pattern registers the
-`delegations` entries whose module is in the successor's closure, verified as it
-loads it (`PatternManager.readInheritedAuthority`), reads nothing else of the
-member, closes nothing, and writes nothing. A member that is absent or names
+successor's own edge at that same position, marked terminal, which a walk
+reaches from that position or later and does not continue past, so the successor
+gets the list as written and no earlier successor of the predecessor or of the
+successor sees it (`composeRecordedEdges`), and closes the candidate's modules,
+before the transaction opens, so the transaction is pinned to the closed set;
+the transition is refused as a source that moved if the member has changed
+since. Any other transition carries `edges` and closes the next pattern's
+modules over them, so a module the next pattern keeps or brings back keeps its
+grant and a new module gets none. Once a source update's transition commits, the
+runtime registers its delegations and stages them on the successor's source and
+compiled cache records, on a cache transaction of its own that reads only those
+records (`#stageCommittedDelegations`). A staging that fails is not retried; the
+piece's next committed update stages the closed entries of the modules it then
+runs. A runtime that starts or swaps the piece to the member's pattern registers
+the `delegations` entries whose module is in the successor's closure, verified
+as it loads it (`PatternManager.readInheritedAuthority`), reads nothing else of
+the member, closes nothing, and writes nothing. A member that is absent or names
 another pattern registers nothing, and the records' own lists decide.
 
 This implements a specification change, `TBD-succession-record` until its pull
