@@ -263,13 +263,17 @@ Its words are its own: from `patternTitle` (or `patternId` when there is no
 title), an optional `author`, and `destinationName` (left out when absent), it
 shows "Install “title” by author onto loom". It takes no button text, so a
 caller chooses which pattern and which loom it names but cannot make it say
-anything else. Each name is flattened to one line and cut short when long.
+anything else. Each name is flattened to one line, with its double quotation
+marks turned into apostrophes, cut short when long, and drawn in a chip of its
+own, so it cannot pass for the words around it.
 
 Wire `onClick` on the element together with `data-ui-action`, inside an
 ancestor carrying `data-ui-pattern` and `data-ui-event-integrity`, as with
-`cf-submit-input`. Only a trusted click on the enabled button reaches the
-host: a scripted click, a click beside the button, and a second click before
-the first has been handled are stopped inside the element. The pattern
+`cf-submit-input`. The button is a native `<button>`, so Enter and Space on it
+are trusted clicks as a pointer tap is. Only a trusted click on the enabled
+button reaches the host's `onClick`: a scripted click, a click on the host's
+box around the button, and a second click before the first has been handled
+are stopped by a capture listener on the host. The pattern
 catalog's `GetItButton` (`patterns/system/pattern-catalog/`) is the caller.
 
 ## cf-form

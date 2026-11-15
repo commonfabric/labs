@@ -21,34 +21,38 @@ function installWith(
 
 /** The button a component draws. */
 const button = (element: CFPatternInstall) =>
-  element.shadowRoot!.querySelector<HTMLElement>("cf-button")!;
+  element.shadowRoot!.querySelector("button")!;
 
 /** The words a component shows, with whitespace collapsed as a page shows it. */
 const shown = (element: CFPatternInstall) =>
   button(element).textContent!.replace(/\s+/g, " ").trim();
 
-type Internals = { _onClick(event: Event): void };
-
-/** A click that reached the component through the button, as the browser
- * marks a person's tap (`isTrusted: true`), with a stopPropagation spy. */
-function tap(): Event & { stopped: boolean } {
-  return {
-    isTrusted: true,
-    stopped: false,
-    composedPath: () => [{ tagName: "BUTTON" }, { tagName: "CF-BUTTON" }],
-    stopPropagation() {
-      (this as { stopped: boolean }).stopped = true;
-    },
-  } as unknown as Event & { stopped: boolean };
+/**
+ * A click as a person's tap or Enter makes it, which the browser marks
+ * `isTrusted`; the test document cannot make one, so the mark is set on the
+ * event itself.
+ */
+function trustedClick(): MouseEvent {
+  const event = new MouseEvent("click", { bubbles: true, composed: true });
+  Object.defineProperty(event, "isTrusted", { value: true });
+  return event;
 }
 
-/** Dispatches a scripted click on the button and returns whether the host's
- * own click listener saw it. */
-function hostSees(element: CFPatternInstall, click: () => void): boolean {
-  let seen = false;
-  const onClick = () => seen = true;
+/** A scripted click event, as a page's own code makes one. */
+const scriptedClick = () =>
+  new MouseEvent("click", { bubbles: true, composed: true });
+
+/** Dispatches `event` on `target` and returns how many times the host's own
+ * click listener saw it, as a pattern's `onClick` would. */
+function hostSees(
+  element: CFPatternInstall,
+  target: EventTarget,
+  event: Event,
+): number {
+  let seen = 0;
+  const onClick = () => seen++;
   element.addEventListener("click", onClick);
-  click();
+  target.dispatchEvent(event);
   element.removeEventListener("click", onClick);
   return seen;
 }
@@ -93,6 +97,15 @@ describe("CFPatternInstall", () => {
       expect(shown(element)).toBe("Install “Bill splitter” by Sam onto Home");
     });
 
+    it("keeps a title that imitates its words inside the title's chip", async () => {
+      const element = await installWith({ patternTitle: "Notes” onto Work" });
+      expect(shown(element)).toBe("Install “Notes' onto Work”");
+      const names = element.shadowRoot!.querySelectorAll(".name");
+      expect([...names].map((name) => name.textContent)).toEqual([
+        "Notes' onto Work",
+      ]);
+    });
+
     it("leaves out the loom when it has no name", async () => {
       const element = await installWith({ patternTitle: "Bill splitter" });
       expect(shown(element)).toBe("Install “Bill splitter”");
@@ -100,10 +113,12 @@ describe("CFPatternInstall", () => {
 
     it("shows the pattern id when the pattern has no title", async () => {
       const element = await installWith({
-        patternId: "bafy0123456789abcdef",
+        patternId: "bafy0123abcdef0123456789ab",
         destinationName: "Home",
       });
-      expect(shown(element)).toBe("Install “pattern bafy01234567…” onto Home");
+      expect(shown(element)).toBe(
+        "Install “pattern bafy0123…456789ab” onto Home",
+      );
     });
 
     it("shows the words its inputs give after they change", async () => {
@@ -135,6 +150,16 @@ describe("CFPatternInstall", () => {
       );
     });
 
+    it("keeps a name from closing its quotation", () => {
+      expect(plainName("Notes” onto Work. Install “Other")).toBe(
+        "Notes' onto Work. Install 'Other",
+      );
+    });
+
+    it("cuts a run of combining marks to two", () => {
+      expect(plainName("a\u0301\u0302\u0303\u0304b")).toBe("a\u0301\u0302b");
+    });
+
     it("cuts a long name short", () => {
       const name = plainName("x".repeat(200));
       expect([...name].length).toBe(60);
@@ -143,62 +168,41 @@ describe("CFPatternInstall", () => {
   });
 
   describe("clicks", () => {
-    it("stops a scripted click() before it reaches the host", async () => {
+    it("passes a trusted click on the button to the host", async () => {
       const element = await installWith({ patternTitle: "Bill splitter" });
-      expect(hostSees(element, () => button(element).click())).toBe(false);
+      expect(hostSees(element, button(element), trustedClick())).toBe(1);
     });
 
-    it("stops a synthetic click event before it reaches the host", async () => {
+    it("stops a scripted click() before the host sees it", async () => {
       const element = await installWith({ patternTitle: "Bill splitter" });
-      expect(
-        hostSees(element, () =>
-          button(element).dispatchEvent(
-            new MouseEvent("click", { bubbles: true, composed: true }),
-          )),
-      ).toBe(false);
+      let seen = 0;
+      element.addEventListener("click", () => seen++);
+      button(element).click();
+      expect(seen).toBe(0);
     });
 
-    it("lets a trusted tap on the button through", () => {
-      const element = new CFPatternInstall();
-      const event = tap();
-      using _time = new FakeTime();
-      (element as unknown as Internals)._onClick(event);
-      expect(event.stopped).toBe(false);
+    it("stops a synthetic click event before the host sees it", async () => {
+      const element = await installWith({ patternTitle: "Bill splitter" });
+      expect(hostSees(element, button(element), scriptedClick())).toBe(0);
     });
 
-    it("stops a trusted tap while disabled", () => {
-      const element = new CFPatternInstall();
-      element.disabled = true;
-      const event = tap();
-      using _time = new FakeTime();
-      (element as unknown as Internals)._onClick(event);
-      expect(event.stopped).toBe(true);
+    it("stops a trusted click while disabled", async () => {
+      const element = await installWith({ disabled: true });
+      expect(hostSees(element, button(element), trustedClick())).toBe(0);
     });
 
-    it("stops a trusted click beside the button", () => {
-      const element = new CFPatternInstall();
-      const event = {
-        ...tap(),
-        composedPath: () => [{ tagName: "DIV" }],
-      } as unknown as Event & { stopped: boolean };
-      event.stopPropagation = () => event.stopped = true;
-      (element as unknown as Internals)._onClick(event);
-      expect(event.stopped).toBe(true);
+    it("stops a trusted click on the host's own box", async () => {
+      const element = await installWith({ patternTitle: "Bill splitter" });
+      expect(hostSees(element, element, trustedClick())).toBe(0);
     });
 
-    it("stops a second tap until the first has been handled", () => {
-      const element = new CFPatternInstall();
+    it("stops a second tap until the first has been handled", async () => {
+      const element = await installWith({ patternTitle: "Bill splitter" });
       using time = new FakeTime();
-      const first = tap();
-      const second = tap();
-      (element as unknown as Internals)._onClick(first);
-      (element as unknown as Internals)._onClick(second);
-      expect(first.stopped).toBe(false);
-      expect(second.stopped).toBe(true);
+      expect(hostSees(element, button(element), trustedClick())).toBe(1);
+      expect(hostSees(element, button(element), trustedClick())).toBe(0);
       time.tick(0);
-      const third = tap();
-      (element as unknown as Internals)._onClick(third);
-      expect(third.stopped).toBe(false);
+      expect(hostSees(element, button(element), trustedClick())).toBe(1);
     });
   });
 });

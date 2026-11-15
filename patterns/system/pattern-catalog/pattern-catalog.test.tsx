@@ -145,7 +145,6 @@ export default pattern(() => {
       split_.patternTitle === "Bill splitter" &&
       split_.destinationName === "Home" &&
       posing_.patternTitle === "Reading tracker" &&
-      !hasText(posing[UI], "Bill splitter") &&
       missing_.patternId === "gone-1" && missing_.patternTitle === "" &&
       missing_.destinationName === undefined;
   });

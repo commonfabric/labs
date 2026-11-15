@@ -101,3 +101,6 @@ have yet:
   ties the two together yet.
 - A pattern rendering above the button could cover it, or draw something else
   over its words, so that a person taps one thing while reading another.
+- A button for a pattern found through `page` rather than in the `entries`
+  window shows the pattern's id, not its title: the button reads titles only
+  from `entries`, the one listing the catalog holds itself.

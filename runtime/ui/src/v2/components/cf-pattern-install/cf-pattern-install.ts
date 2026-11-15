@@ -1,24 +1,32 @@
 import { css, html, nothing } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
-import "../cf-button/cf-button.ts";
 
 /** The longest a shown name runs before it is cut short with an ellipsis. */
 const MAX_NAME_LENGTH = 60;
 
-/** How much of a pattern id is shown when the pattern has no title. */
-const SHOWN_ID_LENGTH = 12;
+/**
+ * How many characters of each end of a long pattern id are shown when the
+ * pattern has no title. Ids that share a prefix (a content hash's encoding
+ * header) differ at the end, so both ends are shown.
+ */
+const SHOWN_ID_END_LENGTH = 8;
 
 /**
- * Returns `text` as one line a person can read: control and formatting
- * characters (bidirectional overrides, zero-width joiners, line breaks)
- * removed, runs of whitespace collapsed, and anything past
- * {@link MAX_NAME_LENGTH} cut short with an ellipsis. A name is written by
- * whoever published the pattern or named the loom, so it must not be able to
- * reorder, hide or break the words around it.
+ * Returns `text` as one line a person can read, with nothing in it that could
+ * pass for the words around it. A name is written by whoever published the
+ * pattern or named the loom, so it must not be able to reorder, hide or break
+ * those words, or close the quotation it sits in and carry on as if it were
+ * them. So: control and formatting characters (bidirectional overrides,
+ * zero-width joiners, line breaks) become spaces; double quotation marks of
+ * every kind become a plain apostrophe; a run of combining marks is cut to
+ * two; whitespace collapses; and anything past {@link MAX_NAME_LENGTH} is cut
+ * short with an ellipsis.
  */
 export const plainName = (text: string | undefined): string => {
   const flat = (text ?? "")
     .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+    .replace(/["“”„‟«»〝〞〟＂]/gu, "'")
+    .replace(/(\p{M}{2})\p{M}+/gu, "$1")
     .replace(/\s+/g, " ")
     .trim();
   const chars = [...flat];
@@ -49,10 +57,12 @@ export const installWording = (inputs: {
   destinationName?: string;
 }): PatternInstallWording => {
   const title = plainName(inputs.patternTitle);
-  const id = plainName(inputs.patternId);
-  const shownId = id.length > SHOWN_ID_LENGTH
-    ? `${id.slice(0, SHOWN_ID_LENGTH)}…`
-    : id;
+  const id = [...plainName(inputs.patternId)];
+  const shownId = id.length > 2 * SHOWN_ID_END_LENGTH + 1
+    ? `${id.slice(0, SHOWN_ID_END_LENGTH).join("")}…${
+      id.slice(-SHOWN_ID_END_LENGTH).join("")
+    }`
+    : id.join("");
   return {
     pattern: title || (shownId ? `pattern ${shownId}` : "this pattern"),
     author: plainName(inputs.author),
@@ -74,7 +84,7 @@ export const installSentence = (wording: PatternInstallWording): string =>
  *
  * A trusted surface pattern puts it where a tap must authorize an install,
  * the way `cf-submit-input` authorizes a create: the button's click is a real
- * (trusted) DOM gesture that bubbles to this host, where the pattern wires
+ * (trusted) DOM gesture that reaches this host, where the pattern wires
  * `onClick` together with the surface's UI integrity (`data-ui-action` on the
  * host and `data-ui-pattern` / `data-ui-event-integrity` on an ancestor).
  *
@@ -84,15 +94,17 @@ export const installSentence = (wording: PatternInstallWording): string =>
  * (left out when not given) — and takes no free text for its button. A pattern
  * placing it can choose which pattern and which loom it names, but not make it
  * say something other than what a tap does. Each name is flattened to one
- * plain line (see {@link plainName}) so it cannot reorder or break the
- * surrounding words.
+ * plain line (see {@link plainName}) and drawn in its own bounded chip, so it
+ * cannot reorder, break or pass for the words around it.
  *
- * Only a trusted click on the button reaches the host. A scripted `click()` or
- * a synthetic event is `isTrusted: false`; it is stopped at the shadow boundary
- * here, and would carry no UI integrity even if it were not. Clicks while
- * disabled, clicks on the space around the button, and a second click before
- * the first has been handled are stopped too, so one tap is one install
- * request.
+ * The button is a native `<button>`, so a person's Enter or Space on it is a
+ * trusted click just as a pointer tap is. Only such a click on the enabled
+ * button reaches the host's `onClick`. A listener the constructor adds on the
+ * host, in the capture phase, sees every click on the element before the
+ * host's own listeners do, including a click on the host's own box around the
+ * button, and stops one that is scripted or synthetic (`isTrusted: false`),
+ * that lands anywhere but the button, that comes while disabled, or that
+ * repeats a tap still being handled. So one tap is one install request.
  *
  * @element cf-pattern-install
  *
@@ -112,18 +124,46 @@ export class CFPatternInstall extends BaseElement {
         max-width: 100%;
       }
 
-      cf-button {
+      button {
         max-width: 100%;
+        font: inherit;
+        font-family: var(--cf-theme-font-family, inherit);
+        text-align: start;
+        overflow-wrap: anywhere;
+        cursor: pointer;
+        padding: var(--cf-size-md-padding-v, 8px)
+          var(--cf-size-md-padding-h, 12px);
+        border: 1px solid transparent;
+        border-radius: var(
+          --cf-theme-border-radius,
+          var(--cf-border-radius-md, 0.375rem)
+        );
+        background: var(
+          --cf-theme-color-primary,
+          var(--cf-colors-primary-500, #4979fa)
+        );
+        color: var(--cf-theme-color-primary-foreground, #fff);
       }
 
-      .sentence {
-        white-space: normal;
-        overflow-wrap: anywhere;
-        text-align: start;
+      button:focus-visible {
+        outline: 2px solid var(--cf-theme-color-accent, #fc856d);
+        outline-offset: 2px;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
       }
 
       .name {
+        display: inline-block;
+        max-width: 100%;
+        overflow: hidden;
+        vertical-align: bottom;
         font-weight: 600;
+        padding: 0 0.3em;
+        border-radius: 0.25em;
+        background: color-mix(in srgb, currentColor 18%, transparent);
       }
     `,
   ];
@@ -156,26 +196,29 @@ export class CFPatternInstall extends BaseElement {
     this.author = "";
     this.destinationName = "";
     this.disabled = false;
+    this.addEventListener("click", (event) => this._onClick(event), {
+      capture: true,
+    });
   }
 
-  /** Whether a click's composed path runs through the button. */
+  /** Whether a click's composed path runs through this element's button. */
   private _isButtonClick(event: Event): boolean {
-    return event.composedPath().some((node) =>
-      (node as Element | undefined)?.tagName === "CF-BUTTON"
-    );
+    const button = this.shadowRoot?.querySelector("button");
+    return button !== null && button !== undefined &&
+      event.composedPath().includes(button);
   }
 
   /**
-   * Handles every click inside the component, and lets through to the host
-   * only a trusted click on the enabled button that is not a repeat of one
-   * still being handled.
+   * Sees every click on the element before the host's listeners do, and lets
+   * through only a trusted click on the enabled button that is not a repeat of
+   * one still being handled.
    */
   private _onClick(event: Event) {
     if (
       !event.isTrusted || this.disabled || this._installing ||
       !this._isButtonClick(event)
     ) {
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       return;
     }
     this._installing = true;
@@ -201,18 +244,15 @@ export class CFPatternInstall extends BaseElement {
       `
       : nothing;
     return html`
-      <div @click="${this._onClick}">
-        <cf-button
-          type="button"
-          ?disabled="${this.disabled}"
-          aria-label="${installSentence(wording)}"
-          part="button"
-        >
-          <span
-            class="sentence">Install “<span class="name">${wording
-              .pattern}</span>”${author}${destination}</span>
-        </cf-button>
-      </div>
+      <button
+        type="button"
+        part="button"
+        ?disabled="${this.disabled}"
+        aria-label="${installSentence(wording)}"
+      >
+        Install “<span class="name">${wording
+          .pattern}</span>”${author}${destination}
+      </button>
     `;
   }
 }
