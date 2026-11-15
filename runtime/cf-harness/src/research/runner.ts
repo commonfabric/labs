@@ -58,7 +58,7 @@ import type {
   HarnessModelClient,
   HarnessModelUsage,
 } from "../model/client.ts";
-import { patternIndexDependencies } from "../pattern-index/composition.ts";
+import { patternIndexDependencies } from "@commonfabric/pattern-index/deploy";
 import type { DescribeHandleResearchResult } from "../tools/describe-handle.ts";
 import {
   patternIndexDeclaredType,

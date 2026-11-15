@@ -138,6 +138,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ],
   ["piece new:request-key", "an opaque caller retry key"],
   [
+    "piece new:from-index",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
+  [
     "ingest mint:gmail-access-token",
     "a secret; a candidate list is the wrong place",
   ],
@@ -249,6 +253,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["url", "a browser URL; its parts complete as --api-url, --space, --piece"],
   ["app-url", "a shell origin, which is not the api-url --api-url names"],
   ["repository", "a source repository URL"],
+  ["pattern-index-url", "the base URL of a pattern index service"],
   ["model", "a model name the harness's configured provider defines"],
   [
     "main-export",
