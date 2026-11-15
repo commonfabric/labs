@@ -523,21 +523,22 @@ describe("patternSource meta accessors", () => {
         .rejects.toThrow(PIECE_SOURCE_MOVED);
     });
 
-    it("is removed by a transition to another pattern that is no source update", async () => {
+    it("carries what it records to the next pattern on a transition that is no source update", async () => {
       const pattern = await compile("before");
       const next = await compile("after");
-      const cell = await pieceRunning("delegations-removed", pattern, [{
-        identity: next.identity,
-        predecessors: ["earlier-pattern"],
-      }]);
+      const recorded = [{
+        identity: "kept-module",
+        predecessors: ["earlier-module"],
+      }];
+      const cell = await pieceRunning("delegations-carried", pattern, recorded);
 
       await transition(cell, next, "edit");
 
       expect(getPieceSourceRevisions(cell).at(-1)?.pattern).toEqual(next);
-      expect(cell.getMetaRaw("pieceSourceDelegations")).toBeUndefined();
-      expect(getPieceSourceDelegations(cell, next.identity)).toStrictEqual(
-        new Map(),
-      );
+      expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
+        identity: next.identity,
+        delegations: recorded,
+      });
     });
   });
 

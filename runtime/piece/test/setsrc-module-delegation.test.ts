@@ -5,6 +5,7 @@ import type { FabricValue } from "@commonfabric/api";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
   getPatternIdentityRef,
+  getPieceSourceSnapshot,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -427,6 +428,52 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     };
 
+    // Every delegation list the closure of `identity` stores, by record: each
+    // module's source record, and its compiled record for `runtimeVersion`
+    // (this runtime's, by default).
+    const closureRecords = async (
+      identity: string,
+      runtimeVersion?: string,
+    ): Promise<Record<string, string[]>> => {
+      await runtime.patternManager.flushCompileCacheWrites();
+      await observer.patternManager.flushCompileCacheWrites();
+      await pieces.synced();
+      const version = runtimeVersion ??
+        await runtime.patternManager.compileCacheRuntimeVersion({
+          patternCoverage: false,
+        });
+      const tx = runtime.edit();
+      try {
+        const lists: Record<string, string[]> = {};
+        const source = await loadVerifiedSourceClosure(
+          runtime,
+          pieces.getSpace(),
+          identity,
+          tx,
+        );
+        for (const [module, doc] of source ?? []) {
+          lists[`source ${module}`] = [
+            ...(doc.delegatedModuleIdentities ?? []),
+          ];
+        }
+        const compiled = await loadCompiledClosure(
+          runtime,
+          pieces.getSpace(),
+          identity,
+          { runtimeVersion: version! },
+          tx,
+        );
+        for (const [module, doc] of compiled) {
+          lists[`compiled ${module}`] = [
+            ...(doc.delegatedModuleIdentities ?? []),
+          ];
+        }
+        return lists;
+      } finally {
+        tx.abort();
+      }
+    };
+
     type Piece = Awaited<ReturnType<PiecesController["get"]>>;
 
     // The piece's `pieceSourceDelegations` member, as stored.
@@ -575,19 +622,57 @@ export default pattern<{seed?: ${seedType}}>(() => {
         identity: v2,
         delegations: [{ identity: v2, predecessors: [v1, "planted"] }],
       });
+      const before = await closureRecords(v2);
+      expect(Object.keys(before).length).toBeGreaterThan(1);
 
       await observerPieces.get(piece.id, true);
 
       expect(
         observer.grantsModuleDelegation(pieces.getSpace(), v2, "planted"),
       ).toBe(true);
-      expect(await storedDelegations(v2)).toEqual([v1]);
+      expect(await closureRecords(v2)).toEqual(before);
+
+      // A runtime of another compile-cache version holds no compiled record
+      // for v2, so its start compiles v2 and writes the compiled records
+      // back, from the source records' lists.
+      const coldVersion = "setsrc-module-delegation-cold-start";
+      const cold = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+      });
+      const restoreVersion = setCompileCacheRuntimeVersionForTesting(
+        coldVersion,
+      );
+      try {
+        const coldPieces = new PiecesController(
+          createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+          cold,
+        );
+        await coldPieces.synced();
+        await coldPieces.get(piece.id, true);
+        await cold.patternManager.flushCompileCacheWrites();
+        await coldPieces.synced();
+        const written = await closureRecords(v2, coldVersion);
+        const compiled = Object.entries(written).filter(([record]) =>
+          record.startsWith("compiled ")
+        );
+        expect(compiled.length).toBeGreaterThan(0);
+        expect(written[`compiled ${v2}`]).toEqual([v1]);
+        for (const [record, list] of Object.entries(written)) {
+          expect(list, record).not.toContain("planted");
+        }
+      } finally {
+        restoreVersion();
+        await cold.dispose({ closeStorage: false });
+      }
     });
 
-    it("refuses an update prepared before another runtime's update replaced the piece's member, and writes nothing", async () => {
+    it("refuses an update prepared before another runtime's update moved the piece, and writes nothing", async () => {
       // `observer` prepares v1 to v2b and is held there; `runtime` then
       // moves the piece from v1 to v2a. The held update is refused, and its
-      // caller reports that; nothing retries it.
+      // caller reports that; nothing retries it. The pointer's guard refuses
+      // it first; the member's own guard, for a member that changed with the
+      // pointer in place, is pinned in `pattern-source.test.ts`.
       const piece = await pieces.create(authorizedWriterProgram("v1"), {
         input: {},
       });
@@ -693,6 +778,110 @@ export default pattern<{seed?: ${seedType}}>(() => {
         const observed = await freshPieces.get(piece.id, true);
 
         expect(await invokeSetName(observed, "b")).toBe("w1:b");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the recorded grant of a module that returns after another module took its file", async () => {
+      // v1's writer leaves in v2; v3 puts an unrelated writer at its file, and
+      // v4 brings v1's back, byte for byte. Nothing at the file in v3 descends
+      // from v1's writer, so only the member's own entry for it keeps its
+      // grant from w0 once v0 to v1's staging failed.
+      const fresh = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+      });
+      try {
+        const freshPieces = new PiecesController(
+          createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+          fresh,
+        );
+        await freshPieces.synced();
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        await piece.setPattern(splitWriterProgram("w2", "e2", "other.ts"));
+        await piece.setPattern(splitWriterProgram("unrelated", "e3"));
+        const cold = await observerPieces.get(piece.id, false);
+        await cold.setPattern(splitWriterProgram("w1", "e4"));
+        await observer.patternManager.flushCompileCacheWrites();
+        await observerPieces.synced();
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the recorded grant of a module across a transition that is no source update", async () => {
+      // v0 to v1 changes the writer, and its staging never lands. v1 to v2
+      // changes only the entry, through a transition whose baseline does not
+      // retain v1, as for an update from an origin nobody gates. A writer's
+      // cache record would keep its grant over that transition; so does the
+      // member, re-keyed to v2. v2's entry gets nothing.
+      const fresh = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+      });
+      try {
+        const freshPieces = new PiecesController(
+          createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+          fresh,
+        );
+        await freshPieces.synced();
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const e0 = getPatternIdentityRef(piece.getCell())!.identity;
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        const e1 = getPatternIdentityRef(piece.getCell())!.identity;
+        const cell = piece.getCell();
+        const v2 = await runtime.patternManager.compilePattern(
+          splitWriterProgram("w1", "e2"),
+          { space: pieces.getSpace() },
+        );
+        const expected = getPieceSourceSnapshot(
+          cell,
+          runtime.runner.sessionPatternPointerFor(cell),
+        )!;
+        await runtime.runSynced(cell, v2, {}, {
+          expectedPatternIdentity: expected.pattern,
+          pieceSourceTransition: {
+            revisionId: crypto.randomUUID(),
+            baseline: { kind: "unavailable" },
+            timestamp: Date.now(),
+            operation: "edit",
+            origin: null,
+            expected,
+          },
+        });
+        await pieces.synced();
+        const e2 = getPatternIdentityRef(cell)!.identity;
+        expect(e2).not.toBe(e1);
+        expect(recordedMember(piece)?.identity).toBe(e2);
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+        for (const predecessor of [e0, e1]) {
+          expect(
+            fresh.grantsModuleDelegation(pieces.getSpace(), e2, predecessor),
+          ).toBe(false);
+        }
       } finally {
         await fresh.dispose({ closeStorage: false });
       }

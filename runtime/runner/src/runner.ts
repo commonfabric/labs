@@ -18111,17 +18111,16 @@ export async function preparePieceSourceTransitionBaseline(
  * transaction. A legacy or externally changed current state first receives a
  * baseline revision so no source or origin is skipped.
  *
- * It also replaces the piece's `pieceSourceDelegations` member
- * ({@link PieceSourceDelegations}). Given `options.sourceUpdate`, the
- * transition is that source update's, and the member records the
- * delegations it grants the next pattern (`PatternManager.stageSourceUpdate()`,
- * composed at preparation with what the member recorded for the current
- * one, and keeping its entries for modules outside the next closure). A
- * transition that leaves the pattern identity in place keeps what the member
- * records for it, which still names it. Any other transition removes the
- * member: nothing promised the next pattern any delegation. A preparation
- * composed over a member that has moved since is refused as
- * {@link PIECE_SOURCE_MOVED}.
+ * It also writes the piece's `pieceSourceDelegations` member
+ * ({@link PieceSourceDelegations}) for the next pattern. Given
+ * `options.sourceUpdate`, the transition is that source update's, and the
+ * member records the delegations it grants the next pattern
+ * (`PatternManager.stageSourceUpdate()`), composed at preparation with
+ * what the member recorded for the current one. Any other transition carries
+ * what the member recorded for the current pattern over to the next, keyed
+ * by module, so a module the next pattern keeps keeps its grant and a new
+ * module gets none. A preparation composed over a member that has moved
+ * since is refused as {@link PIECE_SOURCE_MOVED}.
  */
 export function applyPieceSourceTransition(
   runtime: Runtime,
@@ -18237,12 +18236,12 @@ export function applyPieceSourceTransition(
     candidate,
     current.pattern.identity,
   );
-  // The member is for a pattern's modules, which its identity names; the
-  // symbol picks an export of the same closure, so a change of symbol alone
-  // keeps what the member records.
-  const nextDelegations = new Map(
-    current.pattern.identity === nextPattern.identity ? recorded : [],
-  );
+  // Every transition writes the member for the next pattern. One that is no
+  // source update carries what the member records, keyed by module: the next
+  // pattern's start registers only the entries for modules of its closure,
+  // so a module it keeps unchanged keeps its grant, as its cache record would
+  // keep it after a staging that landed, and a new module gets nothing.
+  let nextDelegations: ModuleDelegationMap = recorded;
   if (options.sourceUpdate !== undefined) {
     if (
       !runtime.patternManager.sourceUpdateComposedWith(
@@ -18260,12 +18259,8 @@ export function applyPieceSourceTransition(
       tx,
       recorded,
     );
-    for (const [identity, predecessors] of [...carried, ...granted]) {
-      nextDelegations.set(
-        identity,
-        new Set([...(nextDelegations.get(identity) ?? []), ...predecessors]),
-      );
-    }
+    // The composition already holds every recorded entry.
+    nextDelegations = new Map([...carried, ...granted]);
   }
   candidate.setMetaRaw(
     "pieceSourceDelegations",

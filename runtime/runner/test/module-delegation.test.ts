@@ -1874,7 +1874,12 @@ describe("module identity delegation", () => {
       const v3Identity = getPatternIdentityRef(piece)!.identity;
       expect(v3Identity).not.toBe(v2Identity);
 
-      expect(piece.getMetaRaw("pieceSourceDelegations")).toBeUndefined();
+      // The member carries v2's entries over to v3, and v3's closure holds
+      // none of the modules they name.
+      expect(
+        (piece.getMetaRaw("pieceSourceDelegations") as { identity?: string })
+          ?.identity,
+      ).toBe(v3Identity);
       await observer.start(observed);
       for (const predecessor of [v1Identity, v2Identity]) {
         expect(
