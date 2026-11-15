@@ -958,10 +958,13 @@ describe("cfc-write-policy-any-of", () => {
 
     describe("through links", () => {
       // A strict runtime with its own store. A document holding links
-      // stores the policy of what they name beneath them, and a document a
-      // link names may carry a confidentiality whose evidence the link's
-      // write consults; each is a document whose stored policy a later
-      // schema omits an alternative of.
+      // stores the policy of what they name beneath them, which the
+      // verification of a later link write reads back. A floor on a slot
+      // holding a link has the link's write derive the evidence of the
+      // document it names, which merges that document's stored envelope with
+      // the schema the transaction writes it under where that schema names
+      // its creator as a reader. Each case writes under a schema omitting
+      // one stored alternative.
 
       /** The schema of one message, whose tags `alternatives` may write. */
       const message = (alternatives: readonly unknown[]): JSONSchemaObj => ({
@@ -1070,11 +1073,16 @@ describe("cfc-write-policy-any-of", () => {
                 ifc: { writePolicyAnyOf: alternatives },
               },
             },
-            ifc: { confidentiality: CREATOR_ONLY },
+            ifc: { confidentiality: CREATOR_ONLY, integrity: ["endorsed"] },
           });
           const holder: JSONSchemaObj = {
             type: "object",
-            properties: { notes: { asCell: ["readonly"] } },
+            properties: {
+              notes: {
+                asCell: ["readonly"],
+                ifc: { requiredIntegrity: ["endorsed"] },
+              },
+            },
           };
           const seed = runtime.edit();
           runtime.getCell(signer.did(), "held-notes", notes(BOTH), seed)
