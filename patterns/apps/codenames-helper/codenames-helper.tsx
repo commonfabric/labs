@@ -23,7 +23,6 @@ import {
   FS,
   generateObject,
   handler,
-  type ImageData,
   NAME,
   pattern,
   type PerSpace,
@@ -259,8 +258,9 @@ const miniCellStyle = (owner: Owner) => ({
  * pattern's): the "default" alias resolves to gateway:claude-sonnet-5, which
  * the gateway's provider refuses structured outputs for, and generateObject's
  * own default (gateway:gpt-5.4-mini) rejects any schema that does not set
- * `additionalProperties: false` on every object, which toolshed does not add.
- * Go back to the default once one of them answers generateObject.
+ * `additionalProperties: false` on every object, which toolshed does not add
+ * (top/3114). Haiku 4.5 reads images, and read a test board and key card
+ * exactly. Go back to the default once one of them answers generateObject.
  */
 const STRUCTURED_MODEL = "anthropic:claude-haiku-4-5";
 
@@ -319,8 +319,25 @@ export interface CodenamesHelperOutput {
   requestClues: Stream<void>;
 }
 
+/**
+ * The parts of an uploaded image this pattern uses. Not `ImageData`: a live
+ * cf-image-input upload reaches a handler without the `timestamp` that
+ * `ImageData` requires (runtime problem: the browser's event detail has it,
+ * the handler's does not), and an event that fails its schema arrives as an
+ * empty `detail`, so no photo was ever added. Go back to `ImageData` once
+ * `timestamp` crosses.
+ */
+interface PhotoFile {
+  id: string;
+  name: string;
+  url?: string;
+  data?: string;
+  type?: string;
+  size?: number;
+}
+
 type ImageUploadEvent = {
-  detail?: { images?: ImageData[]; files?: ImageData[] };
+  detail?: { images?: PhotoFile[]; files?: PhotoFile[] };
 };
 
 const tapCardHandler = handler<
@@ -377,7 +394,7 @@ const discardPhotoHandler = handler<
 
 const addPhotosHandler = handler<
   ImageUploadEvent,
-  { photos: Writable<ImageData[]> }
+  { photos: Writable<PhotoFile[]> }
 >(({ detail }, { photos }) => {
   const added = detail?.images ?? detail?.files ?? [];
   if (added.length > 0) photos.set([...photos.get(), ...added]);
@@ -386,7 +403,7 @@ const addPhotosHandler = handler<
 const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
   ({ board, myTeam, mode }) => {
     const selectedIndex = new Writable.perSession<number>(-1);
-    const photos = new Writable.perSession<ImageData[]>([]);
+    const photos = new Writable.perSession<PhotoFile[]>([]);
     const photoStatus = new Writable.perSession<PhotoStatus>({});
     /** The clue prompt last asked for. Clue ideas are on demand, so a reveal
      * does not start a new LLM call by itself. */
@@ -496,6 +513,12 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           errors: check.errors,
           warnings: check.warnings,
           notes: typeof result?.notes === "string" ? result.notes : "",
+          // Still reading until there is a result: `pending` can clear a
+          // moment before the result lands, and showing the reading then
+          // rendered "No reading yet" as an error whose row stayed behind,
+          // emptied, once the result's errors list came back empty (runtime
+          // problem: a mapped list shrinking to nothing left a stale row).
+          waiting: !reading.error && (reading.pending || !result),
           canApply: check.errors.length === 0,
           applied: status === "applied",
           hidden: status === "discarded",
@@ -588,7 +611,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
             )
             : (
               <div style={styles.photoCard}>
-                {reading.pending
+                {view.waiting
                   ? (
                     <div style={styles.row}>
                       <cf-loader size="sm" showElapsed></cf-loader>

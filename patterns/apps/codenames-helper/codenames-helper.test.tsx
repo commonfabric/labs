@@ -264,7 +264,8 @@ export default pattern(() => {
     helper.board[0].word === "WORD1"
   );
 
-  // A photo upload shows a reading card; Discard hides it.
+  // A photo upload shows a reading card; Discard hides it. The image has no
+  // `timestamp`: a live cf-image-input upload reaches the handler without one.
   const action_upload_photo = action(() =>
     fireEvent(findElement(helper[UI], "cf-image-input"), "oncf-change", {
       detail: {
@@ -273,7 +274,6 @@ export default pattern(() => {
           name: "board.jpg",
           url: "",
           data: "data:image/png;base64,AAAA",
-          timestamp: 0,
           size: 4,
           type: "image/png",
         }],
