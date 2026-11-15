@@ -3267,19 +3267,6 @@ describe("cell-cache", () => {
       }
     });
 
-    it("returns `true` for a stamp at a field the cache writes and the record lacks", () => {
-      const listless = restored(source, (stored) => {
-        delete stored.delegatedModuleIdentities;
-        return stored;
-      });
-
-      expect(
-        cacheRecordStampsRepairable(
-          stamped(listless, { ...STAMP, path: ["delegatedModuleIdentities"] }),
-        ),
-      ).toBe(true);
-    });
-
     describe("for a record holding something a writer chose", () => {
       it("returns `false` for product annotations", () => {
         for (const reading of [source, compiled]) {
@@ -3352,13 +3339,29 @@ describe("cell-cache", () => {
         }
       });
 
-      it("returns `true` for code stored inline as the string it verified", () => {
+      it("returns `false` for code stored inline as the string it verified", () => {
         const inline = restored(source, (stored) => ({
           ...stored,
           code: source.code,
         }));
 
-        expect(cacheRecordStampsRepairable(stamped(inline, STAMP))).toBe(true);
+        expect(cacheRecordStampsRepairable(stamped(inline, STAMP))).toBe(false);
+      });
+
+      it("returns `false` for source code in a form its identity does not hash", () => {
+        // The identity hashes the code with its line endings normalized, so
+        // a writer chooses each one; the cache writes the code as authored.
+        const code = source.code.replace("\n", "\r\n");
+        expect(code).not.toBe(source.code);
+        const crlf: CacheRecordReading = {
+          ...restored(source, (stored) => ({
+            ...stored,
+            code: codeDocumentLink(space, code),
+          })),
+          code,
+        };
+
+        expect(cacheRecordStampsRepairable(stamped(crlf, STAMP))).toBe(false);
       });
 
       it("returns `false` for import edges other than the ones it verified", () => {
@@ -3442,6 +3445,46 @@ describe("cell-cache", () => {
     });
 
     describe("for a stamp other than a flow stamp", () => {
+      it("returns `false` for a label map holding a label-metadata template", () => {
+        expect(
+          cacheRecordStampsRepairable({
+            ...stamped(source, STAMP),
+            documentEntries: [{
+              path: [],
+              origin: "label-metadata",
+              observes: "labelMetadata",
+              label: { confidentiality: ["did:example:stamp"] },
+            }],
+          }),
+        ).toBe(false);
+      });
+
+      it("returns `false` for a stamp under a field the record lacks", () => {
+        const listless = restored(source, (stored) => {
+          delete stored.delegatedModuleIdentities;
+          return stored;
+        });
+
+        for (const reading of [source, listless]) {
+          expect(
+            cacheRecordStampsRepairable(
+              stamped(reading, { ...STAMP, path: ["toString"] }),
+            ),
+          ).toBe(false);
+        }
+        expect(cacheRecordStampsRepairable(stamped(listless, STAMP))).toBe(
+          true,
+        );
+        expect(
+          cacheRecordStampsRepairable(
+            stamped(listless, {
+              ...STAMP,
+              path: ["delegatedModuleIdentities"],
+            }),
+          ),
+        ).toBe(false);
+      });
+
       it("returns `false` for confidentiality of any other origin", () => {
         for (
           const origin of [

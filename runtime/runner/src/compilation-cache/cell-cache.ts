@@ -24,7 +24,10 @@ import {
   compilerStackLoaded,
   ensureCompilerStack,
 } from "../harness/deferred-compiler-stack.ts";
-import { computeModuleHashes } from "../harness/module-identity.ts";
+import {
+  computeModuleHashes,
+  normalizeSource,
+} from "../harness/module-identity.ts";
 import type { CacheableModule } from "../harness/types.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
 import { formerPatternKey } from "../pattern-key-moves.ts";
@@ -1109,6 +1112,9 @@ export interface CacheRecordReading {
 
   /** The payload entries of the record's stored label map. */
   readonly entries: readonly LabelMapEntry[];
+
+  /** The label-metadata templates of the record's stored label map. */
+  readonly documentEntries: readonly LabelMapEntry[];
 }
 
 /**
@@ -1117,21 +1123,23 @@ export interface CacheRecordReading {
  * nothing a writer chose. The value must be the one the cache writes for its
  * verified module. That is every field the cache writes and no other, product
  * annotations included, with the identity it is keyed by, the code it
- * verified, and the import edges it verified, each stored as the cache stores
- * it. A compiled record must carry the compiler's attestation at its root.
- * A delegation list must carry it at the list, and hold distinct module
- * identities other than the record's own, sorted, as the cache writes one.
- * Every entry holding confidentiality must be a `derived` or `structure` one,
- * at the record's root or under a field the cache writes.
+ * verified stored as a link to its code document, and the import edges it
+ * verified, each stored as the cache stores it. A source record's code must
+ * be the form its identity hashes, since the hash leaves line endings to its
+ * writer (`normalizeSource()`). A compiled record must carry the compiler's
+ * attestation at its root. A delegation list must carry it at the list, and
+ * hold distinct module identities other than the record's own, sorted, as
+ * the cache writes one. Every entry holding confidentiality must be a
+ * `derived` or `structure` one, at the record's root or under a field the
+ * record holds, and the label map must hold no label-metadata template.
  *
  * The bound: the verification covers what a module's identity hashes, and
  * the attestation stands for what the compile-cache writer wrote. Two
  * choices are left to the record's last writer and are not checked here.
  * One is the order of the import edges, which the identity does not fix.
  * The other is the cache-root links an entry record holds beside its
- * authored imports (`ROOT_LINK_SPECIFIER`). Only a writer the store admits
- * without the cache's own claim on the record can make either choice, which
- * `enforce-strict` refuses where the writer's transaction read a label.
+ * authored imports (`ROOT_LINK_SPECIFIER`). Making either choice takes a
+ * write to the record the compile-cache writer did not make.
  */
 export function cacheRecordStampsRepairable(
   record: CacheRecordReading,
@@ -1147,8 +1155,8 @@ export function cacheRecordStampsRepairable(
   if (
     !kindWritten || value.identity !== identity ||
     typeof value.filename !== "string" ||
-    !(value.code === record.code ||
-      deepEqual(value.code, codeDocumentLink(record.space, record.code))) ||
+    !deepEqual(value.code, codeDocumentLink(record.space, record.code)) ||
+    (set === "source" && record.code !== normalizeSource(record.code)) ||
     !deepEqual(value.imports, record.imports)
   ) {
     return false;
@@ -1159,7 +1167,7 @@ export function cacheRecordStampsRepairable(
       (entry.label.integrity ?? []).includes(COMPILED_INTEGRITY_ATOM)
     );
   if (set === "compiled" && !attested([])) return false;
-  if ("delegatedModuleIdentities" in value) {
+  if (Object.hasOwn(value, "delegatedModuleIdentities")) {
     const list = value.delegatedModuleIdentities;
     if (
       !Array.isArray(list) || list.length === 0 ||
@@ -1172,10 +1180,10 @@ export function cacheRecordStampsRepairable(
   const stamps = entries.filter((entry) =>
     (entry.label.confidentiality?.length ?? 0) > 0
   );
-  return stamps.length > 0 &&
+  return record.documentEntries.length === 0 && stamps.length > 0 &&
     stamps.every((entry) =>
       (entry.origin === "derived" || entry.origin === "structure") &&
-      (entry.path.length === 0 || fields.has(entry.path[0]))
+      (entry.path.length === 0 || Object.hasOwn(value, entry.path[0]))
     );
 }
 
@@ -1199,6 +1207,11 @@ export function readCacheRecord(
       : compiledDocKey(runtimeVersion, module);
   const cell = runtime.getCell(space, keyOf(identity), undefined, tx);
   const link = cell.getAsNormalizedFullLink();
+  const metadata = readStoredCfcMetadata(tx, {
+    space: link.space,
+    id: link.id,
+    scope: link.scope,
+  });
   return {
     set: runtimeVersion === undefined ? "source" : "compiled",
     space,
@@ -1210,11 +1223,8 @@ export function readCacheRecord(
       link: runtime.getCell(space, keyOf(imp.identity), undefined, tx)
         .getAsLink(),
     })),
-    entries: readStoredCfcMetadata(tx, {
-      space: link.space,
-      id: link.id,
-      scope: link.scope,
-    })?.labelMap.entries ?? [],
+    entries: metadata?.labelMap.entries ?? [],
+    documentEntries: metadata?.labelMap.documentEntries ?? [],
   };
 }
 
