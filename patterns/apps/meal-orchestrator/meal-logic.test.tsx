@@ -18,6 +18,7 @@ import {
   planLinking,
   planOvens,
   requirementFit,
+  tagFor,
   timeline,
   withOvenField,
 } from "./meal-logic.ts";
@@ -92,7 +93,7 @@ export default pattern(() => {
       // The group's own duration stands in for an unset oven time.
       events[1].end === 10 &&
       offTimeline.map((o) => o.reason).join("|") ===
-        "the night before|not scheduled: set its minutes before serving";
+        "the night before|not scheduled (set its minutes before serving)";
   });
 
   const assert_load_rules = assert(() =>
@@ -132,6 +133,38 @@ export default pattern(() => {
     return plan.conflicts.length === 0 &&
       plan.events.find((e) => e.dish === "Pie")?.oven === 1;
   });
+
+  // A first-come plan would put the rolls in the big oven and strand the
+  // turkey; the search finds the plan with no conflict.
+  const assert_search_beats_greedy = assert(() => {
+    const big = { rackPositions: 5, physicalRacks: 2 };
+    const small = { rackPositions: 3, physicalRacks: 1 };
+    const rollsFirst = {
+      name: "Rolls",
+      stepGroups: [ovenGroup("bake", 300, 325, 30)],
+    };
+    const bird = {
+      name: "Turkey",
+      stepGroups: [ovenGroup("roast", 290, 325, 200, {}, 5)],
+    };
+    const a = planOvens([rollsFirst, bird], [big, small]);
+    const one = { rackPositions: 5, physicalRacks: 1 };
+    const two = { rackPositions: 5, physicalRacks: 2 };
+    const b = planOvens([
+      { name: "Pie", stepGroups: [ovenGroup("p", 120, 425, 60)] },
+      { name: "Casserole", stepGroups: [ovenGroup("c", 110, 350, 60)] },
+      { name: "Bread", stepGroups: [ovenGroup("b", 100, 425, 60)] },
+    ], [one, two]);
+    return a.conflicts.length === 0 &&
+      a.events.find((e) => e.dish === "Turkey")?.oven === 0 &&
+      b.conflicts.length === 0;
+  });
+
+  const assert_late_warning = assert(() =>
+    planOvens([{ name: "Gravy", stepGroups: [ovenGroup("g", 10, 350, 50)] }], [
+      OVEN,
+    ]).warnings.join() === "Gravy (g) comes out 40m after serving."
+  );
 
   const assert_touching_is_not_overlap = assert(() => {
     // The first comes out at 60 exactly as the second goes in.
@@ -187,14 +220,27 @@ export default pattern(() => {
   });
 
   const assert_requirement_fit = assert(() => {
-    const salad = dish("Salad", "side", ["vegan"], {
-      primaryIngredients: ["lettuce", "mushrooms"],
-      warnings: ["Contains walnuts"],
-    });
+    const salad = {
+      ...dish("Salad", "side", ["vegan"], {
+        primaryIngredients: ["lettuce", "mushrooms"],
+        warnings: ["Contains walnuts"],
+      }),
+      ingredients: ["romaine lettuce", "mushrooms", "olive oil", "eggplant"],
+    };
     return requirementFit(salad, "Vegetarian") === "fits" &&
       requirementFit(salad, "no mushroom") === "conflicts" &&
       requirementFit(salad, "no-walnuts") === "conflicts" &&
+      // One ingredient, and the full list is known: absent means it fits.
       requirementFit(salad, "no-cilantro") === "fits" &&
+      // Whole words: eggplant is not egg, and egg is a class anyway.
+      requirementFit(salad, "no-eggs") === "fits" &&
+      requirementFit({
+          ...salad,
+          dietaryCompatibility: {
+            ...salad.dietaryCompatibility,
+            compatible: [],
+          },
+        }, "no-eggs") === "unknown" &&
       requirementFit(salad, "gluten-free") === "unknown" &&
       requirementFit(
           dish("Bread", "bread", [], { incompatible: ["gluten-free"] }),
@@ -206,8 +252,45 @@ export default pattern(() => {
       // Not analyzed: unknown, whatever its lists say.
       requirementFit(dish("Stew", "main", ["vegan"], {}, "none"), "vegan") ===
         "unknown" &&
-      // No main ingredients known: "no-x" stays unknown.
-      requirementFit(dish("Cake", "dessert", []), "no-nuts") === "unknown";
+      // No ingredient list: "no-x" stays unknown.
+      requirementFit(dish("Cake", "dessert", []), "no-cilantro") ===
+        "unknown";
+  });
+
+  // Each of these once read as "fits": unknown must never read as safe.
+  const assert_no_false_fits = assert(() => {
+    const custard = {
+      ...dish("Custard", "dessert", [], {
+        incompatible: ["egg-free"],
+        primaryIngredients: ["custard", "milk"],
+      }),
+      ingredients: ["milk", "sugar", "vanilla"],
+    };
+    const pecanPie = {
+      ...dish("Pecan Pie", "dessert", [], {
+        primaryIngredients: ["pecans", "butter", "corn syrup"],
+      }),
+      ingredients: ["pecans", "butter", "corn syrup", "flour"],
+    };
+    const cheesy = {
+      ...dish("Gratin", "side", [], { primaryIngredients: ["cheeses"] }),
+      ingredients: ["potatoes", "cheeses"],
+    };
+    const rolls = dish("Rolls", "bread", [], {
+      primaryIngredients: ["rolls"],
+    }, "declared");
+    return requirementFit(custard, "no-eggs") === "conflicts" &&
+      requirementFit(custard, "no eggs") === "conflicts" &&
+      requirementFit(pecanPie, "no-nuts") === "unknown" &&
+      requirementFit(pecanPie, "no-dairy") === "unknown" &&
+      requirementFit(cheesy, "no-cheese") === "conflicts" &&
+      // A prepared food lists no ingredients in full.
+      requirementFit(rolls, "no-mushrooms") === "unknown" &&
+      // Not "pea" in "peanut".
+      requirementFit(pecanPie, "no-peas") === "fits" &&
+      tagFor("no nuts") === "nut-free" &&
+      tagFor("no-mushrooms") === "no-mushrooms" &&
+      tagFor("Vegan") === "vegan";
   });
 
   const assert_dietary_checks = assert(() => {
@@ -224,7 +307,9 @@ export default pattern(() => {
       sam.fits.join() === "Pie (out of date)" &&
       sam.conflicts.join() === "Turkey" &&
       sam.unknown.join() === "Rolls" &&
-      sam.warning === "No main is known to suit Sam (vegan)." &&
+      // The only fit is out of date, so it does not clear the warning.
+      sam.warning ===
+        "Only out-of-date analyses say something suits Sam (vegan): re-analyze." &&
       other.guest === "Guest 2" &&
       other.warning ===
         "Nothing on the menu is known to suit Guest 2 (no-lamb).";
@@ -254,20 +339,40 @@ export default pattern(() => {
         { name: "rolls", type: "prepared", existingName: "", quote: "Rolls" },
       ],
       unchecked: [3],
-      libraryRecipes: ["Mashed Potatoes"],
+      libraryRecipes: ["Mashed Potatoes", "Green Beans"],
       libraryPrepared: ["Costco Rotisserie Chicken"],
       inMeal: ["Turkey"],
     });
     const [chicken, beans, turkeyStep, rollsStep, again] = steps;
     return chicken.kind === "link" && chicken.type === "prepared" &&
       chicken.index === 0 && chicken.name === "Costco Rotisserie Chicken" &&
-      beans.kind === "create" && beans.category === "other" &&
-      beans.servings === 4 &&
+      // No match named, but a recipe has exactly its name: linked, not
+      // created again.
+      beans.kind === "link" && beans.type === "recipe" && beans.index === 1 &&
       turkeyStep.kind === "skip" &&
       turkeyStep.reason === "already in the meal" &&
       rollsStep.kind === "skip" && rollsStep.reason === "unchecked" &&
       // The unchecked one does not block a repeat from being created.
       again.kind === "create" && again.type === "prepared";
+  });
+
+  const assert_create_clamps = assert(() => {
+    const [made] = planLinking({
+      items: [{
+        name: "Succotash",
+        type: "recipe",
+        existingName: "",
+        quote: "succotash",
+        category: "veg",
+        servings: 0,
+      }],
+      unchecked: [],
+      libraryRecipes: [],
+      libraryPrepared: [],
+      inMeal: [],
+    });
+    return made.kind === "create" && made.category === "other" &&
+      made.servings === 4;
   });
 
   return {
@@ -276,6 +381,8 @@ export default pattern(() => {
       { assertion: assert_load_rules },
       { assertion: assert_one_oven_conflict },
       { assertion: assert_second_oven_resolves },
+      { assertion: assert_search_beats_greedy },
+      { assertion: assert_late_warning },
       { assertion: assert_touching_is_not_overlap },
       { assertion: assert_no_oven },
       { assertion: assert_timeline_layout },
@@ -283,8 +390,10 @@ export default pattern(() => {
       { assertion: assert_oven_field_clamped },
       { assertion: assert_balance },
       { assertion: assert_requirement_fit },
+      { assertion: assert_no_false_fits },
       { assertion: assert_dietary_checks },
       { assertion: assert_plan_linking },
+      { assertion: assert_create_clamps },
     ],
   };
 });

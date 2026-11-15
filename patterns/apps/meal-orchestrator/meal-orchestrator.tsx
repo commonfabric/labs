@@ -36,6 +36,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  type DietaryCompatibility,
   type PreparedFoodForMeal,
   type RecipeForMeal,
 } from "../food-recipe/schemas.tsx";
@@ -45,6 +46,7 @@ import {
   clampCategory,
   DEFAULT_OVEN,
   dietaryChecks,
+  type DietDish,
   type GuestDietaryProfile,
   type LinkAnalysis,
   LINKING_SYSTEM,
@@ -60,22 +62,31 @@ import {
   planLinking,
   planOvens,
   type RequirementCheck,
+  requirementFit,
   stepSummary,
   SUGGESTIONS_SYSTEM,
   suggestionsPrompt,
+  tagFor,
+  timeLabel,
   timeline,
   withOvenField,
 } from "./meal-logic.ts";
 
-/** A recipe in the meal. `analyzeDiet` is the recipe's own stream, used to
- * analyze a dish whose dietary fit is unknown or out of date. */
-export interface MealRecipe extends RecipeForMeal {
+/**
+ * A recipe in the meal: the `RecipeForMeal` role with every field optional,
+ * so one dish missing a field (an older recipe, or one still starting up)
+ * reads as that field missing instead of voiding the whole list. Every read
+ * defaults. `analyzeDiet` is the recipe's own stream, used to analyze a dish
+ * whose dietary fit is unknown or out of date.
+ */
+export interface MealRecipe extends Partial<RecipeForMeal> {
   analyzeDiet?: Stream<void>;
 }
 
-/** A prepared food in the meal. `addDietaryTag` records that it suits a
+/** A prepared food in the meal: the `PreparedFoodForMeal` role, every field
+ * optional for the same reason. `addDietaryTag` records that it suits a
  * requirement, once someone has checked. */
-export interface MealPreparedFood extends PreparedFoodForMeal {
+export interface MealPreparedFood extends Partial<PreparedFoodForMeal> {
   addDietaryTag?: Stream<{ tag: string }>;
 }
 
@@ -147,7 +158,7 @@ export interface MealOrchestratorOutput {
   /** Run the dietary analysis of every recipe not analyzed or out of date. */
   analyzeDiets: Stream<void>;
   /** Record that a prepared food suits a requirement. */
-  markSuits: Stream<{ name: string; requirement: string }>;
+  markSuits: Stream<{ index: number; requirement: string }>;
   /** Ask the model for menu suggestions. */
   suggest: Stream<void>;
   clearSuggestions: Stream<void>;
@@ -169,21 +180,71 @@ const addRecipe = handler<
   unknown,
   { list: Writable<MealRecipe[]>; dish: Writable<MealRecipe> }
 >((_, { list, dish }) => {
-  list.push(dish);
+  list.addUnique(dish);
 });
 
 const addPreparedFood = handler<
   unknown,
   { list: Writable<MealPreparedFood[]>; dish: Writable<MealPreparedFood> }
 >((_, { list, dish }) => {
-  list.push(dish);
+  list.addUnique(dish);
 });
 
 /** A recipe whose diet is unknown or out of date and that has ingredients
  * to analyze (the analyzer does nothing without them). */
-const canAnalyze = (r: RecipeForMeal | undefined): boolean =>
+const canAnalyze = (r: MealRecipe | undefined): boolean =>
   !!r && r.dietarySource !== "analyzed" &&
   (r.ingredients ?? []).some((i) => (i?.item ?? "").trim() !== "");
+
+/** A recipe row's second line. */
+const recipeDetail = (r: MealRecipe | undefined): string =>
+  r
+    ? `${r.category ?? "other"} · serves ${r.servings ?? "?"} · ${
+      DIET_LABEL[r.dietarySource ?? "none"] ?? ""
+    }`
+    : "missing";
+
+/** A prepared food row's second line. */
+const preparedDetail = (p: MealPreparedFood | undefined): string =>
+  p
+    ? `${p.category ?? "other"} · serves ${p.servings ?? "?"}${
+      p.requiresReheating ? " · reheat" : ""
+    }${p.prepTime ? ` · ${p.prepTime} min prep` : ""}`
+    : "missing";
+
+interface PreparedDiet {
+  index: number;
+  name: string;
+  dish: DietDish | null;
+}
+
+/** The prepared foods whose fit for `requirement` is unknown, as buttons for
+ * recording that someone checked. A meal has a few of each, so the scan per
+ * requirement is cheap. */
+const markable = (
+  foods: readonly PreparedDiet[],
+  requirement: string,
+): { index: number; label: string }[] =>
+  foods
+    .filter((p) => p.dish && requirementFit(p.dish, requirement) === "unknown")
+    .map((p) => ({
+      index: p.index,
+      label: `I checked: ${p.name} is ${tagFor(requirement)}`,
+    }));
+
+/** A dish's dietary lists copied out as plain data (empty when unknown), so
+ * the meal's derived views hold values rather than links into the dish. */
+const plainDiet = (
+  d: Partial<DietaryCompatibility> | undefined,
+): DietaryCompatibility => ({
+  compatible: [...(d?.compatible ?? [])],
+  incompatible: [...(d?.incompatible ?? [])],
+  warnings: [...(d?.warnings ?? [])],
+  primaryIngredients: [...(d?.primaryIngredients ?? [])],
+});
+
+const plural = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
 
 const DIET_LABEL: Record<string, string> = {
   analyzed: "diet analyzed",
@@ -323,8 +384,14 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     );
     const guestText = computed(() => String(guestCount.get()));
     const burnerText = computed(() => String(stovetopBurners.get()));
-    const ovenCount = computed(() => ovens.get().length);
-    const guestProfileCount = computed(() => dietaryProfiles.get().length);
+    const ovenTitle = computed(() =>
+      `Equipment (${plural(ovens.get().length, "oven", "ovens")})`
+    );
+    const needsTitle = computed(() =>
+      `Dietary Needs (${
+        plural(dietaryProfiles.get().length, "guest", "guests")
+      } with needs)`
+    );
     const recipeCount = computed(() => recipes.get().filter(Boolean).length);
     const preparedCount = computed(() =>
       preparedFoods.get().filter(Boolean).length
@@ -369,6 +436,11 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     });
     const hasChoices = computed(() =>
       recipeChoices.length + preparedChoices.length > 0
+    );
+    const noChoicesText = computed(() =>
+      libraryFilter.get().trim()
+        ? "Nothing here matches the filter."
+        : "No other recipes or prepared foods found here. Link them from the planning notes to create them."
     );
 
     // --- Equipment and guests -------------------------------------------------
@@ -419,29 +491,6 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
       preparedFoods.set(preparedFoods.get().filter((_, i) => i !== index));
     });
 
-    const recipeRows = computed(() =>
-      recipes.get().map((r, index) => ({
-        index,
-        name: (r?.name ?? "").trim() || "Untitled Recipe",
-        detail: r
-          ? `${r.category} · serves ${r.servings} · ${
-            DIET_LABEL[r.dietarySource] ?? ""
-          }`
-          : "missing",
-      }))
-    );
-    const preparedRows = computed(() =>
-      preparedFoods.get().map((p, index) => ({
-        index,
-        name: (p?.name ?? "").trim() || "Untitled Item",
-        detail: p
-          ? `${p.category} · serves ${p.servings}${
-            p.requiresReheating ? " · reheat" : ""
-          }${p.prepTime ? ` · ${p.prepTime} min prep` : ""}`
-          : "missing",
-      }))
-    );
-
     const needsAnalysis = computed(() =>
       recipes.get().filter(canAnalyze).length
     );
@@ -452,10 +501,12 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
       });
     });
 
+    // Writes a declared tag into the prepared food itself, where every meal
+    // using it sees it; the button says it is for after checking the label.
     const markSuits = action(
-      ({ name, requirement }: { name: string; requirement: string }) => {
-        const tag = normalizeRequirement(requirement);
-        const food = preparedFoods.get().find((p) => p?.name === name);
+      ({ index, requirement }: { index: number; requirement: string }) => {
+        const tag = tagFor(requirement);
+        const food = preparedFoods.get()[index];
         if (tag && food) food.addDietaryTag?.send({ tag });
       },
     );
@@ -463,16 +514,34 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     // --- Analysis -------------------------------------------------------------
 
     const ovenPlan = computed(() =>
-      planOvens(recipes.get().filter(Boolean), ovens.get())
+      planOvens(
+        recipes.get().filter(Boolean).map((r) => ({
+          name: r.name ?? "",
+          stepGroups: r.stepGroups ?? [],
+        })),
+        ovens.get(),
+      )
     );
     const drawn = computed(() => timeline(ovenPlan, mealTime.get()));
     const hasTimeline = computed(() => ovenPlan.events.length > 0);
     const hasOvenNotes = computed(() =>
       ovenPlan.events.length + ovenPlan.offTimeline.length > 0
     );
-    const conflictCount = computed(() => ovenPlan.conflicts.length);
+    const ovenHeading = computed(() =>
+      `Oven Timeline (${
+        plural(ovenPlan.conflicts.length, "conflict", "conflicts")
+      })`
+    );
+    const conflictLines = computed(() =>
+      ovenPlan.conflicts.map((c) => ({
+        head: `${c.dish} (${c.step}, ${c.temperature}°F from ${
+          timeLabel(mealTime.get(), c.at)
+        })`,
+        reason: c.reason,
+      }))
+    );
     const offTimelineLines = computed(() =>
-      ovenPlan.offTimeline.map((o) => `${o.dish} (${o.step}): ${o.reason}`)
+      ovenPlan.offTimeline.map((o) => `${o.dish} (${o.step}) is ${o.reason}`)
     );
 
     const allDishes = computed(() => [
@@ -480,15 +549,17 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
         name: (r.name ?? "").trim() || "Untitled Recipe",
         servings: r.servings ?? 0,
         category: clampCategory(r.category),
-        dietaryCompatibility: r.dietaryCompatibility,
+        dietaryCompatibility: plainDiet(r.dietaryCompatibility),
         dietarySource: r.dietarySource ?? "none",
+        ingredients: (r.ingredients ?? []).map((i) => i?.item ?? "")
+          .filter((i) => i.trim() !== ""),
         kind: "recipe" as const,
       })),
       ...preparedFoods.get().filter(Boolean).map((p) => ({
         name: (p.name ?? "").trim() || "Untitled Item",
         servings: p.servings ?? 0,
         category: clampCategory(p.category),
-        dietaryCompatibility: p.dietaryCompatibility,
+        dietaryCompatibility: plainDiet(p.dietaryCompatibility),
         dietarySource: p.dietarySource ?? "none",
         kind: "prepared" as const,
       })),
@@ -501,8 +572,21 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
     const dietary = computed(() =>
       dietaryChecks(allDishes, dietaryProfiles.get())
     );
-    const preparedNames = computed(() =>
-      allDishes.filter((d) => d.kind === "prepared").map((d) => d.name)
+    // Prepared foods by their index in `preparedFoods`, for marking one as
+    // suiting a need once someone has checked.
+    const preparedDiet = computed((): PreparedDiet[] =>
+      preparedFoods.get().map((p, index) => ({
+        index,
+        name: (p?.name ?? "").trim() || "Untitled Item",
+        dish: p
+          ? {
+            name: p.name ?? "",
+            category: clampCategory(p.category),
+            dietaryCompatibility: plainDiet(p.dietaryCompatibility),
+            dietarySource: p.dietarySource ?? "none",
+          }
+          : null,
+      }))
     );
     const dietaryRows = computed(() =>
       dietary.map((c) => ({
@@ -511,7 +595,7 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
         fitsText: c.fits.join(", "),
         conflictsText: c.conflicts.join(", "),
         unknownText: c.unknown.join(", "),
-        canMark: c.unknown.filter((n) => preparedNames.includes(n)),
+        canMark: markable(preparedDiet, c.requirement),
       }))
     );
     const hasDietary = computed(() => dietary.length > 0);
@@ -548,7 +632,8 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
           knownProblems: [
             ...balance.warnings,
             ...dietary.map((c) => c.warning).filter(Boolean),
-            ...ovenPlan.conflicts.map((c) => c.reason),
+            ...ovenPlan.conflicts.map((c) => `${c.dish}: ${c.reason}`),
+            ...ovenPlan.warnings,
           ],
         }) + retry,
       );
@@ -608,6 +693,8 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
         return {
           index,
           checked,
+          // A dish already in the meal is skipped whatever the box says.
+          toggleable: !(step?.kind === "skip" && step.reason !== "unchecked"),
           name: step && step.kind !== "skip"
             ? step.name
             : (item.name ?? "").trim() || "(unnamed)",
@@ -718,10 +805,15 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
             : null}
           {reviewRows.map((row) => (
             <div style={styles.reviewItem}>
-              <cf-checkbox
-                checked={row.checked}
-                oncf-change={() => toggleLinkItem.send({ index: row.index })}
-              />
+              {row.toggleable
+                ? (
+                  <cf-checkbox
+                    checked={row.checked}
+                    oncf-change={() =>
+                      toggleLinkItem.send({ index: row.index })}
+                  />
+                )
+                : null}
               <cf-vstack gap="1">
                 <strong>{row.name}</strong>
                 <div style={styles.muted}>{row.action}</div>
@@ -795,7 +887,7 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
               <cf-vstack gap="2">
                 <div style={styles.sectionHeader}>
                   <h3 style={styles.section}>
-                    Equipment ({ovenCount} ovens)
+                    {ovenTitle}
                   </h3>
                   <cf-button variant="secondary" onClick={addOven}>
                     + Add Oven
@@ -864,7 +956,7 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
               <cf-vstack gap="2">
                 <div style={styles.sectionHeader}>
                   <h3 style={styles.section}>
-                    Dietary Needs ({guestProfileCount} guests)
+                    {needsTitle}
                   </h3>
                   <cf-button variant="secondary" onClick={addGuest}>
                     + Add Guest
@@ -946,19 +1038,28 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                     )
                     : null}
                 </div>
-                {recipeRows.map((row) => (
+                {recipes.map((recipe, index) => (
                   <div style={styles.dishRow}>
                     <div>
-                      <div style={styles.dishName}>{row.name}</div>
-                      <div style={styles.muted}>{row.detail}</div>
+                      <div style={styles.dishName}>
+                        {computed(() =>
+                          (recipe?.name ?? "").trim() || "Untitled Recipe"
+                        )}
+                      </div>
+                      <div style={styles.muted}>
+                        {computed(() => recipeDetail(recipe))}
+                      </div>
                     </div>
-                    <cf-button
-                      variant="ghost"
-                      aria-label="Remove recipe"
-                      onClick={() => removeRecipe.send({ index: row.index })}
-                    >
-                      ×
-                    </cf-button>
+                    <cf-hstack gap="1" align="center">
+                      <cf-cell-link $cell={recipe} label="Open" static />
+                      <cf-button
+                        variant="ghost"
+                        aria-label="Remove recipe"
+                        onClick={() => removeRecipe.send({ index })}
+                      >
+                        ×
+                      </cf-button>
+                    </cf-hstack>
                   </div>
                 ))}
               </cf-vstack>
@@ -969,20 +1070,28 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                 <h3 style={styles.section}>
                   🛒 Prepared Foods ({preparedCount})
                 </h3>
-                {preparedRows.map((row) => (
+                {preparedFoods.map((food, index) => (
                   <div style={styles.dishRow}>
                     <div>
-                      <div style={styles.dishName}>{row.name}</div>
-                      <div style={styles.muted}>{row.detail}</div>
+                      <div style={styles.dishName}>
+                        {computed(() =>
+                          (food?.name ?? "").trim() || "Untitled Item"
+                        )}
+                      </div>
+                      <div style={styles.muted}>
+                        {computed(() => preparedDetail(food))}
+                      </div>
                     </div>
-                    <cf-button
-                      variant="ghost"
-                      aria-label="Remove prepared food"
-                      onClick={() =>
-                        removePreparedFood.send({ index: row.index })}
-                    >
-                      ×
-                    </cf-button>
+                    <cf-hstack gap="1" align="center">
+                      <cf-cell-link $cell={food} label="Open" static />
+                      <cf-button
+                        variant="ghost"
+                        aria-label="Remove prepared food"
+                        onClick={() => removePreparedFood.send({ index })}
+                      >
+                        ×
+                      </cf-button>
+                    </cf-hstack>
                   </div>
                 ))}
               </cf-vstack>
@@ -995,12 +1104,9 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                   $value={libraryFilter}
                   placeholder="Filter recipes and prepared foods..."
                 />
-                {hasChoices ? null : (
-                  <div style={styles.muted}>
-                    No other recipes or prepared foods found here. Link them
-                    from the planning notes to create them.
-                  </div>
-                )}
+                {hasChoices
+                  ? null
+                  : <div style={styles.muted}>{noChoicesText}</div>}
                 <div style={styles.chips}>
                   {recipeChoices.map((dish) => (
                     <cf-button
@@ -1076,17 +1182,17 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                               {row.unknownText
                                 ? <div>? Unknown: {row.unknownText}</div>
                                 : null}
-                              {row.canMark.map((name) => (
+                              {row.canMark.map((mark) => (
                                 <cf-button
                                   variant="ghost"
                                   size="sm"
                                   onClick={() =>
                                     markSuits.send({
-                                      name,
+                                      index: mark.index,
                                       requirement: row.requirement,
                                     })}
                                 >
-                                  Mark {name} as {row.requirement}
+                                  {mark.label}
                                 </cf-button>
                               ))}
                             </div>
@@ -1132,12 +1238,15 @@ const MealOrchestrator = pattern<MealOrchestratorInput, MealOrchestratorOutput>(
                 <cf-card>
                   <cf-vstack gap="2">
                     <h3 style={styles.section}>
-                      Oven Timeline ({conflictCount} conflicts)
+                      {ovenHeading}
                     </h3>
-                    {ovenPlan.conflicts.map((c) => (
+                    {conflictLines.map((c) => (
                       <div style={styles.conflict}>
-                        <strong>{c.dish}</strong> ({c.step}): {c.reason}
+                        <strong>{c.head}</strong>: {c.reason}
                       </div>
+                    ))}
+                    {ovenPlan.warnings.map((w) => (
+                      <div style={styles.warning}>{w}</div>
                     ))}
                     {hasTimeline
                       ? (

@@ -70,6 +70,12 @@ export const llmMocks = [
           existingName: "",
           quote: "the turkey",
         },
+        {
+          name: "Cranberry Sauce",
+          type: "prepared",
+          existingName: "",
+          quote: "maybe cranberry sauce",
+        },
       ],
     },
   },
@@ -129,7 +135,8 @@ export default pattern(() => {
   const assert_oven_conflict = assert(() =>
     meal.ovenPlan.conflicts.length === 1 &&
     meal.ovenPlan.conflicts[0].dish === "Pumpkin Pie" &&
-    hasText(meal[UI], "Oven Timeline (1 conflicts)") &&
+    hasText(meal[UI], "Oven Timeline (1 conflict)") &&
+    hasText(meal[UI], "Pumpkin Pie (Bake, 425°F from 3:00 PM (2h before))") &&
     hasText(meal[UI], "Oven 1 has Turkey at 325°F.") &&
     hasText(meal[UI], "3:00 PM – 3:50 PM")
   );
@@ -175,7 +182,10 @@ export default pattern(() => {
       vegan?.fits.join() === "Pumpkin Pie" &&
       vegan?.conflicts.join() === "Turkey" &&
       vegan?.warning === "No main is known to suit Sam (vegan)." &&
-      nuts?.fits.join() === "Turkey,Pumpkin Pie" &&
+      // Nuts are a class of food: only a nut-free tag could say a dish has
+      // none, so missing from the main ingredients is not enough.
+      nuts?.fits.length === 0 &&
+      nuts?.unknown.join() === "Turkey,Pumpkin Pie" &&
       !hasText(meal[UI], "Analyze Diets");
   });
 
@@ -183,43 +193,46 @@ export default pattern(() => {
     typeInto(
       meal[UI],
       "Rough ideas: turkey, Mom's stuffing, pie from Costco, Sam brings rolls...",
-      "Sam brings rolls, plus green beans and the turkey",
+      "Sam brings rolls, plus green beans and the turkey, maybe cranberry sauce",
     )
   );
   const action_link = action(() =>
     clickButton(meal[UI], "Link Dishes from Notes")
   );
   const assert_review = assert(() =>
-    meal.linkAnalysis?.items.length === 3 &&
+    meal.linkAnalysis?.items.length === 4 &&
     hasText(meal[UI], "Review Dishes from Notes") &&
     hasText(meal[UI], "Create new prepared food") &&
     hasText(meal[UI], "Skip: already in the meal") &&
     hasText(meal[UI], '"Sam brings rolls"')
   );
 
-  // Uncheck the green beans, then add the rest.
+  // Uncheck the cranberry sauce, then add the rest.
   const action_apply = action(() => {
-    meal.toggleLinkItem.send({ index: 1 });
+    meal.toggleLinkItem.send({ index: 3 });
     meal.applyLinking.send();
   });
   const assert_applied = assert(() =>
     meal.linkAnalysis === null &&
-    meal.recipes.length === 2 &&
+    meal.recipes.length === 3 &&
+    meal.recipes[2]?.name === "Green Beans" &&
+    meal.recipes[2]?.category === "vegetable" &&
+    meal.recipes[2]?.dietarySource === "none" &&
     meal.preparedFoods.length === 1 &&
     meal.preparedFoods[0]?.name === "Dinner Rolls" &&
     meal.preparedFoods[0]?.servings === 12 &&
     meal.preparedFoods[0]?.category === "bread" &&
-    meal.mentionable.length === 1 &&
+    meal.mentionable.length === 2 &&
     meal.balance.categories.map((c) => c.category).join() ===
-      "main,dessert,bread"
+      "main,vegetable,dessert,bread"
   );
 
   // The rolls' fit is declared by hand; marking them records it on the rolls.
   const action_mark = action(() =>
-    clickButton(meal[UI], "Mark Dinner Rolls as vegan")
+    clickButton(meal[UI], "I checked: Dinner Rolls is vegan")
   );
   const assert_marked = assert(() =>
-    meal.preparedFoods[0]?.dietaryCompatibility.compatible.join() ===
+    meal.preparedFoods[0]?.dietaryCompatibility?.compatible.join() ===
       "vegan" &&
     meal.dietary.find((c) => c.requirement === "vegan")?.fits.join() ===
       "Pumpkin Pie,Dinner Rolls"
@@ -228,7 +241,7 @@ export default pattern(() => {
   const action_guests = action(() => guestCount.set(12));
   const assert_short = assert(() =>
     meal.balance.warnings.join("|") ===
-      "Mains serve 10 for 12 guests.|Desserts serve 8 for 12 guests."
+      "Mains serve 10 for 12 guests.|Vegetables serve 4 for 12 guests.|Desserts serve 8 for 12 guests."
   );
 
   const action_suggest = action(() =>
@@ -244,12 +257,11 @@ export default pattern(() => {
     meal.removeOven.send({ index: 1 });
   });
   const assert_removed = assert(() =>
-    meal.recipes.length === 1 &&
+    meal.recipes.length === 2 &&
     meal.recipes[0]?.name === "Pumpkin Pie" &&
     meal.ovens.length === 1 &&
     meal.ovenPlan.conflicts.length === 0 &&
-    // Removed from the meal, the created rolls stay published.
-    meal.mentionable.length === 1
+    meal.mentionable.length === 2
   );
 
   const assert_fs = assert(() =>

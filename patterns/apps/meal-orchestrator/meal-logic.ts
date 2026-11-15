@@ -126,7 +126,7 @@ export const ovenEvents = (
         offTimeline.push({
           dish,
           step,
-          reason: "not scheduled: set its minutes before serving",
+          reason: "not scheduled (set its minutes before serving)",
         });
       } else if (!(minutes > 0)) {
         offTimeline.push({ dish, step, reason: "its oven time is not set" });
@@ -205,6 +205,8 @@ export interface OvenConflict {
   step: string;
   /** Minutes before serving the dish has nowhere to go. */
   at: number;
+  /** °F the dish wants. */
+  temperature: number;
   /** Who else is involved: the dishes it collides with. */
   with: string[];
   reason: string;
@@ -214,6 +216,8 @@ export interface OvenPlan {
   events: PlacedEvent[];
   conflicts: OvenConflict[];
   offTimeline: OffTimeline[];
+  /** Problems short of a conflict: a dish not out by serving time. */
+  warnings: string[];
 }
 
 const problemText = (
@@ -237,11 +241,100 @@ const problemText = (
   }`;
 };
 
+/** Why `event` cannot join `placed` in oven `o`, or null when it can. The
+ * load is checked at every moment something goes in while `event` is in. */
+const placementProblem = (
+  placed: readonly PlacedEvent[],
+  event: OvenEvent,
+  o: number,
+  oven: OvenConfig,
+): { text: string; involved: string[] } | null => {
+  const sharing = placed.filter((p) => p.oven === o && overlap(p, event));
+  const moments = [event.start].concat(
+    sharing.map((p) => p.start).filter((t) => inOvenAt(event, t)),
+  );
+  for (const t of moments) {
+    const there = sharing.filter((p) => inOvenAt(p, t));
+    const load: OvenEvent[] = [...there, event];
+    const problem = ovenLoadProblem(load, oven);
+    if (problem) {
+      return {
+        text: problemText(problem, `Oven ${o + 1}`, there),
+        involved: there.map((p) => p.dish),
+      };
+    }
+  }
+  return null;
+};
+
+/** Ovens to try for `event`, best first: one already at its temperature,
+ * then the smallest. */
+const ovenOrder = (
+  placed: readonly PlacedEvent[],
+  event: OvenEvent,
+  ovens: readonly OvenConfig[],
+): number[] => {
+  const warm = (o: number) =>
+    placed.some((p) =>
+      p.oven === o && overlap(p, event) &&
+      Math.abs(p.temperature - event.temperature) <= TEMP_TOLERANCE
+    );
+  return ovens.map((_, o) => o).sort((a, b) =>
+    Number(warm(b)) - Number(warm(a)) ||
+    ovens[a].rackPositions * ovens[a].physicalRacks -
+      ovens[b].rackPositions * ovens[b].physicalRacks ||
+    a - b
+  );
+};
+
+/** How many placements the exact search may try before settling for the
+ * greedy plan. A meal has a handful of oven steps, so this is rarely hit. */
+const SEARCH_BUDGET = 20000;
+
+/** An oven for every event with no conflict, found by backtracking, or null
+ * when there is none (or the search ran out of budget). */
+const searchPlan = (
+  sorted: readonly OvenEvent[],
+  ovens: readonly OvenConfig[],
+): PlacedEvent[] | null => {
+  const placed: PlacedEvent[] = [];
+  const tries: number[][] = [];
+  const next: number[] = [];
+  let budget = SEARCH_BUDGET;
+  let i = 0;
+  while (i < sorted.length) {
+    if (budget-- <= 0) return null;
+    if (tries[i] === undefined) {
+      tries[i] = ovenOrder(placed, sorted[i], ovens);
+      next[i] = 0;
+    }
+    let chosen = -1;
+    while (next[i] < tries[i].length && chosen < 0) {
+      const o = tries[i][next[i]++];
+      if (!placementProblem(placed, sorted[i], o, ovens[o])) chosen = o;
+    }
+    if (chosen >= 0) {
+      placed.push({ ...sorted[i], oven: chosen });
+      i++;
+    } else {
+      // Nothing fits here: undo the previous choice and try its next oven.
+      tries.length = i;
+      if (i === 0) return null;
+      placed.pop();
+      i--;
+    }
+  }
+  return placed;
+};
+
 /**
- * Gives each oven event an oven, earliest first, so that every oven's load
- * fits it at every moment. A dish stays in one oven for its whole time. An
- * event no oven can take is placed nowhere and reported as a conflict, naming
- * what each oven holds then.
+ * Gives each oven event an oven so that every oven's load fits it at every
+ * moment; a dish stays in one oven for its whole time. It looks for an
+ * assignment with no conflict at all. When there is none, it places dishes
+ * earliest first, each in the best oven that takes it, and reports each dish
+ * no oven can take, naming what each oven holds then.
+ *
+ * It also warns of a dish still in the oven after serving time.
  */
 export const planOvens = (
   recipes: readonly OvenRecipe[],
@@ -252,30 +345,27 @@ export const planOvens = (
     b.start - a.start || (b.start - b.end) - (a.start - a.end) ||
     a.id.localeCompare(b.id)
   );
+  const warnings = sorted
+    .filter((e) => e.end < 0)
+    .map((e) =>
+      `${e.dish} (${e.step}) comes out ${formatBefore(e.end)} serving.`
+    );
+  const exact = ovens.length > 0 ? searchPlan(sorted, ovens) : null;
+  if (exact) return { events: exact, conflicts: [], offTimeline, warnings };
   const placed: PlacedEvent[] = [];
   const conflicts: OvenConflict[] = [];
   for (const event of sorted) {
     const reasons: string[] = [];
     const involved = new Set<string>();
     let chosen: number | null = null;
-    for (let o = 0; o < ovens.length && chosen === null; o++) {
-      const sharing = placed.filter((p) => p.oven === o && overlap(p, event));
-      const moments = [
-        event.start,
-        ...sharing.map((p) => p.start).filter((t) => inOvenAt(event, t)),
-      ];
-      let failure: string | null = null;
-      for (const t of moments) {
-        const there = sharing.filter((p) => inOvenAt(p, t));
-        const problem = ovenLoadProblem([...there, event], ovens[o]);
-        if (problem) {
-          failure = problemText(problem, `Oven ${o + 1}`, there);
-          there.forEach((p) => involved.add(p.dish));
-          break;
-        }
+    for (const o of ovenOrder(placed, event, ovens)) {
+      const problem = placementProblem(placed, event, o, ovens[o]);
+      if (!problem) {
+        chosen = o;
+        break;
       }
-      if (failure === null) chosen = o;
-      else reasons.push(failure);
+      reasons.push(problem.text);
+      problem.involved.forEach((d) => involved.add(d));
     }
     placed.push({ ...event, oven: chosen });
     if (chosen === null) {
@@ -284,6 +374,7 @@ export const planOvens = (
         dish: event.dish,
         step: event.step,
         at: event.start,
+        temperature: event.temperature,
         with: [...involved],
         reason: ovens.length === 0
           ? "No oven is set up."
@@ -291,17 +382,18 @@ export const planOvens = (
       });
     }
   }
-  return { events: placed, conflicts, offTimeline };
+  return { events: placed, conflicts, offTimeline, warnings };
 };
 
 /** "2h 30m before", "serving", "15m after". */
 export const formatBefore = (minutes: number): string => {
-  if (minutes === 0) return "serving";
-  const abs = Math.abs(minutes);
+  const rounded = Math.round(minutes);
+  if (rounded === 0) return "serving";
+  const abs = Math.abs(rounded);
   const h = Math.floor(abs / 60);
   const m = abs % 60;
   const span = h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
-  return minutes > 0 ? `${span} before` : `${span} after`;
+  return rounded > 0 ? `${span} before` : `${span} after`;
 };
 
 /** The clock time `minutesBefore` a serving time of "HH:MM", as "4:30 PM",
@@ -309,7 +401,8 @@ export const formatBefore = (minutes: number): string => {
 export const clockAt = (mealTime: string, minutesBefore: number): string => {
   const match = (mealTime ?? "").match(/^(\d{1,2}):(\d{2})/);
   if (!match) return "";
-  const total = Number(match[1]) * 60 + Number(match[2]) - minutesBefore;
+  const total = Number(match[1]) * 60 + Number(match[2]) -
+    Math.round(minutesBefore);
   const day = 24 * 60;
   const inDay = ((total % day) + day) % day;
   const h = Math.floor(inDay / 60);
@@ -318,7 +411,11 @@ export const clockAt = (mealTime: string, minutesBefore: number): string => {
   const clock = `${hour12}:${String(m).padStart(2, "0")} ${
     h < 12 ? "AM" : "PM"
   }`;
-  return total < 0 ? `${clock} (day before)` : clock;
+  return total < 0
+    ? `${clock} (day before)`
+    : total >= day
+    ? `${clock} (next day)`
+    : clock;
 };
 
 /** A time on the timeline in words: the clock time when the serving time is
@@ -462,6 +559,9 @@ export interface DietDish {
   category: RecipeCategory;
   dietaryCompatibility: DietaryCompatibility;
   dietarySource: DietarySource;
+  /** Every ingredient, for a cooked recipe. Absent for a prepared food,
+   * whose ingredients nobody has listed in full. */
+  ingredients?: readonly string[];
 }
 
 export type Fit = "fits" | "conflicts" | "unknown";
@@ -484,14 +584,69 @@ const IMPLIED: Record<string, string[]> = {
   "nut-free": ["peanut-free", "tree-nut-free"],
 };
 
-const stem = (word: string) => word.trim().toLowerCase().replace(/(es|s)$/, "");
+/** A word's singular form, roughly: "tomatoes" → "tomato", "cheeses" →
+ * "cheese", "berries" → "berry". */
+export const stem = (word: string): string => {
+  const w = word.trim().toLowerCase();
+  if (w.endsWith("ies") && w.length > 4) return `${w.slice(0, -3)}y`;
+  if (/(oes|ches|shes|xes|sses)$/.test(w)) return w.slice(0, -2);
+  if (w.endsWith("s") && !w.endsWith("ss") && w.length > 3) {
+    return w.slice(0, -1);
+  }
+  return w;
+};
 
 /**
- * Whether `dish` suits one requirement. A dish nobody has analyzed or
- * declared is unknown, never safe. A tag the dish lists (or a stricter one
- * that implies it) decides; "no-X" and "X-free" also look for X among the
- * dish's main ingredients and warnings, and "no-X" counts as met when the
- * main ingredients are known and none is X.
+ * Words that name a whole class of food rather than one ingredient. Whether a
+ * dish is free of one cannot be read from its ingredient names (pecans are
+ * nuts, butter is dairy), so only a dietary tag says it fits.
+ */
+const FOOD_CLASSES = new Set([
+  "nut",
+  "peanut",
+  "tree-nut",
+  "dairy",
+  "lactose",
+  "milk",
+  "gluten",
+  "wheat",
+  "grain",
+  "meat",
+  "pork",
+  "beef",
+  "lamb",
+  "poultry",
+  "shellfish",
+  "seafood",
+  "fish",
+  "egg",
+  "soy",
+  "sesame",
+  "alcohol",
+  "sugar",
+  "animal-product",
+  "nightshade",
+]);
+
+/** Whether `text` names `x` (a stemmed word or phrase): as one of its words,
+ * so "peanut" is not "pea" and "eggplant" is not "egg". */
+const mentions = (text: string, x: string): boolean => {
+  const words = text.toLowerCase().split(/[^a-z]+/).filter(Boolean).map(stem);
+  const parts = x.split(" ");
+  return words.some((_, i) => parts.every((p, k) => words[i + k] === p));
+};
+
+/**
+ * Whether `dish` suits one requirement. Unknown is never read as safe:
+ *
+ * - A dish nobody has analyzed or declared is unknown.
+ * - A dietary tag the dish lists decides, including a stricter tag that
+ *   implies it (vegan implies vegetarian); "no-X" and "X-free" are one need.
+ * - For "no-X" / "X-free", X among the dish's ingredients, main ingredients
+ *   or warnings is a conflict.
+ * - Otherwise "no-X" fits only when X is one ingredient (not a class like
+ *   nuts or dairy) and the dish is a recipe whose full ingredient list is
+ *   known and does not name it.
  */
 export const requirementFit = (dish: DietDish, requirement: string): Fit => {
   const req = normalizeRequirement(requirement);
@@ -507,7 +662,10 @@ export const requirementFit = (dish: DietDish, requirement: string): Fit => {
     : req.endsWith("-free")
     ? req.slice(0, -5)
     : "";
-  const names = avoided ? [req, `no-${avoided}`, `${avoided}-free`] : [req];
+  const s = stem(avoided);
+  const names = avoided
+    ? [req, `no-${s}`, `no-${s}s`, `${s}-free`, `${s}s-free`]
+    : [req];
   const tags = (list: readonly string[] | undefined) =>
     (list ?? []).map(normalizeRequirement);
   const compatible = tags(diet.compatible);
@@ -516,13 +674,28 @@ export const requirementFit = (dish: DietDish, requirement: string): Fit => {
   const implied = compatible.flatMap((t) => [t, ...(IMPLIED[t] ?? [])]);
   if (names.some((n) => implied.includes(n))) return "fits";
   if (!avoided) return "unknown";
-  const x = stem(avoided.replace(/-/g, " "));
-  const primary = (diet.primaryIngredients ?? []).map(stem);
-  if (primary.some((i) => i.includes(x))) return "conflicts";
-  if ((diet.warnings ?? []).some((w) => w.toLowerCase().includes(x))) {
+  const x = avoided.split("-").map(stem).join(" ");
+  const named = (list: readonly string[] | undefined) =>
+    (list ?? []).some((text) => mentions(text, x));
+  if (
+    named(dish.ingredients) || named(diet.primaryIngredients) ||
+    named(diet.warnings)
+  ) {
     return "conflicts";
   }
-  return req.startsWith("no-") && primary.length > 0 ? "fits" : "unknown";
+  const fullList = (dish.ingredients ?? []).length > 0;
+  return req.startsWith("no-") && fullList && !FOOD_CLASSES.has(s)
+    ? "fits"
+    : "unknown";
+};
+
+/** The tag to record when someone checks that a dish meets `requirement`:
+ * "no-nuts" is recorded as "nut-free", the tag an analysis uses. */
+export const tagFor = (requirement: string): string => {
+  const req = normalizeRequirement(requirement);
+  if (!req.startsWith("no-")) return req;
+  const s = stem(req.slice(3));
+  return FOOD_CLASSES.has(s) ? `${s}-free` : req;
 };
 
 export interface RequirementCheck {
@@ -538,7 +711,8 @@ export interface RequirementCheck {
 /**
  * For each guest's requirement, which dishes are known to suit it, known not
  * to, or unknown, and a warning when nothing (or no main) is known to suit
- * it. A dish whose analysis is out of date is marked so.
+ * it. A dish whose analysis is out of date is listed as such and does not
+ * count toward clearing the warning.
  */
 export const dietaryChecks = (
   dishes: readonly DietDish[],
@@ -546,7 +720,8 @@ export const dietaryChecks = (
 ): RequirementCheck[] => {
   const present = dishes.filter(Boolean);
   const hasMain = present.some((d) => d.category === "main");
-  return profiles.filter(Boolean).flatMap((profile, p) => {
+  return profiles.flatMap((profile, p) => {
+    if (!profile) return [];
     const guest = (profile.guestName ?? "").trim() || `Guest ${p + 1}`;
     const requirements = [
       ...new Set(
@@ -559,10 +734,14 @@ export const dietaryChecks = (
         d.dietarySource === "stale" ? `${d.name} (out of date)` : d.name;
       const pick = (want: Fit) =>
         present.filter((_, i) => fit[i] === want).map(label);
-      const fittingMain = present.some((d, i) =>
-        fit[i] === "fits" && d.category === "main"
-      );
+      const current = (d: DietDish, i: number) =>
+        fit[i] === "fits" && d.dietarySource !== "stale";
       const fits = pick("fits");
+      const anyCurrent = present.some(current);
+      const currentMain = present.some((d, i) =>
+        current(d, i) && d.category === "main"
+      );
+      const who = `${guest} (${requirement})`;
       return {
         guest,
         requirement,
@@ -571,10 +750,12 @@ export const dietaryChecks = (
         unknown: pick("unknown"),
         warning: present.length === 0
           ? ""
-          : fits.length === 0
-          ? `Nothing on the menu is known to suit ${guest} (${requirement}).`
-          : hasMain && !fittingMain
-          ? `No main is known to suit ${guest} (${requirement}).`
+          : !anyCurrent && fits.length > 0
+          ? `Only out-of-date analyses say something suits ${who}: re-analyze.`
+          : !anyCurrent
+          ? `Nothing on the menu is known to suit ${who}.`
+          : hasMain && !currentMain
+          ? `No main is known to suit ${who}.`
           : "",
       };
     });
@@ -689,9 +870,12 @@ export const planLinking = (input: {
     if (input.unchecked.includes(i)) {
       return { kind: "skip", name, reason: "unchecked" };
     }
+    // The model's match, or failing that a dish named exactly as the item.
     const wanted = (item.existingName ?? "").trim();
-    const find = (lib: readonly string[]) =>
-      wanted ? lib.findIndex((n) => sameName(n, wanted)) : -1;
+    const find = (lib: readonly string[]) => {
+      const byMatch = wanted ? lib.findIndex((n) => sameName(n, wanted)) : -1;
+      return byMatch >= 0 ? byMatch : lib.findIndex((n) => sameName(n, name));
+    };
     const asRecipe = find(input.libraryRecipes);
     const asPrepared = find(input.libraryPrepared);
     const preferPrepared = item.type === "prepared";
@@ -797,9 +981,12 @@ export const mealMarkdown = (m: {
   const section = (title: string, lines: readonly string[]) =>
     lines.length ? ["", `## ${title}`].concat(lines) : [];
   const needs = m.guests
-    .map((g, i) => ({ name: g.guestName.trim() || `Guest ${i + 1}`, g }))
-    .filter(({ g }) => g.requirements.length)
-    .map(({ name, g }) => `- ${name}: ${g.requirements.join(", ")}`);
+    .map((g, i) => ({
+      name: (g?.guestName ?? "").trim() || `Guest ${i + 1}`,
+      requirements: g?.requirements ?? [],
+    }))
+    .filter((g) => g.requirements.length)
+    .map((g) => `- ${g.name}: ${g.requirements.join(", ")}`);
   const oven = m.ovenPlan.events.length
     ? [...m.ovenPlan.events]
       .sort((a, b) => b.start - a.start)
