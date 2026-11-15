@@ -37,8 +37,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "lqnHbzqnRLwFO3Erf1ds2iOqReGetn9bJNiZOfRDMwM",
-              "policyDigest": "q4bj0zDN30wUqWaWyf8ePt51OKmEuVDK-SFvjHzAHfs",
+              "moduleIdentity": "BDUvDOiH2nozS5vUExEpPMCBSINPwC4D1RWLEyCtt0A",
+              "policyDigest": "V46qUPESZP2LBOd5HQqFU7mWkGRrymRRyLfqjHGGDSM",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -51,13 +51,6 @@
       }
     },
     "properties": {
-      "autoDetect": {
-        "asCell": [
-          "cell"
-        ],
-        "default": true,
-        "type": "boolean"
-      },
       "draft": {
         "asCell": [
           "cell"
@@ -66,8 +59,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "lqnHbzqnRLwFO3Erf1ds2iOqReGetn9bJNiZOfRDMwM",
-              "policyDigest": "q4bj0zDN30wUqWaWyf8ePt51OKmEuVDK-SFvjHzAHfs",
+              "moduleIdentity": "BDUvDOiH2nozS5vUExEpPMCBSINPwC4D1RWLEyCtt0A",
+              "policyDigest": "V46qUPESZP2LBOd5HQqFU7mWkGRrymRRyLfqjHGGDSM",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true
@@ -170,8 +163,8 @@
         "ifc": {
           "confidentiality": [
             {
-              "moduleIdentity": "lqnHbzqnRLwFO3Erf1ds2iOqReGetn9bJNiZOfRDMwM",
-              "policyDigest": "q4bj0zDN30wUqWaWyf8ePt51OKmEuVDK-SFvjHzAHfs",
+              "moduleIdentity": "BDUvDOiH2nozS5vUExEpPMCBSINPwC4D1RWLEyCtt0A",
+              "policyDigest": "V46qUPESZP2LBOd5HQqFU7mWkGRrymRRyLfqjHGGDSM",
               "policyRefKind": "module",
               "subject": {
                 "__ctOwningSpace": true

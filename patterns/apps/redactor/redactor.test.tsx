@@ -83,9 +83,11 @@ export default pattern(() => {
       { assertion: assert_real_mention_kept },
       { assertion: assert_no_leaks },
       { assertion: assert_found_list },
-      { action: redactor.sendRawDraft },
       { assertion: assert_raw_refused },
       { action: redactor.send },
+      { assertion: assert_redacted_sent },
+      // The raw draft cannot overwrite what was sent.
+      { action: redactor.sendRawDraft },
       { assertion: assert_redacted_sent },
       { action: action_paste_reply },
       { assertion: assert_reply_restored },

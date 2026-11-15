@@ -43,29 +43,51 @@ words only.
 `policy.tsx`), so everything computed from them carries that clause: the
 detections, the stand-in key, the restored reply.
 
-**Who may learn what.** The owner sees everything in their own space. The model
-may learn the redacted draft and nothing else.
+**Who may learn what.** Readers of the space that holds the data, which in a
+personal space is the owner, may see all of it: `releaseToSpaceReader` adds them
+as an alternative, so the owner's display renders it. That makes it readable by
+those users, not public, so it still cannot be written to a public store. The
+model may learn the redacted draft and nothing else.
 
-**What is released, and how.** `redactionRules` holds one exchange rule. It
-drops the policy's clause from a value only when the runtime attests
-(`TransformedBy`, bound to `policy.tsx`'s content identity) that the exported
-lift `redactDraft` alone computed it — the idiom of
-`examples/cfc-exchange-rules/blessed-computation.tsx`. The release discloses how
-many distinct values of each category the draft held and where they sat, and no
-part of any value. Anything detection misses is disclosed as written; the vault
-and the "Still visible" check narrow that.
+**What is released to the model, and how.** `releaseRedactedDraft` drops the
+policy's clause from a value only when the runtime attests (`TransformedBy`,
+bound to `policy.tsx`'s content identity) that the exported lift `redactDraft`
+alone computed it — the idiom of
+`examples/cfc-exchange-rules/blessed-computation.tsx`. Format detection always
+runs inside `redactDraft`, so no caller can switch it off. The release discloses
+how many distinct values of each category the draft held and where they sat. A
+stand-in is chosen only against text that stays visible and other stand-ins,
+never against a hidden value, so it carries no hint of one.
 
 **The sink.** The model's prompt is a `MaxConfidentiality<string, []>` input
 (`modelPrompt`), which admits only public values. "Send to model" copies
 `redacted` into it; `sendRawDraft` copies the draft and is refused with
-`maxConfidentiality failed at /modelPrompt`. `redactor.test.tsx` pins both.
+`maxConfidentiality failed at /modelPrompt`. `redactor.test.tsx` pins both,
+including that the raw send cannot overwrite what was sent. Sending also keeps
+the stand-in key (secret) beside the reply, in a separate event: a transaction
+that reads the secret key may not also write the public prompt.
+
+**Scope.** The inputs carry no scope wrapper, so they live at the piece's own
+scope: everyone with access to the space sees the vault and the draft, which
+matches the reader rule above. Keep a redactor in a personal space; a shared,
+per-user vault would want `PerUser` and is not attempted here.
 
 ## CFC debt
 
 No corner of the pattern is enforced by ordinary pattern logic in place of CFC.
-Two runtime gaps shape it, and one is a workaround:
+Four gaps shape it, two of them workarounds:
 
-1. **The model call is not itself a sink.** `generateText`, `generateObject`,
+1. **The release trusts a caller-supplied vault.**
+   `redactDraft({ draft,
+   vault })` releases whatever it computes, and the
+   caller picks the vault. A pattern holding a draft under this policy can pass
+   an empty vault, and a name the format detectors cannot recognize is then
+   released as written. Principled CFC would bind that argument by provenance:
+   release only when `vault` is this owner's labeled vault (an input-witness or
+   argument-provenance condition on the rule, in the spirit of `inputWitness` in
+   `examples/cfc-exchange-rules/witnessed-chain.tsx`). This is the semantic to
+   raise with Berni.
+2. **The model call is not itself a sink.** `generateText`, `generateObject`,
    `llm` and `llmDialog` are `ungatedSink` today
    (`runtime/runner/src/runtime-presets.ts`;
    `docs/plans/cfc-llm-sink-admission.md`: "Nothing is built"). The runtime
@@ -73,22 +95,32 @@ Two runtime gaps shape it, and one is a workaround:
    `generateText({ prompt: draft })`. The guarantee therefore rests on
    `generateText`'s prompt being read from `modelPrompt` and nothing else.
    Principled CFC: an LLM prompt is a sink whose ceiling is the provider's
-   clearance (public, here), so passing the draft straight to the model is
-   refused at the call, and `modelPrompt` becomes a convenience rather than the
-   enforcement point.
-2. **`draft` has no `Default` (workaround).** A confidential scalar input with a
-   schema default makes the piece-start commit refuse to install `modelPrompt`'s
-   own `""` default: the setup transaction's machinery reads the labeled
-   `/draft` slot (the handle-binding probe in `runtime/runner/src/schema.ts`),
-   the write-attempt log is empty at piece start so the `maxConfidentiality`
-   gate in `runtime/runner/src/cfc/prepare.ts` measures the constant default
-   against every labeled read in the transaction, and initial schema defaults
-   are exempt only from writer policies. Array inputs that default to `[]`, as
-   in every existing `MaxConfidentiality` demo, never hit it. With no default
-   the draft reads as unset until typed in. To be filed as a runtime topic;
-   remove the workaround when it is fixed.
-3. **Stand-in key in memory.** The key maps stand-ins back to originals and
-   stays secret, but it is recomputed from the draft rather than stored, so a
-   reply can be restored only while the draft that produced it is unchanged. A
-   stored, secret per-send key would let several sends' replies be restored
-   later; it needs no new CFC, only a list of secret records.
+   clearance (public, here), so the call itself refuses the draft.
+3. **Scalar secrets with a value break piece start (workaround).** A
+   confidential scalar holding a value at piece start makes the runtime refuse
+   to install `modelPrompt`'s own `""` default: the setup transaction's
+   machinery reads the labeled slot (the handle-binding probe in
+   `runtime/runner/src/schema.ts`), the write-attempt log is empty at piece
+   start so the `maxConfidentiality` gate in `runtime/runner/src/cfc/prepare.ts`
+   measures the constant default against every labeled read in the transaction,
+   and initial schema defaults are exempt only from writer policies. Lists that
+   start empty never hit it, which is why every existing `MaxConfidentiality`
+   demo works. Consequences here: `draft` has no `Default` (it reads as unset
+   until typed in); a caller cannot pass a prefilled draft (a "redact this note"
+   launcher fails to start); the vault's in-progress entry field is a plain
+   per-session cell rather than `Secret`; and the sent key is a list of secret
+   items. To be filed as a runtime topic; remove the workarounds when it is
+   fixed.
+4. **A pasted reply uses the current key.** A reply from the model is restored
+   with the key kept when it was sent. A pasted reply is restored with the
+   current draft's key, so editing the draft before pasting can mis-restore. A
+   per-copy key would need the copy button to run a handler.
+
+## The leak check
+
+"Still visible" runs a deliberately looser matcher than redaction over the
+redacted draft, with the stand-ins removed: any word of a found value (case and
+accents folded) and any run of four of its digits. It catches what whole-value
+matching missed in forms like "Garcia" for a vault entry "José García" written
+differently, but it can only check values that were found; a name that is in
+neither the vault nor a detectable format cannot be checked.

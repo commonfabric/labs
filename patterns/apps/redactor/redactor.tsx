@@ -41,7 +41,11 @@ import {
   type Secret,
   substitutionsFor,
 } from "./policy.tsx";
-import { CATEGORY_LABELS, type Detection } from "./redaction.ts";
+import {
+  CATEGORY_LABELS,
+  type Detection,
+  type Substitution,
+} from "./redaction.ts";
 import PIIVault, { type SecretEntry } from "./vault.tsx";
 
 const SYSTEM_PROMPT =
@@ -71,7 +75,6 @@ interface RedactorInput {
    * Remove this workaround when the runtime topic on it is resolved.
    */
   draft: Writable<Secret<string>>;
-  autoDetect?: Writable<Default<boolean, true>>;
   /** What the model is asked. Admits only public values. */
   modelPrompt?: Writable<Default<PublicText, "">>;
   /** A reply from a model you asked yourself, pasted in. */
@@ -111,6 +114,22 @@ const setDraft = handler<
   draft.set(text as Secret<string>);
 });
 
+/** Keep the key that undoes a redaction beside the reply it belongs to, so
+ * editing the draft afterwards cannot restore the wrong originals. Its own
+ * event: a transaction that reads the secret key may not also write the
+ * public prompt. */
+const keepKey = handler<
+  void,
+  {
+    substitutions: Substitution[];
+    sentKey: Writable<Secret<Substitution>[]>;
+  }
+>((_, { substitutions, sentKey }) => {
+  sentKey.set(
+    substitutions.map((sub) => ({ ...sub }) as Secret<Substitution>),
+  );
+});
+
 const copyInto = handler<
   void,
   { from: string; to: Writable<PublicText> }
@@ -119,17 +138,25 @@ const copyInto = handler<
 });
 
 const Redactor = pattern<RedactorInput, RedactorOutput>(
-  ({ vaultEntries, draft, autoDetect, modelPrompt, pastedReply }) => {
+  ({ vaultEntries, draft, modelPrompt, pastedReply }) => {
     const vault = PIIVault({ entries: vaultEntries });
     const showVault = new Writable.perSession(false);
 
-    const input = { draft, vault: vaultEntries, autoDetect };
+    const input = { draft, vault: vaultEntries };
     const redacted = redactDraft(input);
     const found = findInDraft(input);
     const substitutions = substitutionsFor(input);
-    const leaks = leaksInText({ text: redacted, found });
+    const leaks = leaksInText({ text: redacted, found, substitutions });
 
-    const send = copyInto({ from: redacted, to: modelPrompt });
+    // A list of secret items, like the vault: a list that starts empty holds
+    // nothing labeled at piece start (README, CFC debt 2).
+    const sentKey = new Writable<Secret<Substitution>[]>([]);
+    const sendRedacted = copyInto({ from: redacted, to: modelPrompt });
+    const keepSentKey = keepKey({ substitutions, sentKey });
+    const send = action(() => {
+      sendRedacted.send();
+      keepSentKey.send();
+    });
     const sendRawDraft = copyInto({ from: draft, to: modelPrompt });
     const typeDraft = setDraft({ draft });
 
@@ -140,7 +167,14 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
         ? pastedReply.get()
         : (answer.result ?? "") as string
     );
-    const restored = restoreReply({ reply, substitutions });
+    // A pasted reply is restored with the current draft's key; a sent one
+    // with the key captured when it was sent.
+    const replyKey = computed((): Substitution[] =>
+      pastedReply.get().trim() !== "" || sentKey.get().length === 0
+        ? [...substitutions]
+        : sentKey.get().map((sub) => ({ ...sub }))
+    );
+    const restored = restoreReply({ reply, substitutions: replyKey });
 
     const toggleVault = action(() => showVault.set(!showVault.get()));
     const clearPasted = action(() => pastedReply.set(""));
@@ -169,9 +203,6 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
                   <cf-heading level={4} style={{ flex: "1" }}>
                     Your vault
                   </cf-heading>
-                  <cf-checkbox $checked={autoDetect}>
-                    Also detect emails, phones, SSNs, cards
-                  </cf-checkbox>
                   <cf-button variant="ghost" onClick={toggleVault}>
                     {vaultToggleLabel}
                   </cf-button>

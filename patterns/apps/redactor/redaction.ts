@@ -108,6 +108,9 @@ const ZERO_WIDTH = new Set(["​", "‌", "‍", "﻿", "­"]);
 
 const SKIPPED = /[\s\p{P}\p{S}]/u;
 
+const foldMarks = (s: string): string =>
+  s.normalize("NFKD").replace(/\p{M}/gu, "");
+
 /** The canonical form of `text`, and for each canonical character the index
  * of the character it came from in the NFKC-normalized text. */
 export const canonicalize = (
@@ -115,7 +118,13 @@ export const canonicalize = (
 ): { canonical: string; positions: number[] } => {
   const chars = Array.from(text.normalize("NFKC"));
   const kept = chars
-    .map((char, index) => ({ char: CONFUSABLES[char] ?? char, index }))
+    .flatMap((char, index) =>
+      // Fold look-alikes, then accents: "José" matches "Jose".
+      Array.from(foldMarks(CONFUSABLES[char] ?? char)).map((c) => ({
+        char: c,
+        index,
+      }))
+    )
     .filter(({ char }) => !ZERO_WIDTH.has(char) && !SKIPPED.test(char));
   // Positions index code points; map them to string offsets.
   const offsets = chars.reduce<number[]>(
@@ -148,6 +157,9 @@ const COMMON_MAIL_PROVIDERS = new Set([
   "msn",
 ]);
 
+/** The shortest part of an email that is matched on its own. */
+const MIN_PART = 4;
+
 interface Needle extends PIIEntry {
   canonical: string;
   /** For one word of a multi-word name: the whole name, and which word. */
@@ -179,10 +191,15 @@ const needlesFor = (entries: readonly PIIEntry[]): Needle[] => {
       const at = value.lastIndexOf("@");
       if (at <= 0) return [entry];
       const domain = value.slice(at + 1).toLowerCase();
+      // A short local part or domain ("me@x.co") would match ordinary words.
+      const local = value.slice(0, at);
       return [
         entry,
-        { category: "custom", value: value.slice(0, at) },
-        ...(COMMON_MAIL_PROVIDERS.has(domain.split(".")[0])
+        ...(local.length >= MIN_PART
+          ? [{ category: "custom" as const, value: local }]
+          : []),
+        ...(COMMON_MAIL_PROVIDERS.has(domain.split(".")[0]) ||
+            domain.length < MIN_PART
           ? []
           : [{ category: "custom" as const, value: domain }]),
       ];
@@ -361,7 +378,9 @@ export const detections = (
 // ---------------------------------------------------------------------------
 // Stand-ins: realistic, reserved-for-fiction values chosen by order of first
 // appearance within each category. They reveal how many distinct values of
-// each kind the draft held and in what order, and nothing else about them.
+// each kind the draft held and in what order, and nothing else about them: a
+// candidate is skipped only when it collides with text that stays visible, or
+// with another stand-in, never because of a value being hidden.
 // ---------------------------------------------------------------------------
 
 const FIRST = [
@@ -375,6 +394,12 @@ const FIRST = [
   "Henry",
   "Iris",
   "Jack",
+  "Kara",
+  "Liam",
+  "Maya",
+  "Noah",
+  "Olive",
+  "Paul",
 ];
 const LAST = [
   "Anderson",
@@ -387,18 +412,18 @@ const LAST = [
   "Harris",
   "Irving",
   "Jones",
+  "Kim",
+  "Lopez",
+  "Moore",
+  "Nguyen",
 ];
 const DOMAINS = ["example.com", "example.org", "example.net"];
 const STREETS = ["Example St", "Test Ave", "Sample Blvd", "Demo Ln", "Mock Dr"];
 const CITIES = ["Anytown", "Somewhere", "Testville", "Mocksburg", "Sampletown"];
 
-/** The `n`th stand-in of a category (n from 0). */
+/** The `n`th stand-in of a non-name category (n from 0). */
 export const standInFor = (category: PIICategory, n: number): string => {
   switch (category) {
-    case "name":
-      return `${FIRST[n % FIRST.length]} ${
-        LAST[Math.floor(n / FIRST.length) % LAST.length]
-      }`;
     case "email":
       return `${FIRST[n % FIRST.length].toLowerCase()}${n + 1}@${
         DOMAINS[n % DOMAINS.length]
@@ -418,75 +443,120 @@ export const standInFor = (category: PIICategory, n: number): string => {
   }
 };
 
+const wordsOf = (text: string): string[] =>
+  foldMarks(text.normalize("NFKC")).toLowerCase().split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w !== "");
+
+/** A pool word with an `n`th-cycle suffix once the pool runs out. */
+const poolWord = (pool: readonly string[], n: number): string =>
+  n < pool.length
+    ? pool[n]
+    : `${pool[n % pool.length]}${
+      String.fromCharCode(65 + (Math.floor(n / pool.length) - 1) % 26)
+    }`;
+
 /** Replace every detected value in `text` with a stand-in. The same original
- * always gets the same stand-in within one redaction, and no stand-in is one
- * that already occurs in `text`. */
+ * always gets the same stand-in within one redaction. Each word of a name gets
+ * its own stand-in word (first names from one pool, surnames from another), so
+ * "Rivera" alone becomes the surname of "Jordan Rivera"'s stand-in, and no two
+ * people share a stand-in word. */
 export const redact = (
   text: string,
   found: readonly PIIEntry[],
 ): Redaction => {
-  const matches = findMatches(text, needlesFor(found));
   const normalized = text.normalize("NFKC");
-  const occurs = canonicalize(normalized).canonical;
-  const byOriginal = new Map<string, Substitution>();
-  const counters: Partial<Record<PIICategory, number>> = {};
-  const nextStandIn = (category: PIICategory): string => {
+  const matches = findMatches(normalized, needlesFor(found));
+  // Words that stay visible, and the words of every hidden value: no stand-in
+  // may be one of either, or restoring would rewrite visible text.
+  const visible = matches
+    .reduceRight(
+      (t, m) => t.slice(0, m.start) + " " + t.slice(m.end),
+      normalized,
+    );
+  const taken = new Set([
+    ...wordsOf(visible),
+    ...found.flatMap((f) => wordsOf(f.value)),
+  ]);
+  const visibleLower = foldMarks(visible).toLowerCase();
+  const counters: Record<string, number> = {};
+  const take = (key: string, make: (n: number) => string): string => {
     for (;;) {
-      const n = counters[category] ?? 0;
-      counters[category] = n + 1;
-      const candidate = standInFor(category, n);
-      // A name's words are used alone too, so each must be new to the text.
-      const words = category === "name" ? candidate.split(" ") : [];
-      if (
-        [candidate, ...words].every((w) =>
-          !occurs.includes(canonicalize(w).canonical)
-        )
-      ) {
+      const n = counters[key] ?? 0;
+      counters[key] = n + 1;
+      const candidate = make(n);
+      const words = wordsOf(candidate);
+      const free = key === "first" || key === "last"
+        ? words.every((w) => !taken.has(w))
+        : !visibleLower.includes(candidate.toLowerCase());
+      if (free) {
+        words.forEach((w) => taken.add(w));
         return candidate;
       }
     }
   };
-  const wholeNames = new Map<string, string>();
-  const standInForNeedle = (needle: Needle): string => {
-    if (!needle.partOf) return nextStandIn(needle.category);
-    const key = canonicalize(needle.partOf.whole).canonical;
-    const whole = wholeNames.get(key) ??
-      byOriginal.get(key)?.standIn ?? nextStandIn("name");
-    wholeNames.set(key, whole);
-    const words = whole.split(" ");
-    // First word to first word, last to last; a middle word keeps the first.
-    return needle.partOf.index === needle.partOf.count - 1
-      ? words[words.length - 1]
-      : words[0];
+
+  // A name's stand-in, one word per original word.
+  const nameStandIns = new Map<string, string[]>();
+  const nameFor = (whole: string): string[] => {
+    const key = canonicalize(whole).canonical;
+    const existing = nameStandIns.get(key);
+    if (existing) return existing;
+    const parts = whole.trim().split(/\s+/);
+    const words = parts.map((_, i) =>
+      parts.length > 1 && i === parts.length - 1
+        ? take("last", (n) => poolWord(LAST, n))
+        : take("first", (n) => poolWord(FIRST, n))
+    );
+    nameStandIns.set(key, words);
+    return words;
   };
+
+  const byOriginal = new Map<string, Substitution>();
+  const add = (category: PIICategory, original: string, standIn: string) => {
+    const key = canonicalize(original).canonical;
+    if (!byOriginal.has(key)) {
+      byOriginal.set(key, { category, original, standIn });
+    }
+    return byOriginal.get(key)!.standIn;
+  };
+
   const pieces: string[] = [];
   let last = 0;
   for (const { needle, start, end } of matches) {
-    if (!needle.partOf && needle.category === "name") {
-      const reserved = wholeNames.get(needle.canonical);
-      if (reserved && !byOriginal.has(needle.canonical)) {
-        byOriginal.set(needle.canonical, {
-          category: "name",
-          original: normalized.slice(start, end),
-          standIn: reserved,
-        });
-      }
+    const original = normalized.slice(start, end);
+    let standIn: string;
+    if (needle.category === "name") {
+      const whole = needle.partOf?.whole ?? needle.value;
+      const words = nameFor(whole);
+      const parts = whole.trim().split(/\s+/);
+      // Every form of the name restores: the whole, and each word alone.
+      add("name", whole.trim(), words.join(" "));
+      parts.forEach((p, i) => {
+        if (parts.length > 1 && p.length >= 2) add("name", p, words[i]);
+      });
+      standIn = needle.partOf
+        ? words[needle.partOf.index]
+        : add("name", original, words.join(" "));
+    } else {
+      standIn = byOriginal.get(needle.canonical)?.standIn ??
+        add(
+          needle.category,
+          original,
+          take(needle.category, (n) => standInFor(needle.category, n)),
+        );
     }
-    const existing = byOriginal.get(needle.canonical);
-    const substitution = existing ?? {
-      category: needle.category,
-      original: normalized.slice(start, end),
-      standIn: standInForNeedle(needle),
-    };
-    byOriginal.set(needle.canonical, substitution);
-    pieces.push(normalized.slice(last, start), substitution.standIn);
+    pieces.push(normalized.slice(last, start), standIn);
     last = end;
   }
   pieces.push(normalized.slice(last));
   return { redacted: pieces.join(""), substitutions: [...byOriginal.values()] };
 };
 
-/** Put the originals back into a reply, longest stand-in first. */
+const escapeRegExp = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Put the originals back into a reply: whole words, any case, longest
+ * stand-in first. */
 export const restore = (
   reply: string,
   substitutions: readonly Substitution[],
@@ -498,30 +568,51 @@ export const restore = (
         text.replace(
           new RegExp(
             `(?<![\\p{L}\\p{N}])${escapeRegExp(s.standIn)}(?![\\p{L}\\p{N}])`,
-            "gu",
+            "giu",
           ),
           () => s.original,
         ),
       reply,
     );
 
-const escapeRegExp = (s: string): string =>
-  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Shorter words match too much ordinary text to report. */
+const MIN_LEAK_WORD = 3;
 
-/** Shorter values match too much ordinary text to report as leaks. */
-const MIN_LEAK_LENGTH = 3;
-
-/** Originals that appear in `text` although it should hold only stand-ins:
- * on the redacted draft, a value redaction missed; on a model's reply before
- * restoring, a value the model somehow knew. */
+/** Pieces of the found values that still appear in `text`, which should hold
+ * only stand-ins. Deliberately looser than redaction's matcher, so it catches
+ * what redaction's whole-value matching missed: any word of a value (accents
+ * and case folded), and any run of four or more of a value's digits. */
 export const leaksIn = (
   text: string,
   found: readonly PIIEntry[],
+  substitutions: readonly Substitution[] = [],
 ): string[] => {
-  const needles = needlesFor(found).filter((n) =>
-    n.canonical.length >= MIN_LEAK_LENGTH
+  // The stand-ins themselves are expected; look only at what remains.
+  const remaining = substitutions.reduce(
+    (t, sub) =>
+      t.replace(
+        new RegExp(
+          `(?<![\\p{L}\\p{N}])${escapeRegExp(sub.standIn)}(?![\\p{L}\\p{N}])`,
+          "giu",
+        ),
+        " ",
+      ),
+    text,
   );
+  const textWords = new Set(wordsOf(remaining));
+  const textDigits = remaining.replace(/\D/g, "");
   return [
-    ...new Set(findMatches(text, needles).map((m) => m.needle.value)),
+    ...new Set(found.flatMap((f) => {
+      const words = wordsOf(f.value).filter((w) =>
+        w.length >= MIN_LEAK_WORD && !/^\d+$/.test(w) && textWords.has(w)
+      );
+      const digits = f.value.replace(/\D/g, "");
+      const digitLeak = digits.length >= 4 &&
+        Array.from(
+          { length: digits.length - 3 },
+          (_, i) => digits.slice(i, i + 4),
+        ).some((run) => textDigits.includes(run));
+      return words.length > 0 || digitLeak ? [f.value] : [];
+    })),
   ];
 };

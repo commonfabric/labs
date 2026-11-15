@@ -1115,8 +1115,7 @@ TransformedBy, MaxConfidentiality
 ```ts
 interface RedactorInput {
   vaultEntries?: Writable<Default<Secret<PIIEntry>[], []>>;
-  draft: Writable<Secret<string>>; // no Default: see README, CFC debt 2
-  autoDetect?: Writable<Default<boolean, true>>;
+  draft: Writable<Secret<string>>; // no Default: see README, CFC debt 3
   modelPrompt?: Writable<Default<PublicText, "">>;
   pastedReply?: Writable<Default<string, "">>;
 }

@@ -25,10 +25,12 @@
  */
 import { type Confidential, lift, type MaxConfidentiality } from "commonfabric";
 import {
+  cfcPattern,
   exchangeRule,
   exchangeRules,
   type PolicyOf,
   THIS_POLICY,
+  v,
 } from "commonfabric/cfc";
 import {
   type Detection,
@@ -55,7 +57,22 @@ export const releaseRedactedDraft = exchangeRule({
   post: { dropClause: true },
 });
 
-export const redactionRules = exchangeRules([releaseRedactedDraft]);
+/** The owner, and anyone else with reader access to the space that holds
+ * the data, may see it (rendered to them, never written anywhere public). */
+export const releaseToSpaceReader = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: {
+    integrity: [
+      cfcPattern.hasRole(v("reader"), THIS_POLICY.subject, "reader"),
+    ],
+  },
+  post: { addAlternatives: [cfcPattern.user(v("reader"))] },
+});
+
+export const redactionRules = exchangeRules([
+  releaseRedactedDraft,
+  releaseToSpaceReader,
+]);
 
 /** A value only its owner may see, released only through `redactDraft`. */
 export type Secret<T> = Confidential<
@@ -69,29 +86,31 @@ export type PublicText = MaxConfidentiality<string, readonly []>;
 export interface DraftInput {
   draft: string;
   vault: PIIEntry[];
-  autoDetect: boolean;
 }
 
-/** The released computation: the draft with every detected value replaced. */
-export const redactDraft = lift(
-  ({ draft, vault, autoDetect }: DraftInput): string =>
-    redact(draft ?? "", detections(draft ?? "", vault ?? [], autoDetect))
-      .redacted,
+/**
+ * The released computation: the draft with every detected value replaced.
+ * Format detection always runs here, so no caller can switch it off; the
+ * vault can only add to what is replaced. A caller can still pass an empty
+ * vault, which is why a name the detectors cannot recognize is released as
+ * written unless it is in the vault (README, CFC debt).
+ */
+export const redactDraft = lift(({ draft, vault }: DraftInput): string =>
+  redact(draft ?? "", detections(draft ?? "", vault ?? [], true)).redacted
 );
 
 // Everything below reads the draft and is not named by the rule, so what it
 // computes stays secret.
 
 /** What was found in the draft, and where it came from. */
-export const findInDraft = lift(
-  ({ draft, vault, autoDetect }: DraftInput): Detection[] =>
-    detections(draft ?? "", vault ?? [], autoDetect),
+export const findInDraft = lift(({ draft, vault }: DraftInput): Detection[] =>
+  detections(draft ?? "", vault ?? [], true)
 );
 
 /** The stand-in for each original: the key to undo the redaction. */
 export const substitutionsFor = lift(
-  ({ draft, vault, autoDetect }: DraftInput): Substitution[] =>
-    redact(draft ?? "", detections(draft ?? "", vault ?? [], autoDetect))
+  ({ draft, vault }: DraftInput): Substitution[] =>
+    redact(draft ?? "", detections(draft ?? "", vault ?? [], true))
       .substitutions,
 );
 
@@ -105,6 +124,9 @@ export const restoreReply = lift(
 
 /** Originals that appear in a text that should hold only stand-ins. */
 export const leaksInText = lift(
-  ({ text, found }: { text: string; found: Detection[] }): string[] =>
-    leaksIn(text ?? "", found ?? []),
+  ({ text, found, substitutions }: {
+    text: string;
+    found: Detection[];
+    substitutions: Substitution[];
+  }): string[] => leaksIn(text ?? "", found ?? [], substitutions ?? []),
 );

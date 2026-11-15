@@ -72,13 +72,19 @@ const removeEntryHandler = handler<
 
 const PIIVault = pattern<VaultInput, VaultOutput>(({ entries }) => {
   const newCategory = new Writable.perSession<PIICategory>("name");
+  // Holds a value before it is added. It should be as secret as the vault,
+  // but a scalar Secret with a value trips the piece-start ceiling-gate bug
+  // (README, CFC debt 2), so it is a plain per-session cell for now.
   const newValue = new Writable.perSession("");
 
   const addEntry = addEntryHandler({ entries });
   const removeEntry = removeEntryHandler({ entries });
 
   const submit = action(() => {
-    addEntry.send({ category: newCategory.get(), value: newValue.get() });
+    addEntry.send({
+      category: newCategory.get(),
+      value: newValue.get(),
+    });
     newValue.set("");
   });
 
