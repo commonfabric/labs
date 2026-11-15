@@ -110,8 +110,6 @@ export function inheritedThrough(
 /**
  * A piece's recorded delegation edges: successor → predecessor → the history
  * positions at which a transition recorded that edge, ascending, each once.
- * Position 0 marks an edge taken from a predecessor record's attested list,
- * which states what that record held when it was staged, not when.
  */
 export type StampedEdges = ReadonlyMap<
   string,
@@ -255,10 +253,13 @@ export function recordEdge(
  * position the update records at.
  *
  * Each successor gets an edge to the module it succeeds, stamped with
- * `recorded.position`. A predecessor record's attested list states what that
- * record held when it was staged, so an entry of it the edges do not already
- * reach from the predecessor becomes the predecessor's edge at stamp 0, which
- * nothing after it continues from. Each module of `candidate` is then closed
+ * `recorded.position`. The predecessor record's attested list is what that
+ * record holds now, which another piece, or a runtime from before the member,
+ * may have added to, so an entry of it the edges do not already reach from
+ * the predecessor becomes the predecessor's edge at `recorded.position` too:
+ * a module that succeeded the predecessor earlier, at a lower stamp, does not
+ * follow it, as its own record froze the list at its own time. Each module of
+ * `candidate` is then closed
  * over the result along non-increasing stamps (`inheritedAlongStamps()`): a
  * module the update leaves unchanged, or one that returns, is closed over its
  * own recorded edges, so no grant the piece's history made is lost, and none
@@ -301,7 +302,7 @@ export function composeRecordedEdges(
   for (const { predecessor, inherited } of matched.values()) {
     for (const entry of inherited) {
       if (!reached.get(predecessor)!.has(entry)) {
-        recordEdge(edges, predecessor, entry, 0);
+        recordEdge(edges, predecessor, entry, recorded.position);
       }
     }
   }

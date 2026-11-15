@@ -1347,6 +1347,59 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     });
 
+    it("grants what another piece added to a predecessor's record only to a module that succeeded the predecessor after it", async () => {
+      // Piece `a` goes X to Y. Piece `b` goes Q to X, so X's record lists Q
+      // from then on. `a` goes Y to X to Y2: Y2 succeeds X after Q was
+      // added, and gets Q, as `main`'s record of Y2 lists. A move that is no
+      // source update then returns `a` to Y, which succeeded X before Q was
+      // added: `main`'s record of Y does not list Q, and Y gets none of it.
+      const { on: atY2, controller: atY2Pieces } = await freshController();
+      const { on: atY, controller: atYPieces } = await freshController();
+      try {
+        const a = await pieces.create(splitWriterProgram("wX", "eX"), {
+          input: {},
+        });
+        const eX = getPatternIdentityRef(a.getCell())!.identity;
+        const wX = await moduleAt(eX, "/app/writer.ts");
+        await a.setPattern(splitWriterProgram("wY", "eY"));
+        const eY = getPatternIdentityRef(a.getCell())!.identity;
+        const wY = await moduleAt(eY, "/app/writer.ts");
+        const b = await pieces.create(splitWriterProgram("wQ", "eQ"), {
+          input: {},
+        });
+        const eQ = getPatternIdentityRef(b.getCell())!.identity;
+        const wQ = await moduleAt(eQ, "/app/writer.ts");
+        await b.setPattern(splitWriterProgram("wX", "eX"));
+        await a.setPattern(splitWriterProgram("wX", "eX"));
+        {
+          // Only the piece's record can grant Y2 what X's record lists.
+          using _noStaging = refuseDelegationStaging(runtime);
+          await a.setPattern(splitWriterProgram("wY2", "eY2"));
+        }
+        const eY2 = getPatternIdentityRef(a.getCell())!.identity;
+        const wY2 = await moduleAt(eY2, "/app/writer.ts");
+        const space = pieces.getSpace();
+
+        await atY2Pieces.get(a.id, true);
+
+        expect(atY2.grantsModuleDelegation(space, wY2, wQ)).toBe(true);
+        expect(atY2.grantsModuleDelegation(space, eY2, eQ)).toBe(true);
+
+        await moveWithoutUpdate(a, splitWriterProgram("wY", "eY"));
+        expect(getPatternIdentityRef(a.getCell())?.identity).toBe(eY);
+
+        await atYPieces.get(a.id, true);
+
+        expect(atY.grantsModuleDelegation(space, wY, wX)).toBe(true);
+        expect(atY.grantsModuleDelegation(space, eY, eX)).toBe(true);
+        expect(atY.grantsModuleDelegation(space, wY, wQ)).toBe(false);
+        expect(atY.grantsModuleDelegation(space, eY, eQ)).toBe(false);
+      } finally {
+        await atY.dispose({ closeStorage: false });
+        await atY2.dispose({ closeStorage: false });
+      }
+    });
+
     it("keeps the grant of a module a source update reverts to after a successor replaced it", async () => {
       // v0 to v1's staging never lands; v2's writer succeeds w1; a source
       // update reverts to v1. w1 keeps w0, and gains w2, as `main` stages.

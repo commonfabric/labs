@@ -2206,8 +2206,8 @@ export interface PieceSourceDelegations {
   /**
    * One entry per module the piece's history has delegated to: the module's
    * identity, and each module it was delegated from directly, with every
-   * history position at which a transition recorded that, ascending (0 for
-   * an edge taken from a predecessor record's attested list). Read only by a
+   * history position at which a transition recorded that, ascending. Read
+   * only by a
    * transition, which closes the next pattern's `delegations` over it along
    * non-increasing positions.
    */
