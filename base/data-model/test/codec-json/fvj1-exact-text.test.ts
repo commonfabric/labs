@@ -258,7 +258,7 @@ const CLASS_CASES: Readonly<
           new Uint8Array([4, 5]),
         ),
       text:
-        'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"BAU","publicKey":"AQID"}}',
+        'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":{"/Bytes@1":"BAU"},"publicKey":{"/Bytes@1":"AQID"}}}',
     },
   ],
   FabricUnavailable: [

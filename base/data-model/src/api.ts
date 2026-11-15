@@ -436,6 +436,16 @@ export interface FabricHashConstructor {
 export declare const FabricHash: FabricHashConstructor;
 
 /**
+ * The state of a `FabricKeyPair` that holds material, which is also its
+ * encoded form: the algorithm name, and the two keys' bytes.
+ */
+export type KeyPairState = {
+  readonly algorithm: string;
+  readonly publicKey: FabricBytes;
+  readonly privateKey: FabricBytes;
+};
+
+/**
  * An immutable asymmetric key pair.
  *
  * An instance either holds handles -- two `CryptoKey`s, whose material this
@@ -449,6 +459,12 @@ export interface FabricKeyPair extends FabricPrimitive {
 
   readonly algorithm: string;
   readonly hasMaterial: boolean;
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * Throws when this instance holds handles.
+   */
+  readonly state: KeyPairState;
 
   /**
    * A `CryptoKeyPair` holding this instance's two keys. The record is a new

@@ -1273,48 +1273,54 @@ describe("ValueHasher", () => {
           expect(hex(hashBytesOf(a1))).not.toBe(hex(hashBytesOf(b)));
         });
       });
-      describe("FabricKeyPair hashing (TAG_KEY_PAIR = 0x2C)", () => {
+      describe("FabricKeyPair (hashed in the `FabricInstance` layout)", () => {
         it("matches a hand-computed byte stream for `FabricKeyPair`", () => {
-          // Algorithm "Ed25519" = 7 bytes UTF-8, under the 64-byte threshold, so
-          // the direct string form. Each key is a complete tagged `FabricBytes`
-          // value: TAG_BYTES, a LEB128 length, then the raw bytes.
+          // `TAG_INSTANCE` (0x12), the wire tag `KeyPair@1` as a tagged
+          // string, then the state as a plain object: `TAG_OBJECT` (0x11),
+          // each key as a tagged string in key order, each followed by its
+          // value -- the algorithm as a tagged string, and each key as a
+          // complete tagged `FabricBytes` value (`TAG_BYTES`, a LEB128 length,
+          // then the raw bytes) -- and `TAG_END`.
           //
           // A real algorithm name, unlike the placeholder the fixtures use: its
           // own bytes are spelled out below and mirrored in Section 7.13 of
           // `2-hash-byte-format.md`, so the two have to be changed together.
           // Nothing here depends on the algorithm being one this system uses.
+          const enc = new TextEncoder();
+          const shortString = (value: string): number[] => {
+            const encoded = enc.encode(value);
+            return [0x24, encoded.length, ...encoded];
+          };
           const pair = new FabricKeyPair(
             "Ed25519",
             new Uint8Array([0xDE, 0xAD]),
             new Uint8Array([0xBE, 0xEF, 0x01]),
           );
           const expected = sha256([
-            0x2C, // TAG_KEY_PAIR
-            0x24, // TAG_STRING
-            0x07, // length of "Ed25519"
-            0x45,
-            0x64,
-            0x32,
-            0x35,
-            0x35,
-            0x31,
-            0x39, // "Ed25519"
-            0x25, // TAG_BYTES
-            0x02, // public key length
-            0xDE,
-            0xAD,
+            0x12, // TAG_INSTANCE
+            ...shortString("KeyPair@1"),
+            0x11, // TAG_OBJECT
+            ...shortString("algorithm"),
+            ...shortString("Ed25519"),
+            ...shortString("privateKey"),
             0x25, // TAG_BYTES
             0x03, // private key length
             0xBE,
             0xEF,
             0x01,
+            ...shortString("publicKey"),
+            0x25, // TAG_BYTES
+            0x02, // public key length
+            0xDE,
+            0xAD,
+            0x00, // TAG_END
           ]);
 
           expect(hex(hashBytesOf(pair))).toBe(hex(expected));
         });
 
         it("hashes the two keys in a fixed order", () => {
-          // The layout above feeds the public key first. Swapping the two is a
+          // Each key is fed under its own name. Swapping the two is a
           // different value rather than the same one -- which the byte stream
           // decides and no distinctness test alone could show, the two keys
           // here being of different lengths only so that a swap is visible at
@@ -1331,6 +1337,17 @@ describe("ValueHasher", () => {
           );
 
           expect(hex(hashBytesOf(pair))).not.toBe(hex(hashBytesOf(swapped)));
+        });
+
+        it("produces the same hash as an `UnknownValue` tagged `KeyPair@1` with the same state", () => {
+          const pair = new FabricKeyPair(
+            "Ed25519",
+            new Uint8Array([0xDE, 0xAD]),
+            new Uint8Array([0xBE, 0xEF, 0x01]),
+          );
+          const unknown = new UnknownValue("KeyPair@1", { ...pair.state });
+
+          expect(hex(hashBytesOf(unknown))).toBe(hex(hashBytesOf(pair)));
         });
       });
 

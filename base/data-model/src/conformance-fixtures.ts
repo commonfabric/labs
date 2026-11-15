@@ -446,9 +446,9 @@ function measurePrimitiveState(
   state: unknown,
   note: (measure: SizeMeasure, size: number) => void,
 ): void {
-  const fieldOf = (name: string): unknown =>
-    (typeof state === "object" && state !== null)
-      ? Object.getOwnPropertyDescriptor(state, name)?.value
+  const fieldOf = (name: string, holder: unknown = state): unknown =>
+    (typeof holder === "object" && holder !== null)
+      ? Object.getOwnPropertyDescriptor(holder, name)?.value
       : undefined;
   const noteBytes = (
     written: unknown,
@@ -472,11 +472,14 @@ function measurePrimitiveState(
       noteString(fieldOf("tag"));
       noteBytes(fieldOf("hash"));
       break;
-    case CODEC_TYPE_TAGS.KeyPair:
+    case CODEC_TYPE_TAGS.KeyPair: {
+      // Each key is written as a `Bytes@1` value of its own.
+      const bytesKey = `/${CODEC_TYPE_TAGS.Bytes}`;
       noteString(fieldOf("algorithm"));
-      noteBytes(fieldOf("publicKey"));
-      noteBytes(fieldOf("privateKey"));
+      noteBytes(fieldOf(bytesKey, fieldOf("publicKey")));
+      noteBytes(fieldOf(bytesKey, fieldOf("privateKey")));
       break;
+    }
     case CODEC_TYPE_TAGS.Symbol:
       if (typeof state === "string") {
         note("symbolKeyLength", codePointCountOf(state));

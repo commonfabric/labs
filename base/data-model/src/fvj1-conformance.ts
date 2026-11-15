@@ -782,10 +782,10 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
   })),
   {
-    name: "key pair with a key outside base64url",
+    name: "key pair whose keys are strings rather than `Bytes@1` values",
     section: "3-json-encoding.md section 3, `KeyPair@1`",
     text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","privateKey":"AA",' +
-      '"publicKey":"+"}}',
+      '"publicKey":"AQ"}}',
   },
   {
     name: "unavailable pairing an error kind with a transient reason",

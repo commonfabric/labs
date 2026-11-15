@@ -106,9 +106,8 @@ round-trip correctly.
 > one character cannot carry a whole byte.
 >
 > This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
-> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, to the
-> `hash` field of `Hash@1` state, and to the `publicKey` and `privateKey` fields
-> of `KeyPair@1` state.
+> `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, and to the
+> `hash` field of `Hash@1` state.
 
 The JSON key for a tagged value is the tag with `/` prepended, per Section 2:
 a value under `Link@1` is written `{ "/Link@1": <state> }`. What follows
@@ -156,12 +155,24 @@ are not strings, or whose `tag` is outside that syntax, produces a
 
 ### `KeyPair@1` — asymmetric key pairs
 
-State is `{ algorithm: string, publicKey: string, privateKey: string }`.
+State is `{ algorithm: string, publicKey: <Bytes@1>, privateKey: <Bytes@1> }`.
 `algorithm` names the algorithm in Web Crypto's normalized spelling (for
-example `Ed25519`), and the two keys are their raw bytes as unpadded base64url
-strings, per the convention above. On decoding, a state that is not an object,
-or whose fields are not strings, produces a `ProblematicValue`, as does a key
-that is not valid base64url.
+example `Ed25519`), and each key is its raw bytes as a `Bytes@1` value of its
+own:
+
+```json
+{
+  "/KeyPair@1": {
+    "algorithm": "Ed25519",
+    "privateKey": { "/Bytes@1": "vu8B" },
+    "publicKey": { "/Bytes@1": "3q0" }
+  }
+}
+```
+
+On decoding, a state that is not an object, whose `algorithm` is not a
+non-empty string, or whose keys do not decode as `Bytes@1` values produces a
+`ProblematicValue`.
 
 **Only a pair that holds key material has a state here.** A `FabricKeyPair`
 that holds `CryptoKey` handles instead is refused: encoding one throws rather
