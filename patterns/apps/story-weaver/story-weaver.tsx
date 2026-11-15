@@ -58,6 +58,23 @@ import {
 
 export type { Level, Spindle } from "./story-logic.ts";
 
+// Every request names its model. The spindles are a high-volume map (four
+// long options per card, a summary per pin), which suits a fast, cheap model;
+// and the generateObject default (`gateway:gpt-5.4-mini`) runs in OpenAI's
+// strict structured-output mode, which rejects the schemas the runtime derives
+// from these result types (no `additionalProperties: false`, and toolshed's
+// `normalizeSchemaForProvider` does not add it), so with no model named every
+// request failed with HTTP 400.
+const MODEL = "anthropic:claude-haiku-4-5" as const;
+
+/** The prompt a request was sent with: its first message's text. */
+const sentPrompt = (
+  messages: readonly { content?: unknown }[] | undefined,
+): string => {
+  const content = messages?.[0]?.content;
+  return typeof content === "string" ? content : "";
+};
+
 const DEFAULT_LEVELS = [
   {
     title: "Characters & Themes",
@@ -77,6 +94,10 @@ const DEFAULT_LEVELS = [
 // Styles
 // ---------------------------------------------------------------------------
 
+// The panels draw their own light backgrounds, so they set their own text
+// color too: inheriting the shell's dark-theme text left it white on white.
+const INK = "#1f2937";
+
 const LEVEL_COLORS = ["#0ea5e9", "#eab308", "#22c55e", "#d946ef", "#f97316"];
 
 const styles = {
@@ -93,6 +114,7 @@ const styles = {
   synopsisPanel: {
     padding: "16px",
     background: "#fefce8",
+    color: INK,
     borderRadius: "8px",
     border: "1px solid #fde047",
     display: "flex",
@@ -139,6 +161,7 @@ const styles = {
   ideas: {
     padding: "12px",
     background: "#faf5ff",
+    color: INK,
     border: "1px solid #c4b5fd",
     borderRadius: "8px",
     display: "flex",
@@ -148,6 +171,7 @@ const styles = {
   idea: {
     padding: "10px 12px",
     background: "white",
+    color: INK,
     border: "1px solid #e5e7eb",
     borderRadius: "6px",
     cursor: "pointer",
@@ -173,12 +197,14 @@ const styles = {
     height: "28px",
     border: "1px solid #d1d5db",
     background: "white",
+    color: INK,
     borderRadius: "6px",
     cursor: "pointer",
   },
   editPanel: {
     padding: "12px",
     background: "#f9fafb",
+    color: INK,
     border: "1px solid #e5e7eb",
     borderRadius: "8px",
     display: "flex",
@@ -195,6 +221,7 @@ const styles = {
   },
   card: {
     background: "white",
+    color: INK,
     border: "1px solid #e5e7eb",
     borderRadius: "8px",
     overflow: "hidden",
@@ -242,6 +269,7 @@ const styles = {
     whiteSpace: "pre-wrap",
     fontSize: "12px",
     background: "#f9fafb",
+    color: INK,
     padding: "8px",
     borderRadius: "6px",
     margin: "6px 0 0 0",
@@ -261,6 +289,7 @@ const optionStyle = (pinned: boolean, dimmed: boolean) => ({
   borderRadius: "8px",
   border: pinned ? "3px solid #2563eb" : "1px solid #e5e7eb",
   background: pinned ? "#eff6ff" : "white",
+  color: INK,
   opacity: dimmed ? "0.4" : "1",
   display: "flex",
   flexDirection: "column",
@@ -358,6 +387,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
 
     const ideas = generateObject<SynopsisIdeasResult>({
       system: IDEAS_SYSTEM,
+      model: MODEL,
       prompt: computed(() => ideasPrompt(ideasAttempt.get())),
     });
     const ideaList = computed(() => ideas.result?.ideas ?? []);
@@ -734,14 +764,40 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
         {level.spindles.map((spindle) => {
           const generation = generateObject<GenerationResult>({
             system: OPTIONS_SYSTEM,
+            model: MODEL,
+            // Four options of up to 400 words fit well inside this.
+            maxTokens: 12000,
             prompt: spindle.activePrompt,
           });
           const summary = generateObject<SummaryResult>({
             system: SUMMARY_SYSTEM,
+            model: MODEL,
             prompt: spindle.summaryPrompt,
           });
+          // The cards follow list position, not path: pinning or unpinning an
+          // earlier parent shifts every later spindle to another card, and the
+          // card's request (and its result) catches up a moment after its new
+          // path and label do. Until it has, the result on hand answers some
+          // other spindle's prompt, and a Pin click would file that spindle's
+          // text under this path. A result counts only when the request it
+          // answers is this spindle's prompt.
+          const answered = computed(() =>
+            sentPrompt(generation.messages) === spindle.activePrompt
+          );
+          const waiting = computed(() =>
+            generation.pending || (!generation.error && !answered)
+          );
+          const failed = computed(() =>
+            answered && !generation.pending ? generation.error ?? "" : ""
+          );
+          const summaryText = computed(() =>
+            sentPrompt(summary.messages) === spindle.summaryPrompt &&
+              !summary.pending
+              ? summary.result?.summary ?? ""
+              : ""
+          );
           const options = computed(() =>
-            (generation.result?.options ?? [])
+            (answered ? generation.result?.options ?? [] : [])
               .map((o, index) => ({
                 index,
                 text: o?.content ?? "",
@@ -854,17 +910,17 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                       </button>
                     </div>
                   )
-                  : generation.pending
+                  : waiting
                   ? (
                     <div style={styles.centered}>
                       <cf-loader size="lg" showElapsed />
                       <div>Generating options...</div>
                     </div>
                   )
-                  : generation.error
+                  : failed
                   ? (
                     <div style={styles.warning}>
-                      Couldn't generate options: {generation.error}
+                      Couldn't generate options: {failed}
                     </div>
                   )
                   : (
@@ -927,9 +983,8 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                   ? (
                     <div style={styles.summary}>
                       <strong>Summary:</strong>
-                      {summary.pending
-                        ? "Summarizing..."
-                        : summary.result?.summary ?? ""}
+                      {summaryText ||
+                        (summary.error ? "" : " Summarizing...")}
                     </div>
                   )
                   : null}

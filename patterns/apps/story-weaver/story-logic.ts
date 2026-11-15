@@ -86,8 +86,11 @@ export interface SynopsisIdeasResult {
 export const NUM_OPTIONS = 4;
 export const MAX_BRANCH = 6;
 
+// The length cap keeps four options inside one response: asked for chapter
+// summaries with no limit, the model wrote past its output budget and the
+// cut-off JSON could not be parsed.
 export const OPTIONS_SYSTEM =
-  "You are a creative writing assistant. Generate 4 distinct options as requested. Each option should take a meaningfully different creative approach. Write each option in Markdown.";
+  "You are a creative writing assistant. Generate 4 distinct options as requested. Each option should take a meaningfully different creative approach. Write each option in Markdown, and keep each one under 400 words.";
 
 export const SUMMARY_SYSTEM = "You are a concise summarizer.";
 
