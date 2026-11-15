@@ -557,6 +557,27 @@ const receiptSchema = {
   required: ["requestKey", "registration", "pieceId", "pattern"],
 } as const satisfies JSONSchema;
 
+/**
+ * The receipt `actingUser`'s creation request `requestKey` left in the space,
+ * or `undefined` when that request never committed. A caller replaying an
+ * uncertain creation reads it to learn the piece's pattern without rebuilding
+ * the program the first attempt sent.
+ */
+export async function readServedInstantiateReceipt(
+  pieces: PiecesController,
+  requestKey: string,
+  actingUser: string,
+): Promise<ServedInstantiateReceipt | undefined> {
+  const record = receiptRecord(
+    pieces.runtime,
+    pieces.getSpace(),
+    requestKey,
+    actingUser,
+  );
+  await record.sync();
+  return record.get();
+}
+
 /** The record retaining the receipt of `actingUser`'s request `requestKey`. */
 function receiptRecord(
   runtime: Runtime,

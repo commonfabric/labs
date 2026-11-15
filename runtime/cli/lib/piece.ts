@@ -56,8 +56,10 @@ import {
   PiecesController,
   type PieceSourceActionResult,
   PieceSourceChangedError,
+  readServedInstantiateReceipt,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
+  type ServedPatternSource,
 } from "@commonfabric/piece/ops";
 import {
   declaredProperties,
@@ -582,6 +584,7 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
   getProgramFromIndex?: typeof getProgramFromIndex;
+  readServedInstantiateReceipt?: typeof readServedInstantiateReceipt;
 
   /** The transport index reads go over, in place of the global `fetch`. */
   patternIndexFetch?: PatternIndexFetch;
@@ -1900,7 +1903,7 @@ function servedScope(
 async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
-  program: RuntimeProgram,
+  source: ServedPatternSource,
   repository: string | undefined,
   options: {
     input?: object;
@@ -1933,7 +1936,7 @@ async function createWithReceipt(
               {
                 ...request,
                 space: pieces.getSpace(),
-                program,
+                ...source,
                 ...(options?.start === false ? { start: false } : {}),
               },
             ),
@@ -1951,7 +1954,7 @@ async function createWithReceipt(
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
-            source: { program },
+            source,
             actingUser,
           }),
         trace,
@@ -2091,7 +2094,24 @@ export async function newPieceWithReceipt(
     );
   }
 
-  const indexed = "patternId" in entry
+  // A creation replayed by its request key from the index answers from the
+  // receipt the first attempt left, naming the piece's pattern by identity:
+  // the index need not be reachable, nor the pattern still published, for a
+  // creation that already committed.
+  const replayed = "patternId" in entry && options?.requestKey !== undefined
+    ? await timeCliPhase(
+      "newPiece.readReceipt",
+      async () =>
+        (deps.readServedInstantiateReceipt ?? readServedInstantiateReceipt)(
+          pieces,
+          options.requestKey!,
+          (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did(),
+        ),
+    )
+    : undefined;
+  const indexed = replayed !== undefined
+    ? undefined
+    : "patternId" in entry
     ? await timeCliPhase(
       "newPiece.getProgramFromIndex",
       () =>
@@ -2112,10 +2132,13 @@ export async function newPieceWithReceipt(
           ),
       ),
     };
-  const { program } = indexed;
+  const source: ServedPatternSource = indexed === undefined
+    ? { pattern: replayed!.pattern }
+    : { program: indexed.program };
   // What the receipt says beside the piece id: the index's display name, for
-  // a piece from the index that has one.
-  const named = indexed.name === undefined ? {} : { name: indexed.name };
+  // a piece from the index that has one. A replay answers from the receipt,
+  // which records no name.
+  const named = indexed?.name === undefined ? {} : { name: indexed.name };
   // A published pattern carries no repository locator of its own.
   const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
@@ -2155,7 +2178,7 @@ export async function newPieceWithReceipt(
         createWithReceipt(
           config,
           pieces,
-          program,
+          source,
           repository,
           options,
           deps,
@@ -2184,6 +2207,14 @@ export async function newPieceWithReceipt(
     });
     noteWroteTo(config.space);
     return { pieceId: id, ...named };
+  }
+  // Only a request key replays a receipt, and a request key always takes the
+  // receipt path above, so the source here is a program.
+  const program = source.program;
+  if (program === undefined) {
+    throw new Error(
+      "a creation without a request key has no receipt to replay",
+    );
   }
   const piece = await timeCliPhase(
     "newPiece.create",

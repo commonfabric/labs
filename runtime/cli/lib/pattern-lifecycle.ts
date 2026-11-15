@@ -220,19 +220,25 @@ async function refuseUntakenScope(
  */
 export async function instantiatePieceOnServer(
   config: LifecycleClientConfig,
-  input: {
-    space: MemorySpace;
+  input:
+    & {
+      space: MemorySpace;
 
-    /** Stable key reused when a creation result is uncertain. */
-    requestKey?: string;
-    program: RuntimeProgram;
-    argument?: object;
-    repository?: string;
-    slug?: string;
-    force?: boolean;
-    register?: boolean;
-    start?: boolean;
-  },
+      /** Stable key reused when a creation result is uncertain. */
+      requestKey?: string;
+    }
+    & (
+      | { program: RuntimeProgram; pattern?: undefined }
+      | { pattern: PatternRef; program?: undefined }
+    )
+    & {
+      argument?: object;
+      repository?: string;
+      slug?: string;
+      force?: boolean;
+      register?: boolean;
+      start?: boolean;
+    },
 ): Promise<{
   pieceId: string;
   pattern: PatternRef;
@@ -251,7 +257,9 @@ export async function instantiatePieceOnServer(
   return await call(config, "instantiate", {
     space: input.space,
     ...(input.requestKey === undefined ? {} : { requestKey: input.requestKey }),
-    program: wireProgram(input.program),
+    ...(input.program === undefined
+      ? { pattern: input.pattern }
+      : { program: wireProgram(input.program) }),
     ...(input.argument === undefined ? {} : { argument: input.argument }),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
     ...(input.slug === undefined ? {} : { slug: input.slug }),

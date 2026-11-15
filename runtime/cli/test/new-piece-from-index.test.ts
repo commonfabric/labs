@@ -202,11 +202,13 @@ describe("piece new --from-index", () => {
               reads.push("file");
               return Promise.reject(new Error("no file is read"));
             },
+            readServedInstantiateReceipt: () => Promise.resolve(undefined),
             getProgramFromIndex: (_pieces, _config, entry) => {
               reads.push(entry);
               return Promise.resolve({ program: PROGRAM });
             },
-            loadIdentity: () => Promise.resolve({} as never),
+            loadIdentity: () =>
+              Promise.resolve({ did: () => "did:key:zActor" } as never),
             instantiatePieceOnServer: (_config, request) => {
               received = request;
               return Promise.resolve({
@@ -237,6 +239,56 @@ describe("piece new --from-index", () => {
         },
       );
     }
+
+    it("replays a served creation by its receipt's pattern, reading no index", async () => {
+      // The serving side answers a request key it has seen from its receipt,
+      // so the replay names the pattern the receipt holds instead of
+      // fetching and compiling the program again.
+      const sent: unknown[] = [];
+      const pattern = { identity: "zPattern", symbol: "default" };
+      const { pieceId } = await newPieceWithReceipt(
+        CONFIG,
+        { patternId: "pat-1", patternIndexUrl: INDEX_URL },
+        { requestKey: "deploy" },
+        {
+          loadPieces: () =>
+            Promise.resolve({
+              runtime: { experimental: { serverExecution: true } },
+              getSpace: () => "did:key:test-space",
+            } as never),
+          loadIdentity: () =>
+            Promise.resolve({ did: () => "did:key:zActor" } as never),
+          readServedInstantiateReceipt: (_pieces, requestKey, actingUser) =>
+            Promise.resolve(
+              requestKey === "deploy" && actingUser === "did:key:zActor"
+                ? {
+                  requestKey,
+                  pieceId: "fid1:created",
+                  pattern,
+                  registration: { status: "handled" },
+                }
+                : undefined,
+            ),
+          getProgramFromIndex: () =>
+            Promise.reject(new Error("the index is read")),
+          instantiatePieceOnServer: (_config, request) => {
+            sent.push(request);
+            return Promise.resolve({
+              pieceId: "fid1:created",
+              pattern,
+              requestKey: "deploy",
+              registration: { status: "handled" },
+            });
+          },
+        },
+      );
+
+      expect(pieceId).toBe("fid1:created");
+      expect(sent).toEqual([
+        expect.objectContaining({ requestKey: "deploy", pattern }),
+      ]);
+      expect(sent[0]).not.toHaveProperty("program");
+    });
 
     describe("against the index", () => {
       // Only the HTTP is faked here: the identity, the signed client, and the

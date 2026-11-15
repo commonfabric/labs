@@ -404,7 +404,10 @@ registration cannot find that root, the response reports the created piece and
 failed registration. The CLI exits unsuccessfully unless registration is
 handled, printing the retry key and created piece when available.
 `cf piece new --request-key <key>` resumes an uncertain creation or incomplete
-registration. The request is awaited without a wall-clock bound, since a
+registration. With `--from-index`, a key whose creation already committed is
+resumed from its receipt: the request names the pattern the receipt holds, and
+the pattern index is not read, so the retry succeeds while the index is
+unreachable or the pattern no longer published. The request is awaited without a wall-clock bound, since a
 creation the server is still committing lands whether or not the client waits;
 the bound the client keeps is on its own start. With `CF_CLI_TRACE_TIMINGS=1`,
 the command reports each step of the creation as a `newPiece.create.<step>`

@@ -123,7 +123,7 @@ describe("newPiece() naming", () => {
           {
             newPiece: (_config, _entry, given) => {
               seen = given;
-              return Promise.resolve("fid1:created");
+              return Promise.resolve({ pieceId: "fid1:created" });
             },
           },
         );
