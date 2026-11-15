@@ -2282,7 +2282,7 @@ the per-epic implementation notes).
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
-  The pool that places spaces on workers takes four more variables from the
+  The pool that places spaces on workers takes five more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
   already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
@@ -2296,7 +2296,10 @@ the per-epic implementation notes).
   serving memory server tests build starts), and
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
-  (default none). The serving memory server tests build reads the first.
+  (default none), and `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, how long a
+  worker may send no message, its heartbeats included, before it is killed
+  (default 60, at least 10). The serving memory server tests build reads the
+  first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and
