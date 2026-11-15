@@ -88,6 +88,8 @@ export type ModuleResult = {
   rows?: ResultRow[];
   /** What the run did not compare, by reason. */
   notCompared?: Record<string, number>;
+  /** The write edges the run of a sent event did not make. */
+  notMade?: string[];
   decided?: Run["decided"];
   events?: number;
   /** What became of each event, with the event the generator made. */
@@ -242,6 +244,9 @@ export const runModule = async (
       ),
     ],
     notCompared,
+    notMade: run.skipped.filter(({ reason }) =>
+      reason === "a write the event's run did not make"
+    ).map(({ what }) => what),
     decided: run.decided,
     events: events.length,
     outcomes: run.events.map((outcome, index) => ({
