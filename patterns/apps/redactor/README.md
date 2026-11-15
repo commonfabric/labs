@@ -75,7 +75,7 @@ per-user vault would want `PerUser` and is not attempted here.
 ## CFC debt
 
 No corner of the pattern is enforced by ordinary pattern logic in place of CFC.
-Four gaps shape it, two of them workarounds:
+Five gaps shape it:
 
 1. **The release trusts a caller-supplied vault.**
    `redactDraft({ draft,
@@ -115,6 +115,17 @@ Four gaps shape it, two of them workarounds:
    with the key kept when it was sent. A pasted reply is restored with the
    current draft's key, so editing the draft before pasting can mis-restore. A
    per-copy key would need the copy button to run a handler.
+
+5. **Only the first send lands (runtime bug).** A public store that once took an
+   exchange-rule release refuses every later write, even a constant (top/2502:
+   the release persists the pre-exchange label at the destination, and the next
+   write's destination probe consumes it). So after the first "Send to model",
+   later sends are refused with `maxConfidentiality failed at /modelPrompt`;
+   appending each send to a list of public prompts is refused too. Workaround
+   until it is fixed: start a new redactor per question. The access-time idiom
+   top/2502 suggests (hand the lift's output straight to the model) would work,
+   but only because model calls are ungated (debt 2), so it would drop the one
+   refusal this pattern exists to show.
 
 ## The leak check
 
