@@ -573,7 +573,7 @@ describe("module identity delegation", () => {
           candidate.identity,
           tx,
           new Map(),
-        ),
+        ).granted,
       ).toBeInstanceOf(Map);
     } finally {
       tx.abort();

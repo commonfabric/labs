@@ -1052,9 +1052,12 @@ export function codeFieldVerifies(
  * remains on the record is the compiler's bookkeeping.
  *
  * Without the marker, any transaction that both reads labeled data and reaches
- * a cache write is refused at `enforce-strict` — which a piece's source
- * transition does by construction, because it stages a module's delegation
- * union on the same transaction that moves the piece's source pointer.
+ * a cache write is refused at `enforce-strict`. A piece's source transition,
+ * which reads the piece's data, no longer reaches one: it records the
+ * successor's delegations on the piece, and they are staged on the records
+ * after it commits, on a transaction that reads only cache records
+ * (`stageModuleDelegations()`). A write-back over a record that already
+ * carries a clause still does.
  *
  * A cache document has no piece owner for §8.12.5's runtime-owned-store
  * enrollment. It is keyed on module content: every piece in the space
@@ -1069,12 +1072,14 @@ export function codeFieldVerifies(
  * Safety invariant 9 is why it does not go that far. The delegation metadata
  * holds module identities, and §17.7 says holding one grants no access to the
  * artifact it names, so the content written here is public. WHICH identity
- * appears is the other question: a transaction that read a labeled value and
- * chose a successor by it writes that choice here, and §8.11.3 puts a
- * decision's label on every downstream output whatever the output's own
- * content is. That is the router attack at one bit per update, so the stamp
- * stays and the ceiling is what the marker skips. The module's bytes are
- * unaffected either way, being in a `cid:` document of their own.
+ * appears is the other question: §8.11.3 puts a decision's label on every
+ * downstream output whatever the output's own content is, so a transaction
+ * that read a labeled value and wrote here keeps that label on the record,
+ * and the ceiling is what the marker skips. The source transition, the one
+ * that chooses a successor, no longer writes here, so the record does not
+ * carry that decision's label; the conformance statement's §11 records that
+ * as an under-taint. The module's bytes are unaffected either way, being in a
+ * `cid:` document of their own.
  *
  * Every write to a cache record goes through here, whichever field it touches.
  * The claim is about the document, so a write site that skipped it would leave

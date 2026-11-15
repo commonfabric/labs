@@ -451,14 +451,13 @@ The strict-only delta is:
   The schemas that describe their fields are the cache's own write schemas,
   which declare integrity and no confidentiality, so the ceiling that resolves
   there is the empty one, and a measured cache write carrying any clause
-  misfits. A piece's source transition reads the piece's argument, so it
-  writes no cache document: it records the successor's delegation union in
-  the piece's own `pieceSourceDelegations` meta member, on the piece's
-  document rather than a cache one, and the union is staged on the cache
-  documents once the
+  misfits. A piece's source transition reads the piece's argument, so it writes
+  no cache document: it records the successor's delegation union in the piece's
+  own `pieceSourceDelegations` meta member, on the piece's document rather than
+  a cache one, and the union is staged on the cache documents once the
   transition commits, on a transaction that reads nothing but cache documents.
-  An ordinary pattern update therefore brings no clause from the piece's data
-  to a cache write. The measurement still reaches a cache document whenever a
+  An ordinary pattern update therefore brings no clause from the piece's data to
+  a cache write. The measurement still reaches a cache document whenever a
   transaction that consumed a clause writes one, as a write-back over a record
   that already carries a clause does.
 

@@ -18116,9 +18116,12 @@ export async function preparePieceSourceTransitionBaseline(
  * transition is that source update's, and the member records the
  * delegations it grants the next pattern (`PatternManager.stageSourceUpdate()`,
  * composed at preparation with what the member recorded for the current
- * one). A transition that leaves the pattern in place keeps what the member
+ * one, and keeping its entries for modules outside the next closure). A
+ * transition that leaves the pattern identity in place keeps what the member
  * records for it, which still names it. Any other transition removes the
- * member: nothing promised the next pattern any delegation.
+ * member: nothing promised the next pattern any delegation. A preparation
+ * composed over a member that has moved since is refused as
+ * {@link PIECE_SOURCE_MOVED}.
  */
 export function applyPieceSourceTransition(
   runtime: Runtime,
@@ -18234,20 +18237,30 @@ export function applyPieceSourceTransition(
     candidate,
     current.pattern.identity,
   );
-  const nextDelegations = new Map(keepsSource ? recorded : []);
+  // The member is for a pattern's modules, which its identity names; the
+  // symbol picks an export of the same closure, so a change of symbol alone
+  // keeps what the member records.
+  const nextDelegations = new Map(
+    current.pattern.identity === nextPattern.identity ? recorded : [],
+  );
   if (options.sourceUpdate !== undefined) {
-    const granted = runtime.patternManager.stageSourceUpdate(
+    if (
+      !runtime.patternManager.sourceUpdateComposedWith(
+        options.sourceUpdate,
+        recorded,
+      )
+    ) {
+      throw new Error(PIECE_SOURCE_MOVED);
+    }
+    const { granted, carried } = runtime.patternManager.stageSourceUpdate(
       options.sourceUpdate,
       resultCell.space,
       transition.expected.pattern.identity,
       nextPattern.identity,
       tx,
-      getPieceSourceDelegations(
-        candidate,
-        transition.expected.pattern.identity,
-      ),
+      recorded,
     );
-    for (const [identity, predecessors] of granted) {
+    for (const [identity, predecessors] of [...carried, ...granted]) {
       nextDelegations.set(
         identity,
         new Set([...(nextDelegations.get(identity) ?? []), ...predecessors]),

@@ -890,32 +890,34 @@ registry of module delegations (`ModuleDelegationRegistry` in
 `cfc/prepare.ts`).
 
 **What the runtime does.** The transition, `applyPieceSourceTransition` in
-`runner.ts`, reads the piece's data and writes no cache document. It records
-the delegations it grants in the piece's `pieceSourceDelegations` meta
-member, through the runtime's meta seam, naming the pattern they are for.
+`runner.ts`, reads the piece's data and writes no cache document. It records the
+delegations it grants in the piece's `pieceSourceDelegations` meta member,
+through the runtime's meta seam, naming the pattern they are for.
 `PatternManager.prepareSourceUpdate` composes them, before the transaction
-opens, with what the member records for the previous pattern, so the
-transaction is pinned to the composed set, and `PatternManager.stageSourceUpdate`
-refuses the transition if the member has moved since. A transition that leaves
-the pattern in place keeps the member, and any other transition removes it.
+opens, with every entry the member records for the previous pattern, so the
+transaction is pinned to the composed set, and the transition is refused as a
+source that moved if the member has changed since. A transition that leaves the
+pattern identity in place keeps the member, and any other transition removes it.
 Once the transition commits, the runtime registers the delegations and stages
 them on the successor's source and compiled cache records, on a cache
 transaction of its own that reads only those records
-(`#stageCommittedDelegations`). A runtime that starts or swaps the piece to
-the member's pattern registers the member's entries whose module is in the
-successor's closure, verified as it loads it
-(`PatternManager.readInheritedAuthority`), and stages them on the records
-again where the records lack them. A member that is absent or names another
-pattern registers nothing, and the records' own lists decide.
+(`#stageCommittedDelegations`). A staging that fails is not retried; the piece's
+next committed update composes what it missed and stages it. A runtime that
+starts or swaps the piece to the member's pattern registers the member's entries
+whose module is in the successor's closure, verified as it loads it
+(`PatternManager.readInheritedAuthority`), and writes nothing. A member that is
+absent or names another pattern registers nothing, and the records' own lists
+decide.
 
-This implements a specification change, `TBD-succession-record` until its
-pull request has a number, ahead of its ruling, at strict and with no dial:
-@danfuzz ruled that it lands that way, recorded in the correspondence
-procedure as a nonconforming semantic gap. Against the pin it admits more,
-since a pattern update no longer labels the cache records it delegates
-through, so it does not satisfy the correspondence procedure's step 4. Its two
-deciding sites, the recording in `applyPieceSourceTransition` and the
-registration in `PatternManager`, carry its `SPEC-PENDING` marker.
+This implements a specification change, `TBD-succession-record` until its pull
+request has a number, ahead of its ruling, at strict and with no dial. @danfuzz
+authorized landing this design ahead of the ruling, without a flag, on
+2026-11-14, recorded in the correspondence procedure as a nonconforming semantic
+gap. Against the pin it admits more, since a pattern update no longer labels the
+cache records it delegates through, so it does not satisfy the correspondence
+procedure's step 4. Its two deciding sites, the recording in
+`applyPieceSourceTransition` and the registration in `PatternManager`, carry its
+`SPEC-PENDING` marker.
 
 **Residuals.**
 
@@ -925,16 +927,16 @@ registration in `PatternManager`, carry its `SPEC-PENDING` marker.
   reads no piece data, so the records carry none, and the member carries no
   flow label either.
 - Authority also comes from the piece's `pieceSourceDelegations` member, not
-  only from a closure's own records, and the member is trusted on its shape:
-  its predecessors are not checked against anything. Only the runtime's meta
-  seam writes it. A client that bypasses its runtime can forge it, as it can
-  forge the compiler's attestation on a record
-  (`memory/v2/envelope-admission.ts`), so no new attacker gains anything. What
-  a forged entry reaches is wider than a forged record: any runtime that
-  starts the piece registers it for the whole space, a start stages it on the
-  successor's cache records, and the next honest update composes it into its
-  own and stages it there under the compiler's attestation, after which it
-  cannot be told apart from an attested entry.
+  only from a closure's own records, and the member is trusted on its shape: its
+  predecessors are not checked against anything. Only the runtime's meta seam
+  writes it. A client that bypasses its runtime can forge it, as it can forge
+  the compiler's attestation on a record (`memory/v2/envelope-admission.ts`), so
+  no new attacker gains anything. What a forged entry reaches is wider than a
+  forged record: any runtime that starts the piece registers it for the whole
+  space. A start writes nothing, so the entry reaches the cache records only
+  when the piece's next honest update composes it into its own and stages it
+  there under the compiler's attestation, after which it cannot be told apart
+  from an attested entry.
 - Records an earlier transition stamped keep their clause, and the setups
   that read them keep refusing, until a separate repair. A write-back still
   re-stamps the root of a record that already carries a clause.

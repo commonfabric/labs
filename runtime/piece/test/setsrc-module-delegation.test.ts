@@ -500,7 +500,23 @@ export default pattern<{seed?: ${seedType}}>(() => {
 
       expect(await invokeSetName(observed, "after")).toBe("v2:after");
       expect(preparing.calls.length).toBe(0);
-      for (const { identity, predecessors } of recorded!.delegations) {
+      // Every entry for a module of v2's closure is registered. The member
+      // also carries v1's modules' entries, for a module that returns.
+      const closureTx = runtime.edit();
+      const v2Modules = new Set(
+        (await loadVerifiedSourceClosure(
+          runtime,
+          pieces.getSpace(),
+          v2,
+          closureTx,
+        ))?.keys(),
+      );
+      closureTx.abort();
+      const registered = recorded!.delegations.filter(({ identity }) =>
+        v2Modules.has(identity)
+      );
+      expect(registered.length).toBeGreaterThan(0);
+      for (const { identity, predecessors } of registered) {
         for (const predecessor of predecessors) {
           expect(
             observer.grantsModuleDelegation(
@@ -562,6 +578,46 @@ export default pattern<{seed?: ${seedType}}>(() => {
         observer.grantsModuleDelegation(pieces.getSpace(), v2, "planted"),
       ).toBe(true);
       expect(await storedDelegations(v2)).toEqual([v1]);
+    });
+
+    it("refuses an update prepared before another runtime's update replaced the piece's member, and writes nothing", async () => {
+      // `observer` prepares v1 to v2b and is held there; `runtime` then
+      // moves the piece from v1 to v2a. The held update is refused, and its
+      // caller reports that; nothing retries it.
+      const piece = await pieces.create(authorizedWriterProgram("v1"), {
+        input: {},
+      });
+      const other = await observerPieces.get(piece.id, false);
+      const entered = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      const prepare = observer.patternManager.prepareSourceUpdate.bind(
+        observer.patternManager,
+      );
+      using _held = stub(
+        observer.patternManager,
+        "prepareSourceUpdate",
+        async (...args) => {
+          const prepared = await prepare(...args);
+          entered.resolve();
+          await released.promise;
+          return prepared;
+        },
+      );
+      const racing = other.setPattern(authorizedWriterProgram("v2b"));
+      await entered.promise;
+      await piece.setPattern(authorizedWriterProgram("v2a"));
+      const v2a = getPatternIdentityRef(piece.getCell())!.identity;
+      const member = recordedMember(piece);
+      released.resolve();
+
+      // Refused by the setup's own guard on a pointer that moved, before the
+      // transition's: either names the piece as having changed.
+      await expect(racing).rejects.toThrow(/changed while/);
+      await observerPieces.synced();
+      await pieces.synced();
+      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(v2a);
+      expect(recordedMember(piece)).toEqual(member);
+      expect(member?.identity).toBe(v2a);
     });
 
     it("keeps the recorded grant of a module an update leaves unchanged", async () => {

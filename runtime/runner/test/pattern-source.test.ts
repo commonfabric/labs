@@ -461,6 +461,68 @@ describe("patternSource meta accessors", () => {
       });
     });
 
+    it("keeps what it records on a transition that changes only the symbol", async () => {
+      const pattern = await compile("symbol");
+      const recorded = [{
+        identity: pattern.identity,
+        predecessors: ["earlier-pattern"],
+      }];
+      const cell = await pieceRunning("delegations-symbol", pattern, recorded);
+
+      await transition(cell, { ...pattern, symbol: "other" }, "edit");
+
+      expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
+        identity: pattern.identity,
+        delegations: recorded,
+      });
+    });
+
+    it("refuses, as a source that moved, an update prepared over a member that has changed since", async () => {
+      const pattern = await compile("prepared-from");
+      const next = await compile("prepared-to");
+      const space = signer.did();
+      const updateOver = async (id: string, moveMember: boolean) => {
+        const cell = await pieceRunning(id, pattern, [{
+          identity: pattern.identity,
+          predecessors: ["earlier-pattern"],
+        }]);
+        const prepared = await runtime.patternManager.prepareSourceUpdate(
+          space,
+          pattern.identity,
+          next.identity,
+          getPieceSourceDelegations(cell, pattern.identity),
+        );
+        if (moveMember) {
+          const write = runtime.edit();
+          cell.withTx(write).setMetaRaw("pieceSourceDelegations", {
+            identity: pattern.identity,
+            delegations: [{
+              identity: pattern.identity,
+              predecessors: ["recorded-since"],
+            }],
+          }, rawMetaWriteAuthorization);
+          expect((await write.commit().settled).error).toBeUndefined();
+        }
+        const tx = runtime.edit();
+        try {
+          applyPieceSourceTransition(runtime, cell, tx, next, {
+            revisionId: `update-${id}`,
+            baseline: { kind: "retain", revisionId: `baseline-${id}` },
+            timestamp: 43,
+            operation: "edit",
+            origin: null,
+            expected: getPieceSourceSnapshot(cell)!,
+          }, { sourceUpdate: prepared });
+        } finally {
+          tx.abort();
+        }
+      };
+
+      await updateOver("prepared-over-the-same-member", false);
+      await expect(updateOver("prepared-over-a-moved-member", true))
+        .rejects.toThrow(PIECE_SOURCE_MOVED);
+    });
+
     it("is removed by a transition to another pattern that is no source update", async () => {
       const pattern = await compile("before");
       const next = await compile("after");
