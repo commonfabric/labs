@@ -115,6 +115,8 @@ export type ModuleResult = {
    * handlers bound in each place (`none`, `site`, `element`), by reason.
    */
   notComparedOfHandlers?: Record<string, Record<string, number>>;
+  /** The same, each with what was not compared. */
+  notComparedOfHandlersList?: { what: string; reason: string; where: string }[];
   /**
    * Each binding of a handler: where it is bound, whether the plan has a
    * result path for it, why not where the crate says, and the number of
@@ -228,10 +230,16 @@ export const runModule = async (
   // One event for each handler whose stream the result holds. A handler
   // bound in an element body gets its event at one element of each
   // enclosing collection, which the harness chooses.
-  const events = (plan.bindings ?? []).flatMap((binding, index) =>
-    binding.handler?.body !== undefined && binding.result !== undefined
-      ? [{ binding: index, event: generateEvent(plan, schemas, index) }]
-      : []
+  // The handlers bound in no element body and no pattern compiled in get
+  // theirs first, in the order of the plan, so that what their runs find
+  // stored does not depend on the events of the others.
+  const events = [false, true].flatMap((inside) =>
+    (plan.bindings ?? []).flatMap((binding, index) =>
+      binding.handler?.body !== undefined && binding.result !== undefined &&
+        ((binding.within ?? []).length > 0) === inside
+        ? [{ binding: index, event: generateEvent(plan, schemas, index) }]
+        : []
+    )
   );
   const handlers = (plan.bindings ?? []).flatMap((binding, index) => {
     if (binding.handler?.body === undefined) return [];
@@ -273,6 +281,10 @@ export const runModule = async (
       events,
     });
   } catch (error) {
+    // With `COMPARE_TRACE` set, where the run failed.
+    if (Deno.env.get("COMPARE_TRACE") !== undefined) {
+      consoleError((error as Error)?.stack ?? error);
+    }
     const message = `${(error as Error)?.message ?? error}`.split("\n")[0];
     return { ...base, skipped: `the run fails: ${message.slice(0, 100)}` };
   } finally {
@@ -307,6 +319,14 @@ export const runModule = async (
     ],
     notCompared,
     notComparedOfHandlers,
+    notComparedOfHandlersList: run.skipped.flatMap(
+      ({ what, reason, binding }) =>
+        binding === undefined ? [] : [{
+          what,
+          reason,
+          where: withinOf(plan.bindings?.[binding]?.within) ?? "none",
+        }],
+    ),
     handlers,
     notMade: run.skipped.filter(({ reason }) =>
       reason === "a write the event's run did not make"

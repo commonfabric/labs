@@ -386,3 +386,41 @@ describe("a handler that writes a reference it passes on", () => {
     expect(room.comparison.integrity).toBe("equal");
   });
 });
+
+describe("a handler of an element body that resolves the handle of its element", () => {
+  // `fixtures/element-resolved.tsx`: the handler calls `spaceOf` on the
+  // handle of its element and writes the result to a state cell. The
+  // `identity` slot of the handle has `resolved`: the body observes the
+  // reference, so the handle is not one that is only passed on (PL §2.2,
+  // "A `resolved` slot"; §2.5, "A resolved reference").
+  it("has the label of the links the resolution crosses, as the run has", async () => {
+    const { plan, schemas } = await planOf("element-resolved");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("element-resolved.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
+    });
+    const inputsOf = (atoms: unknown[]) =>
+      [...new Set(atoms.flatMap((atom) => atomKey(atom).match(/input:\w+/g)))]
+        .sort();
+
+    expect(run.events.map((event) => [event.outcome, event.elements])).toEqual(
+      [["committed", [{ collection: 0, key: "1" }]]],
+    );
+    const [row] = run.writes;
+    // The run crosses the link from the argument to the cell of `items`
+    // and consumes the entry of origin `link` stored there, which holds
+    // the clause the cell's type declares.
+    expect(inputsOf(row.runtime.confidentiality)).toEqual(["input:items"]);
+    expect(inputsOf(row.template.label.confidentiality)).toEqual([
+      "input:items",
+    ]);
+    expect(row.comparison.confidentiality).toBe("equal");
+    expect(row.comparison.integrity).toBe("equal");
+  });
+});

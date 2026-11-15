@@ -67,6 +67,8 @@ export type Plan = {
     root: PlanSlotRoot;
     path: string[];
     observes: string;
+    /** The slot observes the reference where resolution ends (PL §2.5). */
+    resolved?: true;
     schema?: string;
     declared?: { confidentiality?: Atom[]; integrity?: Atom[] };
   }[];
@@ -292,6 +294,8 @@ export type EventOutcome = {
   reason?: string;
   /** What the transaction was aborted with: the error a handler threw. */
   aborted?: string;
+  /** What failed after the event's outcome, where something did. */
+  afterwards?: string;
   /**
    * For a binding of an element body: the element of each enclosing
    * collection the event was sent for, outermost first.
@@ -768,6 +772,46 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             throw new Unsupported(`a slot of root \`${root.kind}\``);
         }
       };
+      // The position a body is given the handle of its element from. "The
+      // slot's label is what a `followRef` read consumes at the position
+      // that holds the reference: the path of the document the body was
+      // given the handle from, such as ... a binding's state document" (PL
+      // §2.2). The run of today gives each run of an element callback an
+      // argument document with the element at `element`, a link to the
+      // position in the source, and a handler bound there reads the
+      // reference from that document. For a path of a binding's state
+      // that is the element itself, that position is returned where the
+      // way has one instance for each step of the binding's `within`.
+      const elementHeldAt = (
+        slot: number,
+        context: Context,
+      ): AnyCell | undefined => {
+        if (plan.slots[slot].root.kind !== "binding") return undefined;
+        const { entry, rest } = stateEntry(slot, context);
+        if (rest.length > 0 || entry.place?.slot === undefined) {
+          return undefined;
+        }
+        const place = plan.slots[entry.place.slot];
+        if (place.root.kind !== "element" || place.path.length > 0) {
+          return undefined;
+        }
+        if (way.instances.length !== way.within.length + 1) return undefined;
+        const step = way.within.findIndex((step) =>
+          (step as { element?: number }).element === place.root.collection
+        );
+        const instance = step < 0 ? undefined : way.instances[step + 1];
+        const link = instance === undefined
+          ? undefined
+          : parseLink(instance.getMetaRaw("argument"), instance);
+        return link === undefined ? undefined : at(
+          runtime.getCellFromLink(
+            link as NormalizedFullLink,
+            undefined,
+            read,
+          ) as AnyCell,
+          ["element"],
+        );
+      };
       const sourceCell = (collection: number, context: Context): AnyCell => {
         const { slot } = plan.collections[collection].source;
         const cell = slot === undefined ? undefined : slotCell(slot, context);
@@ -1077,7 +1121,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         if (binding === undefined) return false;
         const body = plan.bodies
           ?.[plan.bindings?.[binding]?.handler?.body ?? -1];
-        const { root, path } = plan.slots[slot];
+        const { root, path, resolved } = plan.slots[slot];
+        // A slot with `resolved` observes the reference: the run follows
+        // the links from it, and consumes what crossing them consumes.
+        if (resolved === true) return false;
         const place = JSON.stringify([root, path]);
         return !(body?.writes ?? []).some(({ target }) => {
           if (target.kind !== "handle" || target.slot === undefined) {
@@ -1233,12 +1280,17 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return evaluated.label;
             }
             if (observes === "identity") {
+              // In a write row the reference is read where the body was
+              // given the handle from.
+              const held = passedHandle === "every entry"
+                ? cell
+                : elementHeldAt(slot, context) ?? cell;
               if (
                 passedHandle !== "every entry" &&
                 passedOn(slot, scope.binding)
               ) {
                 return passedHandle === "the stamp"
-                  ? linkWithoutDeclaration(cell)
+                  ? linkWithoutDeclaration(held)
                   : { confidentiality: [], integrity: [] };
               }
               // The label of the link: what a `followRef` read at the
@@ -1248,7 +1300,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               // only where it stands for the reference an output passes
               // on (PL §3.1, "What is compared").
               const reference = consumed(
-                cfcLabelViewForResolvedCell(cell, { lastNode: "top" }),
+                cfcLabelViewForResolvedCell(held, { lastNode: "top" }),
                 "followRef",
               );
               return dereference && passed
@@ -1897,9 +1949,19 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           });
         }
       });
-      events.push(await settled.promise);
+      const outcome = await settled.promise;
+      events.push(outcome);
       await runtime.idle();
-      await result.pull();
+      // The result is read again so that what the event's run changed is
+      // computed. A read the runtime fails is recorded with the event,
+      // and the write edges are compared on what is stored.
+      try {
+        await result.pull();
+      } catch (error) {
+        outcome.afterwards = `the read of the result fails: ${
+          (error as Error)?.message ?? error
+        }`.split("\n")[0].slice(0, 160);
+      }
       await runtime.idle();
       await reading((within) => {
         const after = within.writeTargets(binding, elements, found.path);
