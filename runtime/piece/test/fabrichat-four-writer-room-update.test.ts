@@ -351,6 +351,16 @@ describe("fabrichat-four-writer-room-update", () => {
         "ChatSend",
       ),
     );
+    for (const [requestId, value] of [["m4", "Root"], ["m5", "Twice"]]) {
+      await send(
+        "sendMessage",
+        trusted(
+          { requestId, target: { value } },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+    }
     const [first] = await storedMessages();
     await send(
       "sendReaction",
@@ -373,7 +383,13 @@ describe("fabrichat-four-writer-room-update", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
     }
-    expect(await bodies()).toEqual(["First", "Second", "Third"]);
+    expect(await bodies()).toEqual([
+      "First",
+      "Second",
+      "Third",
+      "Root",
+      "Twice",
+    ]);
     storedBefore = storedPolicy(
       runtime,
       room.getArgumentCell<unknown>()!,
@@ -482,7 +498,7 @@ describe("fabrichat-four-writer-room-update", () => {
     );
     const messages = await storedMessages();
     const [first] = messages;
-    const fourth = messages[3];
+    const fourth = messages.at(-1)!;
     await send(
       "editMessage",
       trusted(
@@ -596,12 +612,10 @@ describe("fabrichat-four-writer-room-update", () => {
     });
 
     it("reads a deleted message the earlier program stored as a tombstone, in `count`, `latest` and a window opened afterward", async () => {
-      // TODO(danfuzz): Known red. The room's message entries read each
-      // message through the handle its stored link resolves to, which keeps
-      // the earlier program's schema for it, whose `earlierVersions` the
-      // tombstone this tree's room leaves does not hold; such a message
-      // drops out of the room's counts and views. Turn this green with the
-      // room fix that reads the tombstone whole.
+      // The handle a message's stored link resolves to keeps the earlier
+      // program's schema for it, which requires an `earlierVersions` that
+      // the tombstone this tree's room leaves does not hold. The room reads
+      // each message under its own schema, so the tombstone still counts.
 
       const [, second] = await storedMessages();
       await send(
@@ -644,6 +658,75 @@ describe("fabrichat-four-writer-room-update", () => {
           ).pull(),
         ),
       ).toContainEqual({ deleted: true });
+    });
+
+    it("opens the thread of a message the earlier program stored, once that message is deleted", async () => {
+      const root = (await storedMessages())[3];
+      await send(
+        "sendMessage",
+        trusted(
+          {
+            body: "In the thread",
+            replyTo: { thread: root, shownIn: "thread" },
+          },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: root }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-thread",
+          windowId: "thread",
+          root,
+          from: { after: "start" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+
+      expect(refusals).toEqual([]);
+      expect(
+        ((await today.key("messages").key("windows").key("thread").key(
+          "messages",
+        ).pull()) as { body?: unknown }[] | undefined)?.map((message) =>
+          message?.body
+        ),
+      ).toEqual([{ deleted: true }, "In the thread"]);
+    });
+
+    it("obliterates a message the earlier program stored that its author deleted, dropping the author", async () => {
+      const twice = (await storedMessages())[4];
+      const refusals = await refusalsDuring(async () => {
+        await send(
+          "deleteMessage",
+          trusted({ message: twice }, "ChatDeleteSurface", "ChatDelete"),
+        );
+        await send(
+          "obliterateMessage",
+          trusted(
+            { message: twice },
+            "ChatObliterateSurface",
+            "ChatObliterate",
+          ),
+        );
+      });
+
+      expect(refusals).toEqual([]);
+      expect(await twice.key("body").pull()).toEqual({ deleted: true });
+      expect((twice.getRaw() as { authorProfile?: unknown }).authorProfile)
+        .toBeUndefined();
     });
 
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
