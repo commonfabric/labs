@@ -726,11 +726,19 @@ describe("FabricUnavailable", () => {
         const text = jsonFromFabricValue(arrived);
         const decoded = newDefaultJsonCodecEngine().decode(text, env);
 
+        // An instance constructed with the same text stores no message, so
+        // it is a different state: it hashes differently, and is unequal.
+        const constructed = new FabricUnavailable(
+          "error",
+          "network",
+          NETWORK_DEFAULT_MESSAGE,
+        );
+
         expect(decoded).toBeInstanceOf(FabricUnavailable);
         expect(jsonFromFabricValue(decoded)).toBe(text);
         expect(hashStringOf(decoded)).toBe(hashStringOf(arrived));
-        expect(hashStringOf(decoded))
-          .not.toBe(hashStringOf(new FabricUnavailable("error", "network")));
+        expect(hashStringOf(decoded)).not.toBe(hashStringOf(constructed));
+        expect(valueEqual(decoded, constructed)).toBe(false);
       });
     });
 
@@ -914,6 +922,11 @@ describe("FabricUnavailable", () => {
               CODEC_TYPE_TAGS.Unavailable,
               STATE_WITH_DEFAULT_MESSAGE,
             ),
+          ),
+        );
+        expect(hashStringOf(decoded)).not.toBe(
+          hashStringOf(
+            new FabricUnavailable("error", "network", NETWORK_DEFAULT_MESSAGE),
           ),
         );
       });

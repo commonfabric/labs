@@ -150,8 +150,9 @@ example `fid1`), in the general tag syntax of `1-fabric-values.md` Section 2.5,
 and `hash` is the hash bytes as an unpadded base64url string, per the
 convention above. An encoder does not write a hash whose algorithm tag is
 outside that syntax. On decoding, a state that is not an object, whose fields
-are not strings, or whose `tag` is outside that syntax, produces a
-`ProblematicValue`. See `1-fabric-values.md` Section 1.4.9.
+are not strings, whose `tag` is outside that syntax, or that holds any field
+besides those two, produces a `ProblematicValue`. See `1-fabric-values.md`
+Section 1.4.9.
 
 ### `KeyPair@1` — asymmetric key pairs
 
@@ -283,9 +284,11 @@ things this type is for, and such a value could not go back out under it.
 which it can because that tag is known to be a real one.
 
 On decoding, a state that is not an object, a `tag` or `error` that is not a
-string, or an absent `state` property is refused, and settles against `lenient`
-like any other malformation: a lenient decode yields a `ProblematicValue`
-describing that decode, and a strict one raises. A well-formed record is a
+string, an absent `state` property, or any field besides those three is
+refused, and settles against `lenient` like any other malformation: a lenient
+decode yields a `ProblematicValue` describing that decode, recording
+`Problematic@1` as its tag and the record as it arrived as its state, and a
+strict one raises. A well-formed record is a
 record of a *past* failure and reads back as one under either setting, this
 decode having succeeded. `state` is checked for presence rather than for type,
 because every `FabricValue` is a valid state, `undefined` among them; filling in

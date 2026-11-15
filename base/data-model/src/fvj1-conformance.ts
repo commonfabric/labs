@@ -1064,6 +1064,17 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
       '"errorMessage":"boom","reason":"error"}}',
   },
   {
+    name: "hash holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Hash@1`",
+    text: 'fvj1:{"/Hash@1":{"extra":1,"hash":"AQ","tag":"fid1"}}',
+  },
+  {
+    name: "problematic value holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Problematic@1`",
+    text: 'fvj1:{"/Problematic@1":{"error":"e","extra":1,"state":null,' +
+      '"tag":"x"}}',
+  },
+  {
     name: "key pair holding a field its codec does not read",
     section: "3-json-encoding.md section 3, `KeyPair@1`",
     text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","extra":1,' +

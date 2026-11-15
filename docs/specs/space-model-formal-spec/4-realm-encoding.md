@@ -293,8 +293,9 @@ and nothing inside one is validated except by the codec itself, reading the
 fields it knows (Section 7.1). The reserved-key rule of Section 3.2, the cycle
 rule of Section 4, and the refusals of Section 6 all describe values the walk
 reaches; none of them reaches into a terminal state. A `Hash@1` state carrying
-a `constructor` key or a reference back to itself therefore decodes, because
-its codec reads `tag` and `hash` and never looks.
+a `constructor` key or a reference back to itself is therefore not refused by
+the walk. Its codec refuses it instead, reading `tag` and `hash` and refusing a
+state holding any other field (Section 7.1).
 
 This is what terminality buys and what it costs. A codec that wants its state
 examined declares itself nonterminal, and then every rule here applies to that
