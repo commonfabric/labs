@@ -2086,9 +2086,9 @@ back the generation it replaced. Resolution runs over the whole ranked list
 before the result limit, so a successor outside the limit still takes its
 predecessor's place. The service's `docs/api.md` states the rule.
 
-Replacement metadata, quality, and signals describe the successor, and each row
-carries the display `name` the index holds for it. Where the index supports
-generation evidence, its combined signal summary includes an attributed
+Replacement metadata, quality, and signals describe the successor, and a row
+carries a display `name` when the index holds or can derive one. Where the index
+supports generation evidence, its combined signal summary includes an attributed
 `inherited` portion: predecessor ID, publication cutoff, event counts, and
 score. The harness preserves that attribution; a proven tier can come entirely
 from predecessor evidence before the successor has run. Query-term counts on a

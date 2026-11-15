@@ -6,9 +6,9 @@ index. The server lives in
 The package signs calls with the Fabric CF1 HTTP scheme, checks HTTP and JSON
 responses, and composes requests for index frontends. The index resolves
 discoverable successors itself, so a search answer's rows are current
-generations, each with the display `name` the index holds for it and, for a
-replacement, the `supersedes` id it matched as. Callers supply a signer and can
-substitute the HTTP transport.
+generations. A row carries an optional display `name`, present when the index
+holds or can derive one, and a replacement carries the `supersedes` id it
+matched as. Callers supply a signer and can substitute the HTTP transport.
 
 Import the client from `@commonfabric/pattern-index/client`, search-body
 composition and the status rule from `@commonfabric/pattern-index/front`, or
@@ -54,9 +54,9 @@ allowlist refusals, even when their body is not JSON. Other index failures,
 successful replies with unreadable JSON, and an event response with `ok:false`
 return status 502. Reply errors contain stable messages, withholding the index's
 raw body. Completed requests, including refusals and malformed JSON input, exit
-zero. Host failures such as an unreadable key, an invalid base URL, a failed or
-a failed transport exit nonzero with detail on stderr and nothing on stdout.
-Missing required flags exit 2.
+zero. Host failures such as an unreadable key, an invalid base URL, or a failed
+transport exit nonzero with detail on stderr and nothing on stdout. Missing
+required flags exit 2.
 
 A search is one signed request. The helper uses no cache or resident service.
 The CLI import graph reaches the runner through its `toolshed-http-auth` export,
