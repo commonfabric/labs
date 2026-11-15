@@ -894,21 +894,23 @@ registry of module delegations (`ModuleDelegationRegistry` in
 delegations it grants in the piece's `pieceSourceDelegations` meta member,
 through the runtime's meta seam, naming the pattern they are for.
 `PatternManager.prepareSourceUpdate` composes them, before the transaction
-opens, with every entry the member records for the previous pattern, so the
-transaction is pinned to the composed set, and the transition is refused as a
-source that moved if the member has changed since. Any other transition carries
-the member's entries over to the next pattern, keyed by module, so a module the
-next pattern keeps unchanged keeps its grant, as its cache record would, and a
-new module gets none. Once the transition commits, the runtime registers the
-delegations and stages them on the successor's source and compiled cache
-records, on a cache transaction of its own that reads only those records
-(`#stageCommittedDelegations`). A staging that fails is not retried; the piece's
-next committed update composes what it missed and stages it. A runtime that
-starts or swaps the piece to the member's pattern registers the member's entries
-whose module is in the successor's closure, verified as it loads it
-(`PatternManager.readInheritedAuthority`), and writes nothing. A member that is
-absent or names another pattern registers nothing, and the records' own lists
-decide.
+opens, with every entry the member records for the previous pattern, except an
+entry for a module outside the new closure that an entry kept for a module of
+the closure covers (it holds that module and every predecessor that module's
+entry lists), so the transaction is pinned to the composed set, and the
+transition is refused as a source that moved if the member has changed since.
+Any other transition carries the member's entries over to the next pattern,
+keyed by module, so a module the next pattern keeps unchanged keeps its grant,
+as its cache record would, and a new module gets none. Once the transition
+commits, the runtime registers the delegations and stages them on the
+successor's source and compiled cache records, on a cache transaction of its own
+that reads only those records (`#stageCommittedDelegations`). A staging that
+fails is not retried; the piece's next committed update composes what it missed
+and stages it. A runtime that starts or swaps the piece to the member's pattern
+registers the member's entries whose module is in the successor's closure,
+verified as it loads it (`PatternManager.readInheritedAuthority`), and writes
+nothing. A member that is absent or names another pattern registers nothing, and
+the records' own lists decide.
 
 This implements a specification change, `TBD-succession-record` until its pull
 request has a number, ahead of its ruling, at strict and with no dial. @danfuzz
@@ -938,6 +940,13 @@ procedure's step 4. Its two deciding sites, the recording in
   when the piece's next honest update composes it into its own and stages it
   there under the compiler's attestation, after which it cannot be told apart
   from an attested entry.
+- A grant the composition drops, pinned by a test that expects the loss. Module M's entry is dropped because a successor C covers it. If C
+  then leaves, an unrelated module takes M's file, and M returns, M derives only
+  from the unrelated module and loses its chain, where `main`'s record of M
+  keeps it. It takes those steps and a staging of M's original grant that never
+  landed. It fails closed: the write is refused. Keeping every superseded
+  entry would remove it, at a cost that grows quadratically with the piece's
+  updates.
 - Records an earlier transition stamped keep their clause, and the setups
   that read them keep refusing, until a separate repair. A write-back still
   re-stamps the root of a record that already carries a clause.
