@@ -58,6 +58,40 @@ const keyReading: PhotoReading = {
   })),
 };
 
+// The model requests the steps below make, answered so the test never
+// reaches a model (CI blocks live calls).
+export const llmMocks = [
+  {
+    promptIncludes: "Team: RED",
+    object: {
+      clues: [{
+        clue: "ocean",
+        number: 2,
+        targetWords: ["WORD2", "WORD3"],
+        reasoning: "both are at sea",
+      }],
+    },
+  },
+  {
+    promptIncludes: "Team: BLUE",
+    object: {
+      clues: [{
+        clue: "forest",
+        number: 2,
+        targetWords: ["WORD10", "WORD11"],
+        reasoning: "both grow there",
+      }],
+    },
+  },
+  // A request re-sent when the board changes under an open request.
+  { promptIncludes: "Team:", object: { clues: [] } },
+  // The placeholder photo the steps add is read once.
+  {
+    promptIncludes: "Read this photo",
+    object: { kind: "unknown", notes: "test photo" },
+  },
+];
+
 export default pattern(() => {
   const board = new Writable<BoardCard[]>([]);
   const myTeam = new Writable<Team>("red");
@@ -289,6 +323,11 @@ export default pattern(() => {
   );
 
   return {
+    // With server execution off (as in CI), wiring the per-user `myTeam`
+    // input logs the runtime's scoped-link WARN (data-updating.ts, "Storing a
+    // user-scoped link…", pending review per #4561). Model calls are mocked
+    // above, so no other warning is expected.
+    allowConsoleWarnings: true,
     [TESTS]: [
       { assertion: assert_normalize_pads_to_25 },
       { assertion: assert_bad_owner_is_unassigned },
