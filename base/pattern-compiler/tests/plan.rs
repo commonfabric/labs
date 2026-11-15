@@ -3192,3 +3192,59 @@ export const P = pattern<{ n: Cell<number> }>(({ n }) => {
         ])
     );
 }
+
+/// PL §1.1: "the entries of the enclosing rendered tree at the tag's
+/// position are those of the callee's `[UI]` ... That is a rule about the
+/// position and not about the tag ... At every other place, such as a path
+/// of the result, a path of an argument, or the value of an attribute, the
+/// tag evaluates to the callee's result, and the entries at that place are
+/// those of the result, with the callee's tree below `$UI`".
+#[test]
+fn a_tag_that_is_the_whole_value_of_a_result_path_is_the_callees_result() {
+    let plan = plan_of(
+        &program(
+            r#"import { computed, pattern, UI } from "commonfabric";
+export const Row = pattern<{ title: string }>(({ title }) => {
+  const shout = computed(() => title + "!");
+  return { [UI]: <span>{shout}</span>, shout };
+});
+export const P = pattern<{ secret: string }>(({ secret }) => {
+  return {
+    controls: <Row title={secret} />,
+    [UI]: <div><Row title={secret} />{Row({ title: secret })}</div>,
+  };
+});
+"#,
+        ),
+        "P",
+    );
+    let mut paths: Vec<String> = plan["outputs"]
+        .as_array()
+        .expect("outputs")
+        .iter()
+        .filter(|output| output["kept"] == json!(true))
+        .map(|output| {
+            output["path"]
+                .as_array()
+                .expect("a path")
+                .iter()
+                .map(|segment| segment.as_str().expect("a segment"))
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .filter(|path| path.ends_with("children/0") || path.ends_with("shout"))
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            // At a child position, as a tag and as a call: the callee's
+            // tree.
+            "$UI/children/0/children/0",
+            "$UI/children/1/children/0",
+            // As the value of a result path: the callee's result.
+            "controls/$UI/children/0",
+            "controls/shout",
+        ]
+    );
+}

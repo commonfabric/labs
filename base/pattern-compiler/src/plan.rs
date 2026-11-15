@@ -3768,7 +3768,14 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// under a `site` step where the compiler can see the pattern, and a
     /// `Child` where the tag names a factory value. `false` for any other
     /// tag.
-    fn jsx_pattern(&mut self, element: &JSXElement<'a>) -> Option<Place> {
+    ///
+    /// With `child`, the tag is at a child position of a view node, and
+    /// the place is the callee's `[UI]`: "the entries of the enclosing
+    /// rendered tree at the tag's position are those of the callee's
+    /// `[UI]`". At every other place "the tag evaluates to the callee's
+    /// result, and the entries at that place are those of the result, with
+    /// the callee's tree below `$UI`" (PL §1.1).
+    fn jsx_pattern(&mut self, element: &JSXElement<'a>, child: bool) -> Option<Place> {
         let JSXElementName::IdentifierReference(identifier) = &element.opening_element.name else {
             return None;
         };
@@ -3843,9 +3850,10 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.operands = saved.0;
         self.opaque = saved.1;
         // The enclosing tree holds what the pattern renders.
-        let rendered = match &result {
-            Place::Record(fields) => fields.get("$UI").cloned().unwrap_or(result.clone()),
-            other => other.clone(),
+        let rendered = if child {
+            rendered_at_child(result)
+        } else {
+            result
         };
         self.pass(&rendered);
         Some(rendered)
@@ -3895,13 +3903,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                     continue;
                 }
-                JSXChild::Element(element) => (self.jsx_element(element), false),
+                JSXChild::Element(element) => (self.jsx_element_at(element, true), false),
                 JSXChild::Fragment(fragment) => (self.jsx_node(None, &fragment.children), false),
                 JSXChild::ExpressionContainer(container) => {
                     let Some(expression) = container.expression.as_expression() else {
                         continue;
                     };
-                    let place = self.eval(expression, "child");
+                    // A call of a pattern, and a variable that holds the
+                    // result of one, render as the tag does (PL §1.1).
+                    let place = rendered_at_child(self.eval(expression, "child"));
                     self.pass(&place);
                     let listed = matches!(&place, Place::Value(value, path)
                         if path.is_empty() && self.values[*value].collection.is_some() && !self.values[*value].scan)
@@ -3978,7 +3988,13 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 
     fn jsx_element(&mut self, element: &JSXElement<'a>) -> Place {
-        if let Some(rendered) = self.jsx_pattern(element) {
+        self.jsx_element_at(element, false)
+    }
+
+    /// The place of a JSX element, at a child position of a view node
+    /// where `child` is true.
+    fn jsx_element_at(&mut self, element: &JSXElement<'a>, child: bool) -> Place {
+        if let Some(rendered) = self.jsx_pattern(element, child) {
             return rendered;
         }
         let surface = self.ui_element(element);
@@ -6670,6 +6686,17 @@ fn join(inputs: Vec<Value>) -> Value {
             "inputs": inputs,
             "by": { "expression": true, "pattern": pattern },
         }),
+    }
+}
+
+/// What a child position of a view node holds of `place`: of the result
+/// of a pattern its `[UI]`, and any other place itself (PL §1.1).
+fn rendered_at_child(place: Place) -> Place {
+    match place {
+        Place::Record(mut fields) if fields.contains_key("$UI") => {
+            fields.remove("$UI").unwrap_or(Place::Unknown)
+        }
+        other => other,
     }
 }
 
