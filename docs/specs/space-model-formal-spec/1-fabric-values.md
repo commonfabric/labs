@@ -1377,11 +1377,13 @@ type UnavailableErrorKind =
  * The state of a `FabricUnavailable`, which is also its encoded form. A
  * field that has nothing to say is absent rather than `null`.
  */
-type UnavailableState = {
-  readonly reason: UnavailableReason;
-  readonly errorKind?: UnavailableErrorKind;
-  readonly message?: string;
-};
+type UnavailableState =
+  | { readonly reason: "pending" | "syncing" }
+  | {
+    readonly reason: "error";
+    readonly errorKind: UnavailableErrorKind;
+    readonly message?: string;
+  };
 ```
 
 The reasons split along one axis, which `isTransient()` reports:
@@ -1457,17 +1459,19 @@ export class FabricUnavailable extends FabricPrimitive {
   }
 
   get errorKind(): UnavailableErrorKind | null {
-    return this.#state.errorKind ?? null;
+    const state = this.#state;
+    return (state.reason === "error") ? state.errorKind : null;
   }
 
   /** The message, or the kind's default when none was stored. */
   get message(): string | null {
-    return this.#state.message ?? defaultMessageFor(this.errorKind);
+    return this.rawMessage ?? defaultMessageFor(this.errorKind);
   }
 
   /** The message as stored, with no default supplied. */
   get rawMessage(): string | null {
-    return this.#state.message ?? null;
+    const state = this.#state;
+    return (state.reason === "error") ? (state.message ?? null) : null;
   }
 
   isPending(): boolean {

@@ -553,19 +553,18 @@ export type UnavailableErrorKind =
  * stored. A field that has nothing to say is absent rather than `null`, so
  * that the state of a transient reason is exactly the reason.
  */
-export type UnavailableState = {
-  /** Why the data is unavailable. */
-  readonly reason: UnavailableReason;
-
-  /** The kind of error, present exactly when the reason is `error`. */
-  readonly errorKind?: UnavailableErrorKind;
-
+export type UnavailableState =
+  /** A transient reason, which carries nothing else. */
+  | { readonly reason: "pending" | "syncing" }
   /**
-   * The message, present only when one is stored, which a message equal to
-   * the kind's default never is.
+   * The `error` reason, with its kind, and its message when one is stored,
+   * which a message equal to the kind's default never is.
    */
-  readonly message?: string;
-};
+  | {
+    readonly reason: "error";
+    readonly errorKind: UnavailableErrorKind;
+    readonly message?: string;
+  };
 
 /**
  * A marker standing in for data that is not available, saying why. It holds

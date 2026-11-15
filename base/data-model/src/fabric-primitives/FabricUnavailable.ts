@@ -90,6 +90,18 @@ export type ErrorKindsAgree = MustBeTrue<
   >
 >;
 
+/**
+ * The shape a decoded state is checked against before the constructor sees
+ * it. Wider than `UnavailableState`, because a state arriving from outside may
+ * pair fields with a reason the constructor refuses, and that pairing is the
+ * constructor's to decide.
+ */
+type FabricUnavailableState = {
+  reason: UnavailableReason;
+  errorKind?: UnavailableErrorKind;
+  message?: string;
+};
+
 /** The reasons that have a prefab instance: every reason but `error`. */
 type TransientReason = Exclude<UnavailableReason, "error">;
 
@@ -197,11 +209,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /** The kind of error, when the reason is `error`; `null` otherwise. */
   get errorKind(): UnavailableErrorKind | null {
-    // An own property only, so that nothing inherited stands in for an
-    // absent field; `rawMessage` reads the same way.
     const state = this.#state;
 
-    return Object.hasOwn(state, "errorKind") ? (state.errorKind ?? null) : null;
+    return (state.reason === UNAVAILABLE_REASONS.error)
+      ? state.errorKind
+      : null;
   }
 
   /**
@@ -222,9 +234,13 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * never given.
    */
   get rawMessage(): string | null {
+    // Reads own fields only, as the codecs do.
     const state = this.#state;
 
-    return Object.hasOwn(state, "message") ? (state.message ?? null) : null;
+    return ((state.reason === UNAVAILABLE_REASONS.error) &&
+        Object.hasOwn(state, "message"))
+      ? (state.message ?? null)
+      : null;
   }
 
   /** Whether the reason is `pending`. */
@@ -286,7 +302,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   static #jsonCodec = Object.freeze(
     new (class UnavailableCodec
-      extends BaseNonterminalCodec<never, UnavailableState> {
+      extends BaseNonterminalCodec<never, FabricUnavailableState> {
       /** Constructs an instance. */
       constructor() {
         super(CODEC_TYPE_TAGS.Unavailable, FabricUnavailable);
@@ -296,12 +312,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
       encode(
         value: FabricUnavailable,
         _env: LiveEnvironment,
-      ): UnavailableState {
+      ): FabricUnavailableState {
         return value.#state;
       }
 
       /** @inheritDoc */
-      canDecode(state: FabricValue): state is UnavailableState {
+      canDecode(state: FabricValue): state is FabricUnavailableState {
         return FabricUnavailable.#isState(state);
       }
 
@@ -315,7 +331,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
        */
       decode(
         typeTag: string,
-        state: UnavailableState,
+        state: FabricUnavailableState,
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
@@ -346,7 +362,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
       }
 
       /** @inheritDoc */
-      canDecode(state: RealmCodecValue): state is UnavailableState {
+      canDecode(state: RealmCodecValue): state is FabricUnavailableState {
         return FabricUnavailable.#isState(state);
       }
 
@@ -358,7 +374,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
        */
       decode(
         typeTag: string,
-        state: UnavailableState,
+        state: FabricUnavailableState,
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
@@ -395,7 +411,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * Helper for both codecs' `canDecode()`, which reports whether `state` has
-   * the shape of a {@link UnavailableState}: a plain object whose own
+   * the shape of a {@link FabricUnavailableState}: a plain object whose own
    * `reason` is one of the reasons, whose own `errorKind`, if
    * present at all, is one of the kinds, and whose own `message`, if
    * present at all, is a string. Every field is read as an own property, so
@@ -405,7 +421,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * malformation rather than an absence. Whether the fields present belong with
    * the reason is the constructor's to decide.
    */
-  static #isState(state: unknown): state is UnavailableState {
+  static #isState(state: unknown): state is FabricUnavailableState {
     if (!isPlainObject(state) || !Object.hasOwn(state, "reason")) {
       return false;
     }
@@ -467,7 +483,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * tested them, so a field that is only inherited is absent here too.
    */
   static #instanceForState(
-    state: UnavailableState,
+    state: FabricUnavailableState,
   ): FabricUnavailable {
     const { reason } = state;
     const errorKind = Object.hasOwn(state, "errorKind")

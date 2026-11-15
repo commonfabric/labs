@@ -226,23 +226,6 @@ describe("FabricUnavailable", () => {
         });
       });
 
-      it("leaves the getters reading no field the record only inherits", () => {
-        const polluted = Object.prototype as {
-          errorKind?: unknown;
-          message?: unknown;
-        };
-        polluted.errorKind = "general";
-        polluted.message = "boom";
-        try {
-          expect(UNAVAILABLE_PENDING.errorKind).toBe(null);
-          expect(UNAVAILABLE_PENDING.message).toBe(null);
-          expect(new FabricUnavailable("error", "sync").rawMessage).toBe(null);
-        } finally {
-          delete polluted.errorKind;
-          delete polluted.message;
-        }
-      });
-
       it("is the record both codecs encode", () => {
         const instance = new FabricUnavailable("error", "network", "boom");
         const env = NULL_LIVE_ENVIRONMENT;

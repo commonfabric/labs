@@ -338,14 +338,10 @@ export class ValueHasher {
 
   /**
    * Feeds `value` in the `FabricInstance` layout: `TAG_INSTANCE`, `typeTag`,
-   * then `state` with `value` on the path, or a cycle reference if `value` is
-   * already on it.
+   * then `state` with `value` on the path. The caller has already checked
+   * that `value` is not on the path.
    */
   #feedInstance(value: object, typeTag: string, state: FabricValue): void {
-    if (this.#feedCycleIfOnPath(value)) {
-      return;
-    }
-
     const path = this.#path;
 
     this.#hasher.update(TAG_INSTANCE_BYTES);
@@ -449,6 +445,9 @@ export class ValueHasher {
       }
 
       case VALUE_TAGS.FabricInstance: {
+        if (this.#feedCycleIfOnPath(value)) {
+          return;
+        }
         const fabInst = value as BaseFabricInstance;
         const codec = codecOf(fabInst);
         this.#feedInstance(
@@ -479,6 +478,9 @@ export class ValueHasher {
       case VALUE_TAGS.FabricUnavailable: {
         // A `FabricPrimitive`, hashed in the instance layout under its wire
         // tag: Section 4.18 of `2-hash-byte-format.md`.
+        if (this.#feedCycleIfOnPath(value)) {
+          return;
+        }
         const fab = value as FabricUnavailable;
         this.#feedInstance(fab, CODEC_TYPE_TAGS.Unavailable, fab.state);
         return;
