@@ -1,27 +1,34 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
-  addDirectEdges,
   closeDelegationsFor,
-  inheritedThrough,
+  composeRecordedEdges,
+  inheritedAlongStamps,
+  recordEdge,
+  type StampedEdges,
 } from "../src/module-delegations.ts";
 
-const edgesOf = (
-  entries: Record<string, readonly string[]>,
-): Map<string, Set<string>> =>
-  new Map(
-    Object.entries(entries).map(([identity, predecessors]) => [
-      identity,
-      new Set(predecessors),
-    ]),
-  );
+/** Stamped edges from `[successor, predecessor, stamp]` triples. */
+const stamped = (
+  triples: readonly (readonly [string, string, number])[],
+): Map<string, Map<string, number[]>> => {
+  const edges = new Map<string, Map<string, number[]>>();
+  for (const [identity, predecessor, stamp] of triples) {
+    recordEdge(edges, identity, predecessor, stamp);
+  }
+  return edges;
+};
 
-/** `edges` as a canonical string, for comparing two relations. */
-const canonical = (edges: ReadonlyMap<string, ReadonlySet<string>>): string =>
+const sorted = (values: Iterable<string>) => [...values].sort();
+
+/** `edges` as a canonical string, stamps included. */
+const canonical = (edges: StampedEdges): string =>
   JSON.stringify(
-    [...edges].filter(([, predecessors]) => predecessors.size > 0)
-      .map(([identity, predecessors]) => [identity, [...predecessors].sort()])
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    [...edges].map(([identity, predecessors]) => [
+      identity,
+      [...predecessors].map(([predecessor, stamps]) => [predecessor, stamps])
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    ]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
 
 /** A deterministic generator of numbers in [0, 1), from `seed`. */
@@ -32,31 +39,16 @@ const random = (seed: number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-/**
- * A random relation over `size` identities `m0`… and a random identity and
- * input list over them, from `seed`: cycles, chains and closed lists alike.
- */
-const randomCase = (seed: number, size: number) => {
+/** Random stamped triples over `size` identities `m0`…, from `seed`. */
+const randomTriples = (seed: number, size: number, count: number) => {
   const next = random(seed);
-  const name = (index: number) => `m${index}`;
-  const edges = new Map<string, Set<string>>();
-  for (let index = 0; index < size; index++) {
-    const predecessors = new Set<string>();
-    for (let other = 0; other < size; other++) {
-      if (other !== index && next() < 0.15) predecessors.add(name(other));
-    }
-    if (predecessors.size > 0) edges.set(name(index), predecessors);
-  }
-  const identity = name(Math.floor(next() * size));
-  const inputs = Array.from(
-    { length: Math.floor(next() * size) },
-    () => name(Math.floor(next() * size)),
-  );
-  return { edges, identity, inputs };
+  return Array.from({ length: count }, () =>
+    [
+      `m${Math.floor(next() * size)}`,
+      `m${Math.floor(next() * size)}`,
+      Math.floor(next() * 6),
+    ] as const);
 };
-
-const copy = (edges: ReadonlyMap<string, ReadonlySet<string>>) =>
-  new Map([...edges].map(([identity, set]) => [identity, new Set(set)]));
 
 const shuffled = <T>(values: readonly T[], seed: number): T[] => {
   const next = random(seed);
@@ -69,17 +61,126 @@ const shuffled = <T>(values: readonly T[], seed: number): T[] => {
 };
 
 describe("module-delegations", () => {
-  describe("inheritedThrough()", () => {
-    it("returns every identity reached, itself excepted, and ends on a cycle", () => {
-      const edges = edgesOf({ a: ["b"], b: ["c"], c: ["a", "d"] });
+  describe("inheritedAlongStamps()", () => {
+    // Each case is a piece's history as its source updates record it: the
+    // successor's edge to the module it succeeds, stamped with the history
+    // position. The expected set is what a fresh `main` runtime grants from
+    // the records those updates stage.
+    for (
+      const { name, triples, module, expected } of [
+        {
+          name: "follows an edge only through edges recorded at or before it",
+          // X to A to Y to X; then a move back to A that derives nothing.
+          triples: [["A", "X", 1], ["Y", "A", 2], ["X", "Y", 3]],
+          module: "A",
+          expected: ["X"],
+        },
+        {
+          name:
+            "follows a later edge once the same edge is recorded again after it",
+          // The move back to A is a source update, recording A <- X at 4.
+          triples: [["A", "X", 1], ["Y", "A", 2], ["X", "Y", 3], ["A", "X", 4]],
+          module: "A",
+          expected: ["X", "Y"],
+        },
+        {
+          name:
+            "follows an edge recorded early and again late from an edge between the two",
+          triples: [["A", "X", 1], ["B", "A", 2], ["A", "X", 4]],
+          module: "B",
+          expected: ["A", "X"],
+        },
+        {
+          name: "follows a chain whose stamps only fall",
+          triples: [["w1", "w0", 1], ["w2", "w1", 2], ["w3", "w2", 3]],
+          module: "w3",
+          expected: ["w0", "w1", "w2"],
+        },
+        {
+          name:
+            "follows a revert by a source update to the module the successor replaced",
+          triples: [["w1", "w0", 1], ["w2", "w1", 2], ["w1", "w2", 3]],
+          module: "w1",
+          expected: ["w0", "w2"],
+        },
+        {
+          name: "follows every edge recorded at 0 from wherever it is reached",
+          triples: [["n", "p", 5], ["p", "listed", 0], ["listed", "more", 0]],
+          module: "n",
+          expected: ["listed", "more", "p"],
+        },
+      ] as const
+    ) {
+      it(`${name}`, () => {
+        expect(sorted(inheritedAlongStamps(stamped(triples), module)))
+          .toEqual(expected);
+      });
+    }
 
-      expect([...inheritedThrough(edges, "a")].sort()).toEqual(["b", "c", "d"]);
+    it("ends on a cycle, itself excepted", () => {
+      const edges = stamped([["a", "b", 3], ["b", "c", 2], ["c", "a", 1]]);
+
+      expect(sorted(inheritedAlongStamps(edges, "a"))).toEqual(["b", "c"]);
+    });
+
+    it("reaches every other identity of a forged dense relation, each expanded once", () => {
+      // Two thousand identities, twenty edges each, each edge with every
+      // stamp up to ten: the walk is linear in the edges and their stamps.
+      const triples: [string, string, number][] = [];
+      for (let index = 0; index < 2000; index++) {
+        for (let step = 0; step < 20; step++) {
+          const target = `d${(index + step * 97 + 1) % 2000}`;
+          for (let stamp = 0; stamp <= 10; stamp++) {
+            triples.push([`d${index}`, target, stamp]);
+          }
+        }
+      }
+
+      expect(inheritedAlongStamps(stamped(triples), "d0").size).toBe(1999);
+    });
+
+    it("never inherits less once an edge or a stamp is added", () => {
+      // Edges and stamps are only ever added, so what a module inherits only
+      // grows: the invariant the record rests on.
+      for (let seed = 1; seed <= 300; seed++) {
+        const triples = randomTriples(seed, 10, 25);
+        const edges = stamped(triples);
+        const nodes = [...new Set(triples.flatMap(([a, b]) => [a, b]))];
+        const before = new Map(
+          nodes.map((node) => [node, inheritedAlongStamps(edges, node)]),
+        );
+        for (
+          const [identity, predecessor, stamp] of randomTriples(seed + 7, 10, 5)
+        ) {
+          recordEdge(edges, identity, predecessor, stamp);
+        }
+        for (const [node, inherited] of before) {
+          const after = inheritedAlongStamps(edges, node);
+          for (const identity of inherited) {
+            expect(after.has(identity), `seed ${seed}`).toBe(true);
+          }
+        }
+      }
+    });
+  });
+
+  describe("recordEdge()", () => {
+    it("keeps every stamp an edge was recorded at, once and ascending, whatever their order", () => {
+      for (let seed = 1; seed <= 100; seed++) {
+        const triples = randomTriples(seed, 6, 30);
+        expect(canonical(stamped(shuffled(triples, seed))), `seed ${seed}`)
+          .toBe(canonical(stamped(triples)));
+      }
+      expect([
+        ...stamped([["a", "b", 4], ["a", "b", 1], ["a", "b", 4]])
+          .get("a")!.get("b")!,
+      ]).toEqual([1, 4]);
     });
   });
 
   describe("closeDelegationsFor()", () => {
-    it("closes only the identities named, leaving out those that reach nothing", () => {
-      const edges = edgesOf({ a: ["b"], b: ["c"], stray: ["elsewhere"] });
+    it("closes only the identities named, leaving out those that inherit nothing", () => {
+      const edges = stamped([["a", "b", 2], ["b", "c", 1], ["stray", "s", 1]]);
 
       expect(closeDelegationsFor(edges, ["a", "c"])).toStrictEqual(
         new Map([["a", new Set(["b", "c"])]]),
@@ -87,112 +188,65 @@ describe("module-delegations", () => {
     });
   });
 
-  describe("addDirectEdges()", () => {
-    it("adds an edge only to the input the rest of a closed list is reached through", () => {
-      const edges = edgesOf({ p: ["q"], q: ["r"] });
+  describe("composeRecordedEdges()", () => {
+    it("stamps each successor's edge with the position, and a listed entry the edges do not reach with 0", () => {
+      const recorded = {
+        edges: stamped([["p", "older", 2], ["older", "oldest", 1]]),
+        position: 4,
+      };
+      const matched = new Map([
+        ["n", { predecessor: "p", inherited: ["older", "oldest", "foreign"] }],
+      ]);
 
-      addDirectEdges(edges, "n", ["r", "q", "p", "foreign"]);
-
-      expect(canonical(edges)).toBe(
-        canonical(edgesOf({ p: ["q"], q: ["r"], n: ["foreign", "p"] })),
+      const { delegations, edges } = composeRecordedEdges(
+        matched,
+        recorded,
+        ["n"],
       );
+
+      expect(canonical(edges)).toBe(canonical(stamped([
+        ["p", "older", 2],
+        ["older", "oldest", 1],
+        ["n", "p", 4],
+        ["p", "foreign", 0],
+      ])));
+      expect(sorted(delegations.get("n")!)).toEqual([
+        "foreign",
+        "older",
+        "oldest",
+        "p",
+      ]);
     });
 
-    it("keeps one input of a cycle the inputs form, the first in UTF-8 order", () => {
-      const edges = edgesOf({ x: ["y"], y: ["x"] });
-
-      addDirectEdges(edges, "n", ["y", "x"]);
-
-      expect([...edges.get("n")!]).toEqual(["x"]);
-    });
-
-    it("leaves every identity reaching what it reached before, and the identity reaching every input", () => {
-      // The property the design rests on: an input is left out only when
-      // something kept reaches it, and nothing is ever removed.
-      for (let seed = 1; seed <= 500; seed++) {
-        const { edges, identity, inputs } = randomCase(seed, 12);
-        const before = new Map(
-          [...new Set([...edges.keys(), identity, ...inputs])].map((node) => [
-            node,
-            inheritedThrough(edges, node),
-          ]),
+    it("composes the same edges whatever order the matches and the recorded edges come in", () => {
+      for (let seed = 1; seed <= 100; seed++) {
+        const triples = randomTriples(seed, 8, 20);
+        const next = random(seed + 3);
+        const matched = Array.from({ length: 4 }, (_, index) =>
+          [
+            `n${index}`,
+            {
+              predecessor: `m${Math.floor(next() * 8)}`,
+              inherited: Array.from(
+                { length: 3 },
+                () => `m${Math.floor(next() * 10)}`,
+              ),
+            },
+          ] as const);
+        const candidate = matched.map(([identity]) => identity);
+        const reference = composeRecordedEdges(
+          new Map(matched),
+          { edges: stamped(triples), position: 9 },
+          candidate,
         );
-        const added = copy(edges);
-
-        addDirectEdges(added, identity, inputs);
-
-        const expected = new Set(before.get(identity));
-        for (const input of inputs) {
-          if (input === identity) continue;
-          expected.add(input);
-          for (const reached of before.get(input) ?? []) expected.add(reached);
-        }
-        expected.delete(identity);
-        expect([...inheritedThrough(added, identity)].sort(), `seed ${seed}`)
-          .toEqual([...expected].sort());
-        for (const [node, reached] of before) {
-          for (const ancestor of reached) {
-            expect(inheritedThrough(added, node).has(ancestor), `seed ${seed}`)
-              .toBe(true);
-          }
-        }
-        for (const [node, predecessors] of edges) {
-          for (const predecessor of predecessors) {
-            expect(added.get(node)?.has(predecessor), `seed ${seed}`).toBe(
-              true,
-            );
-          }
-        }
-        for (const [node, predecessors] of added) {
-          for (const predecessor of predecessors) {
-            if (edges.get(node)?.has(predecessor)) continue;
-            expect(node, `seed ${seed}`).toBe(identity);
-            expect(inputs, `seed ${seed}`).toContain(predecessor);
-          }
-        }
-      }
-    });
-
-    it("adds one edge for a forged dense relation whose inputs all reach one another", () => {
-      // Two thousand identities, each with twenty edges, all in one cycle:
-      // the walks are linear in the edges, so this is as cheap as the size of
-      // the relation, and every input but one is left out.
-      const size = 2000;
-      const edges = new Map<string, Set<string>>();
-      for (let index = 0; index < size; index++) {
-        edges.set(
-          `d${index}`,
-          new Set(
-            Array.from(
-              { length: 20 },
-              (_, step) => `d${(index + step * 97 + 1) % size}`,
-            ),
-          ),
+        const reordered = composeRecordedEdges(
+          new Map(shuffled(matched, seed)),
+          { edges: stamped(shuffled(triples, seed + 1)), position: 9 },
+          shuffled(candidate, seed + 2),
         );
-      }
-      const inputs = Array.from({ length: size }, (_, index) => `d${index}`);
 
-      addDirectEdges(edges, "forged", inputs);
-
-      expect([...edges.get("forged")!]).toEqual(["d0"]);
-      expect(inheritedThrough(edges, "forged").size).toBe(size);
-    });
-
-    it("adds the same edges whatever order the inputs and the recorded edges come in", () => {
-      for (let seed = 1; seed <= 200; seed++) {
-        const { edges, identity, inputs } = randomCase(seed, 12);
-        const reference = copy(edges);
-        addDirectEdges(reference, identity, inputs);
-
-        const reordered = new Map(
-          shuffled([...edges], seed).map(([node, predecessors]) => [
-            node,
-            new Set(shuffled([...predecessors], seed + 1)),
-          ]),
-        );
-        addDirectEdges(reordered, identity, shuffled(inputs, seed + 2));
-
-        expect(canonical(reordered), `seed ${seed}`).toBe(canonical(reference));
+        expect(canonical(reordered.edges), `seed ${seed}`)
+          .toBe(canonical(reference.edges));
       }
     });
   });

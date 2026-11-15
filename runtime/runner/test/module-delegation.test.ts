@@ -564,7 +564,11 @@ describe("module identity delegation", () => {
           tx,
           {
             delegations: new Map(),
-            edges: new Map([[previous.identity, new Set(["recorded-since"])]]),
+            edges: new Map([[
+              previous.identity,
+              new Map([["recorded-since", [0]]]),
+            ]]),
+            position: 0,
           },
         )
       ).toThrow("source update preparation does not match the transition");
@@ -575,7 +579,7 @@ describe("module identity delegation", () => {
           previous.identity,
           candidate.identity,
           tx,
-          { delegations: new Map(), edges: new Map() },
+          { delegations: new Map(), edges: new Map(), position: 0 },
         ).delegations,
       ).toBeInstanceOf(Map);
     } finally {
@@ -601,12 +605,12 @@ describe("module identity delegation", () => {
     }
   });
 
-  it("closes the candidate's modules over the recorded edges and the derived ones, adding only direct edges", async () => {
+  it("closes the candidate's modules over the recorded edges and the derived ones, stamped at the record's position", async () => {
     // `candidate` replaces `previous` at the same file. The piece's history
-    // records `previous` succeeding "older", which succeeds "oldest", and a
-    // "stray" module the candidate reaches through nothing. `previous`'s own
-    // record lists all of its chain, and "foreign", which another piece's
-    // history gave it.
+    // records `previous` succeeding "older" at 2, which succeeds "oldest" at
+    // 1, and a "stray" module the candidate reaches through nothing.
+    // `previous`'s own record lists all of its chain, and "foreign", which
+    // another piece's history gave it.
     const previous = moduleFor(moduleProgram("old"));
     const candidate = moduleFor(moduleProgram("new"));
     expect(
@@ -628,10 +632,11 @@ describe("module identity delegation", () => {
     const recorded = {
       delegations: new Map([[previous.identity, new Set(["older", "oldest"])]]),
       edges: new Map([
-        [previous.identity, new Set(["older"])],
-        ["older", new Set(["oldest"])],
-        ["stray", new Set(["elsewhere"])],
+        [previous.identity, new Map([["older", [2]]])],
+        ["older", new Map([["oldest", [1]]])],
+        ["stray", new Map([["elsewhere", [1]]])],
       ]),
+      position: 3,
     };
     const manager = runtime.patternManager;
     const prepared = await manager.prepareSourceUpdate(
@@ -657,14 +662,14 @@ describe("module identity delegation", () => {
           new Set([previous.identity, "older", "oldest", "foreign"]),
         ]]),
       );
-      // The record's list adds an edge only for what the edges did not
-      // already reach.
+      // The successor's edge takes the record's position; the record's list
+      // adds an edge, at 0, only for what the edges did not already reach.
       expect(next.edges).toStrictEqual(
         new Map([
-          [previous.identity, new Set(["older"])],
-          ["older", new Set(["oldest"])],
-          ["stray", new Set(["elsewhere"])],
-          [candidate.identity, new Set([previous.identity, "foreign"])],
+          [previous.identity, new Map([["older", [2]], ["foreign", [0]]])],
+          ["older", new Map([["oldest", [1]]])],
+          ["stray", new Map([["elsewhere", [1]]])],
+          [candidate.identity, new Map([[previous.identity, [3]]])],
         ]),
       );
     } finally {

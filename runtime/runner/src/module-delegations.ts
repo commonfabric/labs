@@ -108,83 +108,204 @@ export function inheritedThrough(
 }
 
 /**
- * The closed delegations of each of `identities` over `direct`: for each,
- * every identity it inherits from, when there is any.
+ * A piece's recorded delegation edges: successor → predecessor → the history
+ * positions at which a transition recorded that edge, ascending, each once.
+ * Position 0 marks an edge taken from a predecessor record's attested list,
+ * which states what that record held when it was staged, not when.
+ */
+export type StampedEdges = ReadonlyMap<
+  string,
+  ReadonlyMap<string, readonly number[]>
+>;
+
+/** The largest of `stamps`, ascending, that is at most `bound`, if any. */
+function latestStampWithin(
+  stamps: readonly number[],
+  bound: number,
+): number | undefined {
+  let low = 0;
+  let high = stamps.length - 1;
+  let found: number | undefined;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (stamps[middle] <= bound) {
+      found = stamps[middle];
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
+/**
+ * Every identity `identity` inherits from over `edges` along a path whose
+ * stamps do not increase: an edge recorded at position p is followed only
+ * by edges recorded at or before p, so a module takes what its predecessor
+ * held when the module was granted it, and nothing the predecessor was granted
+ * later. Itself excepted.
+ *
+ * The walk takes the identity it can reach with the largest bound first, so
+ * it expands each identity once, with the largest bound any path gives it:
+ * its cost is linear in the edges and their stamps, times a logarithm,
+ * whatever the stamps are, and it ends on any relation, cycles included.
+ */
+export function inheritedAlongStamps(
+  edges: StampedEdges,
+  identity: string,
+): Set<string> {
+  const reached = new Set<string>();
+  const expanded = new Set<string>();
+  // A binary max-heap of [identity, bound].
+  const heap: [string, number][] = [[identity, Infinity]];
+  const push = (entry: [string, number]) => {
+    heap.push(entry);
+    let child = heap.length - 1;
+    while (child > 0) {
+      const parent = (child - 1) >> 1;
+      if (heap[parent][1] >= heap[child][1]) break;
+      [heap[parent], heap[child]] = [heap[child], heap[parent]];
+      child = parent;
+    }
+  };
+  const pop = (): [string, number] => {
+    const top = heap[0];
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      let parent = 0;
+      for (;;) {
+        const left = 2 * parent + 1;
+        const right = left + 1;
+        let largest = parent;
+        if (left < heap.length && heap[left][1] > heap[largest][1]) {
+          largest = left;
+        }
+        if (right < heap.length && heap[right][1] > heap[largest][1]) {
+          largest = right;
+        }
+        if (largest === parent) break;
+        [heap[parent], heap[largest]] = [heap[largest], heap[parent]];
+        parent = largest;
+      }
+    }
+    return top;
+  };
+  while (heap.length > 0) {
+    const [node, bound] = pop();
+    if (expanded.has(node)) continue;
+    expanded.add(node);
+    for (const [predecessor, stamps] of edges.get(node) ?? []) {
+      const stamp = latestStampWithin(stamps, bound);
+      if (stamp === undefined) continue;
+      if (predecessor !== identity) reached.add(predecessor);
+      if (!expanded.has(predecessor)) push([predecessor, stamp]);
+    }
+  }
+  return reached;
+}
+
+/**
+ * The closed delegations of each of `identities` over `edges`
+ * ({@link inheritedAlongStamps}), for each that inherits any.
  */
 export function closeDelegationsFor(
-  direct: ModuleDelegationInput,
+  edges: StampedEdges,
   identities: Iterable<string>,
 ): Map<string, ReadonlySet<string>> {
   const closed = new Map<string, ReadonlySet<string>>();
   for (const identity of identities) {
-    const inherited = inheritedThrough(direct, identity);
+    const inherited = inheritedAlongStamps(edges, identity);
     if (inherited.size > 0) closed.set(identity, inherited);
   }
   return closed;
 }
 
 /**
- * Every identity reachable from `sources` over `direct` through at least one
- * edge. Each identity is visited once, so the walk ends on any relation.
+ * Records in `edges` that `identity` was granted `predecessor` at `stamp`,
+ * keeping every stamp the edge was recorded at, in order. Edges and stamps are
+ * only ever added, here and everywhere a piece's record is written, so what
+ * any identity inherits over the edges only grows: that invariant is what the
+ * record's correctness rests on.
  */
-function reachedFrom(
-  direct: ModuleDelegationInput,
-  sources: Iterable<string>,
-): Set<string> {
-  const reached = new Set<string>();
-  const pending: string[] = [];
-  for (const source of sources) pending.push(...(direct.get(source) ?? []));
-  while (pending.length > 0) {
-    const next = pending.pop()!;
-    if (reached.has(next)) continue;
-    reached.add(next);
-    pending.push(...(direct.get(next) ?? []));
+export function recordEdge(
+  edges: Map<string, Map<string, number[]>>,
+  identity: string,
+  predecessor: string,
+  stamp: number,
+): void {
+  if (!admissiblePredecessor(identity, predecessor)) return;
+  let out = edges.get(identity);
+  if (out === undefined) {
+    out = new Map();
+    edges.set(identity, out);
   }
-  return reached;
+  const stamps = out.get(predecessor) ?? [];
+  if (!stamps.includes(stamp)) {
+    stamps.push(stamp);
+    stamps.sort((a, b) => a - b);
+  }
+  out.set(predecessor, stamps);
 }
 
 /**
- * Adds `inputs` to what `identity` inherits over `edges`, as few direct
- * edges as that takes: an input `identity` already reaches adds nothing, and
- * neither does one another new input reaches, as a closed list names its
- * predecessor's predecessors beside the predecessor. Among inputs that reach
- * one another round a cycle, the first in UTF-8 order is the one kept, so the
- * edges added do not depend on the order of `inputs` or of `edges`.
+ * Composes the matches an update derives from its two closures
+ * (`deriveModulePredecessors()` in `cell-cache.ts`) with `recorded`, the
+ * edges the piece's member records for the previous pattern and the history
+ * position the update records at.
  *
- * Edges are only ever added, here and everywhere a piece's record is written,
- * so what any module reaches only grows: afterward `identity` reaches every
- * input and everything it reached before. That invariant is what makes
- * leaving an input out safe. The walks are linear in the edges, a few per
- * call, however long `inputs` is.
+ * Each successor gets an edge to the module it succeeds, stamped with
+ * `recorded.position`. A predecessor record's attested list states what that
+ * record held when it was staged, so an entry of it the edges do not already
+ * reach from the predecessor becomes the predecessor's edge at stamp 0, which
+ * nothing after it continues from. Each module of `candidate` is then closed
+ * over the result along non-increasing stamps (`inheritedAlongStamps()`): a
+ * module the update leaves unchanged, or one that returns, is closed over its
+ * own recorded edges, so no grant the piece's history made is lost, and none
+ * is made that a predecessor was granted only after its successor was.
  */
-export function addDirectEdges(
-  edges: Map<string, Set<string>>,
-  identity: string,
-  inputs: Iterable<string>,
-): void {
-  const before = inheritedThrough(edges, identity);
-  const pending = [...new Set(inputs)].filter((input) =>
-    admissiblePredecessor(identity, input) && !before.has(input)
+export function composeRecordedEdges(
+  matched: ReadonlyMap<
+    string,
+    { predecessor: string; inherited: readonly string[] }
+  >,
+  recorded: { edges: StampedEdges; position: number },
+  candidate: Iterable<string>,
+): {
+  delegations: Map<string, ReadonlySet<string>>;
+  edges: StampedEdges;
+} {
+  const edges = new Map<string, Map<string, number[]>>(
+    [...recorded.edges].map(([identity, predecessors]) => [
+      identity,
+      new Map(
+        [...predecessors].map(([predecessor, stamps]) => [
+          predecessor,
+          [...stamps],
+        ]),
+      ),
+    ]),
   );
-  if (pending.length === 0) return;
-  const covered = reachedFrom(edges, pending);
-  const kept = pending.filter((input) => !covered.has(input));
-  const reach = new Set([...kept, ...reachedFrom(edges, kept)]);
-  // What is left reaches, and is reached from, another input round a cycle.
-  for (
-    const input of pending.filter((left) => !reach.has(left)).sort(utf8Compare)
-  ) {
-    if (reach.has(input)) continue;
-    kept.push(input);
-    reach.add(input);
-    for (const reached of reachedFrom(edges, [input])) reach.add(reached);
+  for (const [identity, { predecessor }] of matched) {
+    recordEdge(edges, identity, predecessor, recorded.position);
   }
-  let direct = edges.get(identity);
-  if (direct === undefined) {
-    direct = new Set();
-    edges.set(identity, direct);
+  // Reached before any listed entry is added, so that what is added does not
+  // depend on the order of the matches.
+  const reached = new Map(
+    [...new Set([...matched.values()].map(({ predecessor }) => predecessor))]
+      .map((predecessor) => [
+        predecessor,
+        inheritedAlongStamps(edges, predecessor),
+      ]),
+  );
+  for (const { predecessor, inherited } of matched.values()) {
+    for (const entry of inherited) {
+      if (!reached.get(predecessor)!.has(entry)) {
+        recordEdge(edges, predecessor, entry, 0);
+      }
+    }
   }
-  for (const input of kept) direct.add(input);
+  return { delegations: closeDelegationsFor(edges, candidate), edges };
 }
 
 /**

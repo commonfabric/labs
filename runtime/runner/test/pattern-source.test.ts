@@ -293,10 +293,14 @@ describe("patternSource meta accessors", () => {
     const pattern = "recorded-pattern";
     const valid = [{ identity: "recorded-module", predecessors: ["earlier"] }];
 
-    /** A piece whose `pieceSourceDelegations` member is `member`. */
+    /**
+     * A piece whose `pieceSourceDelegations` member is `member`, and whose
+     * history holds `revisions` revisions.
+     */
     const pieceWith = async (
       name: string,
       member: unknown,
+      revisions = 0,
     ): Promise<ReturnType<typeof runtime.getCell>> => {
       const cell = runtime.getCell(signer.did(), name);
       const seed = runtime.edit();
@@ -305,6 +309,25 @@ describe("patternSource meta accessors", () => {
         member as never,
         rawMetaWriteAuthorization,
       );
+      if (revisions > 0) {
+        const source = runtime.getCell(
+          signer.did(),
+          `pattern:${pattern}`,
+          undefined,
+          seed,
+        ).getAsLink();
+        cell.withTx(seed).setMetaRaw(
+          "pieceSourceHistory",
+          Array.from({ length: revisions }, (_, index) => ({
+            revisionId: `${name}-${index}`,
+            timestamp: 42 + index,
+            pattern: { identity: pattern, symbol: "default" },
+            source,
+            operation: index === 0 ? "create" : "edit",
+          })) as never,
+          rawMetaWriteAuthorization,
+        );
+      }
       expect((await seed.commit().settled).error).toBeUndefined();
       return cell;
     };
@@ -335,37 +358,61 @@ describe("patternSource meta accessors", () => {
       ).toStrictEqual(new Map());
     });
 
-    it("reads both fields for a recording transition, and neither where either is malformed", async () => {
-      const edges = [{ identity: "recorded-module", predecessors: ["older"] }];
+    it("reads every field for a recording transition at the history's length, and no field where any is malformed", async () => {
+      const edges = [{
+        identity: "recorded-module",
+        predecessors: [{ identity: "older", at: [0, 2] }],
+      }];
       const cell = await pieceWith("recorded-record", {
         identity: pattern,
         delegations: valid,
         edges,
-      });
+      }, 3);
       expect(getPieceSourceRecord(cell, pattern)).toStrictEqual({
         delegations: new Map([["recorded-module", new Set(["earlier"])]]),
-        edges: new Map([["recorded-module", new Set(["older"])]]),
+        edges: new Map([["recorded-module", new Map([["older", [0, 2]]])]]),
+        position: 3,
       });
 
+      const edge = (predecessor: unknown) => [{
+        identity: "m",
+        predecessors: [predecessor],
+      }];
       for (
         const [name, malformed] of [
           ["absent", undefined],
-          ["self-edge", [{ identity: "m", predecessors: ["m"] }]],
-          ["duplicate", [
-            { identity: "m", predecessors: ["a"] },
-            { identity: "m", predecessors: ["b"] },
+          ["unstamped", [{ identity: "m", predecessors: ["a"] }]],
+          ["self-edge", edge({ identity: "m", at: [1] })],
+          ["duplicate-module", [
+            ...edge({ identity: "a", at: [1] }),
+            ...edge({ identity: "b", at: [1] }),
           ]],
+          ["duplicate-predecessor", [{
+            identity: "m",
+            predecessors: [{ identity: "a", at: [1] }, {
+              identity: "a",
+              at: [2],
+            }],
+          }]],
           ["empty-predecessors", [{ identity: "m", predecessors: [] }]],
+          ["no-stamp", edge({ identity: "a", at: [] })],
+          ["non-numeric-stamp", edge({ identity: "a", at: ["1"] })],
+          ["fractional-stamp", edge({ identity: "a", at: [1.5] })],
+          ["negative-stamp", edge({ identity: "a", at: [-1] })],
+          ["decreasing-stamps", edge({ identity: "a", at: [2, 1] })],
+          ["repeated-stamp", edge({ identity: "a", at: [1, 1] })],
+          ["stamp-at-the-history-length", edge({ identity: "a", at: [3] })],
         ] as const
       ) {
         const bad = await pieceWith(`recorded-record-${name}`, {
           identity: pattern,
           delegations: valid,
           ...(malformed === undefined ? {} : { edges: malformed }),
-        });
+        }, 3);
         expect(getPieceSourceRecord(bad, pattern), name).toStrictEqual({
           delegations: new Map(),
           edges: new Map(),
+          position: 3,
         });
         // A start reads the delegations alone, which are well-formed.
         expect(getPieceSourceDelegations(bad, pattern).size, name).toBe(1);
@@ -420,6 +467,18 @@ describe("patternSource meta accessors", () => {
   });
 
   describe("the `pieceSourceDelegations` member across a transition", () => {
+    /** `entries` as stamped edges, each recorded at 0. */
+    const stampedAt0 = (
+      entries: readonly { identity: string; predecessors: string[] }[],
+    ) =>
+      entries.map(({ identity, predecessors }) => ({
+        identity,
+        predecessors: predecessors.map((predecessor) => ({
+          identity: predecessor,
+          at: [0],
+        })),
+      }));
+
     const compile = async (marker: string) =>
       runtime.patternManager.getArtifactEntryRef(
         await runtime.patternManager.compilePattern({
@@ -445,6 +504,8 @@ describe("patternSource meta accessors", () => {
       recorded: { identity: string; predecessors: string[] }[],
       edges = recorded,
     ) => {
+      // The piece's history is one revision long, so the only stamp an edge
+      // can carry is 0.
       const seed = runtime.edit();
       const seeded = runtime.getCell(signer.did(), id, undefined, seed);
       seeded.setMetaRaw("patternIdentity", pattern, rawMetaWriteAuthorization);
@@ -463,7 +524,7 @@ describe("patternSource meta accessors", () => {
       seeded.setMetaRaw("pieceSourceDelegations", {
         identity: pattern.identity,
         delegations: recorded,
-        edges,
+        edges: stampedAt0(edges),
       }, rawMetaWriteAuthorization);
       expect((await seed.commit().settled).error).toBeUndefined();
       return runtime.getCell(signer.did(), id);
@@ -499,7 +560,7 @@ describe("patternSource meta accessors", () => {
       expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
         identity: pattern.identity,
         delegations: recorded,
-        edges: recorded,
+        edges: stampedAt0(recorded),
       });
     });
 
@@ -516,7 +577,7 @@ describe("patternSource meta accessors", () => {
       expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
         identity: pattern.identity,
         delegations: recorded,
-        edges: recorded,
+        edges: stampedAt0(recorded),
       });
     });
 
@@ -547,10 +608,12 @@ describe("patternSource meta accessors", () => {
           cell.withTx(write).setMetaRaw("pieceSourceDelegations", {
             identity: pattern.identity,
             delegations: since,
-            edges: moveMember === "both" ? since : [{
-              identity: pattern.identity,
-              predecessors: ["earlier-pattern"],
-            }],
+            edges: stampedAt0(
+              moveMember === "both" ? since : [{
+                identity: pattern.identity,
+                predecessors: ["earlier-pattern"],
+              }],
+            ),
           }, rawMetaWriteAuthorization);
           expect((await write.commit().settled).error).toBeUndefined();
         }
@@ -595,7 +658,7 @@ describe("patternSource meta accessors", () => {
       expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
         identity: next.identity,
         delegations: [],
-        edges: recorded,
+        edges: stampedAt0(recorded),
       });
     });
 

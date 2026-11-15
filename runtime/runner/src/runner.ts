@@ -202,9 +202,12 @@ import {
   sendValueToBinding,
   unwrapOneLevelAndBindToDoc,
 } from "./pattern-binding.ts";
-import { closeDelegationsFor } from "./module-delegations.ts";
 import {
-  EMPTY_PIECE_SOURCE_RECORD,
+  closeDelegationsFor,
+  type StampedEdges,
+} from "./module-delegations.ts";
+import {
+  emptyPieceSourceRecord,
   PatternManager,
   type PieceSourceRecord,
   type PreparedSourceUpdate,
@@ -2202,10 +2205,16 @@ export interface PieceSourceDelegations {
 
   /**
    * One entry per module the piece's history has delegated to: the module's
-   * identity, and the modules it was delegated from directly. Read only by a
-   * transition, which closes the next pattern's `delegations` over it.
+   * identity, and each module it was delegated from directly, with every
+   * history position at which a transition recorded that, ascending (0 for
+   * an edge taken from a predecessor record's attested list). Read only by a
+   * transition, which closes the next pattern's `delegations` over it along
+   * non-increasing positions.
    */
-  edges: { identity: string; predecessors: string[] }[];
+  edges: {
+    identity: string;
+    predecessors: { identity: string; at: number[] }[];
+  }[];
 }
 
 export interface PieceSourceSnapshot {
@@ -17704,19 +17713,87 @@ export function getPieceSourceDelegations(
 /**
  * What the piece's `pieceSourceDelegations` member records for
  * `patternIdentity`, both fields, for a transition that records the member:
- * {@link EMPTY_PIECE_SOURCE_RECORD} when the member is absent, names another
- * pattern, or either field is malformed.
+ * empty when the member is absent, names another pattern, or either field
+ * is malformed, but in every case read at the piece's history length.
  */
 export function getPieceSourceRecord(
   resultCell: Cell<unknown>,
   patternIdentity: string,
 ): PieceSourceRecord {
+  let position = 0;
+  try {
+    position = getPieceSourceRevisions(resultCell).length;
+  } catch {
+    // An invalid history admits no stamp; the transition reports it.
+  }
   const raw = pieceSourceDelegationsFor(resultCell, patternIdentity);
   const delegations = pieceSourceDelegationEntries(raw?.delegations);
-  const edges = pieceSourceDelegationEntries(raw?.edges);
+  const edges = pieceSourceStampedEdges(raw?.edges, position);
   return delegations === undefined || edges === undefined
-    ? EMPTY_PIECE_SOURCE_RECORD
-    : { delegations, edges };
+    ? emptyPieceSourceRecord(position)
+    : { delegations, edges, position };
+}
+
+/**
+ * The stamped edges of {@link PieceSourceDelegations}, or `undefined` where
+ * they are malformed: anything but an array of entries each naming a module
+ * once, with at least one predecessor, each named once, none the module, and
+ * each with at least one stamp, every stamp a whole number below `position`
+ * (no edge can have been recorded at or after the history's length) and
+ * the stamps strictly ascending.
+ */
+function pieceSourceStampedEdges(
+  value: unknown,
+  position: number,
+): StampedEdges | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const edges = new Map<string, Map<string, readonly number[]>>();
+  for (const entry of value as unknown[]) {
+    if (
+      !isObjectOrArray(entry) || Array.isArray(entry) ||
+      typeof entry.identity !== "string" || entry.identity.length === 0 ||
+      edges.has(entry.identity) ||
+      !Array.isArray(entry.predecessors) || entry.predecessors.length === 0
+    ) {
+      return undefined;
+    }
+    const predecessors = new Map<string, readonly number[]>();
+    for (const predecessor of entry.predecessors as unknown[]) {
+      if (
+        !isObjectOrArray(predecessor) || Array.isArray(predecessor) ||
+        typeof predecessor.identity !== "string" ||
+        predecessor.identity.length === 0 ||
+        predecessor.identity === entry.identity ||
+        predecessors.has(predecessor.identity) ||
+        !Array.isArray(predecessor.at) || predecessor.at.length === 0 ||
+        !(predecessor.at as unknown[]).every((stamp, index, stamps) =>
+          Number.isInteger(stamp) && (stamp as number) >= 0 &&
+          (stamp as number) < position &&
+          (index === 0 || (stamp as number) > (stamps[index - 1] as number))
+        )
+      ) {
+        return undefined;
+      }
+      predecessors.set(predecessor.identity, [...predecessor.at as number[]]);
+    }
+    edges.set(entry.identity, predecessors);
+  }
+  return edges;
+}
+
+/** `edges` as {@link PieceSourceDelegations.edges}, canonically ordered. */
+function pieceSourceStampedEdgeList(
+  edges: StampedEdges,
+): PieceSourceDelegations["edges"] {
+  return [...edges].sort(([a], [b]) => utf8Compare(a, b))
+    .map(([identity, predecessors]) => ({
+      identity,
+      predecessors: [...predecessors].sort(([a], [b]) => utf8Compare(a, b))
+        .map(([predecessor, stamps]) => ({
+          identity: predecessor,
+          at: [...stamps].sort((a, b) => a - b),
+        })),
+    }));
 }
 
 /** `entries` as a list of {@link PieceSourceDelegations}, canonically ordered. */
@@ -18301,7 +18378,7 @@ export function applyPieceSourceTransition(
   // are and closes the next pattern's modules over them, on this trusted
   // path: a module the next pattern keeps or brings back gets what the
   // piece's history granted it, and a new module gets nothing.
-  let next: PieceSourceRecord;
+  let next: { delegations: ModuleDelegationMap; edges: StampedEdges };
   if (options.sourceUpdate !== undefined) {
     // A backstop: every transition appends a revision, so the snapshot check
     // above refuses one that came between preparing and here. This refuses a
@@ -18339,7 +18416,7 @@ export function applyPieceSourceTransition(
     next.delegations.size === 0 && next.edges.size === 0 ? undefined : {
       identity: nextPattern.identity,
       delegations: pieceSourceDelegationList(next.delegations),
-      edges: pieceSourceDelegationList(next.edges),
+      edges: pieceSourceStampedEdgeList(next.edges),
     },
     rawMetaWriteAuthorization,
   );

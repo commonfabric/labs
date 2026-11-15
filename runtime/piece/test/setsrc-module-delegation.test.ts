@@ -482,7 +482,10 @@ export default pattern<{seed?: ${seedType}}>(() => {
         | {
           identity: string;
           delegations: { identity: string; predecessors: string[] }[];
-          edges: { identity: string; predecessors: string[] }[];
+          edges: {
+            identity: string;
+            predecessors: { identity: string; at: number[] }[];
+          }[];
         }
         | undefined;
 
@@ -992,7 +995,7 @@ export default pattern<{seed?: ${seedType}}>(() => {
           expect(recorded.edges.length).toBe(2 * update);
           expect(
             recorded.edges.every(({ predecessors }) =>
-              predecessors.length === 1
+              predecessors.length === 1 && predecessors[0].at.length === 1
             ),
           ).toBe(true);
         }
@@ -1224,6 +1227,184 @@ export default pattern<{seed?: ${seedType}}>(() => {
         expect(fresh.grantsModuleDelegation(space, w1, w0)).toBe(true);
         expect(fresh.grantsModuleDelegation(space, w1, w2)).toBe(false);
         expect(fresh.grantsModuleDelegation(space, e1, e2)).toBe(false);
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    // Each of these compares what a fresh runtime grants with what a fresh
+    // `main` runtime grants from the records the same updates stage there.
+
+    it("grants a pattern a transition that is no source update reverts to, after a cycle of updates, nothing it was granted later", async () => {
+      // X to A to Y to X by source updates whose staging lands, then a move
+      // back to A that is no source update. A's own record on `main` is [X]:
+      // the edge X <- Y came after A was granted X.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("wX", "eX"), {
+          input: {},
+        });
+        const eX = getPatternIdentityRef(piece.getCell())!.identity;
+        const wX = await moduleAt(eX, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wA", "eA"));
+        const eA = getPatternIdentityRef(piece.getCell())!.identity;
+        const wA = await moduleAt(eA, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wY", "eY"));
+        const eY = getPatternIdentityRef(piece.getCell())!.identity;
+        const wY = await moduleAt(eY, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wX", "eX"));
+        await moveWithoutUpdate(piece, splitWriterProgram("wA", "eA"));
+        expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(eA);
+
+        await freshPieces.get(piece.id, true);
+
+        const space = pieces.getSpace();
+        expect(fresh.grantsModuleDelegation(space, wA, wX)).toBe(true);
+        expect(fresh.grantsModuleDelegation(space, eA, eX)).toBe(true);
+        expect(fresh.grantsModuleDelegation(space, wA, wY)).toBe(false);
+        expect(fresh.grantsModuleDelegation(space, eA, eY)).toBe(false);
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("grants a pattern a source update reverts to, after a cycle of updates, what its predecessor holds then", async () => {
+      // The same cycle, but the move back to A is a source update, which
+      // grants A what X holds at that point, Y among it, as `main` stages.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("wX", "eX"), {
+          input: {},
+        });
+        const eX = getPatternIdentityRef(piece.getCell())!.identity;
+        const wX = await moduleAt(eX, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wA", "eA"));
+        const eA = getPatternIdentityRef(piece.getCell())!.identity;
+        const wA = await moduleAt(eA, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wY", "eY"));
+        const eY = getPatternIdentityRef(piece.getCell())!.identity;
+        const wY = await moduleAt(eY, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wX", "eX"));
+        await piece.setPattern(splitWriterProgram("wA", "eA"));
+
+        await freshPieces.get(piece.id, true);
+
+        const space = pieces.getSpace();
+        for (
+          const [module, predecessor] of [[wA, wX], [wA, wY], [eA, eX], [
+            eA,
+            eY,
+          ]]
+        ) {
+          expect(
+            fresh.grantsModuleDelegation(space, module, predecessor),
+            `${module} <- ${predecessor}`,
+          ).toBe(true);
+        }
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("grants a pattern a transition that is no source update reverts to what its predecessor held when it was granted, though that edge was recorded again later", async () => {
+      // X to A to B to X to A by source updates whose staging lands, then a
+      // move to B that is no source update. B was granted A when A held X,
+      // and the edge A <- X is recorded again after that: B keeps A and X,
+      // which `main`'s record of B lists.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("wX", "eX"), {
+          input: {},
+        });
+        const eX = getPatternIdentityRef(piece.getCell())!.identity;
+        const wX = await moduleAt(eX, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wA", "eA"));
+        const eA = getPatternIdentityRef(piece.getCell())!.identity;
+        const wA = await moduleAt(eA, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wB", "eB"));
+        const eB = getPatternIdentityRef(piece.getCell())!.identity;
+        const wB = await moduleAt(eB, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("wX", "eX"));
+        await piece.setPattern(splitWriterProgram("wA", "eA"));
+        await moveWithoutUpdate(piece, splitWriterProgram("wB", "eB"));
+        expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(eB);
+
+        await freshPieces.get(piece.id, true);
+
+        const space = pieces.getSpace();
+        for (const [module, predecessor] of [[wB, wA], [wB, wX]]) {
+          expect(
+            fresh.grantsModuleDelegation(space, module, predecessor),
+            `${module} <- ${predecessor}`,
+          ).toBe(true);
+        }
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the grant of a module a source update reverts to after a successor replaced it", async () => {
+      // v0 to v1's staging never lands; v2's writer succeeds w1; a source
+      // update reverts to v1. w1 keeps w0, and gains w2, as `main` stages.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const e0 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w0 = await moduleAt(e0, "/app/writer.ts");
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        const e1 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w1 = await moduleAt(e1, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("w2", "e2"));
+        const e2 = getPatternIdentityRef(piece.getCell())!.identity;
+        const w2 = await moduleAt(e2, "/app/writer.ts");
+        await piece.setPattern(splitWriterProgram("w1", "e1"));
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+        const space = pieces.getSpace();
+        expect(fresh.grantsModuleDelegation(space, w1, w0)).toBe(true);
+        expect(fresh.grantsModuleDelegation(space, w1, w2)).toBe(true);
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("loses a grant whose staging failed when a runtime from before the record makes the piece's next update", async () => {
+      // TODO(danfuzz): This pins a loss `main` does not have (see the `TODO`
+      // on `#stageCommittedDelegations()`). v0 to v1's staging never lands,
+      // so only the piece's record holds w1's grant from w0. A runtime from
+      // before the record then makes the next update: it reads no record
+      // (as here, with the record removed), derives from w1's unstaged cache
+      // record, and stages w2 inheriting w1 alone. The write is refused,
+      // where `main`'s in-transaction staging would have kept w0. Flip the
+      // expectation to `w2:b` if a staging that fails is ever repaired.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        await replaceMember(piece, undefined);
+        await piece.setPattern(splitWriterProgram("w2", "e2"));
+        await runtime.patternManager.flushCompileCacheWrites();
+        await pieces.synced();
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w0:a");
       } finally {
         await fresh.dispose({ closeStorage: false });
       }

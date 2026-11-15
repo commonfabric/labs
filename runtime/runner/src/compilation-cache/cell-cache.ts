@@ -283,6 +283,37 @@ export function deriveModuleDelegations<
   next: readonly Module[],
   entries?: { previous: string; next: string },
 ): Map<string, ReadonlySet<string>> {
+  const delegations = new Map<string, ReadonlySet<string>>();
+  for (
+    const [identity, { predecessor, inherited }] of deriveModulePredecessors(
+      previous,
+      next,
+      entries,
+    )
+  ) {
+    const delegated = validDelegatedModuleIdentities(
+      identity,
+      predecessor === identity ? [] : [predecessor],
+      inherited,
+    );
+    if (delegated.length > 0) delegations.set(identity, new Set(delegated));
+  }
+  return delegations;
+}
+
+/**
+ * The match {@link deriveModuleDelegations} makes for each successor in
+ * `next`, kept apart: the previous module it succeeds (itself, for a module
+ * the update leaves unchanged), and the attested list that module's record
+ * stores. A successor that matches nothing, or ambiguously, is left out.
+ */
+export function deriveModulePredecessors<
+  Module extends Pick<CacheableModule, "identity" | "filename">,
+>(
+  previous: ReadonlyMap<string, SourceDoc>,
+  next: readonly Module[],
+  entries?: { previous: string; next: string },
+): Map<string, { predecessor: string; inherited: readonly string[] }> {
   const previousByName = new Map<
     string,
     { identity: string; doc: SourceDoc }[]
@@ -370,7 +401,10 @@ export function deriveModuleDelegations<
     );
   }
 
-  const delegations = new Map<string, ReadonlySet<string>>();
+  const matched = new Map<
+    string,
+    { predecessor: string; inherited: readonly string[] }
+  >();
   for (const module of next) {
     const predecessor = claims.get(module.identity);
     if (
@@ -378,16 +412,15 @@ export function deriveModuleDelegations<
     ) {
       continue;
     }
-    const inherited = validDelegatedModuleIdentities(
-      module.identity,
-      predecessor.identity === module.identity ? [] : [predecessor.identity],
-      predecessor.doc.delegatedModuleIdentities,
-    );
-    if (inherited.length > 0) {
-      delegations.set(module.identity, new Set(inherited));
-    }
+    matched.set(module.identity, {
+      predecessor: predecessor.identity,
+      inherited: validDelegatedModuleIdentities(
+        predecessor.identity,
+        predecessor.doc.delegatedModuleIdentities,
+      ),
+    });
   }
-  return delegations;
+  return matched;
 }
 
 export function moduleDelegationsFromDocs(
