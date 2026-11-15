@@ -783,8 +783,12 @@ where the state is an array or a plain object. A value that is not a container
 has depth 0, `[]` has depth 1, `[[]]` has depth 2, and an `Error` whose state
 holds no container has depth 2. Depth is the value's, not the text's: an escape
 wrapper, `/object` or `/quote`, adds nothing, and nor does a `hole` entry; the
-single-key object wrapping an instance is the instance; and a primitive adds
-nothing, whatever the shape of its state in the text.
+single-key object wrapping an instance is the instance. A value of one of the
+format's leaf types adds nothing, whatever the shape of its state in the text:
+these are `Bytes@1`, `Hash@1`, the four temporal quantities, and the types
+that carry a JavaScript primitive (`BigInt@1`, `SpecialNumber@1`, `Symbol@1`
+and `Undefined@1`). Every other tagged value is an instance, `KeyPair@1` and
+`Unavailable@1` among them, so a key pair or an unavailable value has depth 2.
 
 **Bigints.** A bigint's size is the length of its minimal two's-complement
 representation in bytes, the bytes `BigInt@1` writes (Section 3): at least one

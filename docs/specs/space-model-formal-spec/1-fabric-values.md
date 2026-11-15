@@ -359,12 +359,12 @@ own codec for wire-format encoding, but bound per wire format — under
 `[JSON_CODEC]` for JSON — rather than under the format-neutral `[CODEC]` a
 wrapper binds, because a primitive's codec terminates an encoding where a
 wrapper's only decomposes. What further distinguishes them is the hashing layer,
-where each but `FabricUnavailable` has a dedicated primitive hash tag rather
-than the `TAG_INSTANCE` path (`2-hash-byte-format.md` Section 2);
-`FabricUnavailable` is hashed through that path, as though it were an instance
-(`2-hash-byte-format.md` Section 4.18). They do not carry a `wireTypeTag`
-property (no fabric type does, save `UnknownValue` and `ProblematicValue`; the
-wire tag is the codec's concern).
+where each but `FabricKeyPair` and `FabricUnavailable` has a dedicated primitive
+hash tag rather than the `TAG_INSTANCE` path (`2-hash-byte-format.md` Section
+2); those two are hashed through that path, as instances
+(`2-hash-byte-format.md` Sections 4.17 and 4.18). They do not carry a
+`wireTypeTag` property (no fabric type does, save `UnknownValue` and
+`ProblematicValue`; the wire tag is the codec's concern).
 
 #### 1.4.1 Wrapper Class Summary
 
@@ -821,7 +821,10 @@ one axis: whether the data model treats an instance as a primitive. A
 `FabricPrimitive` is treated the way a built-in `string` or `number` is, and a
 `FabricInstance` the way an `object` is. What follows from that, and what a
 caller sees of it, is that a `FabricInstance` may hold and expose arbitrary
-outgoing `FabricValue` references, and a `FabricPrimitive` may not.
+outgoing `FabricValue` references, and a `FabricPrimitive` may not. The split
+is this implementation's rather than the data model's: `FabricKeyPair` and
+`FabricUnavailable` are `FabricPrimitive`s here, and instances in the data
+model, whose encodings and hash treat them so.
 
 At runtime the two classes extend one root, `BaseFabricSpecialObject` in
 `fabric-bases/`, so that `isFabricSpecialObject()` recognizes either with a
@@ -1362,8 +1365,8 @@ JSON.
 
 `FabricUnavailable` is a marker standing in for data that is not available,
 saying why. It holds no data of its own: the reason, and for one reason the
-kind of error and a message, are the whole of what it says, which is what
-makes it a `FabricPrimitive` rather than a container. A consumer reading a
+kind of error and a message, are the whole of what it says, which is why
+this implementation makes it a `FabricPrimitive`. A consumer reading a
 slot that holds one learns that the value it wanted is not there and why,
 rather than reading `undefined` and having to guess among the situations that
 could have produced it.
