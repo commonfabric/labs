@@ -2441,9 +2441,13 @@ export class PatternManager {
   }
 
   /**
-   * Check that `prepared` matches the source transition `tx` makes, and once
-   * `tx` commits, register the successor's delegations and stage them on its
-   * cache records (`#stageCommittedDelegations()`).
+   * Check that `prepared` matches the source transition `tx` makes, and
+   * return the delegations the transition grants the successor: the
+   * proposal's, each predecessor extended with what `recordedPrevious`, the
+   * list the piece's previous revision records, grants that predecessor in
+   * turn, so that the list stays cumulative over the piece's history. Once
+   * `tx` commits, this registers the returned delegations and stages them on
+   * the successor's cache records (`#stageCommittedDelegations()`).
    */
   stageSourceUpdate(
     prepared: PreparedSourceUpdate,
@@ -2451,7 +2455,8 @@ export class PatternManager {
     previousEntryIdentity: string,
     entryIdentity: string,
     tx: IExtendedStorageTransaction,
-  ): void {
+    recordedPrevious?: ModuleDelegationMap,
+  ): ModuleDelegationMap {
     const proposal = this.#sourceUpdates.get(prepared);
     if (
       proposal === undefined || proposal.space !== space ||
@@ -2462,6 +2467,17 @@ export class PatternManager {
         "source update preparation does not match the transition",
       );
     }
+    const granted = new Map<string, ReadonlySet<string>>();
+    for (const [identity, predecessors] of proposal.delegations) {
+      const extended = new Set(predecessors);
+      for (const predecessor of predecessors) {
+        for (const earlier of recordedPrevious?.get(predecessor) ?? []) {
+          extended.add(earlier);
+        }
+      }
+      extended.delete(identity);
+      if (extended.size > 0) granted.set(identity, extended);
+    }
     // The transition writes no cache record: its transaction reads the
     // piece's data, and a record every later setup of the module reads would
     // take that label. The successor's authority is registered once the
@@ -2469,22 +2485,31 @@ export class PatternManager {
     // transaction of its own.
     tx.addVerdictCallback((_tx, result) => {
       if (!result.ok) return;
-      this.#runtime.registerModuleDelegations(space, proposal.delegations);
-      void this.#stageCommittedDelegations(proposal);
+      this.#runtime.registerModuleDelegations(space, granted);
+      void this.#stageCommittedDelegations({
+        ...proposal,
+        delegations: granted,
+      });
     });
+    return granted;
   }
 
   /**
-   * Helper for `stageSourceUpdate()`, which stages the delegations of
-   * `proposal`, a source update that has committed, on the successor's
-   * source and compiled records, on a transaction of its own that reads
-   * nothing but those records, and registers the union it staged. It is
-   * tracked as a cache write-back (`flushCompileCacheWrites()`).
+   * Helper for `stageSourceUpdate()` and `#readStoredDelegations()`, which
+   * stages `target.delegations`, granted by a source update that has
+   * committed, on the successor's source and compiled records, on a
+   * transaction of its own that reads nothing but those records, and
+   * registers the union it staged. It is tracked as a cache write-back
+   * (`flushCompileCacheWrites()`). A source update's `documentHolds` come
+   * along in `target`, so the documents stay loaded until it is done.
    */
   async #stageCommittedDelegations(
-    proposal: SourceUpdatePreparation,
+    target: Pick<
+      SourceUpdatePreparation,
+      "space" | "entryIdentity" | "delegations" | "runtimeVersion"
+    >,
   ): Promise<void> {
-    const { space, entryIdentity, delegations, runtimeVersion } = proposal;
+    const { space, entryIdentity, delegations, runtimeVersion } = target;
     const identities = [...delegations.keys()];
     const targets = identities.map((identity) => ({ identity }));
     const settlements: Promise<WaveSettlement>[] = [];
@@ -2635,18 +2660,26 @@ export class PatternManager {
    * predecessor the successor inherits nothing from stays ungranted, and a
    * failed read is logged rather than rejected, leaving the runtime's grants
    * as they were.
+   *
+   * `recorded` is the list the piece's source history records for the
+   * revision that moved it to `identity` (`PieceSourceRevision`), which the
+   * source update wrote in its own transaction and so is there before the
+   * staging on the cache records lands. Each closure read also registers
+   * those of its entries whose successor is a module of that closure, and no
+   * other.
    */
   readInheritedAuthority(
     space: MemorySpace,
     identity: string,
     predecessorIdentities: Iterable<string>,
+    recorded?: ModuleDelegationMap,
   ): Promise<void> | undefined {
     if (PatternManager.isKeylessPatternIdentity(identity)) return undefined;
     const predecessors = [...predecessorIdentities];
     if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
       return undefined;
     }
-    return this.#readStoredDelegations(space, identity, predecessors);
+    return this.#readStoredDelegations(space, identity, predecessors, recorded);
   }
 
   /**
@@ -2681,14 +2714,22 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     predecessors: readonly string[],
+    recorded: ModuleDelegationMap | undefined,
   ): Promise<void> {
     const tx = this.#runtime.edit();
     try {
-      await this.#readCompiledDelegations(space, identity, tx);
+      const compiled = await this.#readCompiledDelegations(space, identity, tx);
+      this.#registerRecordedDelegations(space, recorded, compiled);
       if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
         return;
       }
-      await loadVerifiedSourceClosure(this.#runtime, space, identity, tx);
+      const source = await loadVerifiedSourceClosure(
+        this.#runtime,
+        space,
+        identity,
+        tx,
+      );
+      this.#registerRecordedDelegations(space, recorded, source);
     } catch (error) {
       logger.warn("inherited-authority-read-failed", () => [
         `reading the delegations of ${identity} in ${space} failed`,
@@ -2700,22 +2741,45 @@ export class PatternManager {
   }
 
   /**
+   * Helper for `#readStoredDelegations()`, which registers each entry of
+   * `recorded` whose successor is a module of `closure`, a closure of the
+   * successor that a read has just verified. Without either it registers
+   * nothing.
+   */
+  #registerRecordedDelegations(
+    space: MemorySpace,
+    recorded: ModuleDelegationMap | undefined,
+    closure: ReadonlyMap<string, unknown> | undefined,
+  ): void {
+    if (recorded === undefined || closure === undefined) return;
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN: authority
+    // read from the piece's source history rather than from a verified
+    // closure's own records. The history is written only through the
+    // runtime's meta seam, in the source update's transaction.
+    const keyed = new Map(
+      [...recorded].filter(([successor]) => closure.has(successor)),
+    );
+    if (keyed.size > 0) this.#runtime.registerModuleDelegations(space, keyed);
+  }
+
+  /**
    * Helper for `#readStoredDelegations()`, which reads `identity`'s compiled
    * closure for this runtime version in `tx`, registering the delegations it
-   * carries. A failed read is logged and registers nothing: the source closure
-   * is read on its own after it, and can still supply every grant.
+   * carries, and returns it. A failed read is logged, registers nothing, and
+   * returns `undefined`: the source closure is read on its own after it, and
+   * can still supply every grant.
    */
   async #readCompiledDelegations(
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
-  ): Promise<void> {
+  ): Promise<ReadonlyMap<string, unknown> | undefined> {
     try {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      if (runtimeVersion === undefined) return;
-      await loadCompiledClosure(
+      if (runtimeVersion === undefined) return undefined;
+      return await loadCompiledClosure(
         this.#runtime,
         space,
         identity,
@@ -2727,6 +2791,7 @@ export class PatternManager {
         `reading the compiled closure of ${identity} in ${space} failed`,
         error,
       ]);
+      return undefined;
     }
   }
 
