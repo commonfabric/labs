@@ -67,6 +67,45 @@ export const revision = ${JSON.stringify(version)};
  * reading it carries that clause in its flow join; the two revisions declare
  * the same label, so nothing about the swap itself weakens anything.
  */
+/**
+ * `authorizedWriterProgram()`'s contract with the handler in a module of its
+ * own: `writer` picks that module's content and `entry` the entry's, so an
+ * update can change one and leave the other as it was.
+ */
+function splitWriterProgram(writer: string, entry: string): RuntimeProgram {
+  return {
+    main: "/app/main.tsx",
+    files: [
+      {
+        name: "/app/main.tsx",
+        contents: `/// <cts-enable />
+import { pattern, Writable, WriteAuthorizedBy } from "commonfabric";
+import { setName } from "./writer.ts";
+export const entry = ${JSON.stringify(entry)};
+export default pattern<{ seed?: string }>(() => {
+  const name = new Writable<
+    WriteAuthorizedBy<string, typeof setName>
+  >("initial").for("name");
+  return { name, setName: setName({ name }) };
+});
+`,
+      },
+      {
+        name: "/app/writer.ts",
+        contents: `/// <cts-enable />
+import { handler, Writable } from "commonfabric";
+export const setName = handler<
+  { name: string },
+  { name: Writable<string> }
+>((event, state) => {
+  state.name.set(${JSON.stringify(writer)} + ":" + event.name);
+});
+`,
+      },
+    ],
+  };
+}
+
 function confidentialArgumentProgram(version: string): RuntimeProgram {
   return {
     main: "/main.tsx",
@@ -436,7 +475,7 @@ export default pattern<{seed?: ${seedType}}>(() => {
       return { pinned, [Symbol.dispose]: () => restore.restore() };
     };
 
-    it("authorizes the successor's writes for every earlier pattern in the piece's history from the piece's record alone, without preparing an update, and stages them again", async () => {
+    it("authorizes the successor's writes for every earlier pattern in the piece's history from the piece's record alone, without preparing an update", async () => {
       using _noStaging = refuseDelegationStaging(runtime);
       const piece = await pieces.create(authorizedWriterProgram("v0"), {
         input: {},
@@ -472,8 +511,137 @@ export default pattern<{seed?: ${seedType}}>(() => {
           ).toBe(true);
         }
       }
-      // The observer's start staged them on the records again.
+      // The observer's start wrote nothing.
+      expect(await storedDelegations(v2)).toEqual([]);
+    });
+
+    it("stages what a failed staging missed with the piece's next committed update", async () => {
+      const piece = await pieces.create(authorizedWriterProgram("v0"), {
+        input: {},
+      });
+      const v0 = getPatternIdentityRef(piece.getCell())!.identity;
+      const updater = await pieces.get(piece.id, true);
+      expect(await invokeSetName(updater, "before")).toBe("v0:before");
+      {
+        using _noStaging = refuseDelegationStaging(runtime);
+        await piece.setPattern(authorizedWriterProgram("v1"));
+      }
+      const v1 = getPatternIdentityRef(piece.getCell())!.identity;
+      // Between the two updates the record lacks the grant, and the piece's
+      // member holds it.
+      expect(await storedDelegations(v1)).toEqual([]);
+      const between = await observerPieces.get(piece.id, true);
+      expect(await invokeSetName(between, "between")).toBe("v1:between");
+      expect(await storedDelegations(v1)).toEqual([]);
+
+      await piece.setPattern(authorizedWriterProgram("v2"));
+      const v2 = getPatternIdentityRef(piece.getCell())!.identity;
+
       expect((await storedDelegations(v2)).sort()).toEqual([v0, v1].sort());
+    });
+
+    it("writes nothing to the cache records when it starts a piece, whatever the piece's member records", async () => {
+      // A member planted with a predecessor no update granted: the start
+      // registers it in the runtime that starts the piece, the residual the
+      // conformance statement records, but it reaches no record.
+      const piece = await pieces.create(authorizedWriterProgram("v1"), {
+        input: {},
+      });
+      const v1 = getPatternIdentityRef(piece.getCell())!.identity;
+      await piece.setPattern(authorizedWriterProgram("v2"));
+      const v2 = getPatternIdentityRef(piece.getCell())!.identity;
+      expect(await storedDelegations(v2)).toEqual([v1]);
+      await replaceMember(piece, {
+        identity: v2,
+        delegations: [{ identity: v2, predecessors: [v1, "planted"] }],
+      });
+
+      await observerPieces.get(piece.id, true);
+
+      expect(
+        observer.grantsModuleDelegation(pieces.getSpace(), v2, "planted"),
+      ).toBe(true);
+      expect(await storedDelegations(v2)).toEqual([v1]);
+    });
+
+    it("keeps the recorded grant of a module an update leaves unchanged", async () => {
+      // The writer module changes from v0 to v1 and stays as it is in v2.
+      // v0 to v1's staging never lands, so only the member holds w1's grant
+      // from w0 when a runtime that never started the piece makes the next
+      // update.
+      const fresh = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+      });
+      try {
+        const freshPieces = new PiecesController(
+          createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+          fresh,
+        );
+        await freshPieces.synced();
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        const cold = await observerPieces.get(piece.id, false);
+        await cold.setPattern(splitWriterProgram("w1", "e2"));
+        await observer.patternManager.flushCompileCacheWrites();
+        await observerPieces.synced();
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the recorded grant of a module two updates leave unchanged", async () => {
+      const runtimes = [0, 1].map(() =>
+        new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager,
+        })
+      );
+      try {
+        const [third, fresh] = await Promise.all(runtimes.map(async (on) => {
+          const controller = new PiecesController(
+            createSession({ identity: signer, spaceDid: pieces.getSpace() }),
+            on,
+          );
+          await controller.synced();
+          return controller;
+        }));
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        {
+          using _noStaging = refuseDelegationStaging(observer);
+          const cold = await observerPieces.get(piece.id, false);
+          await cold.setPattern(splitWriterProgram("w1", "e2"));
+        }
+        const coldAgain = await third.get(piece.id, false);
+        await coldAgain.setPattern(splitWriterProgram("w1", "e3"));
+        await runtimes[0].patternManager.flushCompileCacheWrites();
+        await third.synced();
+
+        const observed = await fresh.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+      } finally {
+        for (const on of runtimes) await on.dispose({ closeStorage: false });
+      }
     });
 
     it("authorizes the successor's writes from its cache records when the piece holds no record of its delegations", async () => {
