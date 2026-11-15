@@ -105,7 +105,11 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
-import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import {
+  clientScopedKey,
+  ownerClient,
+  type WorkerClient,
+} from "@/backends/worker-client.ts";
 import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
@@ -11536,6 +11540,249 @@ describe("runtime-processor", () => {
           await mounting;
           await runtime.dispose();
         }
+      });
+
+      describe("of a space deleted before its view registers", () => {
+        // A view's registration can be refused because its space was deleted
+        // while the mount waited for it, or before the mount was asked for.
+        // Either way the mount renders the space's deleted placeholder, as a
+        // mount that was up when the deletion landed does, and does not fail.
+
+        /** The refusal a deleted space answers every command with. */
+        const deletedError = (space: string) =>
+          Object.assign(new Error(`Space ${space} is deleted`), {
+            name: "AuthorizationError",
+            deleted: true,
+          });
+
+        /**
+         * A processor whose view registrations settle as the promise
+         * `register` returns does, over a storage that reports the mounted
+         * space deleted once `markDeleted()` has been called.
+         */
+        async function deletedMountState(
+          register: () => Promise<(() => void) | undefined>,
+        ) {
+          const { runtime, link } = await mountState();
+          let deleted = false;
+          const processor = buildProcessor({
+            runtime: {
+              getCellFromLink: runtime.getCellFromLink.bind(runtime),
+              viewScopedReplicationRequested: true,
+              viewReplication: { mount: register },
+              storageManager: {
+                spaceAccessError: (space: string) =>
+                  deleted && space === link.space
+                    ? deletedError(space)
+                    : undefined,
+              },
+            },
+          });
+          return {
+            runtime,
+            link,
+            processor,
+            markDeleted: () => {
+              deleted = true;
+            },
+          };
+        }
+
+        /** Whether `posted` holds a batch that marks a node deleted. */
+        const deletedPlaceholderPosted = (posted: PostedMessage[]) =>
+          posted.some((message) =>
+            message.type === NotificationType.VDomBatch &&
+            (message.ops as { op: string; key?: string }[]).some((op) =>
+              op.op === "set-prop" && op.key === "data-space-deleted"
+            )
+          );
+
+        /**
+         * Has the reconciler of `client`'s mount `mountId` flush the ops it
+         * has queued, which it otherwise does on a microtask.
+         */
+        const flushOps = (
+          processor: ReturnType<typeof buildProcessor>,
+          client: WorkerClient,
+          mountId: number,
+        ) => {
+          const mount = processor.accessForTestingOnly.vdomMounts.get(
+            clientScopedKey(client, mountId),
+          );
+          expect(mount).toBeDefined();
+          mount!.reconciler.flush();
+        };
+
+        it("renders the deleted placeholder when the space is deleted while its view registers", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 41,
+              cell: link,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+            const response = await mounting;
+            flushOps(processor, client, 41);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("renders the deleted placeholder when the space was deleted before the mount was asked for", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() =>
+              Promise.reject(deletedError(link.space))
+            );
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            const response = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 42,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 42);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("renders the deleted placeholder when a deleted space registers no view", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => Promise.resolve(undefined));
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            const response = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 43,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 43);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("releases a placeholder mount when it is unmounted, and mounts the same cell again", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() =>
+              Promise.reject(deletedError(link.space))
+            );
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 44,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 44,
+            }, client);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+
+            posted.length = 0;
+            const again = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 44,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 44);
+
+            expect(again.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 44,
+            }, client);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        /**
+         * Expects a mount whose view registration is refused with `refusal`
+         * to fail with it, leaving no mount behind.
+         */
+        async function expectRefusedMountToFail(refusal: Error) {
+          const { runtime, link, processor } = await deletedMountState(() =>
+            Promise.reject(refusal)
+          );
+          const { client } = testClient(1);
+          try {
+            await expect(processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 45,
+              cell: link,
+            }, client)).rejects.toBe(refusal);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        }
+
+        it("fails a mount whose view registration cannot reach the memory server", async () => {
+          await expectRefusedMountToFail(
+            new Error("the memory server could not be reached"),
+          );
+        });
+
+        it("fails a mount whose view registration is refused without the space being deleted", async () => {
+          await expectRefusedMountToFail(
+            Object.assign(new Error("Access refused"), {
+              name: "AuthorizationError",
+            }),
+          );
+        });
+
+        it("resolves, rendering nothing, a mount unmounted while its view registers when the space is deleted", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 46,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 46,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+
+            await expect(mounting).resolves.toEqual({ rootId: null });
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+            expect(
+              posted.filter((message) =>
+                message.type === NotificationType.VDomBatch
+              ),
+            ).toEqual([]);
+          } finally {
+            await runtime.dispose();
+          }
+        });
       });
 
       it("keeps one client's mount when another mounts under the same mount id", async () => {
