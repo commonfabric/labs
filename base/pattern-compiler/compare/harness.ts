@@ -207,27 +207,35 @@ export type WriteRow = {
    * for the written path, which is stored there on both sides (PL §3.1,
    * "A write edge of a handler"). For an edge with a `reference` member
    * it is joined with what a value read through the stored link consumes.
+   *
+   * The `identity` slot of a handle the body only passes on, one that no
+   * write edge of the body targets, has the stamp of the run that wrote
+   * the link and not the entry of origin `link` stored at the position
+   * (PL §2.2, "The `link` entry of a handle that is only passed on is not
+   * in it"). That entry holds what the schema of the link declares, which
+   * for a link to a cell is what the cell's own type declares.
    */
   template: Evaluated;
   comparison: Comparison;
   runtimeByOrigin: { all: Label; withoutStatic: Label };
   comparisonWithoutStatic: Comparison;
   /**
-   * `template` with the entries of origin `link` left out of the label of
-   * each `identity` slot that no write edge of the body targets: a handle
-   * the body passes on and does not write through. Such an entry holds
-   * what the schema of the link declares, which for a link to a cell is
-   * what the cell's own type declares. PL §2.2 counts it as the label of
-   * the link. The run of a handler reads no link it only passes on, so
-   * its join does not hold the entry (note 228 of `SPEC-NOTES.md`).
+   * Whether the row is looser, or incomparable, by the stamp of a link the
+   * body passes on alone: it is not with the label of each such slot left
+   * empty. The runtime's transaction reads nothing at the position of a
+   * handle that is only passed on, so its join does not hold the stamp
+   * (PL §8, question 81).
    */
-  templateWithoutPassedLinks: Evaluated;
-  /** `templateWithoutPassedLinks` against `runtime`. */
-  comparisonWithoutPassedLinks: Comparison;
+  looserByLinkStamp: boolean;
 };
 
 /** Something the harness did not compare, and why. */
-export type Skipped = { what: string; reason: string };
+export type Skipped = {
+  what: string;
+  reason: string;
+  /** For an event or a write edge: the binding it is of. */
+  binding?: number;
+};
 
 /**
  * A kept output the run holds no value at, which is not compared, with
@@ -592,9 +600,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         return NO_VALUE;
       }
     };
-    const skip = (what: string, error: unknown) =>
+    const skip = (what: string, error: unknown, binding?: number) =>
       skipped.push({
         what,
+        ...(binding === undefined ? {} : { binding }),
         reason: error instanceof Unsupported
           ? error.reason
           : `error: ${`${(error as Error)?.message ?? error}`.slice(0, 80)}`,
@@ -1053,10 +1062,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         return { path, elements };
       };
 
-      // Whether the evaluation leaves the entries of origin `link` out of
-      // the label of a handle the body passes on
-      // (`WriteRow.templateWithoutPassedLinks`).
-      let omitPassedLinks = false;
+      // What the evaluation takes as the label of the `identity` slot of a
+      // handle the body only passes on: every `followRef` entry at the
+      // position (an output row, which no body of a handler is evaluated
+      // for), the entries that are not of origin `link` (a write row, PL
+      // §2.2), or nothing (`WriteRow.looserByLinkStamp`).
+      let passedHandle: "every entry" | "the stamp" | "nothing" =
+        "every entry";
       // A handle is passed on where its `identity` slot is in the reads of
       // the handler's body and no write edge of the body has the slot as
       // its target. A handle the body writes through is not passed on: the
@@ -1221,8 +1233,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return evaluated.label;
             }
             if (observes === "identity") {
-              if (omitPassedLinks && passedOn(slot, scope.binding)) {
-                return linkWithoutDeclaration(cell);
+              if (
+                passedHandle !== "every entry" &&
+                passedOn(slot, scope.binding)
+              ) {
+                return passedHandle === "the stamp"
+                  ? linkWithoutDeclaration(cell)
+                  : { confidentiality: [], integrity: [] };
               }
               // The label of the link: what a `followRef` read at the
               // position that holds the reference consumes, and nothing
@@ -1722,14 +1739,19 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               : { ...label, integrity: runtimeLabel.integrity },
           };
         };
-        const template = side();
-        omitPassedLinks = true;
-        let templateWithoutPassedLinks: Evaluated;
+        let template: Evaluated;
+        let withoutStamp: Evaluated;
         try {
-          templateWithoutPassedLinks = side();
+          passedHandle = "the stamp";
+          template = side();
+          passedHandle = "nothing";
+          withoutStamp = side();
         } finally {
-          omitPassedLinks = false;
+          passedHandle = "every entry";
         }
+        const comparison = compareLabels(template.label, runtimeLabel);
+        const worse = (relation: string) =>
+          relation === "looser" || relation === "incomparable";
         const withoutStatic = byOrigin(cell, "value", false);
         return {
           binding,
@@ -1738,7 +1760,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           path,
           runtime: runtimeLabel,
           template,
-          comparison: compareLabels(template.label, runtimeLabel),
+          comparison,
           runtimeByOrigin: {
             all: byOrigin(cell, "value", true),
             withoutStatic,
@@ -1747,11 +1769,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             template.label,
             withoutStatic,
           ),
-          templateWithoutPassedLinks,
-          comparisonWithoutPassedLinks: compareLabels(
-            templateWithoutPassedLinks.label,
-            runtimeLabel,
-          ),
+          looserByLinkStamp: worse(comparison.overall) &&
+            !worse(compareLabels(withoutStamp.label, runtimeLabel).overall),
         };
       };
 
@@ -1785,7 +1804,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         found = await reading((within) => within.streamAt(binding));
       } catch (error) {
         if (!(error instanceof Unsupported)) throw error;
-        skipped.push({ what: name, reason: error.reason });
+        skipped.push({ what: name, reason: error.reason, binding });
         events.push({
           binding,
           handler: record?.name ?? "",
@@ -1888,7 +1907,11 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           const what = `${name}, write ${index}`;
           const earlier = before[index];
           if ("error" in target || "error" in earlier) {
-            skip(what, "error" in target ? target.error : earlier.error);
+            skip(
+              what,
+              "error" in target ? target.error : earlier.error,
+              binding,
+            );
             return;
           }
           // The paths the event's run wrote: a target whose value changed,
@@ -1907,6 +1930,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             skipped.push({
               what,
               reason: "a write the event's run did not make",
+              binding,
             });
           }
           for (const path of paths) {
@@ -1924,7 +1948,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 ),
               );
             } catch (error) {
-              skip(`${what}, ${path.join("/")}`, error);
+              skip(`${what}, ${path.join("/")}`, error, binding);
             }
           }
         });

@@ -53,14 +53,34 @@ describe("tally", () => {
     });
   });
 
-  it("classifies a write edge once, and again with the link entries of a passed handle left out", () => {
+  it("classifies a write edge once, and counts the rows that are looser by the stamp of a passed link", () => {
+    // PL §2.2: the label of the `identity` slot of a handle that is only
+    // passed on is the stamp of the run that wrote the link. The runtime's
+    // transaction reads nothing at such a position, "so with the stamp
+    // the template can be looser than today" (PL §8, question 81).
     const counts = tally([
-      row({ kind: "write", category: "looser", withoutPassedLinks: "equal" }),
-      row({ kind: "write", category: "equal", withoutPassedLinks: "equal" }),
+      row({ kind: "write", category: "looser", looserByLinkStamp: true }),
+      row({ kind: "write", category: "looser", looserByLinkStamp: false }),
+      row({ kind: "write", category: "equal", looserByLinkStamp: false }),
     ], "write");
 
-    expect(counts.withAtom.looser).toBe(1);
+    expect(counts.withAtom.looser).toBe(2);
     expect(counts.withAtom.equal).toBe(1);
-    expect(counts.withoutPassedLinks?.equal).toBe(2);
+    expect(counts.looserByLinkStamp).toBe(1);
+  });
+
+  it("counts the write edges of handlers in an element body and in a pattern compiled in apart", () => {
+    const rows = [
+      row({ kind: "write", category: "equal" }),
+      row({ kind: "write", category: "tighter", within: "site" }),
+      row({ kind: "write", category: "equal", within: "element" }),
+      row({ kind: "write", category: "looser", within: "element" }),
+    ];
+
+    expect(tally(rows, "write").compared).toBe(4);
+    expect(tally(rows, "write", "none").withAtom.equal).toBe(1);
+    expect(tally(rows, "write", "site").withAtom.tighter).toBe(1);
+    expect(tally(rows, "write", "element").compared).toBe(2);
+    expect(tally(rows, "write", "element").withAtom.looser).toBe(1);
   });
 });

@@ -45,8 +45,23 @@ type CorpusModule = {
     plan: CorpusPlan;
     schemas: Schemas;
     unsupported: unknown[];
+    /** The bindings of an element body the crate gives no result path. */
+    noResultPath?: { binding: number; reason: string }[];
   }[];
 };
+
+/** Where a binding is made: the kinds of step its `within` has. */
+export type Within = "site" | "element";
+
+/** The kind of the steps of a `within`: `element` where it has one. */
+export const withinOf = (steps: unknown[] | undefined): Within | undefined =>
+  (steps ?? []).some((step) =>
+      (step as { element?: number }).element !== undefined
+    )
+    ? "element"
+    : (steps ?? []).length > 0
+    ? "site"
+    : undefined;
 
 /** One compared path, as the results file holds it. */
 export type ResultRow = {
@@ -70,11 +85,16 @@ export type ResultRow = {
    */
   templateAlone?: Category;
   /**
-   * For a write edge: the category with the entries of origin `link` left
-   * out of the label of each handle the body passes on
-   * (`WriteRow.comparisonWithoutPassedLinks`).
+   * For a write edge: whether the row is looser by the stamp of a link the
+   * body passes on alone (`WriteRow.looserByLinkStamp`).
    */
-  withoutPassedLinks?: Category;
+  looserByLinkStamp?: boolean;
+  /**
+   * For a write edge of a handler bound in an element body, `element`,
+   * and of one bound in a pattern compiled in and in no element body,
+   * `site` (the steps of `Binding.within`).
+   */
+  within?: Within;
   /** A selector or a pick of the template was not found from the run. */
   bound: boolean;
 };
@@ -90,10 +110,27 @@ export type ModuleResult = {
   notCompared?: Record<string, number>;
   /** The write edges the run of a sent event did not make. */
   notMade?: string[];
+  /**
+   * What the run did not compare of the events and the write edges of the
+   * handlers bound in each place (`none`, `site`, `element`), by reason.
+   */
+  notComparedOfHandlers?: Record<string, Record<string, number>>;
+  /**
+   * Each binding of a handler: where it is bound, whether the plan has a
+   * result path for it, why not where the crate says, and the number of
+   * write edges of its body.
+   */
+  handlers?: {
+    name: string;
+    within?: Within;
+    path: boolean;
+    reason?: string;
+    writes: number;
+  }[];
   decided?: Run["decided"];
   events?: number;
   /** What became of each event, with the event the generator made. */
-  outcomes?: (Run["events"][number] & { event: string })[];
+  outcomes?: (Run["events"][number] & { event: string; within?: Within })[];
   /** The kept outputs the run holds no value at. */
   missing?: {
     path: string;
@@ -136,6 +173,7 @@ const resultRow = (
   kind: "output" | "write",
   row: Row | WriteRow,
   template: Template | undefined,
+  within?: Within,
 ): ResultRow => {
   const evaluated = "reached" in row ? row.reached : row.template;
   return {
@@ -155,7 +193,8 @@ const resultRow = (
     ...("comparisonOfTemplateAlone" in row
       ? { templateAlone: categoryOf(row.comparisonOfTemplateAlone) }
       : {
-        withoutPassedLinks: categoryOf(row.comparisonWithoutPassedLinks),
+        looserByLinkStamp: row.looserByLinkStamp,
+        ...(within === undefined ? {} : { within }),
       }),
     bound: evaluated.bound,
   };
@@ -186,12 +225,28 @@ export const runModule = async (
     const reason = NEEDS[operation.kind ?? ""];
     if (reason !== undefined) return { ...base, skipped: reason };
   }
+  // One event for each handler whose stream the result holds. A handler
+  // bound in an element body gets its event at one element of each
+  // enclosing collection, which the harness chooses.
   const events = (plan.bindings ?? []).flatMap((binding, index) =>
-    binding.handler?.body !== undefined && binding.result !== undefined &&
-      (binding.within ?? []).length === 0
+    binding.handler?.body !== undefined && binding.result !== undefined
       ? [{ binding: index, event: generateEvent(plan, schemas, index) }]
       : []
   );
+  const handlers = (plan.bindings ?? []).flatMap((binding, index) => {
+    if (binding.handler?.body === undefined) return [];
+    const within = withinOf(binding.within);
+    const reason = pattern.noResultPath?.find((entry) =>
+      entry.binding === index
+    )?.reason;
+    return [{
+      name: binding.name ?? "",
+      ...(within === undefined ? {} : { within }),
+      path: binding.result !== undefined,
+      ...(reason === undefined ? {} : { reason }),
+      writes: plan.bodies?.[binding.handler.body]?.writes?.length ?? 0,
+    }];
+  });
   let run: Run;
   // What the runtime reports while the scenario runs: a write it refuses
   // is logged and does not fail the run.
@@ -225,8 +280,14 @@ export const runModule = async (
     console.warn = consoleWarn;
   }
   const notCompared: Record<string, number> = {};
-  for (const { reason } of run.skipped) {
+  const notComparedOfHandlers: Record<string, Record<string, number>> = {};
+  for (const { reason, binding } of run.skipped) {
     notCompared[reason] = (notCompared[reason] ?? 0) + 1;
+    if (binding === undefined) continue;
+    const where = withinOf(plan.bindings?.[binding]?.within) ?? "none";
+    notComparedOfHandlers[where] ??= {};
+    notComparedOfHandlers[where][reason] =
+      (notComparedOfHandlers[where][reason] ?? 0) + 1;
   }
   return {
     ...base,
@@ -240,19 +301,26 @@ export const runModule = async (
           row,
           plan.bodies?.[plan.bindings?.[row.binding]?.handler?.body ?? -1]
             ?.writes?.[row.write]?.template,
+          withinOf(plan.bindings?.[row.binding]?.within),
         )
       ),
     ],
     notCompared,
+    notComparedOfHandlers,
+    handlers,
     notMade: run.skipped.filter(({ reason }) =>
       reason === "a write the event's run did not make"
     ).map(({ what }) => what),
     decided: run.decided,
     events: events.length,
-    outcomes: run.events.map((outcome, index) => ({
-      ...outcome,
-      event: JSON.stringify(events[index]?.event)?.slice(0, 300) ?? "",
-    })),
+    outcomes: run.events.map((outcome, index) => {
+      const within = withinOf(plan.bindings?.[outcome.binding]?.within);
+      return {
+        ...outcome,
+        event: JSON.stringify(events[index]?.event)?.slice(0, 300) ?? "",
+        ...(within === undefined ? {} : { within }),
+      };
+    }),
     missing: run.missing.map((entry) => ({
       path: entry.path.join("/"),
       root: entry.root,
@@ -364,16 +432,27 @@ export type Tally = {
   withAtom: Counts;
   /** `withAtom` against the runtime's label without its static part. */
   withoutStatic: Counts;
-  /** For a write edge: with the link entries of a passed handle left out. */
-  withoutPassedLinks?: Counts;
+  /**
+   * For a write edge: the rows that are looser by the stamp of a link the
+   * body passes on alone.
+   */
+  looserByLinkStamp?: number;
 };
 
-/** Counts the rows of `kind` by each classification. */
+/**
+ * Counts the rows of `kind` by each classification. With `within`, the
+ * write edges of the handlers bound there alone: in an element body, in a
+ * pattern compiled in and in no element body, or in neither (`none`).
+ */
 export const tally = (
   rows: readonly ResultRow[],
   kind: "output" | "write",
+  within?: Within | "none",
 ): Tally => {
-  const of = rows.filter((row) => row.kind === kind);
+  const of = rows.filter((row) =>
+    row.kind === kind &&
+    (within === undefined || (row.within ?? "none") === within)
+  );
   const compared = of.filter((row) => !row.bound);
   const by = (category: (row: ResultRow) => Category | undefined): Counts => {
     const counts = Object.fromEntries(
@@ -392,7 +471,11 @@ export const tally = (
     withAtom: by((row) => row.category),
     withoutStatic: by((row) => row.withoutStatic),
     ...(kind === "write"
-      ? { withoutPassedLinks: by((row) => row.withoutPassedLinks) }
+      ? {
+        looserByLinkStamp: compared.filter((row) =>
+          row.looserByLinkStamp
+        ).length,
+      }
       : {}),
   };
 };
@@ -434,10 +517,6 @@ const report = async (file: string) => {
       : [
         ["", counts.withAtom],
         ["without the static part", counts.withoutStatic],
-        [
-          "without the link entries of a passed handle",
-          counts.withoutPassedLinks!,
-        ],
       ];
     for (const category of CATEGORIES) {
       console.log(
@@ -457,6 +536,28 @@ const report = async (file: string) => {
         )
       ) {
         console.log(`    ${`${group.length}`.padStart(6)}  ${was}`);
+      }
+    }
+    if (kind === "write") {
+      console.log(
+        `  looser by the stamp of a link the body passes on: ${counts.looserByLinkStamp}`,
+      );
+      // The same by where the handler is bound.
+      for (const within of ["none", "site", "element"] as const) {
+        const part = tally(rows, kind, within);
+        console.log(
+          `  handlers bound in ${
+            within === "none"
+              ? "no element body and no pattern compiled in"
+              : within === "site"
+              ? "a pattern compiled in"
+              : "an element body"
+          }: ${part.compared} compared, and ${part.bounds} bounds: ` +
+            CATEGORIES.map((category) =>
+              `${category} ${part.withAtom[category]}`
+            ).join(", ") +
+            `; looser by the stamp of a passed link ${part.looserByLinkStamp}`,
+        );
       }
     }
     // A row counted under "atom names the pattern" is equal or tighter
@@ -479,6 +580,57 @@ const report = async (file: string) => {
   }
   for (const [reason, number] of [...reasons].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${`${number}`.padStart(5)}  ${reason}`);
+  }
+  // The handlers by where they are bound: with a result path, sent an
+  // event, and what became of it.
+  const handlers = ran.flatMap((result) => result.handlers ?? []);
+  const sent = ran.flatMap((result) => result.outcomes ?? []);
+  console.log("handlers, by where they are bound:");
+  for (const within of ["none", "site", "element"] as const) {
+    const of = handlers.filter((handler) =>
+      (handler.within ?? "none") === within
+    );
+    const events = sent.filter((outcome) =>
+      (outcome.within ?? "none") === within
+    );
+    const edges = (list: typeof of) =>
+      list.reduce((sum, handler) => sum + handler.writes, 0);
+    const withPath = of.filter((handler) => handler.path);
+    console.log(
+      `  ${within}: ${of.length} bindings with ${edges(of)} write edges; ` +
+        `${withPath.length} with a result path (${
+          edges(withPath)
+        } write edges); ` +
+        `events committed ${
+          events.filter((outcome) => outcome.outcome === "committed").length
+        }, refused ${
+          events.filter((outcome) => outcome.outcome === "refused").length
+        }, not sent ${
+          events.filter((outcome) => outcome.outcome === "not sent").length
+        }`,
+    );
+    for (
+      const [reason, group] of count(
+        of.filter((handler) => !handler.path),
+        (handler) =>
+          handler.reason ?? "its stream is at no kept path of the result",
+      )
+    ) {
+      console.log(`      no result path, ${reason}: ${group.length}`);
+    }
+    const reasons = new Map<string, number>();
+    for (const result of ran) {
+      for (
+        const [reason, number] of Object.entries(
+          result.notComparedOfHandlers?.[within] ?? {},
+        )
+      ) {
+        reasons.set(reason, (reasons.get(reason) ?? 0) + number);
+      }
+    }
+    for (const [reason, number] of [...reasons].sort((a, b) => b[1] - a[1])) {
+      console.log(`      not compared, ${reason}: ${number}`);
+    }
   }
   const decided = { byValue: 0, byCondition: 0, stated: 0, unobserved: 0 };
   for (const result of ran) {

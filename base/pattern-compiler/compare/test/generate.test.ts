@@ -325,29 +325,24 @@ describe("a handler that passes a handle on without reading through it", () => {
     expect(clauses(writes[0].runtime.confidentiality)).toEqual(["input:mine"]);
   });
 
-  it("has the clause of the link to the cell that was passed on, which the run did not read", async () => {
+  it("leaves the link entry of the handle that was passed on out of the label of its slot", async () => {
     // The argument's link to the cell of `other` carries, as an entry of
     // origin `link`, the clause the link's schema declares, which is the
-    // clause of the cell's own type. PL §2.2 counts it as the label of
-    // the link. The handler's run reads no link it only passes on, so the
-    // runtime's label has no clause of `other` and the template is looser
-    // (note 228 of `SPEC-NOTES.md`).
+    // clause of the cell's own type. "The `link` entry of a handle that
+    // is only passed on is not in" the label of the `identity` slot, and
+    // the stamp of the run that wrote the link is (PL §2.2). The
+    // handler's run reads no link it only passes on, so the runtime's
+    // label has no clause of `other` either.
     const [row] = (await run()).writes;
 
     expect(clauses(row.template.label.confidentiality)).toEqual([
       "input:mine",
-      "input:other",
     ]);
-    expect(row.comparison.confidentiality).toBe("looser");
-  });
-
-  it("is equal with the link entries of the handle that was passed on left out", async () => {
-    const [row] = (await run()).writes;
-
-    expect(clauses(row.templateWithoutPassedLinks.label.confidentiality))
-      .toEqual(["input:mine"]);
-    expect(row.comparisonWithoutPassedLinks.confidentiality).toBe("equal");
-    expect(row.comparisonWithoutPassedLinks.integrity).toBe("equal");
+    expect(row.comparison.confidentiality).toBe("equal");
+    expect(row.comparison.integrity).toBe("equal");
+    // No run wrote the link to `other` under a label, so the stamp adds
+    // nothing.
+    expect(row.looserByLinkStamp).toBe(false);
   });
 });
 
