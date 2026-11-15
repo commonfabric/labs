@@ -395,8 +395,12 @@ of every restating setup. The restatement mints no existence entry, and
 leaves the existence entry as it is. It changes what is stored at strict,
 with no default-off dial, and it is not fail-closed: asked, it lowers a stale
 value stamp, and it can raise one from a restating setup's decision reads. So
-it does not satisfy step 4 above. Its three deciding sites, in
-`cfc/prepare.ts`, carry the `SPEC-PENDING` marker. @danfuzz authorized landing
+it does not satisfy step 4 above. Its four deciding sites, in
+`cfc/prepare.ts`, carry the `SPEC-PENDING` marker. The snapshot stays pinned
+at specs#88's head (`239fc839`), whose `restateResultWiring` lacks the
+value re-derivation specs#98 adds, so the kernel manifest's row for that
+function records today's decision until the next regeneration after the
+ruling. @danfuzz authorized landing
 this ahead of the ruling, without a flag, on 2026-11-14. His reason, in his
 words: "we should define the spec change and still accept doing the change in
 `labs` while pending and without a flag." The conformance statement's §9

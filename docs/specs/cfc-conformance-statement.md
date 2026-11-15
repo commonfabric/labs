@@ -802,7 +802,7 @@ implements
 [specs#98](https://github.com/commonfabric/specs/pull/98) ahead of its ruling,
 at strict and with no dial, at @danfuzz's direction; it lowers a stale value
 stamp and can raise one from the restating setup's decision reads, so it does
-not satisfy step 4 either, and its three deciding sites carry that pull
+not satisfy step 4 either, and its four deciding sites carry that pull
 request's `SPEC-PENDING` marker.
 
 **Residuals.**

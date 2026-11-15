@@ -13848,6 +13848,7 @@ export function* prepareBoundaryCommitSteps(
         }) && entryPath[entryPath.length - 1] === "*"
         ? entryPath.slice(0, -1)
         : entryPath;
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
       // A restated data root replaces the derived value entries at and below
       // it (`restatedDataRoot`); its existence entry was carried above.
       if (
@@ -14647,7 +14648,10 @@ export function* prepareBoundaryCommitSteps(
       // tx had no label of its own): the shallowest written path covering
       // the cleared legacy entry — or, when none does (a declared re-mint
       // without a write there), the entry's own path — receives the frozen
-      // shape entry so the existence history survives the migration.
+      // shape entry so the existence history survives the migration. One that
+      // a restated data root cleared, where no write covers it, takes the
+      // legacy confidentiality alone: a restatement is not a creation, so the
+      // restating attempt's join reaches no existence entry (§8.9.1.3).
       const leftoverByPath = new Map<
         string,
         { path: readonly string[]; atoms: CfcConfClause[] }
@@ -14667,8 +14671,12 @@ export function* prepareBoundaryCommitSteps(
         }
         const anchor = shallowest ?? cleared.path;
         const key = pathKey(anchor);
-        const bucket = leftoverByPath.get(key) ??
-          { path: anchor, atoms: [...flowConfidentiality] };
+        const bucket = leftoverByPath.get(key) ?? {
+          path: anchor,
+          atoms: restatedDataRoot && shallowest === undefined
+            ? []
+            : [...flowConfidentiality],
+        };
         for (const atom of cleared.confidentiality) bucket.atoms.push(atom);
         leftoverByPath.set(key, bucket);
       });

@@ -309,13 +309,14 @@ describe("cfc-result-wiring-stamp", () => {
   /**
    * Adds to `cell`'s stored label map a derived entry naming `atom` at `path`,
    * of the observation class `observes`, `value` unless given, as a write
-   * there by an earlier attempt would leave.
+   * there by an earlier attempt would leave, or of none, as a write before
+   * entries named their class did.
    */
   const plantDerived = async (
     cell: Cell<unknown>,
     path: readonly string[],
     atom: string,
-    observes: "value" | "shape" = "value",
+    observes: "value" | "shape" | "none" = "value",
   ): Promise<void> => {
     const tx = runtime.edit();
     const link = cell.getAsNormalizedFullLink();
@@ -341,7 +342,7 @@ describe("cfc-result-wiring-stamp", () => {
             path: [...path],
             label: { confidentiality: [atom] },
             origin: "derived",
-            observes,
+            ...(observes === "none" ? {} : { observes }),
           },
         ],
       },
@@ -497,6 +498,22 @@ describe("cfc-result-wiring-stamp", () => {
             [...(entry.label.confidentiality ?? [])].sort(),
           ]),
       ).toEqual([[["note"], "shape", [CAROL]]]);
+    });
+
+    it("mints no existence entry from its join on an unchanged result whose root holds an entry naming no class", async () => {
+      // The restatement clears that entry with the value entries, and the
+      // existence history it carried moves to an existence entry alone: a
+      // restatement is not a creation, so the join it read reaches none.
+
+      const { mixed, sameMixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("legacy-root", mixed);
+      await plantDerived(result, [], "legacy-secret", "none");
+
+      await setUp("legacy-root", sameMixed, bobs);
+
+      expect(existenceOf(result)).not.toContain(BOB);
+      expect(existenceOf(result)).toContain("legacy-secret");
     });
   });
 

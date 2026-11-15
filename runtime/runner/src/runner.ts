@@ -8510,7 +8510,10 @@ export class Runner {
   /**
    * Records `tx` as one a setup was asked in (`#askingSetupTransactions`),
    * and as one the runtime started on its own where `runtimeStarted` holds
-   * (`#runtimeStartedSetupTransactions`).
+   * (`#runtimeStartedSetupTransactions`). Both are marks on the transaction,
+   * not on one setup: an asking setup in a transaction a runtime-started one
+   * already marked counts as runtime-started too, and leaves a stored value
+   * entry it could have re-derived, which never lowers one.
    */
   #noteAskingSetupTransaction(
     tx: IExtendedStorageTransaction,
