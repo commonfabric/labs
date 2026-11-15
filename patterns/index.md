@@ -140,7 +140,8 @@ travel through a presence room and are stored nowhere),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
 own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
-`examples/profile-group-chat/`, `apps/project-list/`,
+`examples/profile-group-chat/`, `apps/project-list/`, `apps/star-chart/` (a
+kids' daily-habit sticker chart),
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
 `examples/scoped-group-chat/`, `examples/scoped-user-directory/`,
@@ -938,6 +939,51 @@ interface HabitTrackerOutput {
   toggleHabit: Stream<{ habitName: string }>;
   addHabit: Stream<{ name: string; icon: string }>;
   deleteHabit: Stream<{ habit: Habit }>;
+}
+```
+
+## `apps/star-chart/star-chart.tsx`
+
+A reward calendar for a child learning one daily habit: tap the big star to earn
+today's sticker, watch the streak grow, and celebrate at 3, 7, 14 and 30 days. A
+single missed day after a streak of three or more is forgiven as a dimmed
+"protected" day, and a parent can correct past days. Today is the viewer's local
+date from the `#now` clock; `todayOverride` pins it.
+
+**Keywords:** kids, rewards, streaks, daily-habit, calendar, #now
+
+### Input Schema
+
+```ts
+interface DayRecord {
+  date: string; // YYYY-MM-DD, local
+  earned: boolean;
+  protected: boolean;
+  rotation: number; // sticker tilt, -15..15
+}
+
+interface StarChartInput {
+  goalName?: PerSpace<Writable<string | Default<"Gold Star Goal">>>;
+  goalDescription?: PerSpace<Writable<string | Default<"">>>;
+  days?: PerSpace<Writable<DayRecord[] | Default<[]>>>;
+  todayOverride?: PerSpace<Writable<string | Default<"">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface StarChartOutput {
+  goalName: string;
+  goalDescription: string;
+  days: DayRecord[];
+  today: string;
+  currentStreak: number;
+  bestStreak: number;
+  todayHasStar: boolean;
+  milestone: string;
+  earnStar: Stream<void>;
+  toggleDay: Stream<{ date: string }>;
 }
 ```
 
