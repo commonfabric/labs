@@ -598,6 +598,69 @@ describe("module identity delegation", () => {
     }
   });
 
+  it("drops a carried entry only when a granted entry holds its module and the module's whole chain", async () => {
+    // `candidate` replaces `previous` at the same file. "superseded" is a
+    // module outside the candidate's closure; the piece's record lists
+    // `previous` as succeeding it.
+    const previous = moduleFor(moduleProgram("old"));
+    const candidate = moduleFor(moduleProgram("new"));
+    expect(
+      (await runtime.editWithRetry((tx) => {
+        writeSourceDocs(runtime, space, [previous], previous.identity, tx);
+        writeSourceDocs(runtime, space, [candidate], candidate.identity, tx);
+      })).error,
+    ).toBeUndefined();
+    const carriedOver = async (recorded: ModuleDelegationMap) => {
+      const manager = runtime.patternManager;
+      const prepared = await manager.prepareSourceUpdate(
+        space,
+        previous.identity,
+        candidate.identity,
+        recorded,
+      );
+      const tx = runtime.edit({ sourceUpdate: prepared });
+      try {
+        const { granted, carried } = manager.stageSourceUpdate(
+          prepared,
+          space,
+          previous.identity,
+          candidate.identity,
+          tx,
+          recorded,
+        );
+        return { granted, carried };
+      } finally {
+        tx.abort();
+      }
+    };
+
+    // Covered: `candidate` inherits `previous`, and with it "superseded" and
+    // everything "superseded" inherits.
+    const covered = await carriedOver(
+      new Map([
+        [previous.identity, new Set(["superseded", "earliest"])],
+        ["superseded", new Set(["earliest"])],
+      ]),
+    );
+    expect([...(covered.granted.get(candidate.identity) ?? [])].sort())
+      .toEqual([previous.identity, "earliest", "superseded"].sort());
+    expect(covered.carried.has("superseded")).toBe(false);
+
+    // Not covered: `candidate` inherits "superseded" but not what
+    // "superseded" inherits, so its entry stays.
+    const uncovered = await carriedOver(
+      new Map([
+        [previous.identity, new Set(["superseded"])],
+        ["superseded", new Set(["earliest"])],
+      ]),
+    );
+    expect(uncovered.granted.get(candidate.identity)?.has("earliest"))
+      .toBe(false);
+    expect([...(uncovered.carried.get("superseded") ?? [])]).toEqual([
+      "earliest",
+    ]);
+  });
+
   for (const artifact of ["missing source", "untrusted compiled record"]) {
     it(`refuses a delegation update with ${artifact} without publishing staged authority`, async () => {
       const previous = moduleFor(moduleProgram("old"));
