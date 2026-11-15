@@ -2453,7 +2453,7 @@ export const piece = targetOptions(
   .action(searchPiecesFromCommand)
   /* piece new */
   .command("new", "Create a new piece with a pattern.")
-  .usage(`${spaceUsage} [main] | --from-index <patternId>`)
+  .usage(`${spaceUsage} [main]`)
   .example(
     cliText(`cf piece new ${EX_ID} ${EX_COMP} ./main.tsx`),
     `Create a new piece, using ./main.tsx as source.`,
