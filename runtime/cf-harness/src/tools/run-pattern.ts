@@ -1,7 +1,6 @@
-import {
-  PatternIndexError,
-  type PatternIndexEventType,
-  type PatternIndexPublishRequest,
+import type {
+  PatternIndexEventType,
+  PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import {
@@ -9,6 +8,7 @@ import {
   cellWithScopedLinkRequiredsRelaxed,
   compileAndSavePattern,
   getPatternIdentityRef,
+  type Pattern,
   PatternManager,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -79,12 +79,13 @@ import {
 } from "../pattern-index/publish-render-gate.ts";
 import { openProbeRuntime } from "../pattern-index/probe-runtime.ts";
 import {
+  compileIndexedPattern,
   composedPatternIds,
+  composeProgram,
+  IndexedPatternError,
   materializeComposedPatterns,
-  PatternCompositionError,
   patternIndexDependencies,
-  runtimeProgramFromIndex,
-} from "../pattern-index/composition.ts";
+} from "@commonfabric/pattern-index/deploy";
 import type { HarnessToolDefinition } from "./types.ts";
 import {
   RUN_PATTERN_INPUT_SCHEMA,
@@ -1091,73 +1092,53 @@ export const runPatternTool: HarnessToolDefinition<
       }
       pieceInput = converted;
     }
-    // The indexed program is fetched here, on the trusted host side, and goes
-    // straight into the compiler. Nothing read from the index is carried into
-    // any output this tool returns.
+    // The indexed program is fetched, its composed imports materialized, and
+    // the whole compiled here, on the trusted host side, through the same
+    // path `cf piece new --from-index` deploys by. Nothing read from the index
+    // is carried into any output this tool returns: a failure's text that can
+    // quote indexed source goes only to the artifact.
     let program: RuntimeProgram;
-    // What the index recorded the fetched pattern composes, when the run named
-    // one. A published pattern's own imports are materialized on the same
-    // terms as an authored source's.
-    let recordedDependencies: readonly string[] = [];
-    if (sourceText !== undefined) {
+    let pattern: Pattern;
+    if (patternId !== undefined && getPatternIndexClient !== undefined) {
+      try {
+        ({ program, pattern } = await compileIndexedPattern({
+          runtime: pieces.runtime,
+          space,
+          patternId,
+          getClient: getPatternIndexClient,
+        }));
+      } catch (error) {
+        if (!(error instanceof IndexedPatternError)) throw error;
+        return {
+          ...errorOutput(
+            error.stage === "compile" ? "compile-error" : "error",
+            error.message,
+          ),
+          ...(error.rawCauseMessage !== undefined
+            ? { rawCauseMessage: error.rawCauseMessage }
+            : {}),
+        };
+      }
+    } else if (sourceText !== undefined) {
       program = {
         main: RUN_PATTERN_SOURCE_MAIN,
         files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: sourceText }],
       };
-    } else if (patternId !== undefined && getPatternIndexClient !== undefined) {
-      let indexed;
+      // A `cf:pattern:` import resolves from the space's own source cache, and
+      // for a pattern this space has never run there is nothing there to
+      // resolve. Each one is fetched from the index and compiled into the
+      // space first, host-side, so the compile below finds it — and so no part
+      // of what was fetched reaches this tool's output, on the success path or
+      // on any of the failure paths.
       try {
-        const client = await getPatternIndexClient();
-        indexed = await client.getPattern({
-          patternId,
-          includeSource: true,
+        await composeProgram({
+          runtime: pieces.runtime,
+          space,
+          program,
+          getClient: getPatternIndexClient,
         });
       } catch (error) {
-        // `PatternIndexError.message` is stable by construction; the service
-        // body it withheld can quote indexed source, so it goes only to the
-        // artifact.
-        return {
-          ...errorOutput(
-            "error",
-            `pattern index lookup failed for "${patternId}": ${
-              describeFailure(error)
-            }`,
-          ),
-          ...(error instanceof PatternIndexError && error.detail !== undefined
-            ? { rawCauseMessage: error.detail }
-            : {}),
-        };
-      }
-      if (indexed.program === undefined) {
-        return errorOutput(
-          "error",
-          `the pattern index returned no program for "${patternId}"`,
-        );
-      }
-      program = runtimeProgramFromIndex(indexed.program);
-      recordedDependencies = indexed.dependencies;
-    } else {
-      // Unreachable: a call naming neither was refused above, and one naming
-      // a `patternId` without an index with it. The pair's exclusivity is a
-      // fact about those checks rather than about the input type, so the
-      // branch is written out instead of asserted away.
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
-    }
-    // A `cf:pattern:` import resolves from the space's own source cache, and
-    // for a pattern this space has never run there is nothing there to
-    // resolve. Each one is fetched from the index and compiled into the space
-    // first, host-side, so the compile below finds it — and so no part of what
-    // was fetched reaches this tool's output, on the success path or on any of
-    // the failure paths.
-    try {
-      await materializeComposedPatterns({
-        runtime: pieces.runtime,
-        space,
-        patternIds: composedPatternIds(program, recordedDependencies),
-        getClient: getPatternIndexClient,
-      });
-    } catch (error) {
-      if (error instanceof PatternCompositionError) {
+        if (!(error instanceof IndexedPatternError)) throw error;
         return {
           ...errorOutput("error", error.message),
           ...(error.rawCauseMessage !== undefined
@@ -1165,38 +1146,25 @@ export const runPatternTool: HarnessToolDefinition<
             : {}),
         };
       }
-      return {
-        ...errorOutput(
-          "error",
-          "the published patterns this source composes could not be made available; the failure text is retained in the run artifact and withheld here, since it can quote source you did not author",
-        ),
-        rawCauseMessage: describeFailure(error),
-      };
-    }
-    let pattern;
-    try {
-      pattern = await compileAndSavePattern(pieces.runtime, program, {
-        space,
-      });
-    } catch (error) {
-      // Compiler diagnostics are the model's feedback loop for source it
-      // wrote, so the full message goes into the artifact; the prompt loop
-      // scrubs bare fabric identifiers from the model-facing rendering. An
-      // indexed pattern is source the model never saw and cannot correct, and
-      // a diagnostic quotes the line it failed on, so there the artifact
-      // keeps the diagnostic and the model gets the fact of the failure.
-      return patternId === undefined
-        ? errorOutput(
+      try {
+        pattern = await compileAndSavePattern(pieces.runtime, program, {
+          space,
+        });
+      } catch (error) {
+        // Compiler diagnostics are the model's feedback loop for source it
+        // wrote, so the full message goes into the artifact; the prompt loop
+        // scrubs bare fabric identifiers from the model-facing rendering.
+        return errorOutput(
           "compile-error",
           withRuntimeModuleCorrection(describeFailure(error)),
-        )
-        : {
-          ...errorOutput(
-            "compile-error",
-            `the indexed pattern "${patternId}" did not compile; the diagnostic is retained in the run artifact and withheld here, since it quotes source you did not author`,
-          ),
-          rawCauseMessage: describeFailure(error),
-        };
+        );
+      }
+    } else {
+      // Unreachable: a call naming neither was refused above, and one naming
+      // a `patternId` without an index with it. The pair's exclusivity is a
+      // fact about those checks rather than about the input type, so the
+      // branch is written out instead of asserted away.
+      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
     }
     // An input's value must match the compiled pattern's argument schema for
     // its key before any piece exists, so a mismatch is a model-correctable
