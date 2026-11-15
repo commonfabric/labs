@@ -1307,10 +1307,11 @@ export default pattern<{seed?: ${seedType}}>(() => {
     });
 
     it("grants a pattern a transition that is no source update reverts to what its predecessor held when it was granted, though that edge was recorded again later", async () => {
-      // X to A to B to X to A by source updates whose staging lands, then a
-      // move to B that is no source update. B was granted A when A held X,
-      // and the edge A <- X is recorded again after that: B keeps A and X,
-      // which `main`'s record of B lists.
+      // X to A to B to X to A by source updates, then a move to B that is no
+      // source update. B was granted A when A held X, and the edge A <- X is
+      // recorded again after that: B keeps A and X, which `main`'s record of
+      // B lists. A to B's staging never lands, so only the piece's record
+      // can grant them here.
       const { on: fresh, controller: freshPieces } = await freshController();
       try {
         const piece = await pieces.create(splitWriterProgram("wX", "eX"), {
@@ -1321,7 +1322,10 @@ export default pattern<{seed?: ${seedType}}>(() => {
         await piece.setPattern(splitWriterProgram("wA", "eA"));
         const eA = getPatternIdentityRef(piece.getCell())!.identity;
         const wA = await moduleAt(eA, "/app/writer.ts");
-        await piece.setPattern(splitWriterProgram("wB", "eB"));
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("wB", "eB"));
+        }
         const eB = getPatternIdentityRef(piece.getCell())!.identity;
         const wB = await moduleAt(eB, "/app/writer.ts");
         await piece.setPattern(splitWriterProgram("wX", "eX"));
