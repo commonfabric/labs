@@ -11552,9 +11552,9 @@ describe("runtime-processor", () => {
           });
 
         /**
-         * A processor whose view registrations `register` answers, over a
-         * storage that reports the mounted space deleted once `markDeleted()`
-         * has been called.
+         * A processor whose view registrations settle as the promise
+         * `register` returns does, over a storage that reports the mounted
+         * space deleted once `markDeleted()` has been called.
          */
         async function deletedMountState(
           register: () => Promise<(() => void) | undefined>,
@@ -11593,10 +11593,18 @@ describe("runtime-processor", () => {
             )
           );
 
-        /** Lets the reconciler flush its ops, which it does on a microtask. */
-        const flushOps = async () => {
-          await Promise.resolve();
-          await Promise.resolve();
+        /**
+         * Has the reconciler of `client`'s mount `mountId` flush the ops it
+         * has queued, which it otherwise does on a microtask.
+         */
+        const flushOps = (
+          processor: ReturnType<typeof buildProcessor>,
+          client: WorkerClient,
+          mountId: number,
+        ) => {
+          processor.accessForTestingOnly.vdomMounts.get(
+            `${client.id} ${mountId}`,
+          )?.reconciler.flush();
         };
 
         it("renders the deleted placeholder when the space is deleted while its view registers", async () => {
@@ -11613,7 +11621,7 @@ describe("runtime-processor", () => {
             markDeleted();
             registered.reject(deletedError(link.space));
             const response = await mounting;
-            await flushOps();
+            flushOps(processor, client, 41);
 
             expect(response.rootId).not.toBeNull();
             expect(deletedPlaceholderPosted(posted)).toBe(true);
@@ -11636,7 +11644,7 @@ describe("runtime-processor", () => {
               mountId: 42,
               cell: link,
             }, client);
-            await flushOps();
+            flushOps(processor, client, 42);
 
             expect(response.rootId).not.toBeNull();
             expect(deletedPlaceholderPosted(posted)).toBe(true);
@@ -11656,7 +11664,7 @@ describe("runtime-processor", () => {
               mountId: 43,
               cell: link,
             }, client);
-            await flushOps();
+            flushOps(processor, client, 43);
 
             expect(response.rootId).not.toBeNull();
             expect(deletedPlaceholderPosted(posted)).toBe(true);
@@ -11690,7 +11698,7 @@ describe("runtime-processor", () => {
               mountId: 44,
               cell: link,
             }, client);
-            await flushOps();
+            flushOps(processor, client, 44);
 
             expect(again.rootId).not.toBeNull();
             expect(deletedPlaceholderPosted(posted)).toBe(true);
@@ -11705,29 +11713,68 @@ describe("runtime-processor", () => {
           }
         });
 
-        it("fails a mount whose view registration is refused for any other reason", async () => {
-          for (
-            const refusal of [
-              new Error("the memory server could not be reached"),
-              Object.assign(new Error("Access refused"), {
-                name: "AuthorizationError",
-              }),
-            ]
-          ) {
-            const { runtime, link, processor } = await deletedMountState(() =>
-              Promise.reject(refusal)
-            );
-            const { client } = testClient(1);
-            try {
-              await expect(processor.handleVDomMount({
-                type: RequestType.VDomMount,
-                mountId: 45,
-                cell: link,
-              }, client)).rejects.toBe(refusal);
-              expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
-            } finally {
-              await runtime.dispose();
-            }
+        /**
+         * Expects a mount whose view registration is refused with `refusal`
+         * to fail with it, leaving no mount behind.
+         */
+        async function expectRefusedMountToFail(refusal: Error) {
+          const { runtime, link, processor } = await deletedMountState(() =>
+            Promise.reject(refusal)
+          );
+          const { client } = testClient(1);
+          try {
+            await expect(processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 45,
+              cell: link,
+            }, client)).rejects.toBe(refusal);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        }
+
+        it("fails a mount whose view registration cannot reach the memory server", async () => {
+          await expectRefusedMountToFail(
+            new Error("the memory server could not be reached"),
+          );
+        });
+
+        it("fails a mount whose view registration is refused without the space being deleted", async () => {
+          await expectRefusedMountToFail(
+            Object.assign(new Error("Access refused"), {
+              name: "AuthorizationError",
+            }),
+          );
+        });
+
+        it("resolves, rendering nothing, a mount unmounted while its view registers when the space is deleted", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 46,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 46,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+
+            await expect(mounting).resolves.toEqual({ rootId: null });
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+            expect(
+              posted.filter((message) =>
+                message.type === NotificationType.VDomBatch
+              ),
+            ).toEqual([]);
+          } finally {
+            await runtime.dispose();
           }
         });
       });

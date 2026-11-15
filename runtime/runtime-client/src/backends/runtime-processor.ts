@@ -4865,8 +4865,10 @@ export class RuntimeProcessor {
       // there is no coverage to wait for. The view renders all the same, and
       // the reconciler shows the space's deleted placeholder, as it does for
       // a view that was up when the deletion landed. A failed registration
-      // holds nothing, so the mount has no view registration to cancel.
-      if (active && isDeletedSpaceError(error)) return render();
+      // holds nothing, so the mount has no view registration to cancel. A
+      // mount the page has already given up renders nothing, and resolves as
+      // one whose registration succeeded after it was given up does.
+      if (isDeletedSpaceError(error)) return render();
       throw error;
     }).catch((error) => {
       mount.cancel();
