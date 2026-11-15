@@ -966,8 +966,13 @@ describe("cfc-write-policy-any-of", () => {
       // its creator as a reader. Each case writes under a schema omitting
       // one stored alternative.
 
+      /** A write policy's list of alternatives, as a schema declares one. */
+      type Alternatives = NonNullable<
+        NonNullable<JSONSchemaObj["ifc"]>["writePolicyAnyOf"]
+      >;
+
       /** The schema of one message, whose tags `alternatives` may write. */
-      const message = (alternatives: readonly unknown[]): JSONSchemaObj => ({
+      const message = (alternatives: Alternatives): JSONSchemaObj => ({
         type: "object",
         properties: {
           body: { type: "string" },
@@ -988,7 +993,7 @@ describe("cfc-write-policy-any-of", () => {
        * The schema of a list of `message(alternatives)` documents. Its label
        * is what makes the list store an envelope of its own.
        */
-      const list = (alternatives: readonly unknown[]): JSONSchemaObj => ({
+      const list = (alternatives: Alternatives): JSONSchemaObj => ({
         type: "object",
         properties: {
           messages: { type: "array", items: message(alternatives) },
@@ -1021,7 +1026,7 @@ describe("cfc-write-policy-any-of", () => {
       };
 
       const BOTH = SCHEMA.ifc!.writePolicyAnyOf!;
-      const SEND_ONLY = [policy("send", "Send")];
+      const SEND_ONLY: Alternatives = [policy("send", "Send")];
 
       it("commits a list's link write under a schema omitting one, and stores both alternatives beneath the links", async () => {
         await withStrictRuntime(async (runtime) => {
@@ -1064,7 +1069,7 @@ describe("cfc-write-policy-any-of", () => {
 
       it("commits a held reference to a document written under a schema omitting one", async () => {
         await withStrictRuntime(async (runtime) => {
-          const notes = (alternatives: readonly unknown[]): JSONSchemaObj => ({
+          const notes = (alternatives: Alternatives): JSONSchemaObj => ({
             type: "object",
             properties: {
               notes: { type: "array", items: { type: "string" } },
