@@ -1200,6 +1200,18 @@ its reactive tier included, cannot be compiled in this way, because the
 plan would not end. *Assumed* (section 8, question 45): the compiler
 refuses such a call.
 
+**The order of `Binding.result`.** The paths are in source order: the
+order in which the positions that hold the stream are written in the
+source of the pattern. The members of an object literal are in the order
+the literal writes them, at every depth of the result and not at its root
+alone. In a JSX element the attributes are in the order the element writes
+them and come before the children, and the children are by position,
+compared as numbers. A stream held in a variable that the pattern writes
+at several positions has a path for each, in the order of those
+positions. No behavior depends on the order. It is fixed so that the
+record, and with it the hash of the plan, is a function of the source and
+not of how a compiler holds the members of a record.
+
 **The result paths of a binding in an element body.** A binding whose
 `within` has an `element` step is made once per element key, and each of
 its streams is stored at a position inside one element of the assembled
@@ -1762,7 +1774,45 @@ where a reader of the plan resolves it.
   occurrence. The mapping's §5.1 gives a definition to every named type;
   the compiler gives one to the recursive types alone, so that a schema
   does not depend on which of its types the author named.
-- **The name** is the declared name of the interface or the alias. Where
+- **What a recursive type is, precisely.** The unit is a declaration with
+  its type arguments: an `interface` or a type alias of one module and,
+  for a generic declaration, the types it is instantiated with. Two
+  references name one unit where they resolve to the same declaration
+  with equal type arguments. An alias whose body is nothing but a
+  reference to another interface or alias, with or without type
+  arguments, is no unit of its own: a reference to it is resolved to the
+  unit its body names before anything else is decided, so
+  `type Items = Tree<string>` stands for `Tree` with the argument
+  `string`. A unit is recursive where expanding the body of its
+  declaration, with the arguments substituted, meets a reference to the
+  same unit, at any depth and through any number of other declarations,
+  and through a handle, a `Default`, a scope wrapper or a label
+  annotation as through a property, an element type or a member of a
+  union. The test ends, because a recursive reference of the subset
+  passes the parameters of its declaration unchanged
+  (`language-subset.md` §7.3). Every unit on a cycle is recursive, so two
+  declarations that refer to each other are two recursive types. A
+  declaration that refers to a recursive type and that no path leads
+  back to is not recursive: it is written in place, with a `$ref` where
+  it names the recursive one.
+- **What the member holds, and what refers to it.** The member of a
+  recursive unit is the schema of its declaration's body with the
+  arguments substituted, written as any type is. Every reference to a
+  recursive unit is a `$ref`: the reference that closes the cycle, each
+  other reference inside the member, and each reference from outside,
+  the first one that a walk from the schema's root meets included. A
+  type of the subset reaches itself only through a reference by name to
+  an interface or an alias, since a type written in place has no name by
+  which it could refer to itself. So every recursive type has a
+  declaration, and no name is made up for one that has none. The
+  compiler's type checker therefore keeps, for a reference to a declared
+  type, the declaration and the type arguments it resolved to, and for a
+  reference that closes a cycle it keeps that pair where it would
+  otherwise expand the body. The schema writer takes the member's name
+  and the target of each `$ref` from that pair.
+- **The name** is the name the declaration gives the interface or the
+  alias in its own module, without type arguments, whatever name an
+  import of another module binds it to. Where
   one schema has two recursive types of one declared name, two
   declarations of two modules or two instantiations of one generic
   declaration, the first keeps the name and each later one has the name
@@ -1796,7 +1846,7 @@ The type each member is the schema of:
 | `Plan.argumentSchema`, `Plan.resultSchema` | The argument type and the result type the pattern declares, or the checker infers |
 | `StateCell.schema`, and `schema` of a `createCell` site | The value type of the cell constructor |
 | `Child.argumentSchema`, `Child.resultSchema` | The types the callee's type declares: for a compiled callee, its `Plan.argumentSchema` and `Plan.resultSchema` |
-| `Binding.eventSchema`, `Binding.stateSchema` | The event type and the state type of the handler, or of the factory's type. The event type of a `handler(...)` is its first type argument or the annotation of its event parameter. That of an `action` is its first type argument or the annotation of its parameter, as in `action<{ index: number }>(...)`. That of an inline event handler is the type the checker gives its parameter |
+| `Binding.eventSchema`, `Binding.stateSchema` | The event type and the state type of the handler, or of the factory's type. The event type of a `handler(...)` is its first type argument or the annotation of its event parameter. That of an `action` is its first type argument or the annotation of its parameter, as in `action<{ index: number }>(...)`. That of an inline event handler is the type the checker gives its parameter: its annotation, or without one the type that the attribute's position expects (`language-subset.md` §7.6), which exists where the attribute is a path of the argument of a pattern that declares a stream there. An `on*` attribute of a host element declares no event type. *Assumed* (section 8, question 82): an inline handler written there without an annotation, or without a parameter, has the event type `unknown` |
 | `Slot.schema` | The type under which the slot's reader observes the path (below) |
 | `HandleReads.envelope` | The read envelope `footprint-analysis.md` §7.3 defines: the handle's value type, narrowed to the paths and classes some read through the handle may observe, with the label annotations of the paths it admits |
 
@@ -2279,6 +2329,21 @@ entries the persist step of `prepareBoundaryCommitSteps`
 Declared entries (`origin: "declared"`) are unchanged: they come from the
 schema, not from a template. The format of the stored bytes is a host
 arrangement and does not change.
+
+**A path that a write edge targets** has the same entries in the document
+it is written in: a state cell, a cell reached through a handle, a created
+cell. The `value` entry holds the instantiated template of the edge and is
+replaced by each write. The `shape` entry holds the confidentiality of the
+write that created the path, and a later write that replaces the value
+leaves it as it is, at the written path and at each path below it that
+still exists (§8.12.8). A write that removes a path and creates it again
+mints the entry anew from its own label. So a reader of a written path
+consumes, beside the label of the last write, the existence label of the
+write that created the path, as it does today (section 3.1, "An existence
+entry that an earlier write left"). *Assumed* (section 8, question 83): a
+`shape` entry at a path that a write removed, such as a position beyond
+the end of a list that became shorter, stays until the path is created
+again, as it does in the runtime today.
 
 **Several documents.** The keep set of an instance is stored in as many
 documents as serve its readers. A kept subtree, such as a row of a kept
@@ -2925,17 +2990,21 @@ path consumes with every link followed (`cfcLabelViewForResolvedCell` in
 `runtime/runner/src/cfc/label-view.ts`). For the template it is the label of
 section 3.2, with each `identity` slot that stands for the reference the
 output passes on joined with what a value read at the slot's path consumes:
-the `slot` node that is the output's template, or the selected branch of a
-`select` or the chosen child of a `pick` that is one. An `identity` slot
-that is an input of a `derive` is not dereferenced. It has the label of
-section 2.2, the label of the link, because the body that holds the handle
-did not read through it, and by ruling the label of the handle's cell is
-not in what the body writes. For an entry that names a collection, the
-runtime's side
+the `slot` node that is the output's template, or one that is the selected
+branch of a `select` or the `body` of a `pick`, which is the template of
+the chosen child. An `identity` slot at any other place of a template is
+not dereferenced: an input of a `derive`, the `condition` of a `select`,
+the `choice` of a `pick`, and a slot in the `body` of a `fold`. It has the
+label of section 2.2, the label of the link, because the code that holds
+the handle did not read through it, and by ruling the label of the
+handle's cell is not in what that code writes. Where the handle is only
+passed on, that label leaves out the `link` entry of the position, which
+repeats the label the cell's type declares (section 2.2). For an entry
+that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Ten more rules fix what a row of the comparison is.
+expected. Eleven more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -2986,7 +3055,16 @@ expected. Ten more rules fix what a row of the comparison is.
   address for the target. The template's side is joined with what a value
   read through the link stored at the runtime's output path consumes, the
   entries of the target's own document included. Both sides then read one
-  target, and the row compares the labels of the reference. For a slot of
+  target, and the row compares the labels of the reference. A body can
+  also return a value it computed with such a reference inside it, such as
+  a tree that an authored function builds with the handle at an attribute
+  of one of its elements. The output's template is then the body's
+  `derive`, and the reference is at a path below the output path that the
+  plan does not name. The template's side is joined with what a value read
+  through each link stored below the output path consumes. The row is
+  exact where the reference is the one link stored there. Where the run
+  stored another link below the path it is a bound, because a stored link
+  does not say which site made it. For a slot of
   root `operation` that holds what a materializer returned (section 3.11),
   the runtime's counterpart is the result document of the node that ran
   the body.
@@ -3012,11 +3090,27 @@ expected. Ten more rules fix what a row of the comparison is.
   `event` has the label the event arrived with (section 3.12), each slot of
   root `binding` resolves through the binding the event was sent to, and
   each `identity` slot among the inputs of the body's `derive` has the
-  label of the link and is not dereferenced (section 2.2). Only an edge
+  label of the link and is not dereferenced (section 2.2). For a handle
+  that the body neither reads nor writes through, that label leaves out
+  the `link` entry of the position. Only an edge
   with a `reference` member, whose written value is the reference, is
   joined with what a value read through the stored link consumes, so that
-  both sides read one target. An event whose transaction did not commit
-  gives no row, and neither does a write that the run did not make. The
+  both sides read one target. The integrity of such a row is that of the
+  value read through the link, on both sides. What is stored at the
+  written path is a link, and a read through a link takes its integrity
+  from the target alone (section 3.10). The atom that the edge's template
+  mints for the body is in the label of the link, as the atom of a kept
+  output that passes a value on is (section 3.2), and the row counts
+  neither it nor the integrity of the `followRef` entry that the runtime
+  stamped at the link. An event whose transaction did not commit
+  gives no row, and neither does a write that the run did not make. A run
+  makes no write where the handler returns before it or takes another
+  branch on the event it was sent, and where the value it writes equals
+  what the target holds, because a write changes only the paths whose
+  value differs (`diffAndUpdate` in `runtime/runner/src/data-updating.ts`).
+  A scenario therefore gives the members of an event values that its
+  inputs do not hold, and an event whose declared type is a scalar is a
+  value of that type. The
   outcome is read from the event's transaction and not from a log: the
   runtime reports it once per event (`sendEvent` in
   `runtime/runner/src/cell.ts`, with a callback that
@@ -3031,6 +3125,28 @@ expected. Ten more rules fix what a row of the comparison is.
   (section 8, question 80). A member of an event that is declared as a
   handle is given a handle or left out, because a plain value there reads
   as a handle that cannot be written.
+- **An existence entry that an earlier write left.** The runtime's side of
+  a row can hold clauses of a write that is not the one the row is about.
+  The runtime mints a `derived` entry of class `shape` once, with the join
+  of the transaction that created the path, and carries it over every
+  later write to a path that still exists; an entry at a path that a write
+  removed stays until the path is created again, which the comments of
+  `prepareBoundaryCommitSteps` record as a known residual. A value read
+  of the written path consumes the `shape` entries at the path and below
+  it (section 2.2). The template of a write edge is the label of that one
+  write, and it does not hold the existence label of what an earlier
+  write stored. So where an earlier event of the scenario created the
+  written path, or a path below it, under a label with a clause that the
+  later handler did not read, the row is **tighter** by that clause. A row
+  is of this kind where every clause that the template lacks is held by a
+  `derived` entry of class `shape` that the event's transaction did not
+  mint. It is expected, it is counted as tighter, and it is reported apart
+  from a row that is tighter because the template leaves out something
+  the runtime's join of that write holds. It is no narrowing by the rule
+  of the template: the compiled path stores the same `shape` entry
+  (section 2.3, "A path that a write edge targets"), so a reader of the
+  path consumes the clause in both. The same holds for a row of an
+  output.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -3043,7 +3159,7 @@ nothing else, because a stored entry does not say which schema declared it.
 | `declared`, in a document that a slot of the template is bound in, or that a reference the output passes on leads to: the argument document of the instance, a cell the argument links to, the document of a state cell, and a cell that a site of a body created | Compared. These are the labels of the places a template reads, which its slots resolve to |
 | `derived` | Compared. The stamp of a run's join |
 | `structure` | Compared. The stamp of a run, as below |
-| `link` | Compared. The label a stored link carries, which an `identity` slot resolves to |
+| `link` | Compared where a slot reads through the link or a write edge targets the handle. Left out of the label of an `identity` slot whose handle the body only passes on: the entry holds what the reference declares, which for a link to a cell repeats the label of the cell's type, and by ruling that label is not in the slot (section 2.2). The stamp of the run that wrote the link is an entry of origin `structure`, and it is compared |
 | `minted`, `external-ingest` | Compared. Atoms the runtime or a builtin wrote for a value |
 | `label-metadata` | Not compared. No read of content consumes it; a `labelMetadata` slot resolves to it (section 2.4) |
 | No origin | Compared. An entry written before entries had origins |
@@ -4141,9 +4257,14 @@ ruling: the link itself carries the label of at least the event.
 - **Today.** The transaction of a handler stamps the slot of a link it
   writes with its join, as an entry of class `followRef` (section 3.1), and
   the join holds the event and state reads and no read of the cell behind a
-  handle that was only passed on. **Equal** for a handler. **Tighter** for a
-  re-evaluated body and for expression code, where the runtime stamps the
-  join of the whole run.
+  handle that was only passed on. The transaction makes no observation at
+  the position it was given such a handle through either, so its join
+  holds neither the `link` entry there nor the stamp of the run that wrote
+  the link. The slot leaves the `link` entry out and holds the stamp
+  (section 2.2). **Equal** for a handler where that stamp has no clause,
+  and looser by the stamp where it has one (section 8, question 81).
+  **Tighter** for a re-evaluated body and for expression code, where the
+  runtime stamps the join of the whole run.
 
 **A reference from a computed input.** A handle or a container that
 reached the body in a value the instance computed has no slot. `passes`,
@@ -4343,8 +4464,11 @@ body returned (section 3.9, "A reference a site of the body made"): a path
 that passes such a handle on has no `dynamic` node, and the label of the
 cell it leads to stays at the cell. By ruling the same holds for every
 handle a body passes on without reading through it: the `identity` slot is
-the label of the link the body was given the handle through (section 2.2),
-and it adds nothing of the cell's label to what the body writes. The link a
+the label of the link the body was given the handle through, without the
+`link` entry of that position, which repeats what the cell's type declares
+(section 2.2), and it adds nothing of the cell's label to what the body
+writes. No `followRef` observation is made for such a handle today, at the
+position or at the cell. The link a
 body stores when it passes the handle on is labeled all the same, with the
 slot and, in a handler, with the body's template, which holds the label of
 the event (section 3.9, "A handle a body passes on").
@@ -4372,6 +4496,11 @@ given the handle through, and holds nothing of the label of the cell the
 handle names (section 2.2). So a write through one handle does not carry
 the label of the cell behind another handle of the body, and a write
 through a handle does not carry the label of what the written cell held.
+The slot of a handle the body writes through keeps the `link` entry of
+its position, which the slot of a handle that is only passed on leaves
+out (section 2.2). That entry repeats what the type of the written cell
+declares, and the runtime's transaction reads the position of a handle it
+writes through, so the template is equal to today there.
 Where the written value is itself a reference the body passes on, the
 edge's `reference` member records it, and the link written carries the
 label section 3.9 gives it ("A handle a body passes on"): in a handler the
@@ -9095,7 +9224,11 @@ this document made.
     emits the schema split into documents as `decomposeSchema` splits
     one, and has a plan name a schema by the root reference of the
     split, which for a root type that is itself recursive is a hash
-    followed by `#/$defs/<Name>`. *Assumed,* all four. The schema
+    followed by `#/$defs/<Name>`. *Assumed,* all four, and with them
+    what section 1.5 says a recursive type is: a declaration with its
+    type arguments, an alias that only names another declaration
+    resolved first, every unit on a cycle a member, and the name the
+    one the declaration has in its own module. The schema
     generator of today gives every named type a definition, stores the
     first of two types that share a name and refers the second to it,
     and names an anonymous recursive type `AnonymousType_N`
@@ -9292,9 +9425,13 @@ this document made.
     position is a kept output and carries the pattern's atom on the link. In
     the comparison both sides read the created cell through the stored link
     (section 3.1), so the row is equal in confidentiality, and the runtime's
-    atom corresponds to the atom on the link. Not verified:
-    which step of the runtime minted the observed atom, since
-    `deriveFlowJoinImpl` decides on the join alone.
+    atom corresponds to the atom on the link. Without the atom of a kept
+    output the three rows are looser in integrity, by this assumption.
+    The stage 3 comparison found the stamps of the document that holds
+    the rendered tree to carry the caveat at every path, with the atom
+    beside them, so the join of the run that built the tree held the
+    caveat and `deriveFlowJoinImpl` minted on that join. Not examined:
+    which read of that run consumed the caveat.
 75. **The result paths of a binding's stream, and the event schema of a
     body.** The prototype emits a `result` path on a binding and an
     `eventSchema` on a handler's body. *Assumed:* `Binding.result` is a member
@@ -9394,3 +9531,37 @@ this document made.
     reads nothing at such a position, so with the stamp the template can
     be looser than today, and without it the label of which cell was
     chosen would be lost.
+82. **The event type of an inline handler that declares none** (for the
+    project owner). Section 1.5 takes the event type of an inline event
+    handler from the annotation of its parameter, or from the type the
+    attribute's position expects. An `on*` attribute of a host element
+    expects none: `language-subset.md` refuses the type names of the DOM
+    library and has a handler declare the shape of the event it reads
+    (its question 32). *Assumed:* an inline handler written at such an
+    attribute without an annotation, or without a parameter, has the
+    event type `unknown`, and `Binding.eventSchema` is the schema of
+    `unknown`. Such a handler can test its event against `undefined` and
+    read nothing of it, and a slot of root `event` in its footprint has
+    the schema of `unknown`. The alternatives are to refuse a parameter
+    without an annotation there, or to have `builtin-inventory.md`
+    declare the event type of each `on*` attribute of each host element,
+    which the checker would then give the parameter.
+83. **The existence entry of a path that a write removed** (for the
+    project owner and the specification change). The runtime keeps the
+    `shape` entry of a path over every later write while the path
+    exists, and mints it anew when the path is removed and created
+    again; §8.12.8 (`08-12-store-label-monotonicity.md`) is the rule
+    section 2.3 cites for both. Where a write removes a path and does
+    not create it again, the runtime leaves the entry in place, and the
+    comments of `prepareBoundaryCommitSteps` call that a known residual.
+    A reader of the container above then consumes the existence label of
+    something that is no longer stored: after a handler empties a list,
+    a read of the list carries the clauses under which its former
+    elements were created. *Assumed:* the compiled path keeps the entry
+    as the runtime does, which is equal to today, and the stage 3
+    comparison counts a write row that differs by such an entry alone as
+    tighter and expected (section 3.1). The alternative removes the
+    entry with the path, in the transaction that removes it. The stored
+    label is then tighter than today, and that a path existed under a
+    label is no longer recorded at the path, only in the membership
+    label of the container.
