@@ -428,21 +428,26 @@ ruling. A setup that instantiates such a node resolves each declared input
 through the node's argument to the cell the action will read, and the result
 goes into the scheduler's certificate of the action's reads, which decides
 only whether and when the action runs, and into nothing the setup writes; the
-action's own run reads the same links as ordinary labeled reads. The read carries `schedulerDependencyRead`, as dependency
-seeding (`#populateDeclaredSchedulerReads`) does, so the flow join and the
-runtime read ceiling skip it, while conflict detection and the egress and sink
-consumed set keep it. §8.10.1 excludes such reads only in a transaction used
+action's own run reads the same links as ordinary labeled reads. The reads
+carry `STATIC_READ_TARGET_READ`
+(`runtime/runner/src/cfc/static-read-target-read.ts`): `machineryRead`, as
+the runtime's wiring reads do, and `schedulerDependencyRead`, which
+dependency seeding (`#populateDeclaredSchedulerReads`) carries alone. The
+scheduler marker decides what they consume: the flow join and the runtime
+read ceiling skip them, while conflict detection and the egress and sink
+consumed set keep them. §8.10.1 excludes such reads only in a transaction used
 for nothing but dependency discovery, and §18.6.2's conditional classes are
-wiring and write-destination reads, so the pull request proposes a third,
-dependency-discovery reads, which covers both sites and is narrower than
-§8.10.1's exclusion. It changes what is
-stored at strict, with no default-off dial, so it does not satisfy step 4
-above: a result document whose setup instantiates such a node no longer takes
-the label stored at the slots its inputs resolve through. Its marker sits in
-`runner.ts`, outside the files `GOVERNED_SOURCE` in
-`tasks/check-cfc-correspondence.ts` lists, so that task neither counts nor
-checks it. @danfuzz authorized landing this ahead of the ruling, without a
-flag, on 2026-11-14, at @jkomoros's request. The conformance statement's §2
+wiring and write-destination reads, so the pull request proposes a third
+class, dependency-discovery reads, which covers both sites and is narrower
+than §8.10.1's exclusion. It changes what is stored at strict, with no
+default-off dial, and it is not fail-closed: a result document whose setup
+instantiates such a node no longer takes the label stored at the slots its
+inputs resolve through. So it does not satisfy step 4 above. The action's own
+run still consumes that label, and without the change a view that reads its
+labeled cell is hidden by any update that rewrites it. @danfuzz authorized
+landing this ahead of the ruling, without a flag, on 2026-11-14, at
+@jkomoros's request. The `SPEC-PENDING` marker sits beside the constant, in a
+file `check-cfc-correspondence` governs. The conformance statement's §2
 records the gap.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,

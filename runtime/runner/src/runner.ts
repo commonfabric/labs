@@ -122,6 +122,7 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
+import { STATIC_READ_TARGET_READ } from "./cfc/static-read-target-read.ts";
 import {
   flowJoinObservationsOf,
   servedRunActsForNoOne,
@@ -432,18 +433,6 @@ const PRESENCE_PROBE_READ = {
   ...ignoreReadForScheduling,
   ...internalVerifierRead,
 };
-
-/**
- * The metadata of the reads that resolve a new action's declared inputs to
- * certify its static read set (`#collectStaticReadTargetsWithCompleteness()`):
- * runtime wiring, and dependency discovery as the scheduler's dependency
- * seeding is. One frozen object, so the reads share the transaction's
- * resolution memo, which is keyed by it.
- */
-const STATIC_READ_TARGET_READ = Object.freeze({
-  ...machineryRead,
-  ...schedulerDependencyRead,
-});
 
 /**
  * How many times a named piece's run starts again after its start transaction
@@ -13364,7 +13353,10 @@ export class Runner {
     // action transaction will record at runtime.
     //
     // A dependency-discovery read (specs#100's §18.6.2 class), as
-    // `#populateDeclaredSchedulerReads()` is, and carrying its marker. Both
+    // `#populateDeclaredSchedulerReads()` is: it carries that site's
+    // `schedulerDependencyRead`, which decides what it consumes, beside
+    // `machineryRead` (`STATIC_READ_TARGET_READ`, whose module holds the
+    // marker naming that pull request). Both
     // read the action's declared inputs through their links; that one makes
     // the reactivity log cover them for the scheduler's subscriptions, and
     // this one names the cells they reach in the scheduler's certificate of
@@ -13376,7 +13368,6 @@ export class Runner {
     // reads from a transaction used only for dependency discovery: inside
     // this committing one the read leaves the flow join and read ceilings
     // only, and stays a consumed input and a conflict dependency.
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/100
     return tx.runWithAmbientReadMeta(STATIC_READ_TARGET_READ, () => {
       const targets: NormalizedFullLink[] = [];
       let complete = true;

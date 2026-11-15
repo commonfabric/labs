@@ -138,7 +138,9 @@ carries no label out" and the residual under "What it costs".
 (`#populateDeclaredSchedulerReads` in `runner.ts`), and the resolution of a
 new JavaScript action node's declared inputs that certifies its static read
 set for the scheduler (`#collectStaticReadTargetsWithCompleteness` in
-`runner.ts`, which carries `machineryRead` as well). Both read an action's
+`runner.ts`, under `STATIC_READ_TARGET_READ` in
+`cfc/static-read-target-read.ts`, which carries `machineryRead` as well; the
+scheduler marker decides what both consume). Both read an action's
 declared inputs through their links for the scheduler, the first so the
 reactivity log covers them, the second to name the cells they reach in the
 certificate of the action's reads. Either record decides only whether and
