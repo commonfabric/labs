@@ -444,22 +444,24 @@ section the snapshot does not hold, is exempted in
 the gap and where the runtime differs from the proposal.
 
 The release that appends a write-policy alternative (§8.15.13 carve-out (c))
-implements [specs#96](https://github.com/commonfabric/specs/pull/96), stacked
-on [specs#52](https://github.com/commonfabric/specs/pull/52), ahead of its
-ruling. A stored `writePolicyAnyOf` is matched by content rather than by
-position, and a release may append an alternative whose writer's module it
-installs, where one stored alternative has the same keys and contract, a
-writer claim that differs from the appended one's only in the symbol it
-binds, and that module or one the space attests it succeeds. It admits more
-than the pin at strict, with no default-off dial, so it does not satisfy step 4
-above. Its four deciding sites, the merge's matching and its append, and the
-keep rule's matching and its admission, carry the `SPEC-PENDING` marker, and
-their citations of sections the snapshot does not hold are exempted in
+implements [specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
+[specs#52](https://github.com/commonfabric/specs/pull/52), ahead of its ruling.
+A stored `writePolicyAnyOf` is matched by content rather than by position, and a
+release may append an alternative whose writer's module it installs, where one
+stored alternative has the same keys and contract, a writer claim that differs
+from the appended one's only in the symbol it binds, and that module or one the
+space attests it succeeds. A later schema may omit a stored alternative, which
+the merge keeps as stored, in every write. It admits more than the pin at
+strict, with no default-off dial, so it does not satisfy step 4 above. Its four
+deciding sites, the merge's matching and its append, and the keep rule's
+matching and its admission, carry the `SPEC-PENDING` marker, and their citations
+of sections the snapshot does not hold are exempted in
 `tasks/check-cfc-correspondence.ts`. @danfuzz ruled that it lands at the strict
-default with no default-off dial, recorded here as a nonconforming semantic
-gap, pending [specs#96](https://github.com/commonfabric/specs/pull/96). His
-reason, in his words: "CFC is not a gate for chat". The conformance statement's
-§10 records the gap.
+default with no default-off dial, recorded here as a nonconforming semantic gap,
+pending [specs#96](https://github.com/commonfabric/specs/pull/96). His reason,
+in his words: "CFC is not a gate for chat". He ruled on 2026-11-15 that keeping
+an omitted alternative lands the same way, following the amendment of specs#96
+that admits it. The conformance statement's §10 records the gap.
 
 The resolution that certifies a new JavaScript action node's static read set
 (`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) implements
