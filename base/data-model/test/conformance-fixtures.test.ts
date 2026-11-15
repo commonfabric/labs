@@ -14,7 +14,12 @@ import {
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
-import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
+import {
+  FabricBytes,
+  FabricKeyPair,
+  FabricUnavailable,
+  UNAVAILABLE_PENDING,
+} from "@/fabric-primitives";
 import {
   fabricValueOfTextWithModsForTestingOnly,
   type FixtureRequirements,
@@ -177,6 +182,43 @@ describe("conformance-fixtures", () => {
           [["state"], { array: 1 }],
           [["state", 0], "fvj1:1"],
         ]);
+    });
+
+    it("returns a key pair's algorithm and its two keys, each a byte sequence", () => {
+      const pair = new FabricKeyPair(
+        "Ed25519",
+        new Uint8Array([1, 2]),
+        new Uint8Array([3, 4]),
+      );
+      expect(probesOfForTestingOnly(pair)).toEqual([
+        [[], { instance: "KeyPair@1" }],
+        [["algorithm"], 'fvj1:"Ed25519"'],
+        [["publicKey"], 'fvj1:{"/Bytes@1":"AQI"}'],
+        [["privateKey"], 'fvj1:{"/Bytes@1":"AwQ"}'],
+      ]);
+    });
+
+    it("returns an unavailable value's reason, and its kind and message only where its state has them", () => {
+      expect(probesOfForTestingOnly(UNAVAILABLE_PENDING)).toEqual([
+        [[], { instance: "Unavailable@1" }],
+        [["reason"], 'fvj1:"pending"'],
+      ]);
+      expect(probesOfForTestingOnly(new FabricUnavailable("error", "network")))
+        .toEqual([
+          [[], { instance: "Unavailable@1" }],
+          [["reason"], 'fvj1:"error"'],
+          [["errorKind"], 'fvj1:"network"'],
+        ]);
+      expect(
+        probesOfForTestingOnly(
+          new FabricUnavailable("error", "general", "boom"),
+        ),
+      ).toEqual([
+        [[], { instance: "Unavailable@1" }],
+        [["reason"], 'fvj1:"error"'],
+        [["errorKind"], 'fvj1:"general"'],
+        [["message"], 'fvj1:"boom"'],
+      ]);
     });
 
     it("returns no probe at or under the path of a patch, and the special forms of the containers along it", () => {
