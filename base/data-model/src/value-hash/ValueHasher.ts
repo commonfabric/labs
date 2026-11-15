@@ -28,6 +28,7 @@ import { tagOfFabricValueElseNull, VALUE_TAGS } from "@/types";
 import { debugStr } from "@/value-debug";
 import type { BaseFabricInstance } from "@/fabric-bases";
 import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import {
   FabricBytes,
   FabricHash,
@@ -64,8 +65,8 @@ const TAG_EPOCH_DAY = 0x28;
 const TAG_HASH = 0x29;
 const TAG_SYMBOL = 0x2a;
 // 0x2b: retired; never to be reassigned.
-const TAG_KEY_PAIR = 0x2c;
-const TAG_UNAVAILABLE = 0x2d;
+// 0x2c: retired; never to be reassigned.
+// 0x2d: retired; never to be reassigned.
 const TAG_DURATION_NSEC = 0x2e;
 const TAG_DURATION_DAY = 0x2f;
 
@@ -93,8 +94,6 @@ const TAG_EPOCH_NSEC_BYTES = new Uint8Array([TAG_EPOCH_NSEC]);
 const TAG_EPOCH_DAY_BYTES = new Uint8Array([TAG_EPOCH_DAY]);
 const TAG_HASH_BYTES = new Uint8Array([TAG_HASH]);
 const TAG_SYMBOL_BYTES = new Uint8Array([TAG_SYMBOL]);
-const TAG_KEY_PAIR_BYTES = new Uint8Array([TAG_KEY_PAIR]);
-const TAG_UNAVAILABLE_BYTES = new Uint8Array([TAG_UNAVAILABLE]);
 const TAG_DURATION_NSEC_BYTES = new Uint8Array([TAG_DURATION_NSEC]);
 const TAG_DURATION_DAY_BYTES = new Uint8Array([TAG_DURATION_DAY]);
 
@@ -337,6 +336,21 @@ export class ValueHasher {
   }
 
   /**
+   * Feeds `value` in the `FabricInstance` layout: `TAG_INSTANCE`, `typeTag`,
+   * then `state` with `value` on the path. The caller has already checked
+   * that `value` is not on the path.
+   */
+  #feedInstance(value: object, typeTag: string, state: FabricValue): void {
+    const path = this.#path;
+
+    this.#hasher.update(TAG_INSTANCE_BYTES);
+    this.#hasher.update(getStringRep(typeTag));
+    path.push(value);
+    this.feedValue(state);
+    path.pop();
+  }
+
+  /**
    * Feeds a length value into the hasher, using the standard in-hash encoding
    * for same.
    */
@@ -434,13 +448,12 @@ export class ValueHasher {
           return;
         }
         const fabInst = value as BaseFabricInstance;
-        hasher.update(TAG_INSTANCE_BYTES);
         const codec = codecOf(fabInst);
-        hasher.update(getStringRep(codec.tagForValue(fabInst)));
-        const state = codec.encode(fabInst, NULL_LIVE_ENVIRONMENT);
-        this.#path.push(fabInst);
-        this.feedValue(state);
-        this.#path.pop();
+        this.#feedInstance(
+          fabInst,
+          codec.tagForValue(fabInst),
+          codec.encode(fabInst, NULL_LIVE_ENVIRONMENT),
+        );
         return;
       }
 
@@ -454,19 +467,21 @@ export class ValueHasher {
             "Cannot hash a `FabricKeyPair` that holds opaque handles.",
           );
         }
-        hasher.update(TAG_KEY_PAIR_BYTES);
-        this.feedValue(fab.algorithm);
-        this.feedValue(fab.publicKeyBytes);
-        this.feedValue(fab.privateKeyBytes);
+        // A `FabricPrimitive`, hashed in the instance layout under its wire
+        // tag: Section 4.17 of `2-hash-byte-format.md`. Its state holds a
+        // string and two `FabricBytes`, so nothing inside it leads back to it,
+        // and there is no cycle to check for.
+        this.#feedInstance(fab, CODEC_TYPE_TAGS.KeyPair, fab.state);
         return;
       }
 
       case VALUE_TAGS.FabricUnavailable: {
+        // A `FabricPrimitive`, hashed in the instance layout under its wire
+        // tag: Section 4.18 of `2-hash-byte-format.md`. Its state holds only
+        // strings, so nothing inside it leads back to it, and there is no
+        // cycle to check for.
         const fab = value as FabricUnavailable;
-        hasher.update(TAG_UNAVAILABLE_BYTES);
-        this.feedValue(fab.reason);
-        this.feedValue(fab.errorKind);
-        this.feedValue(fab.rawErrorMessage);
+        this.#feedInstance(fab, CODEC_TYPE_TAGS.Unavailable, fab.state);
         return;
       }
 
