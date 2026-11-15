@@ -385,16 +385,18 @@ ruling, as a nonconforming semantic gap. An asking setup that finds a result
 holding data beside its references unchanged re-derives the root's value entry
 from its transaction's flow join, as its write of the root would, and drops
 the derived value entries below the root as that write would. A result holding
-data and no reference is left as stored: whether specs#98 means to cover it is a
-question there ([comment](COMMENT_URL)). A setup that is not asking restates no
-unchanged result at all. One the runtime starts on its own, to repair a piece,
-to adopt a newer release of the source a piece follows, on open or while it
-runs, or to carry on with a pattern an earlier transaction chose
-(`runtimeStarted` in `runner.ts`), is asking where it is handed a transaction,
-and re-mints an unchanged wiring's membership, which is what specs#98's
-`restateResultWiring` requires of every restating setup, but does not restate an
-unchanged data root's value entry. So both leave that value entry as stored.
-Whether such an adopted release is an asking setup is a question on specs#98
+data and no reference at any depth is left as stored: whether specs#98 means to
+cover it is a question there
+([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6899569496)).
+A setup that is not asking restates no unchanged result at all. One the runtime
+starts on its own, to repair a piece, to adopt a newer release of the source a
+piece follows, on open or while it runs, or to carry on with a pattern an
+earlier transaction chose (`runtimeStarted` in `runner.ts`), is asking where it
+is handed a transaction, and re-mints an unchanged wiring's membership, which is
+what specs#98's `restateResultWiring` requires of every restating setup, but
+does not restate an unchanged data root's value entry. So both leave that value
+entry as stored. Whether such an adopted release is an asking setup is a
+question on specs#98
 ([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6897565858));
 until it is answered, the runtime treats it as not asking. So a hidden view
 heals at an update a caller asks for, whether or not the update touches the

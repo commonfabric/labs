@@ -103,6 +103,8 @@ describe("cfc-result-wiring-stamp", () => {
    * `namedMixed` hold data beside their references; `sameMixed` is another
    * pattern with the result `mixed` has. `dataOnly` holds data and no
    * reference, and `sameDataOnly` is another pattern with its result.
+   * `nestedMixed` holds data beside a reference below its root, and
+   * `sameNestedMixed` is another pattern with its result.
    */
   const patterns = () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
@@ -143,6 +145,14 @@ describe("cfc-result-wiring-stamp", () => {
         a: double(x),
         note: "fixed",
       })),
+      nestedMixed: cf.pattern<{ x: number }>(({ x }) => ({
+        inner: { a: double(x) },
+        note: "fixed",
+      })),
+      sameNestedMixed: cf.pattern<{ x: number }>(({ x }) => {
+        triple(x);
+        return { inner: { a: double(x) }, note: "fixed" };
+      }),
       dataOnly: cf.pattern<{ x: number }>(() => ({ note: "fixed" })),
       sameDataOnly: cf.pattern<{ x: number }>(({ x }) => {
         triple(x);
@@ -1309,6 +1319,31 @@ describe("cfc-result-wiring-stamp", () => {
       await plantValueStamp(result, BOB);
 
       await setUp("remint-unchanged", sameMixed);
+
+      expect(derivedOf(result)).toEqual([]);
+    });
+
+    it("comes off a result whose only reference sits below its root, at a setup of another pattern that finds it unchanged", async () => {
+      // A reference anywhere in the root's value makes it a root holding
+      // data beside references (`holdsReference` in `cfc/prepare.ts`), not
+      // only one at the top level.
+
+      const { nestedMixed, sameNestedMixed } = patterns();
+      const result = await setUp("remint-nested", nestedMixed);
+      const link = result.getAsNormalizedFullLink();
+      const read = runtime.edit();
+      const stored = storedFields(read, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: [],
+      }).value as { inner: Record<string, unknown>; note: unknown };
+      read.abort("stored value read");
+      expect(isCellLink(stored.inner.a)).toBe(true);
+      expect(stored.note).toBe("fixed");
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-nested", sameNestedMixed);
 
       expect(derivedOf(result)).toEqual([]);
     });

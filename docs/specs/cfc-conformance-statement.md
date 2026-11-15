@@ -865,10 +865,10 @@ request's `SPEC-PENDING` marker.
   re-derived at a restatement and none of its membership, so a setup that
   leaves it unchanged keeps the stored membership: an over-taint where an
   earlier attempt's stamp is wider than the setup's own.
-- A result document holding data and no reference is not restated, so a stale
-  value entry on it stays, pending specs#98's answer on whether
+- A result document holding data and no reference at any depth is not restated,
+  so a stale value entry on it stays, pending specs#98's answer on whether
   `restateResultWiring` covers such a root
-  ([comment](COMMENT_URL)).
+  ([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6899569496)).
 - A release the source reconciler adopts, on open or while a piece runs, is
   runtime-started, so it leaves a stored value entry in place, pending
   specs#98's answer on whether such an adoption is an asking setup. A hidden
