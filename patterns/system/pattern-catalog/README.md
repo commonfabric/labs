@@ -44,16 +44,17 @@ render them as text, never as markup or instructions.
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
 stored under the `GetItRequests` type so the write policy holds, and `host` set
-to an opaque id for the host instance that acts on get requests. It answers each
-`page` request in that request's `result`. It acts only on a request that names
-its own `host`, so a cloned host instance never acts on another's requests, and
-only within a window it chooses by `requestedAt`. It answers each request id in
-`getItRequests` under that id in `getItAnswers`: `started` while it works, if it
-says anything before it is done, then one final state (`placed`, `failed` or
-`cancelled`) that it never changes. `FakeCatalog` (`fake-catalog.tsx`) answers
-from a fixed list of entries, as host `fake-host` unless told otherwise, every
-match in one page with no `next`, and `pattern-catalog.test.tsx` pins the
-behavior through it.
+to an opaque id for the host instance that acts on get requests. Each instance
+mints its own id and never takes one from a copy of another instance's state. It
+answers each `page` request in that request's `result`. It acts only on a
+request that names its own `host`, so a cloned host instance never acts on
+another's requests, and only within a window it chooses by `requestedAt`. It
+answers each request id in `getItRequests` under that id in `getItAnswers`:
+`started` while it works, if it says anything before it is done, then one final
+state (`placed`, `failed` or `cancelled`) that it never changes. `FakeCatalog`
+(`fake-catalog.tsx`) answers from a fixed list of entries, as host `fake-host`
+unless told otherwise, every match in one page with no `next`, and
+`pattern-catalog.test.tsx` pins the behavior through it.
 
 ## Not yet settled
 
