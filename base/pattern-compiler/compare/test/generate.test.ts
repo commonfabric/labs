@@ -307,3 +307,44 @@ describe("a handler that passes a handle on without reading through it", () => {
     expect(row.comparisonWithoutPassedLinks.integrity).toBe("equal");
   });
 });
+
+describe("a handler that writes a reference it passes on", () => {
+  // `fixtures/reference-written.tsx`: the handler sets `selected` to a
+  // record whose `room` is the value of `first`, unchanged. The edge at
+  // `room` has a `reference` member.
+  it("compares the written link with both sides reading its target", async () => {
+    const { plan, schemas } = await planOf("reference-written");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("reference-written.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
+    });
+    const inputsOf = (atoms: unknown[]) =>
+      [...new Set(atoms.flatMap((atom) => atomKey(atom).match(/input:\w+/g)))]
+        .sort();
+
+    expect(run.events.map((event) => event.outcome)).toEqual(["committed"]);
+    expect(run.writes.map((row) => [row.write, row.path])).toEqual([
+      [0, []],
+      [1, []],
+    ]);
+    const [, room] = run.writes;
+    // "Only an edge with a `reference` member, whose written value is the
+    // reference, is joined with what a value read through the stored link
+    // consumes, so that both sides read one target" (PL §3.1). The atom
+    // the template mints is on the link and vouches for the reference, so
+    // a read of the value through the link does not have it, as it does
+    // not have the integrity of a stored `followRef` entry.
+    expect(inputsOf(room.runtime.confidentiality)).toEqual([
+      "input:first",
+      "input:selected",
+    ]);
+    expect(room.comparison.confidentiality).toBe("equal");
+    expect(room.comparison.integrity).toBe("equal");
+  });
+});

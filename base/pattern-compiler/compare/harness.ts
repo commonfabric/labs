@@ -1524,7 +1524,17 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             binding,
             event,
           });
-          return { ...evaluated, label: join([evaluated.label, ...beside]) };
+          const label = join([evaluated.label, ...beside]);
+          // The template of such an edge is the label of the link. Its
+          // integrity vouches for the reference, and a read of the value
+          // through the link has the integrity of the target alone, as it
+          // has with a stored `followRef` entry (`consumed`).
+          return {
+            ...evaluated,
+            label: write.reference === undefined
+              ? label
+              : { ...label, integrity: runtimeLabel.integrity },
+          };
         };
         const template = side();
         omitPassedLinks = true;
