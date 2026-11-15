@@ -90,7 +90,7 @@ export const MAX_BRANCH = 6;
 // summaries with no limit, the model wrote past its output budget and the
 // cut-off JSON could not be parsed.
 export const OPTIONS_SYSTEM =
-  "You are a creative writing assistant. Generate 4 distinct options as requested. Each option should take a meaningfully different creative approach. Write each option in Markdown, and keep each one under 400 words.";
+  "You are a creative writing assistant. Generate 4 distinct options as requested. Each option should take a meaningfully different creative approach. Write each option in Markdown, and keep each one under 400 words. Don't title or number the options: the reader already sees them as Option 1 to 4.";
 
 export const SUMMARY_SYSTEM = "You are a concise summarizer.";
 
@@ -225,6 +225,15 @@ export const buildPrompt = (
     `Generate exactly ${NUM_OPTIONS} distinct options for the above.`,
     spindle.respins > 0 ? `[Generation attempt: ${spindle.respins}]` : "",
   ].filter((part) => part.trim() !== "").join("\n\n");
+
+/** Whether a model call's state (its `messages`, the first of which is the
+ * request) answers `prompt`. A card's request is tied to its list position,
+ * not its spindle, so when the board shifts a card holds another spindle's
+ * result until its own request catches up; this tells the two apart. */
+export const answers = (
+  messages: readonly { content?: unknown }[] | undefined,
+  prompt: string,
+): boolean => prompt !== "" && messages?.[0]?.content === prompt;
 
 export const summaryPrompt = (pinnedText: string): string =>
   pinnedText
@@ -463,6 +472,22 @@ export const withLastLevelRemoved = (
 // The woven story, as Markdown
 // ---------------------------------------------------------------------------
 
+/** Pushes every Markdown heading in `text` down `by` levels (to at most
+ * `######`), so a pinned option's own "# Title" nests under the section it
+ * lands in instead of outranking the story's headings. Fenced code is left
+ * alone. */
+export const demoteHeadings = (text: string, by: number): string => {
+  let fenced = false;
+  return text.split("\n").map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    if (fenced) return line;
+    const match = /^(#{1,6})(\s.*)?$/.exec(line);
+    if (!match) return line;
+    const depth = Math.min(6, match[1].length + by);
+    return `${"#".repeat(depth)}${match[2] ?? ""}`;
+  }).join("\n");
+};
+
 /** The story so far: the synopsis and every pinned spindle, level by level. */
 export const storyMarkdown = (
   title: string,
@@ -476,8 +501,10 @@ export const storyMarkdown = (
     if (pinned.length === 0) return "";
     const body = pinned.map((s) =>
       pinned.length > 1 || level.branch > 1
-        ? `### ${s.label}${s.stale ? " (stale)" : ""}\n\n${s.pinnedText}`
-        : `${s.stale ? "_(stale)_\n\n" : ""}${s.pinnedText}`
+        ? `### ${s.label}${s.stale ? " (stale)" : ""}\n\n${
+          demoteHeadings(s.pinnedText, 3)
+        }`
+        : `${s.stale ? "_(stale)_\n\n" : ""}${demoteHeadings(s.pinnedText, 2)}`
     );
     return [`## ${level.title}`, ...body].join("\n\n");
   });

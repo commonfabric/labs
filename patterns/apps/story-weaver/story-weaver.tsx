@@ -31,6 +31,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  answers,
   boardView,
   clampBranch,
   type GenerationResult,
@@ -67,14 +68,6 @@ export type { Level, Spindle } from "./story-logic.ts";
 // request failed with HTTP 400.
 const MODEL = "anthropic:claude-haiku-4-5" as const;
 
-/** The prompt a request was sent with: its first message's text. */
-const sentPrompt = (
-  messages: readonly { content?: unknown }[] | undefined,
-): string => {
-  const content = messages?.[0]?.content;
-  return typeof content === "string" ? content : "";
-};
-
 const DEFAULT_LEVELS = [
   {
     title: "Characters & Themes",
@@ -94,9 +87,16 @@ const DEFAULT_LEVELS = [
 // Styles
 // ---------------------------------------------------------------------------
 
-// The panels draw their own light backgrounds, so they set their own text
-// color too: inheriting the shell's dark-theme text left it white on white.
-const INK = "#1f2937";
+// Colors come from the shell's theme, so the board reads in light and dark
+// alike; the fallbacks are the light theme. A tint mixes an accent into the
+// theme's background rather than naming a light pastel.
+const TEXT = "var(--cf-theme-color-text, #111827)";
+const MUTED = "var(--cf-theme-color-text-muted, #6b7280)";
+const BORDER = "var(--cf-theme-color-border, #e5e7eb)";
+const SURFACE = "var(--cf-theme-color-surface, #f9fafb)";
+const BACKGROUND = "var(--cf-theme-color-background, #ffffff)";
+const tint = (accent: string, percent: number): string =>
+  `color-mix(in srgb, ${accent} ${percent}%, ${BACKGROUND})`;
 
 const LEVEL_COLORS = ["#0ea5e9", "#eab308", "#22c55e", "#d946ef", "#f97316"];
 
@@ -113,10 +113,10 @@ const styles = {
   title: { fontSize: "24px", fontWeight: "bold", width: "100%" },
   synopsisPanel: {
     padding: "16px",
-    background: "#fefce8",
-    color: INK,
+    background: tint("#eab308", 10),
+    color: TEXT,
     borderRadius: "8px",
-    border: "1px solid #fde047",
+    border: `1px solid ${tint("#eab308", 45)}`,
     display: "flex",
     flexDirection: "column",
     gap: "8px",
@@ -128,7 +128,7 @@ const styles = {
     flexWrap: "wrap",
   },
   sectionTitle: { fontWeight: "600", fontSize: "15px" },
-  hint: { fontSize: "13px", color: "#6b7280", fontStyle: "italic" },
+  hint: { fontSize: "13px", color: MUTED, fontStyle: "italic" },
   primary: {
     padding: "8px 16px",
     background: "#2563eb",
@@ -141,9 +141,9 @@ const styles = {
   },
   secondary: {
     padding: "6px 12px",
-    background: "white",
-    color: "#374151",
-    border: "1px solid #d1d5db",
+    background: SURFACE,
+    color: TEXT,
+    border: `1px solid ${BORDER}`,
     borderRadius: "6px",
     cursor: "pointer",
     fontSize: "13px",
@@ -160,9 +160,9 @@ const styles = {
   },
   ideas: {
     padding: "12px",
-    background: "#faf5ff",
-    color: INK,
-    border: "1px solid #c4b5fd",
+    background: tint("#8b5cf6", 10),
+    color: TEXT,
+    border: `1px solid ${tint("#8b5cf6", 40)}`,
     borderRadius: "8px",
     display: "flex",
     flexDirection: "column",
@@ -170,9 +170,9 @@ const styles = {
   },
   idea: {
     padding: "10px 12px",
-    background: "white",
-    color: INK,
-    border: "1px solid #e5e7eb",
+    background: BACKGROUND,
+    color: TEXT,
+    border: `1px solid ${BORDER}`,
     borderRadius: "6px",
     cursor: "pointer",
     textAlign: "left",
@@ -191,21 +191,21 @@ const styles = {
     paddingBottom: "6px",
   },
   levelTitle: { fontWeight: "700", fontSize: "17px" },
-  levelPrompt: { fontSize: "13px", color: "#4b5563", fontStyle: "italic" },
+  levelPrompt: { fontSize: "13px", color: MUTED, fontStyle: "italic" },
   stepper: {
     width: "28px",
     height: "28px",
-    border: "1px solid #d1d5db",
-    background: "white",
-    color: INK,
+    border: `1px solid ${BORDER}`,
+    background: SURFACE,
+    color: TEXT,
     borderRadius: "6px",
     cursor: "pointer",
   },
   editPanel: {
     padding: "12px",
-    background: "#f9fafb",
-    color: INK,
-    border: "1px solid #e5e7eb",
+    background: SURFACE,
+    color: TEXT,
+    border: `1px solid ${BORDER}`,
     borderRadius: "8px",
     display: "flex",
     flexDirection: "column",
@@ -213,22 +213,22 @@ const styles = {
   },
   warning: {
     padding: "8px 12px",
-    background: "#fef3c7",
-    color: "#92400e",
-    border: "1px solid #fcd34d",
+    background: tint("#f59e0b", 16),
+    color: TEXT,
+    border: `1px solid ${tint("#f59e0b", 50)}`,
     borderRadius: "6px",
     fontSize: "13px",
   },
   card: {
-    background: "white",
-    color: INK,
-    border: "1px solid #e5e7eb",
+    background: SURFACE,
+    color: TEXT,
+    border: `1px solid ${BORDER}`,
     borderRadius: "8px",
     overflow: "hidden",
   },
   cardHeader: {
     padding: "10px 14px",
-    borderBottom: "1px solid #e5e7eb",
+    borderBottom: `1px solid ${BORDER}`,
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
@@ -241,7 +241,7 @@ const styles = {
     flexDirection: "column",
     gap: "10px",
   },
-  snippet: { fontSize: "12px", color: "#6b7280" },
+  snippet: { fontSize: "12px", color: MUTED },
   options: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
@@ -254,29 +254,29 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     gap: "10px",
-    color: "#6b7280",
+    color: MUTED,
     fontSize: "14px",
   },
   summary: {
     padding: "8px 12px",
-    background: "#f0fdf4",
-    border: "1px solid #bbf7d0",
+    background: tint("#22c55e", 12),
+    border: `1px solid ${tint("#22c55e", 40)}`,
     borderRadius: "6px",
     fontSize: "13px",
-    color: "#166534",
+    color: TEXT,
   },
   prompt: {
     whiteSpace: "pre-wrap",
     fontSize: "12px",
-    background: "#f9fafb",
-    color: INK,
+    background: BACKGROUND,
+    color: TEXT,
     padding: "8px",
     borderRadius: "6px",
     margin: "6px 0 0 0",
   },
   addLevel: {
     padding: "12px",
-    border: "1px dashed #9ca3af",
+    border: `1px dashed ${BORDER}`,
     borderRadius: "8px",
     display: "flex",
     flexDirection: "column",
@@ -287,10 +287,10 @@ const styles = {
 const optionStyle = (pinned: boolean, dimmed: boolean) => ({
   padding: "12px",
   borderRadius: "8px",
-  border: pinned ? "3px solid #2563eb" : "1px solid #e5e7eb",
-  background: pinned ? "#eff6ff" : "white",
-  color: INK,
-  opacity: dimmed ? "0.4" : "1",
+  border: pinned ? "3px solid #2563eb" : `1px solid ${BORDER}`,
+  background: pinned ? tint("#2563eb", 10) : BACKGROUND,
+  color: TEXT,
+  opacity: dimmed ? "0.55" : "1",
   display: "flex",
   flexDirection: "column",
   gap: "8px",
@@ -376,6 +376,13 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
     const startLabel = computed(() =>
       started ? "Update synopsis" : "Start story →"
     );
+    // A disabled button keeps its colors unless told otherwise, and looks
+    // clickable.
+    const startStyle = computed(() => ({
+      ...styles.primary,
+      opacity: draftChanged ? "1" : "0.5",
+      cursor: draftChanged ? "pointer" : "default",
+    }));
     const nextLevel = computed(() => suggestedLevel(levels.get().length));
 
     // --- Synopsis ------------------------------------------------------------
@@ -497,7 +504,9 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
         ? ""
         : pending.branch === 0
         ? `Removing this level removes ${lost}.`
-        : `Lowering to ${pending.branch} removes ${lost} and everything under them.`;
+        : `Lowering to ${pending.branch} removes ${lost} and everything under ${
+          pending.lost === 1 ? "it" : "them"
+        }.`;
     });
     const pendingLevel = computed(() => pendingBranch.get()?.level ?? -1);
 
@@ -587,7 +596,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
             type="button"
             onClick={startStory}
             disabled={!draftChanged}
-            style={styles.primary}
+            style={startStyle}
           >
             {startLabel}
           </button>
@@ -606,7 +615,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
         {ideasOpen
           ? (
             <div style={styles.ideas}>
-              <div style={{ fontWeight: "600", color: "#7c3aed" }}>
+              <div style={{ fontWeight: "600", color: "#8b5cf6" }}>
                 ✨ Story ideas
               </div>
               {ideas.pending
@@ -631,7 +640,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                   <div style={{ fontWeight: "600", marginBottom: "4px" }}>
                     {idea.title}
                   </div>
-                  <div style={{ fontSize: "13px", color: "#4b5563" }}>
+                  <div style={{ fontSize: "13px", color: MUTED }}>
                     {idea.synopsis}
                   </div>
                 </button>
@@ -648,7 +657,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
           <div style={styles.levelHeader}>
             <span style={styles.levelTitle}>{level.title}</span>
             <div style={styles.row}>
-              <span style={{ fontSize: "13px", color: "#6b7280" }}>
+              <span style={{ fontSize: "13px", color: MUTED }}>
                 Branches
               </span>
               <button
@@ -782,7 +791,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
           // text under this path. A result counts only when the request it
           // answers is this spindle's prompt.
           const answered = computed(() =>
-            sentPrompt(generation.messages) === spindle.activePrompt
+            answers(generation.messages, spindle.activePrompt)
           );
           const waiting = computed(() =>
             generation.pending || (!generation.error && !answered)
@@ -791,7 +800,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
             answered && !generation.pending ? generation.error ?? "" : ""
           );
           const summaryText = computed(() =>
-            sentPrompt(summary.messages) === spindle.summaryPrompt &&
+            answers(summary.messages, spindle.summaryPrompt) &&
               !summary.pending
               ? summary.result?.summary ?? ""
               : ""
@@ -929,7 +938,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                         <div style={optionStyle(option.pinned, option.dimmed)}>
                           <div style={styles.row}>
                             <span
-                              style={{ fontSize: "12px", color: "#6b7280" }}
+                              style={{ fontSize: "12px", color: MUTED }}
                             >
                               Option {option.index + 1}
                             </span>
@@ -958,7 +967,12 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                   ? (
                     <div style={optionStyle(true, false)}>
                       <div style={styles.row}>
-                        <span style={{ fontSize: "12px", color: "#1d4ed8" }}>
+                        <span
+                          style={{
+                            fontSize: "12px",
+                            color: "var(--cf-theme-color-primary, #2563eb)",
+                          }}
+                        >
                           📌 Pinned
                         </span>
                         <button
@@ -990,7 +1004,7 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
                   : null}
 
                 <details>
-                  <summary style={{ fontSize: "12px", color: "#6b7280" }}>
+                  <summary style={{ fontSize: "12px", color: MUTED }}>
                     View prompt
                   </summary>
                   <pre style={styles.prompt}>{spindle.prompt}</pre>
