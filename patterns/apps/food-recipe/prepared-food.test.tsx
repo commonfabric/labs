@@ -29,13 +29,15 @@ export default pattern(() => {
     food[NAME] === "🛒 Costco Rotisserie Chicken" &&
     food.servings === 6 &&
     food.dietaryCompatibility.compatible.length === 0 &&
-    food.dietaryCompatibility.warnings.length === 0
+    food.dietaryCompatibility.warnings.length === 0 &&
+    food.dietarySource === "declared"
   );
 
   const action_quick_add = action(() => clickButton(food[UI], "+ gluten-free"));
   const assert_quick_added = assert(() =>
     food.dietaryTags.join() === "gluten-free" &&
-    food.dietaryCompatibility.compatible.join() === "gluten-free"
+    food.dietaryCompatibility.compatible.join() === "gluten-free" &&
+    food.dietaryCompatibility.warnings.length === 1
   );
 
   // The tag editor reports its whole list; it is normalized on the way in.

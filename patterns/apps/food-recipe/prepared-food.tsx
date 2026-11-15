@@ -7,7 +7,7 @@
  *
  * Ported from jkomoros/community-patterns (`prepared-food.tsx`). Tags and
  * ingredients use `cf-tags`, and its `dietaryCompatibility` has the same shape
- * as a recipe's so a planner treats both alike.
+ * as a recipe's so a planner treats both alike; `dietarySource` is "declared".
  */
 import {
   action,
@@ -26,6 +26,8 @@ import {
 import {
   CATEGORY_ITEMS,
   type DietaryCompatibility,
+  type DietarySource,
+  type PreparedFoodForMeal,
   type RecipeCategory,
 } from "./schemas.tsx";
 
@@ -45,6 +47,9 @@ export const COMMON_DIETARY_TAGS = [
   "low-carb",
   "low-sodium",
 ];
+
+export const DECLARED_WARNING =
+  "Declared by hand, not analyzed: check the label or ask who made it.";
 
 /** `list` lowercased, trimmed and without repeats or blanks. */
 export const normalizedTags = (list: readonly string[]): string[] => [
@@ -87,9 +92,17 @@ export interface PreparedFoodOutput {
   requiresReheating: boolean;
   /** The declared tags in the shape a recipe's analysis has. */
   dietaryCompatibility: DietaryCompatibility;
+  /** Always "declared": the tags are what someone entered. */
+  dietarySource: DietarySource;
   /** Add a dietary tag (lowercased; repeats ignored). */
   addDietaryTag: Stream<{ tag: string }>;
 }
+
+/** The output must keep serving `PreparedFoodForMeal`; this fails to compile
+ * if it drifts. */
+export const asPreparedFoodForMeal = (
+  food: PreparedFoodOutput,
+): PreparedFoodForMeal => food;
 
 const setList = handler<
   { detail?: { tags?: string[] } },
@@ -154,7 +167,9 @@ const PreparedFood = pattern<PreparedFoodInput, PreparedFoodOutput>(
     const dietaryCompatibility = computed((): DietaryCompatibility => ({
       compatible: [...dietaryTags.get()],
       incompatible: [],
-      warnings: [],
+      warnings: dietaryTags.get().length || primaryIngredients.get().length
+        ? [DECLARED_WARNING]
+        : [],
       primaryIngredients: [...primaryIngredients.get()],
     }));
 
@@ -310,6 +325,7 @@ const PreparedFood = pattern<PreparedFoodInput, PreparedFoodOutput>(
       prepTime,
       requiresReheating,
       dietaryCompatibility,
+      dietarySource: "declared",
       addDietaryTag,
     };
   },

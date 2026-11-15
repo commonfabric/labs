@@ -26,6 +26,7 @@ import FoodRecipe from "./food-recipe.tsx";
 import {
   formatQuantity,
   formatTiming,
+  newIngredients,
   ovenRequirements,
   scalarChanges,
   scaleAmount,
@@ -111,6 +112,22 @@ export default pattern(() => {
       !ovenRequirements([base, cold]).needsOven &&
       ovenRequirements([hot, { ...hot, id: "x" }]).temps.join() === "400";
   });
+  const assert_keeps_repeated_ingredients = assert(() => {
+    const butter = { item: "butter", amount: "1/2", unit: "cup" };
+    const salt = { item: "salt", amount: "1", unit: "tsp" };
+    const found = newIngredients([butter], {
+      ingredients: [
+        butter,
+        { ...butter, amount: "2", unit: "tbsp" },
+        salt,
+        salt,
+      ],
+    });
+    // Already-present butter is skipped; a second butter and salt listed
+    // twice (dough and topping) are kept.
+    return found.map((i) => `${i.amount} ${i.item}`).join() ===
+      "2 butter,1 salt,1 salt";
+  });
   const assert_word_diff = assert(() =>
     wordDiff("a b c", "a c d").map((c) => `${c.type[0]}${c.word.trim()}`)
       .filter((s) => s.length > 1).join() === "ua,rb,uc,ad"
@@ -141,6 +158,7 @@ export default pattern(() => {
     recipe.servings === 4 &&
     recipe.ingredients.length === 0 &&
     !recipe.ovenRequirements.needsOven &&
+    recipe.dietarySource === "none" &&
     recipe.extraction === null
   );
 
@@ -205,6 +223,12 @@ export default pattern(() => {
     recipe.ovenRequirements.tempChanges
   );
 
+  // The rack-width button toggles the first oven group's width.
+  const action_toggle_width = action(() => clickButton(recipe[UI], "Full"));
+  const assert_width_toggled = assert(() =>
+    recipe.stepGroups[0]?.oven?.width === "half"
+  );
+
   const action_suggest_timing = action(() =>
     clickButton(recipe[UI], "Suggest Timing")
   );
@@ -245,6 +269,7 @@ export default pattern(() => {
       { assertion: assert_scales_fractions },
       { assertion: assert_nights_clear_minutes },
       { assertion: assert_oven_needs_temperature },
+      { assertion: assert_keeps_repeated_ingredients },
       { assertion: assert_word_diff },
       { assertion: assert_scalar_changes_skip_unchanged },
       { assertion: assert_starts_untitled },
@@ -258,6 +283,8 @@ export default pattern(() => {
       { assertion: assert_doubled },
       { action: action_edit_group },
       { assertion: assert_group_edited },
+      { action: action_toggle_width },
+      { assertion: assert_width_toggled },
       { action: action_suggest_timing },
       { settle: true },
       { assertion: assert_timing_review },

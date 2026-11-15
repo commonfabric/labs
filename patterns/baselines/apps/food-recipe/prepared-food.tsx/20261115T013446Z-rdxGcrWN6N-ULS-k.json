@@ -154,6 +154,14 @@
           "primaryIngredients"
         ],
         "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
       }
     },
     "description": "Prepared food: store-bought, guest-brought or takeout. #preparedFood",
@@ -228,6 +236,10 @@
         "$ref": "#/$defs/DietaryCompatibility",
         "description": "The declared tags in the shape a recipe's analysis has."
       },
+      "dietarySource": {
+        "$ref": "#/$defs/DietarySource",
+        "description": "Always \"declared\": the tags are what someone entered."
+      },
       "dietaryTags": {
         "items": {
           "type": "string"
@@ -267,6 +279,7 @@
       "prepTime",
       "requiresReheating",
       "dietaryCompatibility",
+      "dietarySource",
       "addDietaryTag",
       "$NAME",
       "$UI",

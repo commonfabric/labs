@@ -329,6 +329,14 @@
         ],
         "type": "object"
       },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
+      },
       "Difficulty": {
         "enum": [
           "easy",
@@ -683,6 +691,13 @@
           "opaque"
         ]
       },
+      "analyzeDiet": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Run the dietary analysis on the recipe as it stands."
+      },
       "applyExtraction": {
         "asCell": [
           "stream",
@@ -738,6 +753,10 @@
       },
       "dietaryCompatibility": {
         "$ref": "#/$defs/DietaryCompatibility"
+      },
+      "dietarySource": {
+        "$ref": "#/$defs/DietarySource",
+        "description": "Whether `dietaryCompatibility` is a current analysis, a stale one, or\nnothing yet (\"none\": empty lists mean unknown, not safe)."
       },
       "difficulty": {
         "$ref": "#/$defs/Difficulty"
@@ -996,6 +1015,8 @@
       "totalTime",
       "ovenRequirements",
       "dietaryCompatibility",
+      "dietarySource",
+      "analyzeDiet",
       "extraction",
       "timingSuggestions",
       "extract",

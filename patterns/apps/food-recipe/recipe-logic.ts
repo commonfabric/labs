@@ -171,7 +171,11 @@ export const withOvenField = (
 ): StepGroup => {
   const oven: OvenNeed = { ...DEFAULT_OVEN, ...(group.oven ?? {}) };
   if (field === "width") {
-    oven.width = value === "half" ? "half" : "full";
+    oven.width = value === "toggle"
+      ? (oven.width === "half" ? "full" : "half")
+      : value === "half"
+      ? "half"
+      : "full";
   } else {
     const n = numberFromInput(value) ?? 0;
     oven[field] = field === "heightSlots" ? Math.max(1, n) : n;
@@ -410,9 +414,15 @@ export const notesChange = (
     : { changes: false, to: current };
 };
 
-const ingredientKey = (ing: Ingredient) => ing.item.trim().toLowerCase();
+const ingredientKey = (ing: Ingredient) =>
+  [ing.amount, ing.unit, ing.item].map((s) => s.trim().toLowerCase()).join("|");
 
-/** The extracted ingredients not already in the recipe, by name. */
+/**
+ * The extracted ingredients not already in the recipe. An ingredient counts as
+ * already there only when item, amount and unit all match, so re-extracting
+ * the same notes adds nothing, while a recipe that lists butter twice (crust
+ * and filling) keeps both.
+ */
 export const newIngredients = (
   current: readonly Ingredient[],
   extraction: RecipeExtraction | null | undefined,
@@ -425,12 +435,7 @@ export const newIngredients = (
       amount: String(ing.amount ?? "").trim(),
       unit: String(ing.unit ?? "").trim(),
     }))
-    .filter((ing) => {
-      const key = ingredientKey(ing);
-      if (have.has(key)) return false;
-      have.add(key);
-      return true;
-    });
+    .filter((ing) => !have.has(ingredientKey(ing)));
 };
 
 const cleanNumber = (value: unknown): number | undefined =>

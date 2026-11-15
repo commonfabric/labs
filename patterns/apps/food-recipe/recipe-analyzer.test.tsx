@@ -23,6 +23,15 @@ export const llmMocks = [
       primaryIngredients: ["flour", "butter"],
     },
   },
+  {
+    promptIncludes: "(retry",
+    object: {
+      compatible: ["vegetarian"],
+      incompatible: ["vegan"],
+      warnings: [],
+      primaryIngredients: ["flour", "butter", "sugar"],
+    },
+  },
 ];
 
 export default pattern(() => {
@@ -48,6 +57,7 @@ export default pattern(() => {
 
   const assert_not_analyzed_yet = assert(() =>
     !analyzer.analyzed && !analyzer.pending &&
+    analyzer.dietarySource === "none" &&
     analyzer.dietaryCompatibility.compatible.length === 0 &&
     hasText(analyzer[UI], "Not analyzed yet.")
   );
@@ -55,6 +65,7 @@ export default pattern(() => {
   const action_analyze = action(() => clickButton(analyzer[UI], "Analyze"));
   const assert_analyzed = assert(() =>
     analyzer.analyzed && !analyzer.stale &&
+    analyzer.dietarySource === "analyzed" &&
     analyzer.dietaryCompatibility.compatible.includes("vegetarian") &&
     analyzer.dietaryCompatibility.incompatible.includes("vegan") &&
     hasText(analyzer[UI], "Contains butter - not vegan")
@@ -64,9 +75,21 @@ export default pattern(() => {
     ingredients.push({ item: "sugar", amount: "1/4", unit: "cup" })
   );
   const assert_stale_keeps_last_result = assert(() =>
-    analyzer.stale &&
+    analyzer.stale && analyzer.dietarySource === "stale" &&
     analyzer.dietaryCompatibility.compatible.includes("vegetarian") &&
-    hasText(analyzer[UI], "The ingredients changed since this analysis.")
+    hasText(analyzer[UI], "The recipe changed since this analysis.")
+  );
+
+  // Re-analyzing the changed recipe fails (no mock answers it); the result is
+  // gone, and asking again retries rather than repeating the failed request.
+  const action_reanalyze = action(() => analyzer.analyze.send());
+  const assert_failed = assert(() =>
+    analyzer.error !== "" && analyzer.dietarySource === "none"
+  );
+  const action_retry = action(() => analyzer.analyze.send());
+  const assert_retried = assert(() =>
+    analyzer.error === "" && analyzer.dietarySource === "analyzed" &&
+    analyzer.dietaryCompatibility.primaryIngredients.includes("sugar")
   );
 
   return {
@@ -79,6 +102,12 @@ export default pattern(() => {
       { assertion: assert_analyzed },
       { action: action_change_ingredients },
       { assertion: assert_stale_keeps_last_result },
+      { action: action_reanalyze },
+      { settle: true },
+      { assertion: assert_failed },
+      { action: action_retry },
+      { settle: true },
+      { assertion: assert_retried },
     ],
     analyzer,
     allowConsoleWarnings: true,

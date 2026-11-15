@@ -36,12 +36,13 @@ import {
 import {
   CATEGORY_ITEMS,
   type DietaryCompatibility,
+  type DietarySource,
   type Difficulty,
   type Ingredient,
   type OvenRequirements,
   type RecipeCategory,
+  type RecipeForMeal,
   type StepGroup,
-  UNIT_ITEMS,
 } from "./schemas.tsx";
 import {
   applyTimingSuggestions,
@@ -129,6 +130,11 @@ export interface FoodRecipeOutput {
   totalTime: number;
   ovenRequirements: OvenRequirements;
   dietaryCompatibility: DietaryCompatibility;
+  /** Whether `dietaryCompatibility` is a current analysis, a stale one, or
+   * nothing yet ("none": empty lists mean unknown, not safe). */
+  dietarySource: DietarySource;
+  /** Run the dietary analysis on the recipe as it stands. */
+  analyzeDiet: Stream<void>;
   /** The extraction under review, or null. */
   extraction: RecipeExtraction | null;
   /** The timing suggestions under review, or null. */
@@ -161,6 +167,11 @@ export interface FoodRecipeOutput {
   /** Open the cooking view. */
   cook: Stream<void>;
 }
+
+/** The output must keep serving `RecipeForMeal`; this fails to compile if it
+ * drifts. */
+export const asRecipeForMeal = (recipe: FoodRecipeOutput): RecipeForMeal =>
+  recipe;
 
 type ChangeEvent = { detail?: { value?: string } };
 
@@ -409,8 +420,11 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
     const extract = action(() => {
       const shots = images.get().map((i) => i.data || i.url).filter(Boolean);
       if (!notes.get().trim() && shots.length === 0) return;
+      // After a failure the same request would count as already made, so a
+      // retry carries a marker the model can ignore.
+      const retry = extractError ? `\n\n(retry ${Date.now()})` : "";
       extractRequest.set({
-        text: extractionText(notes.get(), shots.length),
+        text: extractionText(notes.get(), shots.length) + retry,
         images: shots,
       });
     });
@@ -442,8 +456,9 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       ]);
       stepGroups.set([...stepGroups.get(), ...newStepGroups(data, prefix)]);
       tags.set([...tags.get(), ...newTags(tags.get(), data)]);
+      // The photos stay: cf-image-input keeps its own list, and clearing ours
+      // would desync it from what is on screen.
       extractRequest.set(null);
-      images.set([]);
     });
 
     // --- Timing suggestions -------------------------------------------------
@@ -468,7 +483,8 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
     );
 
     const suggestTiming = action(() => {
-      timingRequest.set(timingPrompt(name.get(), stepGroups.get()));
+      const retry = timingError ? `\n\n(retry ${Date.now()})` : "";
+      timingRequest.set(timingPrompt(name.get(), stepGroups.get()) + retry);
     });
     const cancelTiming = action(() => timingRequest.set(""));
     const applyTiming = action(() => {
@@ -563,11 +579,14 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       },
     );
 
-    const cook = action(() =>
-      navigateTo(
-        Viewer({ recipeName: name, servings, ingredients, stepGroups }),
-      )
-    );
+    // One cooking view per recipe, so progress survives going back to edit.
+    const cookingView = Viewer({
+      recipeName: name,
+      servings,
+      ingredients,
+      stepGroups,
+    });
+    const cook = action(() => navigateTo(cookingView));
 
     const fsContent = computed(() =>
       recipeMarkdown({
@@ -586,6 +605,9 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
 
     // --- View ---------------------------------------------------------------
 
+    // The modals open from derived state, which they must not write: with
+    // dismissible={false} cf-modal never writes $open, and Cancel/Apply close
+    // them by clearing the request. (cf-modal types offer no one-way `open`.)
     const extractionReview = (
       <cf-modal
         $open={computed(() => extraction !== null)}
@@ -898,7 +920,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
                       placeholder="Ingredient"
                     />
                     <cf-input $value={ingredient.amount} placeholder="Amount" />
-                    <cf-select $value={ingredient.unit} items={UNIT_ITEMS} />
+                    <cf-input $value={ingredient.unit} placeholder="Unit" />
                     <cf-button
                       variant="ghost"
                       aria-label="Remove ingredient"
@@ -1041,7 +1063,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
 
                       <div style={styles.oven}>
                         <div style={styles.ovenTitle}>
-                          🔥 Oven (leave temperature blank if none)
+                          🔥 Oven (set a temperature to use it)
                         </div>
                         <label>
                           <span style={styles.smallLabel}>Temp (°F)</span>
@@ -1066,6 +1088,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
                             type="number"
                             min="0"
                             placeholder="30"
+                            disabled={computed(() => !group.oven)}
                             value={computed(() =>
                               inputText(group.oven?.duration)
                             )}
@@ -1083,6 +1106,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
                             type="number"
                             min="1"
                             placeholder="1-5"
+                            disabled={computed(() => !group.oven)}
                             value={computed(() =>
                               inputText(group.oven?.heightSlots)
                             )}
@@ -1098,13 +1122,12 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
                           <span style={styles.smallLabel}>Rack width</span>
                           <cf-button
                             variant="secondary"
+                            disabled={computed(() => !group.oven)}
                             onClick={() =>
                               setOven.send({
                                 id: group.id,
                                 field: "width",
-                                value: group.oven?.width === "half"
-                                  ? "full"
-                                  : "half",
+                                value: "toggle",
                               })}
                           >
                             {computed(() =>
@@ -1203,6 +1226,8 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
       totalTime,
       ovenRequirements: oven,
       dietaryCompatibility: analyzer.dietaryCompatibility,
+      dietarySource: analyzer.dietarySource,
+      analyzeDiet: analyzer.analyze,
       extraction,
       timingSuggestions,
       extract,

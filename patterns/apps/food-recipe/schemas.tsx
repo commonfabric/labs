@@ -30,29 +30,6 @@ export const CATEGORY_ITEMS = RECIPE_CATEGORIES.map((value) => ({
   value,
 }));
 
-export const UNITS = [
-  "",
-  "tsp",
-  "tbsp",
-  "cup",
-  "oz",
-  "lb",
-  "g",
-  "kg",
-  "ml",
-  "l",
-  "piece",
-  "clove",
-  "can",
-  "pinch",
-  "to taste",
-] as const;
-
-export const UNIT_ITEMS = UNITS.map((unit) => ({
-  label: unit || "—",
-  value: unit,
-}));
-
 export interface Ingredient {
   item: string;
   /** Free text so "1 1/2", "2-3" and "a handful" all fit. */
@@ -79,6 +56,10 @@ export interface OvenNeed {
  * A phase of the recipe that happens at one time: "Night before", "Prep",
  * "Roast", "Finish". It starts either some nights before the meal or some
  * minutes before serving, never both; neither set means unscheduled.
+ *
+ * An oven need occupies the oven from the group's start for `oven.duration`
+ * minutes, so a planner places it at `minutesBeforeServing` (a night-before
+ * group is outside the day's oven plan).
  */
 export interface StepGroup {
   id: string;
@@ -120,12 +101,20 @@ export interface OvenRequirements {
   tempChanges: boolean;
 }
 
+/**
+ * Where a dish's `dietaryCompatibility` came from. "none" means nobody has
+ * analyzed or declared it yet, so empty lists say nothing about the dish; a
+ * planner must not read them as "contains nothing to avoid".
+ */
+export type DietarySource = "analyzed" | "stale" | "declared" | "none";
+
 /** What every dish offers a meal planner. */
 export interface MealDish {
   name: string;
   servings: number;
   category: RecipeCategory;
   dietaryCompatibility: DietaryCompatibility;
+  dietarySource: DietarySource;
 }
 
 /** A dish cooked from a recipe. */

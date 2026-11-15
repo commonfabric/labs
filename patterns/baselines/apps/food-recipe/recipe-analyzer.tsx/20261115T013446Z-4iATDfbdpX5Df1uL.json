@@ -89,6 +89,14 @@
           "primaryIngredients"
         ],
         "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
       }
     },
     "properties": {
@@ -110,6 +118,10 @@
         "$ref": "#/$defs/DietaryCompatibility",
         "description": "The last analysis, or empty lists before the first."
       },
+      "dietarySource": {
+        "$ref": "#/$defs/DietarySource",
+        "description": "\"analyzed\", \"stale\", or \"none\" when there is no result."
+      },
       "error": {
         "description": "The model's error for the last request, or \"\".",
         "type": "string"
@@ -126,6 +138,7 @@
       "dietaryCompatibility",
       "analyzed",
       "stale",
+      "dietarySource",
       "pending",
       "error",
       "analyze",

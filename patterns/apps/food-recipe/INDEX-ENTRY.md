@@ -78,6 +78,9 @@ interface FoodRecipeOutput {
     warnings: string[];
     primaryIngredients: string[];
   };
+  // "none" = not analyzed yet: empty lists mean unknown, not safe
+  dietarySource: "analyzed" | "stale" | "none";
+  analyzeDiet: Stream<void>;
   extraction: RecipeExtraction | null; // under review
   timingSuggestions: TimingSuggestions | null; // under review
   extract: Stream<void>;
@@ -135,6 +138,7 @@ interface PreparedFoodInput {
 interface PreparedFoodOutput {
   // every input field, as a plain value, plus:
   dietaryCompatibility: DietaryCompatibility; // compatible = dietaryTags
+  dietarySource: "declared";
   addDietaryTag: Stream<{ tag: string }>;
 }
 ```

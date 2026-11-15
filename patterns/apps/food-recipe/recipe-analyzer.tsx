@@ -9,7 +9,9 @@
  * Ported from jkomoros/community-patterns (`recipe-analyzer.tsx`). The original
  * re-ran the model on every ingredient edit, keystroke by keystroke. Here the
  * analysis runs when asked (`analyze`), is stored with the recipe it was asked
- * for, and is flagged as out of date once the ingredients change.
+ * for, and is flagged as out of date once the recipe changes. While a new
+ * analysis runs, and if it fails, there is no result: `dietarySource` says
+ * which case a reader is looking at.
  */
 import {
   action,
@@ -24,6 +26,7 @@ import {
 } from "commonfabric";
 import {
   type DietaryCompatibility,
+  type DietarySource,
   EMPTY_DIETARY,
   type Ingredient,
 } from "./schemas.tsx";
@@ -50,6 +53,12 @@ warnings: short readable caveats, e.g. "Contains dairy (butter) - not vegan".
 primaryIngredients: the 5-10 ingredients that define the dish (proteins, main
 vegetables and starches, key flavors), used to match requests like
 "no mushrooms".`;
+
+const RETRY = /\n\n\(retry \d+\)$/;
+
+/** The recipe prompt a request was made for, without any retry marker. */
+export const requestedRecipe = (request: string): string =>
+  request.replace(RETRY, "");
 
 /** The analysis prompt for a recipe, or "" when it has no ingredients. */
 export const dietaryPrompt = (
@@ -95,6 +104,8 @@ export interface RecipeAnalyzerOutput {
   analyzed: boolean;
   /** The recipe changed since it was analyzed. */
   stale: boolean;
+  /** "analyzed", "stale", or "none" when there is no result. */
+  dietarySource: DietarySource;
   pending: boolean;
   /** The model's error for the last request, or "". */
   error: string;
@@ -144,10 +155,6 @@ const RecipeAnalyzer = pattern<RecipeAnalyzerInput, RecipeAnalyzerOutput>(
       prompt: requested,
     });
 
-    const analyze = action(() => {
-      requested.set(currentPrompt);
-    });
-
     const dietaryCompatibility = computed((): DietaryCompatibility => {
       const r = llm.result;
       return r
@@ -163,10 +170,26 @@ const RecipeAnalyzer = pattern<RecipeAnalyzerInput, RecipeAnalyzerOutput>(
     const pending = computed(() => !!llm.pending);
     const error = computed(() => (llm.error ? String(llm.error) : ""));
     const stale = computed(() =>
-      requested.get() !== "" && requested.get() !== currentPrompt
+      requested.get() !== "" &&
+      requestedRecipe(requested.get()) !== currentPrompt
     );
+    const dietarySource = computed((): DietarySource =>
+      !analyzed ? "none" : stale ? "stale" : "analyzed"
+    );
+    // Asking again for the same recipe after a failure needs a different
+    // request, or the builtin treats it as the one already made; a retry
+    // marker the model can ignore makes it one.
+    const analyze = action(() => {
+      if (currentPrompt === "") return;
+      requested.set(
+        error && requestedRecipe(requested.get()) === currentPrompt
+          ? `${currentPrompt}\n\n(retry ${Date.now()})`
+          : currentPrompt,
+      );
+    });
     const canAnalyze = computed(() =>
-      currentPrompt !== "" && !pending && requested.get() !== currentPrompt
+      currentPrompt !== "" && !pending &&
+      (!!error || requestedRecipe(requested.get()) !== currentPrompt)
     );
     const buttonLabel = computed(() =>
       pending ? "Analyzing..." : analyzed ? "Re-analyze" : "Analyze"
@@ -199,7 +222,7 @@ const RecipeAnalyzer = pattern<RecipeAnalyzerInput, RecipeAnalyzerOutput>(
           {stale
             ? (
               <div style={styles.stale}>
-                The ingredients changed since this analysis.
+                The recipe changed since this analysis.
               </div>
             )
             : null}
@@ -235,6 +258,7 @@ const RecipeAnalyzer = pattern<RecipeAnalyzerInput, RecipeAnalyzerOutput>(
       dietaryCompatibility,
       analyzed,
       stale,
+      dietarySource,
       pending,
       error,
       analyze,
