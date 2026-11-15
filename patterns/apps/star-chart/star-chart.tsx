@@ -2,15 +2,21 @@
  * Star Chart — a reward calendar for a child learning one daily habit.
  *
  * Each day the child taps the big star to earn it. Earned days show as
- * stickers at a random tilt along a timeline back to the first recorded day,
- * with a streak counter and celebrations at 3, 7, 14 and 30 days. A parent can
- * correct past days, and a single missed day after a streak of three or more is
- * forgiven: it is recorded as a dimmed "protected" day that keeps the streak.
+ * stickers at a random tilt along a timeline of the last 30 days, with a
+ * streak counter and celebrations at 3, 7, 14 and 30 days. A parent can
+ * correct past days, and a single missed day right after three or more earned
+ * days in a row is forgiven once the next day is earned: it shows as a dimmed
+ * "protected" day that keeps the streak.
  *
  * Ported from jkomoros/community-patterns (`star-chart.tsx`). The best streak
  * is now derived from the recorded days rather than stored, so correcting a
  * past day can lower it as well as raise it, and a milestone is celebrated on
- * every streak that reaches it rather than only the first time.
+ * every streak that reaches it rather than only the first time. Protected days
+ * are derived too, from the earned days around them, so a parent's correction
+ * grants or withdraws the protection it justifies, and only earned days count
+ * toward the run a forgiveness needs, so one forgiven day never props up the
+ * next. Until today's star is earned, the streak shown is the one today's star
+ * would continue, so it does not read 0 every morning.
  *
  * Today is the viewer's local calendar day, read from the reactive `#now`
  * clock. `todayOverride` (YYYY-MM-DD) pins it, for tests and for trying the
@@ -35,12 +41,15 @@ import {
 export interface DayRecord {
   /** The local calendar day, YYYY-MM-DD. */
   date: string;
-  /** The child earned the star that day. */
+  /** The child earned the star that day. Only earned days are recorded. */
   earned: boolean;
-  /** A forgiven missed day: shown dimmed, and it keeps the streak going. */
-  protected: boolean;
   /** The sticker's tilt in degrees, -15 to 15, fixed when it was placed. */
   rotation: number;
+  /** Legacy: protection was once stored here. It is derived now (see
+   * `protectedDates`), so this is written false and ignored on read. It stays
+   * only because dropping a required stored field breaks updating pieces
+   * deployed with it. */
+  protected: boolean;
 }
 
 const MILESTONES = [
@@ -55,6 +64,9 @@ const PROTECT_AFTER_STREAK = 3;
 
 /** How many days the parent's correction list reaches back. */
 const CORRECTION_DAYS = 30;
+
+/** How many days the timeline and the [FS] day list reach back. */
+const RECENT_DAYS = 30;
 
 const MONTHS = [
   "Jan",
@@ -117,41 +129,94 @@ const daysBetween = (first: string, last: string): string[] => {
 // the handlers agree, and the tests can reach them.
 // ---------------------------------------------------------------------------
 
-const counts = (day: DayRecord | undefined): boolean =>
-  !!day && (day.earned || day.protected);
-
 const byDate = (days: readonly DayRecord[]): Map<string, DayRecord> =>
   new Map(days.map((d) => [d.date, d]));
 
-/** Consecutive counting days ending at `end`, walking back. */
-export const streakEndingAt = (
-  days: readonly DayRecord[],
-  end: string,
-): number => {
-  const index = byDate(days);
+const earnedDates = (days: readonly DayRecord[]): Set<string> =>
+  new Set(days.filter((d) => d.earned).map((d) => d.date));
+
+/** Consecutive days in `dates` ending at `end`, walking back. */
+const runEndingAt = (dates: ReadonlySet<string>, end: string): number => {
   let streak = 0;
   let cursor = end;
-  while (counts(index.get(cursor))) {
+  while (dates.has(cursor)) {
     streak++;
     cursor = addDays(cursor, -1);
   }
   return streak;
 };
 
+/**
+ * The forgiven missed days: each is not earned, the day after it is, and the
+ * days before it end a run of at least `PROTECT_AFTER_STREAK` earned days.
+ * Only earned days count toward that run, so a forgiven day cannot justify
+ * another. Derived rather than stored, so it follows a parent's corrections.
+ */
+export const protectedDates = (days: readonly DayRecord[]): Set<string> => {
+  const earned = earnedDates(days);
+  return new Set(
+    [...earned]
+      .map((date) => addDays(date, -1))
+      .filter((gap) =>
+        !earned.has(gap) &&
+        runEndingAt(earned, addDays(gap, -1)) >= PROTECT_AFTER_STREAK
+      ),
+  );
+};
+
+/** The days that keep a streak going: earned or protected. */
+const countingDates = (days: readonly DayRecord[]): Set<string> =>
+  new Set([...earnedDates(days), ...protectedDates(days)]);
+
+/** Consecutive counting days ending at `end`, walking back. */
+export const streakEndingAt = (
+  days: readonly DayRecord[],
+  end: string,
+): number => runEndingAt(countingDates(days), end);
+
 /** The longest run of consecutive counting days anywhere in the record. */
 export const longestStreak = (days: readonly DayRecord[]): number => {
-  const index = byDate(days);
-  return days
-    .filter((d) => counts(d) && !counts(index.get(addDays(d.date, -1))))
+  const counting = countingDates(days);
+  return [...counting]
+    .filter((date) => !counting.has(addDays(date, -1)))
     .reduce((best, start) => {
       let length = 0;
-      let cursor = start.date;
-      while (counts(index.get(cursor))) {
+      let cursor = start;
+      while (counting.has(cursor)) {
         length++;
         cursor = addDays(cursor, 1);
       }
       return Math.max(best, length);
     }, 0);
+};
+
+/**
+ * The streak still alive on `today`: the one ending today once today's star
+ * is earned; before that, the one today's star would continue. That is the
+ * run ending yesterday, or, when yesterday was missed but earning today would
+ * forgive it, the run ending the day before.
+ */
+export const liveStreak = (
+  days: readonly DayRecord[],
+  today: string,
+): number => {
+  const counting = countingDates(days);
+  if (counting.has(today)) return runEndingAt(counting, today);
+  const yesterday = addDays(today, -1);
+  if (counting.has(yesterday)) return runEndingAt(counting, yesterday);
+  const before = addDays(today, -2);
+  return runEndingAt(earnedDates(days), before) >= PROTECT_AFTER_STREAK
+    ? runEndingAt(counting, before)
+    : 0;
+};
+
+/** The first day of the window of `RECENT_DAYS` ending at `today`, or of the
+ * record if that starts later; "" when nothing counts yet. */
+const recentStart = (days: readonly DayRecord[], today: string): string => {
+  const first = [...earnedDates(days)].sort()[0];
+  if (!first) return "";
+  const cutoff = addDays(today, -(RECENT_DAYS - 1));
+  return first > cutoff ? first : cutoff;
 };
 
 const milestoneMessage = (streak: number): string =>
@@ -161,44 +226,30 @@ const daysLabel = (n: number): string => `${n} day${n === 1 ? "" : "s"}`;
 
 const randomTilt = (): number => Math.round(Math.random() * 30 - 15);
 
-/**
- * The record after earning today's star: unchanged if today is already earned;
- * otherwise today is added, and yesterday is protected when it was missed right
- * after a long enough streak.
- */
+/** The record after earning today's star; unchanged if already earned. */
 export const withStarEarned = (
   days: readonly DayRecord[],
   today: string,
   rotation: number,
-): DayRecord[] => {
-  const index = byDate(days);
-  if (index.get(today)?.earned) return [...days];
-  const yesterday = addDays(today, -1);
-  const protectYesterday = !index.has(yesterday) &&
-    streakEndingAt(days, addDays(today, -2)) >= PROTECT_AFTER_STREAK;
-  const rest = days.filter((d) => d.date !== today);
-  return [
-    ...rest,
-    ...(protectYesterday
-      ? [{ date: yesterday, earned: false, protected: true, rotation: 0 }]
-      : []),
+): DayRecord[] =>
+  days.some((d) => d.date === today && d.earned) ? [...days] : [
+    ...days.filter((d) => d.date !== today),
     { date: today, earned: true, protected: false, rotation },
   ];
-};
 
 /** The record after a parent toggles `date`: an earned day is cleared, any
- * other day becomes earned. Days that neither earned nor are protected are
- * dropped. */
+ * other day becomes earned. Only earned days are kept; protection follows
+ * from them. */
 export const withDayToggled = (
   days: readonly DayRecord[],
   date: string,
   rotation: number,
 ): DayRecord[] => {
-  const existing = byDate(days).get(date);
-  const next: DayRecord = existing?.earned
-    ? { ...existing, earned: false, protected: false }
-    : { date, earned: true, protected: false, rotation };
-  return [...days.filter((d) => d.date !== date), next].filter(counts);
+  const wasEarned = days.some((d) => d.date === date && d.earned);
+  return [
+    ...days.filter((d) => d.date !== date && d.earned),
+    ...(wasEarned ? [] : [{ date, earned: true, protected: false, rotation }]),
+  ];
 };
 
 // ---------------------------------------------------------------------------
@@ -504,8 +555,11 @@ export interface StarChartOutput {
   today: string;
   currentStreak: number;
   bestStreak: number;
+  /** The days forgiven, YYYY-MM-DD, oldest first. */
+  protectedDays: string[];
   todayHasStar: boolean;
-  /** The celebration for the current streak, or "" when it hits no milestone. */
+  /** The celebration for the streak today's star just reached, or "" before
+   * today's star or when it hits no milestone. */
   milestone: string;
   /** Earn today's star. */
   earnStar: Stream<void>;
@@ -539,25 +593,36 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
       days.get().some((d) => d.date === today && d.earned)
     );
     const currentStreak = computed(() =>
-      today === "" ? 0 : streakEndingAt(days.get(), today)
+      today === "" ? 0 : liveStreak(days.get(), today)
     );
     const bestStreak = computed(() => longestStreak(days.get()));
-    const milestone = computed(() => milestoneMessage(currentStreak));
+    const protectedDays = computed(() =>
+      [...protectedDates(days.get())].sort()
+    );
+    // Celebrated on the day the star reaches it, not on the morning after.
+    const milestone = computed(() =>
+      todayHasStar ? milestoneMessage(currentStreak) : ""
+    );
     const streakLabel = computed(() => `🔥 ${daysLabel(currentStreak)}!`);
-    const bestLabel = computed(() => `Best: ${daysLabel(bestStreak)}`);
+    const streakNote = computed(() =>
+      todayHasStar
+        ? `Best: ${daysLabel(bestStreak)}`
+        : `Keep it going! · Best: ${daysLabel(bestStreak)}`
+    );
 
     const timeline = computed((): DayView[] => {
       const all = days.get();
-      const first = all.filter(counts).map((d) => d.date).sort()[0];
-      if (today === "" || !first) return [];
+      const start = today === "" ? "" : recentStart(all, today);
+      if (start === "") return [];
       const index = byDate(all);
-      return daysBetween(first, today).map((date) => {
+      const forgiven = protectedDates(all);
+      return daysBetween(start, today).map((date) => {
         const day = index.get(date);
         return {
           date,
           label: shortLabel(date),
           hasStar: !!day?.earned,
-          isProtected: !!day?.protected,
+          isProtected: forgiven.has(date),
           tilt: `rotate(${day?.rotation ?? 0}deg)`,
         };
       });
@@ -565,14 +630,16 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
 
     const correctionsList = computed((): DayView[] => {
       if (today === "") return [];
-      const index = byDate(days.get());
+      const all = days.get();
+      const index = byDate(all);
+      const forgiven = protectedDates(all);
       return daysBackFrom(today, CORRECTION_DAYS).map((date) => {
         const day = index.get(date);
         return {
           date,
           label: longLabel(date),
           hasStar: !!day?.earned,
-          isProtected: !!day?.protected,
+          isProtected: forgiven.has(date),
           tilt: "",
         };
       });
@@ -598,11 +665,14 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
           d.hasStar ? "⭐ earned" : d.isProtected ? "protected" : "missed"
         }`
       );
+      const total = days.get().filter((d) => d.earned).length;
       return [
         `# ${goalName.get()}`,
         goalDescription.get(),
         "",
-        `Current streak: ${currentStreak} · Best: ${bestStreak}`,
+        `Current streak: ${currentStreak} · Best: ${bestStreak} · Stars earned: ${total}`,
+        "",
+        `## Last ${RECENT_DAYS} days`,
         "",
         ...lines,
       ].join("\n");
@@ -693,7 +763,7 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
           ? (
             <div style={styles.streak}>
               <div style={styles.streakCount}>{streakLabel}</div>
-              <div style={styles.subtle}>{bestLabel}</div>
+              <div style={styles.subtle}>{streakNote}</div>
             </div>
           )
           : null}
@@ -810,6 +880,7 @@ const StarChart = pattern<StarChartInput, StarChartOutput>(
       today,
       currentStreak,
       bestStreak,
+      protectedDays,
       todayHasStar,
       milestone,
       earnStar,
