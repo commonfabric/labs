@@ -111,17 +111,19 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.js
 
 `run` takes each module the crate emits a plan for with no unsupported
 construct, skips the ones that need `wish` or request an effect, and appends one
-line per module to the results file. `report` prints the modules run and skipped
-by reason, the outputs and write edges compared by category, what was not
-compared by reason, each output classified without the atom of a kept output and
-with it, the events committed and refused with the runtime's reason for each
-refusal, the looser rows by what differs, and the outputs the run holds no value
-at by what the run stores there, with one example each. Notes 177 to 186, 191 to
-193, and 197 on of `SPEC-NOTES.md` say what the comparison takes as each side's
-label and what it found, notes 217 to 227 why the runtime refuses an event and
-what the generator does about it, notes 228 to 240 what ruling U1 and the
-comparison rules of PL §3.1 changed, and notes 241 on the events for handlers
-bound in an element body or in a pattern compiled in.
+line per module to the results file. It sends the events of the handlers bound
+in no element body and no pattern compiled in first, and with `--plan-order` it
+sends every event in the order of the plan's bindings. `report` prints the
+modules run and skipped by reason, the outputs and write edges compared by
+category, what was not compared by reason, each output classified without the
+atom of a kept output and with it, the events committed and refused with the
+runtime's reason for each refusal, the looser rows by what differs, and the
+outputs the run holds no value at by what the run stores there, with one example
+each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what the
+comparison takes as each side's label and what it found, notes 217 to 227 why
+the runtime refuses an event and what the generator does about it, notes 228 to
+240 what ruling U1 and the comparison rules of PL §3.1 changed, and notes 241 on
+the events for handlers bound in an element body or in a pattern compiled in.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the

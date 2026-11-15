@@ -202,9 +202,35 @@ const resultRow = (
   };
 };
 
+/**
+ * The order the events of a run are sent in. `outside first` sends the
+ * events of the handlers bound in no element body and no pattern compiled
+ * in before the others, and `plan` sends every event in the order of the
+ * plan's bindings.
+ */
+export type EventOrder = "outside first" | "plan";
+
+/**
+ * The bindings a run sends an event to, in the order it sends them: each
+ * binding of a handler whose stream the result holds at a path.
+ */
+export const eventOrder = (plan: Plan, order: EventOrder): number[] => {
+  const sent = (plan.bindings ?? []).flatMap((binding, index) =>
+    binding.handler?.body !== undefined && binding.result !== undefined
+      ? [{ index, inside: (binding.within ?? []).length > 0 }]
+      : []
+  );
+  const groups = order === "plan" ? [sent] : [
+    sent.filter(({ inside }) => !inside),
+    sent.filter(({ inside }) => inside),
+  ];
+  return groups.flat().map(({ index }) => index);
+};
+
 /** Runs one module of the corpus with a generated scenario. */
 export const runModule = async (
   module: CorpusModule,
+  order: EventOrder = "outside first",
 ): Promise<ModuleResult> => {
   // The pattern the module exports as its default, written in place or
   // by name, and otherwise the first one it exports by name.
@@ -229,18 +255,13 @@ export const runModule = async (
   }
   // One event for each handler whose stream the result holds. A handler
   // bound in an element body gets its event at one element of each
-  // enclosing collection, which the harness chooses.
-  // The handlers bound in no element body and no pattern compiled in get
-  // theirs first, in the order of the plan, so that what their runs find
-  // stored does not depend on the events of the others.
-  const events = [false, true].flatMap((inside) =>
-    (plan.bindings ?? []).flatMap((binding, index) =>
-      binding.handler?.body !== undefined && binding.result !== undefined &&
-        ((binding.within ?? []).length > 0) === inside
-        ? [{ binding: index, event: generateEvent(plan, schemas, index) }]
-        : []
-    )
-  );
+  // enclosing collection, which the harness chooses. What a handler's run
+  // finds stored is what the events before it left, so the rows of a run
+  // are those of one order of the events (`EventOrder`).
+  const events = eventOrder(plan, order).map((binding) => ({
+    binding,
+    event: generateEvent(plan, schemas, binding),
+  }));
   const handlers = (plan.bindings ?? []).flatMap((binding, index) => {
     if (binding.handler?.body === undefined) return [];
     const within = withinOf(binding.within);
@@ -389,7 +410,11 @@ const readResults = async (file: string): Promise<ModuleResult[]> => {
   return finished;
 };
 
-const run = async (file: string, only: string | undefined) => {
+const run = async (
+  file: string,
+  only: string | undefined,
+  order: EventOrder,
+) => {
   const modules = (await corpusPlans()).filter((module) =>
     module.patterns.length > 0 &&
     module.patterns.every((pattern) => pattern.unsupported.length === 0) &&
@@ -411,7 +436,7 @@ const run = async (file: string, only: string | undefined) => {
       { append: true },
     );
     console.error(module.module);
-    const result = await runModule(module);
+    const result = await runModule(module, order);
     await Deno.writeTextFile(file, `${JSON.stringify(result)}\n`, {
       append: true,
     });
@@ -765,11 +790,17 @@ const report = async (file: string) => {
 };
 
 if (import.meta.main) {
-  const [command, file, only] = Deno.args;
-  if (command === "run" && file !== undefined) await run(file, only);
-  else if (command === "report" && file !== undefined) await report(file);
+  const planOrder = Deno.args.includes("--plan-order");
+  const [command, file, only] = Deno.args.filter((argument) =>
+    argument !== "--plan-order"
+  );
+  if (command === "run" && file !== undefined) {
+    await run(file, only, planOrder ? "plan" : "outside first");
+  } else if (command === "report" && file !== undefined) await report(file);
   else {
-    console.error("usage: corpus.ts run|report <results.jsonl> [module text]");
+    console.error(
+      "usage: corpus.ts run|report <results.jsonl> [module text] [--plan-order]",
+    );
     Deno.exit(2);
   }
 }

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type ResultRow, tally } from "../corpus.ts";
+import { eventOrder, type ResultRow, tally } from "../corpus.ts";
 
 const row = (fields: Partial<ResultRow>): ResultRow => ({
   kind: "output",
@@ -82,5 +82,33 @@ describe("tally", () => {
     expect(tally(rows, "write", "site").withAtom.tighter).toBe(1);
     expect(tally(rows, "write", "element").compared).toBe(2);
     expect(tally(rows, "write", "element").withAtom.looser).toBe(1);
+  });
+});
+
+describe("eventOrder", () => {
+  const plan = {
+    slots: [],
+    collections: [],
+    outputs: [],
+    bindings: [
+      { name: "outer", handler: { body: 0 }, result: [["a"]] },
+      {
+        name: "inner",
+        handler: { body: 1 },
+        result: [["b"]],
+        within: [{ element: 0 }],
+      },
+      { name: "no path", handler: { body: 2 } },
+      { name: "later", handler: { body: 3 }, result: [["c"]] },
+      { name: "no handler", result: [["d"]] },
+    ],
+  };
+
+  it("has the bindings with no `within` step first, each group in the order of the plan", () => {
+    expect(eventOrder(plan, "outside first")).toEqual([0, 3, 1]);
+  });
+
+  it("has the bindings in the order of the plan", () => {
+    expect(eventOrder(plan, "plan")).toEqual([0, 1, 3]);
   });
 });
