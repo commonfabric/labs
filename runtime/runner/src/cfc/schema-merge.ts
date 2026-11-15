@@ -237,6 +237,7 @@ const mergeSetLikeIfcArray = (
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
   writePolicyRelease: WritePolicyRelease | undefined,
+  storedSide: "existing" | "candidate" | undefined,
 ): unknown => {
   if (existing === undefined) {
     return candidate;
@@ -339,13 +340,25 @@ const mergeSetLikeIfcArray = (
       return mergeArraySet(candidateArray);
     }
     case "writePolicyAnyOf":
-      return mergeWritePolicyAnyOf(
-        existing,
-        candidate,
-        path,
-        adoptsStamp,
-        writePolicyRelease,
-      );
+      // The stored list goes first, so that an alternative it holds and the
+      // other side omits is kept rather than counted as added.
+      return storedSide === "candidate"
+        ? mergeWritePolicyAnyOf(
+          candidate,
+          existing,
+          path,
+          adoptsStamp,
+          writePolicyRelease,
+          true,
+        )
+        : mergeWritePolicyAnyOf(
+          existing,
+          candidate,
+          path,
+          adoptsStamp,
+          writePolicyRelease,
+          storedSide === "existing",
+        );
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -421,12 +434,15 @@ const mergedStoredAlternative = (
 /**
  * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
  * lists, as `mergeWritePolicy` in §8.15.13 states it. The list is a set
- * (§8.15.6.1): every stored alternative is kept, matched to a candidate's
- * alternative by content rather than by its place in the list, and stays as
- * stored, in stored order. A candidate's alternative matching none of them is
- * appended after them, and only in a release, and only where
- * {@link writePolicyAlternativeAdmissible} admits it; anything else refuses
- * the whole merge.
+ * (§8.15.6.1): every alternative of `existing` is kept, matched to a
+ * candidate's alternative by content rather than by its place in the list,
+ * and stays as it was, in its order. Where `existingIsStored`, `existing` is
+ * the policy the document stores, and a stored alternative the candidate does
+ * not list is kept as stored; otherwise neither list is stored, and a
+ * candidate lacking an alternative of `existing` refuses the merge. A
+ * candidate's alternative matching none of them is appended after them, and
+ * only in a release, and only where {@link writePolicyAlternativeAdmissible}
+ * admits it; anything else refuses the whole merge.
  */
 const mergeWritePolicyAnyOf = (
   existing: unknown,
@@ -434,6 +450,7 @@ const mergeWritePolicyAnyOf = (
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
   release: WritePolicyRelease | undefined,
+  existingIsStored: boolean,
 ): unknown => {
   const unstable = (why: string) =>
     new CfcEnvelopeStabilityError(
@@ -442,25 +459,19 @@ const mergeWritePolicyAnyOf = (
   if (!Array.isArray(existing) || !Array.isArray(candidate)) {
     throw unstable("one side is not a list of alternatives");
   }
-  // TODO(danfuzz): A schema omitting a stored alternative is refused, in every
-  // write, though the merged envelope could keep it: here as a drop, and
-  // below as an addition outside a release where the stored claims are the
-  // side merged in (the verification overlay in `prepare.ts`). That refuses a
-  // FabriChat room's deleting or obliterating a message whose stored envelope
-  // lists `commitDelete` and `commitObliterate` among its reactions' writers,
-  // which the room's `SentReaction` does not list, and its `openWindow` over
-  // such messages. Keep the stored alternative instead once a ruling lets a
-  // later schema omit one.
-  //
   // Each stored alternative is matched by content, wherever the candidate
   // lists it, which accepts a candidate listing them in another order: the
-  // list is a set ("Order carries no meaning", §8.15.6.1).
+  // list is a set ("Order carries no meaning", §8.15.6.1). One the candidate
+  // omits is kept as stored, so that the merged policy holds every writer the
+  // document stores, as stored, and a program that retires a writer can still
+  // write the documents that list it.
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const kept = existing.map((policy) => {
     for (const other of candidate) {
       const merged = mergedStoredAlternative(policy, other, adoptsStamp);
       if (merged !== undefined) return merged;
     }
+    if (existingIsStored) return policy;
     throw unstable("the candidate drops a stored alternative");
   });
   const added = candidate.filter((other) =>
@@ -603,6 +614,7 @@ const mergeIfc = (
   path: string,
   adoptsStamp?: (claim: unknown) => boolean,
   writePolicyRelease?: WritePolicyRelease,
+  storedSide?: "existing" | "candidate",
 ): JSONSchemaObj["ifc"] => {
   if (existing === undefined) {
     return candidate;
@@ -623,6 +635,7 @@ const mergeIfc = (
       path,
       adoptsStamp,
       writePolicyRelease,
+      storedSide,
     );
     if (value !== undefined) merged[key] = value;
   }
@@ -811,6 +824,15 @@ export interface MergeCfcSchemaEnvelopeOptions {
    * merge is no release's, and appends none.
    */
   writePolicyRelease?: WritePolicyRelease;
+
+  /**
+   * Which side of the merge is the envelope the document stores, where one of
+   * them is. A write policy that the other side lists only in part keeps the
+   * stored alternatives it omits (see `mergeWritePolicyAnyOf()`). Absent,
+   * neither side is stored, and a write policy that the candidate lists only
+   * in part refuses the merge.
+   */
+  storedSide?: "existing" | "candidate";
 }
 
 const generatedOutputCovers = (
@@ -1350,6 +1372,7 @@ const mergeSchemaNode = (
       path,
       options.adoptsStamp,
       options.writePolicyRelease,
+      options.storedSide,
     );
   const required = mergeRequired(
     left.required,

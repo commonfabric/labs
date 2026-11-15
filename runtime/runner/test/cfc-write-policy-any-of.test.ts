@@ -1,9 +1,15 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { droppedStoredClaim } from "../src/cfc/claim-preservation.ts";
 import { CfcEnvelopeStabilityError } from "../src/cfc/envelope-stability-reason.ts";
+import {
+  loadStoredCfcEnvelope,
+  storedCfcEnvelopeMergeIssue,
+} from "../src/cfc/prepare.ts";
+import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
 import {
   mergeCfcSchemaEnvelopes,
   type WritePolicyRelease,
@@ -299,6 +305,41 @@ async function withFixture(
     await body(f);
   } finally {
     await f.dispose();
+  }
+}
+
+/**
+ * The alternatives of the write policy the document `id` stores at the logical
+ * path `path`, each as its writer and the action its contract names, joined by
+ * a slash, in stored order.
+ */
+function storedAlternatives(
+  runtime: Runtime,
+  id = "protected-value",
+  path: readonly string[] = [],
+): string[] {
+  const tx = runtime.edit();
+  try {
+    const stored = loadStoredCfcEnvelope(
+      tx,
+      runtime.getCell(signer.did(), id).getAsNormalizedFullLink(),
+    );
+    if (stored.status !== "loaded") {
+      throw new Error(`No stored envelope: ${stored.status}`);
+    }
+    const entry = cfcSchemaEntries(stored.schema).find((entry) =>
+      entry.path.join("/") === path.join("/")
+    );
+    const alternatives =
+      (entry?.schema as JSONSchemaObj | undefined)?.ifc?.writePolicyAnyOf ?? [];
+    return (alternatives as Alternative[]).map((alternative) =>
+      `${
+        (alternative.writeAuthorizedBy.__ctWriterIdentityOf.path as string[])
+          .join(".")
+      }/${(alternative.uiContract as { action?: string })?.action}`
+    );
+  } finally {
+    tx.abort("stored policy read");
   }
 }
 
@@ -790,6 +831,296 @@ describe("cfc-write-policy-any-of", () => {
     });
   });
 
+  describe("a write whose schema omits a stored alternative", () => {
+    // The document stores `SCHEMA`'s two alternatives, `send` through `Send`
+    // and `edit` through `Edit`, and each case writes under a schema that
+    // lists fewer. The merge keeps every stored alternative, so none of these
+    // writes can widen who may write; each case pins what commits and what
+    // the document then stores.
+
+    /** `send` through `Send` alone, which retires `edit`. */
+    const NARROWED: JSONSchemaObj = {
+      type: "string",
+      ifc: { writePolicyAnyOf: [policy("send", "Send")] },
+    };
+
+    it("commits a listed writer's write, and stores both alternatives", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(
+          await f.write("send", "Send", { schema: NARROWED, value: "again" }),
+        ).toBeUndefined();
+        expect(storedAlternatives(f.runtime)).toEqual([
+          "send/Send",
+          "edit/Edit",
+        ]);
+      });
+    });
+
+    it("leaves the omitted writer able to write, under a schema listing it", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        expect(
+          await f.write("send", "Send", { schema: NARROWED, value: "again" }),
+        ).toBeUndefined();
+
+        expect(await f.write("edit", "Edit", { value: "edited" }))
+          .toBeUndefined();
+      });
+    });
+
+    it("refuses the omitted writer's write under the schema omitting it", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(await f.write("edit", "Edit", { schema: NARROWED })).toContain(
+          "writePolicyAnyOf failed at /",
+        );
+      });
+    });
+
+    it("refuses a write listing an alternative the document does not store", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(
+          await f.write("send", "Send", {
+            schema: {
+              type: "string",
+              ifc: {
+                writePolicyAnyOf: [
+                  policy("send", "Send"),
+                  policy("tidy", "Send"),
+                ],
+              },
+            },
+          }),
+        ).toContain("the candidate adds an alternative outside a release");
+        expect(storedAlternatives(f.runtime)).toEqual([
+          "send/Send",
+          "edit/Edit",
+        ]);
+      });
+    });
+
+    it("refuses a write moving a listed writer onto the omitted writer's action", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(
+          await f.write("send", "Edit", {
+            schema: {
+              type: "string",
+              ifc: { writePolicyAnyOf: [policy("send", "Edit")] },
+            },
+          }),
+        ).toContain("the candidate adds an alternative outside a release");
+      });
+    });
+
+    it("refuses another module's write under the schema omitting it", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(
+          await f.write("send", "Send", {
+            schema: NARROWED,
+            module: "other-module",
+          }),
+        ).toContain("writePolicyAnyOf failed at /");
+      });
+    });
+
+    it("refuses a write re-listing the omitted alternative over a document created under the schema omitting it", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send", { schema: NARROWED }))
+          .toBeUndefined();
+        expect(storedAlternatives(f.runtime)).toEqual(["send/Send"]);
+
+        expect(await f.write("edit", "Edit", { value: "edited" })).toContain(
+          "the candidate adds an alternative outside a release",
+        );
+      });
+    });
+
+    it("refuses a schema listing no alternatives", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(
+          await f.write("send", "Send", {
+            schema: { type: "string", ifc: { writePolicyAnyOf: [] } },
+          }),
+        ).toContain("malformed writePolicyAnyOf at /");
+      });
+    });
+
+    describe("through links", () => {
+      // A strict runtime with its own store. A document holding links
+      // stores the policy of what they name beneath them, and a document a
+      // link names may carry a confidentiality whose evidence the link's
+      // write consults; each is a document whose stored policy a later
+      // schema omits an alternative of.
+
+      /** The schema of one message, whose tags `alternatives` may write. */
+      const message = (alternatives: readonly unknown[]): JSONSchemaObj => ({
+        type: "object",
+        properties: {
+          body: { type: "string" },
+          tags: {
+            type: "array",
+            items: { type: "string", ifc: { writePolicyAnyOf: alternatives } },
+          },
+        },
+      });
+
+      /** A confidentiality naming whoever creates the document. */
+      const CREATOR_ONLY = [{
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: { __ctCurrentPrincipal: true },
+      }];
+
+      /**
+       * The schema of a list of `message(alternatives)` documents. Its label
+       * is what makes the list store an envelope of its own.
+       */
+      const list = (alternatives: readonly unknown[]): JSONSchemaObj => ({
+        type: "object",
+        properties: {
+          messages: { type: "array", items: message(alternatives) },
+        },
+        ifc: { confidentiality: CREATOR_ONLY },
+      });
+
+      /** Runs `body` against a strict runtime, disposing of it after. */
+      const withStrictRuntime = async (
+        body: (runtime: Runtime) => Promise<void>,
+      ) => {
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager,
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+          cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
+          trustSnapshotProvider: () => ({
+            id: signer.did(),
+            actingPrincipal: signer.did(),
+          }),
+        });
+        try {
+          await body(runtime);
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+        }
+      };
+
+      const BOTH = SCHEMA.ifc!.writePolicyAnyOf!;
+      const SEND_ONLY = [policy("send", "Send")];
+
+      it("commits a list's link write under a schema omitting one, and stores both alternatives beneath the links", async () => {
+        await withStrictRuntime(async (runtime) => {
+          const seed = runtime.edit();
+          const first = runtime.getCell(
+            signer.did(),
+            "message-1",
+            message(BOTH),
+            seed,
+          );
+          first.set({ body: "first" });
+          runtime.getCell(signer.did(), "message-list", list(BOTH), seed)
+            .set({ messages: [first] });
+          runtime.prepareTxForCommit(seed);
+          expect((await seed.commit().settled).error).toBeUndefined();
+
+          const later = runtime.edit();
+          const second = runtime.getCell(
+            signer.did(),
+            "message-2",
+            message(SEND_ONLY),
+            later,
+          );
+          second.set({ body: "second" });
+          runtime.getCell(signer.did(), "message-list", list(SEND_ONLY), later)
+            .set({ messages: [first.withTx(later), second] });
+          runtime.prepareTxForCommit(later);
+
+          expect((await later.commit().settled).error?.message).toBeUndefined();
+          expect(
+            storedAlternatives(runtime, "message-list", [
+              "messages",
+              "*",
+              "tags",
+              "*",
+            ]),
+          ).toEqual(["send/Send", "edit/Edit"]);
+        });
+      });
+
+      it("commits a held reference to a document written under a schema omitting one", async () => {
+        await withStrictRuntime(async (runtime) => {
+          const notes = (alternatives: readonly unknown[]): JSONSchemaObj => ({
+            type: "object",
+            properties: {
+              notes: { type: "array", items: { type: "string" } },
+              tag: {
+                type: "string",
+                ifc: { writePolicyAnyOf: alternatives },
+              },
+            },
+            ifc: { confidentiality: CREATOR_ONLY },
+          });
+          const holder: JSONSchemaObj = {
+            type: "object",
+            properties: { notes: { asCell: ["readonly"] } },
+          };
+          const seed = runtime.edit();
+          runtime.getCell(signer.did(), "held-notes", notes(BOTH), seed)
+            .set({ notes: ["first"] });
+          runtime.prepareTxForCommit(seed);
+          expect((await seed.commit().settled).error).toBeUndefined();
+
+          const later = runtime.edit();
+          const held = runtime.getCell(
+            signer.did(),
+            "held-notes",
+            notes(SEND_ONLY),
+            later,
+          );
+          held.set({ notes: ["first", "second"] });
+          runtime.getCell(signer.did(), "notes-holder", holder, later)
+            .set({ notes: held });
+          runtime.prepareTxForCommit(later);
+
+          expect((await later.commit().settled).error?.message).toBeUndefined();
+          expect(storedAlternatives(runtime, "held-notes", ["tag"])).toEqual([
+            "send/Send",
+            "edit/Edit",
+          ]);
+        });
+      });
+    });
+
+    it("commits a write under a schema declaring no policy at all, and stores both alternatives", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+
+        expect(
+          await f.write("send", "Send", {
+            schema: { type: "string" },
+            value: "plain",
+          }),
+        ).toBeUndefined();
+        expect(storedAlternatives(f.runtime)).toEqual([
+          "send/Send",
+          "edit/Edit",
+        ]);
+      });
+    });
+  });
+
   describe("merging", () => {
     it("throws when one side names a lone writer and the other a list", () => {
       expect(() =>
@@ -874,6 +1205,59 @@ describe("cfc-write-policy-any-of", () => {
         })
       ).toThrow("writePolicyAnyOf must remain stable");
     });
+
+    describe("with the stored side named", () => {
+      // `SCHEMA` is the stored side, against `narrowed`, which lists one of
+      // its two alternatives.
+
+      const narrowed: JSONSchemaObj = {
+        type: "string",
+        ifc: { writePolicyAnyOf: [policy("send", "Send")] },
+      };
+
+      it("returns the stored alternatives, as stored, for a candidate omitting one", () => {
+        const merged = mergeCfcSchemaEnvelopes(SCHEMA, narrowed, {
+          storedSide: "existing",
+        }) as JSONSchemaObj;
+
+        expect(merged.ifc?.writePolicyAnyOf).toEqual(
+          SCHEMA.ifc!.writePolicyAnyOf,
+        );
+      });
+
+      it("returns the stored alternatives, as stored, where the stored side is the candidate", () => {
+        const merged = mergeCfcSchemaEnvelopes(narrowed, SCHEMA, {
+          storedSide: "candidate",
+        }) as JSONSchemaObj;
+
+        expect(merged.ifc?.writePolicyAnyOf).toEqual(
+          SCHEMA.ifc!.writePolicyAnyOf,
+        );
+      });
+
+      it("throws where the side that is not stored adds an alternative", () => {
+        const widened: JSONSchemaObj = {
+          type: "string",
+          ifc: {
+            writePolicyAnyOf: [
+              ...SCHEMA.ifc!.writePolicyAnyOf!,
+              policy("tidy", "Send"),
+            ],
+          },
+        };
+
+        expect(() =>
+          mergeCfcSchemaEnvelopes(SCHEMA, widened, { storedSide: "existing" })
+        ).toThrow("the candidate adds an alternative outside a release");
+        expect(() =>
+          mergeCfcSchemaEnvelopes(widened, SCHEMA, { storedSide: "candidate" })
+        ).toThrow("the candidate adds an alternative outside a release");
+      });
+
+      it("returns no issue from the dry run of a write omitting one", () => {
+        expect(storedCfcEnvelopeMergeIssue(SCHEMA, narrowed)).toBeUndefined();
+      });
+    });
   });
 
   describe("a write appending an alternative under a release marker", () => {
@@ -950,6 +1334,116 @@ describe("cfc-write-policy-any-of", () => {
         expect(await f.write("reply", "Send", { value: "again" })).toContain(
           "writePolicyAnyOf",
         );
+      });
+    });
+
+    describe("a release omitting a stored alternative", () => {
+      // The release's schema leaves out `edit`. Each case checks what the
+      // document stores afterwards, and that `edit` writes exactly as it
+      // could before the release: through its own action, from its own
+      // module, under a schema listing it.
+
+      /** The release's schema: `send`, and `reply` appended in place of `edit`. */
+      const RENAMED: JSONSchemaObj = {
+        type: "string",
+        ifc: {
+          writePolicyAnyOf: [policy("send", "Send"), policy("reply", "Send")],
+        },
+      };
+
+      /** Every alternative the document stores after `RENAMED`'s release. */
+      const ALL: JSONSchemaObj = {
+        type: "string",
+        ifc: {
+          writePolicyAnyOf: [
+            ...SCHEMA.ifc!.writePolicyAnyOf!,
+            policy("reply", "Send"),
+          ],
+        },
+      };
+
+      /** Writes `send`'s value under `schema` in a release, returning its error. */
+      const released = async (
+        f: ReturnType<typeof fixture>,
+        schema: JSONSchemaObj,
+      ) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema, value: "released" },
+          (tx) => markRelease(f.runtime, tx, true),
+        );
+        return error;
+      };
+
+      it("stores the stored alternatives, as stored, and the appended one after them", async () => {
+        await withFixture(async (f) => {
+          expect(await released(f, RENAMED)).toBeUndefined();
+
+          expect(storedAlternatives(f.runtime)).toEqual([
+            "send/Send",
+            "edit/Edit",
+            "reply/Send",
+          ]);
+        });
+      });
+
+      it("commits the appended writer's write through its own action", async () => {
+        await withFixture(async (f) => {
+          expect(await released(f, RENAMED)).toBeUndefined();
+
+          expect(await f.write("reply", "Send", { schema: RENAMED }))
+            .toBeUndefined();
+          expect(await f.write("reply", "Edit", { schema: ALL })).toContain(
+            "writePolicyAnyOf failed at /",
+          );
+        });
+      });
+
+      it("commits the omitted writer's write through its own action, from its own module", async () => {
+        await withFixture(async (f) => {
+          expect(await released(f, RENAMED)).toBeUndefined();
+
+          expect(await f.write("edit", "Edit", { schema: ALL }))
+            .toBeUndefined();
+        });
+      });
+
+      it("refuses the omitted writer's write through another action, or none, or from another module", async () => {
+        await withFixture(async (f) => {
+          expect(await released(f, RENAMED)).toBeUndefined();
+
+          expect(await f.write("edit", "Send", { schema: ALL })).toContain(
+            "writePolicyAnyOf failed at /",
+          );
+          expect(await f.write("edit", undefined, { schema: ALL })).toContain(
+            "writePolicyAnyOf failed at /",
+          );
+          expect(
+            await f.write("edit", "Edit", {
+              schema: ALL,
+              module: "other-module",
+            }),
+          ).toContain("writePolicyAnyOf failed at /");
+        });
+      });
+
+      it("stores the stored alternatives, as stored, for a release that only omits one", async () => {
+        await withFixture(async (f) => {
+          expect(
+            await released(f, {
+              type: "string",
+              ifc: { writePolicyAnyOf: [policy("send", "Send")] },
+            }),
+          ).toBeUndefined();
+
+          expect(storedAlternatives(f.runtime)).toEqual([
+            "send/Send",
+            "edit/Edit",
+          ]);
+          expect(await f.write("edit", "Edit")).toBeUndefined();
+        });
       });
     });
 

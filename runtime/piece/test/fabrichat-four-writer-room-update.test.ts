@@ -16,8 +16,9 @@
  * result keeps its writer claim for the session's windows, which this tree's
  * room still holds. Each case checks the room after that release: what it
  * stores, that its writers send, edit and react, on messages the earlier
- * program stored as on new ones, and which acts on those earlier messages
- * are still refused.
+ * program stored as on new ones, and that it deletes, obliterates and windows
+ * those earlier messages, whose stored write policies keep writers this
+ * tree's room no longer lists.
  */
 
 import { expect } from "@std/expect";
@@ -510,15 +511,21 @@ describe("fabrichat-four-writer-room-update", () => {
   });
 
   describe("acts on a message stored before the release", () => {
-    // TODO(danfuzz): These pin refusals that are wrong for the room (see the
-    // `TODO` in `mergeWritePolicyAnyOf()`). Each message the earlier program
-    // stored holds, beneath `/reactions/*`, the write policy its
-    // `SentReaction` named, with `commitDelete` and `commitObliterate` among
-    // its writers, and this tree's `SentReaction` names neither. A deletion or
-    // an obliteration writes the whole message, and a window names the
-    // messages, and the merge refuses a schema that omits a stored
-    // alternative, in every write. Flip these when a ruling lets a later
-    // schema omit an alternative the merged envelope keeps.
+    // Each message the earlier program stored holds, beneath `/reactions/*`,
+    // the write policy its `SentReaction` named, with `commitDelete` and
+    // `commitObliterate` among its writers, and this tree's `SentReaction`
+    // names neither. A deletion or an obliteration writes the whole message,
+    // and a window names the messages, so each of these writes a document
+    // whose stored policy lists writers this tree's schema omits. The merge
+    // keeps them as stored.
+
+    /** The writers of the room's reactions before the release, as stored. */
+    const STORED_REACTION_WRITERS = [
+      "commitSendReaction",
+      "commitDeleteReaction",
+      "commitDelete",
+      "commitObliterate",
+    ];
 
     /**
      * The refusal messages logged while `act` runs, of those naming a write
@@ -530,11 +537,11 @@ describe("fabrichat-four-writer-room-update", () => {
       return logged.calls.flatMap((call) =>
         call.args.map((arg) =>
           typeof arg === "string" ? arg : Deno.inspect(arg, { depth: 4 })
-        ).filter((text) => text.includes("writePolicyAnyOf must remain stable"))
+        ).filter((text) => text.includes("writePolicyAnyOf"))
       );
     };
 
-    it("refuses deleting it, over the reactions' stored write policy", async () => {
+    it("deletes it, keeping the writers its reactions' policy stores", async () => {
       const [, second] = await storedMessages();
       const refusals = await refusalsDuring(() =>
         send(
@@ -543,14 +550,30 @@ describe("fabrichat-four-writer-room-update", () => {
         )
       );
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at /reactions/*: the candidate " +
-          "drops a stored alternative",
-      );
-      expect(await second.key("body").pull()).toBe("Second");
+      expect(refusals).toEqual([]);
+      expect(await second.key("body").pull()).toEqual({ deleted: true });
+      expect(
+        storedPolicy(runtime, second, "reactions/*").map(({ writer }) =>
+          writer
+        ),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
 
-    it("refuses obliterating it, over the reactions' stored write policy", async () => {
+    it("deletes one holding reactions", async () => {
+      const [first] = await storedMessages();
+      expect(await reactionsOn(first)).not.toEqual([]);
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: first }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+
+      expect(refusals).toEqual([]);
+      expect(await first.key("body").pull()).toEqual({ deleted: true });
+    });
+
+    it("obliterates it, keeping the writers its reactions' policy stores", async () => {
       const [, , third] = await storedMessages();
       const refusals = await refusalsDuring(() =>
         send(
@@ -563,11 +586,13 @@ describe("fabrichat-four-writer-room-update", () => {
         )
       );
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at /reactions/*: the candidate " +
-          "drops a stored alternative",
-      );
-      expect(await third.key("body").pull()).toBe("Third");
+      expect(refusals).toEqual([]);
+      expect(await third.key("body").pull()).toEqual({ deleted: true });
+      expect((third.getRaw() as { authorProfile?: unknown }).authorProfile)
+        .toBeUndefined();
+      expect(
+        storedPolicy(runtime, third, "reactions/*").map(({ writer }) => writer),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
 
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
@@ -588,7 +613,7 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(refusals).toEqual([]);
     });
 
-    it("refuses this tree's `openWindow` setting the window the earlier program wrote, over the messages' reactions' stored write policy", async () => {
+    it("sets the window the earlier program wrote through this tree's `openWindow`, keeping the writers the window stores for its messages' reactions", async () => {
       const refusals = await refusalsDuring(async () => {
         const tx = runtime.edit();
         room.withTx(tx).key("messages").key("openWindow").send({
@@ -602,15 +627,16 @@ describe("fabrichat-four-writer-room-update", () => {
         await runtime.idle();
       });
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at " +
-          "/main/messages/*/reactions/*: the candidate adds an alternative " +
-          "outside a release",
-      );
-      const windows = await room.key("messages").key("windows").pull() as
-        | Record<string, { requestId?: string }>
-        | undefined;
-      expect(windows?.main?.requestId).toBe("w1");
+      expect(refusals).toEqual([]);
+      const windows = room.key("messages").key("windows");
+      expect(await windows.key("main").key("requestId").pull()).toBe("w2");
+      expect(
+        storedPolicy(
+          runtime,
+          windows.resolveAsCell(),
+          "main/messages/*/reactions/*",
+        ).map(({ writer }) => writer),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
   });
   describe("with the room's own space labeling its argument", () => {
