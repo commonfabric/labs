@@ -387,16 +387,21 @@ from its transaction's flow join, as its write of the root would, and drops
 the derived value entries below the root as that write would. A setup that is
 not asking restates no unchanged result, and one the runtime starts on its
 own, to repair a piece, to adopt a newer release of the source a piece
-follows when it is opened, or to carry on with a pattern an earlier
+follows, on open or while it runs, or to carry on with a pattern an earlier
 transaction chose (`runtimeStarted` in `runner.ts`), takes no value entry, so
 both leave it as stored. A runtime-started setup handed a transaction still
 re-mints an unchanged wiring's membership, which is what specs#98's
-`restateResultWiring` requires of every restating setup. Whether a release
-adopted on open is an asking setup is a question put on specs#98; until it
-is answered, the runtime treats it as not asking. So a hidden view heals at an
-update a caller asks for, whether or not the update touches the view, and not
-at a release adopted on open that leaves the view unchanged; any update that
-rewrites the view replaces its value entry as a write does. The restatement
+`restateResultWiring` requires of every restating setup. Whether such an
+adopted release is an asking setup is a question on specs#98
+([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6897565858));
+until it is answered, the runtime treats it as not asking. So a hidden view
+heals at an update a caller asks for, whether or not the update touches the
+view, except where the update leaves the view's sub-pattern on the pattern it
+had: that setup's read of the name it would carry over takes the stamp again,
+and healing it needs a ruling that such a read of an absent name decides
+nothing written. It does not heal at an adopted release that leaves the view
+unchanged; any update that rewrites the view replaces its value entry as a
+write does. The restatement
 mints no existence entry, and leaves the existence entry as it is. It changes
 what is stored at strict, with no default-off dial, and it is not
 fail-closed: asked, it lowers a stale value stamp, and it can raise one from a

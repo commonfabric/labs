@@ -821,7 +821,8 @@ request's `SPEC-PENDING` marker.
   pattern. Whether that re-mint should also be limited to asking setups is a
   question for the specification, not a labs deviation. Those setups
   pass `runtimeStarted` (the source reconciler's adoption of a newer release
-  when a piece is opened, the piece controller's re-stage of a stale root
+  of the source a piece follows, on open or while it runs, the piece
+  controller's re-stage of a stale root
   setup, its cold-start setup repair and its roll-forward, `wish.ts`'s
   sidecar run in a continuation's transaction, compile-and-run's
   instantiation and the LLM dialog's tool-call instantiation), which
@@ -864,14 +865,15 @@ request's `SPEC-PENDING` marker.
   re-derived at a restatement and none of its membership, so a setup that
   leaves it unchanged keeps the stored membership: an over-taint where an
   earlier attempt's stamp is wider than the setup's own.
-- A release the source reconciler adopts when a piece is opened is
+- A release the source reconciler adopts, on open or while a piece runs, is
   runtime-started, so it leaves a stored value entry in place, pending
   specs#98's answer on whether such an adoption is an asking setup. A hidden
   view therefore heals at an update a caller asks for (`cf piece setsrc`, a
   FUSE source write, a bulk retarget, the harness's source tool, the served
-  `setsrc` verb), whether or not the update touches the view, and not at a
-  release adopted on open that leaves the view unchanged. An update of either
-  kind that rewrites the view replaces its value entry, as a write does.
+  `setsrc` verb), whether or not the update touches the view, except the case
+  the next bullet describes, and not at an adopted release that leaves the
+  view unchanged. An update of either kind that rewrites the view replaces its
+  value entry, as a write does.
 - A setup of the pattern a result was set up with, other than one that
   rebuilds the stored setup state (`reapplyStoredSetup`), reads the name it
   would carry over from the stored result, whether or not one is stored, and

@@ -89,6 +89,20 @@ function sourceWithNote(release: string, note = "fixed"): string {
   ].join("\n");
 }
 
+/**
+ * The tracked pattern with a sub-pattern whose result holds data beside its
+ * references, as a view does; `release` changes only a comment.
+ */
+function sourceWithNestedNote(release: string): string {
+  return [
+    "import { computed, pattern } from 'commonfabric';",
+    `const View = pattern<Record<string, never>, { marker: string; note: string }>(() => ({ marker: computed(() => "v1"), note: "fixed" }));`,
+    `export const ${SYMBOL} = pattern<Record<string, never>, { view: { marker: string; note: string } }>(() => ({ view: View({}) }));`,
+    `// ${release}`,
+    "",
+  ].join("\n");
+}
+
 function sourceWithRequiredInput(marker: string): string {
   return [
     "import { computed, pattern } from 'commonfabric';",
@@ -548,24 +562,44 @@ describe("piece source reconciliation", () => {
       // chose the release.
 
       /**
-       * Sets up v1 of the noted pattern, plants a derived value stamp at its
-       * result's root, adopts `next` as the newer release, and returns the
-       * root's derived value confidentiality afterward.
+       * Sets up `first` (v1 of the noted pattern unless given), plants a
+       * derived value stamp at the root of its result, or of its
+       * sub-pattern's result with `nested`, starts the piece with `running`,
+       * adopts `next` as the newer release, and returns that root's derived
+       * value confidentiality afterward.
        */
-      const stampAfterAdopting = async (next: string): Promise<unknown[]> => {
+      const stampAfterAdopting = async (
+        next: string,
+        options: { first?: string; nested?: boolean; running?: boolean } = {},
+      ): Promise<unknown[]> => {
         const nextIdentity = await identityFor(next);
         createRuntime(servingFetch(() => nextIdentity, () => next));
         const space = signer.did();
         const initial = await runtime.patternManager.compilePattern(
-          parentProgram(sourceWithNote("v1")),
+          parentProgram(options.first ?? sourceWithNote("v1")),
           { space },
         );
-        const piece = runtime.getCell<{ note?: string }>(
+        const piece = runtime.getCell<{ note?: string; view?: unknown }>(
           space,
           `reconcile-${crypto.randomUUID()}`,
         );
         await runtime.setup(undefined, initial, {}, piece);
-        const link = piece.getAsNormalizedFullLink();
+        if (options.running) {
+          expect(await runtime.start(piece)).toBe(true);
+          await runtime.idle();
+        }
+        const link = options.nested
+          ? (() => {
+            const tx = runtime.edit();
+            try {
+              const { space, id, scope } = piece.withTx(tx).key("view")
+                .resolveAsCell().getAsNormalizedFullLink();
+              return { space, id, scope, path: [] };
+            } finally {
+              tx.abort("address read");
+            }
+          })()
+          : piece.getAsNormalizedFullLink();
         const document: IMemorySpaceAddress = {
           space: link.space,
           scope: link.scope,
@@ -600,6 +634,7 @@ describe("piece source reconciliation", () => {
           identity: nextIdentity,
           symbol: SYMBOL,
         });
+        await runtime.idle();
         const tx = runtime.edit();
         try {
           return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
@@ -621,6 +656,27 @@ describe("piece source reconciliation", () => {
       it("comes off where the newer release rewrites the result", async () => {
         expect(await stampAfterAdopting(sourceWithNote("v2", "changed")))
           .toEqual([]);
+      });
+
+      it("stays where a running piece swaps to a newer release that leaves the result unchanged", async () => {
+        // The swap sets up in a transaction of its own, carrying the
+        // adoption's decision, and with it that the runtime started it.
+
+        expect(
+          await stampAfterAdopting(sourceWithNote("v2"), { running: true }),
+        ).toEqual(["bob-secret"]);
+      });
+
+      it("stays on a sub-pattern's result the newer release leaves unchanged", async () => {
+        // A sub-pattern set up in the adoption's transaction takes its mark,
+        // so a view the update hid stays hidden there.
+
+        expect(
+          await stampAfterAdopting(sourceWithNestedNote("v2"), {
+            first: sourceWithNestedNote("v1"),
+            nested: true,
+          }),
+        ).toEqual(["bob-secret"]);
       });
     });
 
