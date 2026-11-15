@@ -948,3 +948,103 @@ kernel manifest carries no row for
   only through a candidate that still lists the writer's alternative, and an
   ordinary write of a document that stores fewer alternatives than the program
   lists is refused as an addition outside a release.
+
+## 11. Writer delegations across a source update (§8.11.3)
+
+A source update lets the successor pattern's modules exercise the writer
+authority of the modules they replace. The runtime keeps that relation in a
+registry of module delegations (`ModuleDelegationRegistry` in
+`module-delegations.ts`), which the commit site reads (`moduleSucceeds` in
+`cfc/prepare.ts`).
+
+**What the runtime does.** The transition, `applyPieceSourceTransition` in
+`runner.ts`, reads the piece's data and writes no cache document. It records
+what it grants in the piece's `pieceSourceDelegations` meta member, through the
+runtime's meta seam, naming the pattern it is for, in two fields: `edges`, every
+delegation edge the piece's history recorded, each with every position in the
+piece's source history at which a transition recorded it, never removed; and
+`delegations`, each module of that pattern's closure closed over `edges` along
+non-increasing positions (`inheritedAlongStamps` in `module-delegations.ts`), so
+a module takes what its predecessor held when the module was granted it.
+`PatternManager.prepareSourceUpdate` records each successor's edge to the module
+it succeeds at one past the piece's history length, never 0, and an entry of the
+predecessor record's attested list the edges do not already reach as the
+successor's own edge at that same position, marked terminal, which a walk
+reaches from that position or later and does not continue past, so the successor
+gets the list as written and no earlier successor of the predecessor or of the
+successor sees it (`composeRecordedEdges`), and closes the candidate's modules,
+before the transaction opens, so the transaction is pinned to the closed set;
+the transition is refused as a source that moved if the member has changed
+since. Any other transition carries `edges` and closes the next pattern's
+modules over them, so a module the next pattern keeps or brings back keeps its
+grant and a new module gets none. Once a source update's transition commits, the
+runtime registers its delegations and stages them on the successor's source and
+compiled cache records, on a cache transaction of its own that reads only those
+records (`#stageCommittedDelegations`). A staging that fails is not retried; the
+piece's next committed update stages the closed entries of the modules it then
+runs. A runtime that starts or swaps the piece to the member's pattern registers
+the `delegations` entries whose module is in the successor's closure, verified
+as it loads it (`PatternManager.readInheritedAuthority`), reads nothing else of
+the member, closes nothing, and writes nothing. A member that is absent or names
+another pattern registers nothing, and the records' own lists decide.
+
+This implements [specs#101](https://github.com/commonfabric/specs/pull/101)
+ahead of its ruling, at strict and with no dial. @danfuzz
+authorized landing this design ahead of the ruling, without a flag, on
+2026-11-14, recorded in the correspondence procedure as a nonconforming semantic
+gap. Against the pin it admits more, since a pattern update no longer labels the
+cache records it delegates through, so it does not satisfy the correspondence
+procedure's step 4. Its two deciding sites, the recording in
+`applyPieceSourceTransition` and the registration in `PatternManager`, carry its
+`SPEC-PENDING` marker.
+
+**Residuals.**
+
+- An under-taint: the decision label. A transition that chose its successor
+  by a labeled value put that value's clause on the records it staged, which
+  §8.11.3 asks of a decision's downstream outputs. The staging transaction
+  reads no piece data, so the records carry none, and the member carries no
+  flow label either.
+- Authority also comes from the piece's `pieceSourceDelegations` member, not
+  only from a closure's own records, and the member is trusted on its shape: its
+  predecessors are not checked against anything. Only the runtime's meta seam
+  writes it. A client that bypasses its runtime can forge it, as it can forge
+  the compiler's attestation on a record (`memory/v2/envelope-admission.ts`), so
+  no new attacker gains anything. What a forged entry reaches is wider than a
+  forged record: any runtime that starts the piece registers it for the whole
+  space. A start writes nothing, so the entry reaches the cache records only
+  when the piece's next honest update composes it into its own and stages it
+  there under the compiler's attestation, after which it cannot be told apart
+  from an attested entry.
+- Growth. `edges` grows by one edge, or one position on an edge already
+  recorded, per module an update replaces, and `delegations` by one predecessor
+  per earlier version of each module of the running pattern, so both grow
+  linearly with the piece's updates; nothing bounds the number of updates over a
+  long-lived piece. A record's attested list adds an edge only for a predecessor
+  the piece's own history does not already reach, as one another piece's update
+  gave a shared successor. The closure expands each module once, taking first
+  the module it reaches with the largest position, so one closure costs time
+  linear in the edges and their positions, times a logarithm. An honest member
+  keeps each file's versions in a chain of their own, a listed entry ending its
+  walk, so a walk covers one chain: an update after a thousand updates of a
+  hundred files composes in about 90 milliseconds, measured. Only a forged
+  member makes the edges dense, and one with a million edges costs one
+  preparation about twelve seconds, measured.
+- A grant whose staging failed. The piece's own authority does not depend on
+  the staging, but the grant stays missing from the cache records where nothing
+  of the piece's carries it to them, so three readers of the records alone are
+  refused it, where `main`'s staging in the transition would have kept it. A
+  runtime from before the member that makes any transition of the piece after
+  the failed staging, a source update or not, leaves the member naming another
+  pattern, so the member is ignored, the unstaged record decides, and the
+  runtime is refused the grant and granted nothing more (pinned by a test that
+  expects the refusal). A source update of another piece from the ungranted
+  module after the failed staging takes in its unstaged record, so it is refused
+  the grant, carries the loss into that piece's record and on to its successors,
+  and is granted nothing more. A module of another piece that writes, through a
+  link, into a field the granting module protects after the failed staging is
+  refused the grant, since that runtime registers it only from the records, and
+  is granted nothing more.
+- Records an earlier transition stamped keep their clause, and the setups
+  that read them keep refusing, until a separate repair. A write-back still
+  re-stamps the root of a record that already carries a clause.

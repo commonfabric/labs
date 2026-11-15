@@ -1124,7 +1124,7 @@ describe("JsonCodecEngine", () => {
       ) as unknown as FabricUnavailable;
       expect(top).toBeInstanceOf(FabricUnavailable);
       expect(top.reason).toBe("error");
-      expect(top.errorMessage).toBe("boom");
+      expect(top.message).toBe("boom");
 
       const obj = {
         status: new FabricUnavailable("pending"),

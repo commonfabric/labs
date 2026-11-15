@@ -96,6 +96,7 @@
     "SqliteTableSchemas",
     "UnavailableErrorKind",
     "UnavailableReason",
+    "UnavailableState",
     "VNode"
   ],
   "collections": [],

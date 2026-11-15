@@ -773,8 +773,8 @@ describe("conformance-fixtures", () => {
       const texts = [
         `fvj1:{"/Bytes@1":"${state}"}`,
         `fvj1:{"/Hash@1":{"hash":"${state}","tag":"fid1"}}`,
-        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"${state}",` +
-        '"publicKey":"AA"}}',
+        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519",` +
+        `"privateKey":{"/Bytes@1":"${state}"},"publicKey":{"/Bytes@1":"AA"}}}`,
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toEqual({
