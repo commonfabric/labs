@@ -631,55 +631,67 @@ describe("ValueHasher", () => {
         });
       });
 
-      describe("FabricUnavailable (dedicated TAG_UNAVAILABLE primitive tag)", () => {
+      describe("FabricUnavailable (hashed in the `FabricInstance` layout)", () => {
+        // `TAG_INSTANCE` (0x12), the wire tag `Unavailable@1` as a tagged
+        // string, then the state as a plain object: `TAG_OBJECT` (0x11),
+        // each key and value as a tagged string in key order, and `TAG_END`.
+        const enc = new TextEncoder();
+        const shortString = (value: string): number[] => {
+          const encoded = enc.encode(value);
+          return [0x24, encoded.length, ...encoded];
+        };
+        const instanceStream = (entries: [string, string][]): number[] => [
+          0x12,
+          ...shortString("Unavailable@1"),
+          0x11,
+          ...entries.flatMap(([key, value]) => [
+            ...shortString(key),
+            ...shortString(value),
+          ]),
+          0x00,
+        ];
+
         it('matches a hand-computed byte stream for `FabricUnavailable("pending")`', () => {
-          // TAG_UNAVAILABLE (0x2D), the reason as a tagged string, then the
-          // absent kind and the absent message each as TAG_NULL (0x20).
-          const expected = sha256([
-            0x2d,
-            0x24,
-            0x07,
-            ...new TextEncoder().encode("pending"),
-            0x20,
-            0x20,
-          ]);
+          const expected = sha256(instanceStream([["reason", "pending"]]));
           expect(hashBytesOf(new FabricUnavailable("pending"))).toEqual(
             expected,
           );
         });
 
         it('matches a hand-computed byte stream for `FabricUnavailable("error", "network", "boom")`', () => {
-          // TAG_UNAVAILABLE (0x2D), then the reason, the kind, and the message
-          // each as a tagged string.
-          const expected = sha256([
-            0x2d,
-            0x24,
-            0x05,
-            ...new TextEncoder().encode("error"),
-            0x24,
-            0x07,
-            ...new TextEncoder().encode("network"),
-            0x24,
-            0x04,
-            ...new TextEncoder().encode("boom"),
-          ]);
+          const expected = sha256(instanceStream([
+            ["errorKind", "network"],
+            ["message", "boom"],
+            ["reason", "error"],
+          ]));
           expect(hashBytesOf(new FabricUnavailable("error", "network", "boom")))
             .toEqual(expected);
         });
 
-        it("feeds `TAG_NULL` for the message of an error given none", () => {
-          const expected = sha256([
-            0x2d,
-            0x24,
-            0x05,
-            ...new TextEncoder().encode("error"),
-            0x24,
-            0x07,
-            ...new TextEncoder().encode("network"),
-            0x20,
-          ]);
+        it("omits the `message` key for an error given none", () => {
+          const expected = sha256(instanceStream([
+            ["errorKind", "network"],
+            ["reason", "error"],
+          ]));
           expect(hashBytesOf(new FabricUnavailable("error", "network")))
             .toEqual(expected);
+        });
+
+        it("produces the same hash as an `UnknownValue` tagged `Unavailable@1` with the same state", () => {
+          const instances = [
+            new FabricUnavailable("syncing"),
+            new FabricUnavailable("error", "decode"),
+            new FabricUnavailable("error", "network", "boom"),
+          ];
+
+          for (const instance of instances) {
+            const unknown = new UnknownValue("Unavailable@1", {
+              ...instance.state,
+            });
+            expect(hex(hashBytesOf(unknown))).toBe(
+              hex(hashBytesOf(instance)),
+            );
+          }
         });
 
         it("produces the same hash for a prefab and a fresh instance with its reason", () => {
@@ -690,7 +702,7 @@ describe("ValueHasher", () => {
         it("produces the same hash for an error given its kind's default message and one given none", () => {
           const given = new FabricUnavailable("error", "network");
           expect(hex(hashBytesOf(
-            new FabricUnavailable("error", "network", given.errorMessage),
+            new FabricUnavailable("error", "network", given.message),
           ))).toBe(hex(hashBytesOf(given)));
         });
 
