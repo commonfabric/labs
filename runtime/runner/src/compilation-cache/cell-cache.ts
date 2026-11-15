@@ -1756,6 +1756,11 @@ function effectiveModuleDelegationsForWrite(
  * caller runs this on a cache transaction of its own, after the source
  * transition has committed, so that `tx` reads nothing but cache records:
  * whatever else it read would label the records it writes.
+ *
+ * TODO: Records a source transition stamped while it staged this on its own
+ * transaction keep that stamp, which this write leaves as it is, and a setup
+ * that reads them is refused (`compile-cache-record-labels.test.ts`). A
+ * repair that drops those stamps is to follow.
  */
 export function stageModuleDelegations(
   runtime: Runtime,

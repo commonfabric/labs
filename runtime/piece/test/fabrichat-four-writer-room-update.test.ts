@@ -26,6 +26,7 @@ import { fromFileUrl, relative } from "@std/path";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
+import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -39,6 +40,7 @@ import {
 import {
   loadStoredCfcEnvelope,
   markRendererTrustedEvent,
+  readStoredCfcMetadata,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
@@ -48,8 +50,20 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 
 import { cfcSchemaEntries } from "../../runner/src/cfc/schema-label-view.ts";
-import { writeSourceDocs } from "../../runner/src/compilation-cache/cell-cache.ts";
+import {
+  compiledDocKey,
+  loadVerifiedSourceClosure,
+  sourceDocKey,
+  writeSourceDocs,
+} from "../../runner/src/compilation-cache/cell-cache.ts";
 import type { Engine } from "../../runner/src/harness/engine.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
+import { PieceController } from "../src/ops/piece-controller.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("FabriChat four-writer room");
@@ -122,6 +136,23 @@ const storedProgram = async (): Promise<RuntimeProgram> => {
   }
   return { main: "/api/patterns/fabrichat/room.tsx", files };
 };
+
+/**
+ * The released program `modules` holds, keyed by identity, with a comment
+ * added to its entry, so that the entry takes another identity: the next
+ * release, for a room that runs this one.
+ */
+const nextReleaseOf = (
+  modules: ReadonlyMap<string, { filename: string; code: string }>,
+): RuntimeProgram => ({
+  main: "/api/patterns/system/fabrichat/room.tsx",
+  files: [...modules.values()].map(({ filename, code }) => ({
+    name: filename,
+    contents: filename.endsWith("/fabrichat/room.tsx")
+      ? `${code}\n// The next release.\n`
+      : code,
+  })),
+});
 
 /**
  * The binding each alternative of the write policy the document `cell`
@@ -580,6 +611,356 @@ describe("fabrichat-four-writer-room-update", () => {
         | Record<string, { requestId?: string }>
         | undefined;
       expect(windows?.main?.requestId).toBe("w1");
+    });
+  });
+  describe("with the room's own space labeling its argument", () => {
+    // A room in a space of its own whose argument carries that space's
+    // personal space, a label the room fits, updated as a person opening it
+    // updates it. The update reads the argument, and its join reaches what it
+    // writes but not the released program's records, which a room set up from
+    // that program in the same space then reads unlabeled.
+
+    let labeledSpace: MemorySpace;
+    let labeledController: PiecesController;
+    let labeledRoom: Cell<unknown>;
+    let released: Map<string, { filename: string; code: string }>;
+    let releasedRecords: Cell<unknown>[];
+
+    beforeAll(async () => {
+      labeledSpace = await runtime.createSpace();
+      labeledController = new PiecesController(
+        createSession({ identity: owner, spaceDid: labeledSpace }),
+        runtime,
+      );
+      await labeledController.synced();
+      const program = await storedProgram();
+      const records = await (runtime.harness as Engine)
+        .compileResolvedToRecordGraph(program.files, program.main);
+      {
+        const tx = runtime.edit();
+        writeSourceDocs(
+          runtime,
+          labeledSpace,
+          records.modules,
+          records.entryIdentity,
+          tx,
+        );
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      const pattern = await runtime.patternManager.loadPatternByIdentity(
+        records.entryIdentity,
+        "default",
+        labeledSpace,
+      );
+      labeledRoom = await labeledController.runPersistent(
+        pattern!,
+        {},
+        "labeled room",
+        { origin: ROOM_ORIGIN },
+      );
+      await runtime.idle();
+      await labeledRoom.pull();
+
+      const label = {
+        confidentiality: [{
+          type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+          owner: labeledSpace,
+        }],
+      };
+      const { id } = labeledRoom.getArgumentCell<unknown>()!
+        .getAsNormalizedFullLink();
+      const address = {
+        space: labeledSpace,
+        scope: "space" as const,
+        id,
+        path: [],
+      };
+      const plant = runtime.edit();
+      const stored = storedFields(plant, address) as FabricPlainObject & {
+        cfc?: FabricPlainObject & {
+          labelMap: FabricPlainObject & { entries: FabricValue[] };
+        };
+      };
+      if (stored.cfc === undefined) writeSeedEnvelopeDoc(plant, labeledSpace);
+      const cfc = stored.cfc ?? {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [] },
+      };
+      seedStoredEnvelope(plant, address, {
+        ...stored,
+        cfc: {
+          ...cfc,
+          labelMap: {
+            ...cfc.labelMap,
+            entries: [
+              ...cfc.labelMap.entries,
+              { path: [], origin: "structure", observes: "shape", label },
+              { path: [], label },
+            ],
+          },
+        },
+      });
+      expect((await plant.commit().settled).error).toBeUndefined();
+
+      await labeledController.openPiece(labeledRoom);
+      await runtime.idle();
+      labeledRoom = await labeledRoom.withTx().sync();
+
+      const version = await runtime.patternManager.compileCacheRuntimeVersion({
+        patternCoverage: false,
+      });
+      const tx = runtime.edit();
+      const closure = await loadVerifiedSourceClosure(
+        runtime,
+        labeledSpace,
+        releasedIdentity,
+        tx,
+      );
+      tx.abort("released closure read");
+      expect(closure).toBeDefined();
+      released = new Map(
+        [...closure!].map(([identity, doc]) => [identity, {
+          filename: doc.filename,
+          code: doc.code,
+        }]),
+      );
+      releasedRecords = [...released.keys()].flatMap((identity) =>
+        [sourceDocKey(identity), compiledDocKey(version!, identity)].map((
+          key,
+        ) => runtime.getCell(labeledSpace, key))
+      );
+    });
+
+    it("moves the room to the released program, staging the delegations it derives", async () => {
+      await runtime.patternManager.flushCompileCacheWrites();
+      await runtime.idle();
+      expect(getPatternIdentityRef(labeledRoom)?.identity).toBe(
+        releasedIdentity,
+      );
+      expect(
+        (runtime.getCell(labeledSpace, sourceDocKey(releasedIdentity))
+          .getRaw() as { delegatedModuleIdentities?: string[] })
+          ?.delegatedModuleIdentities,
+      ).toContain(previousIdentity);
+    });
+
+    it("leaves every released record carrying no confidentiality", () => {
+      const tx = runtime.edit();
+      try {
+        for (const record of releasedRecords) {
+          const { id } = record.getAsNormalizedFullLink();
+          expect(
+            (readStoredCfcMetadata(tx, { space: labeledSpace, id })?.labelMap
+              .entries ?? []).flatMap((entry) =>
+                entry.label.confidentiality ?? []
+              ),
+            id,
+          ).toEqual([]);
+        }
+      } finally {
+        tx.abort("released record labels read");
+      }
+    });
+
+    it("sets up a fresh room from the released program", async () => {
+      const pattern = await runtime.patternManager.loadPatternByIdentity(
+        releasedIdentity,
+        "default",
+        labeledSpace,
+      );
+      const fresh = await labeledController.runPersistent(
+        pattern!,
+        {},
+        "fresh room",
+        { origin: ROOM_ORIGIN },
+      );
+      await runtime.idle();
+      await fresh.pull();
+
+      expect(getPatternIdentityRef(fresh)?.identity).toBe(releasedIdentity);
+    });
+
+    it("updates the room again, to the released program with its entry edited", async () => {
+      await new PieceController(labeledController, labeledRoom).setPattern(
+        nextReleaseOf(released),
+      );
+      await runtime.idle();
+
+      const updated = getPatternIdentityRef(await labeledRoom.withTx().sync());
+      expect(updated?.identity).not.toBe(releasedIdentity);
+    });
+  });
+
+  describe("with the released program's records storing another member's label", () => {
+    // The labels a source update of a room whose own data carries another
+    // member's personal space left on the released program's records, at the
+    // delegation field and at the root, on a runtime that stamped them. A room
+    // set up from that program in the same space reads them, and its writes
+    // misfit; the room's own next update commits. Nothing rewrites what is
+    // stored. Last in the file, so that no other case here runs over the
+    // planted labels.
+    // TODO(danfuzz): The fresh-room cases pin a refusal that is wrong for the
+    // room (see the `TODO` on `stageModuleDelegations()`): flip them to a set
+    // up room once a repair drops the stamps the compile-cache builtin's writes
+    // left.
+
+    const personalSpaceOf = async (passphrase: string) => ({
+      type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+      owner: (await Identity.fromPassphrase(passphrase)).did(),
+    });
+
+    let otherMember: { type: string; owner: string };
+    let records: Cell<unknown>[];
+    let releasedModules: Map<string, { filename: string; code: string }>;
+
+    beforeAll(async () => {
+      otherMember = await personalSpaceOf("FabriChat four-writer other member");
+      const version = await runtime.patternManager.compileCacheRuntimeVersion({
+        patternCoverage: false,
+      });
+      const tx = runtime.edit();
+      const closure = await loadVerifiedSourceClosure(
+        runtime,
+        roomSpace,
+        releasedIdentity,
+        tx,
+      );
+      tx.abort("released closure read");
+      expect(closure).toBeDefined();
+      releasedModules = new Map(
+        [...closure!].map(([identity, doc]) => [identity, {
+          filename: doc.filename,
+          code: doc.code,
+        }]),
+      );
+      // A module this runtime has not compiled has no compiled record.
+      records = [...releasedModules.keys()].flatMap((identity) =>
+        [sourceDocKey(identity), compiledDocKey(version!, identity)].map((
+          key,
+        ) => runtime.getCell(roomSpace, key))
+      ).filter((record) => record.getRaw() !== undefined);
+      const plant = runtime.edit();
+      for (const record of records) {
+        const { id } = record.getAsNormalizedFullLink();
+        const address = {
+          space: roomSpace,
+          scope: "space" as const,
+          id,
+          path: [],
+        };
+        const stored = storedFields(plant, address) as FabricPlainObject & {
+          cfc?: FabricPlainObject & {
+            labelMap: FabricPlainObject & { entries: FabricValue[] };
+          };
+        };
+        if (stored.cfc === undefined) writeSeedEnvelopeDoc(plant, roomSpace);
+        const cfc = stored.cfc ?? {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: { version: 1, entries: [] },
+        };
+        seedStoredEnvelope(plant, address, {
+          ...stored,
+          cfc: {
+            ...cfc,
+            labelMap: {
+              ...cfc.labelMap,
+              entries: [
+                ...cfc.labelMap.entries,
+                ...[["delegatedModuleIdentities"], []].flatMap((path) =>
+                  ["shape", "value"].map((observes) => ({
+                    path,
+                    origin: "derived",
+                    observes,
+                    label: { confidentiality: [otherMember] },
+                  }))
+                ),
+              ],
+            },
+          },
+        });
+      }
+      expect((await plant.commit().settled).error).toBeUndefined();
+    });
+
+    /** Sets up a fresh room from the released program, through `pieces`. */
+    const freshRoom = async (on: Runtime, pieces: PiecesController) => {
+      const pattern = await on.patternManager.loadPatternByIdentity(
+        releasedIdentity,
+        "default",
+        roomSpace,
+      );
+      expect(pattern).toBeDefined();
+      const fresh = await pieces.runPersistent(
+        pattern!,
+        {},
+        "fresh room",
+        { origin: ROOM_ORIGIN },
+      );
+      await on.idle();
+      await fresh.pull();
+      return fresh;
+    };
+
+    it("refuses a fresh room from the released program", async () => {
+      await expect(freshRoom(runtime, roomController)).rejects.toThrow(
+        "writer-fit confidentiality misfit",
+      );
+    });
+
+    it("refuses a fresh room from the released program on a runtime that starts cold", async () => {
+      const coldStorage = EmulatedStorageManager.connectTo(server, {
+        as: owner,
+      });
+      const cold = new Runtime({
+        apiUrl: new URL(`http://127.0.0.1:${http.addr.port}`),
+        storageManager: coldStorage,
+      });
+      const coldPieces = new PiecesController(
+        createSession({ identity: owner, spaceDid: roomSpace }),
+        cold,
+      );
+      try {
+        await coldPieces.synced();
+
+        await expect(freshRoom(cold, coldPieces)).rejects.toThrow(
+          "writer-fit confidentiality misfit",
+        );
+      } finally {
+        await coldPieces.dispose();
+        await cold.dispose();
+        await coldStorage.close();
+      }
+    });
+
+    it("updates the room again, to the released program with its entry edited", async () => {
+      await new PieceController(roomController, room).setPattern(
+        nextReleaseOf(releasedModules),
+      );
+      await runtime.idle();
+
+      const updated = getPatternIdentityRef(await room.withTx().sync());
+      expect(updated?.identity).not.toBe(releasedIdentity);
+    });
+
+    it("leaves the planted label stored on every released record", () => {
+      const tx = runtime.edit();
+      try {
+        for (const record of records) {
+          const { id } = record.getAsNormalizedFullLink();
+          expect(
+            (readStoredCfcMetadata(tx, { space: roomSpace, id })?.labelMap
+              .entries ?? []).flatMap((entry) =>
+                entry.label.confidentiality ?? []
+              ),
+            id,
+          ).toContainEqual(otherMember);
+        }
+      } finally {
+        tx.abort("planted labels read");
+      }
     });
   });
 });
