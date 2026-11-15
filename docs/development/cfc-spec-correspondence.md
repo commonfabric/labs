@@ -460,8 +460,9 @@ of sections the snapshot does not hold are exempted in
 default with no default-off dial, recorded here as a nonconforming semantic gap,
 pending [specs#96](https://github.com/commonfabric/specs/pull/96). His reason,
 in his words: "CFC is not a gate for chat". He ruled on 2026-11-15 that keeping
-an omitted alternative lands the same way, following the amendment of specs#96
-that admits it. The conformance statement's §10 records the gap.
+an omitted alternative lands the same way, following specs#96 as amended
+(§8.15.6.1, "Write-Policy Alternatives"). The conformance statement's §10
+records the gap.
 
 The resolution that certifies a new JavaScript action node's static read set
 (`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) implements

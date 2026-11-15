@@ -891,12 +891,15 @@ request's `SPEC-PENDING` marker.
 The specification at the pin has no write policy: nothing in it names
 `writePolicyAnyOf`, a list of alternatives at one position, each pairing a
 writer with an optional UI contract. Its rules for a schema that changes a
-stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the
-IFC contract attached to a path, and §8.15.3 has write authority stable.
+stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the IFC
+contract attached to a path, and §8.15.3 has write authority stable.
 [specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
 [specs#52](https://github.com/commonfabric/specs/pull/52), proposes the
-construct (§8.15.6.1) and a release that may append an alternative to a stored
-policy (carve-out (c) of §8.15.13, `mergeWritePolicy` and `admissible`).
+construct (§8.15.6.1, "Write-Policy Alternatives"), that a later schema may omit
+a stored alternative, which the merge keeps exactly as stored, in every write, a
+release included, and a release that may append an alternative to a stored
+policy (carve-out (c) of §8.15.13, "Release", `mergeWritePolicy` and
+`admissible`).
 
 **What the runtime does.** `mergeWritePolicyAnyOf` in `cfc/schema-merge.ts`
 matches each stored alternative to a candidate's by content: the same keys, the
@@ -948,19 +951,28 @@ recorded in the correspondence procedure as a nonconforming semantic gap,
 pending specs#96. Against the pin it admits more: an appended writer, a
 candidate listing the stored alternatives in another order, and a candidate
 omitting a stored alternative, which the pin's general stability rules refuse.
-The last follows the amendment of specs#96 that keeps an omitted alternative as
-stored, which @danfuzz ruled on 2026-11-15 lands the same way, at the strict
-default with no dial. So it does not satisfy the correspondence procedure's step
-4, which asks for a default-off dial for a change admitting more. Its four
-deciding sites, the merge's matching and its append, and the keep rule's
-matching and its admission, carry its `SPEC-PENDING` marker, and the kernel
-manifest carries no row for `mergeWritePolicy` until a regenerated snapshot
-defines it.
+The last follows specs#96 as amended, and @danfuzz ruled on 2026-11-15 that it
+lands the same way, at the strict default with no dial. So it does not satisfy
+the correspondence procedure's step 4, which asks for a default-off dial for a
+change admitting more. Its four deciding sites, the merge's matching and its
+append, and the keep rule's matching and its admission, carry its `SPEC-PENDING`
+marker, and the kernel manifest carries no row for `mergeWritePolicy` until a
+regenerated snapshot defines it.
 
 **Residuals.**
 
 - The merge also requires an appended alternative to hold the same keys as the
   stored one it pairs with, which the proposal does not ask: an over-taint.
+- An unstamped stored alternative stays unstamped. The proposal leaves one open
+  to adoption by a later write (§8.15.1, "Handler-Declared Write Capability");
+  the runtime adopts none, outside a release or in one: a schema that differs
+  from the stored envelope only in its stamps leaves the envelope as stored,
+  and the alternative admits no writer whose own write could adopt it. This is
+  stricter than the proposal, and the alternative authorizes no writer either
+  way.
+- A schema declaring an empty list at the position is refused as malformed,
+  and one declaring nothing there keeps the stored policy as stored, as the
+  proposal has them.
 
 ## 11. Writer delegations across a source update (§8.11.3)
 
