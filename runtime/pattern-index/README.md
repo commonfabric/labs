@@ -4,8 +4,11 @@
 index. The server lives in
 [`commontoolsinc/pattern-index`](https://github.com/commontoolsinc/pattern-index).
 The package signs calls with the Fabric CF1 HTTP scheme, checks HTTP and JSON
-responses, resolves discoverable successors, and composes requests for index
-frontends. Callers supply a signer and can substitute the HTTP transport.
+responses, and composes requests for index frontends. The index resolves
+discoverable successors itself, so a search answer's rows are current
+generations. A row carries an optional display `name`, present when the index
+holds or can derive one, and a replacement carries the `supersedes` id it
+matched as. Callers supply a signer and can substitute the HTTP transport.
 
 Import the client from `@commonfabric/pattern-index/client`, search-body
 composition and the status rule from `@commonfabric/pattern-index/front`, or
@@ -55,7 +58,7 @@ Its only operations are:
 - Search: `{"op":"search","text":"calendar","limit":10,"tags":["time"]}`. Search
   fields are optional and use the read frontend's shaping: string text, numeric
   limit, and the string entries of a tags array. The result is
-  `{"ok":true,"value":{"results":[...]}}`, including successor substitution.
+  `{"ok":true,"value":{"results":[...]}}`, as the index answered it.
 - Feedback: `{"op":"feedback","patternId":"...","verdict":"up"}`. Verdicts are
   `up` and `down`, recorded as `thumbs_up` and `thumbs_down`. The result is
   `{"ok":true,"value":{"patternId":"...",
@@ -69,19 +72,17 @@ allowlist refusals, even when their body is not JSON. Other index failures,
 successful replies with unreadable JSON, and an event response with `ok:false`
 return status 502. Reply errors contain stable messages, withholding the index's
 raw body. Completed requests, including refusals and malformed JSON input, exit
-zero. Host failures such as an unreadable key, an invalid base URL, a failed
-transport, or an internal successor-resolution error exit nonzero with detail on
-stderr and nothing on stdout. Missing required flags exit 2.
+zero. Host failures such as an unreadable key, an invalid base URL, or a failed
+transport exit nonzero with detail on stderr and nothing on stdout. Missing
+required flags exit 2.
 
-Each process starts with an empty discovery-record cache. Within a client,
-create-only lineage records are cached and catalog membership is read on each
-nonempty search. The helper uses no persistent cache or resident service. The
-CLI import graph reaches the runner through its `toolshed-http-auth` export, for
-CF1 signing.
+A search is one signed request. The helper uses no cache or resident service.
+The CLI import graph reaches the runner through its `toolshed-http-auth` export,
+for CF1 signing.
 
 ## Tests
 
-`deno task test` runs client, successor, deploy, and CLI tests. CLI tests spawn
-the helper against a loopback server that verifies CF1 signatures from throwaway
+`deno task test` runs client, deploy, and CLI tests. CLI tests spawn the helper
+against a loopback server that verifies CF1 signatures from throwaway
 identities; they use the CFS invocation with no lockfile and never call the
 deployed index.

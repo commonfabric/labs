@@ -1458,8 +1458,8 @@ principal a run writes with. Four functions are reachable, all of them reads:
 `listPatterns`, `listEvents`, `getPattern` and `searchPatterns`. Anything else —
 a publication, a recorded event — is refused by name before the index is
 touched, and the request the server sends is composed field by field rather than
-forwarded, so nothing extra survives the crossing. `searchPatterns` uses the
-shared client's
+forwarded, so nothing extra survives the crossing. `searchPatterns` answers with
+the index's own
 [successor resolution](../README.md#pattern-generations-in-search); the listing
 and exact-ID reads retain their individual generation records. Event badges
 count only that generation's own events, split by author DID when the index
