@@ -51,6 +51,7 @@ import {
   writeSourceAndCompiledDocs,
   writeSourceDocs,
 } from "./compilation-cache/cell-cache.ts";
+import { addDirectEdges, closeDelegationsFor } from "./module-delegations.ts";
 import { createRef } from "./create-ref.ts";
 import { waveSettlementOf } from "./executor/wave.ts";
 import {
@@ -129,26 +130,24 @@ type SourceUpdatePreparation = {
   runtimeVersion: string | undefined;
 
   /**
-   * The delegations the update grants the candidate's modules: those derived
-   * from the two closures, composed with `recordedPrevious`
-   * (`composeRecordedDelegations()`). The update's transaction is pinned to
-   * them, and they are registered and staged once it commits.
+   * The delegations the update grants the candidate's modules, closed over
+   * `edges` (`composeRecordedDelegations()`). The update's transaction is
+   * pinned to them, and they are registered and staged once it commits.
    */
   delegations: ModuleDelegationMap;
 
   /**
-   * The entries of `recordedPrevious` for modules outside the candidate's
-   * closure, which the piece's member keeps so that a module that leaves the
-   * closure and returns keeps its grant.
+   * The direct edges the piece's member records once the update commits:
+   * the previous record's, and the ones this update derives.
    */
-  carried: ModuleDelegationMap;
+  edges: ModuleDelegationMap;
 
   /**
-   * The delegations the piece's `pieceSourceDelegations` member records for
-   * the previous pattern, as the caller read them before preparing. The
-   * transition checks that the member still holds them.
+   * What the piece's `pieceSourceDelegations` member records for the
+   * previous pattern, as the caller read it before preparing. The transition
+   * checks that the member still holds it.
    */
-  recordedPrevious: ModuleDelegationMap;
+  recordedPrevious: PieceSourceRecord;
 
   /**
    * The hold tokens (`IStorageManager.holdDocument()`) of the candidate's
@@ -162,58 +161,49 @@ type SourceUpdatePreparation = {
 };
 
 /**
+ * What a piece's `pieceSourceDelegations` member records for a pattern:
+ * `delegations`, the closed delegations of the modules of that pattern's
+ * closure, which a start registers; and `edges`, the direct predecessor
+ * edges of every module the piece's history has delegated, which only a
+ * transition that records the member reads.
+ */
+export type PieceSourceRecord = {
+  delegations: ModuleDelegationMap;
+  edges: ModuleDelegationMap;
+};
+
+/** A record that records nothing. */
+export const EMPTY_PIECE_SOURCE_RECORD: PieceSourceRecord = Object.freeze({
+  delegations: new Map(),
+  edges: new Map(),
+});
+
+/**
  * Composes `derived`, the delegations an update derives from its two
- * closures, with `recordedPrevious`, what the piece's member records for the
- * previous pattern, so that what the piece records stays cumulative over its
- * history. In `granted`, keyed by modules of `candidate`, each derived
- * predecessor is extended with what `recordedPrevious` grants it in turn,
- * and each recorded entry for a module of `candidate` is kept, as for a
- * module the update leaves unchanged, whose derivation reads only its cache
- * record. `carried` holds the recorded entries for modules outside
- * `candidate`, so that one that returns keeps its grant, except that an entry
- * for a module M is dropped when an entry in `granted` holds M and every
- * predecessor M's entry lists: the entry that holds M then states all that
- * M's did, and a returning M inherits it from the module that holds it. A
- * module's own identity is never its predecessor.
- *
- * TODO: The drop loses M's grant when the module that holds it leaves in
- * turn, an unrelated module takes M's file, and M returns, deriving only from
- * the unrelated module, while the staging of M's own grant never landed
- * (`setsrc-module-delegation.test.ts`, "loses the grant of a module whose
- * covering successor left before it returned").
+ * closures (each successor with its predecessor and the predecessor
+ * record's own attested list), with `recorded`, what the piece's member
+ * records for the previous pattern. Each derived list is added to the
+ * recorded edges as direct edges (`addDirectEdges()`), and each module of
+ * `candidate` is closed over the result. A module the update leaves
+ * unchanged, or one that returns, is closed over its own recorded edges, so
+ * no grant the piece's history made is lost, and none is made that the edges
+ * do not reach.
  */
 function composeRecordedDelegations(
   derived: ModuleDelegationMap,
-  recordedPrevious: ModuleDelegationMap,
-  candidate: ReadonlySet<string>,
-): { granted: ModuleDelegationMap; carried: ModuleDelegationMap } {
-  const granted = new Map<string, Set<string>>();
-  const grant = (identity: string, predecessors: Iterable<string>) => {
-    const into = granted.get(identity) ?? new Set();
-    for (const predecessor of predecessors) {
-      if (predecessor !== identity) into.add(predecessor);
-    }
-    if (into.size > 0) granted.set(identity, into);
-  };
-  for (const [identity, predecessors] of derived) {
-    grant(identity, predecessors);
-    for (const predecessor of predecessors) {
-      grant(identity, recordedPrevious.get(predecessor) ?? []);
-    }
+  recorded: PieceSourceRecord,
+  candidate: Iterable<string>,
+): { delegations: ModuleDelegationMap; edges: ModuleDelegationMap } {
+  const edges = new Map<string, Set<string>>(
+    [...recorded.edges].map(([identity, predecessors]) => [
+      identity,
+      new Set(predecessors),
+    ]),
+  );
+  for (const [identity, inputs] of derived) {
+    addDirectEdges(edges, identity, inputs);
   }
-  const carried = new Map<string, ReadonlySet<string>>();
-  for (const [identity, predecessors] of recordedPrevious) {
-    if (candidate.has(identity)) grant(identity, predecessors);
-  }
-  for (const [identity, predecessors] of recordedPrevious) {
-    if (candidate.has(identity)) continue;
-    const covered = [...granted.values()].some((held) =>
-      held.has(identity) &&
-      [...predecessors].every((predecessor) => held.has(predecessor))
-    );
-    if (!covered) carried.set(identity, predecessors);
-  }
-  return { granted, carried };
+  return { delegations: closeDelegationsFor(edges, candidate), edges };
 }
 
 /** A canonical key for `delegations`, equal for equal maps. */
@@ -223,6 +213,14 @@ function moduleDelegationsKey(delegations: ModuleDelegationMap): string {
       [identity, [...predecessors].sort(utf8Compare)] as const
     ).sort(([a], [b]) => utf8Compare(a, b)),
   );
+}
+
+/** A canonical key for `record`, equal for records equal in both fields. */
+function pieceSourceRecordKey(record: PieceSourceRecord): string {
+  return JSON.stringify([
+    moduleDelegationsKey(record.delegations),
+    moduleDelegationsKey(record.edges),
+  ]);
 }
 
 const logger = getLogger("pattern-manager");
@@ -2383,7 +2381,7 @@ export class PatternManager {
 
   /**
    * Derive proposed authority from two verified durable source closures,
-   * extended with `recordedPrevious`, what the piece's
+   * composed with `recordedPrevious`, what the piece's
    * `pieceSourceDelegations` member records for the previous pattern
    * (`getPieceSourceDelegations()`). The proposal belongs to this update and
    * remains absent from ordinary transactions; the update's own transaction
@@ -2393,7 +2391,7 @@ export class PatternManager {
     space: MemorySpace,
     previousEntryIdentity: string,
     entryIdentity: string,
-    recordedPrevious: ModuleDelegationMap = new Map(),
+    recordedPrevious: PieceSourceRecord = EMPTY_PIECE_SOURCE_RECORD,
   ): Promise<PreparedSourceUpdate> {
     const tx = this.#runtime.edit();
     try {
@@ -2437,7 +2435,7 @@ export class PatternManager {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
-      const { granted, carried } = composeRecordedDelegations(
+      const { delegations, edges } = composeRecordedDelegations(
         deriveModuleDelegations(
           previous,
           [...candidate].map(([identity, doc]) => ({
@@ -2447,7 +2445,7 @@ export class PatternManager {
           { previous: previousEntryIdentity, next: entryIdentity },
         ),
         recordedPrevious,
-        new Set(candidate.keys()),
+        candidate.keys(),
       );
       const prepared = Object.freeze({}) as PreparedSourceUpdate;
       this.#sourceUpdates.set(prepared, {
@@ -2457,8 +2455,8 @@ export class PatternManager {
         runtimeVersion,
         documentHolds,
         recordedPrevious,
-        delegations: granted,
-        carried,
+        delegations,
+        edges,
       });
       return prepared;
     } finally {
@@ -2503,7 +2501,7 @@ export class PatternManager {
     space: MemorySpace,
     previousEntryIdentity: string,
     entryIdentity: string,
-    recordedPrevious: ModuleDelegationMap = new Map(),
+    recordedPrevious: PieceSourceRecord = EMPTY_PIECE_SOURCE_RECORD,
   ): Promise<ModuleDelegationMap | undefined> {
     const tx = this.#runtime.edit();
     try {
@@ -2539,8 +2537,8 @@ export class PatternManager {
           next: entryIdentity,
         }),
         recordedPrevious,
-        new Set(candidate.map(({ identity }) => identity)),
-      ).granted;
+        candidate.map(({ identity }) => identity),
+      ).delegations;
     } finally {
       tx.abort("source update proposal derived");
     }
@@ -2555,24 +2553,23 @@ export class PatternManager {
    */
   sourceUpdateComposedWith(
     prepared: PreparedSourceUpdate,
-    recordedPrevious: ModuleDelegationMap,
+    recordedPrevious: PieceSourceRecord,
   ): boolean {
     const proposal = this.#sourceUpdates.get(prepared);
     return proposal !== undefined &&
-      moduleDelegationsKey(proposal.recordedPrevious) ===
-        moduleDelegationsKey(recordedPrevious);
+      pieceSourceRecordKey(proposal.recordedPrevious) ===
+        pieceSourceRecordKey(recordedPrevious);
   }
 
   /**
    * Check that `prepared` matches the source transition `tx` makes, and
-   * return what the transition records in the piece's member: the
-   * delegations it grants the successor's modules (`prepareSourceUpdate()`),
-   * and the recorded entries it carries for modules outside the successor's
-   * closure. `recordedPrevious` is what the member records for the previous
-   * pattern, read in `tx`; a preparation composed with something else does
-   * not match. Once `tx` commits, this registers the granted delegations and
-   * stages them on the successor's cache records
-   * (`#stageCommittedDelegations()`).
+   * return what the transition records in the piece's member for the
+   * successor (`prepareSourceUpdate()`): the closed delegations of its
+   * modules, and the direct edges of the piece's history.
+   * `recordedPrevious` is what the member records for the previous pattern,
+   * read in `tx`; a preparation composed with something else does not match.
+   * Once `tx` commits, this registers the delegations and stages them on the
+   * successor's cache records (`#stageCommittedDelegations()`).
    */
   stageSourceUpdate(
     prepared: PreparedSourceUpdate,
@@ -2580,21 +2577,21 @@ export class PatternManager {
     previousEntryIdentity: string,
     entryIdentity: string,
     tx: IExtendedStorageTransaction,
-    recordedPrevious: ModuleDelegationMap = new Map(),
-  ): { granted: ModuleDelegationMap; carried: ModuleDelegationMap } {
+    recordedPrevious: PieceSourceRecord = EMPTY_PIECE_SOURCE_RECORD,
+  ): PieceSourceRecord {
     const proposal = this.#sourceUpdates.get(prepared);
     if (
       proposal === undefined || proposal.space !== space ||
       proposal.previousEntryIdentity !== previousEntryIdentity ||
       proposal.entryIdentity !== entryIdentity ||
-      moduleDelegationsKey(proposal.recordedPrevious) !==
-        moduleDelegationsKey(recordedPrevious)
+      pieceSourceRecordKey(proposal.recordedPrevious) !==
+        pieceSourceRecordKey(recordedPrevious)
     ) {
       throw new Error(
         "source update preparation does not match the transition",
       );
     }
-    const { delegations, carried, runtimeVersion } = proposal;
+    const { delegations, edges, runtimeVersion } = proposal;
     // The transition writes no cache record: its transaction reads the
     // piece's data, and a record every later setup of the module reads would
     // take that label. The successor's authority is registered once the
@@ -2610,7 +2607,7 @@ export class PatternManager {
         runtimeVersion,
       });
     });
-    return { granted: delegations, carried };
+    return { delegations, edges };
   }
 
   /**

@@ -275,6 +275,7 @@ export {
   getPatternSource,
   getPieceReconciliation,
   getPieceSourceDelegations,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   isStoredArgumentSchemaRefusal,

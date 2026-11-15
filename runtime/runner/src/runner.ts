@@ -202,8 +202,11 @@ import {
   sendValueToBinding,
   unwrapOneLevelAndBindToDoc,
 } from "./pattern-binding.ts";
+import { closeDelegationsFor } from "./module-delegations.ts";
 import {
+  EMPTY_PIECE_SOURCE_RECORD,
   PatternManager,
+  type PieceSourceRecord,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
 import { isCellResultForDereferencing } from "./query-result-proxy.ts";
@@ -2176,25 +2179,33 @@ export interface PieceSourceRevision {
 
 /**
  * The `pieceSourceDelegations` meta member: the writer-authority delegations
- * of the pattern the piece runs, as the source update that moved it there
- * granted them, cumulative over the piece's earlier patterns.
+ * of the pattern the piece runs, and the direct edges of every delegation the
+ * piece's history made.
  *
  * Only {@link applyPieceSourceTransition} writes it, through the meta seam,
- * in the transaction that moves the pointer, and every transition replaces
- * it. A runtime that starts or swaps the piece to `identity` registers the
- * entries whose module is in that pattern's verified closure
- * (`PatternManager.readInheritedAuthority()`).
+ * in the transaction that moves the pointer, and every transition writes it
+ * for the next pattern. A runtime that starts or swaps the piece to
+ * `identity` registers the `delegations` entries whose module is in that
+ * pattern's verified closure (`PatternManager.readInheritedAuthority()`), and
+ * reads nothing else.
  */
 export interface PieceSourceDelegations {
   /** The pattern the delegations are for. */
   identity: string;
 
   /**
-   * One entry per module granted any: the module's identity, and the
-   * identities of the modules of the piece's earlier patterns whose
-   * authority it exercises.
+   * One entry per module of `identity`'s closure granted any: the module's
+   * identity, and every module of the piece's earlier patterns whose
+   * authority it exercises, closed over `edges`.
    */
   delegations: { identity: string; predecessors: string[] }[];
+
+  /**
+   * One entry per module the piece's history has delegated to: the module's
+   * identity, and the modules it was delegated from directly. Read only by a
+   * transition, which closes the next pattern's `delegations` over it.
+   */
+  edges: { identity: string; predecessors: string[] }[];
 }
 
 export interface PieceSourceSnapshot {
@@ -10554,7 +10565,7 @@ export class Runner {
         resultCell.space,
         transition.expected.pattern.identity,
         candidateRef.identity,
-        getPieceSourceDelegations(
+        getPieceSourceRecord(
           resultCell,
           transition.expected.pattern.identity,
         ),
@@ -17630,41 +17641,93 @@ export function setPatternSource(
 }
 
 /**
- * The delegations the piece's `pieceSourceDelegations` member records for
- * `patternIdentity`: empty when the member is absent, names another pattern,
- * or is malformed. A malformed member grants nothing and refuses nothing.
+ * The entries of one list of {@link PieceSourceDelegations}, or `undefined`
+ * where it is malformed: anything but an array of entries each naming a
+ * module once, with at least one predecessor, none of them the module.
  */
-export function getPieceSourceDelegations(
-  resultCell: Cell<unknown>,
-  patternIdentity: string,
-): ModuleDelegationMap {
-  const raw = resultCell.getMetaRaw("pieceSourceDelegations", {
-    meta: ignoreReadForScheduling,
-  });
-  const none = new Map<string, ReadonlySet<string>>();
-  if (
-    !isObjectOrArray(raw) || Array.isArray(raw) ||
-    raw.identity !== patternIdentity || !Array.isArray(raw.delegations)
-  ) {
-    return none;
-  }
-  const delegations = new Map<string, ReadonlySet<string>>();
-  for (const entry of raw.delegations as unknown[]) {
+function pieceSourceDelegationEntries(
+  value: unknown,
+): ModuleDelegationMap | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = new Map<string, ReadonlySet<string>>();
+  for (const entry of value as unknown[]) {
     if (
       !isObjectOrArray(entry) || Array.isArray(entry) ||
       typeof entry.identity !== "string" || entry.identity.length === 0 ||
-      delegations.has(entry.identity) ||
+      entries.has(entry.identity) ||
       !Array.isArray(entry.predecessors) || entry.predecessors.length === 0 ||
       !entry.predecessors.every((predecessor: unknown) =>
         typeof predecessor === "string" && predecessor.length > 0 &&
         predecessor !== entry.identity
       )
     ) {
-      return none;
+      return undefined;
     }
-    delegations.set(entry.identity, new Set(entry.predecessors as string[]));
+    entries.set(entry.identity, new Set(entry.predecessors as string[]));
   }
-  return delegations;
+  return entries;
+}
+
+/**
+ * The piece's `pieceSourceDelegations` member, raw, when it names
+ * `patternIdentity`.
+ */
+function pieceSourceDelegationsFor(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): Record<string, unknown> | undefined {
+  const raw = resultCell.getMetaRaw("pieceSourceDelegations", {
+    meta: ignoreReadForScheduling,
+  });
+  return isObjectOrArray(raw) && !Array.isArray(raw) &&
+      raw.identity === patternIdentity
+    ? raw as Record<string, unknown>
+    : undefined;
+}
+
+/**
+ * The delegations the piece's `pieceSourceDelegations` member records for
+ * `patternIdentity`, which a start registers: empty when the member is
+ * absent, names another pattern, or its `delegations` are malformed. A
+ * malformed member grants nothing and refuses nothing. It reads nothing but
+ * the `delegations`.
+ */
+export function getPieceSourceDelegations(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): ModuleDelegationMap {
+  return pieceSourceDelegationEntries(
+    pieceSourceDelegationsFor(resultCell, patternIdentity)?.delegations,
+  ) ?? new Map();
+}
+
+/**
+ * What the piece's `pieceSourceDelegations` member records for
+ * `patternIdentity`, both fields, for a transition that records the member:
+ * {@link EMPTY_PIECE_SOURCE_RECORD} when the member is absent, names another
+ * pattern, or either field is malformed.
+ */
+export function getPieceSourceRecord(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): PieceSourceRecord {
+  const raw = pieceSourceDelegationsFor(resultCell, patternIdentity);
+  const delegations = pieceSourceDelegationEntries(raw?.delegations);
+  const edges = pieceSourceDelegationEntries(raw?.edges);
+  return delegations === undefined || edges === undefined
+    ? EMPTY_PIECE_SOURCE_RECORD
+    : { delegations, edges };
+}
+
+/** `entries` as a list of {@link PieceSourceDelegations}, canonically ordered. */
+function pieceSourceDelegationList(
+  entries: ModuleDelegationMap,
+): { identity: string; predecessors: string[] }[] {
+  return [...entries].sort(([a], [b]) => utf8Compare(a, b))
+    .map(([identity, predecessors]) => ({
+      identity,
+      predecessors: [...predecessors].sort(utf8Compare),
+    }));
 }
 
 /** Read the validated, append-only source revisions carried by a piece. */
@@ -18232,16 +18295,13 @@ export function applyPieceSourceTransition(
   // SPEC-PENDING TBD-succession-record: the member carries the delegations,
   // so that a runtime starting the piece holds them before the staging on
   // the cache records, which follows this transaction's commit, lands.
-  const recorded = getPieceSourceDelegations(
-    candidate,
-    current.pattern.identity,
-  );
-  // Every transition writes the member for the next pattern. One that is no
-  // source update carries what the member records, keyed by module: the next
-  // pattern's start registers only the entries for modules of its closure,
-  // so a module it keeps unchanged keeps its grant, as its cache record would
-  // keep it after a staging that landed, and a new module gets nothing.
-  let nextDelegations: ModuleDelegationMap = recorded;
+  const recorded = getPieceSourceRecord(candidate, current.pattern.identity);
+  // Every transition writes the member for the next pattern. A source update
+  // composed its record at preparation. Any other carries the edges as they
+  // are and closes the next pattern's modules over them, on this trusted
+  // path: a module the next pattern keeps or brings back gets what the
+  // piece's history granted it, and a new module gets nothing.
+  let next: PieceSourceRecord;
   if (options.sourceUpdate !== undefined) {
     if (
       !runtime.patternManager.sourceUpdateComposedWith(
@@ -18251,7 +18311,7 @@ export function applyPieceSourceTransition(
     ) {
       throw new Error(PIECE_SOURCE_MOVED);
     }
-    const { granted, carried } = runtime.patternManager.stageSourceUpdate(
+    next = runtime.patternManager.stageSourceUpdate(
       options.sourceUpdate,
       resultCell.space,
       transition.expected.pattern.identity,
@@ -18259,18 +18319,24 @@ export function applyPieceSourceTransition(
       tx,
       recorded,
     );
-    // The composition already holds every recorded entry.
-    nextDelegations = new Map([...carried, ...granted]);
+  } else {
+    const closure = readVerifiedSourceClosure(
+      runtime,
+      resultCell.space,
+      nextPattern.identity,
+      tx,
+    );
+    next = {
+      delegations: closeDelegationsFor(recorded.edges, closure?.keys() ?? []),
+      edges: recorded.edges,
+    };
   }
   candidate.setMetaRaw(
     "pieceSourceDelegations",
-    nextDelegations.size === 0 ? undefined : {
+    next.delegations.size === 0 && next.edges.size === 0 ? undefined : {
       identity: nextPattern.identity,
-      delegations: [...nextDelegations].sort(([a], [b]) => utf8Compare(a, b))
-        .map(([identity, predecessors]) => ({
-          identity,
-          predecessors: [...predecessors].sort(utf8Compare),
-        })),
+      delegations: pieceSourceDelegationList(next.delegations),
+      edges: pieceSourceDelegationList(next.edges),
     },
     rawMetaWriteAuthorization,
   );

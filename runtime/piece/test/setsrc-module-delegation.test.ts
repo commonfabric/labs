@@ -482,6 +482,7 @@ export default pattern<{seed?: ${seedType}}>(() => {
         | {
           identity: string;
           delegations: { identity: string; predecessors: string[] }[];
+          edges: { identity: string; predecessors: string[] }[];
         }
         | undefined;
 
@@ -546,11 +547,19 @@ export default pattern<{seed?: ${seedType}}>(() => {
           ?.predecessors,
       ).toEqual([v0, v1].sort());
 
+      // A start derives and closes nothing: both of the paths that compose a
+      // record go unused, and the member stays as it was.
       using preparing = spy(observer.patternManager, "prepareSourceUpdate");
+      using proposing = spy(
+        observer.patternManager,
+        "proposedSourceUpdateDelegations",
+      );
       const observed = await observerPieces.get(piece.id, true);
 
       expect(await invokeSetName(observed, "after")).toBe("v2:after");
       expect(preparing.calls.length).toBe(0);
+      expect(proposing.calls.length).toBe(0);
+      expect(recordedMember(piece)).toEqual(recorded);
       // Every entry for a module of v2's closure is registered. The member
       // also carries v1's modules' entries, for a module that returns.
       const closureTx = runtime.edit();
@@ -909,8 +918,8 @@ export default pattern<{seed?: ${seedType}}>(() => {
       // v0 to v1 changes the writer, and its staging never lands. v1 to v2
       // replaces the writer through a transition that is no source update,
       // so v2's writer holds none of w1's grant. v3 replaces it again by a
-      // source update, and v4 brings w1 back, byte for byte. w1's entry is
-      // superseded at v3 but covered by nothing, so it is kept.
+      // source update, and v4 brings w1 back, byte for byte. w1's edge to w0
+      // stays in the member's edges throughout.
       const { on: fresh, controller: freshPieces } = await freshController();
       try {
         const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
@@ -957,32 +966,34 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     });
 
-    it("keeps the member linear over updates that change every module", async () => {
-      // Each update replaces the entry and the writer, and each new version
-      // holds the whole chain of the one it replaces, so no superseded
-      // version's entry is kept: two entries, each listing every earlier
-      // version of its module.
+    it("keeps the member's edges linear in derivations over updates that change every module", async () => {
+      // Each update replaces the entry and the writer. The edges gain one
+      // direct edge per replaced module per update, the records' own closed
+      // lists adding none; the delegations hold one entry per module of the
+      // running pattern, listing every earlier version of it.
       const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
         input: {},
       });
       for (let update = 1; update <= 8; update++) {
         await piece.setPattern(splitWriterProgram(`w${update}`, `e${update}`));
+        await runtime.patternManager.flushCompileCacheWrites();
         const recorded = recordedMember(piece)!;
         expect(recorded.delegations.length).toBe(2);
         expect(
           recorded.delegations.map(({ predecessors }) => predecessors.length),
         ).toEqual([update, update]);
+        expect(recorded.edges.length).toBe(2 * update);
+        expect(
+          recorded.edges.every(({ predecessors }) => predecessors.length === 1),
+        ).toBe(true);
       }
     });
 
-    it("loses the grant of a module whose covering successor left before it returned", async () => {
-      // TODO(danfuzz): This pins a loss that `main` does not have (see the
-      // `TODO` in `composeRecordedDelegations()`). v0 to v1's staging never
-      // lands. v2's writer covers w1's chain, so w1's entry is dropped. v3
-      // drops that writer, v4 puts an unrelated one at its file, and v5 brings
-      // w1 back: it derives only from the unrelated writer, and its write is
-      // refused, where `main`'s record of w1 still grants it. Flip the
-      // expectation to `w1:b` if the record keeps direct edges for history.
+    it("keeps the grant of a module whose successor left before it returned", async () => {
+      // v0 to v1's staging never lands. v2's writer succeeds w1, v3 drops
+      // that writer, v4 puts an unrelated one at its file, and v5 brings w1
+      // back: w1 derives only from the unrelated writer, and its own edge to
+      // w0 still grants it, as `main`'s record of w1 does.
       const { on: fresh, controller: freshPieces } = await freshController();
       try {
         const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
@@ -1003,7 +1014,66 @@ export default pattern<{seed?: ${seedType}}>(() => {
 
         const observed = await freshPieces.get(piece.id, true);
 
-        expect(await invokeSetName(observed, "b")).toBe("w0:a");
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the grant of a module a successor replaced, when a transition that is no source update reverts to it, and after a later update", async () => {
+      // v0 to v1's staging never lands; v1 to v2 is a source update whose
+      // staging lands, so w2 succeeds w1; a transition that is no source
+      // update then reverts to v1. w1 keeps its grant from w0, and so does
+      // the writer of a later honest update from v1.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        await piece.setPattern(splitWriterProgram("w2", "e2"));
+        await moveWithoutUpdate(piece, splitWriterProgram("w1", "e1"));
+
+        const reverted = await freshPieces.get(piece.id, true);
+        expect(await invokeSetName(reverted, "b")).toBe("w1:b");
+
+        await piece.setPattern(splitWriterProgram("w3", "e3"));
+        const cold = await observerPieces.get(piece.id, true);
+        expect(await invokeSetName(cold, "c")).toBe("w3:c");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
+    it("keeps the grant of a module a successor replaced, when an ordinary update brings it back after its file was renamed away", async () => {
+      // v0 to v1's staging never lands; w2 succeeds w1 at v2; v3 moves the
+      // writer to another file, so no module has w1's; v4 is an ordinary
+      // update back to v1's writer, which derives from nothing.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        await piece.setPattern(splitWriterProgram("w2", "e2"));
+        await piece.setPattern(splitWriterProgram("w2", "e3", "other.ts"));
+        await piece.setPattern(splitWriterProgram("w1", "e4"));
+        await runtime.patternManager.flushCompileCacheWrites();
+        await pieces.synced();
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w1:b");
       } finally {
         await fresh.dispose({ closeStorage: false });
       }

@@ -86,6 +86,77 @@ function mergeDelegations(
 }
 
 /**
+ * Every identity `identity` inherits from through `direct`, itself excepted.
+ * The walk visits each identity once, so it ends on any relation, cycles and
+ * self-edges included.
+ */
+export function inheritedThrough(
+  direct: ModuleDelegationInput,
+  identity: string,
+): Set<string> {
+  const inherited = new Set<string>();
+  const pending = [...(direct.get(identity) ?? [])];
+  while (pending.length > 0) {
+    const predecessor = pending.pop()!;
+    if (predecessor === identity || inherited.has(predecessor)) continue;
+    inherited.add(predecessor);
+    for (const ancestor of direct.get(predecessor) ?? []) {
+      pending.push(ancestor);
+    }
+  }
+  return inherited;
+}
+
+/**
+ * The closed delegations of each of `identities` over `direct`: for each,
+ * every identity it inherits from, when there is any.
+ */
+export function closeDelegationsFor(
+  direct: ModuleDelegationInput,
+  identities: Iterable<string>,
+): Map<string, ReadonlySet<string>> {
+  const closed = new Map<string, ReadonlySet<string>>();
+  for (const identity of identities) {
+    const inherited = inheritedThrough(direct, identity);
+    if (inherited.size > 0) closed.set(identity, inherited);
+  }
+  return closed;
+}
+
+/**
+ * Adds to `edges` an edge from `identity` to each of `inputs` that `identity`
+ * does not already inherit from over `edges`, so that the edges stay direct:
+ * an input that a closed list names beside the predecessor it came through
+ * adds nothing. The inputs are taken widest-first, so the one the others are
+ * reached through goes in before them. What `identity` inherits afterward is
+ * every input and everything it inherited before; nothing is dropped.
+ */
+export function addDirectEdges(
+  edges: Map<string, Set<string>>,
+  identity: string,
+  inputs: Iterable<string>,
+): void {
+  const candidates = [...new Set(inputs)].filter((input) =>
+    admissiblePredecessor(identity, input)
+  );
+  const reach = new Map(
+    candidates.map((input) => [input, inheritedThrough(edges, input).size]),
+  );
+  candidates.sort((a, b) =>
+    (reach.get(b)! - reach.get(a)!) || utf8Compare(a, b)
+  );
+  for (const input of candidates) {
+    if (inheritedThrough(edges, identity).has(input)) continue;
+    let direct = edges.get(identity);
+    if (direct === undefined) {
+      direct = new Set();
+      edges.set(identity, direct);
+    }
+    direct.add(input);
+  }
+}
+
+/**
  * Returns the transitive closure of `direct`: for each successor, every
  * identity reachable through predecessors, itself excepted, sorted so the
  * list is canonical whatever order the registrations arrived in.
@@ -94,17 +165,8 @@ function transitiveDelegations(
   direct: DirectDelegations,
 ): ReadonlyMap<string, readonly string[]> {
   const closure = new Map<string, readonly string[]>();
-  for (const [identity, predecessors] of direct) {
-    const inherited = new Set<string>();
-    const pending = [...predecessors];
-    while (pending.length > 0) {
-      const predecessor = pending.pop()!;
-      if (predecessor === identity || inherited.has(predecessor)) continue;
-      inherited.add(predecessor);
-      for (const ancestor of direct.get(predecessor) ?? []) {
-        pending.push(ancestor);
-      }
-    }
+  for (const identity of direct.keys()) {
+    const inherited = inheritedThrough(direct, identity);
     if (inherited.size > 0) {
       closure.set(identity, [...inherited].sort(utf8Compare));
     }

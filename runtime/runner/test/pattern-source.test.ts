@@ -9,6 +9,7 @@ import {
   applyPieceSourceTransition,
   getPatternSource,
   getPieceSourceDelegations,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   PIECE_SOURCE_MOVED,
@@ -334,6 +335,43 @@ describe("patternSource meta accessors", () => {
       ).toStrictEqual(new Map());
     });
 
+    it("reads both fields for a recording transition, and neither where either is malformed", async () => {
+      const edges = [{ identity: "recorded-module", predecessors: ["older"] }];
+      const cell = await pieceWith("recorded-record", {
+        identity: pattern,
+        delegations: valid,
+        edges,
+      });
+      expect(getPieceSourceRecord(cell, pattern)).toStrictEqual({
+        delegations: new Map([["recorded-module", new Set(["earlier"])]]),
+        edges: new Map([["recorded-module", new Set(["older"])]]),
+      });
+
+      for (
+        const [name, malformed] of [
+          ["absent", undefined],
+          ["self-edge", [{ identity: "m", predecessors: ["m"] }]],
+          ["duplicate", [
+            { identity: "m", predecessors: ["a"] },
+            { identity: "m", predecessors: ["b"] },
+          ]],
+          ["empty-predecessors", [{ identity: "m", predecessors: [] }]],
+        ] as const
+      ) {
+        const bad = await pieceWith(`recorded-record-${name}`, {
+          identity: pattern,
+          delegations: valid,
+          ...(malformed === undefined ? {} : { edges: malformed }),
+        });
+        expect(getPieceSourceRecord(bad, pattern), name).toStrictEqual({
+          delegations: new Map(),
+          edges: new Map(),
+        });
+        // A start reads the delegations alone, which are well-formed.
+        expect(getPieceSourceDelegations(bad, pattern).size, name).toBe(1);
+      }
+    });
+
     it("returns none for a malformed member", async () => {
       const malformed: unknown[] = [
         "not an object",
@@ -398,12 +436,14 @@ describe("patternSource meta accessors", () => {
 
     /**
      * A piece running `pattern`, whose history ends at it and whose member
-     * records `recorded` for it.
+     * records `recorded` for it, as its delegations and, unless `edges` says
+     * otherwise, as its edges.
      */
     const pieceRunning = async (
       id: string,
       pattern: { identity: string; symbol: string },
       recorded: { identity: string; predecessors: string[] }[],
+      edges = recorded,
     ) => {
       const seed = runtime.edit();
       const seeded = runtime.getCell(signer.did(), id, undefined, seed);
@@ -423,6 +463,7 @@ describe("patternSource meta accessors", () => {
       seeded.setMetaRaw("pieceSourceDelegations", {
         identity: pattern.identity,
         delegations: recorded,
+        edges,
       }, rawMetaWriteAuthorization);
       expect((await seed.commit().settled).error).toBeUndefined();
       return runtime.getCell(signer.did(), id);
@@ -458,6 +499,7 @@ describe("patternSource meta accessors", () => {
       expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
         identity: pattern.identity,
         delegations: recorded,
+        edges: recorded,
       });
     });
 
@@ -474,6 +516,7 @@ describe("patternSource meta accessors", () => {
       expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
         identity: pattern.identity,
         delegations: recorded,
+        edges: recorded,
       });
     });
 
@@ -490,16 +533,18 @@ describe("patternSource meta accessors", () => {
           space,
           pattern.identity,
           next.identity,
-          getPieceSourceDelegations(cell, pattern.identity),
+          getPieceSourceRecord(cell, pattern.identity),
         );
         if (moveMember) {
           const write = runtime.edit();
+          const since = [{
+            identity: pattern.identity,
+            predecessors: ["recorded-since"],
+          }];
           cell.withTx(write).setMetaRaw("pieceSourceDelegations", {
             identity: pattern.identity,
-            delegations: [{
-              identity: pattern.identity,
-              predecessors: ["recorded-since"],
-            }],
+            delegations: since,
+            edges: since,
           }, rawMetaWriteAuthorization);
           expect((await write.commit().settled).error).toBeUndefined();
         }
@@ -523,7 +568,7 @@ describe("patternSource meta accessors", () => {
         .rejects.toThrow(PIECE_SOURCE_MOVED);
     });
 
-    it("carries what it records to the next pattern on a transition that is no source update", async () => {
+    it("carries its edges to the next pattern on a transition that is no source update, closing only that pattern's modules", async () => {
       const pattern = await compile("before");
       const next = await compile("after");
       const recorded = [{
@@ -537,8 +582,43 @@ describe("patternSource meta accessors", () => {
       expect(getPieceSourceRevisions(cell).at(-1)?.pattern).toEqual(next);
       expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
         identity: next.identity,
-        delegations: recorded,
+        delegations: [],
+        edges: recorded,
       });
+    });
+
+    it("closes a module over edges for modules outside the closure only through a path from that module", async () => {
+      // `pattern` reaches "middle", and through it "farthest"; "stray" is
+      // outside the closure and reached from nothing in it.
+      const pattern = await compile("reach");
+      const edges = [
+        { identity: "middle", predecessors: ["farthest"] },
+        { identity: pattern.identity, predecessors: ["middle"] },
+        { identity: "stray", predecessors: ["elsewhere"] },
+      ];
+      const cell = await pieceRunning("delegations-reach", pattern, [], edges);
+
+      await transition(cell, pattern, "detach");
+
+      expect(getPieceSourceDelegations(cell, pattern.identity)).toStrictEqual(
+        new Map([[pattern.identity, new Set(["farthest", "middle"])]]),
+      );
+    });
+
+    it("closes a module over edges that form a cycle, and ends", async () => {
+      const pattern = await compile("cycle");
+      const edges = [
+        { identity: "one", predecessors: ["two"] },
+        { identity: pattern.identity, predecessors: ["one"] },
+        { identity: "two", predecessors: ["one", pattern.identity] },
+      ];
+      const cell = await pieceRunning("delegations-cycle", pattern, [], edges);
+
+      await transition(cell, pattern, "detach");
+
+      expect(getPieceSourceDelegations(cell, pattern.identity)).toStrictEqual(
+        new Map([[pattern.identity, new Set(["one", "two"])]]),
+      );
     });
   });
 

@@ -428,15 +428,16 @@ the change and its markers name it `TBD-succession-record`. The transition reads
 the piece's data, so delegation lists it staged on compile-cache records took
 that data's flow label, and every later setup of the module consumed it and
 could be refused. The transition now writes the lists only into the member,
-through the runtime's meta seam, naming the pattern they are for. A cache
-transaction of its own then stages them on the records, after the commit. A
-runtime that starts or swaps the piece registers the member's entries whose
-module is in the successor's verified closure, and writes nothing. It admits
-more at strict, with no default-off dial, so it does not satisfy step 4 above.
-Its two deciding sites carry the `SPEC-PENDING` marker. @danfuzz authorized
-landing this design ahead of the ruling, without a flag, on 2026-11-14. The
-conformance statement's §11 records the gap, what it gives up, and what it
-leaves to a separate repair.
+through the runtime's meta seam, naming the pattern they are for: the direct
+edges of the piece's history, and the closed delegations of that pattern's
+modules over them. A cache transaction of its own then stages them on the
+records, after the commit. A runtime that starts or swaps the piece registers
+the closed entries whose module is in the successor's verified closure, reads
+nothing else, and writes nothing. It admits more at strict, with no default-off
+dial, so it does not satisfy step 4 above. Its two deciding sites carry the
+`SPEC-PENDING` marker. @danfuzz authorized landing this design ahead of the
+ruling, without a flag, on 2026-11-14. The conformance statement's §11 records
+the gap, what it gives up, and what it leaves to a separate repair.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
