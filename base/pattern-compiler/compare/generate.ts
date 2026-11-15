@@ -56,10 +56,15 @@ const isHandle = (schema: Schema): boolean =>
 
 /**
  * A value of `schema`. `name` makes each string distinct, so that a value
- * the run stores can be told from another. With `handles` false an object
- * has no member that is declared as a handle and is not required: a plain
- * value sent in an event where a handle is declared is read as a handle
- * that cannot be written, and a handler that sets it throws.
+ * the run stores can be told from another. With `handles` false the value
+ * is for an event. An object then has no member that is declared as a
+ * handle and is not required: a plain value sent in an event where a
+ * handle is declared is read as a handle that cannot be written, and a
+ * handler that sets it throws. And a number is 1, a boolean `false`, and
+ * a value of an `enum` its last member, where an input holds 3, `true`,
+ * and the first member: a handler that sets a cell to a value of its
+ * event writes nothing where the cell holds that value already, and an
+ * index of 1 is inside an array of an input, which has two elements.
  */
 export const generateValue = (
   schema: Schema,
@@ -73,7 +78,9 @@ export const generateValue = (
   if (resolved === true) return `${name}-value`;
   if (isStream(resolved)) return NONE;
   if ("const" in resolved) return resolved.const;
-  if (resolved.enum !== undefined) return resolved.enum[0];
+  if (resolved.enum !== undefined) {
+    return handles ? resolved.enum[0] : resolved.enum.at(-1);
+  }
   const variants = resolved.anyOf ?? resolved.oneOf;
   if (variants !== undefined) {
     // The first variant that has a value other than `null`.
@@ -95,9 +102,9 @@ export const generateValue = (
       return `${name}-text`;
     case "number":
     case "integer":
-      return 3;
+      return handles ? 3 : 1;
     case "boolean":
-      return true;
+      return handles;
     case "null":
       return null;
     case "array": {
@@ -233,6 +240,11 @@ export const generateEvent = (
   if (declared !== undefined) {
     const value = generateValue(declared, declared, "event", 0, false);
     if (value !== NONE && value !== null && typeof value === "object") {
+      return value;
+    }
+    // An event whose declared type is a primitive is that value.
+    const type = typeof declared === "object" ? declared.type : undefined;
+    if (type === "string" || type === "number" || type === "boolean") {
       return value;
     }
   }

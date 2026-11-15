@@ -112,6 +112,49 @@ describe("generateEvent", () => {
   });
 });
 
+describe("the values of a generated event", () => {
+  const plan = (schema: Schema): [Plan, { id: string; schema: Schema }[]] => [
+    {
+      slots: [],
+      outputs: [],
+      bindings: [{ name: "h", handler: { body: 0 }, eventSchema: "event" }],
+    } as unknown as Plan,
+    [{ id: "event", schema }],
+  ];
+
+  it("differ from the values of a generated input, and an index is inside a generated array", () => {
+    // A handler that sets a cell to a value of its event writes nothing
+    // where the cell already holds that value, and a handler that takes
+    // an index returns early where the index is past the end. An input
+    // holds 3 for a number, `true`, the first member of an `enum`, and
+    // two elements in an array.
+    const schema: Schema = {
+      type: "object",
+      properties: {
+        index: { type: "number" },
+        on: { type: "boolean" },
+        status: { enum: ["want", "reading", "done"] },
+      },
+    };
+
+    expect(generateEvent(...plan(schema), 0)).toEqual({
+      index: 1,
+      on: false,
+      status: "done",
+    });
+    expect(generateValue(schema, schema, "x")).toEqual({
+      index: 3,
+      on: true,
+      status: "want",
+    });
+  });
+
+  it("is a string where the event's type is a string", () => {
+    // `action((to: string) => path.set(to))`.
+    expect(generateEvent(...plan({ type: "string" }), 0)).toBe("event-text");
+  });
+});
+
 describe("a generated scenario for the handler fixture", () => {
   it("gives each input an atom of its own where its schema declares no clause at its root", async () => {
     const { plan, schemas } = await planOf("handler");
