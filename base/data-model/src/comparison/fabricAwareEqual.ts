@@ -12,10 +12,10 @@ import { valueEqual } from "./valueEqual.ts";
  * without being known to be one: a schema `const` against a stored value, a
  * schema default against a materialized one, a write against the value it
  * replaces, a request against the snapshot a policy was checked over. A
- * special object -- a byte sequence, a temporal value, a content hash, a
- * regular expression, an error, a link, a map, a set -- keeps its state in
- * private fields and has no enumerable own properties, so `deepEqual()` on its
- * own reads two distinct same-class ones as equal. `valueEqual()` is defined
+ * special object -- a byte sequence, a temporal value, a content hash, an
+ * error, a link, a map, a set -- keeps its state in private fields and has no
+ * enumerable own properties, so `deepEqual()` on its own reads two distinct
+ * same-class ones as equal. `valueEqual()` is defined
  * over `FabricValue`s and throws on any other class instance, which these
  * operands can still carry -- a `Cell`, for one.
  *

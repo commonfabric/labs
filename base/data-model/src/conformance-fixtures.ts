@@ -20,9 +20,7 @@ import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import type { CODEC, JSON_CODEC } from "@/codec-interface/interface.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
-import { JSON_FORMAT } from "@/codec-json/interface.ts";
 import { deepFreeze } from "@/deep-freeze.ts";
 import {
   FabricError,
@@ -33,11 +31,9 @@ import {
 } from "@/fabric-instances";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
-import {
-  codecClassesFor,
-  createDefaultJsonRegistry,
-  jsonFromFabricValue,
-} from "./codecs.ts";
+import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
+import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
+import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
 
 //
 // Types
@@ -136,21 +132,6 @@ export type FixtureRequirements = {
   readonly [Measure in SizeMeasure]?: number;
 };
 
-/**
- * The names in `ClassesByName` of the classes that bind a JSON codec, which
- * are the classes whose values have text. A class binds one under `[CODEC]`
- * or under the JSON format's own symbol, as `codecClassesFor()` reads it.
- *
- * TODO(danfuzz): Once `FabricRegExp` is deleted, key the class tables on
- * `keyof ClassesByName`, and remove this.
- */
-export type JsonCodecClassName<ClassesByName> = {
-  readonly [Name in keyof ClassesByName]: ClassesByName[Name] extends
-    | { readonly [CODEC]: unknown }
-    | { readonly [JSON_CODEC]: unknown } ? Name
-    : never;
-}[keyof ClassesByName];
-
 /** Makers of examples of each class in one of the class tables. */
 export type ExampleMakers<ClassesByName> = {
   readonly [Name in keyof ClassesByName]: readonly (() => FabricValue)[];
@@ -184,7 +165,7 @@ export const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
  * place among that class's makers.
  */
 export function classCasesOf<Name extends string>(
-  makers: { readonly [N in NoInfer<Name>]: readonly (() => FabricValue)[] },
+  makers: { readonly [N in Name]: readonly (() => FabricValue)[] },
   notes: { readonly [N in Name]: ClassCaseNotes },
 ): ClassCase[] {
   const cases: ClassCase[] = [];
@@ -852,10 +833,9 @@ function mutableEngineUnclaiming(
     for (const cls of claiming) leftOut.add(cls);
   }
   const kept = (cls: Constructor) => !leftOut.has(cls);
-  // TODO(danfuzz): Once `FabricRegExp` is deleted, filter the two
-  // `codecClasses()` lists here directly.
   const registry = createBaseJsonRegistry().extend(
-    codecClassesFor(JSON_FORMAT).filter(kept),
+    primitiveClasses().filter(kept),
+    instanceClasses().filter(kept),
   );
   return new JsonCodecEngine({ registry, mutable: true });
 }
@@ -868,9 +848,7 @@ function mutableEngineUnclaiming(
  */
 function classesClaiming(tag: string): Constructor[] {
   const base = createBaseJsonRegistry();
-  // TODO(danfuzz): Once `FabricRegExp` is deleted, filter the two
-  // `codecClasses()` lists here directly.
-  return codecClassesFor(JSON_FORMAT).filter((cls) =>
+  return [...primitiveClasses(), ...instanceClasses()].filter((cls) =>
     base.extend(cls).codecFromTag(tag) !== base.codecFromTag(tag)
   );
 }

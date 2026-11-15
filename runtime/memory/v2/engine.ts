@@ -7174,7 +7174,7 @@ const applyCommitTransaction = (
     // A set's value must be a document object, as applying the set also
     // checks. It is checked here first because the identity check below reads
     // its `value` member, which on a non-document can be anything: a
-    // `FabricRegExp`'s, for one, is a JS `RegExp`.
+    // `FabricEpochDay`'s, for one, is a `bigint`.
     if (!isEntityDocument(operation.value)) {
       throw new ProtocolError(
         `memory v2 commit sets content-addressed document ${operation.id} to something other than a document`,
