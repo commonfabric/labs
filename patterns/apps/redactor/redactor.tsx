@@ -107,6 +107,23 @@ export interface RedactorOutput {
   };
 }
 
+/**
+ * Give an unset draft a value, so the textarea can bind to it. The runtime
+ * fits a confidential cell that holds nothing by its schema's label alone,
+ * which no exchange rule rewrites, so the owner's display refuses it; and a
+ * bound input whose read is refused writes nothing. Typing into a fresh
+ * redactor was silently dropped. Once the draft holds a value it carries a
+ * stored label, `releaseToSpaceReader` admits it, and the binding works.
+ * Remove this when the draft can take a `Default` (README, CFC debt 3) or the
+ * runtime admits an empty secret's own reader.
+ */
+const startDraft = handler<
+  unknown,
+  { draft: Writable<Secret<string>> }
+>((_, { draft }) => {
+  if (draft.get() == null) draft.set("" as Secret<string>);
+});
+
 const setDraft = handler<
   { text: string },
   { draft: Writable<Secret<string>> }
@@ -159,6 +176,7 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
     });
     const sendRawDraft = copyInto({ from: draft, to: modelPrompt });
     const typeDraft = setDraft({ draft });
+    const beginDraft = startDraft({ draft });
 
     const answer = generateText({ system: SYSTEM_PROMPT, prompt: modelPrompt });
 
@@ -214,6 +232,7 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
                 <cf-heading level={4}>1. Your draft (private)</cf-heading>
                 <cf-textarea
                   $value={draft}
+                  oncf-focus={beginDraft}
                   rows={6}
                   autoResize
                   placeholder="Write what you want to ask, real names and all."

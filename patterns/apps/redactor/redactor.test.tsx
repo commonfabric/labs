@@ -5,7 +5,12 @@
  *
  * Run: deno task cf test patterns/apps/redactor/redactor.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  findNode,
+  fireEvent,
+  propsOf,
+} from "../../tools/test-support/vnode-helpers.ts";
 import Redactor from "./redactor.tsx";
 import { restore } from "./redaction.ts";
 
@@ -13,6 +18,11 @@ const DRAFT =
   "Write a polite note to my landlord Jordan Rivera (jordan.r@rivera-props.com, " +
   "415-867-5309) saying I'll pay on Friday. Rivera knows my SSN is 123-45-6789. " +
   "Cc Alice Anderson.";
+
+// "Send to model" asks the model; CI blocks live calls.
+export const llmMocks = [
+  { promptIncludes: "polite note", text: "Dear Bob Brown, see you Friday." },
+];
 
 export default pattern(() => {
   const pastedReply = new Writable("");
@@ -30,6 +40,23 @@ export default pattern(() => {
   );
 
   const assert_empty_start = assert(() => redactor.modelPrompt === "");
+
+  // Focusing the draft gives an unset draft a value, without which the
+  // owner's display refuses it and the bound textarea drops what is typed.
+  const action_focus_draft = action(() =>
+    fireEvent(
+      findNode(
+        redactor[UI],
+        (node) => propsOf(node)?.["oncf-focus"] !== undefined,
+      ),
+      "oncf-focus",
+      {},
+      "the draft textarea",
+    )
+  );
+  const assert_draft_started = assert(() =>
+    redactor.redacted === "" && redactor.found.length === 0
+  );
 
   const assert_vault_name_replaced = assert(() =>
     !redactor.redacted.includes("Jordan") &&
@@ -73,6 +100,8 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_empty_start },
+      { action: action_focus_draft },
+      { assertion: assert_draft_started },
       {
         action: redactor.vault.addEntry,
         event: { category: "name", value: "Jordan Rivera" },
