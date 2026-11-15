@@ -695,11 +695,12 @@ and the piece's own authority does not depend on it; the piece's next committed
 update stages the closed entries of the modules it then runs. A grant whose
 staging failed stays missing from the records where nothing of the piece's
 carries it to them, and a reader of the records alone is refused it: a runtime
-from before the member that makes the piece's next update, and a write that
-another piece's module makes through a link. A member that is absent or names
-another pattern registers nothing, and the stored entries decide. General cache
-saves ([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority
-already present in either set. Entries accumulate because one content-addressed
+from before the member that makes any transition of the piece after the failed
+staging, a source update or not, and a write that another piece's module makes
+through a link. A member that is absent or names another pattern registers
+nothing, and the stored entries decide. General cache saves
+([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority already
+present in either set. Entries accumulate because one content-addressed
 successor can be shared by patterns updated from different predecessors.
 
 Because `identity` is a one-way Merkle hash, internal source links are

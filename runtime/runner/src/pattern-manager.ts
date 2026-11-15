@@ -2625,9 +2625,10 @@ export class PatternManager {
    * TODO: A grant whose staging failed is missing from the records for good
    * where nothing of this piece's carries it to them, and what reads only
    * the records is refused it, where `main`'s staging in the transition
-   * would have kept it: a runtime from before the member that makes the
-   * piece's next update, which ignores the member and derives from the
-   * unstaged record (`setsrc-module-delegation.test.ts`, "loses a grant
+   * would have kept it: a runtime from before the member that makes any
+   * transition of the piece after the failed staging, a source update or
+   * not, after which the member names another pattern and is ignored, and
+   * the unstaged record decides (`setsrc-module-delegation.test.ts`, "loses a grant
    * whose staging failed when a runtime from before the record makes the
    * piece's next update"); and a write that a module of another piece
    * makes, through a link, into a field the granting module protects, since

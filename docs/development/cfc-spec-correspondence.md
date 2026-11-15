@@ -433,16 +433,17 @@ delegation edge of the piece's history with the history positions it was
 recorded at, and the closed delegations of that pattern's modules over them
 along non-increasing positions. A grant whose staging failed stays missing from
 the records where nothing of the piece's carries it there, so a runtime from
-before the member that makes the piece's next update, and another piece's module
-writing through a link, are refused it; each needs the failed staging first, and
-each refuses only. A cache transaction of its own then stages them on the
-records, after the commit. A runtime that starts or swaps the piece registers
-the closed entries whose module is in the successor's verified closure, reads
-nothing else, and writes nothing. It admits more at strict, with no default-off
-dial, so it does not satisfy step 4 above. Its two deciding sites carry the
-`SPEC-PENDING` marker. @danfuzz authorized landing this design ahead of the
-ruling, without a flag, on 2026-11-14. The conformance statement's §11 records
-the gap, what it gives up, and what it leaves to a separate repair.
+before the member that makes any transition of the piece after the failed
+staging, and another piece's module writing through a link, are refused it; each
+needs the failed staging first, and each refuses only. A cache transaction of
+its own then stages them on the records, after the commit. A runtime that starts
+or swaps the piece registers the closed entries whose module is in the
+successor's verified closure, reads nothing else, and writes nothing. It admits
+more at strict, with no default-off dial, so it does not satisfy step 4 above.
+Its two deciding sites carry the `SPEC-PENDING` marker. @danfuzz authorized
+landing this design ahead of the ruling, without a flag, on 2026-11-14. The
+conformance statement's §11 records the gap, what it gives up, and what it
+leaves to a separate repair.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

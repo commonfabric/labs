@@ -952,18 +952,22 @@ procedure's step 4. Its two deciding sites, the recording in
   long-lived piece. A record's attested list adds an edge only for a predecessor
   the piece's own history does not already reach, as one another piece's update
   gave a shared successor. The closure expands each module once, taking first
-  the module it reaches with the largest position, so its cost is linear in the
-  edges and their positions, times a logarithm, forged members included.
+  the module it reaches with the largest position, so one closure costs time
+  linear in the edges and their positions, times a logarithm. A forged member
+  can still make one preparation expensive, since the update closes once per
+  predecessor and per candidate module: one with a million edges costs about
+  twelve seconds, measured.
 - A grant whose staging failed. The piece's own authority does not depend on the
   staging, but the grant stays missing from the cache records where nothing of
   the piece's carries it to them, so what reads only the records is refused it,
   where `main`'s staging in the transition would have kept it: a runtime from
-  before the member that makes the piece's next update ignores the member and
-  derives from the unstaged record (pinned by a test that expects the refusal);
-  and a module of another piece that writes, through a link, into a field the
-  granting module protects is refused, since that runtime registers the grant
-  only from the records. Each needs the failed staging first, and each refuses,
-  never grants.
+  before the member that makes any transition of the piece after the failed
+  staging, a source update or not, leaves the member naming another pattern, so
+  it is ignored and the unstaged record decides (pinned by a test that expects
+  the refusal); and a module of another piece that writes, through a link, into
+  a field the granting module protects is refused, since that runtime registers
+  the grant only from the records. Each needs the failed staging first, and each
+  refuses, never grants.
 - Records an earlier transition stamped keep their clause, and the setups
   that read them keep refusing, until a separate repair. A write-back still
   re-stamps the root of a record that already carries a clause.
