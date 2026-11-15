@@ -75,29 +75,31 @@ written, with the reading this crate chose.
 evaluator of the templates of `plan-and-label-templates.md` §3.2
 (`compare/template.ts`), a harness that runs a pattern through the existing
 transformer and builder and reads the stored labels of its slots and outputs
-(`compare/harness.ts`), six fixtures, a generator of scenarios
+(`compare/harness.ts`), fixtures, a generator of scenarios
 (`compare/generate.ts`), and a run over the corpus (`compare/corpus.ts`). The
 harness resolves a slot of root `argument`, `element`, `state`, `binding`, and
 `event`. It sends an event to the stream of a binding and compares the write
 edges of the handler's body with the labels at the paths that event's run wrote.
-It finds the branch of a `select` and the child of a `pick` from the values the
-run stored. Every kept output carries the atom of the plan's pattern, and a row
-whose atom names the pattern where the runtime's names other code is counted in
-a category of its own. The position of a tag that names a pattern is read below
-the `$UI` of the result the run holds there. The generator gives each top-level
-input of a plan a value of its type and a confidentiality atom of its own, and
-each handler an event of the type its event declares. An `identity` slot has the
-label of the link at the position that holds the reference, and is joined with a
-value read of its path only where an output passes the reference on. A write row
-is compared beside the label the target's type declares, and the slot of a
-handle its body only passes on has the stamp of the link without the entry of
-origin `link`. A binding of an element body gets its event at the last element
-of each enclosing collection, and its write edges and state are evaluated with
-that element bound. A state cell of another instance, an element's or a
-compiled-in pattern's, is read from the manifest of that instance's result
-document. An output that passes on a reference the instance computed is compared
-with both sides reading the cell the stored link leads to. The static part is
-separated by document.
+It evaluates the templates of those edges on what is stored before the event,
+compares no edge of an event the runtime did not commit, and compares no row
+whose label the runtime fails to read. It finds the branch of a `select` and the
+child of a `pick` from the values the run stored. Every kept output carries the
+atom of the plan's pattern, and a row whose atom names the pattern where the
+runtime's names other code is counted in a category of its own. The position of
+a tag that names a pattern is read below the `$UI` of the result the run holds
+there. The generator gives each top-level input of a plan a value of its type
+and a confidentiality atom of its own, and each handler an event of the type its
+event declares. An `identity` slot has the label of the link at the position
+that holds the reference, and is joined with a value read of its path only where
+an output passes the reference on. A write row is compared beside the label the
+target's type declares, and the slot of a handle its body only passes on has the
+stamp of the link without the entry of origin `link`. A binding of an element
+body gets its event at the last element of each enclosing collection, and its
+write edges and state are evaluated with that element bound. A state cell of
+another instance, an element's or a compiled-in pattern's, is read from the
+manifest of that instance's result document. An output that passes on a
+reference the instance computed is compared with both sides reading the cell the
+stored link leads to. The static part is separated by document.
 
 Run the tests from the repository root with
 `deno test -A base/pattern-compiler/compare/test/`, and print the tables of the
@@ -122,8 +124,10 @@ outputs the run holds no value at by what the run stores there, with one example
 each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what the
 comparison takes as each side's label and what it found, notes 217 to 227 why
 the runtime refuses an event and what the generator does about it, notes 228 to
-240 what ruling U1 and the comparison rules of PL §3.1 changed, and notes 241 on
-the events for handlers bound in an element body or in a pattern compiled in.
+240 what ruling U1 and the comparison rules of PL §3.1 changed, notes 241 to 251
+the events for handlers bound in an element body or in a pattern compiled in,
+and notes 252 on the order of the events and the state a write row is compared
+on.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the

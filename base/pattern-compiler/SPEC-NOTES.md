@@ -2269,3 +2269,146 @@ numbers have gaps.
      `runtime/runner/src/traverse.ts`). With the events of the bindings with no
      step sent first it did not. It was not examined. The harness records such a
      failure with the event (`EventOutcome.afterwards`) and goes on.
+
+## The order of the events, three looser rows, and the tighter rows of element bodies
+
+252. **Why three write rows were looser with the events in the order of the
+     plan** (closes the question of note 249 on the order of the events). The
+     rows are of `examples/map-demo/map-demo.tsx`: writes 0 and 1 of the inline
+     handler of an area's button (binding 9, `center.set(area.center)`), and
+     write 1 of the inline handler of the reset button (binding 12). None is
+     looser because the template names a read the handler does not make, and
+     none because the runtime stores less than its rules say. In the order of
+     the plan three events leave a cycle of two links. `addAreaHandler`
+     (binding 8) stores `center.get()` in a new area; what a `get` returns of an
+     object is a view of the cell, so the area's `center` holds a link to the
+     cell of the input `center`. The event of binding 9 goes to the last
+     element, which is that area, and sets the cell of `center` to a link to the
+     area's `center`. After it the cell of `center` holds the link, with an
+     entry of origin `link` and one of origin `structure` and class `followRef`
+     at its root, each with the clauses of `areasOfInterest`, `center`, `stops`
+     and `zoom`: the clauses of the template. The transaction read
+     `element/center` and `params/center` and `params/zoom` of the element's
+     argument document, the area's document at `center`, and the cells of
+     `center` and `zoom`. The harness read the runtime's label through
+     `cfcLabelViewForResolvedCell`, whose resolution throws at a cycle; the
+     runtime then returns the entry of the first link alone, the clause of
+     `center`, and says that the read failed, and the harness did not read that
+     status. The third row is of an event the runtime dropped ("Event dropped:
+     dependency preflight failed"): the harness takes a target with no value
+     before the event as written, and the cell of `center` had none before and
+     after.
+253. **A label the runtime fails to read.** The harness reads every label of the
+     run through `cfcLabelViewForResolvedCellWithStatus` (`labelView` in
+     `compare/harness.ts`), and a row that needs a label the runtime failed to
+     read is not compared, under the reason "a label the runtime fails to read".
+     PL §3.1 does not say what the runtime's side of a row is at a path where a
+     read resolves no value. `compare/fixtures/link-cycle.tsx` has the two
+     handlers that leave the cycle.
+254. **An event that was not committed.** The write edges of an event the
+     runtime refused or dropped are listed under "a write edge of an event not
+     committed", and none is compared. Before, they were counted with the write
+     edges an event's run did not make, 17 of the 132 of note 239, and a target
+     that held no value made a row. Over the corpus the count of "a write the
+     event's run did not make" is 151 where it was 169, and 18 are under the new
+     reason. `compare/fixtures/handler-throws.tsx` has a handler that throws
+     before its write.
+255. **The template of a write edge is evaluated before the event.** The harness
+     evaluated it after the event. A slot of a cell that the handler reads and
+     writes then has the label of the run's own write, which holds every clause
+     the run consumed, so a template that lacks a read of the handler was
+     compared as equal: with the read of `label` taken out of the template of
+     `count` in `compare/fixtures/input-writes.tsx`, the row was equal, and it
+     is tighter now. The harness evaluates the templates of a handler's write
+     edges on what is stored before it sends the event (`writeTemplates`), which
+     is what the handler's transaction reads, and reads the runtime's side after
+     it. This is the rule that does not depend on what the event itself stores.
+     PL §3.1 says what a write row compares and not on which state the
+     template's slots are read. No row of the corpus changed its category with
+     it. The choices of a `select` and a `pick` are counted once for an edge,
+     where they were counted for each path the run wrote.
+256. **The read that throws at a cycle of links** (closes note 251). The read of
+     the result after the event of binding 9 throws
+     `Doc path should never exceed selector path` because the result holds
+     `areasOfInterest`, whose last element holds the link into the cycle. The
+     read is `Cell.pull` of the result under the pattern's result schema, and
+     the stored values were made by `Cell.set` and `Cell.get` alone, so the
+     harness's read is well formed. Reduced, with the runner alone: a cell `a`
+     that holds a link to `b` at `center`, where `b` holds
+     `{ center: <a link to a> }`. A `get` of `a` throws `Link cycle detected`
+     from `resolveLink`. A `get` of `b` under a schema with the property
+     `center` throws the other message. `followPointer` in
+     `runtime/runner/src/traverse.ts` finds the cycle and returns "not found"
+     with the address of the link it stopped at, `["value", "center"]`, and the
+     selector it had already rooted at the link's target, `["value"]`;
+     `#traversePointerWithSchema` passes the two to `traverseWithSelector`,
+     which throws on a document path longer than the selector's. The runtime was
+     not changed.
+257. **The six tighter rows of handlers in an element body** (replaces the last
+     sentence of note 249). One has the cause of note 238. The others do not.
+
+    | Row | What the template lacks | The entry that holds it | Cause |
+    | --- | --- | --- | --- |
+    | write 2 (`zoom.set(14)`) of the handler of a stop's button, and write 2 (`zoom.set(13)`) of the handler of an area's button, `examples/map-demo/map-demo.tsx` | `areasOfInterest`, `selectedStopIndex`, `stops` | The `derived` entry of class `value` at the root of the cell of `zoom`, which this event's run wrote | The run's own join. The transaction reads `params/center`, `params/zoom` and `element` of the element's argument document, whose entries of origin `structure` at `*` and `params/*` have the five clauses: the stamp of the run of the `map` that wrote that document. The harness reads the slots of `center` and `zoom` at the pattern's argument, as the plan's state entries place them |
+    | write 0 (`center.set(...)`) of the same two handlers | the same three | The entries of origin `link` and of origin `structure`, class `followRef`, at the root of the cell of `center`, which this event's run wrote; the document of the element, through the stored link, has `areasOfInterest`, `center`, `stops`, `zoom` | The same join. The run stored a link, which the edge with `reference` (write 1) describes, and that row is equal; write 0 is the edge for a value |
+    | write 0 of `selectRoomRef`, `examples/scoped-group-chat/main-with-writable-inputs.tsx` | `draft`, `name`; the integrity atom is the template's alone | `derived` entries of class `shape` at `room/messages/2` and `room/messages/length` of the cell of `selectedRoom`, from `send` | Note 238: the run wrote the link at `room` alone, and the entries below it are of what `send` pushed while the room was stored in place. The run stored no `value` entry at the root, so a read there has no atom |
+    | write 0 of `setDefaultProfile`, `system/profile-picker/profile-picker.tsx` | nothing in confidentiality; the template has the body's atom and the runtime's label has none | One entry at `profile` of the cell of `defaultProfile`: origin `structure`, class `followRef`, with the clauses of `defaultProfile` and `profiles` | The run stored a link. Write 1, the edge with `reference`, is equal; write 0 is the edge for a value, and a read through the link has the integrity of the target |
+
+     With the events in the order of the plan, before any event wrote the
+     clauses of `areasOfInterest` and `selectedStopIndex` anywhere, the two
+     rows of the stop's handler are tighter by `stops` alone, the entries of
+     the element's argument document have `stops` alone, and the `shape`
+     entry at the root of `zoom` has `center` and `zoom`. So no entry an
+     earlier write left accounts for them. Two things follow that PL does not
+     state. PL §2.2 has the label of an `identity` slot read at "the path of
+     the document the body was given the handle from, such as a path of the
+     argument document or of a binding's state document"; in the run of today
+     a handler of an element body is given every handle from `params` and
+     `element` of the element's argument document, and the harness reads that
+     position for the element itself alone (note 247). The plan has no record
+     of the name a captured handle has under `params`. And where one write has
+     an edge with `reference` and an edge without, PL does not say that the
+     row of the second is not compared when the run stored a link.
+
+258. **The order of the events** (adds to note 249). `compare/corpus.ts run`
+     takes `--plan-order`. The two orders over the corpus, after the changes of
+     notes 253 to 255:
+
+    | | no-step bindings first | the order of the plan |
+    | --- | --- | --- |
+    | outputs compared | 1,388, and 125 bounds | 1,388, and 125 bounds |
+    | with the atom: tighter, atom names the pattern | 1,267, 121 | 1,267, 121 |
+    | looser, incomparable | 0, 0 | 0, 0 |
+    | events committed, refused, not sent | 344, 15, 18 | 342, 17, 18 |
+    | write edges compared | 234, and 1 bound | 230, and 1 bound |
+    | equal | 219 | 219 |
+    | tighter | 15 | 11 |
+    | looser, incomparable | 0, 0 | 0, 0 |
+    | a write the event's run did not make | 151 | 149 |
+    | a write edge of an event not committed | 18 | 23 |
+    | a label the runtime fails to read | 0 | 2 |
+
+     Every difference is in two modules. In
+     `examples/array-in-cell-with-remove-editable/array-in-cell-with-remove-editable.tsx`
+     two pushed elements are at another index and are equal in both. In
+     map-demo, the cycle of note 252 forms in the order of the plan alone: two
+     rows of binding 9 are not compared, the events of bindings 10 and 12 are
+     dropped, and two tighter rows of binding 12 are not made. One row has
+     another category: write 2 of binding 9 is tighter with the no-step
+     bindings first and equal in the order of the plan. It is no row of one
+     state. The event goes to the last element, which is the second generated
+     area in one order and the area `addAreaHandler` added in the other. That
+     area's `center` is a stored link, the handler passes it on, and the stamp
+     of the link has the four clauses the run's join has. A category depends
+     on the order of the events where the events leave another state, and
+     after these changes on nothing else that was found.
+
+259. **A write row names its binding.** Two inline handlers of map-demo are both
+     named `onClick#1`, since the emitter numbers the handlers of each body from
+     1, and the results file named a write row by the handler's name.
+     `ResultRow.binding` holds the index of the binding.
+260. **What the harness still takes as a write.** A write is one whose target's
+     value differs after the event. A link stored in the place of an equal value
+     is not seen: write 1 of `keep` in `compare/fixtures/link-cycle.tsx` is
+     listed as not made. The harness cannot read the write attempts of the
+     transaction, since the runtime releases them when the transaction settles.
