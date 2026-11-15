@@ -147,11 +147,19 @@ describe("exec.handlers", () => {
   });
 
   it("aborts the service call when the request's timeout passes, and not before", async () => {
+    // The handler arms its timeout only after it has awaited the request's
+    // signature check and body, which are real work the fake clock does not
+    // drive, and before its first call to the service. So the clock moves
+    // once the service has been called, and a tick taken earlier would pass
+    // before there was a timeout to pass.
+
     using time = new FakeTime();
     let aborted = false;
+    const { promise: called, resolve: call } = Promise.withResolvers<void>();
     const app = createTestApp(createSandboxExecRouter({
       fetch: (_input, init) =>
         new Promise<Response>((_resolve, reject) => {
+          call();
           init?.signal?.addEventListener("abort", () => {
             aborted = true;
             reject(init.signal?.reason);
@@ -178,6 +186,7 @@ describe("exec.handlers", () => {
       headers,
       body,
     });
+    await called;
     await time.tickAsync(4999);
     expect(aborted).toBe(false);
     await time.tickAsync(1);
