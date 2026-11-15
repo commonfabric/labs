@@ -394,6 +394,10 @@ struct Emitter<'r, 'm, 'a> {
     root_types: HashMap<Root, TypeId>,
     /// The type the pattern declares for its result.
     result_type: Option<TypeId>,
+    /// The members of the record the pattern returns, in the order its
+    /// object literal writes them (PL §1.1, `Binding.result`: "in source
+    /// order").
+    result_order: Vec<String>,
     /// The value type of a state cell, where its constructor is written
     /// with one (PL §1.5, `StateCell.schema`).
     state_types: HashMap<usize, TypeId>,
@@ -1906,6 +1910,8 @@ impl<'a> Emitter<'_, '_, 'a> {
             },
             Expression::ObjectExpression(object) => {
                 let mut fields = BTreeMap::new();
+                // The members in the order they are written.
+                let mut written: Vec<String> = Vec::new();
                 for property in &object.properties {
                     match property {
                         ObjectPropertyKind::ObjectProperty(property) => {
@@ -1937,6 +1943,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     }
                                 },
                             };
+                            if !written.contains(&name) {
+                                written.push(name.clone());
+                            }
                             let member = self.eval(&property.value, &format!("@{name}"));
                             fields.insert(name, member);
                         }
@@ -1994,6 +2003,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                             }
                         }
                     }
+                }
+                // The literal of the pattern's own result is the last one
+                // evaluated under this hint: a pattern compiled in returns
+                // while a member of it is evaluated.
+                if hint == "result" {
+                    self.result_order = written;
                 }
                 Place::Record(fields)
             }
@@ -5441,10 +5456,44 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 
     /// Where the result holds the stream of a binding, the binding names
-    /// the path (PL §1.1, `Binding.result`). PL has the paths in source
-    /// order. The emitter holds the members of a record by name, so the
-    /// paths are in the order of their segments.
+    /// the path (PL §1.1, `Binding.result`), "in source order". The
+    /// emitter holds the members of a record by name, so the order is
+    /// formed from the paths: the members of the returned record in the
+    /// order its object literal writes them, in a view node the attributes
+    /// before the children, and the children by position. The members of a
+    /// record nested below a result path are in the order of their names.
     fn stream_at(&mut self, binding: usize, path: &[String]) {
+        let order = self.result_order.clone();
+        let key = move |path: &Value| -> Vec<(usize, u64, String)> {
+            let segments: Vec<&str> = path
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            segments
+                .iter()
+                .enumerate()
+                .map(|(index, segment)| {
+                    let first = if index == 0 {
+                        order
+                            .iter()
+                            .position(|name| name == segment)
+                            .unwrap_or(order.len())
+                    } else {
+                        match *segment {
+                            "props" => 0,
+                            "children" => 1,
+                            _ => 2,
+                        }
+                    };
+                    match segment.parse::<u64>() {
+                        Ok(position) => (first, position, String::new()),
+                        Err(_) => (first, 0, (*segment).to_string()),
+                    }
+                })
+                .collect()
+        };
         let Some(record) = self.bindings.get_mut(binding) else {
             return;
         };
@@ -5454,7 +5503,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(paths) = record["result"].as_array_mut() {
             if !paths.contains(&json!(path)) {
                 paths.push(json!(path));
-                paths.sort_by_key(|path| path.to_string());
+                paths.sort_by_key(key);
             }
         }
     }
@@ -6965,6 +7014,7 @@ pub fn emit_module<'a>(
             tags: Vec::new(),
             root_types: HashMap::new(),
             result_type: None,
+            result_order: Vec::new(),
             state_types: HashMap::new(),
             child_types: HashMap::new(),
             body_guards: Vec::new(),

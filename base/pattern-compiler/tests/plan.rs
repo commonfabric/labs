@@ -3085,8 +3085,8 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
         binding("inc")["result"],
         json!([
             ["$UI", "children", "0", "props", "onClick"],
-            ["again"],
-            ["inc"]
+            ["inc"],
+            ["again"]
         ])
     );
     assert_eq!(
@@ -3152,4 +3152,43 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
             .1;
         assert_eq!(document["properties"][property]["type"], "number", "{name}");
     }
+}
+
+/// PL §1.1, `Binding.result`: "the paths are in source order". In a
+/// rendered tree the attributes of an element are written before its
+/// children, and the children in the order of their positions.
+#[test]
+fn the_result_paths_of_a_binding_are_in_source_order() {
+    let analysis = program(
+        r#"import { Cell, handler, pattern, UI } from "commonfabric";
+const inc = handler<{ by: number }, { n: Cell<number> }>((event, state) => {
+  state.n.set(state.n.get() + event.by);
+});
+export const P = pattern<{ n: Cell<number> }>(({ n }) => {
+  const go = inc({ n });
+  return {
+    zeta: go,
+    [UI]: (
+      <div onClick={go}>
+        <i /><i /><i /><i /><i /><i /><i /><i /><i /><i />
+        <b onClick={go} />
+        <u onClick={go} />
+      </div>
+    ),
+    alpha: go,
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        plan["bindings"][0]["result"],
+        json!([
+            ["zeta"],
+            ["$UI", "props", "onClick"],
+            ["$UI", "children", "10", "props", "onClick"],
+            ["$UI", "children", "11", "props", "onClick"],
+            ["alpha"]
+        ])
+    );
 }
