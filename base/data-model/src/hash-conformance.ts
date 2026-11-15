@@ -585,14 +585,17 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
   {
     name: "unavailable with an error kind and a message",
     section: SECTION_UNAVAILABLE,
-    spec: "2D  24 05 65 72 72 6F 72  24 07 6E 65 74 77 6F 72 6B  " +
-      "24 04 62 6F 6F 6D",
+    spec: "12  24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31  11  " +
+      "24 09 65 72 72 6F 72 4B 69 6E 64  24 07 6E 65 74 77 6F 72 6B  " +
+      "24 07 6D 65 73 73 61 67 65  24 04 62 6F 6F 6D  " +
+      "24 06 72 65 61 73 6F 6E  24 05 65 72 72 6F 72  00",
     make: () => new FabricUnavailable("error", "network", "boom"),
   },
   {
     name: "unavailable and pending",
     section: SECTION_UNAVAILABLE,
-    spec: "2D  24 07 70 65 6E 64 69 6E 67  20  20",
+    spec: "12  24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31  11  " +
+      "24 06 72 65 61 73 6F 6E  24 07 70 65 6E 64 69 6E 67  00",
     make: () => new FabricUnavailable("pending"),
   },
   {
@@ -608,7 +611,7 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
       new FabricUnavailable(
         "error",
         "network",
-        new FabricUnavailable("error", "network").errorMessage,
+        new FabricUnavailable("error", "network").message,
       ),
   },
 

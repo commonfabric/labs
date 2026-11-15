@@ -359,8 +359,10 @@ own codec for wire-format encoding, but bound per wire format — under
 `[JSON_CODEC]` for JSON — rather than under the format-neutral `[CODEC]` a
 wrapper binds, because a primitive's codec terminates an encoding where a
 wrapper's only decomposes. What further distinguishes them is the hashing layer,
-where each has a dedicated primitive hash tag rather than the `TAG_INSTANCE`
-path (`2-hash-byte-format.md` Section 2). They do not carry a `wireTypeTag`
+where each but `FabricUnavailable` has a dedicated primitive hash tag rather
+than the `TAG_INSTANCE` path (`2-hash-byte-format.md` Section 2);
+`FabricUnavailable` is hashed through that path, as though it were an instance
+(`2-hash-byte-format.md` Section 4.18). They do not carry a `wireTypeTag`
 property (no fabric type does, save `UnknownValue` and `ProblematicValue`; the
 wire tag is the codec's concern).
 
@@ -456,7 +458,7 @@ included in `FabricValue` via the `FabricPrimitive` arm of the union (Section
 | `FabricHash` | `FabricPrimitive` | `Hash@1` | `Uint8Array` (hash bytes, private) + `string` (algorithm tag) | Content identifier / hash. Stringifies as `<tag>:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5). The first algorithm tag is `fid1` ("fabric ID, v1"). Wire state is `{ tag, hash }` (see Section 1.4.9). |
 | `FabricBytes` | `FabricPrimitive` | `Bytes@1` | `Uint8Array` (private byte storage) | Immutable byte sequence. The instance owns its bytes outright: input is copied at construction time, unless the caller cedes it with `transfer`. Callers access bytes via `slice()`, `sliceBuffer()`, `copyInto()`, and `length`. |
 | `FabricKeyPair` | `FabricPrimitive` | `KeyPair@1` | Either two `CryptoKey` handles, or an algorithm name and the two keys' bytes | Asymmetric key pair. Which of the two states it holds decides what it can do: only the material state has a JSON encoding or a hash, and only the handle state can hand back a `CryptoKeyPair` (see Section 1.4.11). |
-| `FabricUnavailable` | `FabricPrimitive` | `Unavailable@1` | `reason` string; for reason `error`, an `errorKind` string and an optional `errorMessage` string | Marker standing in for data that is not available, saying why: `pending`, `syncing`, or `error`, the last sorted by a kind. Only the `error` reason carries a kind and a message. Wire state is `{ reason }`, `{ reason, errorKind }`, or `{ reason, errorKind, errorMessage }` (see Section 1.4.12). |
+| `FabricUnavailable` | `FabricPrimitive` | `Unavailable@1` | One frozen state record: a `reason` string; for reason `error`, an `errorKind` string and an optional `message` string | Marker standing in for data that is not available, saying why: `pending`, `syncing`, or `error`, the last sorted by a kind. Only the `error` reason carries a kind and a message. The state record, exposed as `.state`, is the wire state: `{ reason }`, `{ reason, errorKind }`, or `{ reason, errorKind, message }` (see Section 1.4.12). |
 
 #### Extra Enumerable Properties
 
@@ -1370,14 +1372,24 @@ type UnavailableErrorKind =
   | "compile"
   | "provider"
   | "sync";
+
+/**
+ * The state of a `FabricUnavailable`, which is also its encoded form. A
+ * field that has nothing to say is absent rather than `null`.
+ */
+type UnavailableState = {
+  readonly reason: UnavailableReason;
+  readonly errorKind?: UnavailableErrorKind;
+  readonly message?: string;
+};
 ```
 
 The reasons split along one axis, which `isTransient()` reports:
 
 * `pending` — the value is being produced and has not arrived yet.
 * `syncing` — the value exists but has not reached this runtime yet.
-* `error` — producing the value failed. `errorKind` says how, and
-  `errorMessage` says more.
+* `error` — producing the value failed. `errorKind` says how, and `message`
+  says more.
 
 The kinds sort a failure by what failed, so that a consumer can tell a broken
 service from a violated data contract without parsing a message:
@@ -1406,70 +1418,76 @@ service from a violated data contract without parsing a message:
  * pairings.
  */
 export class FabricUnavailable extends FabricPrimitive {
-  readonly #reason: UnavailableReason;
-  readonly #errorKind: UnavailableErrorKind | null;
-  readonly #errorMessage: string | null;
+  readonly #state: UnavailableState;
 
   constructor(
     reason: UnavailableReason,
     errorKind: UnavailableErrorKind | null = null,
-    errorMessage: string | null = null,
+    message: string | null = null,
   ) {
     super();
     if (reason === "error") {
       if (errorKind === null) {
         throw new Error("Reason `error` requires an `UnavailableErrorKind`.");
       }
-    } else if (errorKind !== null || errorMessage !== null) {
+      // A message equal to the kind's default is stored as none.
+      const stored = (message === defaultMessageFor(errorKind))
+        ? null
+        : message;
+      this.#state = (stored === null)
+        ? Object.freeze({ reason, errorKind })
+        : Object.freeze({ reason, errorKind, message: stored });
+    } else if (errorKind !== null || message !== null) {
       throw new Error(
-        `Reason \`${reason}\` takes neither an \`errorKind\` nor an ` +
-          "`errorMessage`.",
+        `Reason \`${reason}\` takes neither an \`errorKind\` nor a ` +
+          "`message`.",
       );
+    } else {
+      this.#state = Object.freeze({ reason });
     }
-    this.#reason = reason;
-    this.#errorKind = errorKind;
-    // A message equal to the kind's default is stored as none.
-    this.#errorMessage = (errorMessage === defaultMessageFor(errorKind))
-      ? null
-      : errorMessage;
+  }
+
+  /** The state, exactly as both codecs encode it. */
+  get state(): UnavailableState {
+    return this.#state;
   }
 
   get reason(): UnavailableReason {
-    return this.#reason;
+    return this.#state.reason;
   }
 
   get errorKind(): UnavailableErrorKind | null {
-    return this.#errorKind;
+    return this.#state.errorKind ?? null;
   }
 
   /** The message, or the kind's default when none was stored. */
-  get errorMessage(): string | null {
-    return this.#errorMessage ?? defaultMessageFor(this.#errorKind);
+  get message(): string | null {
+    return this.#state.message ?? defaultMessageFor(this.errorKind);
   }
 
   /** The message as stored, with no default supplied. */
-  get rawErrorMessage(): string | null {
-    return this.#errorMessage;
+  get rawMessage(): string | null {
+    return this.#state.message ?? null;
   }
 
   isPending(): boolean {
-    return this.#reason === "pending";
+    return this.#state.reason === "pending";
   }
 
   isSyncing(): boolean {
-    return this.#reason === "syncing";
+    return this.#state.reason === "syncing";
   }
 
   /** Narrows the two error members to what the `error` reason carries. */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   } {
-    return this.#reason === "error";
+    return this.#state.reason === "error";
   }
 
   isTransient(): boolean {
-    return this.#reason !== "error";
+    return this.#state.reason !== "error";
   }
 }
 
@@ -1484,10 +1502,10 @@ transient reason with a kind or a message, is refused. A wire state carrying
 either pairing is therefore one the class never wrote, and decoding it
 produces a `ProblematicValue` (Section 3.5) rather than an instance.
 
-**The message has a default, and the default is not state.** `errorMessage`
+**The message has a default, and the default is not state.** `message`
 returns the stored message, or a fixed message for the kind when none is
-stored; `rawErrorMessage` returns the stored message alone, `null` when there
-is none. A message given at construction that equals its kind's default is
+stored; `rawMessage` returns the stored message alone, `null` when there is
+none. A message given at construction that equals its kind's default is
 stored as no message at all, so the two ways of arriving at the default are
 one state: they encode alike, hash alike, and are equal by content. The
 default text is presentation, never encoded or hashed, and may change without
@@ -1500,17 +1518,20 @@ rather than to a fresh one. Nothing turns on the identity: two instances with
 the same state are equal by content (Section 6), and hash the same, however
 they were made. The prefabs exist so that the common case allocates nothing.
 
-**Wire state** is `{ reason }` for a transient reason, and for `error`
-`{ reason, errorKind }` or `{ reason, errorKind, errorMessage }`, the message
-present exactly when `rawErrorMessage` is not `null`, under the tag
-`Unavailable@1`. A field with nothing to say is absent from the state rather
-than present as `null`. The state is a record of strings, so it is a
-`FabricValue` and a realm-crossing value alike: the JSON codec is nonterminal
-over it and the realm codec terminal (Section 3.4 of
-[4-realm-encoding.md](./4-realm-encoding.md)). The hashing layer feeds the
-reason, the kind or `null`, and the raw message or `null`, under the dedicated
-`TAG_UNAVAILABLE` (Section 4.18 of
-[2-hash-byte-format.md](./2-hash-byte-format.md)).
+**The state is one frozen record**, held by the instance and returned by
+`.state`: `{ reason }` for a transient reason, and for `error`
+`{ reason, errorKind }` or `{ reason, errorKind, message }`, the message
+present exactly when `rawMessage` is not `null`. The other members read from
+it. A field with nothing to say is absent from the record rather than present
+as `null`.
+
+**Wire state** is that record, under the tag `Unavailable@1`. It is a record
+of strings, so it is a `FabricValue` and a realm-crossing value alike: the
+JSON codec is nonterminal over it and the realm codec terminal (Section 3.4 of
+[4-realm-encoding.md](./4-realm-encoding.md)). The hashing layer hashes a
+`FabricUnavailable` as though it were a `FabricInstance` with that tag and
+that state (Section 4.18 of [2-hash-byte-format.md](./2-hash-byte-format.md)),
+so it hashes alike with an `UnknownValue` carrying the same tag and state.
 
 What flows where — which built-ins produce one and under which kind, how a
 computation reacts to one arriving as an input, what a renderer shows while a

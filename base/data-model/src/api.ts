@@ -505,16 +505,42 @@ export type UnavailableErrorKind =
   | "sync";
 
 /**
+ * The state of a `FabricUnavailable`, which is also its encoded form: the
+ * reason; for the `error` reason the kind; and the message when one is
+ * stored. A field that has nothing to say is absent rather than `null`, so
+ * that the state of a transient reason is exactly the reason.
+ */
+export type UnavailableState = {
+  /** Why the data is unavailable. */
+  readonly reason: UnavailableReason;
+
+  /** The kind of error, present exactly when the reason is `error`. */
+  readonly errorKind?: UnavailableErrorKind;
+
+  /**
+   * The message, present only when one is stored, which a message equal to
+   * the kind's default never is.
+   */
+  readonly message?: string;
+};
+
+/**
  * A marker standing in for data that is not available, saying why. It holds
  * no data of its own: the reason, and for the `error` reason the kind of
  * error and a message, are the whole of what it says. Only the `error` reason
  * carries a kind, and it always does; only the `error` reason may carry a
- * message, and `errorMessage` supplies one for its kind when none was given.
- * For the other two reasons every error member is `null`.
+ * message, and `message` supplies one for its kind when none was given. For
+ * the other two reasons every error member is `null`.
  */
 export interface FabricUnavailable extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
+
+  /**
+   * The state, a frozen record: the reason, the kind when there is one, and
+   * the message when one is stored.
+   */
+  readonly state: UnavailableState;
 
   /** Why the data is unavailable. */
   readonly reason: UnavailableReason;
@@ -526,14 +552,14 @@ export interface FabricUnavailable extends FabricPrimitive {
    * The message, when the reason is `error`: the one given at construction,
    * or the kind's default when none was. `null` for a transient reason.
    */
-  readonly errorMessage: string | null;
+  readonly message: string | null;
 
   /**
    * The message as given at construction, with no default supplied: `null`
    * for a transient reason, and for an `error` whose message is its kind's
    * default or was never given.
    */
-  readonly rawErrorMessage: string | null;
+  readonly rawMessage: string | null;
 
   /** Whether the reason is `pending`. */
   isPending(): boolean;
@@ -542,12 +568,12 @@ export interface FabricUnavailable extends FabricPrimitive {
   isSyncing(): boolean;
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
-   * to the non-`null` values the `error` reason always carries.
+   * Whether the reason is `error`, narrowing `errorKind` and `message` to the
+   * non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   };
 
   /**
@@ -561,7 +587,7 @@ export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
     errorKind?: UnavailableErrorKind | null,
-    errorMessage?: string | null,
+    message?: string | null,
   ): FabricUnavailable;
   prototype: FabricUnavailable;
 }

@@ -1036,19 +1036,19 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "unavailable error with a numeric message",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","message":5,' +
       '"reason":"error"}}',
   },
   {
     name: "unavailable error with a null message",
     section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
-      '"errorMessage":null,"reason":"error"}}',
+      '"message":null,"reason":"error"}}',
   },
   {
     name: "unavailable pairing a message with a transient reason",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+    text: 'fvj1:{"/Unavailable@1":{"message":"m","reason":"pending"}}',
   },
   {
     name: "tag with no version",

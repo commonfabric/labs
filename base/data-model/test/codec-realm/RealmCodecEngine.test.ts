@@ -507,7 +507,7 @@ describe("RealmCodecEngine", () => {
         wire(tagged("Unavailable@1", {
           reason: "error",
           errorKind: "general",
-          errorMessage: undefined,
+          message: undefined,
         })),
         NULL_LIVE_ENVIRONMENT,
       );
