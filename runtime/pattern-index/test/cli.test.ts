@@ -240,4 +240,31 @@ describe("cli", () => {
     expect(output.stderr).toContain("failed host-side");
     expect(calls).toEqual([]);
   });
+
+  it("exits nonzero with only stderr when the index cannot be reached", async () => {
+    // A port nothing listens on: the transport fails rather than the index
+    // refusing, which is a host failure and not an answer.
+    const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+    const { port } = listener.addr as Deno.NetAddr;
+    listener.close();
+
+    const output = await callHelper(
+      directory,
+      `http://127.0.0.1:${port}/index`,
+      { op: "search", text: "test" },
+    );
+
+    expect(output.code).not.toBe(0);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("failed host-side");
+  });
+
+  it("exits 2 with usage on stderr when a required flag is empty", async () => {
+    const output = await callHelper(directory, "", { op: "search" });
+
+    expect(output.code).toBe(2);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("usage: cli.ts");
+    expect(calls).toEqual([]);
+  });
 });
