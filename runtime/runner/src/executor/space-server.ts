@@ -157,9 +157,7 @@ function fetchWithin(fetch: RuntimeFetch, deadlineMs: number): RuntimeFetch {
     });
     const answered = fetch(input, { ...init, signal: abort.signal });
     answered.catch(() => {});
-    return Promise.race([answered, silent]).finally(() =>
-      clearTimeout(timer)
-    );
+    return Promise.race([answered, silent]).finally(() => clearTimeout(timer));
   };
 }
 
