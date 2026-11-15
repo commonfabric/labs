@@ -284,12 +284,13 @@ const fillAndVerify = async (
   await hostElement.commit?.();
   phase("committed");
   await hostElement.requestUpdate?.();
-  // Named apart from the update, so a fill stalled on frames that never come
-  // says so.
+  // Named apart from the update, so a fill stalled on its two steps of page
+  // progress says so. In a document that is not being rendered a step is a
+  // turn of the event loop rather than a frame (`ProbeApi.nextFrame`), so a
+  // fill in a tab behind another still reads its value back.
   phase("awaiting-frame");
-  await new Promise((resolve) =>
-    requestAnimationFrame(() => requestAnimationFrame(resolve))
-  );
+  await probe.nextFrame();
+  await probe.nextFrame();
 
   // A commit that re-renders the host replaces the control. The input this fill
   // typed into is then detached and still holds the typed text, so resolve the
@@ -1449,27 +1450,13 @@ const aimAtMarkedTarget = async (
     }
   };
 
-  // One step of page progress, after which the settle looks again.
-  //
-  // While the document is being rendered that step is a frame, which is what
-  // moves a box. A document that is not being rendered produces no frames, so
-  // waiting for one waits for something that will not arrive; the step there is
-  // one turn of the event loop, delivered through a message channel. It has to
-  // be a real turn rather than a resolved promise: a hidden control comes back
-  // when a timer or a task puts it back, and a loop that only yields to the
-  // microtask queue never lets either run, so it would spin against a control
-  // it is itself preventing from returning.
+  // One step of page progress, after which the settle looks again: a frame,
+  // which is what moves a box, or in a document that is not being rendered one
+  // turn of the event loop (`ProbeApi.nextFrame`). A hidden control comes back
+  // when a timer or a task puts it back, which that turn lets run.
   const nextFrame = (): Promise<void> => {
     diag.frames++;
-    return new Promise((resolve) => {
-      if (document.visibilityState !== "hidden") {
-        requestAnimationFrame(() => resolve());
-        return;
-      }
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => resolve();
-      channel.port2.postMessage(0);
-    });
+    return probe.nextFrame();
   };
 
   // Absent and hidden are different answers. A hidden control is coming back,
