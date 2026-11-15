@@ -210,12 +210,17 @@ function stampedEdgesKey(edges: StampedEdges): string {
   );
 }
 
-/** A canonical key for `record`, equal for records equal in every field. */
+/**
+ * A canonical key for `record`'s member fields, equal for records equal in
+ * both. The position is left out: it is one past the history's length, and
+ * the transition refuses a history whose last revision is not the one the
+ * preparation read (`samePieceSourceSnapshot()`), so the two cannot differ
+ * where this key is compared.
+ */
 function pieceSourceRecordKey(record: PieceSourceRecord): string {
   return JSON.stringify([
     moduleDelegationsKey(record.delegations),
     stampedEdgesKey(record.edges),
-    record.position,
   ]);
 }
 
@@ -2631,7 +2636,8 @@ export class PatternManager {
    * not, after which the member names another pattern and is ignored, and
    * the unstaged record decides (`setsrc-module-delegation.test.ts`, "loses a grant
    * whose staging failed when a runtime from before the record makes the
-   * piece's next update"); and a write that a module of another piece
+   * piece's next update", and "…moves the piece without a source update");
+   * and a write that a module of another piece
    * makes, through a link, into a field the granting module protects, since
    * that runtime registers the grant only from the records. Each needs the
    * failed staging first, and each refuses, never grants.

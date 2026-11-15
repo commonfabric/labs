@@ -1507,6 +1507,39 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     });
 
+    it("loses a grant whose staging failed when a runtime from before the record moves the piece without a source update", async () => {
+      // TODO(danfuzz): This pins a loss `main` does not have (see the `TODO`
+      // on `#stageCommittedDelegations()`). v0 to v1's staging never lands.
+      // A runtime from before the record then moves the piece to v2, which
+      // keeps v1's writer, by a transition that is no source update, and
+      // leaves the record naming v1 (as here, by putting it back). The record
+      // then names another pattern and is ignored, and w1's unstaged cache
+      // record decides: the write is refused, where `main`'s record of w1
+      // grants it. Flip the expectation to `w1:b` if a staging that fails is
+      // ever repaired.
+      const { on: fresh, controller: freshPieces } = await freshController();
+      try {
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        const updater = await pieces.get(piece.id, true);
+        expect(await invokeSetName(updater, "a")).toBe("w0:a");
+        {
+          using _noStaging = refuseDelegationStaging(runtime);
+          await piece.setPattern(splitWriterProgram("w1", "e1"));
+        }
+        const left = recordedMember(piece);
+        await moveWithoutUpdate(piece, splitWriterProgram("w1", "e2"));
+        await replaceMember(piece, left as unknown as FabricValue);
+
+        const observed = await freshPieces.get(piece.id, true);
+
+        expect(await invokeSetName(observed, "b")).toBe("w0:a");
+      } finally {
+        await fresh.dispose({ closeStorage: false });
+      }
+    });
+
     it("keeps the recorded grant of a module two updates leave unchanged", async () => {
       const runtimes = [0, 1].map(() =>
         new Runtime({

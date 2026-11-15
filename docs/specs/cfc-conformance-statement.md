@@ -899,22 +899,24 @@ piece's source history at which a transition recorded it, never removed; and
 non-increasing positions (`inheritedAlongStamps` in `module-delegations.ts`), so
 a module takes what its predecessor held when the module was granted it.
 `PatternManager.prepareSourceUpdate` records each successor's edge to the module
-it succeeds at the piece's history length, and an entry of the predecessor
-record's attested list the edges do not already reach as the predecessor's edge
-at position 0 (`composeRecordedEdges`), and closes the candidate's modules,
-before the transaction opens, so the transaction is pinned to the closed set;
-the transition is refused as a source that moved if the member has changed
-since. Any other transition carries `edges` and closes the next pattern's
-modules over them, so a module the next pattern keeps or brings back keeps its
-grant and a new module gets none. Once a source update's transition commits, the
-runtime registers its delegations and stages them on the successor's source and
-compiled cache records, on a cache transaction of its own that reads only those
-records (`#stageCommittedDelegations`). A staging that fails is not retried; the
-piece's next committed update stages the closed entries of the modules it then
-runs. A runtime that starts or swaps the piece to the member's pattern registers
-the `delegations` entries whose module is in the successor's closure, verified
-as it loads it (`PatternManager.readInheritedAuthority`), reads nothing else of
-the member, closes nothing, and writes nothing. A member that is absent or names
+it succeeds at one past the piece's history length, never 0, and an entry of the
+predecessor record's attested list the edges do not already reach as the
+successor's own edge at position 0, which the walk follows and stops at, so the
+successor gets the list as written and no earlier successor sees it
+(`composeRecordedEdges`), and closes the candidate's modules, before the
+transaction opens, so the transaction is pinned to the closed set; the
+transition is refused as a source that moved if the member has changed since.
+Any other transition carries `edges` and closes the next pattern's modules over
+them, so a module the next pattern keeps or brings back keeps its grant and a
+new module gets none. Once a source update's transition commits, the runtime
+registers its delegations and stages them on the successor's source and compiled
+cache records, on a cache transaction of its own that reads only those records
+(`#stageCommittedDelegations`). A staging that fails is not retried; the piece's
+next committed update stages the closed entries of the modules it then runs. A
+runtime that starts or swaps the piece to the member's pattern registers the
+`delegations` entries whose module is in the successor's closure, verified as it
+loads it (`PatternManager.readInheritedAuthority`), reads nothing else of the
+member, closes nothing, and writes nothing. A member that is absent or names
 another pattern registers nothing, and the records' own lists decide.
 
 This implements a specification change, `TBD-succession-record` until its pull
@@ -953,10 +955,12 @@ procedure's step 4. Its two deciding sites, the recording in
   the piece's own history does not already reach, as one another piece's update
   gave a shared successor. The closure expands each module once, taking first
   the module it reaches with the largest position, so one closure costs time
-  linear in the edges and their positions, times a logarithm. A forged member
-  can still make one preparation expensive, since the update closes once per
-  predecessor and per candidate module: one with a million edges costs about
-  twelve seconds, measured.
+  linear in the edges and their positions, times a logarithm. An honest member
+  keeps each file's versions in a chain of their own, a listed entry ending its
+  walk, so a walk covers one chain: an update after a thousand updates of a
+  hundred files composes in about 90 milliseconds, measured. Only a forged
+  member makes the edges dense, and one with a million edges costs one
+  preparation about twelve seconds, measured.
 - A grant whose staging failed. The piece's own authority does not depend on the
   staging, but the grant stays missing from the cache records where nothing of
   the piece's carries it to them, so what reads only the records is refused it,
