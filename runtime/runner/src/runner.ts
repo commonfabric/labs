@@ -13363,14 +13363,20 @@ export class Runner {
     // static chain so the completeness certificate covers the same target the
     // action transaction will record at runtime.
     //
-    // This is the same dependency discovery (§8.10.1) as
-    // `#populateDeclaredSchedulerReads()`, and carries its marker. Both read
-    // the action's declared inputs through their links; that one makes the
-    // reactivity log cover them for the scheduler's subscriptions, and this
-    // one names the cells they reach in the scheduler's certificate of the
-    // action's reads. Neither result reaches a value anything writes. The
-    // action's own run reads the same cells as ordinary reads, so its labels
-    // and its read ceiling are weighed there, where the value is consumed.
+    // A dependency-discovery read (specs#100's §18.6.2 class), as
+    // `#populateDeclaredSchedulerReads()` is, and carrying its marker. Both
+    // read the action's declared inputs through their links; that one makes
+    // the reactivity log cover them for the scheduler's subscriptions, and
+    // this one names the cells they reach in the scheduler's certificate of
+    // the action's reads. Either record decides only whether and when the
+    // action runs, and nothing the transaction resolving it writes is taken
+    // from it. The action's own run reads the same links as ordinary reads,
+    // so their labels and the read ceiling are weighed there, where the value
+    // is consumed. The class is narrower than §8.10.1, which excludes such
+    // reads from a transaction used only for dependency discovery: inside
+    // this committing one the read leaves the flow join and read ceilings
+    // only, and stays a consumed input and a conflict dependency.
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/100
     return tx.runWithAmbientReadMeta(STATIC_READ_TARGET_READ, () => {
       const targets: NormalizedFullLink[] = [];
       let complete = true;

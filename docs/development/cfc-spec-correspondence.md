@@ -421,6 +421,30 @@ gap, pending [specs#96](https://github.com/commonfabric/specs/pull/96). His
 reason, in his words: "CFC is not a gate for chat". The conformance statement's
 §10 records the gap.
 
+The resolution that certifies a new JavaScript action node's static read set
+(`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) implements
+[specs#100](https://github.com/commonfabric/specs/pull/100) ahead of its
+ruling. A setup that instantiates such a node resolves each declared input
+through the node's argument to the cell the action will read, and the result
+goes into the scheduler's certificate of the action's reads, which decides
+only whether and when the action runs, and into nothing the setup writes; the
+action's own run reads the same links as ordinary labeled reads. The read carries `schedulerDependencyRead`, as dependency
+seeding (`#populateDeclaredSchedulerReads`) does, so the flow join and the
+runtime read ceiling skip it, while conflict detection and the egress and sink
+consumed set keep it. §8.10.1 excludes such reads only in a transaction used
+for nothing but dependency discovery, and §18.6.2's conditional classes are
+wiring and write-destination reads, so the pull request proposes a third,
+dependency-discovery reads, which covers both sites and is narrower than
+§8.10.1's exclusion. It changes what is
+stored at strict, with no default-off dial, so it does not satisfy step 4
+above: a result document whose setup instantiates such a node no longer takes
+the label stored at the slots its inputs resolve through. Its marker sits in
+`runner.ts`, outside the files `GOVERNED_SOURCE` in
+`tasks/check-cfc-correspondence.ts` lists, so that task neither counts nor
+checks it. @danfuzz authorized landing this ahead of the ruling, without a
+flag, on 2026-11-14, at @jkomoros's request. The conformance statement's §2
+records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

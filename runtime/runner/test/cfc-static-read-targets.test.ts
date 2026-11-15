@@ -22,6 +22,7 @@ import { getMetaLink } from "../src/link-utils.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { isSchedulerDependencyRead } from "../src/storage/reactivity-log.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
@@ -358,6 +359,55 @@ describe("cfc-static-read-targets", () => {
     expect(errors.map(String)).toContainEqual(
       expect.stringMatching(/read ceiling/),
     );
+  });
+
+  it("resolves an input several actions share once in the transaction", () => {
+    // The reads share the transaction's resolution memo, which is keyed by
+    // their metadata, so a second action over the same input resolves
+    // nothing again.
+
+    const source = runtime.getCell<number>(space, "shared-source");
+    const resolvingReads = (actions: number): number => {
+      const lifts = Array.from({ length: actions }, () =>
+        lift(
+          (input: { x: number }) => input.x * 2,
+          {
+            type: "object",
+            properties: { x: { type: "number" } },
+          } as const,
+          { type: "number" } as const,
+          { completeSchedulerScopeSummary: true },
+        ));
+      const testPattern = pattern<{ x: number }>(({ x }) =>
+        Object.fromEntries(
+          lifts.map((each, index) => [`d${index}`, each({ x })]),
+        )
+      );
+      const tx = runtime.edit();
+      try {
+        source.withTx(tx).set(21);
+        runtime.run(
+          tx,
+          testPattern,
+          { x: source.withTx(tx) },
+          runtime.getCell(
+            space,
+            `shared-${actions}`,
+            testPattern.resultSchema,
+            tx,
+          ),
+        );
+        return [...(tx.getReadActivities?.() ?? [])].filter((read) =>
+          isSchedulerDependencyRead(read.meta)
+        ).length;
+      } finally {
+        tx.abort("read count");
+      }
+    };
+
+    const once = resolvingReads(1);
+    expect(once).toBeGreaterThan(0);
+    expect(resolvingReads(8)).toBe(once);
   });
 
   it("joins a stored name the setup carries over, which it writes", async () => {

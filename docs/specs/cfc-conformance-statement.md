@@ -141,11 +141,18 @@ set for the scheduler (`#collectStaticReadTargetsWithCompleteness` in
 `runner.ts`, which carries `machineryRead` as well). Both read an action's
 declared inputs through their links for the scheduler, the first so the
 reactivity log covers them, the second to name the cells they reach in the
-certificate of the action's reads, and neither result reaches a value the
-transaction writes. The action's own run reads the same cells as ordinary
-reads, where their labels and the runtime read ceiling are weighed. The
-runtime reads §8.10.1's requirement that dependency discovery not count as
-consumed input as covering these reads inside a transaction that also commits.
+certificate of the action's reads. Either record decides only whether and
+when the action runs, and nothing the transaction resolving it writes is
+taken from it. The action's own run reads the same links as ordinary reads,
+where their labels and the runtime read ceiling are weighed. §8.10.1 excludes
+dependency discovery only in a transaction used for nothing else, and §18.6.2
+names no class for these reads inside a transaction that also commits, so the
+second site is a nonconforming semantic gap, as the first is wherever it runs
+in a transaction that commits; `cfc-spec-correspondence.md` records it. The
+class [specs#100](https://github.com/commonfabric/specs/pull/100) proposes is
+narrower than §8.10.1's exclusion: these reads leave the flow join and read
+ceilings only, and stay in the consumed set the input gate, egress and sinks
+check, and in conflict detection.
 
 **The wiring marking sites:** `runner.ts`, `pattern-binding.ts`, and under
 `builtins/` the collection builtins `map.ts`, `filter.ts`, `flatmap.ts`,

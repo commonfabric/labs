@@ -535,12 +535,13 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
  * (populateDeclaredSchedulerReads and friends) and by the resolution of a new
  * action's declared inputs that certifies its static read set
  * (`#collectStaticReadTargetsWithCompleteness`): they materialize declared
- * dependencies so the reactivity log covers them for subscriptions, but
- * they are scheduling machinery, not handler consumption (§8.10.1:
- * dependency-discovery reads must not count as consumed inputs). Flow-label
- * derivation and the runtime read ceiling exclude them; their materialized
- * values never enter the handler. The action body's own reads enforce its
- * ceiling and carry the taint.
+ * dependencies so the reactivity log covers them for subscriptions, or name
+ * them in the scheduler's certificate, but they are scheduling machinery, not
+ * handler consumption (§8.10.1). The flow join and the runtime read ceiling
+ * exclude them; the consumed set that egress and sinks check still counts
+ * them, and conflict detection keeps them. Their materialized values never
+ * enter the handler. The action body's own reads enforce its ceiling and
+ * carry the taint.
  */
 export const schedulerDependencyRead: Metadata = {
   [schedulerDependencyReadMarker]: true,

@@ -355,6 +355,11 @@ describe("sub-pattern-update-labels", () => {
 
             expect(viewEntries(runtime, cell)).toEqual(created);
             expect(viewHidden(cell, "policy")).toBe(false);
+            // The computed's output keeps the cell's clause. The cell's own
+            // label and the slot's carry the one clause, so this does not
+            // tell which of them its run took; the runner's
+            // `cfc-static-read-targets` tests pin the slot's, under an atom
+            // of its own.
             if (reading === "renders") {
               expect(carries(shownEntries(runtime, cell), "policy")).toBe(
                 true,
