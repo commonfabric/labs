@@ -22,7 +22,7 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
-import { ProblematicValue } from "@/codec-common";
+import { hasOnlyKeys, ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -122,10 +122,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
   implements ApiFabricUnavailable {
   /**
    * The state, frozen, in exactly the shape both codecs encode. Its `message`
-   * is absent when none was given, and also when the one given is the kind's
-   * default, which is stored as no message at all.
+   * is absent when none was given. The constructor also stores a message
+   * equal to the kind's default as none; a decoded instance holds its state as
+   * it arrived, such a message included. Written only by the constructor and
+   * by `#instanceForState()`.
    */
-  readonly #state: UnavailableState;
+  #state: UnavailableState;
 
   /**
    * Constructs an instance with the given reason, kind of error, and
@@ -230,8 +232,8 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * The message as stored, with no default supplied: `null` for a transient
-   * reason, and for an `error` whose message is its kind's default or was
-   * never given.
+   * reason, and for an `error` that stores none. An instance constructed with
+   * its kind's default as the message stores none.
    */
   get rawMessage(): string | null {
     // Reads own fields only, as the codecs do.
@@ -283,9 +285,10 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * The message `.message` returns for each kind when none was stored.
-   * Presentation rather than state: none of these is ever encoded or hashed,
-   * and a message given at construction that equals its kind's entry here is
-   * stored as no message at all.
+   * Presentation rather than state: `.message` supplies one only where the
+   * state holds no message, and a message given at construction that equals
+   * its kind's entry here is stored as no message at all. A decoded state
+   * holding such a message keeps it.
    */
   static #DEFAULT_ERROR_MESSAGES: Readonly<
     Record<UnavailableErrorKind, string>
@@ -299,6 +302,13 @@ export class FabricUnavailable extends BaseFabricPrimitive
     provider: "A provider reported a failure.",
     sync: "Synchronization failed.",
   });
+
+  /** The keys a state may hold, which are the whole of what the codecs read. */
+  static #STATE_KEYS: readonly string[] = Object.freeze([
+    "reason",
+    "errorKind",
+    "message",
+  ]);
 
   static #jsonCodec = Object.freeze(
     new (class UnavailableCodec
@@ -414,15 +424,19 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * the shape of a {@link FabricUnavailableState}: a plain object whose own
    * `reason` is one of the reasons, whose own `errorKind`, if
    * present at all, is one of the kinds, and whose own `message`, if
-   * present at all, is a string. Every field is read as an own property, so
-   * nothing inherited stands in for one. Presence is the test for the optional
+   * present at all, is a string; and which has no other key, a key this class
+   * does not read being one it never writes. Every field is read as an own
+   * property, so nothing inherited stands in for one. Presence is the test for the optional
    * fields rather than a comparison against `undefined`, because the realm
    * format carries `undefined` faithfully, and a field sent that way is a
    * malformation rather than an absence. Whether the fields present belong with
    * the reason is the constructor's to decide.
    */
   static #isState(state: unknown): state is FabricUnavailableState {
-    if (!isPlainObject(state) || !Object.hasOwn(state, "reason")) {
+    if (
+      !isPlainObject(state) || !Object.hasOwn(state, "reason") ||
+      !hasOnlyKeys(state, FabricUnavailable.#STATE_KEYS)
+    ) {
       return false;
     }
 
@@ -477,9 +491,10 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * Helper for both codecs' `decode()`, which returns the instance a decoded
-   * state stands for: the prefab for a state that is a transient reason alone, and a fresh instance otherwise. Throws as
-   * the constructor does when the fields present do not belong with the reason.
-   * The optional fields are read as own properties, as `#isState()`
+   * state stands for: the prefab for a state that is a transient reason alone,
+   * and a fresh instance holding the state as it arrived otherwise. Throws as
+   * the constructor does when the fields present do not belong with the
+   * reason. The optional fields are read as own properties, as `#isState()`
    * tested them, so a field that is only inherited is absent here too.
    */
   static #instanceForState(
@@ -498,11 +513,29 @@ export class FabricUnavailable extends BaseFabricPrimitive
       return FabricUnavailable.#prefabFor(reason);
     }
 
-    return new FabricUnavailable(
+    const result = new FabricUnavailable(
       reason,
       errorKind ?? null,
       message ?? null,
     );
+    const constructed = result.#state;
+
+    // The constructor stores a message equal to the kind's default as none,
+    // which a decode does not: the state is kept as it arrived, so that it
+    // encodes and hashes as it did.
+    if (
+      (message !== undefined) &&
+      (constructed.reason === UNAVAILABLE_REASONS.error) &&
+      (constructed.message === undefined)
+    ) {
+      result.#state = Object.freeze({
+        reason: constructed.reason,
+        errorKind: constructed.errorKind,
+        message,
+      });
+    }
+
+    return result;
   }
 }
 
