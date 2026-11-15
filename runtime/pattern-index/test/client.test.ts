@@ -143,123 +143,32 @@ describe("PatternIndexClient", () => {
     });
   });
 
-  it("answers searchPatterns with the index's results", async () => {
-    const { client } = createClient([
-      jsonResponse({
-        results: [{
-          patternId: "pat-1",
-          description: "Totals an expense list",
-          hashtags: ["expenses"],
-          ownerDid: "did:key:zOwner",
-          createdAt: "2026-08-01T00:00:00.000Z",
-          dependencies: [],
-          signals: { uses: 4, score: 0.75 },
-        }],
-      }),
-      jsonResponse({ patterns: [], eventTypes: {} }),
-    ]);
-    const response = await client.searchPatterns({ tags: ["expenses"] });
-    expect(response.results.length).toBe(1);
-    expect(response.results[0].patternId).toBe("pat-1");
-    expect(response.results[0].signals).toEqual({ uses: 4, score: 0.75 });
-  });
-
-  it("refreshes catalog membership while caching immutable lineage metadata", async () => {
-    const metadata = (id: string, priorPatternId?: string) => ({
-      patternId: id,
-      ownerDid: signer.did(),
-      createdAt: "2026-09-17T00:00:00Z",
-      description: id,
-      hashtags: ["donuts"],
+  it("answers searchPatterns with the index's rows, from one request", async () => {
+    // The index substitutes successors itself, so a replacement row, its
+    // display name, and the generation it supersedes arrive as sent.
+    const row = {
+      patternId: "fresh",
+      name: "Expense Totaler",
+      description: "Totals an expense list",
+      hashtags: ["expenses"],
+      ownerDid: "did:key:zOwner",
+      createdAt: "2026-08-01T00:00:00.000Z",
       dependencies: [],
-      ...(priorPatternId === undefined ? {} : { priorPatternId }),
-    });
-    const records = [metadata("old"), metadata("fresh", "old")];
-    const requests: { fn: string; body: Record<string, unknown> }[] = [];
-    let listed = records.slice(0, 1);
-    const client = new PatternIndexClient({
-      baseUrl: "https://index.test/api",
-      signer,
-      fetchFn: (input, init) => {
-        const fn = new URL(String(input)).pathname.split("/").at(-1)!;
-        const body = JSON.parse(String(init?.body));
-        requests.push({ fn, body });
-        const output = fn === "searchPatterns"
-          ? { results: [{ ...records[0], quality: "proven", kind: "app" }] }
-          : fn === "listPatterns"
-          ? {
-            patterns: listed.map((entry) => ({
-              ...entry,
-              events: { created: 1 },
-              score: 0,
-              quality: "unproven",
-            })),
-            eventTypes: {},
-          }
-          : records.find((entry) => entry.patternId === body.patternId);
-        return Promise.resolve(jsonResponse(output));
-      },
-    });
-    const first = await client.searchPatterns({ text: "donuts", limit: 1 });
-    listed = records;
-    const second = await client.searchPatterns({ text: "donuts", limit: 1 });
-    const third = await client.searchPatterns({ text: "donuts", limit: 1 });
-    expect(first.results.map((hit) => hit.patternId)).toEqual(["old"]);
-    expect(second.results.map((hit) => hit.patternId)).toEqual(["fresh"]);
-    expect(third).toEqual(second);
-    expect(requests.filter((request) => request.fn === "listPatterns").length)
-      .toBe(3);
-    expect(
-      requests.filter((request) => request.fn === "getPattern").map((request) =>
-        request.body
-      ),
-    ).toEqual([
-      { patternId: "old", includeSource: false },
-      { patternId: "fresh", includeSource: false },
+      signals: { uses: 4, score: 0.75 },
+      quality: "proven",
+      kind: "app",
+      supersedes: "old",
+    };
+    const { client, requests } = createClient([
+      jsonResponse({ results: [row], successorsResolved: true }),
     ]);
-    expect(
-      (await client.getPattern({ patternId: "old", includeSource: true }))
-        .patternId,
-    ).toBe("old");
-    expect(requests.at(-1)?.body).toEqual({
-      patternId: "old",
-      includeSource: true,
-    });
-  });
 
-  it("does not cache failed or mismatched discovery metadata", async () => {
-    for (
-      const failure of [
-        jsonResponse({ error: "unavailable" }, 503),
-        jsonResponse({ patternId: "wrong" }),
-      ]
-    ) {
-      const hit = {
-        patternId: "old",
-        ownerDid: signer.did(),
-        quality: "unproven",
-        kind: "app",
-      };
-      const search = () => jsonResponse({ results: [hit] });
-      const catalog = () =>
-        jsonResponse({ patterns: [{ patternId: "old" }], eventTypes: {} });
-      const { client, requests } = createClient([
-        search(),
-        catalog(),
-        failure,
-        search(),
-        catalog(),
-        jsonResponse(hit),
-      ]);
-      await expect(client.searchPatterns({ text: "donuts" })).rejects.toThrow();
-      expect((await client.searchPatterns({ text: "donuts" })).results).toEqual(
-        [hit],
-      );
-      expect(
-        requests.filter((request) => request.url.endsWith("/getPattern"))
-          .length,
-      ).toBe(2);
-    }
+    const response = await client.searchPatterns({ tags: ["expenses"] });
+
+    expect(response.results).toEqual([row]);
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://index.test/api/searchPatterns",
+    ]);
   });
 
   it("asks getPattern for source only when told to", async () => {

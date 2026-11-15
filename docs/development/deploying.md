@@ -196,7 +196,9 @@ built with `--perf-basic-prof-only-functions` and
 `/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
 on the host name the JavaScript a thread runs, a stalled serving worker's
 included. The map grows for as long as the process runs. A toolshed runs a serving worker per served space, up to
-`SERVER_EXECUTION_MAX_WORKERS` of them (default 4) and
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 4; more only while spaces
+separated at a heap limit each hold a worker of their own, until one of those
+closes) and
 `SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
 about 110 MB before it serves anything
 ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,

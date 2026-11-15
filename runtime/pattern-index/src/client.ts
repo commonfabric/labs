@@ -16,7 +16,6 @@ import {
 } from "@commonfabric/runner/toolshed-http-auth";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { PatternIndexFetch } from "./http-fetch.ts";
-import { resolvePatternIndexSuccessors } from "./successors.ts";
 
 /** Own and publication-bounded inherited evidence computed by the index. */
 export interface PatternIndexSignals {
@@ -41,6 +40,10 @@ export type PatternIndexQuality = "penalized" | "unproven" | "proven";
 /** One hit from `searchPatterns`. Carries metadata and never source. */
 export interface PatternIndexSearchResult {
   patternId: string;
+
+  /** Short display name, when the index has or could derive one. */
+  name?: string;
+
   description: string;
   hashtags: readonly string[];
   ownerDid: string;
@@ -62,6 +65,12 @@ export interface PatternIndexSearchResult {
   matchedTerms?: number;
 
   queryTerms?: number;
+
+  /**
+   * The generation the query matched, when the index answered with its
+   * current successor in that generation's place.
+   */
+  supersedes?: string;
 }
 
 export interface PatternIndexSearchRequest {
@@ -70,6 +79,11 @@ export interface PatternIndexSearchRequest {
   limit?: number;
 }
 
+/**
+ * What `searchPatterns` answers. The index resolves successors itself: each
+ * result is a current discoverable generation, once, at the earliest position
+ * any generation of its chain matched.
+ */
 export interface PatternIndexSearchResponse {
   results: readonly PatternIndexSearchResult[];
 }
@@ -93,6 +107,10 @@ export interface PatternIndexProgram {
 
 export interface PatternIndexPattern {
   patternId: string;
+
+  /** Short display name, when the index has or could derive one. */
+  name?: string;
+
   ownerDid: string;
   createdAt: string;
   description: string;
@@ -117,6 +135,10 @@ export interface PatternIndexGetRequest {
  */
 export interface PatternIndexListedPattern {
   patternId: string;
+
+  /** Short display name, when the index has or could derive one. */
+  name?: string;
+
   description: string;
   hashtags: readonly string[];
   keywords: readonly string[];
@@ -322,7 +344,6 @@ export class PatternIndexClient {
   readonly #baseUrl: string;
   readonly #fetchFn: PatternIndexFetch;
   readonly #signer: FirstPartyHttpSigner;
-  readonly #discoveryRecords = new Map<string, Promise<PatternIndexPattern>>();
 
   constructor(options: PatternIndexClientOptions) {
     // The function name is appended to the base's path, so a base carrying a
@@ -420,44 +441,18 @@ export class PatternIndexClient {
   }
 
   /**
-   * Searches current discoverable generations. Catalog membership is read on
-   * every nonempty search; create-only pattern metadata is cached per client.
-   * A replacement keeps the first matching position and its own index signals.
+   * Searches current discoverable generations. The index substitutes each
+   * matched generation's discoverable successor and withholds ambiguous
+   * chains, so the answer is returned as the index gave it.
    */
-  async searchPatterns(
+  searchPatterns(
     request: PatternIndexSearchRequest,
   ): Promise<PatternIndexSearchResponse> {
-    const response = await this.#call<PatternIndexSearchResponse>(
-      "searchPatterns",
-      {
-        ...(request.tags !== undefined ? { tags: [...request.tags] } : {}),
-        ...(request.text !== undefined ? { text: request.text } : {}),
-        ...(request.limit !== undefined ? { limit: request.limit } : {}),
-      },
-    );
-    if (response.results.length === 0) return response;
-    const { patterns: listed } = await this.listPatterns();
-    const records = await Promise.all(listed.map((row) => {
-      const held = this.#discoveryRecords.get(row.patternId);
-      if (held !== undefined) return held;
-      const read = this.getPattern({
-        patternId: row.patternId,
-        includeSource: false,
-      }).then((pattern) => {
-        if (pattern.patternId !== row.patternId) {
-          throw new Error(
-            "pattern index returned mismatched discovery metadata",
-          );
-        }
-        return pattern;
-      }).catch((error) => {
-        this.#discoveryRecords.delete(row.patternId);
-        throw error;
-      });
-      this.#discoveryRecords.set(row.patternId, read);
-      return read;
-    }));
-    return resolvePatternIndexSuccessors(response, listed, records);
+    return this.#call<PatternIndexSearchResponse>("searchPatterns", {
+      ...(request.tags !== undefined ? { tags: [...request.tags] } : {}),
+      ...(request.text !== undefined ? { text: request.text } : {}),
+      ...(request.limit !== undefined ? { limit: request.limit } : {}),
+    });
   }
 
   getPattern(request: PatternIndexGetRequest): Promise<PatternIndexPattern> {
