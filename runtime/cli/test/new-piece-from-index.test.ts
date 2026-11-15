@@ -6,7 +6,7 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
 import { newPieceFromCommand, piece } from "../commands/piece.ts";
-import { newPiece } from "../lib/piece.ts";
+import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
 
 const CONFIG = {
@@ -35,7 +35,7 @@ describe("piece new --from-index", () => {
           newPiece: (_config, received) => {
             created = true;
             entry = received;
-            return Promise.resolve("fid1:created");
+            return Promise.resolve({ pieceId: "fid1:created" });
           },
         })
       ).then(() => undefined, (e) => e);
@@ -50,6 +50,53 @@ describe("piece new --from-index", () => {
 
       expect(error).toBeUndefined();
       expect(entry).toEqual({ patternId: "pat-1", patternIndexUrl: INDEX_URL });
+    });
+
+    describe("its receipt", () => {
+      /** Runs the action with `newPiece` answering `receipt`, capturing output. */
+      const printed = async (
+        options: Record<string, unknown>,
+        receipt: { pieceId: string; name?: string },
+      ) => {
+        const out: { value: unknown; json?: boolean }[] = [];
+        await captureStderr(() =>
+          newPieceFromCommand(
+            {
+              ...CONFIG,
+              fromIndex: "pat-1",
+              patternIndexUrl: INDEX_URL,
+              ...options,
+            },
+            undefined,
+            {
+              newPiece: () => Promise.resolve(receipt),
+              render: (value, flags) => {
+                out.push({ value, ...(flags?.json ? { json: true } : {}) });
+              },
+            },
+          )
+        );
+        return out;
+      };
+
+      it("prints the piece id and the index's name as one JSON object under --json", async () => {
+        expect(
+          await printed({ json: true }, { pieceId: "fid1:a", name: "Doubler" }),
+        ).toEqual([
+          { value: { pieceId: "fid1:a", name: "Doubler" }, json: true },
+        ]);
+      });
+
+      it("prints no name key under --json when the index has none", async () => {
+        expect(await printed({ json: true }, { pieceId: "fid1:a" })).toEqual([
+          { value: { pieceId: "fid1:a" }, json: true },
+        ]);
+      });
+
+      it("prints only the piece id without --json", async () => {
+        expect(await printed({}, { pieceId: "fid1:a", name: "Doubler" }))
+          .toEqual([{ value: "fid1:a" }]);
+      });
     });
 
     for (
@@ -157,7 +204,7 @@ describe("piece new --from-index", () => {
             },
             getProgramFromIndex: (_pieces, _config, entry) => {
               reads.push(entry);
-              return Promise.resolve(PROGRAM);
+              return Promise.resolve({ program: PROGRAM });
             },
             loadIdentity: () => Promise.resolve({} as never),
             instantiatePieceOnServer: (_config, request) => {
@@ -226,7 +273,8 @@ describe("piece new --from-index", () => {
       const createFrom = async (answer: Response) => {
         const requests: { url: string; as: string | null }[] = [];
         let created: unknown;
-        const error = await newPiece(
+        let receipt: unknown;
+        const error = await newPieceWithReceipt(
           CONFIG,
           { patternId: "pat-1", patternIndexUrl: INDEX_URL },
           { start: false },
@@ -256,26 +304,34 @@ describe("piece new --from-index", () => {
               return Promise.resolve(answer);
             },
           },
-        ).then(() => undefined, (e) => e);
-        return { requests, created, error };
+        ).then((answered) => {
+          receipt = answered;
+        }, (e) => e);
+        return { requests, created, receipt, error };
       };
 
+      /** A `getPattern` answer for `pat-1`, carrying `name` when given one. */
+      const record = (name?: string) =>
+        Response.json({
+          patternId: "pat-1",
+          ...(name === undefined ? {} : { name }),
+          ownerDid: signer.did(),
+          createdAt: "2026-11-14T00:00:00.000Z",
+          description: "doubles n",
+          dependencies: [],
+          program: {
+            main: "/main.tsx",
+            files: [{ name: "/main.tsx", contents: SOURCE }],
+          },
+        });
+
       it("creates the piece from the program the index served", async () => {
-        const { requests, created, error } = await createFrom(
-          Response.json({
-            patternId: "pat-1",
-            ownerDid: signer.did(),
-            createdAt: "2026-11-14T00:00:00.000Z",
-            description: "doubles n",
-            dependencies: [],
-            program: {
-              main: "/main.tsx",
-              files: [{ name: "/main.tsx", contents: SOURCE }],
-            },
-          }),
+        const { requests, created, receipt, error } = await createFrom(
+          record(),
         );
 
         expect(error).toBeUndefined();
+        expect(receipt).toEqual({ pieceId: "fid1:created" });
         expect(requests).toEqual([
           { url: `${INDEX_URL}/getPattern`, as: signer.did() },
         ]);
@@ -283,6 +339,13 @@ describe("piece new --from-index", () => {
           main: "/main.tsx",
           files: [{ name: "/main.tsx", contents: SOURCE }],
         });
+      });
+
+      it("answers the index's display name beside the piece id", async () => {
+        const { receipt, error } = await createFrom(record("Doubler"));
+
+        expect(error).toBeUndefined();
+        expect(receipt).toEqual({ pieceId: "fid1:created", name: "Doubler" });
       });
 
       it("throws an IndexedPatternError naming the id when the index fails", async () => {

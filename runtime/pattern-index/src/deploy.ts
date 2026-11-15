@@ -442,16 +442,25 @@ export interface IndexedPatternOptions {
   getClient: PatternIndexClientFactory;
 }
 
+/** A published pattern's program, ready to compile, and what names it. */
+export interface IndexedProgram {
+  program: RuntimeProgram;
+
+  /** The index's display name for the pattern, when it holds one. */
+  name?: string;
+}
+
 /**
  * Reads `patternId`'s program from the index and makes the published patterns
  * it imports durable in `space`. Answers the program ready to compile, or to
- * hand to something that compiles it, such as a piece creation.
+ * hand to something that compiles it, such as a piece creation, with the
+ * index's display name for it.
  *
  * @throws IndexedPatternError at the `lookup` or `compose` stage.
  */
 export const prepareIndexedProgram = async (
   options: IndexedPatternOptions,
-): Promise<RuntimeProgram> => {
+): Promise<IndexedProgram> => {
   const { runtime, space, patternId, getClient } = options;
   let indexed;
   try {
@@ -483,25 +492,31 @@ export const prepareIndexedProgram = async (
     recordedDependencies: indexed.dependencies,
     getClient,
   });
-  return program;
+  return {
+    program,
+    ...(indexed.name === undefined ? {} : { name: indexed.name }),
+  };
 };
 
 /**
  * Deploys `patternId` into `space`: {@link prepareIndexedProgram}, then a
- * compile. Answers the program and the pattern it compiled to.
+ * compile. Answers the program, the pattern it compiled to, and the index's
+ * display name for it.
  *
  * @throws IndexedPatternError at any stage. A compile failure's diagnostic is
  * withheld from the message, since it quotes source the caller did not write.
  */
 export const compileIndexedPattern = async (
   options: IndexedPatternOptions,
-): Promise<{ program: RuntimeProgram; pattern: Pattern }> => {
-  const program = await prepareIndexedProgram(options);
+): Promise<IndexedProgram & { pattern: Pattern }> => {
+  const indexed = await prepareIndexedProgram(options);
   try {
-    const pattern = await compileAndSavePattern(options.runtime, program, {
-      space: options.space,
-    });
-    return { program, pattern };
+    const pattern = await compileAndSavePattern(
+      options.runtime,
+      indexed.program,
+      { space: options.space },
+    );
+    return { ...indexed, pattern };
   } catch (error) {
     throw new IndexedPatternError(
       "compile",

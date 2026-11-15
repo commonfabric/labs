@@ -22,7 +22,10 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
-import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
+import {
+  compileIndexedPattern,
+  type IndexedProgram,
+} from "@commonfabric/pattern-index/deploy";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
 import {
@@ -926,7 +929,8 @@ async function getPinnedProgramFromFile(
 }
 
 /**
- * The program a published pattern deploys as, fetched and compiled into the
+ * The program a published pattern deploys as, and the index's display name
+ * for it, fetched and compiled into the
  * space the way cf-harness's `run_pattern` deploys one: the published patterns
  * it imports are drawn into the space first, so its `cf:pattern:` imports
  * resolve, and a failure's message never quotes the indexed source.
@@ -947,9 +951,9 @@ async function getProgramFromIndex(
   config: SpaceConfig,
   entry: IndexedPatternEntry,
   deps: PieceOperationDependencies = {},
-): Promise<RuntimeProgram> {
+): Promise<IndexedProgram> {
   const signer = await (deps.loadIdentity ?? loadIdentity)(config.identity);
-  const { program } = await compileIndexedPattern({
+  const { program, name } = await compileIndexedPattern({
     runtime: pieces.runtime,
     space: pieces.getSpace(),
     patternId: entry.patternId,
@@ -964,7 +968,7 @@ async function getProgramFromIndex(
         }),
       ),
   });
-  return program;
+  return { program, ...(name === undefined ? {} : { name }) };
 }
 
 // Returns an array of metadata about pieces to display.
@@ -2009,6 +2013,15 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
 }
 
 /**
+ * What creating a piece answers: the piece's id, and for a piece from the
+ * pattern index, the index's display name for the pattern when it has one.
+ */
+export interface NewPieceReceipt {
+  pieceId: string;
+  name?: string;
+}
+
+/**
  * Creates a new piece from source code, or from a published pattern, and
  * optional input.
  *
@@ -2019,7 +2032,7 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
  * so it names the piece as well as the flag: an operator who meant to repoint
  * has an id to name, and one who did not has a piece to find.
  */
-export async function newPiece(
+export async function newPieceWithReceipt(
   config: SpaceConfig,
   entry: PieceEntry,
   options?: {
@@ -2032,7 +2045,7 @@ export async function newPiece(
     requestKey?: string;
   },
   deps: PieceOperationDependencies = {},
-): Promise<string> {
+): Promise<NewPieceReceipt> {
   const pieces = await timeCliPhase(
     "newPiece.loadPieces",
     () => (deps.loadPieces ?? loadPieces)(config),
@@ -2078,7 +2091,7 @@ export async function newPiece(
     );
   }
 
-  const program = "patternId" in entry
+  const indexed = "patternId" in entry
     ? await timeCliPhase(
       "newPiece.getProgramFromIndex",
       () =>
@@ -2089,14 +2102,20 @@ export async function newPiece(
           deps,
         ),
     )
-    : await timeCliPhase(
-      "newPiece.getProgramFromFile",
-      () =>
-        (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
-          pieces,
-          entry,
-        ),
-    );
+    : {
+      program: await timeCliPhase(
+        "newPiece.getProgramFromFile",
+        () =>
+          (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
+            pieces,
+            entry,
+          ),
+      ),
+    };
+  const { program } = indexed;
+  // What the receipt says beside the piece id: the index's display name, for
+  // a piece from the index that has one.
+  const named = indexed.name === undefined ? {} : { name: indexed.name };
   // A published pattern carries no repository locator of its own.
   const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
@@ -2164,7 +2183,7 @@ export async function newPiece(
       throw error;
     });
     noteWroteTo(config.space);
-    return id;
+    return { pieceId: id, ...named };
   }
   const piece = await timeCliPhase(
     "newPiece.create",
@@ -2209,7 +2228,14 @@ export async function newPiece(
     () => pieces.add([piece.getCell()], { reconcile: false }),
   );
 
-  return piece.id;
+  return { pieceId: piece.id, ...named };
+}
+
+/** {@link newPieceWithReceipt}, answering only the new piece's id. */
+export async function newPiece(
+  ...args: Parameters<typeof newPieceWithReceipt>
+): Promise<string> {
+  return (await newPieceWithReceipt(...args)).pieceId;
 }
 
 /**

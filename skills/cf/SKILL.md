@@ -227,7 +227,7 @@ no `--space`.
 | Test pattern       | `deno task cf test pattern.test.tsx`                                                                                                                              |
 | Deploy new         | `deno task cf piece new pattern.tsx --test pattern.test.tsx --root . --repository REPO -i key -a url -s space`                                                    |
 | Attach a data file | `deno task cf piece new pattern.tsx --test pattern.test.tsx --datafile data/cities.json ...`                                                                      |
-| Deploy from index  | `deno task cf piece new --from-index ID --pattern-index-url URL ...` (fetched and compiled as `run_pattern` does, imports unpinned)                               |
+| Deploy from index  | `deno task cf piece new --from-index ID --pattern-index-url URL ... --json` (`{"pieceId","name"?}`; built as `run_pattern` builds it)                             |
 | Update existing    | `deno task cf piece setsrc pattern.tsx --test pattern.test.tsx --root . --repository REPO --cell ID -i key -a url -s space`                                       |
 | Follow an origin   | `deno task cf piece follow --cell ID system:system/profile-home/profile-home.tsx ...` (point a detached piece at an origin and adopt it; releases follow on open) |
 | Inspect state      | `deno task cf piece inspect --cell ID ...`                                                                                                                        |
