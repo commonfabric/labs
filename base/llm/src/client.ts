@@ -59,9 +59,15 @@ export function normalizeLLMResponse(data: unknown, id: string): LLMResponse {
 }
 
 function getInitialLLMUrl(): string {
-  if (typeof globalThis.location !== "undefined") {
-    return globalThis.location.protocol + "//" + globalThis.location.host +
-      "/api/ai/llm";
+  // A page's location names the server that served it. A Deno worker also has
+  // a location, but it is its module's file: URL, and a POST there fails, so
+  // only an http(s) location is taken as the toolshed.
+  const location = globalThis.location;
+  if (
+    typeof location !== "undefined" &&
+    (location.protocol === "http:" || location.protocol === "https:")
+  ) {
+    return location.protocol + "//" + location.host + "/api/ai/llm";
   }
   try {
     const apiUrl = Deno?.env?.get?.("API_URL");
@@ -79,6 +85,9 @@ let llmApiUrl = getInitialLLMUrl();
 export const setLLMUrl = (toolshedUrl: string) => {
   llmApiUrl = new URL("/api/ai/llm", toolshedUrl).toString();
 };
+
+/** The endpoint LLM calls without a per-space endpoint are sent to. */
+export const getLLMUrl = (): string => llmApiUrl;
 
 //
 // Mock Mode for Testing
