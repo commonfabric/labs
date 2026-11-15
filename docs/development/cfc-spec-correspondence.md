@@ -450,6 +450,33 @@ landing this ahead of the ruling, without a flag, on 2026-11-14, at
 file `check-cfc-correspondence` governs. The conformance statement's §2
 records the gap.
 
+Staging a source update's delegations after its transition commits, and
+recording them in the piece's `pieceSourceDelegations` meta member, implements
+[specs#101](https://github.com/commonfabric/specs/pull/101) ahead of its
+ruling, and its markers name it. The transition reads
+the piece's data, so delegation lists it staged on compile-cache records took
+that data's flow label, and every later setup of the module consumed it and
+could be refused. The transition now writes the lists only into the member,
+through the runtime's meta seam, naming the pattern they are for: every
+delegation edge of the piece's history with the history positions it was
+recorded at, and the closed delegations of that pattern's modules over them
+along non-increasing positions. A grant whose staging failed stays missing from
+the records where nothing of the piece's carries it there, and three readers of
+the records are refused it. A runtime from before the member that makes any
+transition of the piece after the failed staging is refused the grant, and is
+granted nothing more. Another piece's source update from the ungranted module
+after the failed staging is refused it, and carries the loss into that piece's
+records, so it too is only refused. Another piece's module writing through a
+link after the failed staging is refused it, and is granted nothing more. A
+cache transaction of its own then stages them on the records, after the
+commit. A runtime that starts or swaps the piece registers the closed entries
+whose module is in the successor's verified closure, reads nothing else, and
+writes nothing. It admits more at strict, with no default-off dial, so it does
+not satisfy step 4 above. Its two deciding sites carry the `SPEC-PENDING`
+marker. @danfuzz authorized landing this design ahead of the ruling, without a
+flag, on 2026-11-14. The conformance statement's §11 records the gap, what it
+gives up, and what it leaves to a separate repair.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

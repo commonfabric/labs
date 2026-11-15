@@ -70,6 +70,7 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceRecord,
   getPieceSourceSnapshot,
   keepLaterConfirmation,
   knownPieceReleasedAt,
@@ -1551,6 +1552,7 @@ export class SourceReconciler {
         state.space,
         state.running.identity,
         candidateRef.identity,
+        getPieceSourceRecord(resultCell, state.running.identity),
       )
       : undefined;
     const transition: PieceSourceTransition = {
@@ -1639,21 +1641,13 @@ export class SourceReconciler {
           return false;
         }
       }
-      if (sourceUpdate !== undefined) {
-        runtime.patternManager.stageSourceUpdate(
-          sourceUpdate,
-          state.space,
-          state.running.identity,
-          candidateRef.identity,
-          tx,
-        );
-      }
       applyPieceSourceTransition(
         runtime,
         resultCell,
         tx,
         candidateRef,
         transition,
+        { sourceUpdate },
       );
       // Staging the candidate belongs to this transaction whether or not the
       // piece is running, so a refusal costs nothing either way: setup that

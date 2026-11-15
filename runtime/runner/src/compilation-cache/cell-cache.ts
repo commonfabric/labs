@@ -283,6 +283,37 @@ export function deriveModuleDelegations<
   next: readonly Module[],
   entries?: { previous: string; next: string },
 ): Map<string, ReadonlySet<string>> {
+  const delegations = new Map<string, ReadonlySet<string>>();
+  for (
+    const [identity, { predecessor, inherited }] of deriveModulePredecessors(
+      previous,
+      next,
+      entries,
+    )
+  ) {
+    const delegated = validDelegatedModuleIdentities(
+      identity,
+      predecessor === identity ? [] : [predecessor],
+      inherited,
+    );
+    if (delegated.length > 0) delegations.set(identity, new Set(delegated));
+  }
+  return delegations;
+}
+
+/**
+ * The match {@link deriveModuleDelegations} makes for each successor in
+ * `next`, kept apart: the previous module it succeeds (itself, for a module
+ * the update leaves unchanged), and the attested list that module's record
+ * stores. A successor that matches nothing, or ambiguously, is left out.
+ */
+export function deriveModulePredecessors<
+  Module extends Pick<CacheableModule, "identity" | "filename">,
+>(
+  previous: ReadonlyMap<string, SourceDoc>,
+  next: readonly Module[],
+  entries?: { previous: string; next: string },
+): Map<string, { predecessor: string; inherited: readonly string[] }> {
   const previousByName = new Map<
     string,
     { identity: string; doc: SourceDoc }[]
@@ -370,7 +401,10 @@ export function deriveModuleDelegations<
     );
   }
 
-  const delegations = new Map<string, ReadonlySet<string>>();
+  const matched = new Map<
+    string,
+    { predecessor: string; inherited: readonly string[] }
+  >();
   for (const module of next) {
     const predecessor = claims.get(module.identity);
     if (
@@ -378,16 +412,15 @@ export function deriveModuleDelegations<
     ) {
       continue;
     }
-    const inherited = validDelegatedModuleIdentities(
-      module.identity,
-      predecessor.identity === module.identity ? [] : [predecessor.identity],
-      predecessor.doc.delegatedModuleIdentities,
-    );
-    if (inherited.length > 0) {
-      delegations.set(module.identity, new Set(inherited));
-    }
+    matched.set(module.identity, {
+      predecessor: predecessor.identity,
+      inherited: validDelegatedModuleIdentities(
+        predecessor.identity,
+        predecessor.doc.delegatedModuleIdentities,
+      ),
+    });
   }
-  return delegations;
+  return matched;
 }
 
 export function moduleDelegationsFromDocs(
@@ -1052,9 +1085,12 @@ export function codeFieldVerifies(
  * remains on the record is the compiler's bookkeeping.
  *
  * Without the marker, any transaction that both reads labeled data and reaches
- * a cache write is refused at `enforce-strict` — which a piece's source
- * transition does by construction, because it stages a module's delegation
- * union on the same transaction that moves the piece's source pointer.
+ * a cache write is refused at `enforce-strict`. A piece's source transition,
+ * which reads the piece's data, no longer reaches one: it records the
+ * successor's delegations on the piece, and they are staged on the records
+ * after it commits, on a transaction that reads only cache records
+ * (`stageModuleDelegations()`). A write-back over a record that already
+ * carries a clause still does.
  *
  * A cache document has no piece owner for §8.12.5's runtime-owned-store
  * enrollment. It is keyed on module content: every piece in the space
@@ -1069,12 +1105,14 @@ export function codeFieldVerifies(
  * Safety invariant 9 is why it does not go that far. The delegation metadata
  * holds module identities, and §17.7 says holding one grants no access to the
  * artifact it names, so the content written here is public. WHICH identity
- * appears is the other question: a transaction that read a labeled value and
- * chose a successor by it writes that choice here, and §8.11.3 puts a
- * decision's label on every downstream output whatever the output's own
- * content is. That is the router attack at one bit per update, so the stamp
- * stays and the ceiling is what the marker skips. The module's bytes are
- * unaffected either way, being in a `cid:` document of their own.
+ * appears is the other question: §8.11.3 puts a decision's label on every
+ * downstream output whatever the output's own content is, so a transaction
+ * that read a labeled value and wrote here keeps that label on the record,
+ * and the ceiling is what the marker skips. The source transition, the one
+ * that chooses a successor, no longer writes here, so the record does not
+ * carry that decision's label; the conformance statement's §11 records that
+ * as an under-taint. The module's bytes are unaffected either way, being in a
+ * `cid:` document of their own.
  *
  * Every write to a cache record goes through here, whichever field it touches.
  * The claim is about the document, so a write site that skipped it would leave
@@ -1751,10 +1789,16 @@ function effectiveModuleDelegationsForWrite(
 }
 
 /**
- * Stage a source update's delegation union on its durable artifacts. The source
- * transition owns this transaction; the returned union becomes runtime authority
- * only after that transaction commits. Compiled bodies stay in bounded cache
- * writes while these field updates share the source pointer's atomic boundary.
+ * Stage a source update's delegation union on its durable artifacts, and
+ * return the union, which becomes runtime authority once `tx` commits. The
+ * caller runs this on a cache transaction of its own, after the source
+ * transition has committed, so that `tx` reads nothing but cache records:
+ * whatever else it read would label the records it writes.
+ *
+ * TODO: Records a source transition stamped while it staged this on its own
+ * transaction keep that stamp, which this write leaves as it is, and a setup
+ * that reads them is refused (`compile-cache-record-labels.test.ts`). A
+ * repair that drops those stamps is to follow.
  */
 export function stageModuleDelegations(
   runtime: Runtime,
