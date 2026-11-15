@@ -73,37 +73,46 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `f1a86a95d8`, under
+  computes exists at prototype commit `b739a377dc`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
   no browser. It generates a scenario per module, with a distinct
   clause per input and one event per handler. Of the 270 modules with
   a full plan, 213 run; 33 need `wish`, 14 request an effect, and the
-  runtime refuses the commit of 10. Of 1,301 outputs compared, none is
+  runtime refuses the commit of 10. Of 1,388 outputs compared, none is
   looser and none incomparable with the pattern's atom on kept
   outputs. Without that atom, which tests the rule of each template,
-  1,165 are equal, 15 tighter, 74 have an atom that names the pattern
-  where the runtime's names a callback, and 47 are looser in integrity
-  alone, by the ruling on a promoted `computed`. None is looser
-  without the runtime's static part. Of 226 events sent, 212 commit.
-  Of the 14 refused, 6 are refused by a pattern written to be refused
-  or for a trusted event the harness does not send, 5 by the handler's
-  own validation of the generated values, and 3 by gaps in the crate,
-  the harness, and the generator. Of 152 write edges compared, 143 are
-  equal and 9 tighter, with the `link` entry of a handle that is only
-  passed on left out (question 127); with it, 2 are looser. The 9
-  tighter each have a label an earlier event of the scenario left on
-  the shape of the target. 120 write edges are of a write the run did
-  not make; a sample of 40 found a write of an equal value, a branch
-  not taken on the generated values, or a random choice, and no error.
-  53 outputs have no stored value; for 7 of them the template has a
-  clause where the runtime stores no label, because an action threw or
-  a conditional rendered nothing.
-  Per-element handlers (385 bindings, 511 write edges) get no event.
+  47 are looser in integrity alone, by the ruling on a promoted
+  `computed`, and none is looser in confidentiality. None is looser
+  without the runtime's static part. The modules run have 651
+  bindings with 924 write edges: 266 written in the pattern itself,
+  314 of a pattern compiled in at a tag or a call, and 71 of an
+  element body. 377 have a result path and 344 get an event that
+  commits; 15 events are refused, 6 of them by a pattern written to
+  be refused or for a trusted event the harness does not send, and
+  the rest by the handler on the generated values or by gaps in the
+  crate, the harness, and the generator. Of 234 write edges compared,
+  219 are equal, 15 tighter, and none looser. The 9 tighter that were
+  examined each have a label an earlier event of the scenario left on
+  the shape of the target; the 6 of element bodies are not examined.
+  169 write edges are of a write the run did not make; a sample of 40
+  found a write of an equal value, a branch not taken on the generated
+  values, or a random choice, and no error. The comparison is partial
+  in these ways. 208 bindings of patterns reached through elements of
+  an array of pattern results have no result path, and 37 write edges
+  target the stream of another binding and 52 hold a slot over all
+  elements; neither kind is compared. Outputs below the elements of a
+  collection are not compared. Three rows of
+  `examples/map-demo/map-demo.tsx` were looser in confidentiality
+  when the events ran in another order, and a read after one of them
+  threw in `traverseWithSelector`; neither is examined. 53 outputs
+  have no stored value; for 7 of them the template has a clause where
+  the runtime stores no label, because an action threw or a
+  conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
-  yet emit `$defs` for a recursive type or a result path for a binding
-  inside an element. The crate's `SPEC-NOTES.md` lists the places
-  where it found the documents ambiguous.
+  yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
+  lists the places where it found the documents ambiguous; notes 241
+  to 251 are not yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
