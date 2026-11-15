@@ -210,7 +210,9 @@ async function refuseUntakenScope(
 }
 
 /**
- * Create a piece in `space` from `program`, set up and not started here,
+ * Create a piece in `space` from `program`, or from a `pattern` the space
+ * already holds (a request-key retry names the one its receipt recorded),
+ * set up and not started here,
  * with its name in the setup transaction and registration through the
  * default pattern action after setup commits. Missing roots or handlers retain
  * the created piece and report failed registration for a request-key retry.
