@@ -417,11 +417,11 @@ export const fitValue = (
 };
 
 const CONFIDENCE_COLORS: Record<string, string> = {
-  high: "#15803d",
-  medium: "#b45309",
-  low: "#b91c1c",
+  high: "var(--cf-theme-color-success, #15803d)",
+  medium: "var(--cf-theme-color-warning, #b45309)",
+  low: "var(--cf-theme-color-error, #b91c1c)",
 };
-const UNKNOWN_CONFIDENCE_COLOR = "#6b7280";
+const UNKNOWN_CONFIDENCE_COLOR = "var(--cf-colors-gray-500, #6b7280)";
 
 export const EMPTY_PREVIEW: QuickAddPreview = {
   ready: false,
@@ -588,8 +588,14 @@ export const rubricMarkdown = (
 // Styles
 // ---------------------------------------------------------------------------
 
-const BORDER = "1px solid var(--cf-colors-gray-200, #e5e7eb)";
+// Colours come from the shell's theme, with light fallbacks, so the panels
+// stay readable in dark mode: a fixed light background under the theme's
+// light text left the selected option's name and the Quick Add heading
+// unreadable.
+const BORDER = "1px solid var(--cf-theme-color-border, #e5e7eb)";
 const MUTED = "var(--cf-colors-gray-500, #6b7280)";
+const ACCENT = "var(--cf-theme-color-primary, #2563eb)";
+const ACCENT_SURFACE = "var(--cf-theme-color-primary-light, #eff6ff)";
 
 const styles = {
   page: {
@@ -610,8 +616,8 @@ const styles = {
   },
   quickAdd: {
     padding: "1rem",
-    border: "1px solid #bfdbfe",
-    background: "#eff6ff",
+    border: `1px solid ${ACCENT}`,
+    background: ACCENT_SURFACE,
     borderRadius: "8px",
     display: "flex",
     flexDirection: "column",
@@ -655,7 +661,7 @@ const styles = {
     font: "inherit",
     color: "inherit",
   },
-  score: { fontSize: "1.2em", fontWeight: "bold", color: "#1d4ed8" },
+  score: { fontSize: "1.2em", fontWeight: "bold", color: ACCENT },
   card: {
     padding: "0.75rem",
     border: BORDER,
@@ -674,7 +680,7 @@ const styles = {
   },
   small: { color: MUTED, fontSize: "0.85em" },
   preview: {
-    background: "var(--cf-colors-surface, white)",
+    background: "var(--cf-theme-color-surface, white)",
     padding: "0.75rem",
     borderRadius: "6px",
     border: BORDER,
@@ -683,8 +689,8 @@ const styles = {
     gap: "0.4rem",
   },
   error: {
-    color: "#991b1b",
-    background: "#fee2e2",
+    color: "var(--cf-theme-color-error, #991b1b)",
+    background: "var(--cf-theme-color-error-light, #fee2e2)",
     padding: "0.5rem",
     borderRadius: "6px",
   },
@@ -746,6 +752,8 @@ export interface RubricOutput {
   toggleDirection: Stream<{ name: string }>;
 }
 
+const QUICK_ADD_MODEL = "anthropic:claude-haiku-4-5";
+
 const SmartRubric = pattern<RubricInput, RubricOutput>(
   ({ title, options, dimensions }) => {
     const selected = new Writable.perSession<string>("");
@@ -762,6 +770,13 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
     // captured at submission too, so editing dimensions while a proposal is
     // on screen does not send the description again.
     const extraction = generateObject<QuickAddResponse>({
+      // Name the model. The default (`gateway:gpt-5.4-mini`) runs in OpenAI's
+      // strict structured-output mode, which rejects the schema the runtime
+      // derives from QuickAddResponse: it leaves out `additionalProperties:
+      // false`, and toolshed's `normalizeSchemaForProvider` does not add it,
+      // so every Quick Add failed with HTTP 400. Drop this once toolshed makes
+      // derived schemas strict-compatible.
+      model: QUICK_ADD_MODEL,
       system: quickAddSubmittedSystem,
       prompt: quickAddSubmitted,
     });
@@ -1041,10 +1056,10 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
                   style={{
                     ...styles.optionCard,
                     border: row.name === selectedName
-                      ? "2px solid #2563eb"
+                      ? `2px solid ${ACCENT}`
                       : BORDER,
                     background: row.name === selectedName
-                      ? "#eff6ff"
+                      ? ACCENT_SURFACE
                       : "transparent",
                   }}
                 >
