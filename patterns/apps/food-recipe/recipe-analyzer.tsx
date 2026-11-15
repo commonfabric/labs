@@ -31,6 +31,13 @@ import {
   type Ingredient,
 } from "./schemas.tsx";
 
+/**
+ * Named rather than left to the default: the default generateObject model
+ * rejects the schemas the runtime derives with HTTP 400 (top/3114). Haiku
+ * 4.5 reads images, which extraction needs. Drop this once top/3114 is fixed.
+ */
+const STRUCTURED_MODEL = "anthropic:claude-haiku-4-5";
+
 export const DIETARY_SYSTEM = `You analyze recipes for dietary compatibility.
 
 Check every one of these tags and list each as compatible or incompatible:
@@ -151,6 +158,7 @@ const RecipeAnalyzer = pattern<RecipeAnalyzerInput, RecipeAnalyzerOutput>(
     );
 
     const llm = generateObject<DietaryCompatibility>({
+      model: STRUCTURED_MODEL,
       system: DIETARY_SYSTEM,
       prompt: requested,
     });

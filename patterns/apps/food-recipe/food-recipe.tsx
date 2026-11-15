@@ -78,6 +78,13 @@ import {
 import RecipeAnalyzer from "./recipe-analyzer.tsx";
 import Viewer from "./viewer.tsx";
 
+/**
+ * Named rather than left to the default: the default generateObject model
+ * rejects the schemas the runtime derives with HTTP 400 (top/3114). Haiku
+ * 4.5 reads images, which extraction needs. Drop this once top/3114 is fixed.
+ */
+const STRUCTURED_MODEL = "anthropic:claude-haiku-4-5";
+
 interface FoodRecipeInput {
   name?: PerSpace<Writable<string | Default<"">>>;
   cuisine?: PerSpace<Writable<string | Default<"">>>;
@@ -356,6 +363,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
     >(null);
 
     const extractLlm = generateObject<RecipeExtraction>({
+      model: STRUCTURED_MODEL,
       system: EXTRACTION_SYSTEM,
       prompt: computed(() => {
         const request = extractRequest.get();
@@ -465,6 +473,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
 
     const timingRequest = new Writable.perSession<string>("");
     const timingLlm = generateObject<TimingSuggestions>({
+      model: STRUCTURED_MODEL,
       system: TIMING_SYSTEM,
       prompt: timingRequest,
     });
