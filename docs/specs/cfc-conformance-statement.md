@@ -891,18 +891,25 @@ registry of module delegations (`ModuleDelegationRegistry` in
 
 **What the runtime does.** The transition, `applyPieceSourceTransition` in
 `runner.ts`, reads the piece's data and writes no cache document. It records
-the delegations it grants as `moduleDelegations` on the piece's new source
-revision, through the runtime's meta seam, extended with what the previous
-revision records (`PatternManager.stageSourceUpdate`). Once it commits, the
-runtime registers them and stages them on the successor's source and compiled
-cache records, on a cache transaction of its own that reads only those
-records (`#stageCommittedDelegations`). A runtime that starts or swaps the
-piece to that pattern registers the recorded entries whose module is in the
+the delegations it grants in the piece's `pieceSourceDelegations` meta
+member, through the runtime's meta seam, naming the pattern they are for.
+`PatternManager.prepareSourceUpdate` composes them, before the transaction
+opens, with what the member records for the previous pattern, so the
+transaction is pinned to the composed set, and `PatternManager.stageSourceUpdate`
+refuses the transition if the member has moved since. A transition that leaves
+the pattern in place keeps the member, and any other transition removes it.
+Once the transition commits, the runtime registers the delegations and stages
+them on the successor's source and compiled cache records, on a cache
+transaction of its own that reads only those records
+(`#stageCommittedDelegations`). A runtime that starts or swaps the piece to
+the member's pattern registers the member's entries whose module is in the
 successor's closure, verified as it loads it
-(`PatternManager.readInheritedAuthority`), and falls back to the records' own
-lists for a revision that records none.
+(`PatternManager.readInheritedAuthority`), and stages them on the records
+again where the records lack them. A member that is absent or names another
+pattern registers nothing, and the records' own lists decide.
 
-This implements specs#NN ahead of its ruling, at strict and with no dial:
+This implements a specification change, `TBD-succession-record` until its
+pull request has a number, ahead of its ruling, at strict and with no dial:
 @danfuzz ruled that it lands that way, recorded in the correspondence
 procedure as a nonconforming semantic gap. Against the pin it admits more,
 since a pattern update no longer labels the cache records it delegates
@@ -915,12 +922,19 @@ registration in `PatternManager`, carry its `SPEC-PENDING` marker.
 - An under-taint: the decision label. A transition that chose its successor
   by a labeled value put that value's clause on the records it staged, which
   §8.11.3 asks of a decision's downstream outputs. The staging transaction
-  reads no piece data, so the records carry none, and the source history is
-  not labeled either.
-- Authority also comes from the piece's source history, not only from a
-  closure's own records. Only the runtime's meta seam writes the history. A
-  client that bypasses its runtime can forge it, as it can forge the
-  compiler's attestation on a record (`memory/v2/envelope-admission.ts`).
+  reads no piece data, so the records carry none, and the member carries no
+  flow label either.
+- Authority also comes from the piece's `pieceSourceDelegations` member, not
+  only from a closure's own records, and the member is trusted on its shape:
+  its predecessors are not checked against anything. Only the runtime's meta
+  seam writes it. A client that bypasses its runtime can forge it, as it can
+  forge the compiler's attestation on a record
+  (`memory/v2/envelope-admission.ts`), so no new attacker gains anything. What
+  a forged entry reaches is wider than a forged record: any runtime that
+  starts the piece registers it for the whole space, a start stages it on the
+  successor's cache records, and the next honest update composes it into its
+  own and stages it there under the compiler's attestation, after which it
+  cannot be told apart from an attested entry.
 - Records an earlier transition stamped keep their clause, and the setups
   that read them keep refusing, until a separate repair. A write-back still
   re-stamps the root of a record that already carries a clause.

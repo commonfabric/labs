@@ -664,17 +664,20 @@ delegation field alone. Compiled documents authenticate it with their existing
 root compiler stamp. Loaders discard delegation metadata without the applicable
 stamp. A source update writes no cache document in its own transaction, which
 reads the piece's data and would label every document it wrote with that
-data's flow label. It records the delegations it grants in the piece's new
-source revision instead (`moduleDelegations` in
-[piece-source-lifecycle.md](piece-source-lifecycle.md)), cumulative over the
-piece's earlier revisions, and registers them in the active runtime once that
-transaction commits. A cache transaction of its own then computes a union of
+data's flow label. It records the delegations it grants in the piece's
+`pieceSourceDelegations` meta member instead, which names the pattern they are
+for and which every source transition replaces (see
+[piece-source-lifecycle.md](piece-source-lifecycle.md)). They are composed,
+when the update is prepared, with what the member recorded for the previous
+pattern, so they stay cumulative over the piece's history and the transaction
+is pinned to them. The runtime registers them once that transaction commits. A cache transaction of its own then computes a union of
 those entries and authenticated entries already stored in either document set
 under `editWithRetry`, and writes the same union to both sets. A runtime that
-starts or swaps a piece to the revision's pattern registers the recorded
-entries whose module is in the closure it loads, so the authority holds before
-that second transaction lands, and when it never does. A revision that records
-none falls back to the stored entries. General cache saves
+starts or swaps a piece to the member's pattern registers the recorded entries
+whose module is in the closure it verifies, so the authority holds before that
+second transaction lands, and when it never does; where the closure's records
+lack them, it stages them there again. A member that is absent or names
+another pattern registers nothing, and the stored entries decide. General cache saves
 ([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority already
 present in either set. Entries accumulate because one content-addressed
 successor can be shared by patterns updated from different predecessors.
@@ -774,9 +777,12 @@ registers the new pattern's module as inheriting from every other pattern the
 history names. A grant registered for one of them settles nothing about the
 rest, since a later update onto the same successor extends its stored grants
 with that update's own predecessors. If any is missing, the runner first reads
-the new pattern's verified source closure in a transaction without writes,
-which registers whatever delegation that closure durably carries. The start or
-swap proceeds once the read settles, whether or not it added a grant.
+the new pattern's compiled closure, and its verified source closure if a
+grant is still missing, in a transaction without writes, which registers
+whatever delegation that closure durably carries, and the entries the piece's
+`pieceSourceDelegations` member records for that pattern whose module is in
+the closure. The start or swap proceeds once the read settles, whether or not
+it added a grant.
 
 Registration and transitive closure are scoped by the space carrying that
 attestation. Each transaction snapshots the resulting per-space maps, and

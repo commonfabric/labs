@@ -453,8 +453,9 @@ The strict-only delta is:
   there is the empty one, and a measured cache write carrying any clause
   misfits. A piece's source transition reads the piece's argument, so it
   writes no cache document: it records the successor's delegation union in
-  the piece's own source history, which is the piece's document rather than a
-  cache one, and the union is staged on the cache documents once the
+  the piece's own `pieceSourceDelegations` meta member, on the piece's
+  document rather than a cache one, and the union is staged on the cache
+  documents once the
   transition commits, on a transaction that reads nothing but cache documents.
   An ordinary pattern update therefore brings no clause from the piece's data
   to a cache write. The measurement still reaches a cache document whenever a
