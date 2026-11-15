@@ -5,7 +5,10 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
-import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import {
+  type ExtendedStorageTransaction,
+  setCfcImplementationIdentity,
+} from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-integrity-mint-gate");
@@ -298,6 +301,40 @@ describe("CFC integrity mint gate", () => {
       });
 
       expect(paths).toEqual([["tag"]]);
+    });
+
+    it("binds the writes another identity made into the prepared digest's input", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const digestInput = (underBuiltin: boolean) => {
+          const tx = runtime.edit();
+          try {
+            setCfcImplementationIdentity(
+              tx,
+              underBuiltin ? BUILTIN : undefined,
+            );
+            runtime.getCell(signer.did(), "mint-gate-digest", undefined, tx)
+              .set({ note: "written" });
+            setCfcImplementationIdentity(tx, BUILTIN);
+            return (tx as ExtendedStorageTransaction).accessForTestingOnly
+              .buildPreparedDigestInput();
+          } finally {
+            tx.abort();
+          }
+        };
+
+        expect(digestInput(true).unattestedWrites).toBeUndefined();
+        expect(
+          digestInput(false).unattestedWrites?.map((write) => write.path),
+        ).toContainEqual(["note"]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
     });
 
     it("drops the evidence at the field the other write reaches", async () => {
