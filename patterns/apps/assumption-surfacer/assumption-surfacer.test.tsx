@@ -179,7 +179,8 @@ export default pattern(() => {
       updateFor(corrected[0], 0) ===
         "Regarding language: TypeScript rather than Python." &&
       corrected[0].chosenIndex === 2 &&
-      updateFor(rejected[0], 0).startsWith("Regarding language: not Python") &&
+      updateFor(rejected[0], 0) ===
+        "Regarding language: none of Python, JavaScript, TypeScript." &&
       // Taken back after the assistant heard the correction, and before.
       updateFor(undone[0], 2) === "Regarding language: Python after all." &&
       updateFor(undone[0], 0) === "" &&
@@ -327,7 +328,7 @@ export default pattern(() => {
   const assert_rejected = assert(() =>
     surfacer.assumptions[1]?.status === "rejected" &&
     lastText(surfacer.messages).startsWith(
-      update("Regarding skill level: not"),
+      update("Regarding skill level: none of Beginner,"),
     ) &&
     surfacer.system.includes("- Skill level: none of")
   );

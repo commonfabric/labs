@@ -1051,10 +1051,11 @@ interface RewardSpinnerOutput {
 A chat that shows, beside the conversation, the assumptions the assistant is
 making about you. Before each reply the assistant records its few most
 consequential guesses (your language, skill level, goal…) through a
-`recordAssumptions` tool, each with alternatives. The sidebar lists them, newest
-first; pick the right alternative or "None of these". A correction is also sent
-to the chat, and every settled assumption is folded into the system prompt so
-later replies build on it.
+`recordAssumptions` tool, each with alternatives; the list is read from those
+tool calls in the chat, so only your verdicts are stored. The sidebar lists
+them, newest first; pick the right alternative or "None of these". A correction
+is also sent to the chat, and every settled assumption is folded into the system
+prompt so later replies build on it.
 
 **Keywords:** llm, chat, llmDialog, tools, assumptions, clarification
 
@@ -1075,7 +1076,14 @@ interface Assumption {
 
 interface AssumptionSurfacerInput {
   messages?: PerSpace<Writable<BuiltInLLMMessage[] | Default<[]>>>;
-  assumptions?: PerSpace<Writable<Assumption[] | Default<[]>>>;
+  // The user's verdict on each recorded assumption, by id. The assumptions
+  // themselves are read from the recordAssumptions calls in `messages`.
+  verdicts?: PerSpace<
+    Writable<
+      | Record<string, { status: Assumption["status"]; chosenIndex: number }>
+      | Default<{}>
+    >
+  >;
   // Each message of assumption updates sent; one counts as told only once it
   // appears in `messages` (the dialog drops a send made mid-reply).
   updates?: PerSpace<Writable<SentUpdate[] | Default<[]>>>;
@@ -1094,7 +1102,7 @@ interface AssumptionSurfacerOutput {
   unsent: string[]; // verdicts not yet told to the assistant in the chat
   system: string; // the full system prompt
   pending: boolean | undefined;
-  recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }, string>;
+  recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }>;
   confirmAssumption: Stream<{ id: string }>;
   rejectAssumption: Stream<{ id: string }>;
   chooseAlternative: Stream<{ id: string; index: number }>;

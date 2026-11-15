@@ -366,9 +366,7 @@ export const updateFor = (a: Assumption, told: number): string => {
   const topic = a.label.toLowerCase();
   const assumed = a.alternatives[a.assumedIndex] ?? "";
   return now === -1
-    ? `Regarding ${topic}: not ${assumed}, and none of ${
-      a.alternatives.join(", ")
-    }.`
+    ? `Regarding ${topic}: none of ${a.alternatives.join(", ")}.`
     : now === a.assumedIndex
     ? `Regarding ${topic}: ${assumed} after all.`
     : `Regarding ${topic}: ${
