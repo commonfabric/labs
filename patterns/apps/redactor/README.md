@@ -105,12 +105,16 @@ Five gaps shape it:
    measures the constant default against every labeled read in the transaction,
    and initial schema defaults are exempt only from writer policies. Lists that
    start empty never hit it, which is why every existing `MaxConfidentiality`
-   demo works. Consequences here: `draft` has no `Default` (it reads as unset
-   until typed in); a caller cannot pass a prefilled draft (a "redact this note"
-   launcher fails to start); the vault's in-progress entry field is a plain
-   per-session cell rather than `Secret`; and the sent key is a list of secret
-   items. To be filed as a runtime topic; remove the workarounds when it is
-   fixed.
+   demo works. Consequences here: `draft` has no `Default`, and an unset secret
+   cannot be typed into: the owner's display fits a cell that holds nothing by
+   its schema's label alone, which no exchange rule rewrites, so it refuses the
+   read, and a bound input whose read is refused writes nothing. Focusing the
+   textarea therefore sets an unset draft to `""` through a handler
+   (`startDraft`), after which the draft carries a stored label the reader rule
+   admits. A caller cannot pass a prefilled draft (a "redact this note" launcher
+   fails to start); the vault's in-progress entry field is a plain per-session
+   cell rather than `Secret`; and the sent key is a list of secret items. To be
+   filed as a runtime topic; remove the workarounds when it is fixed.
 4. **A pasted reply uses the current key.** A reply from the model is restored
    with the key kept when it was sent. A pasted reply is restored with the
    current draft's key, so editing the draft before pasting can mis-restore. A
