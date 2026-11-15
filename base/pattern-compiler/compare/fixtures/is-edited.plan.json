@@ -5,6 +5,7 @@
       {
         "line": 17,
         "name": "default",
+        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],

@@ -5,6 +5,7 @@
       {
         "line": 15,
         "name": "Child",
+        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],
@@ -150,6 +151,7 @@
       {
         "line": 40,
         "name": "default",
+        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [

@@ -5,6 +5,7 @@
       {
         "line": 9,
         "name": "Row",
+        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],
@@ -160,6 +161,7 @@
       {
         "line": 18,
         "name": "default",
+        "noResultPath": [],
         "plan": {
           "argumentSchema": "unhashed:schema/0",
           "bindings": [],
