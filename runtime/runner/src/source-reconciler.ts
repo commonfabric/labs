@@ -1654,9 +1654,12 @@ export class SourceReconciler {
       // cannot take the piece's data fails the transaction and the piece keeps
       // what it has. A running piece is then re-instantiated by the pattern
       // watcher, which sees its own completion marker and does not stage it a
-      // second time.
+      // second time. The runtime adopts the release on its own, with none of
+      // the reads that chose it in this transaction, so the setup leaves the
+      // value of a result it finds unchanged as stored (`runtimeStarted`).
       void runtime.setup(tx, candidate, undefined, resultCell.withTx(tx), {
         prepareForResume: true,
+        runtimeStarted: true,
       });
       return true;
     };

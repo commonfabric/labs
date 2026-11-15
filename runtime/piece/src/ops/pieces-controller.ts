@@ -3003,6 +3003,7 @@ export class PiecesController<T = unknown> {
           () =>
             runtime.runSynced(rootToStart, repairPattern, undefined, {
               expectedPatternIdentity: ref,
+              runtimeStarted: true,
             }),
         );
       } catch (repairError) {
@@ -3174,6 +3175,7 @@ export class PiecesController<T = unknown> {
             void this.runtime.setup(tx, pattern, undefined, candidate, {
               prepareForResume: true,
               reapplyStoredSetup: true,
+              runtimeStarted: true,
             });
             return true;
           }),
@@ -3509,6 +3511,7 @@ export class PiecesController<T = unknown> {
         () =>
           this.runtime.runSynced(root.withTx(), pattern, undefined, {
             expectedPatternIdentity: ref,
+            runtimeStarted: true,
           }),
       );
     } catch (materializeError) {

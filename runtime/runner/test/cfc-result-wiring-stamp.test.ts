@@ -99,7 +99,12 @@ describe("cfc-result-wiring-stamp", () => {
    * one set up over the other rewrites the wiring; `named` carries a name,
    * which a setup of the same pattern keeps from the stored result;
    * `forwarding` returns a nested `named` piece as its whole result, so its
-   * result document stores a reference.
+   * result document stores a reference. `mixed`, `remixed`, `sameMixed` and
+   * `namedMixed` hold data beside their references; `sameMixed` is another
+   * pattern with the result `mixed` has. `dataOnly` holds data and no
+   * reference, and `sameDataOnly` is another pattern with its result.
+   * `nestedMixed` holds data beside a reference below its root, and
+   * `sameNestedMixed` is another pattern with its result.
    */
   const patterns = () => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
@@ -131,6 +136,28 @@ describe("cfc-result-wiring-stamp", () => {
         a: double(x),
         note: "changed",
       })),
+      sameMixed: cf.pattern<{ x: number }>(({ x }) => {
+        triple(x);
+        return { a: double(x), note: "fixed" };
+      }),
+      namedMixed: cf.pattern<{ x: number }>(({ x }) => ({
+        [NAME]: title(x),
+        a: double(x),
+        note: "fixed",
+      })),
+      nestedMixed: cf.pattern<{ x: number }>(({ x }) => ({
+        inner: { a: double(x) },
+        note: "fixed",
+      })),
+      sameNestedMixed: cf.pattern<{ x: number }>(({ x }) => {
+        triple(x);
+        return { inner: { a: double(x) }, note: "fixed" };
+      }),
+      dataOnly: cf.pattern<{ x: number }>(() => ({ note: "fixed" })),
+      sameDataOnly: cf.pattern<{ x: number }>(({ x }) => {
+        triple(x);
+        return { note: "fixed" };
+      }),
     };
   };
 
@@ -295,6 +322,51 @@ describe("cfc-result-wiring-stamp", () => {
     expect(existenceOf(cell)).toEqual([existence]);
   };
 
+  /**
+   * Adds to `cell`'s stored label map a derived entry naming `atom` at `path`,
+   * of the observation class `observes`, `value` unless given, as a write
+   * there by an earlier attempt would leave, or of none, as a write before
+   * entries named their class did.
+   */
+  const plantDerived = async (
+    cell: Cell<unknown>,
+    path: readonly string[],
+    atom: string,
+    observes: "value" | "shape" | "none" = "value",
+  ): Promise<void> => {
+    const tx = runtime.edit();
+    const link = cell.getAsNormalizedFullLink();
+    const document: IMemorySpaceAddress = {
+      space: link.space,
+      scope: link.scope,
+      id: link.id,
+      path: [],
+    };
+    writeSeedEnvelopeDoc(tx, space);
+    const cfc = (storedFields(tx, document).cfc ?? {
+      version: 1,
+      schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+      labelMap: { version: 1, entries: [] },
+    }) as { labelMap: { entries: FabricValue[] } };
+    seedStoredEnvelope(tx, { ...document, path: ["cfc"] }, {
+      ...cfc,
+      labelMap: {
+        ...cfc.labelMap,
+        entries: [
+          ...cfc.labelMap.entries,
+          {
+            path: [...path],
+            label: { confidentiality: [atom] },
+            origin: "derived",
+            ...(observes === "none" ? {} : { observes }),
+          },
+        ],
+      },
+    } as FabricValue);
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).ok).toBeDefined();
+  };
+
   describe("a setup that reads another principal's data", () => {
     it("stamps it on the membership where the transaction read it before choosing the pattern", async () => {
       // What a transaction read before a setup began decided which pattern
@@ -363,7 +435,11 @@ describe("cfc-result-wiring-stamp", () => {
       expect(membershipOf(result)).toContain(BOB);
     });
 
-    it("stamps nothing of it on an unchanged result that holds data beside its references", async () => {
+    it("stamps it on the value of an unchanged result that holds data beside its references", async () => {
+      // The setup restates the data the result holds, so the result's value
+      // stamp is re-minted from the attempt's join, which carries what the
+      // transaction read before choosing the pattern.
+
       const { mixed } = patterns();
       const bobs = await seedBobsDocument();
       const result = await setUp("mixed-reads-bob", mixed);
@@ -371,8 +447,105 @@ describe("cfc-result-wiring-stamp", () => {
 
       await setUp("mixed-reads-bob", mixed, bobs);
 
-      expect(derivedOf(result)).not.toContain(BOB);
+      expect(derivedOf(result)).toContain(BOB);
       expect(membershipOf(result)).not.toContain(BOB);
+    });
+
+    it("stamps nothing of it on an unchanged result that holds data and no reference", async () => {
+      // Only a root holding data beside references is restated: whether a
+      // root of data alone is too is a question on specs#98, so its entries
+      // stay as stored.
+
+      const { dataOnly, sameDataOnly } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("data-only-reads-bob", dataOnly);
+      expect(derivedOf(result)).toEqual([]);
+
+      await setUp("data-only-reads-bob", sameDataOnly, bobs);
+
+      expect(derivedOf(result)).toEqual([]);
+      expect(existenceOf(result)).toEqual([]);
+    });
+
+    it("records no existence of an unchanged result that holds data beside its references", async () => {
+      // The root existed before the setup, which only restates it, so no
+      // existence entry records a creation from the attempt's join.
+
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-exists", mixed);
+      expect(existenceOf(result)).toEqual([]);
+
+      await setUp("mixed-exists", mixed, bobs);
+
+      expect(derivedOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([]);
+    });
+
+    it("replaces a derived entry below an unchanged result's root with the root's", async () => {
+      // A write of the root would drop what an earlier write left below it,
+      // so a reader there takes the re-derived root entry instead.
+
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-below", mixed);
+      await plantDerived(result, ["note"], CAROL);
+
+      await setUp("mixed-below", mixed, bobs);
+
+      expect(
+        entriesOf(result)
+          .filter((entry) => entry.origin === "derived")
+          .map((entry) => [entry.path, entry.label.confidentiality]),
+      ).toEqual([[[], [BOB]]]);
+      const tx = runtime.edit();
+      try {
+        result.withTx(tx).key("note" as never).get();
+        expect(deriveFlowJoin(tx).confidentiality).toEqual([BOB]);
+      } finally {
+        tx.abort("probe read");
+      }
+    });
+
+    it("keeps an existence entry below an unchanged result's root, as a write of the root does", async () => {
+      // A write of the root clears the value entries below it and keeps the
+      // existence entries there, which record that a path was written.
+
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-below-existence", mixed);
+      await plantDerived(result, ["note"], CAROL, "shape");
+      await plantDerived(result, ["note"], "note-secret");
+
+      await setUp("mixed-below-existence", mixed, bobs);
+
+      expect(
+        entriesOf(result)
+          .filter((entry) =>
+            entry.origin === "derived" && entry.path.length === 1
+          )
+          .map((entry) => [
+            entry.path,
+            entry.observes,
+            [...(entry.label.confidentiality ?? [])].sort(),
+          ]),
+      ).toEqual([[["note"], "shape", [CAROL]]]);
+    });
+
+    it("mints no existence entry from its join on an unchanged result whose root holds an entry naming no class", async () => {
+      // The restatement clears that entry with the value entries, and the
+      // existence history it carried moves to an existence entry alone: a
+      // restatement is not a creation, so the join it read reaches none.
+
+      const { mixed, sameMixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("legacy-root", mixed);
+      await plantDerived(result, [], "legacy-secret", "none");
+
+      await setUp("legacy-root", sameMixed, bobs);
+
+      expect(existenceOf(result)).not.toContain(BOB);
+      expect(existenceOf(result)).toContain("legacy-secret");
     });
   });
 
@@ -1135,6 +1308,178 @@ describe("cfc-result-wiring-stamp", () => {
       await setUp("remixed", remixed);
 
       expect(derivedOf(result)).not.toContain(BOB);
+    });
+
+    it("comes off at a setup of another pattern that finds the result unchanged", async () => {
+      // The setup restates the data the result holds, in a transaction that
+      // read nothing labeled, so the value entry is re-derived empty.
+
+      const { mixed, sameMixed } = patterns();
+      const result = await setUp("remint-unchanged", mixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-unchanged", sameMixed);
+
+      expect(derivedOf(result)).toEqual([]);
+    });
+
+    it("comes off a result whose only reference sits below its root, at a setup of another pattern that finds it unchanged", async () => {
+      // A reference anywhere in the root's value makes it a root holding
+      // data beside references (`holdsReference` in `cfc/prepare.ts`), not
+      // only one at the top level.
+
+      const { nestedMixed, sameNestedMixed } = patterns();
+      const result = await setUp("remint-nested", nestedMixed);
+      const link = result.getAsNormalizedFullLink();
+      const read = runtime.edit();
+      const stored = storedFields(read, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: [],
+      }).value as { inner: Record<string, unknown>; note: unknown };
+      read.abort("stored value read");
+      expect(isCellLink(stored.inner.a)).toBe(true);
+      expect(stored.note).toBe("fixed");
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-nested", sameNestedMixed);
+
+      expect(derivedOf(result)).toEqual([]);
+    });
+
+    it("stays on a result that holds data and no reference, at a setup of another pattern that finds it unchanged", async () => {
+      // Whether a root of data alone is restated is a question on specs#98,
+      // so its value entry stays as stored. Another pattern's setup reads no
+      // stored name, so only that keeps the stamp.
+
+      const { dataOnly, sameDataOnly } = patterns();
+      const result = await setUp("remint-data-only", dataOnly);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-data-only", sameDataOnly);
+
+      expect(derivedOf(result)).toEqual([BOB]);
+    });
+
+    it("stays where a setup of the same pattern finds the result unchanged", async () => {
+      // A setup of the pattern the result was set up with reads the name it
+      // would carry over, though none is stored, and that read takes the
+      // stamp at the root above it, so the attempt's join, which the value
+      // entry is re-derived from, carries the clause again.
+
+      const { mixed } = patterns();
+      const result = await setUp("remint-same", mixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("remint-same", mixed);
+
+      expect(derivedOf(result)).toContain(BOB);
+    });
+
+    it("stays where a run of another pattern given no transaction finds the result unchanged", async () => {
+      // Only a setup in the transaction it was asked in restates an unchanged
+      // result (`#isAsking` in `runner.ts`). A run given no transaction holds
+      // none of the reads that chose its pattern, so a re-mint there could
+      // drop a clause they carried. Another pattern's setup reads no stored
+      // name, so its join is empty and only the gate keeps the stamp.
+
+      const { mixed, sameMixed } = patterns();
+      const result = await setUp("unasked-unchanged", mixed);
+      await plantValueStamp(result, BOB);
+
+      const again = runtime.run(
+        undefined,
+        sameMixed,
+        { x: 1 },
+        runtime.getCell(space, "unasked-unchanged"),
+      );
+      await again.pull();
+      await runtime.idle();
+      runtime.runner.stop(again);
+
+      expect(derivedOf(result)).toContain(BOB);
+    });
+
+    describe("a setup the runtime starts on its own", () => {
+      // A repair or a continuation hands setup a transaction holding none of
+      // the reads that chose the pattern (`runtimeStarted`), so a setup there
+      // that finds the result unchanged leaves its value entry as stored.
+      // Each case sets up another pattern with the same result, which reads
+      // no stored name, so only that gate keeps the stamp.
+
+      it("leaves the stamp through `setup()` given a transaction", async () => {
+        const { mixed, sameMixed } = patterns();
+        const result = await setUp("started-setup", mixed);
+        await plantValueStamp(result, BOB);
+
+        const { error } = await runtime.editWithRetry((tx) => {
+          void runtime.setup(
+            tx,
+            sameMixed,
+            { x: 1 },
+            runtime.getCell(space, "started-setup", undefined, tx),
+            { prepareForResume: true, runtimeStarted: true },
+          );
+        });
+        expect(error).toBeUndefined();
+        await runtime.idle();
+        runtime.runner.stop(result);
+
+        expect(derivedOf(result)).toContain(BOB);
+      });
+
+      it("leaves the stamp through `runSynced()`", async () => {
+        const { mixed, sameMixed } = patterns();
+        const result = await setUp("started-synced", mixed);
+        await plantValueStamp(result, BOB);
+
+        const again = await runtime.runSynced(
+          runtime.getCell(space, "started-synced"),
+          sameMixed,
+          { x: 1 },
+          { runtimeStarted: true },
+        );
+        await runtime.idle();
+        runtime.runner.stop(again);
+
+        expect(derivedOf(result)).toContain(BOB);
+      });
+
+      it("leaves the stamp through `run()` given a transaction", async () => {
+        const { mixed, sameMixed } = patterns();
+        const result = await setUp("started-run", mixed);
+        await plantValueStamp(result, BOB);
+
+        const tx = runtime.edit();
+        const again = runtime.run(
+          tx,
+          sameMixed,
+          { x: 1 },
+          runtime.getCell(space, "started-run", undefined, tx),
+          { runtimeStarted: true },
+        );
+        tx.prepareCfc();
+        expect((await tx.commit().settled).ok).toBeDefined();
+        await runtime.idle();
+        runtime.runner.stop(again);
+
+        expect(derivedOf(result)).toContain(BOB);
+      });
+    });
+
+    it("stays where the setup carries over the stored name, whose read takes the stamp", async () => {
+      // The setup reads the name it carries over from the stored result, and
+      // that read consumes the stamp at the root above it, so the attempt's
+      // join, which the stamp is re-minted from, carries the clause again.
+
+      const { namedMixed } = patterns();
+      const result = await setUp("named-mixed", namedMixed);
+      await plantValueStamp(result, BOB);
+
+      await setUp("named-mixed", namedMixed);
+
+      expect(derivedOf(result)).toContain(BOB);
     });
   });
 });

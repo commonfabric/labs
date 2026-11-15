@@ -2082,6 +2082,9 @@ export interface RunSyncedOptions {
 
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
+
+  /** See `RunnerRunOptions.runtimeStarted`. */
+  runtimeStarted?: boolean;
 }
 
 /** Options for a pattern setup whose fresh source revision proves a commit. */
@@ -2143,6 +2146,9 @@ type SetupValidationOptions = {
 
   /** Keep the next start on the persisted-result dependency-sync path. */
   prepareForResume?: boolean;
+
+  /** See `RunnerRunOptions.runtimeStarted`. */
+  runtimeStarted?: boolean;
 };
 
 export type PieceSourceRevisionOperation =
@@ -2509,6 +2515,11 @@ const LIST_OP_INPUT_SCHEMAS = {
 // `#startAfterSuccessfulCommit()`.
 export type RunnerRunOptions = {
   doNotUpdateOnPatternChange?: boolean;
+  // The runtime starts this setup on its own, to repair a piece or to carry
+  // on with a pattern an earlier transaction chose, so the transaction it is
+  // given holds none of the reads that chose the pattern
+  // (`#runtimeStartedSetupTransactions`).
+  runtimeStarted?: boolean;
   // Resumed-from-synced-state: hold each action's initial rehydration/run until
   // the space has finished syncing, so consumers don't race the data.
   awaitSyncBeforeInitialRun?: boolean;
@@ -2902,11 +2913,26 @@ export class Runner {
    * transaction or a swap, has that standing too when it carries the reads
    * that decided it from an asking one that is committing or committed
    * (`#carriedStanding`).
-   * Every other setup transaction, a repair's or a swap's that no setup here
-   * staged, holds none of those reads, so re-minting the stored membership
-   * there would drop a clause they carried.
+   * A setup the runtime starts on its own and hands a transaction, a repair
+   * or a continuation, is added too, though it holds none of those reads
+   * either, so its membership re-mint can drop a clause they carried; it is
+   * also one of `#runtimeStartedSetupTransactions`, which keeps the value of
+   * a result holding data out of that re-mint. Every other setup
+   * transaction, a repair's the runner makes itself or a swap's that no setup
+   * here staged, is not added, so it leaves the stored membership.
    */
   readonly #askingSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
+  /**
+   * The asking transactions (`#askingSetupTransactions`) a setup the runtime
+   * started on its own runs in (`runtimeStarted`), and the ones the runner
+   * makes later carrying the reads of one of them (`#runDecisionOf()`). They
+   * hold none of the reads that chose the pattern, so a setup in one leaves
+   * the value of an unchanged result holding data as stored (§8.9.1.3).
+   */
+  readonly #runtimeStartedSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
   >();
 
@@ -3860,7 +3886,7 @@ export class Runner {
   ): Promise<Cell<R>> {
     if (providedTx) {
       this.#callerOwnedSetupTransactions.add(providedTx);
-      this.#askingSetupTransactions.add(providedTx);
+      this.#noteAskingSetupTransaction(providedTx, options.runtimeStarted);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -3879,7 +3905,7 @@ export class Runner {
       // setup.
       return this.#runtime.editWithRetry((tx) => {
         this.#callerOwnedSetupTransactions.add(tx);
-        this.#askingSetupTransactions.add(tx);
+        this.#noteAskingSetupTransaction(tx, options.runtimeStarted);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -4357,6 +4383,7 @@ export class Runner {
         },
         buildDecided: !nameCarried,
         setupBegan: options.setupBegan,
+        runtimeStarted: this.#runtimeStartedSetupTransactions.has(tx),
       }, runtimeWritePolicyAuthorization);
     }
     if (changed) {
@@ -4430,6 +4457,12 @@ export class Runner {
     // reference holds no name of its own either, and reading its `NAME` slot
     // through the cell would follow the reference to the name of what it
     // reaches.
+    // TODO(danfuzz): The read of `NAME` below consumes the stored root's
+    // labels even when no name is stored there, so a restated result whose
+    // root holds a stale value stamp keeps it (§8.9.1.3). Make the absent
+    // case consume nothing once the specification rules that such a read
+    // decides nothing written; the pinned limit is in
+    // `sub-pattern-update-labels.test.ts`.
     const previousResult = writableResultCell.getRaw({
       meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
     });
@@ -8517,6 +8550,22 @@ export class Runner {
   }
 
   /**
+   * Records `tx` as one a setup was asked in (`#askingSetupTransactions`),
+   * and as one the runtime started on its own where `runtimeStarted` holds
+   * (`#runtimeStartedSetupTransactions`). Both are marks on the transaction,
+   * not on one setup: an asking setup in a transaction a runtime-started one
+   * already marked counts as runtime-started too, and leaves a stored value
+   * entry it could have re-derived, which never lowers one.
+   */
+  #noteAskingSetupTransaction(
+    tx: IExtendedStorageTransaction,
+    runtimeStarted: boolean | undefined,
+  ): void {
+    this.#askingSetupTransactions.add(tx);
+    if (runtimeStarted === true) this.#runtimeStartedSetupTransactions.add(tx);
+  }
+
+  /**
    * Takes what decided a run `from` deferred into a transaction the runner
    * makes later (`carryRunDecision()`), and returns the step that hands it to
    * that transaction, along with `from`'s standing once `from` commits: a
@@ -8539,9 +8588,11 @@ export class Runner {
       return (status === "pending" || status === "done") &&
         this.#isAsking(from);
     };
+    const runtimeStarted = this.#runtimeStartedSetupTransactions.has(from);
     return (to) => {
       carry(to);
       this.#carriedStanding.set(to, standing);
+      if (runtimeStarted) this.#runtimeStartedSetupTransactions.add(to);
     };
   }
 
@@ -10147,7 +10198,7 @@ export class Runner {
     // A run given no transaction starts in one the runner makes, which holds
     // none of the reads that chose the pattern, so it is not an asking one.
     if (providedTx !== undefined) {
-      this.#askingSetupTransactions.add(providedTx);
+      this.#noteAskingSetupTransaction(providedTx, options.runtimeStarted);
     }
     return this.#runWithStartOwnership(
       providedTx,
@@ -10620,7 +10671,7 @@ export class Runner {
     };
     if (givenTx) {
       this.#callerOwnedSetupTransactions.add(givenTx);
-      this.#askingSetupTransactions.add(givenTx);
+      this.#noteAskingSetupTransaction(givenTx, options?.runtimeStarted);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -10685,7 +10736,7 @@ export class Runner {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
-          this.#askingSetupTransactions.add(tx);
+          this.#noteAskingSetupTransaction(tx, options?.runtimeStarted);
           return this.#setupInternal(
             tx,
             pattern,
