@@ -773,6 +773,48 @@ describe("serving-worker-recovery", () => {
       expect(started.stats().lease.lost).toBe(1);
     });
 
+    it("kills a worker only once it has been silent for `watchdogLimitMs`, however long that is", async () => {
+      start({ watchdogLimitMs: 300_000 });
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [silent] = workers();
+
+      // The first check reads the messages; 29 silent ones are 290 s.
+      await pass(30);
+      expect(silent.terminated).toBe(false);
+
+      await pass(1);
+      await clock.settle();
+      expect(silent.terminated).toBe(true);
+    });
+
+    it("counts only silence in a row toward `watchdogLimitMs`: a message restarts it", async () => {
+      start({ watchdogLimitMs: 300_000 });
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+
+      // 240 s of silence, then a heartbeat, which the next check reads.
+      await pass(25);
+      worker.beat(1);
+      await clock.settle();
+      await pass(1);
+
+      // 290 s more: 530 s silent in all, but never 300 s in a row.
+      await pass(29);
+      expect(worker.terminated).toBe(false);
+
+      await pass(1);
+      await clock.settle();
+      expect(worker.terminated).toBe(true);
+    });
+
+    it("throws for a `watchdogLimitMs` shorter than an interval or not a whole number of milliseconds", () => {
+      for (const watchdogLimitMs of [0, 9_999, 60_000.5]) {
+        expect(() => start({ watchdogLimitMs })).toThrow("watchdogLimitMs");
+      }
+    });
+
     it("restarts its count at a message of any kind", async () => {
       start();
       server.openSession(space, "session-1");

@@ -66,7 +66,8 @@ const WATCHDOG_INTERVAL_MS = 10_000;
 
 /**
  * How many whole intervals a worker may pass without a message before its
- * watchdog kills it: at the default interval, a minute of silence.
+ * watchdog kills it, unless `watchdogLimitMs` says otherwise: at the default
+ * interval, a minute of silence.
  */
 const WATCHDOG_SILENT_INTERVALS = 6;
 
@@ -196,11 +197,21 @@ export type ServingWorkerPoolOptions = {
 
   /**
    * How often a worker posts a heartbeat and the watchdog checks for
-   * messages; a worker is killed after six such intervals in which it sent
-   * none. Default: ten seconds. A test shortens it, to see a kill in less time
-   * than the test is allowed.
+   * messages. Default: ten seconds. A test shortens it, to see a kill in less
+   * time than the test is allowed.
    */
   watchdogIntervalMs?: number;
+
+  /**
+   * How long a worker may send no message before the watchdog kills it, in
+   * milliseconds: a whole number, no shorter than `watchdogIntervalMs`. The
+   * worker's heartbeat timer runs on its own thread, so a worker silent this
+   * long has not returned to its event loop in that time. Measured in whole
+   * intervals, the first of which only reads the messages, so a kill comes
+   * up to one interval after the limit. Default: six intervals, a minute at
+   * the default interval.
+   */
+  watchdogLimitMs?: number;
 
   /** DIAGNOSTIC (tests): the workers' activation outcomes. */
   onActivationSettled?: (
@@ -463,6 +474,17 @@ export class ServingWorkerPool {
     }
     if (options.heapLimitMb !== undefined) {
       assertServingThreadHeapLimit(options.heapLimitMb);
+    }
+    const intervalMs = options.watchdogIntervalMs ?? WATCHDOG_INTERVAL_MS;
+    const limitMs = options.watchdogLimitMs;
+    if (
+      limitMs !== undefined &&
+      (!Number.isSafeInteger(limitMs) || limitMs < intervalMs)
+    ) {
+      throw new Error(
+        `\`watchdogLimitMs\` is ${limitMs}; a worker's silence limit is a ` +
+          `whole number of milliseconds, ${intervalMs} or more`,
+      );
     }
     this.#options = options;
     this.#maxWorkers = maxWorkers;
@@ -1082,10 +1104,13 @@ export class ServingWorkerPool {
         return;
       }
       silentIntervals += 1;
-      if (silentIntervals < WATCHDOG_SILENT_INTERVALS) return;
+      const limitMs = this.#options.watchdogLimitMs ??
+        WATCHDOG_SILENT_INTERVALS * intervalMs;
+      if (silentIntervals * intervalMs < limitMs) return;
       this.#onWorkerFailed(
         watched,
-        `no message in ${silentIntervals} watchdog intervals`,
+        `no message in ${silentIntervals} watchdog intervals ` +
+          `(${(silentIntervals * intervalMs) / 1000} s)`,
         { killed: true },
       );
     }, intervalMs);
