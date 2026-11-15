@@ -707,16 +707,30 @@ describe("fabrichat-four-writer-room-update", () => {
     });
 
     it("obliterates a message the earlier program stored that its author deleted, dropping the author", async () => {
+      // Each act names the message as a row of the room does, by the link
+      // the room's latest messages hold, which resolves to the message
+      // under the schema the earlier program sent it with.
+
       const twice = (await storedMessages())[4];
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const shown = (await today.key("messages").key("latest").key("messages")
+        .asSchema<Cell<unknown>[]>(asCells).pull()).find((cell) =>
+          docOf(cell) === docOf(twice)
+        );
+      expect(shown).toBeDefined();
       const refusals = await refusalsDuring(async () => {
         await send(
           "deleteMessage",
-          trusted({ message: twice }, "ChatDeleteSurface", "ChatDelete"),
+          trusted({ message: shown }, "ChatDeleteSurface", "ChatDelete"),
         );
         await send(
           "obliterateMessage",
           trusted(
-            { message: twice },
+            { message: shown },
             "ChatObliterateSurface",
             "ChatObliterate",
           ),
