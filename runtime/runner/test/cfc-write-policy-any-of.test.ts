@@ -120,14 +120,14 @@ function fixture() {
       sourceFile: "/main.tsx",
       bindingPath: [writer],
     });
-    const atTag = options.at === "tag";
-    const document = runtime.getCell<unknown>(
-      signer.did(),
-      "protected-value",
-      atTag ? { type: "object", properties: { tag: schema } } : schema,
-      tx,
-    );
-    const cell = atTag ? document.key("tag" as never) : document;
+    const cell = options.at === "tag"
+      ? runtime.getCell<{ tag: unknown }>(
+        signer.did(),
+        "protected-value",
+        { type: "object", properties: { tag: schema } },
+        tx,
+      ).key("tag")
+      : runtime.getCell<unknown>(signer.did(), "protected-value", schema, tx);
     if (options.link === true) {
       const source = runtime.getCell<string>(
         signer.did(),
@@ -136,9 +136,9 @@ function fixture() {
         tx,
       );
       source.set(value);
-      cell.set(source as never);
+      cell.set(source);
     } else {
-      cell.set(value as never);
+      cell.set(value);
     }
     const target = cell.getAsNormalizedFullLink();
     if (options.initialization === "setup") {
@@ -336,12 +336,14 @@ async function withFixture(
 /**
  * The alternatives of the write policy the document `id` stores at the logical
  * path `path`, each as its writer and the action its contract names, joined by
- * a slash, in stored order.
+ * a slash, and where `stamped`, the module its writer is stamped with after an
+ * at sign, in stored order.
  */
 function storedAlternatives(
   runtime: Runtime,
   id = "protected-value",
   path: readonly string[] = [],
+  stamped = false,
 ): string[] {
   const tx = runtime.edit();
   try {
@@ -357,12 +359,15 @@ function storedAlternatives(
     );
     const alternatives =
       (entry?.schema as JSONSchemaObj | undefined)?.ifc?.writePolicyAnyOf ?? [];
-    return (alternatives as Alternative[]).map((alternative) =>
-      `${
-        (alternative.writeAuthorizedBy.__ctWriterIdentityOf.path as string[])
-          .join(".")
-      }/${(alternative.uiContract as { action?: string })?.action}`
-    );
+    return (alternatives as Alternative[]).map((alternative) => {
+      const binding = alternative.writeAuthorizedBy.__ctWriterIdentityOf;
+      const name = `${(binding.path as string[]).join(".")}/${
+        (alternative.uiContract as { action?: string })?.action
+      }`;
+      return stamped
+        ? `${name}@${binding.moduleIdentity ?? "unstamped"}`
+        : name;
+    });
   } finally {
     tx.abort("stored policy read");
   }
@@ -502,6 +507,32 @@ describe("cfc-write-policy-any-of", () => {
               await f.write("edit", "Edit", { module: "other-module", schema }),
             ).toContain("writePolicyAnyOf failed");
           }
+        });
+      });
+
+      it("commits a write omitting an unstamped member, which stays unstamped and admits no writer", async () => {
+        await withFixture(async (f) => {
+          expect(await f.write("send", "Send", { schema: unstamped }))
+            .toBeUndefined();
+          expect(
+            storedAlternatives(f.runtime, "protected-value", [], true),
+          ).toEqual(["send/Send@test-module", "edit/Edit@unstamped"]);
+
+          expect(
+            await f.write("send", "Send", {
+              schema: {
+                type: "string",
+                ifc: { writePolicyAnyOf: [policy("send", "Send")] },
+              },
+              value: "again",
+            }),
+          ).toBeUndefined();
+          expect(
+            storedAlternatives(f.runtime, "protected-value", [], true),
+          ).toEqual(["send/Send@test-module", "edit/Edit@unstamped"]);
+          expect(await f.write("edit", "Edit")).toContain(
+            "writePolicyAnyOf failed",
+          );
         });
       });
 
@@ -1032,11 +1063,11 @@ describe("cfc-write-policy-any-of", () => {
         });
       });
 
-      it("refuses the omitted writer's link, and its value, under the schema omitting it", async () => {
-        await withFixture(async (f) => {
-          await seeded(f);
+      for (const [what, link] of [["link", true], ["value", false]] as const) {
+        it(`refuses the omitted writer's ${what} under the schema omitting it`, async () => {
+          await withFixture(async (f) => {
+            await seeded(f);
 
-          for (const link of [true, false]) {
             expect(
               await f.write("edit", "Edit", {
                 at: "tag",
@@ -1044,15 +1075,13 @@ describe("cfc-write-policy-any-of", () => {
                 link,
               }),
             ).toContain("writePolicyAnyOf failed at /tag");
-          }
+          });
         });
-      });
 
-      it("refuses a writer's link, and its value, under a schema stamping it with another module", async () => {
-        await withFixture(async (f) => {
-          await seeded(f);
+        it(`refuses a writer's ${what} under a schema stamping it with another module`, async () => {
+          await withFixture(async (f) => {
+            await seeded(f);
 
-          for (const link of [true, false]) {
             expect(
               await f.write("edit", "Edit", {
                 at: "tag",
@@ -1060,9 +1089,9 @@ describe("cfc-write-policy-any-of", () => {
                 link,
               }),
             ).toContain("writePolicyAnyOf failed at /tag");
-          }
+          });
         });
-      });
+      }
     });
 
     describe("through links", () => {
@@ -1336,13 +1365,16 @@ describe("cfc-write-policy-any-of", () => {
       ]);
     });
 
-    it("throws when a later schema drops an alternative", () => {
+    it("throws when a later schema drops an alternative, where neither side is stored", () => {
       expect(() =>
         mergeCfcSchemaEnvelopes(SCHEMA, {
           type: "string",
           ifc: { writePolicyAnyOf: [policy("send", "Send")] },
         })
-      ).toThrow("writePolicyAnyOf must remain stable");
+      ).toThrow(
+        "writePolicyAnyOf must remain stable at /: the candidate lacks an " +
+          "alternative the other schema lists",
+      );
     });
 
     describe("with the stored side named", () => {
