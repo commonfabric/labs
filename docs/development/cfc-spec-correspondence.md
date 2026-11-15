@@ -451,9 +451,9 @@ file `check-cfc-correspondence` governs. The conformance statement's §2
 records the gap.
 
 Staging a source update's delegations after its transition commits, and
-recording them in the piece's `pieceSourceDelegations` meta member, implements a
-specification change ahead of its ruling; until its pull request has a number,
-the change and its markers name it `TBD-succession-record`. The transition reads
+recording them in the piece's `pieceSourceDelegations` meta member, implements
+[specs#101](https://github.com/commonfabric/specs/pull/101) ahead of its
+ruling, and its markers name it. The transition reads
 the piece's data, so delegation lists it staged on compile-cache records took
 that data's flow label, and every later setup of the module consumed it and
 could be refused. The transition now writes the lists only into the member,

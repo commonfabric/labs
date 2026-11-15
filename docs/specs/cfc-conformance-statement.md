@@ -942,8 +942,8 @@ as it loads it (`PatternManager.readInheritedAuthority`), reads nothing else of
 the member, closes nothing, and writes nothing. A member that is absent or names
 another pattern registers nothing, and the records' own lists decide.
 
-This implements a specification change, `TBD-succession-record` until its pull
-request has a number, ahead of its ruling, at strict and with no dial. @danfuzz
+This implements [specs#101](https://github.com/commonfabric/specs/pull/101)
+ahead of its ruling, at strict and with no dial. @danfuzz
 authorized landing this design ahead of the ruling, without a flag, on
 2026-11-14, recorded in the correspondence procedure as a nonconforming semantic
 gap. Against the pin it admits more, since a pattern update no longer labels the

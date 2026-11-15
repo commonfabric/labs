@@ -18409,9 +18409,10 @@ export function applyPieceSourceTransition(
     patternIdentityKey(recordedCurrent.pattern) !==
       patternIdentityKey(current.pattern) ||
     (recordedCurrent.origin ?? null) !== currentOrigin.origin;
-  // SPEC-PENDING TBD-succession-record: the member carries the delegations,
-  // so that a runtime starting the piece holds them before the staging on
-  // the cache records, which follows this transaction's commit, lands.
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/101 The member
+  // carries the delegations, so that a runtime starting the piece holds them
+  // before the staging on the cache records, which follows this
+  // transaction's commit, lands.
   const recorded = getPieceSourceRecord(candidate, current.pattern.identity);
   // Every transition writes the member for the next pattern. A source update
   // composed its record at preparation. Any other carries the edges as they

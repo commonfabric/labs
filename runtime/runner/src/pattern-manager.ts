@@ -2894,9 +2894,9 @@ export class PatternManager {
       | undefined,
   ): void {
     if (recorded === undefined || closure === undefined) return;
-    // SPEC-PENDING TBD-succession-record: authority read from the piece's
-    // `pieceSourceDelegations` member rather than from a verified closure's
-    // own records. The member is written only through the runtime's meta
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/101 Authority
+    // read from the piece's `pieceSourceDelegations` member rather than from
+    // a verified closure's own records. The member is written only through the runtime's meta
     // seam, in the source update's transaction (`applyPieceSourceTransition()`).
     const keyed = new Map(
       [...recorded].filter(([successor]) => closure.has(successor)),
