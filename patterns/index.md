@@ -141,11 +141,15 @@ travel through a presence room and are stored nowhere),
 item only by sending the pattern's `addItem` verb, which writes the pattern's
 own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
 `examples/profile-group-chat/`, `apps/project-list/`, `apps/star-chart/` (a
-kids' daily-habit sticker chart), `apps/redactor/` (asks a model about personal
-matters with every personal value swapped out, enforced by CFC; the CFC design
-and debt are in its README), `apps/assumption-surfacer/` (a chat that surfaces
-the assistant's assumptions for you to confirm or correct),
-`apps/reward-spinner/` (a kids' prize spinner with parent-set odds),
+kids' daily-habit sticker chart), `apps/codenames-helper/` (a spymaster's
+companion for in-person Codenames, with photo reading and clue ideas),
+`apps/smart-rubric/` (score and rank options against a weighted rubric, with LLM
+Quick Add), `apps/story-weaver/` (brainstorm a story level by level with AI),
+`apps/redactor/` (asks a model about personal matters with every personal value
+swapped out, enforced by CFC; the CFC design and debt are in its README),
+`apps/assumption-surfacer/` (a chat that surfaces the assistant's assumptions
+for you to confirm or correct), `apps/reward-spinner/` (a kids' prize spinner
+with parent-set odds),
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
 `examples/scoped-group-chat/`, `examples/scoped-user-directory/`,
@@ -1129,6 +1133,201 @@ interface RedactorOutput {
   send: Stream<void>;
   sendRawDraft: Stream<void>; // refused by the runtime
   typeDraft: Stream<{ text: string }>;
+}
+```
+
+## `apps/story-weaver/story-weaver.tsx`
+
+Grow a story with AI, one level at a time. Commit a synopsis (or ask for ideas
+with Inspire me), and each spindle on the next level asks the model for four
+Markdown options built on its parent; pin one and its children appear on the
+level below, ready to generate. Levels (Characters & Themes, Chapters, ...) are
+editable, and each has a branch factor for how many sibling spindles a pinned
+parent gets. Respin asks for fresh options, a spindle can carry its own extra
+instruction, and pins built on text that has since changed are flagged stale.
+The board is a tree of paths derived from what was pinned (`story-logic.ts`),
+and the pinned story projects to `[FS]` Markdown.
+
+**Keywords:** llm, generateObject, writing, story, brainstorm, tree, branching
+
+### Input Schema
+
+```ts
+interface Level {
+  title: string;
+  prompt: string; // instruction each spindle at this level sends
+  branch: number; // siblings per pinned parent, 1..6
+}
+
+interface Spindle {
+  path: string; // sibling indices per level, e.g. "0.2"
+  pinned: number; // option index, or -1
+  pinnedText: string;
+  parentHash: string; // hash of the parent text when pinned (stale check)
+  extraPrompt: string;
+  respins: number;
+  requested: boolean; // levels below the first wait for Generate options
+}
+
+interface StoryWeaverInput {
+  title?: PerSpace<Writable<string | Default<"My Story Weaver">>>;
+  synopsis?: PerSpace<Writable<string | Default<"">>>;
+  synopsisDraft?: PerSpace<Writable<string | Default<"">>>;
+  levels?: PerSpace<Writable<Level[] | Default<typeof DEFAULT_LEVELS>>>;
+  spindles?: PerSpace<Writable<Spindle[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface StoryWeaverOutput {
+  title: string;
+  synopsis: string;
+  synopsisDraft: string;
+  levels: Level[];
+  spindles: Spindle[];
+  board: string[][]; // paths on the board, level by level
+  startStory: Stream<void>;
+  pin: Stream<{ path: string; option: number; text: string }>;
+  respin: Stream<{ path: string }>;
+  generate: Stream<{ path: string }>;
+  setExtraPrompt: Stream<{ path: string; text: string }>;
+  setBranch: Stream<{ level: number; branch: number }>;
+  addLevel: Stream<{ title: string; prompt: string }>;
+  updateLevel: Stream<{ level: number; title: string; prompt: string }>;
+  removeLastLevel: Stream<void>;
+}
+```
+
+## `apps/smart-rubric/smart-rubric.tsx`
+
+Weigh options against a weighted rubric. Define categorical dimensions (scored
+Excellent / Good / Fair / Poor) and numeric ones (a range mapped onto the same
+0–10 scale, higher or lower is better), weight them, and set each option's
+values; options rank by weighted score. ▲/▼ pins an option at a slot by hand
+while the rest keep ranking by score. Quick Add sends a free-text description to
+`generateObject` and proposes the option's name and values, checked against the
+rubric, for review before adding.
+
+**Keywords:** decision, rubric, scoring, ranking, weights, generateObject, llm
+
+### Input Schema
+
+```ts
+interface CategoryOption {
+  label: string;
+  score: number;
+}
+
+interface Dimension {
+  name: string; // unique; option values refer to it
+  type: "categorical" | "numeric";
+  multiplier: number; // weight, 0..10 in steps of 0.5
+  categories: CategoryOption[];
+  numericMin: number;
+  numericMax: number;
+  higherIsBetter?: boolean; // numeric only; default true
+}
+
+interface RubricOption {
+  name: string; // unique
+  values: { dimensionName: string; value: string | number }[];
+  manualRank: number | null; // slot pinned by hand, or null
+}
+
+interface RubricInput {
+  title?: PerSpace<Writable<string | Default<"Decision Rubric">>>;
+  options?: PerSpace<Writable<RubricOption[] | Default<[]>>>;
+  dimensions?: PerSpace<Writable<Dimension[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface RubricOutput {
+  title: string;
+  options: RubricOption[];
+  dimensions: Dimension[];
+  ranked: RankedOption[]; // displayed order with scores
+  selected: string;
+  quickAddStatus: "idle" | "pending" | "error" | "ready";
+  quickAddPreview: QuickAddPreview;
+  addOption: Stream<{ name?: string }>;
+  removeOption: Stream<{ name: string }>;
+  addDimension: Stream<{ name?: string; type: "categorical" | "numeric" }>;
+  removeDimension: Stream<{ name: string }>;
+  changeWeight: Stream<{ name: string; delta: number }>;
+  toggleDirection: Stream<{ name: string }>;
+  selectOption: Stream<{ name: string }>;
+  setValue: Stream<
+    { option: string; dimension: string; value: string | number }
+  >;
+  stepValue: Stream<{ option: string; dimension: string; delta: number }>;
+  moveOption: Stream<{ name: string; delta: number }>;
+  resetManualRanks: Stream<void>;
+  analyzeQuickAdd: Stream<void>;
+  acceptQuickAdd: Stream<void>;
+  clearQuickAdd: Stream<void>;
+  dismissQuickAdd: Stream<void>;
+}
+```
+
+## `apps/codenames-helper/codenames-helper.tsx`
+
+A spymaster's companion for playing the word game Codenames in person with the
+physical cards. Setup: type the 25 board words into the grid and give each card
+its key-card color (tap a card, then a color), or photograph the board and the
+key card and apply what an LLM reads from each after checking it. The color
+counts flag a key that is not 9/8/7/1. Play: tap a card when it is guessed to
+mark it out of play (tap again to undo), and ask for one-word clue ideas that
+connect your team's remaining words while avoiding the rest (ask again for
+different ideas). Board logic is pure functions in `board.ts`.
+
+**Keywords:** game companion, board game, word game, spymaster, LLM,
+generateObject, image input, 5x5 grid
+
+### Input Schema
+
+```ts
+type Team = "red" | "blue";
+type Owner = "red" | "blue" | "neutral" | "assassin" | "unassigned";
+type Mode = "setup" | "play";
+
+interface BoardCard {
+  word: string; // upper case, "" until entered
+  owner: Owner; // key-card color
+  revealed: boolean; // guessed, out of play
+}
+
+interface CodenamesHelperInput {
+  board?: PerSpace<Writable<BoardCard[] | Default<[]>>>; // padded to 25
+  myTeam?: PerUser<Writable<Team | Default<"red">>>; // each spymaster's own
+  mode?: PerSpace<Writable<Mode | Default<"setup">>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface CodenamesHelperOutput {
+  board: BoardCard[]; // always 25, row-major
+  myTeam: Team;
+  mode: Mode;
+  selectedIndex: number; // card picked for coloring, or -1
+  inPlay: Record<Owner, number>;
+  keyWarnings: string[];
+  clueRequest: string; // board prompt clue ideas were last requested for
+  tapCard: Stream<{ index: number }>;
+  assignOwner: Stream<{ owner: Owner }>;
+  setWord: Stream<{ index: number; word: string }>;
+  applyPhotoReading: Stream<{ reading: PhotoReading; photoId?: string }>;
+  clearColors: Stream<void>;
+  resetBoard: Stream<void>;
+  startPlay: Stream<void>;
+  editBoard: Stream<void>;
+  requestClues: Stream<void>;
 }
 ```
 
