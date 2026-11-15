@@ -170,7 +170,17 @@ type SourceUpdatePreparation = {
  * and each recorded entry for a module of `candidate` is kept, as for a
  * module the update leaves unchanged, whose derivation reads only its cache
  * record. `carried` holds the recorded entries for modules outside
- * `candidate`. A module's own identity is never its predecessor.
+ * `candidate`, so that one that returns keeps its grant, except that an entry
+ * for a module M is dropped when an entry in `granted` holds M and every
+ * predecessor M's entry lists: the entry that holds M then states all that
+ * M's did, and a returning M inherits it from the module that holds it. A
+ * module's own identity is never its predecessor.
+ *
+ * TODO: The drop loses M's grant when the module that holds it leaves in
+ * turn, an unrelated module takes M's file, and M returns, deriving only from
+ * the unrelated module, while the staging of M's own grant never landed
+ * (`setsrc-module-delegation.test.ts`, "loses the grant of a module whose
+ * covering successor left before it returned").
  */
 function composeRecordedDelegations(
   derived: ModuleDelegationMap,
@@ -194,7 +204,14 @@ function composeRecordedDelegations(
   const carried = new Map<string, ReadonlySet<string>>();
   for (const [identity, predecessors] of recordedPrevious) {
     if (candidate.has(identity)) grant(identity, predecessors);
-    else carried.set(identity, predecessors);
+  }
+  for (const [identity, predecessors] of recordedPrevious) {
+    if (candidate.has(identity)) continue;
+    const covered = [...granted.values()].some((held) =>
+      held.has(identity) &&
+      [...predecessors].every((predecessor) => held.has(predecessor))
+    );
+    if (!covered) carried.set(identity, predecessors);
   }
   return { granted, carried };
 }
