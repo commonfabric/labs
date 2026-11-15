@@ -111,8 +111,7 @@ next.
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; notes 241
-  to 251 are not yet written into the documents.
+  lists the places where it found the documents ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -888,6 +887,22 @@ as an assumption.
     a handler emptied carries the clauses its former elements were
     created under. *Assumed:* the compiled path keeps it, equal to
     today. The alternative removes it with the path.
+130. **A result path of a stream that the elements of a collection
+    hold** (PL question 84). A stream inside a value that one element
+    holds, as `example[UI]` over an array of the results of patterns
+    in `patterns/examples/cfc-trusted-component-examples/` (208
+    bindings). *Assumed:* the binding has no result path through the
+    collection, so no reader finds its stream from the plan. The
+    alternatives name the position of the member, or write `*` and
+    have a reader try each position.
+131. **The label of the handle of an element in the compiled path**
+    (PL question 85). Today it is read at the argument document of the
+    element's instance, which the compiled path does not have.
+    *Assumed:* where the body resolves, reads through, or writes
+    through the handle, its label is that of the links at the
+    position in the source, with the label the source collection's
+    declaration gives the element. No record of the plan holds that
+    declared label.
 
 ## Open, and not needing the owner
 
