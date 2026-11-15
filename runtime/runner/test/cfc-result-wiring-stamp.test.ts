@@ -307,13 +307,15 @@ describe("cfc-result-wiring-stamp", () => {
   };
 
   /**
-   * Adds to `cell`'s stored label map a derived value entry naming `atom` at
-   * `path`, as a write there by an earlier attempt would leave.
+   * Adds to `cell`'s stored label map a derived entry naming `atom` at `path`,
+   * of the observation class `observes`, `value` unless given, as a write
+   * there by an earlier attempt would leave.
    */
   const plantDerived = async (
     cell: Cell<unknown>,
     path: readonly string[],
     atom: string,
+    observes: "value" | "shape" = "value",
   ): Promise<void> => {
     const tx = runtime.edit();
     const link = cell.getAsNormalizedFullLink();
@@ -339,7 +341,7 @@ describe("cfc-result-wiring-stamp", () => {
             path: [...path],
             label: { confidentiality: [atom] },
             origin: "derived",
-            observes: "value",
+            observes,
           },
         ],
       },
@@ -470,6 +472,31 @@ describe("cfc-result-wiring-stamp", () => {
       } finally {
         tx.abort("probe read");
       }
+    });
+
+    it("keeps an existence entry below an unchanged result's root, as a write of the root does", async () => {
+      // A write of the root clears the value entries below it and keeps the
+      // existence entries there, which record that a path was written.
+
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-below-existence", mixed);
+      await plantDerived(result, ["note"], CAROL, "shape");
+      await plantDerived(result, ["note"], "note-secret");
+
+      await setUp("mixed-below-existence", mixed, bobs);
+
+      expect(
+        entriesOf(result)
+          .filter((entry) =>
+            entry.origin === "derived" && entry.path.length === 1
+          )
+          .map((entry) => [
+            entry.path,
+            entry.observes,
+            [...(entry.label.confidentiality ?? [])].sort(),
+          ]),
+      ).toEqual([[["note"], "shape", [CAROL]]]);
     });
   });
 

@@ -794,9 +794,11 @@ root is not treated as written: only an asking setup restates a wiring it
 finds unchanged, and the persist region's `restatedDataRoot` replaces the
 derived value entries at and below the root with one at the root re-derived
 from the transaction's whole flow join, the entry a write of the root would
-leave, or with none where the join is empty. The root's existence entry and
-the membership entries below the root stay as stored, and no existence entry
-is minted there. This implements
+leave, or with none where the join is empty. The existence entries at and
+below the root and the membership entries below it stay as stored, as the
+existence entries do under a write of the root, and no existence entry is
+minted at the root. This
+implements
 [specs#98](https://github.com/commonfabric/specs/pull/98) ahead of its ruling,
 at strict and with no dial, at @danfuzz's direction; it lowers a stale value
 stamp and can raise one from the restating setup's decision reads, so it does
@@ -814,8 +816,10 @@ request's `SPEC-PENDING` marker.
   pattern node its parent instantiates, takes that transaction's standing).
   A `run` given no transaction is not one. A setup the runtime starts on its
   own but hands a transaction is one, and so re-mints an unchanged wiring's
-  membership from a join holding none of the reads that chose the pattern:
-  an under-taint, wider than the specification's asking setup. Those setups
+  membership, as specs#98's `restateResultWiring` requires of every
+  restating setup, from a join holding none of the reads that chose the
+  pattern. Whether that re-mint should also be limited to asking setups is a
+  question for the specification, not a labs deviation. Those setups
   pass `runtimeStarted` (the piece controller's re-stage of a stale root
   setup, its cold-start setup repair and its roll-forward, `wish.ts`'s
   sidecar run in a continuation's transaction, compile-and-run's

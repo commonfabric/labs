@@ -4408,6 +4408,12 @@ export class Runner {
     // reference holds no name of its own either, and reading its `NAME` slot
     // through the cell would follow the reference to the name of what it
     // reaches.
+    // TODO(danfuzz): The read of `NAME` below consumes the stored root's
+    // labels even when no name is stored there, so a restated result whose
+    // root holds a stale value stamp keeps it (§8.9.1.3). Make the absent
+    // case consume nothing once the specification rules that such a read
+    // decides nothing written; the pinned limit is in
+    // `sub-pattern-update-labels.test.ts`.
     const previousResult = writableResultCell.getRaw({
       meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
     });

@@ -14436,8 +14436,9 @@ export function* prepareBoundaryCommitSteps(
       // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
       // A restated data root's value entry is re-derived from the attempt's
       // join, as the setup's write of the root would set it (§8.9.1.3); the
-      // stale ones, at and below the root, were cleared above. It is not measured against the store,
-      // as the membership stamps are not, and mints no existence entry.
+      // stale ones, at and below the root, were cleared above. It is not
+      // measured against the store, as the membership stamps are not, and
+      // mints no existence entry.
       if (restatedDataRoot && flowHasJoin) {
         persistedLabelEntries.push(markFlowStampEntry({
           path: [],

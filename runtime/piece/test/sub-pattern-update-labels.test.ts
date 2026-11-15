@@ -608,6 +608,10 @@ describe("sub-pattern-update-labels", () => {
             // none is stored, and that read takes the stamp at the root
             // above it: the join the value entry is re-derived from carries
             // the clause again.
+            // TODO(danfuzz): Expect the view shown once the specification
+            // rules that a setup's read of a name it finds absent decides
+            // nothing written; the matching `TODO` is at that read in
+            // `#nextResultProjection` in `runner.ts`.
             name: "a comment of the parent's module",
             next: { main: "// v2\n", view: "" },
             hidden: true,
