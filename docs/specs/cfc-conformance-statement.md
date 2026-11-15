@@ -896,11 +896,12 @@ through the runtime's meta seam, naming the pattern they are for.
 `PatternManager.prepareSourceUpdate` composes them, before the transaction
 opens, with every entry the member records for the previous pattern, so the
 transaction is pinned to the composed set, and the transition is refused as a
-source that moved if the member has changed since. A transition that leaves the
-pattern identity in place keeps the member, and any other transition removes it.
-Once the transition commits, the runtime registers the delegations and stages
-them on the successor's source and compiled cache records, on a cache
-transaction of its own that reads only those records
+source that moved if the member has changed since. Any other transition carries
+the member's entries over to the next pattern, keyed by module, so a module the
+next pattern keeps unchanged keeps its grant, as its cache record would, and a
+new module gets none. Once the transition commits, the runtime registers the
+delegations and stages them on the successor's source and compiled cache
+records, on a cache transaction of its own that reads only those records
 (`#stageCommittedDelegations`). A staging that fails is not retried; the piece's
 next committed update composes what it missed and stages it. A runtime that
 starts or swaps the piece to the member's pattern registers the member's entries

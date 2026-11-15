@@ -670,9 +670,10 @@ for and which every source transition replaces (see
 [piece-source-lifecycle.md](piece-source-lifecycle.md)). They are composed, when
 the update is prepared, with what the member recorded for the previous pattern,
 every recorded entry kept, so they stay cumulative over the piece's history and
-the transaction is pinned to them. The runtime registers them once that
-transaction commits. A cache transaction of its own then computes a union of
-those entries and authenticated entries already stored in either document set
+the transaction is pinned to them. A transition that is no source update carries
+them over to the next pattern, keyed by module. The runtime registers them once
+that transaction commits. A cache transaction of its own then computes a union
+of those entries and authenticated entries already stored in either document set
 under `editWithRetry`, and writes the same union to both sets. A runtime that
 starts or swaps a piece to the member's pattern registers the recorded entries
 whose module is in the closure it verifies, and writes nothing, so the authority
