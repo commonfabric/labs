@@ -836,10 +836,17 @@ handle is the label of the link the body was given the handle through: the
 entries of class `followRef` at the position that holds the reference, and
 nothing of the document the reference leads to, neither the label that
 cell's type declares nor the labels of its content
-(`plan-and-label-templates.md` §2.2, "The label of an `identity` slot"). So
+(`plan-and-label-templates.md` §2.2, "The label of an `identity` slot").
+One entry at the position is left out for a handle that the body neither
+reads nor writes through: the entry of origin `link`, which holds what the
+reference declares and so repeats the label of the cell's type. The
+runtime makes no `followRef` observation for such a handle today. So
 the table above records the same entry for a handle the body passes on,
 compares, or writes through, and the entry is the same whatever the cell
-holds. The label of the cell reaches a body only through a hop: `get()`,
+holds. Whether the `link` entry is in the entry's label follows from the
+record: it is left out where no write edge and no write envelope of the
+body names the entry and no entry of the body reads below it. The label
+of the cell reaches a body only through a hop: `get()`,
 `sample()`, or a read below a `key` chain
 ([§7.1](#71-what-a-body-may-do-with-a-handle)).
 

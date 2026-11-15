@@ -2074,6 +2074,22 @@ entries.
 State cell documents, operation state documents and binding state documents
 carry their labels in their own envelopes, as documents do today.
 
+**What a later write does to the entries of a path.** A write to a path
+that holds a value replaces the `value` entry with the instantiated
+template of that write and keeps the `shape` entry, which holds the label
+under which the path was created. That holds for a kept output and for a
+path that a write edge targets, in a state cell document or in the
+document of a cell reached through a handle
+(`plan-and-label-templates.md` §2.3, "A path that a write edge targets").
+A write that removes a path and creates it again in one transaction
+replaces the `shape` entry with one minted from its own label. *Assumed*
+(section 11, question 76): a write that removes a path and does not
+create it again leaves the `shape` entry of the path, and of each path
+below it, in the envelope until the path is created again, as
+`prepareBoundaryCommitSteps` in `runtime/runner/src/cfc/prepare.ts` does
+today. The entry then labels no stored value, and a read of the container
+above consumes it.
+
 ### 4.4 A link to another instance's output
 
 A link to an output of another instance is a link to that instance's result
@@ -4519,6 +4535,16 @@ Added by the ruling that the scheduler is switched per space (section 9):
 74. **How a validation run compares the two paths.** Nothing is designed
     here. *Assumed:* the comparison is between two spaces, one on each
     path, since no space runs both.
+
+<!-- The list restarts so that the numbers stay as cited. -->
+
+76. **The `shape` entry of a path that a write removed** (section 4.3;
+    `plan-and-label-templates.md` §8, question 83). *Assumed:* it stays
+    in the envelope until the path is created again, as today, so a read
+    of a list that a handler emptied still consumes the labels under
+    which its former elements were created. The alternative removes the
+    entry in the transaction that removes the path, which is tighter
+    than today.
 
 ### 11.2 For another document or the prototype
 
