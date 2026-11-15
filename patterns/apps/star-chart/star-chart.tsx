@@ -320,6 +320,9 @@ const styles = {
   correctionLabel: { fontSize: "15px", color: AMBER_DARK, fontWeight: "500" },
   toggle: {
     fontSize: "32px",
+    // Explicit, or the empty ○ takes the UA's `buttontext`, which is white
+    // under a dark color scheme and vanishes on the light row.
+    color: AMBER,
     background: "none",
     border: "none",
     cursor: "pointer",
