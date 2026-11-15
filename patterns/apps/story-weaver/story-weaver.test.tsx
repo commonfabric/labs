@@ -13,13 +13,16 @@ import {
   clickButton,
   findNodeByProp,
   hasText,
+  innermostNode,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
 import StoryWeaver, { type Level, type Spindle } from "./story-weaver.tsx";
 import {
+  answers,
   boardPaths,
   boardView,
   buildPrompt,
+  demoteHeadings,
   pinsLostByBranch,
   storyMarkdown,
   withBranch,
@@ -29,6 +32,7 @@ import {
 } from "./story-logic.ts";
 
 const SYNOPSIS = "A lighthouse keeper finds a door in the sea.";
+const WIDE_SYNOPSIS = "Two sisters share one lighthouse.";
 
 export const llmMocks = [
   {
@@ -50,6 +54,35 @@ export const llmMocks = [
         { content: "Chapter one: the storm." },
       ],
     },
+  },
+  // The wide board's own story, so the two boards never answer each other.
+  {
+    promptIncludes: `${WIDE_SYNOPSIS}\n\nName them.\n\nThis is part 1`,
+    object: {
+      options: [{ content: "Ada keeps the lamp." }, {
+        content: "Bea keeps the log.",
+      }],
+    },
+  },
+  {
+    promptIncludes: `${WIDE_SYNOPSIS}\n\nName them.\n\nThis is part 2`,
+    object: {
+      options: [{ content: "Cy rows out." }, { content: "Di stays home." }],
+    },
+  },
+  {
+    promptIncludes: "Cy rows out.\n\nWrite detailed",
+    object: { options: [{ content: "Cy's chapter: the crossing." }] },
+  },
+  // Asked again once Ada's chapter takes its card: the request follows the
+  // card, not the path. Toolshed's cache answers that live.
+  {
+    promptIncludes: "Cy rows out.\n\nWrite detailed",
+    object: { options: [{ content: "Cy's chapter: the crossing." }] },
+  },
+  {
+    promptIncludes: "Ada keeps the lamp.\n\nWrite detailed",
+    object: { options: [{ content: "Ada's chapter: the lamp." }] },
   },
   {
     promptIncludes: "Summarize the above",
@@ -79,6 +112,21 @@ export default pattern(() => {
     },
   ]);
   const board = StoryWeaver({ levels });
+
+  // A second board, two spindles wide at the first level, for the cards
+  // that change spindle when an earlier parent is pinned.
+  const wideLevels = new Writable<Level[]>([
+    { title: "Characters & Themes", prompt: "Name them.", branch: 2 },
+    {
+      title: "Chapters",
+      prompt: "Write detailed chapter summaries.",
+      branch: 1,
+    },
+  ]);
+  const wide = StoryWeaver({
+    levels: wideLevels,
+    synopsis: new Writable(WIDE_SYNOPSIS),
+  });
 
   // --- Pure rules -----------------------------------------------------------
 
@@ -140,6 +188,21 @@ export default pattern(() => {
     return md.includes("## Characters") &&
       md.includes("### Characters · 2 of 2\n\nBo") &&
       !md.includes("## Chapters");
+  });
+
+  const assert_answers_only_its_prompt = assert(() =>
+    answers([{ content: "a" }, { content: "reply" }], "a") &&
+    !answers([{ content: "b" }], "a") &&
+    !answers(undefined, "a") &&
+    !answers([{ content: "" }], "")
+  );
+  const assert_story_markdown_nests_headings = assert(() => {
+    const md = storyMarkdown("T", LEVELS, "seed", [
+      pinned("1", "# Bo\n\n```\n# not a heading\n```", "seed"),
+    ]);
+    return md.includes("### Characters · 2 of 2\n\n#### Bo") &&
+      md.includes("\n# not a heading\n") &&
+      demoteHeadings("##### Deep", 3) === "###### Deep";
   });
 
   // --- Through the pattern --------------------------------------------------
@@ -236,6 +299,47 @@ export default pattern(() => {
   const action_remove_level = action(() => board.removeLastLevel.send());
   const assert_level_removed = assert(() => board.levels.length === 2);
 
+  // Cards follow list position. Pinning "0" puts 0.0 on the card that was
+  // showing 1.0, and until that card's request catches up, the options on
+  // hand are 1.0's (Cy's): they must not show on Ada's card, where a Pin
+  // would file Cy's chapter under Ada. The harness lets the request catch up
+  // before it looks, so this checks where each card lands; the guard itself
+  // is pinned by `assert_answers_only_its_prompt`.
+  const action_wide_open_second = action(() => {
+    wide.pin.send({
+      path: "1",
+      option: 0,
+      text: "Cy rows out.",
+    });
+    wide.generate.send({ path: "1.0" });
+    wide.generate.send({ path: "0.0" });
+  });
+  const assert_wide_second_child = assert(() =>
+    wide.board[1].join() === "1.0" &&
+    showsMarkdown(wide[UI], "Cy's chapter: the crossing.")
+  );
+  const action_wide_pin_first = action(() =>
+    wide.pin.send({
+      path: "0",
+      option: 0,
+      text: "Ada keeps the lamp.",
+    })
+  );
+  const assert_wide_no_borrowed_options = assert(() => {
+    const adaCard = innermostNode(
+      wide[UI],
+      (node) =>
+        hasText(node, "from “Ada keeps the lamp.”") &&
+        hasText(node, "View prompt"),
+    );
+    return wide.board[1].join() === "0.0,1.0" && adaCard !== undefined &&
+      !showsMarkdown(adaCard, "Cy's chapter: the crossing.");
+  });
+  const assert_wide_both_children = assert(() =>
+    showsMarkdown(wide[UI], "Ada's chapter: the lamp.") &&
+    showsMarkdown(wide[UI], "Cy's chapter: the crossing.")
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_no_board_before_synopsis },
@@ -247,6 +351,8 @@ export default pattern(() => {
       { assertion: assert_stale_carries_down },
       { assertion: assert_remove_level_drops_its_spindles },
       { assertion: assert_story_markdown_lists_pins },
+      { assertion: assert_story_markdown_nests_headings },
+      { assertion: assert_answers_only_its_prompt },
       { assertion: assert_starts_empty },
       { action: action_write_synopsis },
       { action: action_start },
@@ -270,8 +376,17 @@ export default pattern(() => {
       { assertion: assert_level_added },
       { action: action_remove_level },
       { assertion: assert_level_removed },
+      { settle: true },
+      { action: action_wide_open_second },
+      { settle: true },
+      { assertion: assert_wide_second_child },
+      { action: action_wide_pin_first },
+      { assertion: assert_wide_no_borrowed_options },
+      { settle: true },
+      { assertion: assert_wide_both_children },
     ],
     allowConsoleWarnings: true,
     board,
+    wide,
   };
 });
