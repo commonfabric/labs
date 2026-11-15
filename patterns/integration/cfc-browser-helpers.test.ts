@@ -2,6 +2,8 @@ import {
   Browser,
   installPresentationInteractions,
   type Page,
+  waitForCondition,
+  withWaitForConditionTimeout,
 } from "@commonfabric/integration";
 import {
   assert,
@@ -1590,6 +1592,114 @@ describe("CFC browser helpers", () => {
         ?.querySelector("input")?.value
     );
     assertEquals(value, "Bob");
+  });
+
+  /**
+   * Puts a cf input with the id `id` in `target`'s page, on a view that is
+   * settled whenever asked.
+   */
+  const addSettledInput = (target: Page, id: string) =>
+    target.evaluate((inputId: string) => {
+      const host = document.createElement("div");
+      host.id = inputId;
+      Object.assign(host.style, {
+        display: "block",
+        height: "40px",
+        width: "240px",
+      });
+      const root = host.attachShadow({ mode: "open" });
+      const input = document.createElement("input");
+      Object.assign(input.style, {
+        display: "block",
+        height: "32px",
+        width: "200px",
+      });
+      root.append(input);
+      document.body.append(host);
+      (globalThis as typeof globalThis & {
+        commonfabric: { viewSettled: () => Promise<void> };
+      }).commonfabric = { viewSettled: () => Promise.resolve() };
+    }, { args: [id] });
+
+  /** The value of the cf input `id` names in `target`'s page. */
+  const inputValue = (target: Page, id: string) =>
+    target.evaluate(
+      (inputId: string) =>
+        document.getElementById(inputId)?.shadowRoot?.querySelector("input")
+          ?.value,
+      { args: [id] },
+    );
+
+  it("fills a cf input in a tab behind another", async () => {
+    // A tab behind another is not rendered and gets no animation frames, so a
+    // fill that waited on frames there would wait out the safety net, which
+    // is shortened here so that such a fill fails in seconds.
+    const behind = await browser.newPage();
+    const front = await browser.newPage();
+    try {
+      assertEquals(
+        await behind.evaluate(() => document.visibilityState),
+        "hidden",
+        "the tab behind should not be rendering",
+      );
+      await addSettledInput(behind, "behind-tab-input");
+
+      await withWaitForConditionTimeout(
+        10_000,
+        () => fillCfInput(behind, "#behind-tab-input", "Bob"),
+      );
+
+      expect(await inputValue(behind, "behind-tab-input")).toBe("Bob");
+    } finally {
+      await front.close();
+      await behind.close();
+    }
+  });
+
+  it("fills a cf input in a tab put behind another while the fill waits on a frame", async () => {
+    // The page holds back the fill's first frame request, as a page hidden
+    // before its next frame does, and the tab is then put behind another. A
+    // fill that waited for that frame would wait out the shortened net.
+    const behind = await browser.newPage();
+    let front: Page | undefined;
+    try {
+      await addSettledInput(behind, "hidden-mid-wait-input");
+      await behind.evaluate(() => {
+        const scope = globalThis as unknown as {
+          __cfFillDiag?: Record<string, { phase: string }>;
+          __frameHeld: boolean;
+          __requestFrame: typeof requestAnimationFrame;
+        };
+        scope.__frameHeld = false;
+        scope.__requestFrame = globalThis.requestAnimationFrame;
+        globalThis.requestAnimationFrame = (callback) => {
+          const phase = scope.__cfFillDiag?.["#hidden-mid-wait-input"]?.phase;
+          if (phase === "awaiting-frame" && !scope.__frameHeld) {
+            scope.__frameHeld = true;
+            return 0;
+          }
+          return scope.__requestFrame.call(globalThis, callback);
+        };
+      });
+
+      await withWaitForConditionTimeout(10_000, async () => {
+        const filled = fillCfInput(behind, "#hidden-mid-wait-input", "Bob");
+        await waitForCondition(
+          behind,
+          () => (globalThis as unknown as { __frameHeld: boolean }).__frameHeld,
+        );
+        front = await browser.newPage();
+        await filled;
+      });
+
+      expect(await inputValue(behind, "hidden-mid-wait-input")).toBe("Bob");
+      expect(await behind.evaluate(() => document.visibilityState)).toBe(
+        "hidden",
+      );
+    } finally {
+      await front?.close();
+      await behind.close();
+    }
   });
 
   it("fills the live input when a commit replaces the one it typed into", async () => {
