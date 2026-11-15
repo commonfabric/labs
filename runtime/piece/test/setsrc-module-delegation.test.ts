@@ -872,11 +872,11 @@ export default pattern<{seed?: ${seedType}}>(() => {
         await pieces.synced();
         const e2 = getPatternIdentityRef(cell)!.identity;
         expect(e2).not.toBe(e1);
-        expect(recordedMember(piece)?.identity).toBe(e2);
 
         const observed = await freshPieces.get(piece.id, true);
 
         expect(await invokeSetName(observed, "b")).toBe("w1:b");
+        expect(recordedMember(piece)?.identity).toBe(e2);
         for (const predecessor of [e0, e1]) {
           expect(
             fresh.grantsModuleDelegation(pieces.getSpace(), e2, predecessor),
