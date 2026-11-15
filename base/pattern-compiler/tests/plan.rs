@@ -3248,3 +3248,35 @@ export const P = pattern<{ secret: string }>(({ secret }) => {
         ]
     );
 }
+
+#[test]
+fn the_binding_of_an_inline_handler_names_the_schema_of_the_event_its_parameter_declares() {
+    // PL §1.1, `Binding.eventSchema`: the event type "of an inline event
+    // handler is the type the checker gives its parameter". Where the
+    // parameter has an annotation, that is the annotated type.
+    let analysis = program(
+        r#"import { Writable, pattern, UI } from "commonfabric";
+export const P = pattern<{ n: Writable<number> }>(({ n }) => {
+  return {
+    [UI]: <button onClick={(event: { by: number }) => n.set(event.by)}>+</button>,
+  };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    let schema = found.plan["bindings"][0]["eventSchema"]
+        .as_str()
+        .expect("a schema");
+    let document = &found
+        .schemas
+        .iter()
+        .find(|(id, _)| id == schema)
+        .expect("the document")
+        .1;
+    assert_eq!(document["properties"]["by"]["type"], "number");
+}

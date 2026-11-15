@@ -4812,9 +4812,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             }
         }
         // An `action` declares its event as the annotation of its one
-        // parameter or as its type argument. An inline handler has no
-        // declared type for its event.
-        if let (BodyKind::Action, Some(function)) = (body_kind, self.function_at(home, start)) {
+        // parameter or as its type argument, and an inline handler as the
+        // annotation of its parameter. Where an inline handler has no
+        // annotation, the crate has no type for its event.
+        if let (BodyKind::Action | BodyKind::InlineHandler, Some(function)) =
+            (body_kind, self.function_at(home, start))
+        {
             if let Some(event) = function.params().items.first() {
                 self.root_type(home, Root::Event(index), event);
             }
