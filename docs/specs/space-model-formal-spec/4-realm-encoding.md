@@ -552,11 +552,17 @@ which arrive intact. Nothing here emits one, which is what rules them out --
 the assumption at the top of this section, and the one place it does load-
 bearing work.
 
-**A field of a codec's state that the codec does not read is ignored, not
-refused.** A state is matched by what it must carry, so a record arriving with
-more than that decodes as though the extra were absent. Two implementations
-would otherwise be free to disagree — one ignoring, one refusing — over data
-that cloning carries perfectly well and that a peer can send.
+**A state holding a field that its codec does not read is refused.** A codec
+reads the whole of a state it decodes, so a record arriving with more than that
+is one it did not write, and decoding it without the extra would build a value
+that re-encodes and hashes differently from what was sent. It is a malformation
+like any other, and settles against leniency into a `ProblematicValue` that
+keeps the state as it arrived. This agrees with the JSON format's "Decoding
+validation" note (Section 3 of [3-json-encoding.md](./3-json-encoding.md)). A
+codec whose state is open-ended by design reads every field it is handed, so
+the rule refuses nothing there: `Error@1` reads each field beyond its fixed
+ones as one of the error's own properties, and `Link@1`'s state is its payload
+whole.
 
 **An absent field is not the same as one present holding `undefined`.** Where a
 codec's state has an optional field, what its absence means applies to a field

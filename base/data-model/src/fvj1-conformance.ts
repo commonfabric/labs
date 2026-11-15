@@ -597,6 +597,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => new FabricUnavailable("error", "network"),
   },
   {
+    name: "unavailable error whose message is this package's default for " +
+      "its kind, kept as it arrived",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"message":"A network request failed.","reason":"error"}}',
+  },
+  {
     name: "problematic value whose tag is not a tag",
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","state":{"/Undefined@1":null},' +
@@ -1049,6 +1056,18 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "unavailable pairing a message with a transient reason",
     section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"message":"m","reason":"pending"}}',
+  },
+  {
+    name: "unavailable error holding a field its codec does not read",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":"boom","reason":"error"}}',
+  },
+  {
+    name: "key pair holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `KeyPair@1`",
+    text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","extra":1,' +
+      '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AQ"}}}',
   },
   {
     name: "tag with no version",
