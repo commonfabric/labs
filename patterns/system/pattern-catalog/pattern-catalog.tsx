@@ -227,7 +227,10 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
     const blocked = computed((): string => {
       if (!destination) return "There is nowhere to put it";
       if (catalog.status?.state !== "ready") {
-        return catalog.status?.reason ?? "The pattern catalog is unavailable";
+        const reason = catalog.status?.reason ??
+          "The pattern catalog is unavailable";
+        const remedy = catalog.status?.remedy;
+        return remedy ? `${reason}. ${remedy}` : reason;
       }
       return "";
     });

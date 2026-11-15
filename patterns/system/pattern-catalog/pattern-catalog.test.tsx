@@ -160,6 +160,7 @@ export default pattern(() => {
     refused.get()?.status.state === "unavailable" &&
     refused.get()?.entries.length === 0 &&
     hasText(later[UI], "This instance is not enrolled") &&
+    hasText(later[UI], "loom index enroll") &&
     catalog.getItRequests.length === 3
   );
 
