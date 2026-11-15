@@ -1066,18 +1066,22 @@ export type InitializationData = {
 
   /**
    * Whether author-supplied render-boundary declassification is honored.
-   * `allow` is the default. `deny` ignores an author's
-   * `declassifyConfidentiality`, so that a pattern cannot release a secret
-   * upward through a render boundary.
+   * `deny`, the default, ignores an author's `declassifyConfidentiality`, so
+   * that a pattern cannot release a secret upward through a render boundary
+   * (spec §8.10.6). `allow` honors it.
    */
   renderDeclassificationPolicy?: "allow" | "deny";
 
   /**
    * The confidentiality a display surface admits by default: exact `atoms`,
    * which is where an acting user's identity atoms go, plus the Caveat
-   * `caveatKinds` a display admits. Absent means no ceiling.
+   * `caveatKinds` a display admits. Absent means the default display ceiling
+   * for the principal the runtime acts as (spec §8.10.6), which admits that
+   * principal's own identity atoms and the prompt-caveat family. `null` means
+   * no root ceiling: no host read is gated, and a render is gated only by the
+   * authored boundaries around it.
    */
-  renderConfidentialityCeiling?: {
+  renderConfidentialityCeiling?: null | {
     /**
      * The exact confidentiality clauses a display surface admits, an acting
      * user's own identity atoms among them.
@@ -3769,7 +3773,28 @@ export type HostReadDecided = { readonly [decidedByHostReadGate]: true };
 export type CellReadRefusal = {
   /** The display ceiling the worker renders with refused the read. */
   readonly refusedBy: "display-ceiling";
+
+  /**
+   * Which of the labels a decision weighs refused the read, by kind and with
+   * nothing of the label itself: a label stored at the cell's own node or
+   * above it (`stored`), one the read consumed on its way, below the node or
+   * behind a link (`consumed`), the one the cell's schema declares where
+   * nothing stored applies (`schema`), or labels that could not be read at
+   * all, so that the read was refused without a label to decide on
+   * (`unreadable`). The host knows the read it made, and could learn the
+   * first three by making narrower ones; what the kind adds is whether a
+   * label refused the read or a failure to read one did. Absent from a
+   * worker that does not report it.
+   */
+  readonly labelSource?: CellReadRefusalLabelSource;
 };
+
+/** The kinds of label a {@link CellReadRefusal} names as having refused it. */
+export type CellReadRefusalLabelSource =
+  | "stored"
+  | "consumed"
+  | "schema"
+  | "unreadable";
 
 /**
  * A cell's value on its way _out_ of the worker. The two directions carry the
