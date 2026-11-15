@@ -3445,3 +3445,50 @@ export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string>
         ]
     );
 }
+
+/// A stream in a branch of a `select` is stored below the position of the
+/// `select` while that branch is selected. PL §1.1 has "the paths of the
+/// result at which the instance stores a link to the stream" and does not
+/// say whether a position that holds the stream under one selection is
+/// one. The emitter lists it (note 243 of `SPEC-NOTES.md`).
+#[test]
+fn a_stream_in_a_branch_of_a_select_has_a_result_path_below_the_select() {
+    let analysis = program(
+        r#"import { Writable, handler, ifElse, pattern, UI } from "commonfabric";
+interface Item { title: string; open: boolean }
+const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.item.title);
+});
+export const P = pattern<{ items: Item[]; show: boolean; chosen: Writable<string> }>(
+  ({ items, show, chosen }) => {
+    const first = select({ item: items[0], chosen });
+    return {
+      [UI]: (
+        <div>
+          {show ? <b onClick={first} /> : null}
+          {items.map((item) => (
+            <li>{ifElse(item.open, <i onClick={select({ item, chosen })} />, null)}</li>
+          ))}
+        </div>
+      ),
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    assert_eq!(
+        results_of(&plan, "first"),
+        [(
+            "[]".to_string(),
+            r#"[["$UI","children","0","props","onClick"]]"#.to_string()
+        )]
+    );
+    assert_eq!(
+        results_of(&plan, "select"),
+        [(
+            r#"[{"element":0}]"#.to_string(),
+            r#"[["$UI","children","*","children","0","props","onClick"]]"#.to_string()
+        )]
+    );
+}

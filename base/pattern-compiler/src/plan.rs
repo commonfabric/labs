@@ -1035,7 +1035,10 @@ impl<'a> Emitter<'_, '_, 'a> {
         branches: [Option<&Expression<'a>>; 2],
         origins: &mut Vec<Option<Declared>>,
     ) -> Place {
-        self.build(hint, at, |emitter, _| {
+        // A stream in a branch is stored below the position of the
+        // `select` while the branch is selected.
+        let mut streams: Vec<(Vec<String>, usize)> = Vec::new();
+        let place = self.build(hint, at, |emitter, _| {
             let selector = emitter.selector(2);
             let class = class.unwrap_or_else(|| emitter.test_class(test));
             let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
@@ -1054,12 +1057,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                 origins.push(emitter.declared_of(&place));
                 constructed.push((emitter.entries_of(&place), template.clone()));
                 templates.push(template);
+                if branch.is_some() {
+                    let mut found = Vec::new();
+                    emitter.stream_paths(&place, &mut Vec::new(), &mut found);
+                    for entry in found {
+                        if !streams.contains(&entry) {
+                            streams.push(entry);
+                        }
+                    }
+                }
             }
             emitter.per_path(&constructed, |at| {
                 select_node(selector, condition.clone(), at)
             });
             select_node(selector, condition, templates)
-        })
+        });
+        if let Place::Value(value, _) = &place {
+            self.values[*value].streams = streams;
+        }
+        place
     }
 
     /// A dynamic key in the reactive tier: a `pick` whose choice the value
