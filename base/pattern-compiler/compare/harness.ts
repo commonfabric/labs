@@ -16,7 +16,11 @@ import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.
 import { resolveLink } from "../../../runtime/runner/src/link-resolution.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
-import { type Cell, sendEvent } from "../../../runtime/runner/src/cell.ts";
+import {
+  type Cell,
+  isStream,
+  sendEvent,
+} from "../../../runtime/runner/src/cell.ts";
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.ts";
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
@@ -280,6 +284,16 @@ export type EventOutcome = {
   reason?: string;
   /** What the transaction was aborted with: the error a handler threw. */
   aborted?: string;
+  /**
+   * For a binding of an element body: the element of each enclosing
+   * collection the event was sent for, outermost first.
+   */
+  elements?: ElementBinding[];
+  /**
+   * For such a binding: the path of the result the stream was read at,
+   * with the position of each chosen element in place of its `*`.
+   */
+  stream?: string[];
   /**
    * For a commit the runtime's CFC refuses: each reason of the refusal,
    * and for a reason its gate describes (`cfc/refusal-detail.ts`), the
@@ -596,35 +610,77 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       let nestedBound = false;
 
       // The cells the pattern made: its state cells by name.
-      const manifest = (output.getMetaRaw("internal") ?? []) as unknown as {
-        partialCause?: unknown;
-        link?: unknown;
-      }[];
+      // The instances on the way to the row being read, outermost first,
+      // and the `within` of what the row is about. The run of today gives
+      // each instance of a pattern a result document of its own: the
+      // pattern of the scenario, each run of an element callback, and each
+      // pattern at a tag or a call. The `internal` metadata of that
+      // document names the cells the instance's body made, a state cell
+      // by the name of its declaration (`partialCause`).
+      let way: { instances: AnyCell[]; within: unknown[] } = {
+        instances: [],
+        within: [],
+      };
+      const manifestOf = (instance: AnyCell) => {
+        const manifest = instance.getMetaRaw("internal");
+        return (Array.isArray(manifest) ? manifest : []) as unknown as {
+          partialCause?: unknown;
+          link?: unknown;
+        }[];
+      };
       const stateCell = (cell: number): AnyCell => {
         const record = plan.stateCells?.[cell];
         if (record === undefined) {
           throw new Unsupported("an unlisted state cell");
         }
-        if ((record.within ?? []).length > 0) {
-          throw new Unsupported("a state cell of a per-element body");
+        const steps = record.within ?? [];
+        // A cell of a body with a `within` step is in the manifest of the
+        // instance that step leads to. Where the way has one instance for
+        // each step of the row's `within`, that is the instance at the
+        // depth of the cell's own steps. Otherwise it is the one instance
+        // on the way that names the cell.
+        let owners = [output];
+        if (steps.length > 0) {
+          const naming = way.instances.slice(1).filter((instance) =>
+            manifestOf(instance).some((entry) =>
+              entry.partialCause === record.name
+            )
+          );
+          const atDepth = way.instances.length === way.within.length + 1 &&
+              sameValue(steps, way.within.slice(0, steps.length))
+            ? way.instances[steps.length]
+            : undefined;
+          owners = atDepth !== undefined && naming.includes(atDepth)
+            ? [atDepth]
+            : naming;
+          if (owners.length !== 1) {
+            throw new Unsupported(
+              "a state cell of a pattern instance the row does not lead to",
+            );
+          }
         }
-        const found = Array.isArray(manifest)
-          ? manifest.filter((entry) => entry.partialCause === record.name)
-          : [];
+        const found = manifestOf(owners[0]).filter((entry) =>
+          entry.partialCause === record.name
+        );
         const link = found.length === 1
-          ? parseLink(found[0].link, output)
+          ? parseLink(found[0].link, owners[0])
           : undefined;
         if (link === undefined) {
           throw new Unsupported(
             "a state cell the run's manifest does not name",
           );
         }
-        return runtime.getCellFromLink(
+        const made = runtime.getCellFromLink(
           link as NormalizedFullLink,
           undefined,
           read,
         ) as AnyCell;
+        stateCellIds.add(made.getAsNormalizedFullLink().id);
+        return made;
       };
+      // The documents of the state cells the session resolved, whose
+      // declared entries are the labels of places a template reads.
+      const stateCellIds = new Set<string>();
 
       // A path of a slot with each `*` the key a pick chose in the
       // container the path is below.
@@ -655,9 +711,6 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           throw new Unsupported("a slot of a binding read outside a binding");
         }
         const binding = plan.bindings?.[context.binding];
-        if ((binding?.within ?? []).length > 0) {
-          throw new Unsupported("a binding of a per-element body");
-        }
         const path = chosenPath(slot, context);
         const entry = (binding?.state ?? [])
           .filter((entry) => isPrefix(entry.path, path))
@@ -789,7 +842,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           try {
             return [stateCell(cell).getAsNormalizedFullLink().id];
           } catch {
-            // A state cell of a per-element body has no address here.
+            // A state cell of another instance is found from the row that
+            // reads it (`stateCellIds`).
             return [];
           }
         }),
@@ -803,7 +857,10 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         return join(way.map((link, index) => {
           const metadata = readStoredCfcMetadata(read, link);
           if (metadata === undefined) return consumed(undefined, observes);
-          const kept = withStatic || inputIds.has(link.id) ? metadata : {
+          const kept = withStatic || inputIds.has(link.id) ||
+              stateCellIds.has(link.id)
+            ? metadata
+            : {
             ...metadata,
             labelMap: {
               ...metadata.labelMap,
@@ -880,6 +937,120 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         return path.length > 0 && valueOf(cell) === undefined
           ? treeOf(cell, undefined)
           : cell;
+      };
+
+      // The instances whose result documents are on the way from the
+      // result to `path`, outermost first: each document a link on the way
+      // leads to that has an argument or a manifest of its own.
+      const instancesAlong = (path: readonly string[]): AnyCell[] => {
+        const found: AnyCell[] = [];
+        const seen = new Set<string>();
+        const visit = (cell: AnyCell) => {
+          let links: NormalizedFullLink[] = [];
+          try {
+            links = hops(cell);
+          } catch {
+            // A path the run does not hold leads to no instance.
+          }
+          for (const link of links) {
+            if (seen.has(link.id)) continue;
+            seen.add(link.id);
+            const root = runtime.getCellFromLink(
+              { ...link, path: [] } as NormalizedFullLink,
+              undefined,
+              read,
+            ) as AnyCell;
+            if (
+              root.getMetaRaw("internal") !== undefined ||
+              root.getMetaRaw("argument") !== undefined
+            ) found.push(root);
+          }
+        };
+        let cell = output;
+        visit(cell);
+        path.forEach((key, index) => {
+          if (index > 0) cell = treeOf(cell, key);
+          cell = cell.key(key as never) as AnyCell;
+          visit(cell);
+        });
+        return found;
+      };
+
+      // Where the run holds the stream of a binding: the path of the
+      // result, and for a binding of an element body the element chosen
+      // of each enclosing collection (PL §1.1, "The result paths of a
+      // binding in an element body": "a reader that wants the stream of
+      // one element chooses, for each `*`, a position of the collection
+      // that the matching `element` step names"). The harness chooses the
+      // last position of each collection. PL has the index "in the stored
+      // array ... plus the number of children stored before the spread".
+      // The run of today does not store the children of a view node as
+      // one array: the assembled array of a `map` is one child, at the
+      // position the expression is written at, so the element is at that
+      // position and then at its own.
+      const streamAt = (
+        binding: number,
+      ): { path: string[]; elements: ElementBinding[] } => {
+        const record = plan.bindings?.[binding];
+        const [streamPath] = record?.result ?? [];
+        if (streamPath === undefined) {
+          throw new Unsupported(
+            "a binding whose stream the result does not hold",
+          );
+        }
+        const steps = (record?.within ?? []).flatMap((step) => {
+          const { element } = step as { element?: number };
+          return element === undefined ? [] : [element];
+        });
+        if (streamPath.filter((key) => key === "*").length !== steps.length) {
+          throw new Unsupported(
+            "a result path that does not pass through every enclosing collection",
+          );
+        }
+        const path: string[] = [];
+        const elements: ElementBinding[] = [];
+        let cell = output;
+        streamPath.forEach((key, index) => {
+          if (key !== "*") {
+            if (index > 0) {
+              const tree = treeOf(cell, key);
+              if (tree !== cell) path.push("$UI");
+              cell = tree;
+            }
+            cell = cell.key(key as never) as AnyCell;
+            path.push(key);
+            return;
+          }
+          let value = valueOf(cell);
+          if (streamPath[index - 1] === "children" && Array.isArray(value)) {
+            const holders = value.flatMap((child, position) =>
+              Array.isArray(child) ? [position] : []
+            );
+            if (holders.length !== 1) {
+              throw new Unsupported(
+                holders.length === 0
+                  ? "children that hold no assembled array"
+                  : "children that hold two assembled arrays",
+              );
+            }
+            cell = cell.key(`${holders[0]}` as never) as AnyCell;
+            path.push(`${holders[0]}`);
+            value = valueOf(cell);
+          }
+          if (!Array.isArray(value) || value.length === 0) {
+            throw new Unsupported("an enclosing collection with no element");
+          }
+          const position = `${value.length - 1}`;
+          elements.push({ collection: steps[elements.length], key: position });
+          cell = cell.key(position as never) as AnyCell;
+          path.push(position);
+        });
+        // A position that holds the stream under one selection holds
+        // another value, or none, under the other.
+        if (!isStream(cell)) {
+          throw new Unsupported("a result path the run holds no stream at");
+        }
+        return { path, elements };
       };
 
       // Whether the evaluation leaves the entries of origin `link` out of
@@ -1329,6 +1500,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           for (const { path, elements } of instances) {
             try {
               current = { template, path };
+              way = { instances: instancesAlong(path), within: [] };
               rowKey = `output ${path.join("/")}`;
               // The entry of a collection is the label of its membership,
               // so the runtime's side is what a read of the container's
@@ -1452,7 +1624,15 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
 
       // The cell each write edge of a body targets, with the path below
       // it up to the first `*`, and the rest of the path.
-      const writeTargets = (binding: number) => {
+      const writeTargets = (
+        binding: number,
+        elements: readonly ElementBinding[],
+        stream: readonly string[],
+      ) => {
+        way = {
+          instances: instancesAlong(stream),
+          within: plan.bindings?.[binding]?.within ?? [],
+        };
         const body = plan.bodies
           ?.[plan.bindings?.[binding]?.handler?.body ?? -1];
         return (body?.writes ?? []).map((write, index) => {
@@ -1461,7 +1641,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             const path = target.path ?? [];
             const star = path.indexOf("*");
             const above = star < 0 ? path : path.slice(0, star);
-            const context = { elements: [], binding };
+            const context = { elements, binding };
             let base: AnyCell | undefined;
             if (target.kind === "handle" && target.slot !== undefined) {
               base = slotCell(target.slot, context);
@@ -1499,7 +1679,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         index: number,
         cell: AnyCell,
         path: string[],
+        elements: readonly ElementBinding[],
+        stream: readonly string[],
       ): WriteRow => {
+        way = {
+          instances: instancesAlong(stream),
+          within: plan.bindings?.[binding]?.within ?? [],
+        };
         if (write.template === undefined) {
           throw new Unsupported("a write edge with no template");
         }
@@ -1520,7 +1706,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         ];
         const side = (): Evaluated => {
           const evaluated = evaluate(write.template!, false, {
-            elements: [],
+            elements,
             binding,
             event,
           });
@@ -1569,7 +1755,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         };
       };
 
-      return { outputRows, writeTargets, writeRow, at, read };
+      return { outputRows, writeTargets, writeRow, streamAt, at, read };
     };
 
     const reading = async <T>(
@@ -1591,20 +1777,29 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     for (const { binding, event } of scenario.events ?? []) {
       const record = plan.bindings?.[binding];
       const name = `event of ${record?.name ?? binding}`;
-      const [streamPath] = record?.result ?? [];
-      if (streamPath === undefined) {
-        const reason = "a binding whose stream the result does not hold";
-        skipped.push({ what: name, reason });
+      const inElement = (record?.within ?? []).some((step) =>
+        (step as { element?: number }).element !== undefined
+      );
+      let found: { path: string[]; elements: ElementBinding[] };
+      try {
+        found = await reading((within) => within.streamAt(binding));
+      } catch (error) {
+        if (!(error instanceof Unsupported)) throw error;
+        skipped.push({ what: name, reason: error.reason });
         events.push({
           binding,
           handler: record?.name ?? "",
           outcome: "not sent",
-          reason,
+          reason: error.reason,
         });
         continue;
       }
-      const before = await reading((within) => within.writeTargets(binding));
-      const stream = streamPath.reduce(
+      const { elements } = found;
+      const sentFor = inElement ? { elements, stream: found.path } : {};
+      const before = await reading((within) =>
+        within.writeTargets(binding, elements, found.path)
+      );
+      const stream = found.path.reduce(
         (cell, key) => cell.key(key as never) as AnyCell,
         result as AnyCell,
       );
@@ -1644,6 +1839,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             binding,
             handler,
             outcome: "refused",
+            ...sentFor,
             error: name,
             reason: message,
             ...(aborted === undefined ? {} : {
@@ -1674,7 +1870,12 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             }),
           });
         } else {
-          settled.resolve({ binding, handler, outcome: "committed" });
+          settled.resolve({
+            binding,
+            handler,
+            outcome: "committed",
+            ...sentFor,
+          });
         }
       });
       events.push(await settled.promise);
@@ -1682,7 +1883,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       await result.pull();
       await runtime.idle();
       await reading((within) => {
-        const after = within.writeTargets(binding);
+        const after = within.writeTargets(binding, elements, found.path);
         after.forEach((target, index) => {
           const what = `${name}, write ${index}`;
           const earlier = before[index];
@@ -1718,6 +1919,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                   index,
                   within.at(target.cell, path),
                   path,
+                  elements,
+                  found.path,
                 ),
               );
             } catch (error) {

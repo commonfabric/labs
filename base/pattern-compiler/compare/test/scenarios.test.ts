@@ -352,3 +352,77 @@ describe("a pattern written as a tag", () => {
     expect(row && verdict(row)).toBe("C equal, I tighter, by name");
   });
 });
+
+describe("a handler bound in an element body", () => {
+  const run = async () => {
+    const read = (name: string) =>
+      Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
+    const modules = JSON.parse(await read("element-handlers.plan.json"));
+    const { plan } = modules[0].patterns.find((pattern: { name: string }) =>
+      pattern.name === "default"
+    );
+    return await runScenario({
+      program: {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: await read("element-handlers.tsx"),
+        }],
+      },
+      plan,
+      argument: { items: [{ title: "a" }, { title: "b" }], note: "n" },
+      events: [{ binding: 0, event: {} }, { binding: 1, event: {} }],
+    });
+  };
+
+  it("gets its event at the stream of the last element of each enclosing collection", async () => {
+    // PL §1.1, "The result paths of a binding in an element body": "a
+    // reader that wants the stream of one element chooses, for each `*`,
+    // a position of the collection". The run of today stores the
+    // assembled array as one child of the view node, so the element is
+    // at the position of that child and then at its own.
+    const { events } = await run();
+
+    expect(events).toEqual([
+      {
+        binding: 0,
+        handler: "choose",
+        outcome: "committed",
+        elements: [{ collection: 0, key: "1" }],
+        stream: ["$UI", "children", "1", "children", "1", "1", "props", "onClick"],
+      },
+      {
+        binding: 1,
+        handler: "mark",
+        outcome: "committed",
+        elements: [{ collection: 1, key: "1" }],
+        stream: ["$UI", "children", "2", "children", "0", "1", "$UI", "props", "onClick"],
+      },
+    ]);
+  });
+
+  it("compares its write edges with the element bound", async () => {
+    const { writes, skipped } = await run();
+    const clauses = (atoms: unknown[]) => [...new Set(atoms)].sort();
+
+    expect(
+      skipped.filter(({ what }) => what.startsWith("event of")),
+    ).toEqual([]);
+    expect(writes.map((row) => [row.handler, row.write, row.path])).toEqual([
+      ["choose", 0, []],
+      ["mark", 0, []],
+    ]);
+    // `choose` reads the title of its element and the input `note`, and
+    // writes a state cell of the pattern.
+    expect(clauses(writes[0].runtime.confidentiality)).toEqual([
+      "alice",
+      "bob",
+    ]);
+    expect(writes[0].comparison.overall).toBe("equal");
+    // `mark` writes the state cell of the instance of `Row` for the
+    // element: a cell of a pattern compiled in, which the run of today
+    // names in the manifest of that instance's result.
+    expect(clauses(writes[1].runtime.confidentiality)).toEqual(["alice"]);
+    expect(writes[1].comparison.overall).toBe("equal");
+  });
+});
