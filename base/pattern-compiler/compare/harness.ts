@@ -194,7 +194,9 @@ export type Row = {
  * One row for a write edge of a handler's body: a path one event's
  * transaction wrote. `template` is the label of §3.2 with no slot
  * dereferenced, since the body writes through its handles and does not
- * read what they hold.
+ * read what they hold. Its slots are read on what is stored before the
+ * event is sent, which is what the handler's run reads, and the runtime's
+ * side is read after the event.
  */
 export type WriteRow = {
   binding: number;
@@ -412,6 +414,16 @@ type SelectNode = Extract<Template, { op: "select" }>;
 type PickNode = Extract<Template, { op: "pick" }> & {
   from?: { container?: number; collection?: number };
 };
+
+/**
+ * The template of a write edge as evaluated before its event: with the
+ * stamp of each handle the body only passes on, and with nothing for it.
+ */
+type WriteTemplate = { template: Evaluated; withoutStamp: Evaluated };
+
+/** The key of the choices of the template of a write edge. */
+const writeKey = (binding: number, write: number): string =>
+  `write ${binding}/${write}`;
 
 /** The value of a place the harness could not read. */
 const NO_VALUE = Symbol("no value");
@@ -1805,23 +1817,61 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         });
       };
 
-      const writeRow = (
+      // The template of each write edge of a body, evaluated on what is
+      // stored when it is called. The harness calls it before it sends the
+      // event: the handler's run reads what is stored when its transaction
+      // begins, and a slot of a cell the run writes has the label of the
+      // run's own write afterwards, which would stand in for a read the
+      // template lacks. The key of a choice names the edge and no path,
+      // since the paths the run writes are not known yet.
+      const writeTemplates = (
         binding: number,
         event: unknown,
+        elements: readonly ElementBinding[],
+        stream: readonly string[],
+      ): (WriteTemplate | { error: unknown })[] => {
+        way = {
+          instances: instancesAlong(stream),
+          within: plan.bindings?.[binding]?.within ?? [],
+        };
+        const body = plan.bodies
+          ?.[plan.bindings?.[binding]?.handler?.body ?? -1];
+        return (body?.writes ?? []).map((write, index) => {
+          const { template } = write;
+          try {
+            if (template === undefined) {
+              throw new Unsupported("a write edge with no template");
+            }
+            rowKey = writeKey(binding, index);
+            const withHandle = (handle: typeof passedHandle) => {
+              passedHandle = handle;
+              return evaluate(template, false, { elements, binding, event });
+            };
+            return {
+              template: withHandle("the stamp"),
+              withoutStamp: withHandle("nothing"),
+            };
+          } catch (error) {
+            return { error };
+          } finally {
+            passedHandle = "every entry";
+          }
+        });
+      };
+
+      const writeRow = (
+        binding: number,
         write: PlanWrite,
         index: number,
         cell: AnyCell,
         path: string[],
-        elements: readonly ElementBinding[],
         stream: readonly string[],
+        evaluated: WriteTemplate,
       ): WriteRow => {
         way = {
           instances: instancesAlong(stream),
           within: plan.bindings?.[binding]?.within ?? [],
         };
-        if (write.template === undefined) {
-          throw new Unsupported("a write edge with no template");
-        }
         rowKey = `write ${binding}/${index}/${path.join("/")}`;
         const runtimeLabel = consumed(
           labelView(cell),
@@ -1837,12 +1887,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           declaredAt(cell),
           ...(write.reference === undefined ? [] : [runtimeLabel]),
         ];
-        const side = (): Evaluated => {
-          const evaluated = evaluate(write.template!, false, {
-            elements,
-            binding,
-            event,
-          });
+        const side = (evaluated: Evaluated): Evaluated => {
           const label = join([evaluated.label, ...beside]);
           // The template of such an edge is the label of the link. Its
           // integrity vouches for the reference, and a read of the value
@@ -1855,16 +1900,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               : { ...label, integrity: runtimeLabel.integrity },
           };
         };
-        let template: Evaluated;
-        let withoutStamp: Evaluated;
-        try {
-          passedHandle = "the stamp";
-          template = side();
-          passedHandle = "nothing";
-          withoutStamp = side();
-        } finally {
-          passedHandle = "every entry";
-        }
+        const template = side(evaluated.template);
+        const withoutStamp = side(evaluated.withoutStamp);
         const comparison = compareLabels(template.label, runtimeLabel);
         const worse = (relation: string) =>
           relation === "looser" || relation === "incomparable";
@@ -1890,7 +1927,15 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         };
       };
 
-      return { outputRows, writeTargets, writeRow, streamAt, at, read };
+      return {
+        outputRows,
+        writeTargets,
+        writeTemplates,
+        writeRow,
+        streamAt,
+        at,
+        read,
+      };
     };
 
     const reading = async <T>(
@@ -1931,9 +1976,15 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       }
       const { elements } = found;
       const sentFor = inElement ? { elements, stream: found.path } : {};
-      const before = await reading((within) =>
-        within.writeTargets(binding, elements, found.path)
-      );
+      const { before, templates } = await reading((within) => ({
+        before: within.writeTargets(binding, elements, found.path),
+        templates: within.writeTemplates(
+          binding,
+          event,
+          elements,
+          found.path,
+        ),
+      }));
       const stream = found.path.reduce(
         (cell, key) => cell.key(key as never) as AnyCell,
         result as AnyCell,
@@ -2069,19 +2120,27 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               reason: "a write the event's run did not make",
               binding,
             });
+            // The choices of a template that is compared with nothing are
+            // not counted.
+            for (const key of [...how.keys()]) {
+              if (key.startsWith(`${writeKey(binding, index)}|`)) {
+                how.delete(key);
+              }
+            }
           }
           for (const path of paths) {
             try {
+              const evaluated = templates[index];
+              if ("error" in evaluated) throw evaluated.error;
               writes.push(
                 within.writeRow(
                   binding,
-                  event,
                   target.write,
                   index,
                   within.at(target.cell, path),
                   path,
-                  elements,
                   found.path,
+                  evaluated,
                 ),
               );
             } catch (error) {

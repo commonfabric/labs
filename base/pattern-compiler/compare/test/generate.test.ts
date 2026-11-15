@@ -530,3 +530,37 @@ describe("an event whose transaction the runtime does not commit", () => {
     ]);
   });
 });
+
+describe("the template of a write edge", () => {
+  // The handler of `fixtures/input-writes.tsx` reads `label` and `count`
+  // and sets `count`. With the read of `label` taken out of the edge's
+  // template, the template lacks the clause of `label`, which the run's
+  // write has. The slot of `count` has that clause once the event's run
+  // has written `count`, so a template evaluated on what is stored after
+  // the event hides what it lacks.
+  it("is evaluated on the labels stored when the event's transaction begins", async () => {
+    const { plan, schemas } = await planOf("input-writes");
+    const label = plan.slots.findIndex((slot) =>
+      slot.root.kind === "binding" && slot.path.join("/") === "label"
+    );
+    const [write] = plan.bodies?.[0].writes ?? [];
+    const template = write.template as {
+      inputs: { op: string; slot?: number }[];
+    };
+    template.inputs = template.inputs.filter((input) => input.slot !== label);
+
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("input-writes.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 0, event: generateEvent(plan, schemas, 0) }],
+    });
+
+    const row = run.writes.find((row) => row.write === 0);
+    expect(row?.comparison.confidentiality).toBe("tighter");
+  });
+});
