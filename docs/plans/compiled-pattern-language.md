@@ -73,38 +73,38 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `1ab9fe992f`, under
+  computes exists at prototype commit `f1a86a95d8`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
   no browser. It generates a scenario per module, with a distinct
   clause per input and one event per handler. Of the 270 modules with
   a full plan, 213 run; 33 need `wish`, 14 request an effect, and the
-  runtime refuses the commit of 10. Of 1,313 outputs compared, none is
-  looser and none incomparable. In 124 the atom names the pattern
-  where the runtime's names a callback; the other 1,189 have the
-  confidentiality of the runtime or less, and one atom more, the
-  pattern's, by the ruling on kept outputs. Of 226 events sent, 212
-  commit. Of the 14 refused, 6 are refused by a pattern written to be
-  refused or for a trusted event the harness does not send, 5 by the
-  handler's own validation of the generated values, and 3 by gaps in
-  the crate, the harness, and the generator. Of 354 write edges of
-  the handlers that get an event, 145 are compared: 131 equal, 11
-  tighter, 2 looser, and 1 a bound. The 2 looser are in
-  `showcase/battleship/multiplayer/repro-minimal.tsx`, where a
-  handler passes a handle on without reading through it and the
-  template includes the label of that handle's cell; whether the
-  runtime journals a read there is not determined. 133 write edges
-  are of a write the run did not make, 107 of them in events that
-  commit, which is not examined. 53 outputs have no stored value; for
-  7 of them the template has a clause where the runtime stores no
-  label, because an action threw or a conditional rendered nothing.
+  runtime refuses the commit of 10. Of 1,301 outputs compared, none is
+  looser and none incomparable with the pattern's atom on kept
+  outputs. Without that atom, which tests the rule of each template,
+  1,165 are equal, 15 tighter, 74 have an atom that names the pattern
+  where the runtime's names a callback, and 47 are looser in integrity
+  alone, by the ruling on a promoted `computed`. None is looser
+  without the runtime's static part. Of 226 events sent, 212 commit.
+  Of the 14 refused, 6 are refused by a pattern written to be refused
+  or for a trusted event the harness does not send, 5 by the handler's
+  own validation of the generated values, and 3 by gaps in the crate,
+  the harness, and the generator. Of 152 write edges compared, 143 are
+  equal and 9 tighter, with the `link` entry of a handle that is only
+  passed on left out (question 127); with it, 2 are looser. The 9
+  tighter each have a label an earlier event of the scenario left on
+  the shape of the target. 120 write edges are of a write the run did
+  not make; a sample of 40 found a write of an equal value, a branch
+  not taken on the generated values, or a random choice, and no error.
+  53 outputs have no stored value; for 7 of them the template has a
+  clause where the runtime stores no label, because an action threw or
+  a conditional rendered nothing.
   Per-element handlers (385 bindings, 511 write edges) get no event.
   The crate accepts 333 modules and reports 389 errors. It does not
-  yet follow a created cell's reference through a body that passes it
-  on (`plan-and-label-templates.md` §3.9), and its harness does not
-  yet separate the static part by document (§3.1). The crate's
-  `SPEC-NOTES.md` lists the places where it found the documents
-  ambiguous.
+  yet emit `$defs` for a recursive type or a result path for a binding
+  inside an element. The crate's `SPEC-NOTES.md` lists the places
+  where it found the documents ambiguous; notes 228 to 240 are not
+  yet written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -862,6 +862,13 @@ as an assumption.
     under** (PL question 80). *Assumed:* the comparison stores inputs
     under the runtime's schema. The documents do not say how a schema
     of the plan names a policy.
+127. **The `link` entry at the position of a handle that is only
+    passed on** (PL question 81). The runtime stores there what the
+    reference declares, which repeats the label of the cell's type.
+    *Assumed:* it is not part of the handle's label, and the stamp of
+    the run that wrote the link is. The runtime reads nothing at such
+    a position, so the template can be looser than today by that
+    stamp; the comparison met no such row.
 
 ## Open, and not needing the owner
 
