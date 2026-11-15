@@ -34,6 +34,7 @@ import {
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import {
+  getPatternIdentityRef,
   getPieceSourceSnapshot,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
@@ -552,6 +553,28 @@ describe("module identity delegation", () => {
         )
           .toThrow("source update preparation does not match the transition");
       }
+      // Prepared over a piece recording nothing, staged over one that records
+      // something: the record moved after the preparation composed with it.
+      expect(() =>
+        manager.stageSourceUpdate(
+          prepared,
+          space,
+          previous.identity,
+          candidate.identity,
+          tx,
+          new Map([[previous.identity, new Set(["recorded-since"])]]),
+        )
+      ).toThrow("source update preparation does not match the transition");
+      expect(
+        manager.stageSourceUpdate(
+          prepared,
+          space,
+          previous.identity,
+          candidate.identity,
+          tx,
+          new Map(),
+        ),
+      ).toBeInstanceOf(Map);
     } finally {
       tx.abort();
     }
@@ -1816,6 +1839,48 @@ describe("module identity delegation", () => {
       await observer.start(observed);
 
       expect(await setName(observer, observed, "after")).toBe("v2:after");
+    });
+
+    it("grants the next pattern nothing from the piece's earlier patterns after a transition that is no source update", async () => {
+      // v1 to v2 is a source update. v2 to v3 is not: its baseline does not
+      // retain v2, as for an update from an origin nobody gates, so nothing
+      // promised v3 any authority of v1's or v2's.
+      const v1Identity = getPatternIdentityRef(piece)!.identity;
+      await moveToV2();
+      const v2Identity = getPatternIdentityRef(piece)!.identity;
+      expect(
+        (piece.getMetaRaw("pieceSourceDelegations") as { identity?: string })
+          ?.identity,
+      ).toBe(v2Identity);
+      const v3 = await runtime.patternManager.compilePattern(
+        writerProgram("v3"),
+        { space },
+      );
+      const expected = getPieceSourceSnapshot(
+        piece,
+        runtime.runner.sessionPatternPointerFor(piece),
+      )!;
+      await runtime.runSynced(piece, v3, {}, {
+        expectedPatternIdentity: expected.pattern,
+        pieceSourceTransition: {
+          revisionId: crypto.randomUUID(),
+          baseline: { kind: "unavailable" },
+          timestamp: Date.now(),
+          operation: "edit",
+          origin: null,
+          expected,
+        },
+      });
+      const v3Identity = getPatternIdentityRef(piece)!.identity;
+      expect(v3Identity).not.toBe(v2Identity);
+
+      expect(piece.getMetaRaw("pieceSourceDelegations")).toBeUndefined();
+      await observer.start(observed);
+      for (const predecessor of [v1Identity, v2Identity]) {
+        expect(
+          observer.grantsModuleDelegation(space, v3Identity, predecessor),
+        ).toBe(false);
+      }
     });
 
     it("does not start a piece stopped while the authority read is in flight", async () => {

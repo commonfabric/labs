@@ -8,6 +8,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   applyPieceSourceTransition,
   getPatternSource,
+  getPieceSourceDelegations,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   PIECE_SOURCE_MOVED,
@@ -287,30 +288,128 @@ describe("patternSource meta accessors", () => {
     }
   });
 
-  it("rejects malformed recorded delegations", async () => {
-    const pattern = { identity: "recorded-pattern", symbol: "default" };
-    const valid = [{
-      identity: "recorded-pattern",
-      predecessors: ["earlier-pattern"],
-    }];
-    const malformed: unknown[] = [
-      "not an array",
-      [42],
-      [["recorded-pattern", ["earlier-pattern"]]],
-      [{ identity: "", predecessors: ["earlier-pattern"] }],
-      [{ identity: "recorded-pattern", predecessors: [] }],
-      [{ identity: "recorded-pattern", predecessors: [""] }],
-      [{ identity: "recorded-pattern", predecessors: "earlier-pattern" }],
-      [...valid, { identity: "recorded-pattern", predecessors: ["other"] }],
-    ];
-    const historyOf = async (
+  describe("getPieceSourceDelegations()", () => {
+    const pattern = "recorded-pattern";
+    const valid = [{ identity: "recorded-module", predecessors: ["earlier"] }];
+
+    /** A piece whose `pieceSourceDelegations` member is `member`. */
+    const pieceWith = async (
       name: string,
-      moduleDelegations: unknown,
+      member: unknown,
     ): Promise<ReturnType<typeof runtime.getCell>> => {
       const cell = runtime.getCell(signer.did(), name);
       const seed = runtime.edit();
-      cell.withTx(seed).setMetaRaw("pieceSourceHistory", [{
-        revisionId: "recorded",
+      cell.withTx(seed).setMetaRaw(
+        "pieceSourceDelegations",
+        member as never,
+        rawMetaWriteAuthorization,
+      );
+      expect((await seed.commit().settled).error).toBeUndefined();
+      return cell;
+    };
+
+    it("returns the delegations a member records for the pattern it names", async () => {
+      const cell = await pieceWith("recorded-delegations", {
+        identity: pattern,
+        delegations: valid,
+      });
+
+      expect(getPieceSourceDelegations(cell, pattern)).toStrictEqual(
+        new Map([["recorded-module", new Set(["earlier"])]]),
+      );
+    });
+
+    it("returns none for a member that names another pattern, or for no member", async () => {
+      const cell = await pieceWith("recorded-delegations-elsewhere", {
+        identity: "another-pattern",
+        delegations: valid,
+      });
+
+      expect(getPieceSourceDelegations(cell, pattern)).toStrictEqual(new Map());
+      expect(
+        getPieceSourceDelegations(
+          runtime.getCell(signer.did(), "no-recorded-delegations"),
+          pattern,
+        ),
+      ).toStrictEqual(new Map());
+    });
+
+    it("returns none for a malformed member", async () => {
+      const malformed: unknown[] = [
+        "not an object",
+        [{ identity: pattern, delegations: valid }],
+        { identity: pattern },
+        { identity: pattern, delegations: "not an array" },
+        { identity: pattern, delegations: [42] },
+        { identity: pattern, delegations: [["recorded-module", ["earlier"]]] },
+        {
+          identity: pattern,
+          delegations: [{ identity: "", predecessors: ["earlier"] }],
+        },
+        {
+          identity: pattern,
+          delegations: [{ identity: "recorded-module", predecessors: [] }],
+        },
+        {
+          identity: pattern,
+          delegations: [{ identity: "recorded-module", predecessors: [""] }],
+        },
+        {
+          identity: pattern,
+          delegations: [{
+            identity: "recorded-module",
+            predecessors: ["recorded-module"],
+          }],
+        },
+        {
+          identity: pattern,
+          delegations: [...valid, {
+            identity: "recorded-module",
+            predecessors: ["other"],
+          }],
+        },
+      ];
+
+      for (const [index, member] of malformed.entries()) {
+        const cell = await pieceWith(
+          `malformed-recorded-delegations-${index}`,
+          member,
+        );
+        expect(getPieceSourceDelegations(cell, pattern), String(index))
+          .toStrictEqual(new Map());
+      }
+    });
+  });
+
+  describe("the `pieceSourceDelegations` member across a transition", () => {
+    const compile = async (marker: string) =>
+      runtime.patternManager.getArtifactEntryRef(
+        await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents:
+              `import { pattern } from 'commonfabric'; export default pattern(() => ({ marker: ${
+                JSON.stringify(marker)
+              } }));`,
+          }],
+        }, { space: signer.did() }),
+      )!;
+
+    /**
+     * A piece running `pattern`, whose history ends at it and whose member
+     * records `recorded` for it.
+     */
+    const pieceRunning = async (
+      id: string,
+      pattern: { identity: string; symbol: string },
+      recorded: { identity: string; predecessors: string[] }[],
+    ) => {
+      const seed = runtime.edit();
+      const seeded = runtime.getCell(signer.did(), id, undefined, seed);
+      seeded.setMetaRaw("patternIdentity", pattern, rawMetaWriteAuthorization);
+      seeded.setMetaRaw("pieceSourceHistory", [{
+        revisionId: "updated",
         timestamp: 42,
         pattern,
         source: runtime.getCell(
@@ -319,87 +418,65 @@ describe("patternSource meta accessors", () => {
           undefined,
           seed,
         ).getAsLink(),
-        operation: "create",
-        moduleDelegations,
-      }] as never, rawMetaWriteAuthorization);
+        operation: "edit",
+      }], rawMetaWriteAuthorization);
+      seeded.setMetaRaw("pieceSourceDelegations", {
+        identity: pattern.identity,
+        delegations: recorded,
+      }, rawMetaWriteAuthorization);
       expect((await seed.commit().settled).error).toBeUndefined();
-      return cell;
+      return runtime.getCell(signer.did(), id);
     };
 
-    // The same revision with well-formed delegations reads back.
-    const control = await historyOf("well-formed-recorded-delegations", valid);
-    expect(getPieceSourceRevisions(control)[0].moduleDelegations)
-      .toStrictEqual(valid);
+    const transition = async (
+      cell: ReturnType<typeof runtime.getCell>,
+      next: { identity: string; symbol: string },
+      operation: "detach" | "edit",
+    ) => {
+      const tx = runtime.edit();
+      applyPieceSourceTransition(runtime, cell, tx, next, {
+        revisionId: `to-${next.identity}-${operation}`,
+        baseline: { kind: "retain", revisionId: `baseline-${operation}` },
+        timestamp: 43,
+        operation,
+        origin: null,
+        expected: getPieceSourceSnapshot(cell)!,
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
 
-    for (const [index, moduleDelegations] of malformed.entries()) {
-      const cell = await historyOf(
-        `malformed-recorded-delegations-${index}`,
-        moduleDelegations,
-      );
-      expect(() => getPieceSourceRevisions(cell)).toThrow(
-        "piece source history is invalid",
-      );
-    }
-  });
+    it("keeps what it records on a transition that leaves the pattern in place", async () => {
+      const pattern = await compile("kept");
+      const recorded = [{
+        identity: pattern.identity,
+        predecessors: ["earlier-pattern"],
+      }];
+      const cell = await pieceRunning("delegations-kept", pattern, recorded);
 
-  it("carries the recorded delegations forward on a transition that leaves the source in place", async () => {
-    const id = "pattern-source-carried-delegations";
-    const compiled = await runtime.patternManager.compilePattern({
-      main: "/main.tsx",
-      files: [{
-        name: "/main.tsx",
-        contents:
-          "import { pattern } from 'commonfabric'; export default pattern(() => ({}));",
-      }],
-    }, { space: signer.did() });
-    const pattern = runtime.patternManager.getArtifactEntryRef(compiled)!;
-    const recorded = [{
-      identity: pattern.identity,
-      predecessors: ["earlier-pattern"],
-    }];
-    const seed = runtime.edit();
-    const seededCell = runtime.getCell(signer.did(), id, undefined, seed);
-    seededCell.setMetaRaw(
-      "patternIdentity",
-      pattern,
-      rawMetaWriteAuthorization,
-    );
-    seededCell.setMetaRaw("pieceSourceHistory", [{
-      revisionId: "updated",
-      timestamp: 42,
-      pattern,
-      source: runtime.getCell(
-        signer.did(),
-        `pattern:${pattern.identity}`,
-        undefined,
-        seed,
-      ).getAsLink(),
-      operation: "edit",
-      moduleDelegations: recorded,
-    }], rawMetaWriteAuthorization);
-    expect((await seed.commit().settled).error).toBeUndefined();
+      await transition(cell, pattern, "detach");
 
-    const cell = runtime.getCell(signer.did(), id);
-    const tx = runtime.edit();
-    applyPieceSourceTransition(runtime, cell, tx, pattern, {
-      revisionId: "detached",
-      baseline: { kind: "retain", revisionId: "detached-baseline" },
-      timestamp: 43,
-      operation: "detach",
-      origin: null,
-      expected: getPieceSourceSnapshot(cell)!,
+      expect(cell.getMetaRaw("pieceSourceDelegations")).toEqual({
+        identity: pattern.identity,
+        delegations: recorded,
+      });
     });
-    expect((await tx.commit().settled).error).toBeUndefined();
 
-    expect(
-      getPieceSourceRevisions(cell).map((revision) => ({
-        revisionId: revision.revisionId,
-        moduleDelegations: revision.moduleDelegations,
-      })),
-    ).toStrictEqual([
-      { revisionId: "updated", moduleDelegations: recorded },
-      { revisionId: "detached", moduleDelegations: recorded },
-    ]);
+    it("is removed by a transition to another pattern that is no source update", async () => {
+      const pattern = await compile("before");
+      const next = await compile("after");
+      const cell = await pieceRunning("delegations-removed", pattern, [{
+        identity: next.identity,
+        predecessors: ["earlier-pattern"],
+      }]);
+
+      await transition(cell, next, "edit");
+
+      expect(getPieceSourceRevisions(cell).at(-1)?.pattern).toEqual(next);
+      expect(cell.getMetaRaw("pieceSourceDelegations")).toBeUndefined();
+      expect(getPieceSourceDelegations(cell, next.identity)).toStrictEqual(
+        new Map(),
+      );
+    });
   });
 
   it("rejects a history link that does not retain its recorded pattern", async () => {

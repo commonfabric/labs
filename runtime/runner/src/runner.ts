@@ -18,6 +18,7 @@ import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
 import { backtickQuote } from "@commonfabric/text/markdown";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import {
   requireLocalReadCondition,
@@ -2171,24 +2172,29 @@ export interface PieceSourceRevision {
    * the piece from being moved to an earlier release.
    */
   releasedAt?: number;
-
-  /**
-   * The writer-authority delegations of this revision's pattern, one entry
-   * per module granted any: the module's identity, and the identities of the
-   * modules of the piece's earlier patterns whose authority it exercises.
-   * Written by a source update, cumulative over the piece's earlier
-   * revisions, and carried forward by a later revision that leaves the same
-   * source in place. A runtime that starts or swaps the piece to this
-   * revision's pattern registers the entries whose module is in that
-   * pattern's closure (`PatternManager.readInheritedAuthority()`).
-   */
-  moduleDelegations?: PieceSourceModuleDelegation[];
 }
 
-/** One entry of {@link PieceSourceRevision.moduleDelegations}. */
-export interface PieceSourceModuleDelegation {
+/**
+ * The `pieceSourceDelegations` meta member: the writer-authority delegations
+ * of the pattern the piece runs, as the source update that moved it there
+ * granted them, cumulative over the piece's earlier patterns.
+ *
+ * Only {@link applyPieceSourceTransition} writes it, through the meta seam,
+ * in the transaction that moves the pointer, and every transition replaces
+ * it. A runtime that starts or swaps the piece to `identity` registers the
+ * entries whose module is in that pattern's verified closure
+ * (`PatternManager.readInheritedAuthority()`).
+ */
+export interface PieceSourceDelegations {
+  /** The pattern the delegations are for. */
   identity: string;
-  predecessors: string[];
+
+  /**
+   * One entry per module granted any: the module's identity, and the
+   * identities of the modules of the piece's earlier patterns whose
+   * authority it exercises.
+   */
+  delegations: { identity: string; predecessors: string[] }[];
 }
 
 export interface PieceSourceSnapshot {
@@ -8238,15 +8244,14 @@ export class Runner {
       // valid one, reports it.
       return undefined;
     }
-    const latest = revisions.at(-1);
-    if (latest?.pattern.identity !== identityRef.identity) {
+    if (revisions.at(-1)?.pattern.identity !== identityRef.identity) {
       return undefined;
     }
     return this.#runtime.patternManager.readInheritedAuthority(
       rootCell.space,
       identityRef.identity,
       revisions.map((revision) => revision.pattern.identity),
-      pieceSourceRevisionDelegations(latest),
+      getPieceSourceDelegations(rootCell, identityRef.identity),
     );
   }
 
@@ -10549,6 +10554,10 @@ export class Runner {
         resultCell.space,
         transition.expected.pattern.identity,
         candidateRef.identity,
+        getPieceSourceDelegations(
+          resultCell,
+          transition.expected.pattern.identity,
+        ),
       )
       : undefined;
 
@@ -17621,40 +17630,41 @@ export function setPatternSource(
 }
 
 /**
- * Whether `value` is a valid {@link PieceSourceRevision.moduleDelegations}: a
- * non-empty identity and at least one non-empty predecessor per entry, each
- * identity once.
+ * The delegations the piece's `pieceSourceDelegations` member records for
+ * `patternIdentity`: empty when the member is absent, names another pattern,
+ * or is malformed. A malformed member grants nothing and refuses nothing.
  */
-function isPieceSourceModuleDelegations(value: unknown): boolean {
-  if (!Array.isArray(value)) return false;
-  const identities = new Set<string>();
-  for (const entry of value) {
+export function getPieceSourceDelegations(
+  resultCell: Cell<unknown>,
+  patternIdentity: string,
+): ModuleDelegationMap {
+  const raw = resultCell.getMetaRaw("pieceSourceDelegations", {
+    meta: ignoreReadForScheduling,
+  });
+  const none = new Map<string, ReadonlySet<string>>();
+  if (
+    !isObjectOrArray(raw) || Array.isArray(raw) ||
+    raw.identity !== patternIdentity || !Array.isArray(raw.delegations)
+  ) {
+    return none;
+  }
+  const delegations = new Map<string, ReadonlySet<string>>();
+  for (const entry of raw.delegations as unknown[]) {
     if (
       !isObjectOrArray(entry) || Array.isArray(entry) ||
       typeof entry.identity !== "string" || entry.identity.length === 0 ||
-      identities.has(entry.identity) ||
+      delegations.has(entry.identity) ||
       !Array.isArray(entry.predecessors) || entry.predecessors.length === 0 ||
       !entry.predecessors.every((predecessor: unknown) =>
-        typeof predecessor === "string" && predecessor.length > 0
+        typeof predecessor === "string" && predecessor.length > 0 &&
+        predecessor !== entry.identity
       )
     ) {
-      return false;
+      return none;
     }
-    identities.add(entry.identity);
+    delegations.set(entry.identity, new Set(entry.predecessors as string[]));
   }
-  return true;
-}
-
-/** The delegations `revision` records, as a map; empty when it records none. */
-export function pieceSourceRevisionDelegations(
-  revision: PieceSourceRevision | undefined,
-): ModuleDelegationMap {
-  return new Map(
-    (revision?.moduleDelegations ?? []).map((entry) => [
-      entry.identity,
-      new Set(entry.predecessors),
-    ]),
-  );
+  return delegations;
 }
 
 /** Read the validated, append-only source revisions carried by a piece. */
@@ -17709,9 +17719,7 @@ export function getPieceSourceRevisions(
           value.selectedRevisionId.length === 0) ||
       value.releasedAt !== undefined &&
         (typeof value.releasedAt !== "number" ||
-          !Number.isFinite(value.releasedAt) || value.releasedAt < 0) ||
-      value.moduleDelegations !== undefined &&
-        !isPieceSourceModuleDelegations(value.moduleDelegations)
+          !Number.isFinite(value.releasedAt) || value.releasedAt < 0)
     ) {
       throw new Error("piece source history is invalid");
     }
@@ -17731,14 +17739,6 @@ export function getPieceSourceRevisions(
     }
     if (typeof value.releasedAt === "number") {
       revision.releasedAt = value.releasedAt;
-    }
-    if (value.moduleDelegations !== undefined) {
-      revision.moduleDelegations = (
-        value.moduleDelegations as PieceSourceModuleDelegation[]
-      ).map(({ identity, predecessors }) => ({
-        identity,
-        predecessors: [...predecessors],
-      }));
     }
     revisionIds.add(revision.revisionId);
     revisions.push(revision);
@@ -18111,11 +18111,14 @@ export async function preparePieceSourceTransitionBaseline(
  * transaction. A legacy or externally changed current state first receives a
  * baseline revision so no source or origin is skipped.
  *
- * Given `options.sourceUpdate`, the transition is that source update's: the
- * new revision records the delegations it grants the next pattern
- * (`PatternManager.stageSourceUpdate()`), extended with those the revision
- * the piece runs now records. A transition that leaves the source in place
- * carries the recorded delegations forward.
+ * It also replaces the piece's `pieceSourceDelegations` member
+ * ({@link PieceSourceDelegations}). Given `options.sourceUpdate`, the
+ * transition is that source update's, and the member records the
+ * delegations it grants the next pattern (`PatternManager.stageSourceUpdate()`,
+ * composed at preparation with what the member recorded for the current
+ * one). A transition that leaves the pattern in place keeps what the member
+ * records for it, which still names it. Any other transition removes the
+ * member: nothing promised the next pattern any delegation.
  */
 export function applyPieceSourceTransition(
   runtime: Runtime,
@@ -18224,16 +18227,14 @@ export function applyPieceSourceTransition(
     patternIdentityKey(recordedCurrent.pattern) !==
       patternIdentityKey(current.pattern) ||
     (recordedCurrent.origin ?? null) !== currentOrigin.origin;
-  // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN: the history
-  // carries the delegations, so that a runtime starting the piece holds them
-  // before the staging on the cache records, which follows this transaction's
-  // commit, lands.
-  const recordedDelegations = recordedCurrent !== undefined &&
-      patternIdentityKey(recordedCurrent.pattern) ===
-        patternIdentityKey(current.pattern)
-    ? pieceSourceRevisionDelegations(recordedCurrent)
-    : new Map<string, ReadonlySet<string>>();
-  const moduleDelegations = new Map(keepsSource ? recordedDelegations : []);
+  // SPEC-PENDING TBD-succession-record: the member carries the delegations,
+  // so that a runtime starting the piece holds them before the staging on
+  // the cache records, which follows this transaction's commit, lands.
+  const recorded = getPieceSourceDelegations(
+    candidate,
+    current.pattern.identity,
+  );
+  const nextDelegations = new Map(keepsSource ? recorded : []);
   if (options.sourceUpdate !== undefined) {
     const granted = runtime.patternManager.stageSourceUpdate(
       options.sourceUpdate,
@@ -18241,15 +18242,30 @@ export function applyPieceSourceTransition(
       transition.expected.pattern.identity,
       nextPattern.identity,
       tx,
-      recordedDelegations,
+      getPieceSourceDelegations(
+        candidate,
+        transition.expected.pattern.identity,
+      ),
     );
     for (const [identity, predecessors] of granted) {
-      moduleDelegations.set(
+      nextDelegations.set(
         identity,
-        new Set([...(moduleDelegations.get(identity) ?? []), ...predecessors]),
+        new Set([...(nextDelegations.get(identity) ?? []), ...predecessors]),
       );
     }
   }
+  candidate.setMetaRaw(
+    "pieceSourceDelegations",
+    nextDelegations.size === 0 ? undefined : {
+      identity: nextPattern.identity,
+      delegations: [...nextDelegations].sort(([a], [b]) => utf8Compare(a, b))
+        .map(([identity, predecessors]) => ({
+          identity,
+          predecessors: [...predecessors].sort(utf8Compare),
+        })),
+    },
+    rawMetaWriteAuthorization,
+  );
   if (needsBaseline && transition.baseline.kind === "retain") {
     history.push({
       revisionId: transition.baseline.revisionId,
@@ -18282,14 +18298,6 @@ export function applyPieceSourceTransition(
       ? {}
       : { selectedRevisionId: transition.selectedRevisionId }),
     ...(releasedAt === undefined ? {} : { releasedAt }),
-    ...(moduleDelegations.size === 0 ? {} : {
-      moduleDelegations: [...moduleDelegations].sort(([a], [b]) =>
-        a < b ? -1 : a > b ? 1 : 0
-      ).map(([identity, predecessors]) => ({
-        identity,
-        predecessors: [...predecessors].sort(),
-      })),
-    }),
   });
   candidate.setMetaRaw(
     "patternSource",

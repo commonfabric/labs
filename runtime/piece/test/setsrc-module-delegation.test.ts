@@ -5,7 +5,6 @@ import type { FabricValue } from "@commonfabric/api";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
   getPatternIdentityRef,
-  getPieceSourceRevisions,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -352,12 +351,12 @@ export default pattern<{seed?: ${seedType}}>(() => {
       expect(await invokeSetName(observed, "after")).toBe("v2:after");
     });
 
-    // Fails the staging that follows each source update's commit in
-    // `runtime`, as a runtime that stops between the two commits leaves it:
-    // the transition lands, and the cache records carry no delegation.
-    const refuseDelegationStaging = () => {
-      const stamp = runtime.stampServerRun.bind(runtime);
-      return stub(runtime, "stampServerRun", (tx, info) => {
+    // Fails the staging that follows each source update's commit in `on`, as
+    // a runtime that stops between the two commits leaves it: the transition
+    // lands, and the cache records carry no delegation.
+    const refuseDelegationStaging = (on: Runtime) => {
+      const stamp = on.stampServerRun.bind(on);
+      return stub(on, "stampServerRun", (tx, info) => {
         if (info.actionId.startsWith("compile-cache/delegation-staging/")) {
           throw new Error("injected delegation staging failure");
         }
@@ -366,9 +365,10 @@ export default pattern<{seed?: ${seedType}}>(() => {
     };
 
     // What the successor's own cache record says it inherits, once every
-    // staging `runtime` started has settled.
+    // staging either runtime started has settled.
     const storedDelegations = async (identity: string): Promise<string[]> => {
       await runtime.patternManager.flushCompileCacheWrites();
+      await observer.patternManager.flushCompileCacheWrites();
       await pieces.synced();
       const tx = runtime.edit();
       try {
@@ -384,26 +384,60 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     };
 
-    // Rewrites the piece's source history without the delegations its
-    // revisions record, as a history written before revisions recorded them.
-    const dropRecordedDelegations = async (
-      piece: Awaited<ReturnType<PiecesController["get"]>>,
+    type Piece = Awaited<ReturnType<PiecesController["get"]>>;
+
+    // The piece's `pieceSourceDelegations` member, as stored.
+    const recordedMember = (piece: Piece) =>
+      piece.getCell().getMetaRaw("pieceSourceDelegations") as
+        | {
+          identity: string;
+          delegations: { identity: string; predecessors: string[] }[];
+        }
+        | undefined;
+
+    // Replaces the piece's `pieceSourceDelegations` member through the meta
+    // seam; `undefined` removes it, as for a piece updated before the member.
+    const replaceMember = async (
+      piece: Piece,
+      member: FabricValue | undefined,
     ): Promise<void> => {
-      const stripped = getPieceSourceRevisions(piece.getCell()).map(
-        ({ moduleDelegations: _dropped, ...revision }) => revision,
-      );
       const tx = runtime.edit();
       piece.getCell().withTx(tx).setMetaRaw(
-        "pieceSourceHistory",
-        stripped as unknown as FabricValue,
+        "pieceSourceDelegations",
+        member,
         rawMetaWriteAuthorization,
       );
       expect((await tx.commit().settled).error).toBeUndefined();
       await pieces.synced();
     };
 
-    it("authorizes the successor's writes for every earlier pattern in the piece's history from the history alone, without preparing an update", async () => {
-      using _noStaging = refuseDelegationStaging();
+    // For each transaction `on` prepares that moves `piece` off `from`, the
+    // pattern it moves it to and the delegations the transaction is pinned
+    // to for that pattern.
+    const pinnedDelegations = (on: Runtime, piece: Piece, from: string) => {
+      const pinned: { identity: string; delegations: string[] }[] = [];
+      const prepare = on.prepareTxForCommit.bind(on);
+      const restore = stub(on, "prepareTxForCommit", (tx) => {
+        const staged = getPatternIdentityRef(
+          on.getCellFromLink(piece.getCell().getAsNormalizedFullLink())
+            .withTx(tx),
+        );
+        if (staged !== undefined && staged.identity !== from) {
+          pinned.push({
+            identity: staged.identity,
+            delegations: [
+              ...(tx.getCfcState().moduleDelegations.get(pieces.getSpace())
+                ?.get(staged.identity) ?? []),
+            ],
+          });
+        }
+        prepare(tx);
+      });
+      return { pinned, [Symbol.dispose]: () => restore.restore() };
+    };
+
+    it("authorizes the successor's writes for every earlier pattern in the piece's history from the piece's record alone, without preparing an update, and stages them again", async () => {
+      using _noStaging = refuseDelegationStaging(runtime);
       const piece = await pieces.create(authorizedWriterProgram("v0"), {
         input: {},
       });
@@ -415,10 +449,11 @@ export default pattern<{seed?: ${seedType}}>(() => {
       await piece.setPattern(authorizedWriterProgram("v2"));
       const v2 = getPatternIdentityRef(piece.getCell())!.identity;
       expect(await storedDelegations(v2)).toEqual([]);
-      const recorded = getPieceSourceRevisions(piece.getCell()).at(-1)
-        ?.moduleDelegations ?? [];
+      const recorded = recordedMember(piece);
+      expect(recorded?.identity).toBe(v2);
       expect(
-        recorded.find((entry) => entry.identity === v2)?.predecessors,
+        recorded?.delegations.find((entry) => entry.identity === v2)
+          ?.predecessors,
       ).toEqual([v0, v1].sort());
 
       using preparing = spy(observer.patternManager, "prepareSourceUpdate");
@@ -426,7 +461,7 @@ export default pattern<{seed?: ${seedType}}>(() => {
 
       expect(await invokeSetName(observed, "after")).toBe("v2:after");
       expect(preparing.calls.length).toBe(0);
-      for (const { identity, predecessors } of recorded) {
+      for (const { identity, predecessors } of recorded!.delegations) {
         for (const predecessor of predecessors) {
           expect(
             observer.grantsModuleDelegation(
@@ -437,9 +472,11 @@ export default pattern<{seed?: ${seedType}}>(() => {
           ).toBe(true);
         }
       }
+      // The observer's start staged them on the records again.
+      expect((await storedDelegations(v2)).sort()).toEqual([v0, v1].sort());
     });
 
-    it("authorizes the successor's writes from its cache records when the piece's history records no delegations", async () => {
+    it("authorizes the successor's writes from its cache records when the piece holds no record of its delegations", async () => {
       const piece = await pieces.create(authorizedWriterProgram("v1"), {
         input: {},
       });
@@ -449,15 +486,15 @@ export default pattern<{seed?: ${seedType}}>(() => {
       await piece.setPattern(authorizedWriterProgram("v2"));
       const v2 = getPatternIdentityRef(piece.getCell())!.identity;
       expect(await storedDelegations(v2)).toContain(v1);
-      await dropRecordedDelegations(piece);
+      await replaceMember(piece, undefined);
 
       const observed = await observerPieces.get(piece.id, true);
 
       expect(await invokeSetName(observed, "after")).toBe("v2:after");
     });
 
-    it("refuses the successor's writes when neither the piece's history nor its cache records carry its delegations", async () => {
-      using _noStaging = refuseDelegationStaging();
+    it("refuses the successor's writes when neither the piece nor its cache records hold its delegations", async () => {
+      using _noStaging = refuseDelegationStaging(runtime);
       const piece = await pieces.create(authorizedWriterProgram("v1"), {
         input: {},
       });
@@ -466,11 +503,108 @@ export default pattern<{seed?: ${seedType}}>(() => {
       await piece.setPattern(authorizedWriterProgram("v2"));
       const v2 = getPatternIdentityRef(piece.getCell())!.identity;
       expect(await storedDelegations(v2)).toEqual([]);
-      await dropRecordedDelegations(piece);
+      await replaceMember(piece, undefined);
 
       const observed = await observerPieces.get(piece.id, true);
 
       expect(await invokeSetName(observed, "after")).toBe("v1:before");
+    });
+
+    it("registers nothing from a record that names another pattern, as a runtime from before the record leaves it, and falls back to the cache records", async () => {
+      // A runtime from before the member updates the piece from v2 to v3,
+      // staging on the records in its own transaction, and leaves the member
+      // naming v2. The entry planted for v3 stands for anything such a stale
+      // member could hold.
+      const piece = await pieces.create(authorizedWriterProgram("v1"), {
+        input: {},
+      });
+      const updater = await pieces.get(piece.id, true);
+      expect(await invokeSetName(updater, "before")).toBe("v1:before");
+      await piece.setPattern(authorizedWriterProgram("v2"));
+      const v2 = getPatternIdentityRef(piece.getCell())!.identity;
+      const left = recordedMember(piece)!;
+      expect(left.identity).toBe(v2);
+      await piece.setPattern(authorizedWriterProgram("v3"));
+      const v3 = getPatternIdentityRef(piece.getCell())!.identity;
+      expect(await storedDelegations(v3)).toContain(v2);
+      await replaceMember(piece, {
+        identity: v2,
+        delegations: [...left.delegations, {
+          identity: v3,
+          predecessors: ["planted-predecessor"],
+        }],
+      });
+
+      const observed = await observerPieces.get(piece.id, true);
+
+      expect(await invokeSetName(observed, "after")).toBe("v3:after");
+      expect(
+        observer.grantsModuleDelegation(
+          pieces.getSpace(),
+          v3,
+          "planted-predecessor",
+        ),
+      ).toBe(false);
+    });
+
+    it("pins a later update made by a runtime that never started the piece to the earlier update's delegations as well", async () => {
+      // `runtime` moves the piece from v0 to v1, and its staging never lands.
+      // `observer`, which has not started the piece and so has registered
+      // nothing for it, then moves it to v2.
+      const piece = await pieces.create(authorizedWriterProgram("v0"), {
+        input: {},
+      });
+      const v0 = getPatternIdentityRef(piece.getCell())!.identity;
+      {
+        using _noStaging = refuseDelegationStaging(runtime);
+        await piece.setPattern(authorizedWriterProgram("v1"));
+      }
+      const v1 = getPatternIdentityRef(piece.getCell())!.identity;
+      expect(await storedDelegations(v1)).toEqual([]);
+      const cold = await observerPieces.get(piece.id, false);
+
+      using pins = pinnedDelegations(observer, cold, v1);
+      await cold.setPattern(authorizedWriterProgram("v2"));
+
+      const v2 = getPatternIdentityRef(cold.getCell())!.identity;
+      expect(v2).not.toBe(v1);
+      expect(pins.pinned.length).toBeGreaterThan(0);
+      for (const pinned of pins.pinned) {
+        expect(pinned.identity).toBe(v2);
+        expect(pinned.delegations.sort()).toEqual([v0, v1].sort());
+      }
+      expect(
+        recordedMember(cold)?.delegations.find((entry) => entry.identity === v2)
+          ?.predecessors,
+      ).toEqual([v0, v1].sort());
+    });
+
+    it("pins a third update, made by a runtime that never started the piece, to both earlier updates' delegations", async () => {
+      const piece = await pieces.create(authorizedWriterProgram("v0"), {
+        input: {},
+      });
+      const v0 = getPatternIdentityRef(piece.getCell())!.identity;
+      let v1: string;
+      {
+        using _noStaging = refuseDelegationStaging(runtime);
+        await piece.setPattern(authorizedWriterProgram("v1"));
+        v1 = getPatternIdentityRef(piece.getCell())!.identity;
+        await piece.setPattern(authorizedWriterProgram("v2"));
+      }
+      const v2 = getPatternIdentityRef(piece.getCell())!.identity;
+      expect(await storedDelegations(v2)).toEqual([]);
+      const cold = await observerPieces.get(piece.id, false);
+
+      using pins = pinnedDelegations(observer, cold, v2);
+      await cold.setPattern(authorizedWriterProgram("v3"));
+
+      const v3 = getPatternIdentityRef(cold.getCell())!.identity;
+      expect(v3).not.toBe(v2);
+      expect(pins.pinned.length).toBeGreaterThan(0);
+      for (const pinned of pins.pinned) {
+        expect(pinned.identity).toBe(v3);
+        expect(pinned.delegations.sort()).toEqual([v0, v1, v2].sort());
+      }
     });
 
     it("authorizes the successor's writes for every earlier pattern in the piece's history, not just the latest", async () => {

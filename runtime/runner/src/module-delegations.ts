@@ -120,8 +120,10 @@ function transitiveDelegations(
  * module loads, and authorization in one space can never borrow another
  * space's delegation metadata: a space's closure is computed from that
  * space's entries alone. Entries come only from verified source closures or
- * integrity-valid compiled closures in that same space, which is the caller's
- * obligation.
+ * integrity-valid compiled closures in that same space, from a source update
+ * this runtime committed there, or from what a piece's
+ * `pieceSourceDelegations` member records for a module of such a closure,
+ * which is the caller's obligation.
  */
 export class ModuleDelegationRegistry {
   readonly #direct = new Map<MemorySpace, DirectDelegations>();

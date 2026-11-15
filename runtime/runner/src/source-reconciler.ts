@@ -70,6 +70,7 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceDelegations,
   getPieceSourceSnapshot,
   keepLaterConfirmation,
   knownPieceReleasedAt,
@@ -1551,6 +1552,7 @@ export class SourceReconciler {
         state.space,
         state.running.identity,
         candidateRef.identity,
+        getPieceSourceDelegations(resultCell, state.running.identity),
       )
       : undefined;
     const transition: PieceSourceTransition = {

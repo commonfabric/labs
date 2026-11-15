@@ -1,6 +1,7 @@
 import type { Source } from "@commonfabric/js-compiler";
 import { getLogger } from "@commonfabric/logger";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
@@ -126,16 +127,63 @@ type SourceUpdatePreparation = {
   previousEntryIdentity: string;
   entryIdentity: string;
   runtimeVersion: string | undefined;
+
+  /**
+   * The delegations the update grants: those derived from the two closures,
+   * extended with `recordedPrevious` (`composeRecordedDelegations()`).
+   */
   delegations: ModuleDelegationMap;
 
   /**
+   * The delegations the piece's `pieceSourceDelegations` member records for
+   * the previous pattern, as the caller read them before preparing. The
+   * transition checks that the member still holds them.
+   */
+  recordedPrevious: ModuleDelegationMap;
+
+  /**
    * The hold tokens (`IStorageManager.holdDocument()`) of the candidate's
-   * source documents, which the staging after the transition commits reads,
-   * kept for as long as the preparation is, so that a release pass between
-   * preparing and staging leaves them loaded.
+   * source documents, kept for as long as the preparation is. The transition
+   * verifies the candidate's source closure synchronously, inside its own
+   * transaction (`applyPieceSourceTransition()`), which reads only documents
+   * already loaded, so a release pass between preparing and that commit must
+   * leave them loaded.
    */
   documentHolds: readonly object[];
 };
+
+/**
+ * `derived`, each predecessor extended with what `recordedPrevious` grants
+ * that predecessor in turn, so that the delegations a piece records stay
+ * cumulative over its history. A module's own identity is never its
+ * predecessor.
+ */
+function composeRecordedDelegations(
+  derived: ModuleDelegationMap,
+  recordedPrevious: ModuleDelegationMap,
+): ModuleDelegationMap {
+  const composed = new Map<string, ReadonlySet<string>>();
+  for (const [identity, predecessors] of derived) {
+    const extended = new Set(predecessors);
+    for (const predecessor of predecessors) {
+      for (const earlier of recordedPrevious.get(predecessor) ?? []) {
+        extended.add(earlier);
+      }
+    }
+    extended.delete(identity);
+    if (extended.size > 0) composed.set(identity, extended);
+  }
+  return composed;
+}
+
+/** A canonical key for `delegations`, equal for equal maps. */
+function moduleDelegationsKey(delegations: ModuleDelegationMap): string {
+  return JSON.stringify(
+    [...delegations].map(([identity, predecessors]) =>
+      [identity, [...predecessors].sort(utf8Compare)] as const
+    ).sort(([a], [b]) => utf8Compare(a, b)),
+  );
+}
 
 const logger = getLogger("pattern-manager");
 
@@ -2294,13 +2342,18 @@ export class PatternManager {
   }
 
   /**
-   * Derive proposed authority from two verified durable source closures. The
-   * proposal belongs to this update and remains absent from ordinary transactions.
+   * Derive proposed authority from two verified durable source closures,
+   * extended with `recordedPrevious`, what the piece's
+   * `pieceSourceDelegations` member records for the previous pattern
+   * (`getPieceSourceDelegations()`). The proposal belongs to this update and
+   * remains absent from ordinary transactions; the update's own transaction
+   * is pinned to it (`sourceUpdateDelegations()`).
    */
   async prepareSourceUpdate(
     space: MemorySpace,
     previousEntryIdentity: string,
     entryIdentity: string,
+    recordedPrevious: ModuleDelegationMap = new Map(),
   ): Promise<PreparedSourceUpdate> {
     const tx = this.#runtime.edit();
     try {
@@ -2323,12 +2376,12 @@ export class PatternManager {
           "cannot authorize source update without verified source closures",
         );
       }
-      // Staging reads each candidate module's source document inside the
-      // transition's commit, and throws when one is missing rather than
-      // loading it. Nothing else keeps what the load above read: the cells
-      // that read it go with this call, so a release pass before staging would
-      // drop those documents. The preparation holds them for as long as it
-      // lives, taken here, while they are loaded.
+      // The transition verifies the candidate's source closure inside its
+      // commit, reading only what is loaded, and fails when a document is
+      // missing rather than loading it. Nothing else keeps what the load above
+      // read: the cells that read it go with this call, so a release pass
+      // before the commit would drop those documents. The preparation holds
+      // them for as long as it lives, taken here, while they are loaded.
       const documentHolds: object[] = [];
       for (const identity of candidate.keys()) {
         const { id, scope } = this.#runtime
@@ -2351,13 +2404,17 @@ export class PatternManager {
         entryIdentity,
         runtimeVersion,
         documentHolds,
-        delegations: deriveModuleDelegations(
-          previous,
-          [...candidate].map(([identity, doc]) => ({
-            identity,
-            filename: doc.filename,
-          })),
-          { previous: previousEntryIdentity, next: entryIdentity },
+        recordedPrevious,
+        delegations: composeRecordedDelegations(
+          deriveModuleDelegations(
+            previous,
+            [...candidate].map(([identity, doc]) => ({
+              identity,
+              filename: doc.filename,
+            })),
+            { previous: previousEntryIdentity, next: entryIdentity },
+          ),
+          recordedPrevious,
         ),
       });
       return prepared;
@@ -2396,12 +2453,14 @@ export class PatternManager {
    * program imports only for its types, so the review can then miss a
    * delegation the update proposes. `undefined` where neither is at hand, or
    * the previous program's source closure does not verify in `space`, which
-   * leaves an update nothing to propose.
+   * leaves an update nothing to propose. `recordedPrevious` is as for
+   * `prepareSourceUpdate()`.
    */
   async proposedSourceUpdateDelegations(
     space: MemorySpace,
     previousEntryIdentity: string,
     entryIdentity: string,
+    recordedPrevious: ModuleDelegationMap = new Map(),
   ): Promise<ModuleDelegationMap | undefined> {
     const tx = this.#runtime.edit();
     try {
@@ -2431,10 +2490,13 @@ export class PatternManager {
           return filename === undefined ? [] : [{ identity, filename }];
         });
       if (candidate === undefined) return undefined;
-      return deriveModuleDelegations(previous, candidate, {
-        previous: previousEntryIdentity,
-        next: entryIdentity,
-      });
+      return composeRecordedDelegations(
+        deriveModuleDelegations(previous, candidate, {
+          previous: previousEntryIdentity,
+          next: entryIdentity,
+        }),
+        recordedPrevious,
+      );
     } finally {
       tx.abort("source update proposal derived");
     }
@@ -2442,12 +2504,12 @@ export class PatternManager {
 
   /**
    * Check that `prepared` matches the source transition `tx` makes, and
-   * return the delegations the transition grants the successor: the
-   * proposal's, each predecessor extended with what `recordedPrevious`, the
-   * list the piece's previous revision records, grants that predecessor in
-   * turn, so that the list stays cumulative over the piece's history. Once
-   * `tx` commits, this registers the returned delegations and stages them on
-   * the successor's cache records (`#stageCommittedDelegations()`).
+   * return the delegations the transition grants the successor
+   * (`prepareSourceUpdate()`). `recordedPrevious` is what the piece's
+   * `pieceSourceDelegations` member records for the previous pattern, read in
+   * `tx`; a preparation composed with something else does not match. Once
+   * `tx` commits, this registers the delegations and stages them on the
+   * successor's cache records (`#stageCommittedDelegations()`).
    */
   stageSourceUpdate(
     prepared: PreparedSourceUpdate,
@@ -2455,29 +2517,21 @@ export class PatternManager {
     previousEntryIdentity: string,
     entryIdentity: string,
     tx: IExtendedStorageTransaction,
-    recordedPrevious?: ModuleDelegationMap,
+    recordedPrevious: ModuleDelegationMap = new Map(),
   ): ModuleDelegationMap {
     const proposal = this.#sourceUpdates.get(prepared);
     if (
       proposal === undefined || proposal.space !== space ||
       proposal.previousEntryIdentity !== previousEntryIdentity ||
-      proposal.entryIdentity !== entryIdentity
+      proposal.entryIdentity !== entryIdentity ||
+      moduleDelegationsKey(proposal.recordedPrevious) !==
+        moduleDelegationsKey(recordedPrevious)
     ) {
       throw new Error(
         "source update preparation does not match the transition",
       );
     }
-    const granted = new Map<string, ReadonlySet<string>>();
-    for (const [identity, predecessors] of proposal.delegations) {
-      const extended = new Set(predecessors);
-      for (const predecessor of predecessors) {
-        for (const earlier of recordedPrevious?.get(predecessor) ?? []) {
-          extended.add(earlier);
-        }
-      }
-      extended.delete(identity);
-      if (extended.size > 0) granted.set(identity, extended);
-    }
+    const { delegations, runtimeVersion } = proposal;
     // The transition writes no cache record: its transaction reads the
     // piece's data, and a record every later setup of the module reads would
     // take that label. The successor's authority is registered once the
@@ -2485,13 +2539,15 @@ export class PatternManager {
     // transaction of its own.
     tx.addVerdictCallback((_tx, result) => {
       if (!result.ok) return;
-      this.#runtime.registerModuleDelegations(space, granted);
+      this.#runtime.registerModuleDelegations(space, delegations);
       void this.#stageCommittedDelegations({
-        ...proposal,
-        delegations: granted,
+        space,
+        entryIdentity,
+        delegations,
+        runtimeVersion,
       });
     });
-    return granted;
+    return delegations;
   }
 
   /**
@@ -2499,9 +2555,16 @@ export class PatternManager {
    * stages `target.delegations`, granted by a source update that has
    * committed, on the successor's source and compiled records, on a
    * transaction of its own that reads nothing but those records, and
-   * registers the union it staged. It is tracked as a cache write-back
-   * (`flushCompileCacheWrites()`). A source update's `documentHolds` come
-   * along in `target`, so the documents stay loaded until it is done.
+   * registers the union it staged.
+   *
+   * It is tracked as a cache write (`flushCompileCacheWrites()`), but not as
+   * a closure persist, and its wave's outcome is not watched: it changes one
+   * field of records the space already holds (`stageModuleDelegations()`
+   * refuses a record that is absent), so neither its progress nor a
+   * withdrawal says anything about whether the space holds the closure. A
+   * failed or withdrawn staging is not retried here. The authority does not
+   * depend on it, since the piece's member records it, and the next runtime
+   * that starts or swaps the piece without the grant stages it again.
    */
   async #stageCommittedDelegations(
     target: Pick<
@@ -2535,7 +2598,7 @@ export class PatternManager {
         );
       });
     })();
-    this.#trackCacheWriteBack(space, entryIdentity, identities, staging);
+    this.#trackCacheWriteBack(space, entryIdentity, [], staging);
     try {
       const { error } = await staging;
       if (error !== undefined) {
@@ -2546,20 +2609,13 @@ export class PatternManager {
         return;
       }
       this.#runtime.registerModuleDelegations(space, committed);
-      this.#watchCacheWriteDurability(
-        space,
-        entryIdentity,
-        identities,
-        settlements,
-        undefined,
-      );
     } catch (error) {
       logger.warn("delegation-staging-failed", () => [
         `staging the delegations of ${entryIdentity} in ${space} failed`,
         error,
       ]);
     } finally {
-      this.#untrackCacheWriteBack(space, entryIdentity, identities, staging);
+      this.#untrackCacheWriteBack(space, entryIdentity, [], staging);
     }
   }
 
@@ -2661,12 +2717,13 @@ export class PatternManager {
    * failed read is logged rather than rejected, leaving the runtime's grants
    * as they were.
    *
-   * `recorded` is the list the piece's source history records for the
-   * revision that moved it to `identity` (`PieceSourceRevision`), which the
-   * source update wrote in its own transaction and so is there before the
-   * staging on the cache records lands. Each closure read also registers
-   * those of its entries whose successor is a module of that closure, and no
-   * other.
+   * `recorded` is what the piece's `pieceSourceDelegations` member records
+   * for `identity` (`getPieceSourceDelegations()`), which the source update
+   * wrote in its own transaction and so is there before the staging on the
+   * cache records lands, or whether or not it ever does. Each closure read
+   * also registers those of its entries whose successor is a module of that
+   * closure, and no other. Where the closure's own records lack one of
+   * them, the read stages them there again (`#stageCommittedDelegations()`).
    */
   readInheritedAuthority(
     space: MemorySpace,
@@ -2719,7 +2776,7 @@ export class PatternManager {
     const tx = this.#runtime.edit();
     try {
       const compiled = await this.#readCompiledDelegations(space, identity, tx);
-      this.#registerRecordedDelegations(space, recorded, compiled);
+      this.#registerRecordedDelegations(space, identity, recorded, compiled);
       if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
         return;
       }
@@ -2729,7 +2786,7 @@ export class PatternManager {
         identity,
         tx,
       );
-      this.#registerRecordedDelegations(space, recorded, source);
+      this.#registerRecordedDelegations(space, identity, recorded, source);
     } catch (error) {
       logger.warn("inherited-authority-read-failed", () => [
         `reading the delegations of ${identity} in ${space} failed`,
@@ -2742,24 +2799,53 @@ export class PatternManager {
 
   /**
    * Helper for `#readStoredDelegations()`, which registers each entry of
-   * `recorded` whose successor is a module of `closure`, a closure of the
-   * successor that a read has just verified. Without either it registers
-   * nothing.
+   * `recorded` whose successor is a module of `closure`, a closure of
+   * `identity` that a read has just verified, and stages again, on the
+   * closure's records, the entries those records do not already carry.
+   * Without either it registers nothing.
    */
   #registerRecordedDelegations(
     space: MemorySpace,
+    identity: string,
     recorded: ModuleDelegationMap | undefined,
-    closure: ReadonlyMap<string, unknown> | undefined,
+    closure:
+      | ReadonlyMap<
+        string,
+        { readonly delegatedModuleIdentities?: readonly string[] }
+      >
+      | undefined,
   ): void {
     if (recorded === undefined || closure === undefined) return;
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN: authority
-    // read from the piece's source history rather than from a verified
-    // closure's own records. The history is written only through the
-    // runtime's meta seam, in the source update's transaction.
+    // SPEC-PENDING TBD-succession-record: authority read from the piece's
+    // `pieceSourceDelegations` member rather than from a verified closure's
+    // own records. The member is written only through the runtime's meta
+    // seam, in the source update's transaction (`applyPieceSourceTransition()`).
     const keyed = new Map(
       [...recorded].filter(([successor]) => closure.has(successor)),
     );
-    if (keyed.size > 0) this.#runtime.registerModuleDelegations(space, keyed);
+    if (keyed.size === 0) return;
+    this.#runtime.registerModuleDelegations(space, keyed);
+    const unstaged = [...keyed].some(([successor, predecessors]) => {
+      const stored = new Set(closure.get(successor)?.delegatedModuleIdentities);
+      return [...predecessors].some((predecessor) => !stored.has(predecessor));
+    });
+    if (!unstaged) return;
+    void (async () => {
+      let runtimeVersion: string | undefined;
+      try {
+        runtimeVersion = await this.compileCacheRuntimeVersion({
+          patternCoverage: this.#patternCoverageFor() !== undefined,
+        });
+      } catch {
+        // Stage on the source records alone.
+      }
+      await this.#stageCommittedDelegations({
+        space,
+        entryIdentity: identity,
+        delegations: keyed,
+        runtimeVersion,
+      });
+    })();
   }
 
   /**
@@ -2773,7 +2859,12 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
     tx: IExtendedStorageTransaction,
-  ): Promise<ReadonlyMap<string, unknown> | undefined> {
+  ): Promise<
+    ReadonlyMap<
+      string,
+      { readonly delegatedModuleIdentities?: readonly string[] }
+    > | undefined
+  > {
     try {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,

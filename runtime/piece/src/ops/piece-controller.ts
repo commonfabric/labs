@@ -30,6 +30,7 @@ import {
   getPatternRepository,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceDelegations,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   getValueAtPath,
@@ -5946,6 +5947,7 @@ async function pieceSourceCompatibilityReview(
         piece.space,
         previous.ref.identity,
         entry.identity,
+        getPieceSourceDelegations(piece, previous.ref.identity),
       );
   let schema: string | undefined;
   if (previous.pattern === undefined) {
