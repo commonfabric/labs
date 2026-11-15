@@ -7379,6 +7379,35 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
     out.push_str(&format!(
         "cones: {cones}; edges: {edges}, {write_edges} through a side-write\n"
     ));
+    // The bindings of a handler in an element body, by whether they have
+    // a result path, and those without by reason (PL §1.1, "The result
+    // paths of a binding in an element body").
+    let mut in_element = 0;
+    let mut without: BTreeMap<&str, usize> = BTreeMap::new();
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        in_element += plan.plan["bindings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|binding| {
+                binding.get("handler").is_some()
+                    && binding["within"]
+                        .as_array()
+                        .is_some_and(|steps| steps.iter().any(|step| step.get("element").is_some()))
+            })
+            .count();
+        for (_, reason) in &plan.element_bindings {
+            *without.entry(reason.as_str()).or_default() += 1;
+        }
+    }
+    let none: usize = without.values().sum();
+    out.push_str(&format!(
+        "bindings of a handler in an element body: {in_element}, {} with a result path\n",
+        in_element - none
+    ));
+    for (reason, count) in &without {
+        out.push_str(&format!("  no result path, {reason}: {count}\n"));
+    }
     // The templates of the plans emitted with no unsupported construct:
     // which records have one, and the nodes by kind.
     let complete_plans: Vec<&PatternPlan> = with_patterns

@@ -204,6 +204,11 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
                                 .map(|(id, document)| serde_json::json!({ "id": id, "schema": document }))
                                 .collect::<Vec<_>>(),
                             "unsupported": unsupported,
+                            "noResultPath": plan
+                                .element_bindings
+                                .iter()
+                                .map(|(binding, reason)| serde_json::json!({ "binding": binding, "reason": reason }))
+                                .collect::<Vec<_>>(),
                         })
                     })
                     .collect();
