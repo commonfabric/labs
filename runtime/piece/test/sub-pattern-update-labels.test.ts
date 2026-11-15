@@ -536,6 +536,60 @@ describe("sub-pattern-update-labels", () => {
         });
       }
 
+      describe("with a view that reads the labeled cell", () => {
+        // The view computes from the cell, as a view that shows anything of
+        // it does; its own run reads the cell and labels what it computes, and
+        // the setup's resolution of that action's input takes nothing of the
+        // slot's label, so a restating setup's join does not repeat the stamp.
+
+        for (const reading of ["returns", "renders"] as const) {
+          for (const editView of [false, true]) {
+            it(`shows the view after an update that changes ${editView ? "the view" : "only the parent"}, keeping the existence entry (the computed ${reading === "renders" ? "rendered" : "returned"})`, async () => {
+              const piece = await stamped(
+                program({ ...options, version: "v1", editView, reading }),
+              );
+
+              await piece.setPattern(
+                program({ ...options, version: "v2", editView, reading }),
+              );
+              await runtime.idle();
+              await piece.getCell().key("$UI").pull();
+              await runtime.idle();
+
+              expect(viewHidden(piece.getCell(), "policy")).toBe(false);
+              expect(stampedRootClasses(runtime, piece.getCell())).toEqual([
+                "shape",
+              ]);
+            });
+          }
+
+          it(`keeps the view hidden across a restart (the computed ${reading === "renders" ? "rendered" : "returned"})`, async () => {
+            // A restart is not an asking setup, so it restates nothing.
+
+            const piece = await stamped(
+              program({
+                ...options,
+                version: "v1",
+                editView: false,
+                reading,
+              }),
+            );
+
+            runtime.runner.stop(piece.getCell());
+            await runtime.idle();
+            await pieces.startPiece(piece.id);
+            await piece.getCell().key("$UI").pull();
+            await runtime.idle();
+
+            expect(viewHidden(piece.getCell(), "policy")).toBe(true);
+            expect(stampedRootClasses(runtime, piece.getCell())).toEqual([
+              "shape",
+              "value",
+            ]);
+          });
+        }
+      });
+
       describe("with the view in a module of its own", () => {
         const edits = [
           {
