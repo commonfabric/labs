@@ -2115,9 +2115,16 @@ numbers have gaps.
      `PatternPlan.element_bindings` and as `noResultPath` in the JSON, in two
      cases. Two collections spread into one array of children: 15 bindings over
      every plan, 2 in the modules run. PL gives a path there too, "the `*` of
-     each binding's path stands for the positions of its own collection alone",
-     and says the path alone does not resolve it; the emitter emits none, as the
-     task for this work asked. A stream at no kept path of what the callback
+     each binding's path stands for the positions of its own collection alone,
+     which the runtime knows from how it assembled the array". The emitter emits
+     none. The reason is in PL §8, question 78: what is assumed there is the
+     resolution of the path, "in particular where two collections are spread
+     into one array of children, where the path alone does not say which
+     positions are whose", and the alternative PL names gives the path a segment
+     that names the collection. A reader that has the path and the stored array
+     alone, as the comparison harness has, cannot choose a position of one
+     collection there, so a path would name a position no reader of this
+     prototype can resolve. A stream at no kept path of what the callback
      returns: 60 over every plan, 4 in the modules run (one `detachRow` of
      `apps/person-workbench/main.tsx`, `toggleEmojiPicker` and one
      `toggleReaction` of `examples/group-chat-room/group-chat-room.tsx`,
