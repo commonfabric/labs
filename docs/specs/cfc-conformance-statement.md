@@ -983,20 +983,22 @@ procedure's step 4. Its two deciding sites, the recording in
   walk, so a walk covers one chain: an update after a thousand updates of a
   hundred files composes in about 90 milliseconds, measured. Only a forged
   member makes the edges dense, and one with a million edges costs one
-  preparation about twelve seconds, measured. - A grant whose staging failed.
-  The piece's own authority does not depend on the staging, but the grant stays
-  missing from the cache records where nothing of the piece's carries it to
-  them, so what reads only the records is refused it, where `main`'s staging in
-  the transition would have kept it: a runtime from before the member that makes
-  any transition of the piece after the failed staging, a source update or not,
-  leaves the member naming another pattern, so it is ignored and the unstaged
-  record decides (pinned by a test that expects the refusal); a source update of
-  another piece from the ungranted module takes in its unstaged record, and so
-  carries the loss into that piece's record and on to its successors; and a
-  module of another piece that writes, through a link, into a field the granting
-  module protects is refused, since that runtime registers the grant only from
-  the records. Each needs the failed staging first, and each refuses, never
-  grants.
+  preparation about twelve seconds, measured.
+- A grant whose staging failed. The piece's own authority does not depend on
+  the staging, but the grant stays missing from the cache records where nothing
+  of the piece's carries it to them, so three readers of the records alone are
+  refused it, where `main`'s staging in the transition would have kept it. A
+  runtime from before the member that makes any transition of the piece after
+  the failed staging, a source update or not, leaves the member naming another
+  pattern, so the member is ignored, the unstaged record decides, and the
+  runtime is refused the grant and granted nothing more (pinned by a test that
+  expects the refusal). A source update of another piece from the ungranted
+  module after the failed staging takes in its unstaged record, so it is refused
+  the grant, carries the loss into that piece's record and on to its successors,
+  and is granted nothing more. A module of another piece that writes, through a
+  link, into a field the granting module protects after the failed staging is
+  refused the grant, since that runtime registers it only from the records, and
+  is granted nothing more.
 - Records an earlier transition stamped keep their clause, and the setups
   that read them keep refusing, until a separate repair. A write-back still
   re-stamps the root of a record that already carries a clause.

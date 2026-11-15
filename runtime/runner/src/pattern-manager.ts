@@ -56,7 +56,11 @@ import {
   type StampedEdges,
 } from "./module-delegations.ts";
 import { createRef } from "./create-ref.ts";
-import { waveSettlementOf } from "./executor/wave.ts";
+import {
+  delegatedCarriageOf,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "./executor/wave.ts";
 import {
   deterministicCompileError,
   isDeterministicCompileFailure,
@@ -2600,7 +2604,9 @@ export class PatternManager {
     // piece's data, and a record every later setup of the module reads would
     // take that label. The successor's authority is registered once the
     // transition commits, and staged on its records after that, on a cache
-    // transaction of its own.
+    // transaction of its own, which carries the transition's delegated
+    // carriage, as a cache write-back carries its triggering run's.
+    const delegated = delegatedCarriageOf(waveRunContextOf(tx));
     tx.addVerdictCallback((_tx, result) => {
       if (!result.ok) return;
       this.#runtime.registerModuleDelegations(space, delegations);
@@ -2609,7 +2615,7 @@ export class PatternManager {
         entryIdentity,
         delegations,
         runtimeVersion,
-      });
+      }, delegated);
     });
     return { delegations, edges };
   }
@@ -2619,7 +2625,9 @@ export class PatternManager {
    * stages `target.delegations`, granted by a source update that has
    * committed, on the successor's source and compiled records, on a
    * transaction of its own that reads nothing but those records, and
-   * registers the union it staged.
+   * registers the union it staged. `delegated` is the committed
+   * transition's delegated carriage, which the staging carries into a space
+   * foreign to a serving runtime's home space (`#stampCacheWrite()`).
    *
    * It is tracked as a cache write (`flushCompileCacheWrites()`), but not as
    * a closure persist, and its wave's outcome is not watched: it changes one
@@ -2652,6 +2660,7 @@ export class PatternManager {
       SourceUpdatePreparation,
       "space" | "entryIdentity" | "delegations" | "runtimeVersion"
     >,
+    delegated: WritebackDelegation | undefined,
   ): Promise<void> {
     const { space, entryIdentity, delegations, runtimeVersion } = target;
     const identities = [...delegations.keys()];
@@ -2666,10 +2675,12 @@ export class PatternManager {
         }));
       return await this.#editCacheWrite(settlements, (tx) => {
         // Bookkeeping stamp, the same §3d reason as the write-backs'.
-        this.#runtime.stampServerRun(tx, {
-          actionId: `compile-cache/delegation-staging/${entryIdentity}`,
-          kind: "bookkeeping",
-        });
+        this.#stampCacheWrite(
+          tx,
+          space,
+          `compile-cache/delegation-staging/${entryIdentity}`,
+          delegated,
+        );
         committed = stageModuleDelegations(
           this.#runtime,
           space,
@@ -4758,6 +4769,26 @@ export class PatternManager {
     return result;
   }
 
+  /**
+   * Helper for the cache writes, which stamps `tx`, a write to `space`'s
+   * compile cache, as the bookkeeping run `actionId`. A write to a space
+   * foreign to a serving runtime's home space also carries `delegated`, the
+   * triggering run's delegated carriage (`protocol.md` §2b), without which
+   * the wave's accept gate refuses the crossing.
+   */
+  #stampCacheWrite(
+    tx: IExtendedStorageTransaction,
+    space: MemorySpace,
+    actionId: string,
+    delegated: WritebackDelegation | undefined,
+  ): void {
+    this.#runtime.stampServerRun(tx, {
+      actionId,
+      kind: "bookkeeping",
+      ...this.#runtime.delegationForWriteTo(space, delegated),
+    });
+  }
+
   async #writeBackSourceCache(
     settlements: Promise<WaveSettlement>[],
     space: MemorySpace,
@@ -4778,11 +4809,12 @@ export class PatternManager {
       // FOREIGN-space writeback additionally carries the triggering run's
       // delegated carriage (protocol.md §2b) — without it the wave's accept
       // gate refuses the crossing.
-      this.#runtime.stampServerRun(tx, {
-        actionId: `compile-cache/source-writeback/${entryIdentity}`,
-        kind: "bookkeeping",
-        ...this.#runtime.delegationForWriteTo(space, delegated),
-      });
+      this.#stampCacheWrite(
+        tx,
+        space,
+        `compile-cache/source-writeback/${entryIdentity}`,
+        delegated,
+      );
       committedModuleDelegations = writeSourceDocs(
         this.#runtime,
         space,
@@ -4881,11 +4913,12 @@ export class PatternManager {
         // Bookkeeping stamp, same §3d reason as writeBackSourceCache
         // above (the triage-confirmed second offender: this writeback
         // refused unstamped on the serving runtime).
-        this.#runtime.stampServerRun(tx, {
-          actionId: `compile-cache/writeback/${entryIdentity}`,
-          kind: "bookkeeping",
-          ...this.#runtime.delegationForWriteTo(space, delegated),
-        });
+        this.#stampCacheWrite(
+          tx,
+          space,
+          `compile-cache/writeback/${entryIdentity}`,
+          delegated,
+        );
         chunkDelegations = writeSourceAndCompiledDocs(
           this.#runtime,
           space,

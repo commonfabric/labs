@@ -4,7 +4,8 @@ import { fromFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { Runtime } from "../src/runtime.ts";
+import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -682,6 +683,79 @@ describe("module identity delegation", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("the staging after a source update commits", () => {
+    const delegated = {
+      acting: { user: "did:key:z6MkSourceUpdateActor" },
+      capabilityRef: "source-update-grant",
+    };
+
+    /**
+     * Commit a source update in a transaction whose run carries `delegated`,
+     * on a runtime whose storage serves `home`, and return the stamps of the
+     * staging that follows.
+     */
+    const stagingStamps = async (home: string): Promise<ServerRunInfo[]> => {
+      Object.defineProperty(storageManager, "servingHomeSpace", {
+        get: () => home,
+        configurable: true,
+      });
+      const stamps: ServerRunInfo[] = [];
+      using _stamps = stub(runtime, "stampServerRun", (_tx, info) => {
+        if (info.actionId.startsWith("compile-cache/delegation-staging/")) {
+          stamps.push(info);
+        }
+      });
+      const previous = moduleFor(moduleProgram("old"));
+      const candidate = moduleFor(moduleProgram("new"));
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          writeSourceDocs(runtime, space, [previous], previous.identity, tx);
+          writeSourceDocs(runtime, space, [candidate], candidate.identity, tx);
+        })).error,
+      ).toBeUndefined();
+      const manager = runtime.patternManager;
+      const prepared = await manager.prepareSourceUpdate(
+        space,
+        previous.identity,
+        candidate.identity,
+      );
+      const tx = runtime.edit({ sourceUpdate: prepared });
+      stampWaveRunContext(tx, {
+        actionId: "source update",
+        kind: "event-handler",
+        ...delegated,
+      });
+      manager.stageSourceUpdate(
+        prepared,
+        space,
+        previous.identity,
+        candidate.identity,
+        tx,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await manager.flushCompileCacheWrites();
+      return stamps;
+    };
+
+    it("carries the transition's delegated carriage into a space foreign to the serving runtime's home space", async () => {
+      const home = (await Identity.fromPassphrase("module delegation home"))
+        .did();
+
+      expect(await stagingStamps(home)).toStrictEqual([{
+        actionId: expect.stringMatching(/^compile-cache\/delegation-staging\//),
+        kind: "bookkeeping",
+        delegated,
+      }]);
+    });
+
+    it("carries no delegated carriage into the serving runtime's home space", async () => {
+      expect(await stagingStamps(space)).toStrictEqual([{
+        actionId: expect.stringMatching(/^compile-cache\/delegation-staging\//),
+        kind: "bookkeeping",
+      }]);
+    });
   });
 
   for (const artifact of ["missing source", "untrusted compiled record"]) {

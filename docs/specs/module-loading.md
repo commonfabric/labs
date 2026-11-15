@@ -699,12 +699,14 @@ second transaction lands, and when it never does. A staging that fails is not
 retried, and the piece's own authority does not depend on it; the piece's next
 committed update stages the closed entries of the modules it then runs. A grant
 whose staging failed stays missing from the records where nothing of the piece's
-carries it to them, and a reader of the records alone is refused it: a runtime
-from before the member that makes any transition of the piece after the failed
-staging, a source update or not; a source update of another piece from the
-ungranted module, which takes in its unstaged record and so carries the loss
-into that piece's record and on to its successors; and a write that another
-piece's module makes through a link. A member that is absent or names another
+carries it to them, and three readers of the records alone are refused it. A
+runtime from before the member that makes any transition of the piece after the
+failed staging, a source update or not, is refused the grant and granted nothing
+more. A source update of another piece from the ungranted module after the
+failed staging takes in its unstaged record, so it is refused the grant, carries
+the loss into that piece's record and on to its successors, and is granted
+nothing more. A write that another piece's module makes through a link after
+the failed staging is refused the grant, and is granted nothing more. A member that is absent or names another
 pattern registers nothing, and the stored entries decide. General cache saves
 ([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority already
 present in either set. Entries accumulate because one content-addressed
