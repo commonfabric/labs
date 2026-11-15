@@ -662,14 +662,22 @@ current module may exercise. Since content addressing does not authenticate that
 mutable field, source documents carry the compiler integrity stamp on the
 delegation field alone. Compiled documents authenticate it with their existing
 root compiler stamp. Loaders discard delegation metadata without the applicable
-stamp. The source-update transaction computes a union of proposed entries and
-authenticated entries already stored in either document set under
-`editWithRetry`. It writes the same union to both sets with the source pointer
-and revision, and registers it in the active runtime only after the durable
-commit succeeds. General cache saves ([`writeSourceAndCompiledDocs`][c14])
-preserve authenticated authority already present in either set. Entries
-accumulate because one content-addressed successor can be shared by patterns
-updated from different predecessors.
+stamp. A source update writes no cache document in its own transaction, which
+reads the piece's data and would label every document it wrote with that
+data's flow label. It records the delegations it grants in the piece's new
+source revision instead (`moduleDelegations` in
+[piece-source-lifecycle.md](piece-source-lifecycle.md)), cumulative over the
+piece's earlier revisions, and registers them in the active runtime once that
+transaction commits. A cache transaction of its own then computes a union of
+those entries and authenticated entries already stored in either document set
+under `editWithRetry`, and writes the same union to both sets. A runtime that
+starts or swaps a piece to the revision's pattern registers the recorded
+entries whose module is in the closure it loads, so the authority holds before
+that second transaction lands, and when it never does. A revision that records
+none falls back to the stored entries. General cache saves
+([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority already
+present in either set. Entries accumulate because one content-addressed
+successor can be shared by patterns updated from different predecessors.
 
 Because `identity` is a one-way Merkle hash, internal source links are
 load-bearing and stored explicitly. The parent hash commits to those children's

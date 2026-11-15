@@ -421,6 +421,23 @@ gap, pending [specs#96](https://github.com/commonfabric/specs/pull/96). His
 reason, in his words: "CFC is not a gate for chat". The conformance statement's
 §10 records the gap.
 
+Staging a source update's delegations after its transition commits, and
+recording them in the piece's source history, implements specs#NN ahead of its
+ruling. The transition reads the piece's data, so delegation lists it staged
+on compile-cache records took that data's flow label, and every later setup
+of the module consumed it and could be refused. The transition now writes the
+lists only into its new source revision, through the runtime's meta seam. A
+cache transaction of its own then stages them on the records, after the
+commit. A runtime that starts or swaps the piece registers the recorded
+entries whose module is in the successor's verified closure. It admits more
+at strict, with no default-off dial, so it does not satisfy step 4 above. Its
+two deciding sites carry the `SPEC-PENDING` marker. @danfuzz ruled, in his
+words, "we should define the spec change and still accept doing the change in
+`labs` while pending and without a flag", and extended that to this change:
+"i am _also_ okay with the same treatment on [the compile-cache labeling]".
+The conformance statement's §11 records the gap, what it gives up, and what
+it leaves to a separate repair.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

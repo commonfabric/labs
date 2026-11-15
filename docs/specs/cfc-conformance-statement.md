@@ -880,3 +880,47 @@ kernel manifest carries no row for
   only through a candidate that still lists the writer's alternative, and an
   ordinary write of a document that stores fewer alternatives than the program
   lists is refused as an addition outside a release.
+
+## 11. Writer delegations across a source update (§8.11.3)
+
+A source update lets the successor pattern's modules exercise the writer
+authority of the modules they replace. The runtime keeps that relation in a
+registry of module delegations (`ModuleDelegationRegistry` in
+`module-delegations.ts`), which the commit site reads (`moduleSucceeds` in
+`cfc/prepare.ts`).
+
+**What the runtime does.** The transition, `applyPieceSourceTransition` in
+`runner.ts`, reads the piece's data and writes no cache document. It records
+the delegations it grants as `moduleDelegations` on the piece's new source
+revision, through the runtime's meta seam, extended with what the previous
+revision records (`PatternManager.stageSourceUpdate`). Once it commits, the
+runtime registers them and stages them on the successor's source and compiled
+cache records, on a cache transaction of its own that reads only those
+records (`#stageCommittedDelegations`). A runtime that starts or swaps the
+piece to that pattern registers the recorded entries whose module is in the
+successor's closure, verified as it loads it
+(`PatternManager.readInheritedAuthority`), and falls back to the records' own
+lists for a revision that records none.
+
+This implements specs#NN ahead of its ruling, at strict and with no dial:
+@danfuzz ruled that it lands that way, recorded in the correspondence
+procedure as a nonconforming semantic gap. Against the pin it admits more,
+since a pattern update no longer labels the cache records it delegates
+through, so it does not satisfy the correspondence procedure's step 4. Its two
+deciding sites, the recording in `applyPieceSourceTransition` and the
+registration in `PatternManager`, carry its `SPEC-PENDING` marker.
+
+**Residuals.**
+
+- An under-taint: the decision label. A transition that chose its successor
+  by a labeled value put that value's clause on the records it staged, which
+  §8.11.3 asks of a decision's downstream outputs. The staging transaction
+  reads no piece data, so the records carry none, and the source history is
+  not labeled either.
+- Authority also comes from the piece's source history, not only from a
+  closure's own records. Only the runtime's meta seam writes the history. A
+  client that bypasses its runtime can forge it, as it can forge the
+  compiler's attestation on a record (`memory/v2/envelope-admission.ts`).
+- Records an earlier transition stamped keep their clause, and the setups
+  that read them keep refusing, until a separate repair. A write-back still
+  re-stamps the root of a record that already carries a clause.
