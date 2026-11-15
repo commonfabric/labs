@@ -739,3 +739,10 @@ export const recipeMarkdown = (r: RecipeMarkdownInput): string => {
     ...(r.notes.trim() ? ["", "## Notes", r.notes.trim()] : []),
   ].join("\n");
 };
+
+/** `groups` with the group `id` replaced by `update` of it. */
+export const updatedGroup = (
+  groups: readonly StepGroup[],
+  id: string,
+  update: (group: StepGroup) => StepGroup,
+): StepGroup[] => groups.map((g) => (g.id === id ? update(g) : g));
