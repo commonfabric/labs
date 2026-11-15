@@ -21,6 +21,9 @@ import {
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
 import {
   ownerReleaseByIntentRequest,
@@ -204,6 +207,22 @@ export interface EntryConfig {
   /** Data file paths stored with the piece and never compiled. */
   dataFilePaths?: string[];
 }
+
+/**
+ * A published pattern to create a piece from, in place of local source. The
+ * index is read as the space's identity, the principal the piece is created
+ * as.
+ */
+export interface IndexedPatternEntry {
+  /** The pattern's id in the index, as a search answers it. */
+  patternId: string;
+
+  /** Base URL of the pattern index that serves it. */
+  patternIndexUrl: string;
+}
+
+/** Where a new piece's program comes from: local files, or the index. */
+export type PieceEntry = EntryConfig | IndexedPatternEntry;
 
 export interface SpaceConfig {
   apiUrl: string;
@@ -559,6 +578,10 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   loadIdentity?: typeof loadIdentity;
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
+  getProgramFromIndex?: typeof getProgramFromIndex;
+
+  /** The transport index reads go over, in place of the global `fetch`. */
+  patternIndexFetch?: PatternIndexFetch;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
   followPieceOnServer?: typeof followPieceOnServer;
@@ -900,6 +923,48 @@ async function getPinnedProgramFromFile(
     console.error(renderPinRewrite(rewrite));
   }
   return result.program;
+}
+
+/**
+ * The program a published pattern deploys as, fetched and compiled into the
+ * space the way cf-harness's `run_pattern` deploys one: the published patterns
+ * it imports are drawn into the space first, so its `cf:pattern:` imports
+ * resolve, and a failure's message never quotes the indexed source.
+ *
+ * Compiling here, ahead of creation, is what gives a creation the shared
+ * path's failures: creation compiles the program again, from the cache this
+ * compile filled, and a served creation compiles it on the server.
+ *
+ * Unlike a program read from local files, this one's fabric imports are not
+ * pinned: it deploys exactly as the index serves it, as `run_pattern` deploys
+ * it.
+ *
+ * @throws IndexedPatternError when the index, a composed import, or the
+ * compile fails.
+ */
+async function getProgramFromIndex(
+  pieces: PiecesController,
+  config: SpaceConfig,
+  entry: IndexedPatternEntry,
+  deps: PieceOperationDependencies = {},
+): Promise<RuntimeProgram> {
+  const signer = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  const { program } = await compileIndexedPattern({
+    runtime: pieces.runtime,
+    space: pieces.getSpace(),
+    patternId: entry.patternId,
+    getClient: () =>
+      Promise.resolve(
+        new PatternIndexClient({
+          baseUrl: entry.patternIndexUrl,
+          signer,
+          ...(deps.patternIndexFetch === undefined
+            ? {}
+            : { fetchFn: deps.patternIndexFetch }),
+        }),
+      ),
+  });
+  return program;
 }
 
 // Returns an array of metadata about pieces to display.
@@ -1832,7 +1897,7 @@ async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
   program: RuntimeProgram,
-  entry: EntryConfig,
+  repository: string | undefined,
   options: {
     input?: object;
     start?: boolean;
@@ -1850,9 +1915,7 @@ async function createWithReceipt(
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
-        ...(entry.repository === undefined
-          ? {}
-          : { repository: entry.repository }),
+        ...(repository === undefined ? {} : { repository }),
         ...(options?.slug === undefined ? {} : { slug: options.slug }),
         ...(options?.force === undefined ? {} : { force: options.force }),
         register: true,
@@ -1946,7 +2009,8 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
 }
 
 /**
- * Creates a new piece from source code and optional input.
+ * Creates a new piece from source code, or from a published pattern, and
+ * optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
  * refuses one, and `force` takes it. With a request key or a serving
@@ -1957,7 +2021,7 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
  */
 export async function newPiece(
   config: SpaceConfig,
-  entry: EntryConfig,
+  entry: PieceEntry,
   options?: {
     /** Initial argument committed during setup, before registration or start. */
     input?: object;
@@ -2014,14 +2078,27 @@ export async function newPiece(
     );
   }
 
-  const program = await timeCliPhase(
-    "newPiece.getProgramFromFile",
-    () =>
-      (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
-        pieces,
-        entry,
-      ),
-  );
+  const program = "patternId" in entry
+    ? await timeCliPhase(
+      "newPiece.getProgramFromIndex",
+      () =>
+        (deps.getProgramFromIndex ?? getProgramFromIndex)(
+          pieces,
+          config,
+          entry,
+          deps,
+        ),
+    )
+    : await timeCliPhase(
+      "newPiece.getProgramFromFile",
+      () =>
+        (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
+          pieces,
+          entry,
+        ),
+    );
+  // A published pattern carries no repository locator of its own.
+  const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
   // scheduler `idle()` that never resolves, and the runtime surfaces no
   // event that a start has definitively failed (a thrown pattern reports its
@@ -2060,7 +2137,7 @@ export async function newPiece(
           config,
           pieces,
           program,
-          entry,
+          repository,
           options,
           deps,
           boundStart,
@@ -2093,7 +2170,7 @@ export async function newPiece(
     "newPiece.create",
     () =>
       boundStart(pieces.create(program, {
-        repository: entry.repository,
+        repository,
         start: options?.start,
         ...(options?.input === undefined ? {} : { input: options.input }),
       })),

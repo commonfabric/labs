@@ -45,7 +45,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { createHarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { createHarnessFabricSessionFactory } from "../src/fabric-session.ts";
-import { patternIndexDependencies } from "../src/pattern-index/composition.ts";
+import { patternIndexDependencies } from "@commonfabric/pattern-index/deploy";
 import { patternIndexDeclaredType } from "../src/tools/search-patterns.ts";
 
 /** Where the atoms live, relative to the repository root. */
