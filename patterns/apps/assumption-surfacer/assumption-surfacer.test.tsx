@@ -4,8 +4,9 @@
  * The test environment has no language model: the dialog answers the one
  * message `llmMocks` covers with its text and every other with its error reply,
  * and never calls the `recordAssumptions` tool. The tests play the model's part
- * by sending that tool's stream directly, then drive the verdicts through the
- * streams and the sidebar's buttons. The mocked turn is what keeps `pending`
+ * by appending its tool call to the chat, which is where the pattern reads the
+ * assumptions from, then drive the verdicts through the streams and the
+ * sidebar's buttons. The mocked turn is what keeps `pending`
  * true while verdicts arrive, which is where updates must queue, not vanish.
  *
  * Run: deno task cf test patterns/apps/assumption-surfacer/assumption-surfacer.test.tsx --verbose
@@ -36,6 +37,8 @@ import AssumptionSurfacer, {
   nextUpdate,
   normalizeReported,
   realUserMessages,
+  recordedAssumptions,
+  type ReportedAssumption,
   type SentUpdate,
   settledFacts,
   unsentUpdates,
@@ -54,6 +57,17 @@ export const llmMocks = [
 const user = (text: string): BuiltInLLMMessage => ({
   role: "user",
   content: [{ type: "text" as const, text }],
+});
+
+/** The assistant's message calling its tool, as the dialog stores it. */
+const toolCall = (assumptions: ReportedAssumption[]): BuiltInLLMMessage => ({
+  role: "assistant",
+  content: [{
+    type: "tool-call" as const,
+    toolCallId: `call-${assumptions.map((a) => a.label).join("-")}`,
+    toolName: "recordAssumptions",
+    input: { assumptions },
+  }],
 });
 
 const language = {
@@ -92,9 +106,8 @@ export default pattern(() => {
   const messages = new Writable<BuiltInLLMMessage[]>([
     user("How do I sort a list?"),
   ]);
-  const assumptions = new Writable<Assumption[]>([]);
   const systemPrompt = new Writable("You are terse.");
-  const surfacer = AssumptionSurfacer({ messages, assumptions, systemPrompt });
+  const surfacer = AssumptionSurfacer({ messages, systemPrompt });
 
   // --- Pure parsing and rules ------------------------------------------------
 
@@ -235,6 +248,28 @@ export default pattern(() => {
         "- Skill level: none of Beginner, Intermediate, Expert",
       );
   });
+  // The record is read from the tool calls in the chat: each rests on the
+  // user's last own message, never on an update sent on their behalf.
+  const assert_record_from_chat = assert(() => {
+    const record = recordedAssumptions([
+      user("How do I sort a list?"),
+      toolCall([language, level]),
+      { role: "assistant", content: "Use sorted()." },
+      composeMessage(`${UPDATE_TAG} Regarding x: y.`, "")!,
+      toolCall([{ ...language, assumedIndex: 1 }]),
+      user("Now in a browser"),
+      toolCall([{ label: "", alternatives: ["a"], assumedIndex: 0 }]),
+      toolCall([{
+        label: "Browser",
+        alternatives: ["A", "B"],
+        assumedIndex: 0,
+      }]),
+    ]);
+    return record.map((a) => `${a.id}:${a.label}:${a.turn}`).join() ===
+        "a2:Skill level:1,a3:Language:1,a4:Browser:2" &&
+      record[1].assumedIndex === 1 && record[2].about === "Now in a browser" &&
+      record.every((a) => a.status === "open");
+  });
   const assert_title = assert(() =>
     chatTitle([]) === "Assumption Surfacer" &&
     chatTitle([user("short")]) === "short" &&
@@ -249,10 +284,12 @@ export default pattern(() => {
     surfacer.system.startsWith("You are terse.")
   );
 
-  // The model reports its assumptions through its tool.
-  const action_record = action(() =>
-    surfacer.recordAssumptions.send({ assumptions: [language, level] })
-  );
+  // The model reports its assumptions through its tool; the call lands in the
+  // chat. The handler itself writes nothing.
+  const action_record = action(() => {
+    surfacer.recordAssumptions.send({ assumptions: [language, level] });
+    messages.push(toolCall([language, level]));
+  });
   const assert_recorded = assert(() =>
     surfacer.assumptions.length === 2 && surfacer.openCount === 2 &&
     surfacer.assumptions[0]?.turn === 1 &&
@@ -339,10 +376,13 @@ export default pattern(() => {
   // A verdict the assistant has not heard waits in the sidebar, which offers
   // to send it. Seeded here: an assumption corrected but never sent.
   const seeded = AssumptionSurfacer({
-    messages: new Writable<BuiltInLLMMessage[]>([user("How do I sort?")]),
-    assumptions: new Writable<Assumption[]>(
-      applyVerdict(recorded(), "a1", { kind: "choose", index: 2 }),
-    ),
+    messages: new Writable<BuiltInLLMMessage[]>([
+      user("How do I sort?"),
+      toolCall([language, level]),
+    ]),
+    verdicts: new Writable({
+      a1: { status: "corrected" as const, chosenIndex: 2 },
+    }),
   });
   const assert_waiting_offered = assert(() =>
     seeded.unsent.length === 1 &&
@@ -358,13 +398,11 @@ export default pattern(() => {
   // The reply to that update-only message records an assumption: it rests on
   // the user's own second message, not on the update.
   const action_record_after_update = action(() =>
-    surfacer.recordAssumptions.send({
-      assumptions: [{
-        label: "Browser",
-        alternatives: ["Chrome", "Firefox"],
-        assumedIndex: 0,
-      }],
-    })
+    messages.push(toolCall([{
+      label: "Browser",
+      alternatives: ["Chrome", "Firefox"],
+      assumedIndex: 0,
+    }]))
   );
   const assert_turn_counts_real_messages = assert(() => {
     const card = surfacer.assumptions.find((a) => a.label === "Browser");
@@ -374,6 +412,8 @@ export default pattern(() => {
   const action_clear = action(() => surfacer.clearChat.send());
   const assert_cleared = assert(() =>
     surfacer.messages.length === 0 && surfacer.assumptions.length === 0 &&
+    surfacer.openCount === 0 && surfacer.unsent.length === 0 &&
+    surfacer.settled.length === 0 &&
     surfacer[NAME] === "Assumption Surfacer"
   );
 
@@ -390,6 +430,7 @@ export default pattern(() => {
       { assertion: assert_update_parts },
       { assertion: assert_latest_fact_wins },
       { assertion: assert_prompt_builds },
+      { assertion: assert_record_from_chat },
       { assertion: assert_title },
       { assertion: assert_starts_empty },
       { action: action_record },

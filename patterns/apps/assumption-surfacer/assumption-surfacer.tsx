@@ -17,8 +17,9 @@
  * analysis, never storing it: earlier assumptions vanished with each reply,
  * and a correction was keyed to message 0, so it attached to any later
  * assumption that happened to share its label. Here the assistant records its
- * own assumptions through a tool (a bound handler, which is how a dialog tool
- * writes the caller's state), so the list is durable, per reply and complete.
+ * own assumptions through a tool, and the list is read from those tool calls,
+ * which the chat keeps with their input, so it is durable, per reply and
+ * complete. Only the user's verdicts are stored beside the chat.
  * The original's "user context" notes were collected but never read; settled
  * assumptions now reach the model through the system prompt instead.
  *
@@ -262,6 +263,57 @@ const belief = (a: Assumption): number =>
     : a.status === "corrected"
     ? a.chosenIndex
     : a.assumedIndex;
+
+/** The tool name the model records its assumptions with. */
+export const RECORD_TOOL = "recordAssumptions";
+
+/** The assumptions the assistant recorded, read from its tool calls in the
+ * chat, all open. Each call is folded in with `withRecorded`, so ids, turns
+ * and replacement follow recording order exactly as live recording would. */
+export const recordedAssumptions = (
+  messages: readonly BuiltInLLMMessage[],
+): Assumption[] => {
+  let record: Assumption[] = [];
+  let turn = 0;
+  let about = "";
+  for (const message of messages) {
+    if (userText(message).trim() !== "") {
+      turn += 1;
+      about = truncate(userText(message), ABOUT_LENGTH);
+      continue;
+    }
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const part of message.content) {
+      if (
+        !isRecord(part) || part.type !== "tool-call" ||
+        part.toolName !== RECORD_TOOL
+      ) continue;
+      const reported = normalizeReported(part.input);
+      if (reported.length > 0) {
+        record = withRecorded(record, reported, turn, about);
+      }
+    }
+  }
+  return record;
+};
+
+/** What the user said about one assumption. */
+export interface StoredVerdict {
+  status: AssumptionStatus;
+  chosenIndex: number;
+}
+
+/** The recorded assumptions with the user's verdicts applied. */
+export const withVerdicts = (
+  recorded: readonly Assumption[],
+  verdicts: Readonly<Record<string, StoredVerdict>>,
+): Assumption[] =>
+  recorded.map((a) => {
+    const v = verdicts[a.id];
+    return v ? { ...a, status: v.status, chosenIndex: v.chosenIndex } : a;
+  });
 
 /** The record after a verdict on assumption `id`. A verdict that changes
  * nothing, or names no such assumption or alternative, is a no-op. */
@@ -582,7 +634,10 @@ const cardView = (a: Assumption): CardView => {
 
 interface AssumptionSurfacerInput {
   messages?: PerSpace<Writable<BuiltInLLMMessage[] | Default<[]>>>;
-  assumptions?: PerSpace<Writable<Assumption[] | Default<[]>>>;
+  /** The user's verdict on each recorded assumption, by its id. The
+   * assumptions themselves are read from the model's tool calls in
+   * `messages`. */
+  verdicts?: PerSpace<Writable<Record<string, StoredVerdict> | Default<{}>>>;
   /** Every message of assumption updates sent, landed or not. */
   updates?: PerSpace<Writable<SentUpdate[] | Default<[]>>>;
   /** The assistant's persona. The assumption instructions are added to it. */
@@ -609,7 +664,7 @@ export interface AssumptionSurfacerOutput {
   system: string;
   pending: boolean | undefined;
   /** The dialog's tool: record the assumptions behind the next reply. */
-  recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }, string>;
+  recordAssumptions: Stream<{ assumptions: ReportedAssumption[] }>;
   /** Keep the assistant's guess. */
   confirmAssumption: Stream<{ id: string }>;
   /** None of the alternatives fit; tells the assistant. */
@@ -623,37 +678,43 @@ export interface AssumptionSurfacerOutput {
   clearChat: Stream<void>;
 }
 
+/** The dialog's tool. It stores nothing: the call itself, kept in the chat
+ * with its input, is the record (`recordedAssumptions`). It only answers the
+ * model, through the `result` cell the dialog passes in.
+ *
+ * Why not write the caller's state here: under server execution a tool
+ * handler's write to the pattern's arguments (the document that also holds
+ * `messages`) can be withdrawn from the wave while the dialog's own commit of
+ * that document still carries it. A list of objects written that way is left
+ * as links to element documents that were never committed, and every read of
+ * the list then fails, so the sidebar rendered nothing at all. Reading the
+ * record from `messages` leaves the dialog the only writer during a turn. */
 const recordAssumptionsHandler = handler<
-  { assumptions: ReportedAssumption[] },
-  {
-    assumptions: Writable<Assumption[]>;
-    messages: Writable<BuiltInLLMMessage[]>;
-  },
-  string
->((event, { assumptions, messages }) => {
-  const reported = normalizeReported(event);
-  if (reported.length === 0) return "No assumptions recorded.";
-  // Only what the user wrote counts: a reply to an update-only message rests
-  // on the user's last own words.
-  const userMessages = realUserMessages(messages.get());
-  assumptions.set(
-    withRecorded(
-      assumptions.get(),
-      reported,
-      userMessages.length,
-      truncate(userText(userMessages[userMessages.length - 1]), ABOUT_LENGTH),
-    ),
+  { assumptions: ReportedAssumption[]; result?: Writable<string> },
+  Record<string, never>
+>((event) => {
+  const n = normalizeReported(event).length;
+  event.result?.set(
+    n === 0
+      ? "No usable assumptions recorded."
+      : `Recorded ${n} assumption(s); the user will see them.`,
   );
-  return `Recorded ${reported.length} assumption(s); the user will see them.`;
 });
 
 /** The state a send reads and writes. */
 interface Outbox {
-  assumptions: Writable<Assumption[]>;
+  verdicts: Writable<Record<string, StoredVerdict>>;
   updates: Writable<SentUpdate[]>;
   messages: Writable<BuiltInLLMMessage[]>;
   addMessage: Stream<BuiltInLLMMessage>;
 }
+
+/** The assumptions as they stand now, verdicts applied. */
+const currentAssumptions = (
+  messages: readonly BuiltInLLMMessage[] | undefined,
+  verdicts: Readonly<Record<string, StoredVerdict>> | undefined,
+): Assumption[] =>
+  withVerdicts(recordedAssumptions(messages ?? []), verdicts ?? {});
 
 /** Sends the unsent updates with the user's `text` (which may be empty) as
  * one message, and logs the send. Nothing is marked told here: the updates
@@ -661,13 +722,18 @@ interface Outbox {
  * leaves them unsent. While a turn runs the dialog would drop the message, so
  * then nothing is sent. */
 const tellAssistant = (
-  { assumptions, updates, messages, addMessage }: Outbox,
+  { verdicts, updates, messages, addMessage }: Outbox,
   pending: boolean | undefined,
   text: string,
 ): void => {
   if (pending) return;
-  const sent = updates.get();
-  const update = nextUpdate(assumptions.get(), sent, messages.get());
+  const sent = updates.get() ?? [];
+  const history = messages.get() ?? [];
+  const update = nextUpdate(
+    currentAssumptions(history, verdicts.get()),
+    sent,
+    history,
+  );
   const message = composeMessage(update?.text ?? "", text);
   if (message === null) return;
   addMessage.send(message);
@@ -681,7 +747,17 @@ const settle = (
   id: string,
   verdict: Verdict,
 ): void => {
-  outbox.assumptions.set(applyVerdict(outbox.assumptions.get(), id, verdict));
+  const stored = outbox.verdicts.get() ?? {};
+  const next = applyVerdict(
+    currentAssumptions(outbox.messages.get(), stored),
+    id,
+    verdict,
+  ).find((a) => a.id === id);
+  if (!next) return;
+  outbox.verdicts.set({
+    ...stored,
+    [id]: { status: next.status, chosenIndex: next.chosenIndex },
+  });
   tellAssistant(outbox, pending, "");
 };
 
@@ -697,12 +773,15 @@ const sendMessage = handler<
 const AssumptionSurfacer = pattern<
   AssumptionSurfacerInput,
   AssumptionSurfacerOutput
->(({ messages, assumptions, updates, systemPrompt }) => {
+>(({ messages, verdicts, updates, systemPrompt }) => {
+  const assumptions = computed(() =>
+    currentAssumptions(messages.get(), verdicts.get())
+  );
   const system = computed(() =>
-    buildSystemPrompt(systemPrompt.get(), assumptions.get())
+    buildSystemPrompt(systemPrompt.get(), assumptions)
   );
 
-  const recordAssumptions = recordAssumptionsHandler({ assumptions, messages });
+  const recordAssumptions = recordAssumptionsHandler({});
 
   const { addMessage, cancelGeneration, pending } = llmDialog({
     system,
@@ -710,14 +789,14 @@ const AssumptionSurfacer = pattern<
     model: MODEL,
     builtinTools: false,
     tools: {
-      recordAssumptions: {
+      [RECORD_TOOL]: {
         handler: recordAssumptions,
         description: TOOL_DESCRIPTION,
       },
     },
   });
 
-  const outbox = { assumptions, updates, messages, addMessage };
+  const outbox = { verdicts, updates, messages, addMessage };
   const confirmAssumption = action(({ id }: { id: string }) =>
     settle(outbox, pending, id, { kind: "confirm" })
   );
@@ -732,15 +811,15 @@ const AssumptionSurfacer = pattern<
   const clearChat = action(() => {
     cancelGeneration.send();
     messages.set([]);
-    assumptions.set([]);
+    verdicts.set({});
     updates.set([]);
   });
 
-  const title = computed(() => chatTitle(messages.get()));
+  const title = computed(() => chatTitle(messages.get() ?? []));
   const openCount = computed(() =>
-    assumptions.get().filter((a) => a.status === "open").length
+    assumptions.filter((a) => a.status === "open").length
   );
-  const settled = computed(() => settledFacts(assumptions.get()));
+  const settled = computed(() => settledFacts(assumptions));
   const settledNote = computed(() => {
     const n = settled.length;
     return n === 0
@@ -749,7 +828,7 @@ const AssumptionSurfacer = pattern<
   });
   const openNote = computed(() => (openCount > 0 ? `${openCount} open` : ""));
   const unsent = computed(() =>
-    unsentUpdates(assumptions.get(), updates.get(), messages.get())
+    unsentUpdates(assumptions, updates.get() ?? [], messages.get() ?? [])
   );
   const unsentNote = computed(() => {
     const n = unsent.length;
@@ -760,12 +839,10 @@ const AssumptionSurfacer = pattern<
       }`;
   });
   // Newest first, so the reply just given is at the top.
-  const cards = computed(() => [...assumptions.get()].reverse().map(cardView));
-  const hasCards = computed(() => assumptions.get().length > 0);
+  const cards = computed(() => [...assumptions].reverse().map(cardView));
+  const hasCards = computed(() => assumptions.length > 0);
 
-  const fsContent = computed(() =>
-    assumptionsMarkdown(title, assumptions.get())
-  );
+  const fsContent = computed(() => assumptionsMarkdown(title, assumptions));
 
   return {
     [NAME]: title,
@@ -888,7 +965,7 @@ const AssumptionSurfacer = pattern<
           placeholder="Ask a question..."
           pending={pending}
           oncf-send={sendMessage({
-            assumptions,
+            verdicts,
             updates,
             messages,
             addMessage,
