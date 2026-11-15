@@ -477,10 +477,9 @@ export class ValueHasher {
 
       case VALUE_TAGS.FabricUnavailable: {
         // A `FabricPrimitive`, hashed in the instance layout under its wire
-        // tag: Section 4.18 of `2-hash-byte-format.md`.
-        if (this.#feedCycleIfOnPath(value)) {
-          return;
-        }
+        // tag: Section 4.18 of `2-hash-byte-format.md`. Its state holds only
+        // strings, so nothing inside it leads back to it, and there is no
+        // cycle to check for.
         const fab = value as FabricUnavailable;
         this.#feedInstance(fab, CODEC_TYPE_TAGS.Unavailable, fab.state);
         return;
