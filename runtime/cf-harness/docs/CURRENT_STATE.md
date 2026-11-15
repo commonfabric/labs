@@ -1109,8 +1109,8 @@ The current package provides:
   `CF_HARNESS_PATTERN_INDEX_URL` environment fallback), which needs the fabric
   session configuration: index requests are signed with the session identity
   under the CF1 first-party scheme, and an indexed pattern runs in the session's
-  space. The signed client, successor resolution, search request shaping,
-  feedback vocabulary and recorder, and safe status rule live in
+  space. The signed client, search request shaping, feedback vocabulary and
+  recorder, and safe status rule live in
   [`@commonfabric/pattern-index`](../../pattern-index/README.md).
   [`src/pattern-index/factory.ts`](../src/pattern-index/factory.ts) loads the
   configured harness identity. Composition, the ledger, and publication gates

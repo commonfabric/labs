@@ -53,22 +53,13 @@ const callHelper = async (
   };
 };
 
-const pattern = (patternId: string, priorPatternId?: string) => ({
+const pattern = (patternId: string) => ({
   patternId,
   ownerDid: "did:example:publisher",
   createdAt: "2026-10-09T00:00:00Z",
   description: patternId,
   hashtags: ["test"],
   dependencies: [],
-  ...(priorPatternId === undefined ? {} : { priorPatternId }),
-});
-
-const listed = (patternId: string) => ({
-  ...pattern(patternId),
-  keywords: [],
-  events: {},
-  score: 0,
-  quality: "unproven",
 });
 
 describe("cli", () => {
@@ -107,29 +98,22 @@ describe("cli", () => {
     await Deno.remove(directory, { recursive: true });
   });
 
-  it("returns successors from a signed search and rebuilds its fields", async () => {
-    reply = ({ fn, body }) => {
-      switch (fn) {
-        case "searchPatterns":
-          return Response.json({
-            results: [{ ...pattern("old"), kind: "app", quality: "unproven" }],
-          });
-        case "listPatterns":
-          return Response.json({
-            patterns: [listed("old"), listed("fresh")],
-            eventTypes: {},
-          });
-        case "getPattern":
-          return Response.json(
-            pattern(
-              String(body.patternId),
-              body.patternId === "fresh" ? "old" : undefined,
-            ),
-          );
-        default:
-          throw new Error(`unexpected index function: ${fn}`);
-      }
+  it("answers a signed search with the index's rows as sent", async () => {
+    // The index resolves successors, so the helper relays a replacement row,
+    // its display name, and what it supersedes without reading further.
+    const answer = {
+      results: [{
+        ...pattern("fresh"),
+        name: "Fresh",
+        kind: "app",
+        quality: "unproven",
+        signals: { uses: 0, score: 0 },
+        supersedes: "old",
+      }],
+      successorsResolved: true,
     };
+    reply = () => Response.json(answer);
+
     const output = await callHelper(directory, baseUrl, {
       op: "search",
       text: "test",
@@ -139,27 +123,14 @@ describe("cli", () => {
       fn: "publishPattern",
       did: "forged",
     });
+
     expect(output.code).toBe(0);
-    expect(JSON.parse(output.stdout)).toEqual({
-      ok: true,
-      value: {
-        results: [{
-          ...pattern("fresh"),
-          kind: "app",
-          quality: "unproven",
-          signals: { uses: 0, score: 0 },
-        }],
-      },
-    });
-    expect(calls.map((call) => call.did)).toEqual([did, did, did, did]);
-    expect(calls[0].body).toEqual({ text: "test", tags: ["test"], limit: 3 });
-    expect(
-      calls.filter((call) => call.fn === "getPattern").map((call) => call.body),
-    )
-      .toEqual([{ patternId: "old", includeSource: false }, {
-        patternId: "fresh",
-        includeSource: false,
-      }]);
+    expect(JSON.parse(output.stdout)).toEqual({ ok: true, value: answer });
+    expect(calls).toEqual([{
+      fn: "searchPatterns",
+      did,
+      body: { text: "test", tags: ["test"], limit: 3 },
+    }]);
   });
 
   for (
@@ -255,38 +226,6 @@ describe("cli", () => {
             : "pattern index recordEvent failed (200)",
       });
     }
-  });
-
-  it("exits nonzero with only stderr for an internal successor-resolution failure", async () => {
-    reply = ({ fn, body }) => {
-      switch (fn) {
-        case "searchPatterns":
-          return Response.json({
-            results: [{ ...pattern("old"), kind: "app", quality: "unproven" }],
-          });
-        case "listPatterns":
-          return Response.json({
-            patterns: [listed("old"), listed("fresh")],
-            eventTypes: {},
-          });
-        case "getPattern":
-          return Response.json(
-            pattern(
-              String(body.patternId),
-              body.patternId === "old" ? "fresh" : "old",
-            ),
-          );
-        default:
-          throw new Error(`unexpected index function: ${fn}`);
-      }
-    };
-    const output = await callHelper(directory, baseUrl, {
-      op: "search",
-      text: "test",
-    });
-    expect(output.code).not.toBe(0);
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toContain("successor chain is ambiguous or cyclic");
   });
 
   it("exits nonzero with only stderr when the identity key cannot be read", async () => {
