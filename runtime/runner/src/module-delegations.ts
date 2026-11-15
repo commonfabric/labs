@@ -124,36 +124,67 @@ export function closeDelegationsFor(
 }
 
 /**
- * Adds to `edges` an edge from `identity` to each of `inputs` that `identity`
- * does not already inherit from over `edges`, so that the edges stay direct:
- * an input that a closed list names beside the predecessor it came through
- * adds nothing. The inputs are taken widest-first, so the one the others are
- * reached through goes in before them. What `identity` inherits afterward is
- * every input and everything it inherited before; nothing is dropped.
+ * Every identity reachable from `sources` over `direct` through at least one
+ * edge. Each identity is visited once, so the walk ends on any relation.
+ */
+function reachedFrom(
+  direct: ModuleDelegationInput,
+  sources: Iterable<string>,
+): Set<string> {
+  const reached = new Set<string>();
+  const pending: string[] = [];
+  for (const source of sources) pending.push(...(direct.get(source) ?? []));
+  while (pending.length > 0) {
+    const next = pending.pop()!;
+    if (reached.has(next)) continue;
+    reached.add(next);
+    pending.push(...(direct.get(next) ?? []));
+  }
+  return reached;
+}
+
+/**
+ * Adds `inputs` to what `identity` inherits over `edges`, as few direct
+ * edges as that takes: an input `identity` already reaches adds nothing, and
+ * neither does one another new input reaches, as a closed list names its
+ * predecessor's predecessors beside the predecessor. Among inputs that reach
+ * one another round a cycle, the first in UTF-8 order is the one kept, so the
+ * edges added do not depend on the order of `inputs` or of `edges`.
+ *
+ * Edges are only ever added, here and everywhere a piece's record is written,
+ * so what any module reaches only grows: afterward `identity` reaches every
+ * input and everything it reached before. That invariant is what makes
+ * leaving an input out safe. The walks are linear in the edges, a few per
+ * call, however long `inputs` is.
  */
 export function addDirectEdges(
   edges: Map<string, Set<string>>,
   identity: string,
   inputs: Iterable<string>,
 ): void {
-  const candidates = [...new Set(inputs)].filter((input) =>
-    admissiblePredecessor(identity, input)
+  const before = inheritedThrough(edges, identity);
+  const pending = [...new Set(inputs)].filter((input) =>
+    admissiblePredecessor(identity, input) && !before.has(input)
   );
-  const reach = new Map(
-    candidates.map((input) => [input, inheritedThrough(edges, input).size]),
-  );
-  candidates.sort((a, b) =>
-    (reach.get(b)! - reach.get(a)!) || utf8Compare(a, b)
-  );
-  for (const input of candidates) {
-    if (inheritedThrough(edges, identity).has(input)) continue;
-    let direct = edges.get(identity);
-    if (direct === undefined) {
-      direct = new Set();
-      edges.set(identity, direct);
-    }
-    direct.add(input);
+  if (pending.length === 0) return;
+  const covered = reachedFrom(edges, pending);
+  const kept = pending.filter((input) => !covered.has(input));
+  const reach = new Set([...kept, ...reachedFrom(edges, kept)]);
+  // What is left reaches, and is reached from, another input round a cycle.
+  for (
+    const input of pending.filter((left) => !reach.has(left)).sort(utf8Compare)
+  ) {
+    if (reach.has(input)) continue;
+    kept.push(input);
+    reach.add(input);
+    for (const reached of reachedFrom(edges, [input])) reach.add(reached);
   }
+  let direct = edges.get(identity);
+  if (direct === undefined) {
+    direct = new Set();
+    edges.set(identity, direct);
+  }
+  for (const input of kept) direct.add(input);
 }
 
 /**

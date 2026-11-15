@@ -966,28 +966,38 @@ export default pattern<{seed?: ${seedType}}>(() => {
       }
     });
 
-    it("keeps the member's edges linear in derivations over updates that change every module", async () => {
-      // Each update replaces the entry and the writer. The edges gain one
-      // direct edge per replaced module per update, the records' own closed
-      // lists adding none; the delegations hold one entry per module of the
-      // running pattern, listing every earlier version of it.
-      const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
-        input: {},
+    for (const staging of ["landed", "failed"] as const) {
+      it(`keeps the member's edges linear in derivations over updates that change every module, with every staging ${staging}`, async () => {
+        // Each update replaces the entry and the writer. The edges gain one
+        // direct edge per replaced module per update: where the stagings
+        // land, the records' closed lists add none. The delegations hold one
+        // entry per module of the running pattern, listing every earlier
+        // version of it.
+        using _staging = staging === "failed"
+          ? refuseDelegationStaging(runtime)
+          : undefined;
+        const piece = await pieces.create(splitWriterProgram("w0", "e0"), {
+          input: {},
+        });
+        for (let update = 1; update <= 8; update++) {
+          await piece.setPattern(
+            splitWriterProgram(`w${update}`, `e${update}`),
+          );
+          await runtime.patternManager.flushCompileCacheWrites();
+          const recorded = recordedMember(piece)!;
+          expect(recorded.delegations.length).toBe(2);
+          expect(
+            recorded.delegations.map(({ predecessors }) => predecessors.length),
+          ).toEqual([update, update]);
+          expect(recorded.edges.length).toBe(2 * update);
+          expect(
+            recorded.edges.every(({ predecessors }) =>
+              predecessors.length === 1
+            ),
+          ).toBe(true);
+        }
       });
-      for (let update = 1; update <= 8; update++) {
-        await piece.setPattern(splitWriterProgram(`w${update}`, `e${update}`));
-        await runtime.patternManager.flushCompileCacheWrites();
-        const recorded = recordedMember(piece)!;
-        expect(recorded.delegations.length).toBe(2);
-        expect(
-          recorded.delegations.map(({ predecessors }) => predecessors.length),
-        ).toEqual([update, update]);
-        expect(recorded.edges.length).toBe(2 * update);
-        expect(
-          recorded.edges.every(({ predecessors }) => predecessors.length === 1),
-        ).toBe(true);
-      }
-    });
+    }
 
     it("keeps the grant of a module whose successor left before it returned", async () => {
       // v0 to v1's staging never lands. v2's writer succeeds w1, v3 drops

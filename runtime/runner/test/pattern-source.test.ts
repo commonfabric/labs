@@ -524,7 +524,10 @@ describe("patternSource meta accessors", () => {
       const pattern = await compile("prepared-from");
       const next = await compile("prepared-to");
       const space = signer.did();
-      const updateOver = async (id: string, moveMember: boolean) => {
+      const updateOver = async (
+        id: string,
+        moveMember: "none" | "both" | "delegations",
+      ) => {
         const cell = await pieceRunning(id, pattern, [{
           identity: pattern.identity,
           predecessors: ["earlier-pattern"],
@@ -535,7 +538,7 @@ describe("patternSource meta accessors", () => {
           next.identity,
           getPieceSourceRecord(cell, pattern.identity),
         );
-        if (moveMember) {
+        if (moveMember !== "none") {
           const write = runtime.edit();
           const since = [{
             identity: pattern.identity,
@@ -544,7 +547,10 @@ describe("patternSource meta accessors", () => {
           cell.withTx(write).setMetaRaw("pieceSourceDelegations", {
             identity: pattern.identity,
             delegations: since,
-            edges: since,
+            edges: moveMember === "both" ? since : [{
+              identity: pattern.identity,
+              predecessors: ["earlier-pattern"],
+            }],
           }, rawMetaWriteAuthorization);
           expect((await write.commit().settled).error).toBeUndefined();
         }
@@ -563,9 +569,15 @@ describe("patternSource meta accessors", () => {
         }
       };
 
-      await updateOver("prepared-over-the-same-member", false);
-      await expect(updateOver("prepared-over-a-moved-member", true))
+      // On an honest path the history's guard refuses first: every
+      // transition appends a revision. The member's own check is for a
+      // member written without one, either field of it.
+      await updateOver("prepared-over-the-same-member", "none");
+      await expect(updateOver("prepared-over-a-moved-member", "both"))
         .rejects.toThrow(PIECE_SOURCE_MOVED);
+      await expect(
+        updateOver("prepared-over-moved-delegations", "delegations"),
+      ).rejects.toThrow(PIECE_SOURCE_MOVED);
     });
 
     it("carries its edges to the next pattern on a transition that is no source update, closing only that pattern's modules", async () => {
