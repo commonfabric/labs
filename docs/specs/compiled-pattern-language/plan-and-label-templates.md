@@ -2190,12 +2190,20 @@ follows the handle. The definition above gives that rule, read as follows.
   argument document or of a binding's state document, and each link crossed
   before that position (section 2.5). The entries a `followRef` read
   consumes are those of class `followRef`, which are the label a link was
-  written with: the `link` entry of the stored link, and the stamp of the
-  run that wrote the link at that position (section 3.1). An entry that a
-  schema declares with the class `followRef` at the position is a label
-  declared for the reference itself, and it is consumed with them. The
-  label says which cell the handle names, and under what label that was
-  decided.
+  written with: the stamp of the run that wrote the link at that position
+  (section 3.1). An entry that a schema declares with the class
+  `followRef` at the position is a label declared for the reference
+  itself, and it is consumed with them. The label says which cell the
+  handle names, and under what label that was decided.
+- **The `link` entry of a handle that is only passed on is not in it.**
+  The runtime stores, at the position of a link, an entry of origin `link`
+  that holds what the reference declares (`prepareBoundaryCommitSteps` in
+  `runtime/runner/src/cfc/prepare.ts`). The schema of a link to a cell is
+  the cell's own, so that entry repeats the label the cell's type
+  declares. By the ruling it is the label of the cell and stays out of
+  the slot's label where the body neither reads nor writes through the
+  handle. *Assumed* (section 8, question 81): the same holds where the
+  `link` entry holds more than the target's declaration.
 - **Nothing of the target document is in it.** The slot is not resolved to
   the cell the reference leads to, and no entry of that cell's document
   joins it: not the `declared` entries that the cell's own type gives it,
@@ -2213,15 +2221,17 @@ follows the handle. The definition above gives that rule, read as follows.
   on, to compare it, or to write through it has the `identity` slot in its
   template and no such read.
 
-This is **equal** to today. A probe of a reference that the transaction
-does not follow is a `followRef` observation, which consumes the entries of
-that class at the probed position and none of the target
-(`forEachFlowObservation` in `runtime/runner/src/cfc/prepare.ts`). The stage
-3 comparison observed it in
-`patterns/showcase/battleship/multiplayer/repro-minimal.tsx`: the handler
+This is **equal** to today in the case the stage 3 comparison observed, in
+`patterns/showcase/battleship/multiplayer/repro-minimal.tsx`. The handler
 `joinAsP1` writes one input and passes the handles of that input and of a
-second one to a child, and what the runtime stored for the write holds no
-clause of the second input.
+second one to a child. Its transaction reads neither the position of the
+second link in the argument document nor the document the link names, so
+the runtime makes no observation for a handle that is only passed on, and
+what it stored for the write, and for the links in the child's argument,
+holds no clause of the second input. Where the link at the position was
+itself written under a label, the slot has that stamp and the runtime's
+join does not, and the template is looser by it; the comparison met no
+such row.
 
 Three consequences of the mapping:
 
@@ -9375,3 +9385,12 @@ this document made.
     equal to it. Which form a compiled instance stores in a document's
     declared entries is for `execution-and-storage.md`. Not verified
     here: the two forms, which are the prototype's observation.
+81. **The `link` entry at the position of a handle that is only passed
+    on.** The runtime stores there what the reference declares, which for
+    a link to a cell repeats the label of the cell's type. *Assumed:* the
+    entry is not part of the label of the `identity` slot where the body
+    neither reads nor writes through the handle, whatever it holds, and
+    the stamp of the run that wrote the link is. The runtime's transaction
+    reads nothing at such a position, so with the stamp the template can
+    be looser than today, and without it the label of which cell was
+    chosen would be lost.
