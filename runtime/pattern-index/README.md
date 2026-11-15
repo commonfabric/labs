@@ -17,6 +17,24 @@ verdict mapping and recording from `@commonfabric/pattern-index/feedback`.
 console owns its four-read allowlist and dispatcher, including metadata-only
 `getPattern` reads. Publishing and retraction remain explicit client methods.
 
+## Deploying an indexed pattern
+
+`@commonfabric/pattern-index/deploy` is the one place a published pattern is
+deployed from. cf-harness's `run_pattern` uses it when a model names a
+`patternId`, and `cf piece new --from-index <patternId>` uses it to create a
+piece. `compileIndexedPattern()` fetches the program with its source, draws
+every published pattern it imports through `cf:pattern:` into the space so those
+imports resolve, and compiles it there. `prepareIndexedProgram()` stops before
+the compile, and `composeProgram()` does only the import step, for authored
+source that composes published patterns.
+
+Every failure is an `IndexedPatternError` with a `stage` of `lookup`, `compose`,
+or `compile`. Its message never quotes indexed source: where it names a pattern
+it names its id, and some failures, such as a runtime without CFC enforcement or
+a composition past the cap, name none. A compile diagnostic, or an index
+response body, can quote that source, so it is kept apart as `rawCauseMessage`
+for an artifact or an operator log.
+
 ## Loom helper contract
 
 Loom's CFS commands spawn `runtime/pattern-index/cli.ts` once per request:
@@ -64,6 +82,7 @@ for CF1 signing.
 
 ## Tests
 
-`deno task test` runs client and CLI tests. CLI tests spawn the helper against a
-loopback server that verifies CF1 signatures from throwaway identities; they use
-the CFS invocation with no lockfile and never call the deployed index.
+`deno task test` runs client, deploy, and CLI tests. CLI tests spawn the helper
+against a loopback server that verifies CF1 signatures from throwaway
+identities; they use the CFS invocation with no lockfile and never call the
+deployed index.
