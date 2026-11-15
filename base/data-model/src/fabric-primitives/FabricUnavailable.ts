@@ -134,6 +134,14 @@ export class FabricUnavailable extends BaseFabricPrimitive
   readonly #state: UnavailableState;
 
   /**
+   * Constructs an instance holding `state` as it stands, for the codecs, which
+   * hold `AS_DECODED` and have validated `state` with `#validatedState()`.
+   * Declared ahead of the public signature, so that the constructor's type,
+   * which is read from the last one, is the public one.
+   */
+  constructor(token: typeof AS_DECODED, state: UnavailableState);
+
+  /**
    * Constructs an instance with the given reason, kind of error, and
    * message. A message equal to the kind's default is stored as none. Throws
    * when `reason` is not one of the reasons; when it is `error` and
@@ -145,12 +153,6 @@ export class FabricUnavailable extends BaseFabricPrimitive
     errorKind?: UnavailableErrorKind | null,
     message?: string | null,
   );
-
-  /**
-   * Constructs an instance holding `state` as it stands, for the codecs, which
-   * hold `AS_DECODED` and have validated `state` with `#validatedState()`.
-   */
-  constructor(token: typeof AS_DECODED, state: UnavailableState);
 
   constructor(
     ...args:
@@ -599,3 +601,16 @@ export const UNAVAILABLE_SYNCING = new FabricUnavailable(
 // public member on this class that the declaration omits passes silently.
 // Members added here need adding there by hand.
 FabricUnavailable satisfies ApiFabricUnavailableConstructor;
+
+/**
+ * Whether the parameters read from the constructor's type are the public ones
+ * `FabricUnavailableConstructor` declares, rather than those of the overload
+ * only the codecs can call. `satisfies` above passes either way, so this is
+ * what stops compiling when the overloads are reordered.
+ */
+export type ConstructorParametersArePublic = MustBeTrue<
+  Same<
+    ConstructorParameters<typeof FabricUnavailable>,
+    ConstructorParameters<ApiFabricUnavailableConstructor>
+  >
+>;

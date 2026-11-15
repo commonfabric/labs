@@ -17,12 +17,7 @@ import type { Constructor } from "@commonfabric/js-values/types";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { FabricPlainObject, FabricValue } from "@/interface.ts";
-import {
-  JSON_CODEC,
-  NULL_LIVE_ENVIRONMENT,
-  ProblematicValue,
-  UnknownValue,
-} from "@/codec-common";
+import { ProblematicValue, UnknownValue } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
@@ -42,7 +37,6 @@ import {
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
-import { debugStr } from "@/value-debug";
 import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
 import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
 import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
@@ -1397,22 +1391,11 @@ const INSTANCE_FIELDS: {
   FabricUnavailable: fielded(
     FabricUnavailable,
     (value) => Object.entries(value.state),
-    (_like, fields) => {
-      // Made by decoding the fields as a state rather than by the
-      // constructor, which stores a message equal to its kind's default as
-      // none: what is made has to hold the state as the fields give it.
-      const made = FabricUnavailable[JSON_CODEC].decode(
-        CODEC_TYPE_TAGS.Unavailable,
-        Object.fromEntries(fields),
-        NULL_LIVE_ENVIRONMENT,
-      );
-      if (!(made instanceof FabricUnavailable)) {
-        throw new Error(
-          debugStr`Not the fields of an \`Unavailable@1\` state: $quote${made}`,
-        );
-      }
-      return made;
-    },
+    // Its fields are strings, which the codec never decodes to `null`, so no
+    // patch replaces one and the instance they make is `like` itself. Making
+    // one afresh through the constructor would drop a message equal to its
+    // kind's default, which the state holds as it arrived.
+    (like) => like,
   ),
   UnknownValue: fielded(
     UnknownValue,
