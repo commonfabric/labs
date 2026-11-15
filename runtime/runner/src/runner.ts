@@ -18303,6 +18303,9 @@ export function applyPieceSourceTransition(
   // piece's history granted it, and a new module gets nothing.
   let next: PieceSourceRecord;
   if (options.sourceUpdate !== undefined) {
+    // A backstop: every transition appends a revision, so the snapshot check
+    // above refuses one that came between preparing and here. This refuses a
+    // member written without a transition.
     if (
       !runtime.patternManager.sourceUpdateComposedWith(
         options.sourceUpdate,
