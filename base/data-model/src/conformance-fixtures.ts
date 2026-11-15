@@ -300,7 +300,10 @@ const PRIMITIVE_TAGS: ReadonlySet<string> = new Set([
   CODEC_TYPE_TAGS.SpecialNumber,
   CODEC_TYPE_TAGS.Symbol,
   CODEC_TYPE_TAGS.Undefined,
-  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS),
+  // These two are primitives in this package but instances in the data model.
+  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS).filter((tag) =>
+    tag !== CODEC_TYPE_TAGS.KeyPair && tag !== CODEC_TYPE_TAGS.Unavailable
+  ),
 ]);
 
 /**
@@ -439,16 +442,16 @@ function sizesOf(
 /**
  * Notes the sizes of what the state of a primitive under `tag` holds: the
  * bytes a base64url state or field writes, whether a byte sequence's or a
- * bigint's, a registered symbol's key, and any other string.
+ * bigint's, a registered symbol's key, and a hash's algorithm tag.
  */
 function measurePrimitiveState(
   tag: string,
   state: unknown,
   note: (measure: SizeMeasure, size: number) => void,
 ): void {
-  const fieldOf = (name: string, holder: unknown = state): unknown =>
-    (typeof holder === "object" && holder !== null)
-      ? Object.getOwnPropertyDescriptor(holder, name)?.value
+  const fieldOf = (name: string): unknown =>
+    (typeof state === "object" && state !== null)
+      ? Object.getOwnPropertyDescriptor(state, name)?.value
       : undefined;
   const noteBytes = (
     written: unknown,
@@ -472,14 +475,6 @@ function measurePrimitiveState(
       noteString(fieldOf("tag"));
       noteBytes(fieldOf("hash"));
       break;
-    case CODEC_TYPE_TAGS.KeyPair: {
-      // Each key is written as a `Bytes@1` value of its own.
-      const bytesKey = `/${CODEC_TYPE_TAGS.Bytes}`;
-      noteString(fieldOf("algorithm"));
-      noteBytes(fieldOf(bytesKey, fieldOf("publicKey")));
-      noteBytes(fieldOf(bytesKey, fieldOf("privateKey")));
-      break;
-    }
     case CODEC_TYPE_TAGS.Symbol:
       if (typeof state === "string") {
         note("symbolKeyLength", codePointCountOf(state));
@@ -496,11 +491,6 @@ function measurePrimitiveState(
     case CODEC_TYPE_TAGS.Undefined:
       // A number, written as a string or not at all.
       break;
-    default:
-      noteString(state);
-      if (typeof state === "object" && state !== null) {
-        Object.values(state).forEach(noteString);
-      }
   }
 }
 

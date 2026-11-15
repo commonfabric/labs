@@ -846,6 +846,20 @@ describe("conformance-fixtures", () => {
       }
     });
 
+    it("counts a key pair and an unavailable value each as an instance and its state, two deep", () => {
+      const values = [
+        '{"/KeyPair@1":{"algorithm":"Ed25519",' +
+        '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AA"}}}',
+        '{"/Unavailable@1":{"reason":"pending"}}',
+      ];
+      for (const value of values) {
+        expect(requirementsOfText(`fvj1:${nestedIn(floors.depth - 2, value)}`))
+          .toBeUndefined();
+        expect(requirementsOfText(`fvj1:${nestedIn(floors.depth - 1, value)}`))
+          .toEqual({ depth: floors.depth + 1 });
+      }
+    });
+
     it("counts a tag-shaped key under an escape as a record key, the values under `/object` being decoded and those under `/quote` not", () => {
       // Under each escape the sole key reads like a tag; were it taken for
       // one, the record and its key would go uncounted.
