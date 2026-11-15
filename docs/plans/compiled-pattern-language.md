@@ -103,8 +103,7 @@ next.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type or a result path for a binding
   inside an element. The crate's `SPEC-NOTES.md` lists the places
-  where it found the documents ambiguous; notes 228 to 240 are not
-  yet written into the documents.
+  where it found the documents ambiguous.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -869,6 +868,17 @@ as an assumption.
     the run that wrote the link is. The runtime reads nothing at such
     a position, so the template can be looser than today by that
     stamp; the comparison met no such row.
+128. **The event type of an inline handler that declares none** (PL
+    question 82). An `on*` attribute of a host element expects no
+    type. *Assumed:* `unknown`, so the handler reads nothing of its
+    event. The alternatives refuse a parameter without an annotation
+    there, or declare the event type of each attribute of each host
+    element.
+129. **The existence label of a path that a write removed** (PL
+    question 83). The runtime leaves it in place, so a read of a list
+    a handler emptied carries the clauses its former elements were
+    created under. *Assumed:* the compiled path keeps it, equal to
+    today. The alternative removes it with the path.
 
 ## Open, and not needing the owner
 
