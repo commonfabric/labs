@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
+  compileAndSavePattern,
   computeEntryIdentity,
   ensureCompilerStack,
   Runtime,
@@ -15,7 +16,11 @@ import {
 } from "@commonfabric/pattern-index/client";
 import {
   compileIndexedPattern,
+  composeProgram,
   IndexedPatternError,
+  materializeComposedPatterns,
+  MAX_COMPOSED_PATTERNS,
+  PatternCompositionError,
   prepareIndexedProgram,
 } from "@commonfabric/pattern-index/deploy";
 
@@ -222,6 +227,236 @@ describe("deploy", () => {
       expect(error).toBeInstanceOf(IndexedPatternError);
       expect(error.stage).toBe("compose");
       expect(error.message).toContain('the imported pattern "missing"');
+    });
+  });
+
+  describe("materializeComposedPatterns()", () => {
+    /** Materializes `patternIds`, answering what it threw. */
+    const failureOf = (
+      patternIds: readonly string[],
+      getClient: ReturnType<typeof clientAnswering> | undefined,
+      on: Runtime = runtime,
+    ) =>
+      materializeComposedPatterns({
+        runtime: on,
+        space: pieces.getSpace(),
+        patternIds,
+        getClient,
+      }).then(() => undefined, (e) => e);
+
+    /** A record composing nothing, whose recorded dependencies are `deps`. */
+    const chained = (deps: (id: string) => string[]) =>
+      clientAnswering((id) =>
+        Promise.resolve(recordFor(id, DOUBLING_SOURCE, deps(id)))
+      );
+
+    it("answers nothing, and reads nothing, for a program that composes nothing", async () => {
+      expect(
+        await materializeComposedPatterns({
+          runtime,
+          space: pieces.getSpace(),
+          patternIds: [],
+          getClient: undefined,
+        }),
+      ).toEqual([]);
+    });
+
+    it("throws naming the ids when there is no index to read them from", async () => {
+      const error = await failureOf(["a", "b"], undefined);
+
+      expect(error).toBeInstanceOf(PatternCompositionError);
+      expect(error.name).toBe("PatternCompositionError");
+      expect(error.message).toContain('"a", "b"');
+      expect(error.message).toContain("requires a pattern index");
+    });
+
+    it("throws for a runtime with CFC enforcement disabled", async () => {
+      const disabled = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        cfcEnforcementMode: "disabled",
+      });
+      try {
+        const error = await failureOf(["a"], chained(() => []), disabled);
+
+        expect(error.message).toContain("requires a CFC-enabled runtime");
+      } finally {
+        await disabled.dispose();
+      }
+    });
+
+    it("throws keeping the index's body apart when the client cannot be built", async () => {
+      const error = await failureOf(
+        ["a"],
+        () => Promise.reject(new PatternIndexError("health", 503, "BODY")),
+      );
+
+      expect(error.message).toBe(
+        "pattern index unavailable: pattern index health failed (503)",
+      );
+      expect(error.rawCauseMessage).toBe("BODY");
+    });
+
+    it("throws naming the cycle when recorded dependencies loop", async () => {
+      const error = await failureOf(
+        ["a"],
+        chained((id) => [id === "a" ? "b" : "a"]),
+      );
+
+      expect(error.message).toContain('"a", "b", "a"');
+      expect(error.message).toContain("in a cycle");
+    });
+
+    it("throws past the cap on how many patterns one program draws in", async () => {
+      const error = await failureOf(
+        ["p0"],
+        chained((id) => [`p${Number(id.slice(1)) + 1}`]),
+      );
+
+      expect(error.message).toContain(
+        `more than ${MAX_COMPOSED_PATTERNS} published patterns`,
+      );
+    });
+
+    it("throws when the index answers an import with no program", async () => {
+      const error = await failureOf(
+        ["a"],
+        clientAnswering((id) =>
+          Promise.resolve({
+            ...recordFor(id, DOUBLING_SOURCE),
+            program: undefined,
+          })
+        ),
+      );
+
+      expect(error.message).toBe(
+        'the pattern index returned no program for the imported pattern "a"',
+      );
+    });
+
+    it("throws withholding an import's compile diagnostic", async () => {
+      const error = await failureOf(
+        ["a"],
+        clientAnswering((id) => Promise.resolve(recordFor(id, BROKEN_SOURCE))),
+      );
+
+      expect(error.message).toContain(
+        'the imported pattern "a" did not compile',
+      );
+      expect(error.message).not.toContain("SECRET_MARKER");
+      expect(error.rawCauseMessage).toContain("SECRET_MARKER");
+    });
+
+    it("throws when an import compiles to an identity other than its id", async () => {
+      const error = await failureOf(
+        ["not-its-identity"],
+        clientAnswering((id) =>
+          Promise.resolve(recordFor(id, DOUBLING_SOURCE))
+        ),
+      );
+
+      expect(error.message).toContain(
+        'stores the imported pattern under "not-its-identity"',
+      );
+    });
+
+    it("answers each id once, and nothing for one the space already holds", async () => {
+      await ensureCompilerStack();
+      const doublerId = await computeEntryIdentity("/main.tsx", [
+        { name: "/main.tsx", contents: DOUBLING_SOURCE },
+      ]);
+      const getClient = chained(() => []);
+
+      const first = await materializeComposedPatterns({
+        runtime,
+        space: pieces.getSpace(),
+        patternIds: [doublerId, doublerId],
+        getClient,
+      });
+      const again = await materializeComposedPatterns({
+        runtime,
+        space: pieces.getSpace(),
+        patternIds: [doublerId],
+        getClient,
+      });
+
+      expect(first).toEqual([doublerId]);
+      expect(again).toEqual([]);
+    });
+    it("draws in an import's own imports before the import itself", async () => {
+      await ensureCompilerStack();
+      const doublerId = await computeEntryIdentity("/main.tsx", [
+        { name: "/main.tsx", contents: DOUBLING_SOURCE },
+      ]);
+      const composing = [
+        "import { pattern } from 'commonfabric';",
+        `import doubler from "cf:pattern:${doublerId}";`,
+        "interface Input { n: number; }",
+        "export default pattern<Input, { half: { doubled: number } }>(",
+        "  ({ n }) => ({ half: doubler({ n }) }),",
+        ");",
+        "",
+      ].join("\n");
+      const answer = clientAnswering((id) =>
+        Promise.resolve(
+          id === doublerId
+            ? recordFor(id, DOUBLING_SOURCE)
+            : recordFor(id, composing, [doublerId]),
+        )
+      );
+      // An import's identity is only known by compiling it, so the composer's
+      // is read off a compile in a space of its own.
+      const scratch = (await Identity.generate()).did();
+      const program = {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: composing }],
+      };
+      await composeProgram({
+        runtime,
+        space: scratch,
+        program,
+        getClient: answer,
+      });
+      const composerId = runtime.patternManager.getArtifactEntryRef(
+        await compileAndSavePattern(runtime, program, { space: scratch }),
+      )!.identity;
+
+      const drawn = await materializeComposedPatterns({
+        runtime,
+        space: pieces.getSpace(),
+        patternIds: [composerId],
+        getClient: answer,
+      });
+
+      expect(drawn).toEqual([doublerId, composerId]);
+    });
+  });
+
+  describe("composeProgram()", () => {
+    it("throws a compose-stage error withholding a failure that is not a composition error", async () => {
+      const error = await composeProgram({
+        runtime,
+        space: pieces.getSpace(),
+        program: {
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: 'import a from "cf:pattern:a";\n',
+          }],
+        },
+        getClient: clientAnswering((id) =>
+          Promise.resolve({
+            ...recordFor(id, DOUBLING_SOURCE),
+            program: { main: "/main.tsx" },
+          } as unknown as PatternIndexPattern)
+        ),
+      }).then(() => undefined, (e) => e);
+
+      expect(error).toBeInstanceOf(IndexedPatternError);
+      expect(error.name).toBe("IndexedPatternError");
+      expect(error.stage).toBe("compose");
+      expect(error.message).toContain("could not be made available");
+      expect(error.rawCauseMessage).toBeDefined();
     });
   });
 });
