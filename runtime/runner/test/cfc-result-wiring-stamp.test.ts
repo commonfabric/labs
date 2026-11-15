@@ -441,19 +441,19 @@ describe("cfc-result-wiring-stamp", () => {
       expect(membershipOf(result)).not.toContain(BOB);
     });
 
-    it("stamps it on the value of an unchanged result that holds data and no reference", async () => {
-      // A root holding data alone is restated as one holding references too
-      // (§8.9.1.3's `restateResultWiring` keys the value entry on the data,
-      // not on the references beside it).
+    it("stamps nothing of it on an unchanged result that holds data and no reference", async () => {
+      // Only a root holding data beside references is restated: whether a
+      // root of data alone is too is a question on specs#98, so its entries
+      // stay as stored.
 
       const { dataOnly, sameDataOnly } = patterns();
       const bobs = await seedBobsDocument();
       const result = await setUp("data-only-reads-bob", dataOnly);
-      expect(derivedOf(result)).not.toContain(BOB);
+      expect(derivedOf(result)).toEqual([]);
 
       await setUp("data-only-reads-bob", sameDataOnly, bobs);
 
-      expect(derivedOf(result)).toContain(BOB);
+      expect(derivedOf(result)).toEqual([]);
       expect(existenceOf(result)).toEqual([]);
     });
 
@@ -1313,9 +1313,10 @@ describe("cfc-result-wiring-stamp", () => {
       expect(derivedOf(result)).toEqual([]);
     });
 
-    it("comes off a result that holds data and no reference, at a setup of another pattern that finds it unchanged", async () => {
-      // As for a result holding references too: the value entry is
-      // re-derived from a join that read nothing labeled.
+    it("stays on a result that holds data and no reference, at a setup of another pattern that finds it unchanged", async () => {
+      // Whether a root of data alone is restated is a question on specs#98,
+      // so its value entry stays as stored. Another pattern's setup reads no
+      // stored name, so only that keeps the stamp.
 
       const { dataOnly, sameDataOnly } = patterns();
       const result = await setUp("remint-data-only", dataOnly);
@@ -1323,7 +1324,7 @@ describe("cfc-result-wiring-stamp", () => {
 
       await setUp("remint-data-only", sameDataOnly);
 
-      expect(derivedOf(result)).toEqual([]);
+      expect(derivedOf(result)).toEqual([BOB]);
     });
 
     it("stays where a setup of the same pattern finds the result unchanged", async () => {

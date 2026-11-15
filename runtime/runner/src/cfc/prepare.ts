@@ -4071,6 +4071,18 @@ const isPureLinkStructure = (value: unknown): boolean => {
 };
 
 /**
+ * Whether `value` holds a reference anywhere, as a result root whose data
+ * sits beside its wiring's references does (`withRestatedResultWirings`).
+ */
+const holdsReference = (value: unknown): boolean => {
+  if (isPrimitiveCellLink(value)) return true;
+  if (isWalkableObjectOrArray(value)) {
+    return Object.values(value).some((member) => holdsReference(member));
+  }
+  return false;
+};
+
+/**
  * The whole-value roots recorded in `target` by the identity the
  * transaction's flow join names: a root another identity wrote in the same
  * transaction is not this writer's to claim.
@@ -4738,8 +4750,8 @@ const resultWiringsByTarget = (
  * slots that changed, while the wiring's membership is the root container's:
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
- * verifier read that consumes nothing. A root holding data, beside
- * references or alone, is taken too, where the setup is an asking one
+ * verifier read that consumes nothing. A root holding data beside
+ * references is taken too, where the setup is an asking one
  * (`#isAsking` in `runner.ts`) that the runtime did not start on its own: one
  * holding the reads that chose what the data shows. The persist region
  * re-derives that root's value entries from the transaction's join, as the
@@ -4767,9 +4779,12 @@ const withRestatedResultWirings = (
       type: "application/json",
       path: ["value"],
     }, { meta: internalVerifierRead }).ok?.value;
+    // A root holding data and no reference is left as stored: whether a
+    // restatement re-derives its value entry is a question on specs#98.
     if (
       value === undefined ||
-      (wiring.runtimeStarted && !isPureLinkStructure(value))
+      (!isPureLinkStructure(value) &&
+        (wiring.runtimeStarted || !holdsReference(value)))
     ) {
       continue;
     }
@@ -13237,8 +13252,8 @@ export function* prepareBoundaryCommitSteps(
     );
     const flowTarget = flowPersist ? flowTargets?.get(key) : undefined;
     // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
-    // A result wiring a setup restates, on a document holding data, beside
-    // references or alone, without writing its root
+    // A result wiring a setup restates, on a document holding data beside
+    // references, without writing its root
     // (`withRestatedResultWirings`). Its derived value entries, at the root
     // and below it, are replaced by one at the root (below), as a write of
     // the root would replace them, but the root is not a written path: no
