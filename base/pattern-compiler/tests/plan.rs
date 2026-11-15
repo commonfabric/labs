@@ -3450,7 +3450,7 @@ export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string>
 /// `select` while that branch is selected. PL §1.1 has "the paths of the
 /// result at which the instance stores a link to the stream" and does not
 /// say whether a position that holds the stream under one selection is
-/// one. The emitter lists it (note 243 of `SPEC-NOTES.md`).
+/// one. The emitter lists it (note 244 of `SPEC-NOTES.md`).
 #[test]
 fn a_stream_in_a_branch_of_a_select_has_a_result_path_below_the_select() {
     let analysis = program(
