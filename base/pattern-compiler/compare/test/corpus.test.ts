@@ -1,7 +1,9 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { eventOrder, type ResultRow, tally } from "../corpus.ts";
+import { eventOrder, type ResultRow, resultRow, tally } from "../corpus.ts";
+import type { WriteRow } from "../harness.ts";
+import { compareLabels } from "../template.ts";
 
 const row = (fields: Partial<ResultRow>): ResultRow => ({
   kind: "output",
@@ -110,5 +112,37 @@ describe("eventOrder", () => {
 
   it("has the bindings in the order of the plan", () => {
     expect(eventOrder(plan, "plan")).toEqual([0, 1, 3]);
+  });
+});
+
+describe("resultRow", () => {
+  it("names the binding of a write row, which the name of an inline handler does not", () => {
+    // Two inline handlers of one module can have one name: the plan
+    // numbers the handlers of each body from 1.
+    const empty = { confidentiality: [], integrity: [] };
+    const evaluated = { label: empty, bound: false, unsupported: [] };
+    const equal = compareLabels(empty, empty);
+    const write = (binding: number): WriteRow => ({
+      binding,
+      handler: "onClick#1",
+      write: 0,
+      path: [],
+      runtime: empty,
+      template: evaluated,
+      comparison: equal,
+      runtimeByOrigin: { all: empty, withoutStatic: empty },
+      comparisonWithoutStatic: equal,
+      looserByLinkStamp: false,
+    });
+
+    const rows = [4, 9].map((binding) =>
+      resultRow("write", write(binding), undefined)
+    );
+
+    expect(rows.map((row) => row.path)).toEqual([
+      "onClick#1#0/",
+      "onClick#1#0/",
+    ]);
+    expect(rows.map((row) => row.binding)).toEqual([4, 9]);
   });
 });

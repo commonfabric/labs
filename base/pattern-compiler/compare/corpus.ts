@@ -67,6 +67,12 @@ export const withinOf = (steps: unknown[] | undefined): Within | undefined =>
 export type ResultRow = {
   kind: "output" | "write";
   path: string;
+  /**
+   * For a write edge: the index of the handler's binding in the plan. The
+   * name in `path` does not identify it, since two inline handlers of one
+   * module can have one name.
+   */
+  binding?: number;
   /** The `op` of the root of the template. */
   root: string;
   runtime: string;
@@ -171,7 +177,8 @@ const NEEDS: Record<string, string> = {
   effect: "requests an effect",
 };
 
-const resultRow = (
+/** A row of the comparison as the results file holds it. */
+export const resultRow = (
   kind: "output" | "write",
   row: Row | WriteRow,
   template: Template | undefined,
@@ -183,6 +190,7 @@ const resultRow = (
     path: "handler" in row
       ? `${row.handler}#${row.write}/${row.path.join("/")}`
       : row.path.join("/"),
+    ...("handler" in row ? { binding: row.binding } : {}),
     root: template?.op ?? "",
     runtime: showLabel(row.runtime),
     runtimeWithoutStatic: showLabel(row.runtimeByOrigin.withoutStatic),
