@@ -130,10 +130,13 @@ export const requestGetIt = handler<
   // race conflict, and the retried one sees the first.
   if (latest && (!answer || answer.state === "started")) return;
   if (answer?.state === "placed") return;
+  // The same on every run of this tap (a conflict retry, the client's echo
+  // and the served run), so a host sees one request per tap. A tap the stream
+  // admits again derives the same key, and finds its request already there.
+  const requestId = eventKey();
+  if (requests.some((request) => request?.requestId === requestId)) return;
   getItRequests.set([...requests, {
-    // The same on every run of this tap (a conflict retry, the client's echo
-    // and the served run), so a host sees one request per tap.
-    requestId: eventKey(),
+    requestId,
     patternId,
     destination,
   }]);
