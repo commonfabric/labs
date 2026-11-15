@@ -100,7 +100,8 @@ export default pattern(() => {
     dimensionScore(rent, 2000) === 5 &&
     dimensionScore(rent, 500) === 0 &&
     dimensionScore(rent, 9000) === 10 &&
-    dimensionScore(rent, undefined) === 0
+    dimensionScore(rent, undefined) === 0 &&
+    dimensionScore({ ...rent, higherIsBetter: false }, 1200) === 9
   );
   const assert_categorical_scores_label = assert(() =>
     dimensionScore(location, "Good") === 7 &&
@@ -118,7 +119,7 @@ export default pattern(() => {
       option("TieB", "Fair"),
     ], [location])) === "High,TieA,TieB,Low"
   );
-  const assert_move_pins_every_option = assert(() => {
+  const assert_move_pins_only_the_moved_option = assert(() => {
     const moved = withOptionMoved(
       [option("A", "Excellent"), option("B", "Poor"), option("C", "Good")],
       [location],
@@ -126,11 +127,22 @@ export default pattern(() => {
       -1,
     );
     const ranked = rankOptions(moved, [location]);
+    // A new top scorer still rises past the unpinned options around B.
+    const withD = rankOptions([...moved, option("D", "Excellent")], [
+      location,
+    ]);
     return names(ranked) === "A,B,C" &&
-      moved.every((o) => o.manualRank !== null) &&
+      moved.filter((o) => o.manualRank !== null).length === 1 &&
       ranked.find((r) => r.name === "B")?.movedByHand === true &&
-      ranked.find((r) => r.name === "A")?.movedByHand === false;
+      ranked.find((r) => r.name === "A")?.movedByHand === false &&
+      names(withD) === "A,B,D,C";
   });
+  const assert_pinned_slots_survive_shrinking = assert(() =>
+    names(rankOptions([
+      option("A", "Excellent"),
+      option("Z", "Poor", undefined, 5),
+    ], [location])) === "A,Z"
+  );
   const assert_move_past_end_is_noop = assert(() =>
     withOptionMoved([option("A"), option("B")], [location], "A", -1)
       .every((o) => o.manualRank === null)
@@ -305,6 +317,19 @@ export default pattern(() => {
   );
   const assert_dimension_removed = assert(() => rubric.dimensions.length === 2);
 
+  // Flip Rent to lower-is-better: B's 1200 now scores 9, not 1.
+  const action_rent_lower_is_better = action(() =>
+    clickButton(rubric[UI], "Higher is better")
+  );
+  const assert_rent_flipped = assert(() =>
+    rubric.dimensions[1]?.higherIsBetter === false &&
+    rubric.ranked.find((r) => r.name === "Apartment B")?.score === 29 &&
+    hasText(rubric[UI], "Lower is better")
+  );
+  const action_rent_higher_is_better = action(() =>
+    rubric.toggleDirection.send({ name: "Rent" })
+  );
+
   // Quick Add: the mocked answer is checked against the rubric before adding.
   const action_quick_add = action(() => {
     typeInto(rubric[UI], QUICK_ADD_PLACEHOLDER, "A sunny loft near the park");
@@ -327,7 +352,7 @@ export default pattern(() => {
       rubric.ranked[0]?.score === 25.5;
   });
 
-  // A description with no mocked answer fails, and Clear dismisses it.
+  // A description with no mocked answer fails, and Dismiss clears the error.
   const action_quick_add_unanswered = action(() => {
     typeInto(rubric[UI], QUICK_ADD_PLACEHOLDER, "A houseboat");
     rubric.analyzeQuickAdd.send();
@@ -335,7 +360,7 @@ export default pattern(() => {
   const assert_quick_add_error = assert(() =>
     rubric.quickAddStatus === "error" && hasText(rubric[UI], "Error:")
   );
-  const action_clear = action(() => clickButton(rubric[UI], "Clear"));
+  const action_clear = action(() => clickButton(rubric[UI], "Dismiss"));
   const assert_cleared = assert(() =>
     rubric.quickAddStatus === "idle" &&
     rubric.options.length === 3
@@ -353,7 +378,8 @@ export default pattern(() => {
       { assertion: assert_categorical_scores_label },
       { assertion: assert_score_is_weighted_sum },
       { assertion: assert_rank_by_score_ties_by_order },
-      { assertion: assert_move_pins_every_option },
+      { assertion: assert_move_pins_only_the_moved_option },
+      { assertion: assert_pinned_slots_survive_shrinking },
       { assertion: assert_move_past_end_is_noop },
       { assertion: assert_manual_ranks_come_first },
       { assertion: assert_unique_names },
@@ -388,6 +414,9 @@ export default pattern(() => {
       { assertion: assert_dimension_added_option_removed },
       { action: action_remove_dimension },
       { assertion: assert_dimension_removed },
+      { action: action_rent_lower_is_better },
+      { assertion: assert_rent_flipped },
+      { action: action_rent_higher_is_better },
       { action: action_quick_add },
       { settle: true },
       { assertion: assert_quick_add_ready },

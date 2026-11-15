@@ -23,6 +23,13 @@
  * - Quick Add values are checked against the rubric before they are added:
  *   unknown dimensions are dropped, category labels matched exactly, numbers
  *   clamped to range.
+ * - Numeric dimensions can be "lower is better" (rent, commute), which the
+ *   original could not express.
+ * - A ▲/▼ nudge pins only the option moved, at its new slot; the rest keep
+ *   ranking by score around it. The original's manual rank froze the order.
+ * - Quick Add can be cancelled while it runs and its error dismissed while
+ *   keeping the description, and the description is not re-sent when
+ *   dimensions change while a proposal is shown.
  * - Weights step by 0.5 between 0 and 10 (0 ignores a dimension); the
  *   original's 0.1 floor made the sequence 1 → 0.5 → 0.1 → 0.6.
  * - The selection, the quick-add prompt and the form drafts are per-session UI
@@ -66,6 +73,9 @@ export interface Dimension {
   categories: CategoryOption[];
   numericMin: number;
   numericMax: number;
+  /** For a numeric dimension: whether a larger number is better (the
+   * default) or worse, as with price. */
+  higherIsBetter?: boolean;
 }
 
 export interface OptionValue {
@@ -110,6 +120,8 @@ export interface QuickAddValue {
   dimensionName: string;
   value: string | number;
   confidence: string;
+  /** The confidence's colour in the preview. */
+  color: string;
 }
 
 /** The option Quick Add proposes, after checking it against the rubric. */
@@ -163,7 +175,8 @@ export const dimensionScore = (
   const n = Number(value);
   const span = dim.numericMax - dim.numericMin;
   if (!Number.isFinite(n) || span <= 0) return 0;
-  return clamp((n - dim.numericMin) / span, 0, 1) * TOP_SCORE;
+  const fraction = clamp((n - dim.numericMin) / span, 0, 1);
+  return (dim.higherIsBetter === false ? 1 - fraction : fraction) * TOP_SCORE;
 };
 
 /** An option's total: each dimension's score times its weight. */
@@ -191,26 +204,37 @@ const byScore = (
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((entry) => entry.option);
 
-/** The displayed order: options placed by hand first, in their manual order,
- * then the rest by score. */
+/** The displayed order. An option placed by hand holds the slot it was put
+ * in (or the nearest free one, if the list has shrunk or two claim the same
+ * slot); every other option fills the remaining slots in score order, so
+ * adding or rescoring options still reorders everything not pinned. */
 const displayOrder = (
   options: readonly RubricOption[],
   dims: readonly Dimension[],
 ): RubricOption[] => {
-  const scored = byScore(options, dims);
-  const manual = scored
+  const n = options.length;
+  const slots: (RubricOption | undefined)[] = Array.from({ length: n });
+  const pinned = options
     .filter((o) => o.manualRank != null)
     .sort((a, b) => (a.manualRank ?? 0) - (b.manualRank ?? 0));
-  return [...manual, ...scored.filter((o) => o.manualRank == null)];
+  for (const option of pinned) {
+    const want = clamp((option.manualRank ?? 1) - 1, 0, n - 1);
+    let slot = want;
+    while (slot < n && slots[slot]) slot++;
+    if (slot >= n) {
+      slot = want;
+      while (slot >= 0 && slots[slot]) slot--;
+    }
+    slots[slot] = option;
+  }
+  const rest = byScore(options.filter((o) => o.manualRank == null), dims);
+  return slots.map((slot) => slot ?? rest.shift()!);
 };
 
 export const rankOptions = (
   options: readonly RubricOption[],
   dims: readonly Dimension[],
 ): RankedOption[] => {
-  const scorePlace = new Map(
-    byScore(options, dims).map((o, i) => [o.name, i]),
-  );
   const ordered = displayOrder(options, dims);
   return ordered.map((option, i) => {
     const score = scoreOption(option, dims);
@@ -221,15 +245,15 @@ export const rankOptions = (
       position: i + 1,
       isFirst: i === 0,
       isLast: i === ordered.length - 1,
-      movedByHand: option.manualRank != null &&
-        scorePlace.get(option.name) !== i,
+      movedByHand: option.manualRank != null,
     };
   });
 };
 
 /** The options after moving `name` one place up (delta -1) or down (+1) in
- * the displayed ranking. Every option is then pinned at its new place, so
- * the hand-made order holds as scores change. */
+ * the displayed ranking. The moved option is pinned at its new slot; the
+ * option it swapped with keeps a pin only if it already had one (at the slot
+ * just vacated). Everything else stays ranked by score. */
 export const withOptionMoved = (
   options: readonly RubricOption[],
   dims: readonly Dimension[],
@@ -238,12 +262,16 @@ export const withOptionMoved = (
 ): RubricOption[] => {
   const order = displayOrder(options, dims).map((o) => o.name);
   const from = order.indexOf(name);
-  const to = from + delta;
+  const to = from + Math.sign(delta);
   if (from < 0 || to < 0 || to >= order.length) return [...options];
-  const moved = [...order];
-  moved[from] = order[to];
-  moved[to] = name;
-  return options.map((o) => ({ ...o, manualRank: moved.indexOf(o.name) + 1 }));
+  const partner = order[to];
+  return options.map((o) =>
+    o.name === name
+      ? { ...o, manualRank: to + 1 }
+      : o.name === partner && o.manualRank != null
+      ? { ...o, manualRank: from + 1 }
+      : o
+  );
 };
 
 export const withManualRanksCleared = (
@@ -388,6 +416,13 @@ export const fitValue = (
   return clamp(n, dim.numericMin, dim.numericMax);
 };
 
+const CONFIDENCE_COLORS: Record<string, string> = {
+  high: "#15803d",
+  medium: "#b45309",
+  low: "#b91c1c",
+};
+const UNKNOWN_CONFIDENCE_COLOR = "#6b7280";
+
 export const EMPTY_PREVIEW: QuickAddPreview = {
   ready: false,
   name: "",
@@ -405,11 +440,13 @@ export const previewFromResponse = (
   const values = (response.extractedValues ?? []).flatMap((ev) => {
     const dim = dims.find((d) => d.name === ev?.dimensionName);
     const value = dim ? fitValue(dim, ev.value) : undefined;
+    const confidence = ev.confidence ?? "unknown";
     return dim && value !== undefined
       ? [{
         dimensionName: dim.name,
         value,
-        confidence: ev.confidence ?? "unknown",
+        confidence,
+        color: CONFIDENCE_COLORS[confidence] ?? UNKNOWN_CONFIDENCE_COLOR,
       }]
       : [];
   });
@@ -460,6 +497,8 @@ interface DimensionView {
   kind: string;
   weightLabel: string;
   scaleLabel: string;
+  isNumeric: boolean;
+  directionLabel: string;
 }
 
 const formatValue = (value: string | number): string =>
@@ -499,6 +538,10 @@ const dimensionView = (dim: Dimension): DimensionView => ({
       dim.categories.map((c) => `${c.label}=${c.score}`).join(", ")
     }`
     : `Range: ${dim.numericMin} – ${dim.numericMax}`,
+  isNumeric: dim.type === "numeric",
+  directionLabel: dim.higherIsBetter === false
+    ? "Lower is better"
+    : "Higher is better",
 });
 
 /** The rubric as markdown, for the filesystem projection. */
@@ -526,7 +569,9 @@ export const rubricMarkdown = (
     const view = dimensionView(d);
     return `- ${d.name} ${view.kind}, weight ${
       d.multiplier.toFixed(1)
-    }× — ${view.scaleLabel}`;
+    }× — ${view.scaleLabel}${
+      view.isNumeric ? ` (${view.directionLabel.toLowerCase()})` : ""
+    }`;
   });
   return [
     `# ${title}`,
@@ -537,12 +582,6 @@ export const rubricMarkdown = (
     "## Dimensions",
     ...(dimensionLines.length ? dimensionLines : ["(no dimensions yet)"]),
   ].join("\n");
-};
-
-const CONFIDENCE_COLORS: Record<string, string> = {
-  high: "#15803d",
-  medium: "#b45309",
-  low: "#b91c1c",
 };
 
 // ---------------------------------------------------------------------------
@@ -701,6 +740,10 @@ export interface RubricOutput {
   /** Add the option Quick Add proposed. */
   acceptQuickAdd: Stream<void>;
   clearQuickAdd: Stream<void>;
+  /** Cancel a pending call or dismiss its error, keeping the description. */
+  dismissQuickAdd: Stream<void>;
+  /** Flip a numeric dimension between higher-is-better and lower-is-better. */
+  toggleDirection: Stream<{ name: string }>;
 }
 
 const SmartRubric = pattern<RubricInput, RubricOutput>(
@@ -710,16 +753,16 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
     const newDimensionName = new Writable.perSession<string>("");
     const quickAddPrompt = new Writable.perSession<string>("");
     const quickAddSubmitted = new Writable.perSession<string>("");
+    const quickAddSubmittedSystem = new Writable.perSession<string>("");
 
     // --- Quick Add ---------------------------------------------------------
 
-    const quickAddSystem = computed(() =>
-      buildQuickAddSystemPrompt(dimensions.get())
-    );
     // Runs only once a description is submitted: an empty prompt sends
-    // nothing, so typing in the box costs no calls.
+    // nothing, so typing in the box costs no calls. The system prompt is
+    // captured at submission too, so editing dimensions while a proposal is
+    // on screen does not send the description again.
     const extraction = generateObject<QuickAddResponse>({
-      system: quickAddSystem,
+      system: quickAddSubmittedSystem,
       prompt: quickAddSubmitted,
     });
     const quickAddPreview = computed(() =>
@@ -736,14 +779,27 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
         ? "error"
         : quickAddPreview.ready
         ? "ready"
+        // An answer that arrived but names no option is a failure too, so
+        // the spinner never waits on it.
+        : extraction.result
+        ? "error"
         : "pending"
     );
-    const quickAddError = computed(() => String(extraction.error ?? ""));
+    const quickAddError = computed(() =>
+      extraction.error
+        ? String(extraction.error)
+        : "The answer did not name an option."
+    );
 
     const analyzeQuickAdd = action(() => {
       const description = quickAddPrompt.get().trim();
-      if (description !== "") quickAddSubmitted.set(description);
+      if (description === "") return;
+      quickAddSubmittedSystem.set(buildQuickAddSystemPrompt(dimensions.get()));
+      quickAddSubmitted.set(description);
     });
+    // Cancel a call or dismiss its error, keeping the description to edit or
+    // resend. Emptying the prompt also lets the same text be sent again.
+    const dismissQuickAdd = action(() => quickAddSubmitted.set(""));
     const clearQuickAdd = action(() => {
       quickAddPrompt.set("");
       quickAddSubmitted.set("");
@@ -796,10 +852,15 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
         newDimensionName.set("");
       },
     );
-    const addCategorical = action(() =>
-      addDimension.send({ type: "categorical" })
+    const toggleDirection = action(({ name }: { name: string }) =>
+      dimensions.set(
+        dimensions.get().map((d) =>
+          d.name === name
+            ? { ...d, higherIsBetter: d.higherIsBetter === false }
+            : d
+        ),
+      )
     );
-    const addNumeric = action(() => addDimension.send({ type: "numeric" }));
 
     const removeDimension = action(({ name }: { name: string }) => {
       dimensions.set(dimensions.get().filter((d) => d.name !== name));
@@ -893,7 +954,10 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
           ? (
             <div style={styles.row}>
               <cf-loader size="sm" showElapsed />
-              Analyzing description...
+              <span style={styles.grow}>Analyzing description...</span>
+              <cf-button variant="outline" onClick={dismissQuickAdd}>
+                Cancel
+              </cf-button>
             </div>
           )
           : quickAddStatus === "error"
@@ -902,8 +966,8 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
               <div style={{ ...styles.error, ...styles.grow }}>
                 Error: {quickAddError}
               </div>
-              <cf-button variant="outline" onClick={clearQuickAdd}>
-                Clear
+              <cf-button variant="outline" onClick={dismissQuickAdd}>
+                Dismiss
               </cf-button>
             </div>
           )
@@ -922,7 +986,7 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
                         <span
                           style={{
                             fontSize: "0.8em",
-                            color: CONFIDENCE_COLORS[v.confidence] ?? MUTED,
+                            color: v.color,
                           }}
                         >
                           ({v.confidence})
@@ -1163,8 +1227,14 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
             placeholder="New dimension name"
             style="flex: 1;"
           />
-          <cf-button onClick={addCategorical}>+ Categorical</cf-button>
-          <cf-button onClick={addNumeric}>+ Numeric</cf-button>
+          <cf-button
+            onClick={() => addDimension.send({ type: "categorical" })}
+          >
+            + Categorical
+          </cf-button>
+          <cf-button onClick={() => addDimension.send({ type: "numeric" })}>
+            + Numeric
+          </cf-button>
         </div>
         {hasDimensions
           ? (
@@ -1182,6 +1252,18 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
                       <strong>{dim.name}</strong>{" "}
                       <span style={styles.small}>{dim.kind}</span>
                     </div>
+                    {dim.isNumeric
+                      ? (
+                        <cf-button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            toggleDirection.send({ name: dim.name })}
+                        >
+                          {dim.directionLabel}
+                        </cf-button>
+                      )
+                      : null}
                     <span>{dim.weightLabel}</span>
                     <cf-button
                       size="sm"
@@ -1264,6 +1346,8 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
       analyzeQuickAdd,
       acceptQuickAdd,
       clearQuickAdd,
+      dismissQuickAdd,
+      toggleDirection,
     };
   },
 );
