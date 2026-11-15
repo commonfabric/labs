@@ -10,8 +10,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { JSON_FORMAT } from "@/codec-json/interface.ts";
-import { codecClassesFor } from "@/codecs.ts";
+import { fabricInstanceClassesByName } from "@/fabric-instances";
+import { fabricPrimitiveClassesByName } from "@/fabric-primitives";
 import {
   fabricValueOfTextWithModsForTestingOnly,
   type FixtureRequirements,
@@ -253,8 +253,11 @@ describe("fvj1-conformance", () => {
     const values = FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap((c) =>
       "make" in c ? [c.make()] : []
     );
-    for (const cls of codecClassesFor(JSON_FORMAT)) {
-      const { name } = cls;
+    const classes = {
+      ...fabricPrimitiveClassesByName(),
+      ...fabricInstanceClassesByName(),
+    };
+    for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
         .toEqual({ name, covered: !STUB_CODEC_CLASSES.has(name) });
     }

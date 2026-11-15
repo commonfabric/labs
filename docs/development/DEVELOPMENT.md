@@ -682,11 +682,11 @@ which predicate it needs is the next section.
 ### Walking or comparing a value
 
 A value the runtime holds may be a `FabricSpecialObject` — a byte sequence, a
-temporal value, a content hash, a regular expression, an error, a link, a map,
-a set. Each of those keeps its state in private fields and has no own
-properties at all, so a walk that decides "may I read this by property name?"
-with `isObjectOrArray()`, `isReadonlyObjectOrArray()`, `isObjectNotArray()`, or
-a bare `typeof value === "object"` gets the wrong result: it sees an empty
+temporal value, a content hash, an error, a link, a map, a set. Each of those
+keeps its state in private fields and has no own properties at all, so a walk
+that decides "may I read this by property name?" with `isObjectOrArray()`,
+`isReadonlyObjectOrArray()`, `isObjectNotArray()`, or a bare
+`typeof value === "object"` gets the wrong result: it sees an empty
 record and then merges the value to `{}`, rebuilds it as `{}`, descends into it
 and finds nothing, or writes a property onto it. Two sites already carry a
 `TODO(danfuzz)` naming that defect against `isReadonlyObjectOrArray()` —

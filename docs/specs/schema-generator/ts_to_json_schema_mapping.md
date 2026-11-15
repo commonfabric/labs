@@ -636,30 +636,29 @@ same-named types emit `$ref`s to it.
 `NATIVE_TYPE_SCHEMAS` (`src/formatters/native-type-formatter.ts`), as of
 this writing: `VNode` →
 `{ $ref: "https://commonfabric.org/schemas/vnode.json" }`; `Date`, `RegExp`,
-and `Uint8Array` → `{ type: "object" }`; eight `FabricPrimitive` classes
+and `Uint8Array` → `{ type: "object" }`; the eight `FabricPrimitive` classes
 (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`,
 `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`,
 `FabricUnavailable`) → `{ type: "<Name>" }`
 (the `FabricPrimitive`
 schema
 vocabulary, each name being the `.schemaType` its class's instances report);
-`FabricRegExp` → `{ type: "object" }`, the `.schemaType` its instances report;
 `URL` → `{ type: "string", format:
 "uri" }`; `ArrayBuffer`/`ArrayBufferLike`/`SharedArrayBuffer`/
 `ArrayBufferView`, the remaining ten typed arrays
 (`Uint8ClampedArray` … `BigUint64Array`), and `JSONSchemaObj`/`JSONSchema` →
 `true`.
 
-The three mapped to `{ type: "object" }` are native TS types with a canonical
-fabric form: a `Date` is stored as a `FabricEpochNsec`, a `RegExp` as a
-`FabricRegExp`, and a `Uint8Array` as a `FabricBytes`. They deliberately do
-NOT adopt the `FabricPrimitive` type names: a field authored against a native
-TS type can hold a raw native value on the way into the fabric boundary, and
-the `FabricPrimitive` types validate by prototype only. `"object"` accepts the
-stored fabric form, so a value stored as one reads back intact — where
-`{ type: "string" }` projects the read to `undefined`. `URL` is the exception
-that stays a string, because it converts to a plain string rather than to a
-`FabricPrimitive`.
+`Date` and `Uint8Array` are native TS types with a canonical fabric form: a
+`Date` is stored as a `FabricEpochNsec`, and a `Uint8Array` as a
+`FabricBytes`. They deliberately do NOT adopt the `FabricPrimitive` type names:
+a field authored against a native TS type can hold a raw native value on the
+way into the fabric boundary, and the `FabricPrimitive` types validate by
+prototype only. `"object"` accepts the stored fabric form, so a value stored as
+one reads back intact — where `{ type: "string" }` projects the read to
+`undefined`. `URL` is the exception that stays a string, because it converts to
+a plain string rather than to a `FabricPrimitive`. A `RegExp` has no fabric
+form at all: conversion refuses one.
 
 A field authored against a `FabricPrimitive` class ITSELF (`blob: FabricBytes`)
 emits that class's schema-vocabulary name, a leaf with no `properties`, no
