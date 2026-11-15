@@ -288,6 +288,8 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
    * (a never-settling promise — the unbounded-remote-fetch shape the
    * ensure's deadline exists to bound). */
   let hangPatternFetches = false;
+  /** A slow ensure: pattern SOURCE fetches wait for this gate, when set. */
+  let heldPatternFetches: PromiseWithResolvers<void> | undefined;
 
   const fetchStub: RuntimeFetch = (input, _init) => {
     const url = new URL(
@@ -303,6 +305,9 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     }
     if (hangPatternFetches && !url.searchParams.has("identity")) {
       return new Promise<Response>(() => {});
+    }
+    if (heldPatternFetches && !url.searchParams.has("identity")) {
+      return heldPatternFetches.promise.then(() => new Response(body));
     }
     if (url.searchParams.has("identity")) {
       return identityFor(url.pathname).then((id) => new Response(id));
@@ -323,6 +328,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     stats = emptyServingLoopStats();
     sinkLocalSeq = { value: 0 };
     hangPatternFetches = false;
+    heldPatternFetches = undefined;
     spaceServer = undefined;
     cleanups = [];
   });
@@ -404,7 +410,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     policyOverride?: Partial<
       NonNullable<ConstructorParameters<typeof SpaceServer>[0]["policy"]>
     >,
-    options?: { ensureSpaceRoots?: boolean },
+    options?: { ensureSpaceRoots?: boolean; onWaveCycle?: () => void },
   ): SpaceServer => {
     const created = new SpaceServer({
       ...(options?.ensureSpaceRoots !== undefined
@@ -448,6 +454,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
       },
       localSeqRef: sinkLocalSeq,
       onRootEnsure: ensures.record,
+      ...(options?.onWaveCycle ? { onWaveCycle: options.onWaveCycle } : {}),
       stats,
       policy: {
         flushDeadlineMs: 2_000,
@@ -942,6 +949,44 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(stats.rootEnsure.runs).toBe(0);
     expect(stats.rootEnsure.created).toBe(0);
     // The tenure is alive and serving — the wedge parked nothing.
+    expect(created.active).toBe(true);
+  });
+
+  it("a lifecycle verb queued while a SLOW ensure runs past its deadline waits for the root, then runs against it", async () => {
+    // A cold root compile on a loaded machine can outrun the deadline
+    // and still finish. A piece creation queued meanwhile registers into
+    // the root's addPiece stream: run before the root exists, it fails
+    // with "The space has no default pattern" for a creation that would
+    // have succeeded moments later (loom's pattern-build preview, on CI).
+    // The tenure keeps serving past the deadline; only its verbs wait.
+    await seedAcl({ [space]: "OWNER" });
+    heldPatternFetches = Promise.withResolvers<void>();
+    let cycles = 0;
+    const cycled = new ArrivalLog<number>();
+    const created = newSpaceServer({ rootEnsureDeadlineMs: 300 }, {
+      onWaveCycle: () => cycled.record(++cycles),
+    });
+    expect(await created.activate()).toBe(true);
+    await ensures.matching((outcome) => outcome === "failed");
+
+    let released = false;
+    let ranWhileHeld: boolean | undefined;
+    const queuedAt = cycles;
+    const verb = created.runLifecycleVerb({
+      name: "needs-root",
+      run: async (runtime) => {
+        ranWhileHeld = !released;
+        return (await resolveSpaceRootPattern(runtime, space)) !== undefined;
+      },
+    });
+    // A whole cycle after the verb arrived: before the fix it ran there.
+    await cycled.matching((cycle) => cycle > queuedAt);
+    expect(ranWhileHeld).toBeUndefined();
+
+    released = true;
+    heldPatternFetches.resolve();
+    expect(await verb).toBe(true);
+    expect(ranWhileHeld).toBe(false);
     expect(created.active).toBe(true);
   });
 

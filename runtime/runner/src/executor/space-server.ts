@@ -1455,6 +1455,17 @@ export class SpaceServer implements TransactionSealDestination {
    * admission, and the ensure re-sets it only from another no-owner
    * skip. */
   #rootEnsureAwaitingOwner = false;
+  /**
+   * The space-root ensure that outran its deadline and is still running,
+   * detached: the tenure serves on, but its queued lifecycle verbs wait
+   * for it. A verb such as a piece creation registers into the root's
+   * `addPiece` stream, so running it before the root exists fails a
+   * creation that would have succeeded moments later (a cold root
+   * compile on a loaded machine outruns the deadline). Cleared, with the
+   * loop woken, when the work settles either way; a verb then runs
+   * against whatever the ensure left, and reports its own failure.
+   */
+  #rootEnsureDetached: Promise<void> | undefined;
 
   /**
    * Lifecycle verbs awaiting the next wave cycle, in arrival order
@@ -2032,6 +2043,8 @@ export class SpaceServer implements TransactionSealDestination {
     // it off nothing arms, so the skip/re-arm machinery and every
     // rootEnsure counter stay untouched for the tenure.
     this.#rootEnsureOwed = this.#options.ensureSpaceRoots !== false;
+    // A previous tenure's held ensure is not this tenure's to wait for.
+    this.#rootEnsureDetached = undefined;
 
     // W = read watermark doc (0 if absent).
     this.#watermark = readWatermarkSeq(engine);
@@ -3737,7 +3750,10 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   #hasWorkBesidesFeed(): boolean {
-    return this.#lifecycleVerbs.length > 0 ||
+    // Verbs held for a root ensure past its deadline are not work until it
+    // settles: its settling wakes the loop, so the idle wait does not spin.
+    return (this.#lifecycleVerbs.length > 0 &&
+      this.#rootEnsureDetached === undefined) ||
       (this.#currentWave?.contributionCount ?? 0) > 0 ||
       // Chained-not-yet-applied wave seals (the F4 fix): real work the
       // contribution count cannot see yet.
@@ -6900,6 +6916,10 @@ export class SpaceServer implements TransactionSealDestination {
   async #ensureSpaceRoot(runtime: Runtime): Promise<void> {
     const { engine, space, server } = this.#options;
     const stats = this.#options.stats.rootEnsure;
+    // The ensure's work, settled either way, and whether it has: what a
+    // deadline leaves running is what the queued verbs wait for.
+    let running: Promise<void> | undefined;
+    let finished = false;
     try {
       // Inside the try like everything else the ensure does: the loop
       // must never park over the ensure — a thrown ACL read is a
@@ -6958,6 +6978,9 @@ export class SpaceServer implements TransactionSealDestination {
       // its eventual rejection is swallowed here so it can never
       // surface as an unhandled rejection.
       work.catch(() => {});
+      running = work.then(() => {}, () => {}).finally(() => {
+        finished = true;
+      });
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       let result: Awaited<typeof work>;
       try {
@@ -6996,6 +7019,7 @@ export class SpaceServer implements TransactionSealDestination {
     } catch (error) {
       stats.failures += 1;
       this.#options.onRootEnsure?.("failed");
+      if (running !== undefined && !finished) this.#holdVerbsFor(running);
       logger.warn("space-root-ensure-failed", () => [
         `space ${space}: root ensure failed; the tenure serves without ` +
         "it and the next activation retries (the client-era creation " +
@@ -7003,6 +7027,18 @@ export class SpaceServer implements TransactionSealDestination {
         error,
       ]);
     }
+  }
+
+  /** Hold the queued lifecycle verbs until `running` (an ensure past its
+   * deadline) settles, then wake the loop to run them. */
+  #holdVerbsFor(running: Promise<void>): void {
+    const held = running.then(() => {
+      if (this.#rootEnsureDetached !== held) return;
+      this.#rootEnsureDetached = undefined;
+      // The held verbs are input again: wake the loop out of its idle wait.
+      this.#feedArrived?.resolve();
+    });
+    this.#rootEnsureDetached = held;
   }
 
   async #waveCycle(runtime: Runtime): Promise<void> {
@@ -7037,11 +7073,16 @@ export class SpaceServer implements TransactionSealDestination {
     // wave's commit leaves it, so a commit an overlapped cycle left in
     // flight is finished before the first verb runs: a write of it the
     // sink refused rolls back before any verb can read it.
-    if (this.#lifecycleVerbs.length > 0 && this.#commitInFlight !== undefined) {
+    // Verbs wait out a root ensure still running past its deadline.
+    const verbsRun = this.#rootEnsureDetached === undefined;
+    if (
+      verbsRun && this.#lifecycleVerbs.length > 0 &&
+      this.#commitInFlight !== undefined
+    ) {
       await this.#finishCommitInFlight(runtime, this.#commitInFlight);
       if (!this.#active || this.#runtime !== runtime) return;
     }
-    const verbs = await this.#runQueuedLifecycleVerbs(runtime);
+    const verbs = verbsRun ? await this.#runQueuedLifecycleVerbs(runtime) : [];
     this.#servedWave = undefined;
     // A verb's receipt reads this cycle's commit outcome, so a cycle that
     // ran one commits inline; any other cycle may leave its commit in
