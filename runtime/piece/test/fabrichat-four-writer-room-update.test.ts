@@ -595,6 +595,57 @@ describe("fabrichat-four-writer-room-update", () => {
       ).toEqual(STORED_REACTION_WRITERS);
     });
 
+    it("reads a deleted message the earlier program stored as a tombstone, in `count`, `latest` and a window opened afterward", async () => {
+      // TODO(danfuzz): Known red. The room's message entries read each
+      // message through the handle its stored link resolves to, which keeps
+      // the earlier program's schema for it, whose `earlierVersions` the
+      // tombstone this tree's room leaves does not hold; such a message
+      // drops out of the room's counts and views. Turn this green with the
+      // room fix that reads the tombstone whole.
+
+      const [, second] = await storedMessages();
+      await send(
+        "deleteMessage",
+        trusted({ message: second }, "ChatDeleteSurface", "ChatDelete"),
+      );
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-tombstone",
+          windowId: "tombstone",
+          from: { before: "end" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+      const bodiesOf = (messages: unknown) =>
+        ((messages ?? []) as { body?: unknown }[]).map((message) =>
+          message?.body
+        );
+
+      expect(await today.key("messages").key("count").pull()).toBe(
+        (await storedMessages()).length,
+      );
+      expect(
+        bodiesOf(
+          await today.key("messages").key("latest").key("messages")
+            .pull(),
+        ),
+      ).toContainEqual({ deleted: true });
+      expect(
+        bodiesOf(
+          await today.key("messages").key("windows").key("tombstone").key(
+            "messages",
+          ).pull(),
+        ),
+      ).toContainEqual({ deleted: true });
+    });
+
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
       // A close of a window that isn't open changes nothing, so it makes no
       // write the stored policy could refuse.
