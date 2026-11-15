@@ -507,16 +507,23 @@ export const assumptionsMarkdown = (
 const MUTED = "var(--cf-theme-color-text-secondary, #6b7280)";
 const BORDER = "1px solid var(--cf-theme-color-border, #e5e7eb)";
 
+// The body fills the screen's main area and each column is exactly its
+// height, so the chat and the card list scroll inside their columns and the
+// sidebar's footer (unsent updates, "Tell it now") stays in view. Without
+// `minHeight: 0` and the columns' `height: 100%`, both columns grew to the
+// whole transcript and the footer sat thousands of pixels down, unreachable.
+// On a narrow screen the sidebar wraps below the chat and the body scrolls.
 const styles = {
   body: {
     display: "flex",
     flex: "1",
     flexWrap: "wrap",
-    overflow: "hidden",
-    height: "100%",
+    minHeight: "0",
+    overflowY: "auto",
   },
   chat: {
     flex: "2 1 320px",
+    height: "100%",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
@@ -524,6 +531,7 @@ const styles = {
   },
   sidebar: {
     flex: "1 1 260px",
+    height: "100%",
     maxWidth: "380px",
     borderLeft: BORDER,
     display: "flex",
@@ -555,7 +563,7 @@ const styles = {
   },
   cardHeader: {
     padding: "0.4rem 0.6rem",
-    background: "var(--cf-theme-color-surface-secondary, #f5f5f5)",
+    background: "var(--cf-theme-color-surface, #f5f5f5)",
     borderBottom: BORDER,
     display: "flex",
     justifyContent: "space-between",
@@ -865,7 +873,7 @@ const AssumptionSurfacer = pattern<
         <div style={styles.body}>
           <div style={styles.chat}>
             <cf-vscroll
-              style="padding: 1rem; flex: 1;"
+              style="padding: 1rem; flex: 1; min-height: 0;"
               flex
               showScrollbar
               fadeEdges
@@ -883,7 +891,11 @@ const AssumptionSurfacer = pattern<
               </span>
             </div>
 
-            <cf-vscroll style="padding: 1rem; flex: 1;" flex showScrollbar>
+            <cf-vscroll
+              style="padding: 1rem; flex: 1; min-height: 0;"
+              flex
+              showScrollbar
+            >
               {hasCards
                 ? (
                   <div>
