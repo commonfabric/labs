@@ -492,9 +492,8 @@ export const tally = (
     withoutStatic: by((row) => row.withoutStatic),
     ...(kind === "write"
       ? {
-        looserByLinkStamp: compared.filter((row) =>
-          row.looserByLinkStamp
-        ).length,
+        looserByLinkStamp:
+          compared.filter((row) => row.looserByLinkStamp).length,
       }
       : {}),
   };

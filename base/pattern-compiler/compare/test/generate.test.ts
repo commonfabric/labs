@@ -424,3 +424,35 @@ describe("a handler of an element body that resolves the handle of its element",
     expect(row.comparison.integrity).toBe("equal");
   });
 });
+
+describe("a handler that sends to the stream of another binding", () => {
+  // `fixtures/stream-target.tsx`: the write edge of the inline handler
+  // has the stream of `inc` as its target. A stream stores no value, so
+  // the edge has no stored label to compare.
+  it("has a write edge that is not compared, under a reason that names the stream", async () => {
+    const { plan, schemas } = await planOf("stream-target");
+    const binding = (plan.bindings ?? []).findIndex((binding) =>
+      binding.result !== undefined
+    );
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("stream-target.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding, event: generateEvent(plan, schemas, binding) }],
+    });
+
+    expect(run.events.map((event) => event.outcome)).toEqual(["committed"]);
+    expect(run.writes).toEqual([]);
+    expect(run.skipped.filter((entry) => entry.binding === binding)).toEqual([
+      {
+        what: "event of onClick, write 0",
+        reason: "a write edge whose target is the stream of a binding",
+        binding,
+      },
+    ]);
+  });
+});

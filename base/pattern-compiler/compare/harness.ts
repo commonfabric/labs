@@ -914,14 +914,14 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               stateCellIds.has(link.id)
             ? metadata
             : {
-            ...metadata,
-            labelMap: {
-              ...metadata.labelMap,
-              entries: metadata.labelMap.entries.filter((entry) =>
-                entry.origin !== "declared"
-              ),
-            },
-          };
+              ...metadata,
+              labelMap: {
+                ...metadata.labelMap,
+                entries: metadata.labelMap.entries.filter((entry) =>
+                  entry.origin !== "declared"
+                ),
+              },
+            };
           const view = cfcLabelViewFromMetadata(kept, link.path);
           // A document the way passes through contributes the
           // confidentiality of its entries at the link, which a read through
@@ -1111,8 +1111,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       // position (an output row, which no body of a handler is evaluated
       // for), the entries that are not of origin `link` (a write row, PL
       // §2.2), or nothing (`WriteRow.looserByLinkStamp`).
-      let passedHandle: "every entry" | "the stamp" | "nothing" =
-        "every entry";
+      let passedHandle: "every entry" | "the stamp" | "nothing" = "every entry";
       // A handle is passed on where its `identity` slot is in the reads of
       // the handler's body and no write edge of the body has the slot as
       // its target. A handle the body writes through is not passed on: the
@@ -1714,6 +1713,20 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             let base: AnyCell | undefined;
             if (target.kind === "handle" && target.slot !== undefined) {
               base = slotCell(target.slot, context);
+              // A send to the stream of another binding stores nothing at
+              // the target: what that binding's handler writes is the
+              // write of another event.
+              if (
+                base === undefined &&
+                plan.slots[target.slot].root.kind === "binding" &&
+                (stateEntry(target.slot, context).entry.place as {
+                    stream?: number;
+                  } | undefined)?.stream !== undefined
+              ) {
+                throw new Unsupported(
+                  "a write edge whose target is the stream of a binding",
+                );
+              }
             } else if (target.kind === "state" && target.cell !== undefined) {
               base = stateCell(target.cell);
             }
