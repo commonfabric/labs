@@ -9,12 +9,12 @@ the foods out of free-form planning notes, match each to a recipe or prepared
 food already in the space (`wish("#recipe" / "#preparedFood")`), or offer to
 create one, all reviewed with checkboxes before anything is added; existing
 dishes can also be added by hand. It works out the meal's balance (dishes and
-servings per course against the guest count), each guest's dietary fit
-(unknown is never read as safe; "Analyze Diets" runs the recipes' own
-analyzers), and an oven plan that gives every oven step an oven by temperature,
-racks and height and reports what cannot fit, drawn as a timeline in clock
-time. "Suggest Improvements" asks the model for menu ideas. Burners are
-recorded but not scheduled: recipes do not say when they use one.
+servings per course against the guest count), each guest's dietary fit (unknown
+is never read as safe; "Analyze Diets" runs the recipes' own analyzers), and an
+oven plan that gives every oven step an oven by temperature, racks and height
+and reports what cannot fit, drawn as a timeline in clock time. "Suggest
+Improvements" asks the model for menu ideas. Burners are recorded but not
+scheduled: recipes do not say when they use one.
 
 **Keywords:** meal-planning, recipe, prepared food, oven schedule, conflict
 detection, dietary, generateObject, wish, composition, mentionable
