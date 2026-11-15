@@ -1862,3 +1862,207 @@ numbers have gaps.
      per-element body have no address the harness can form (174 rows are not
      compared for that reason already), so a write whose target or template
      names one would still not be compared. It was not built.
+
+## Ruling U1, the comparison rules of PL §3.1, and the write edges examined
+
+228. **The label of a handle that is passed on, and the `link` entry** (ruling
+     U1; PL §2.2 "The label of an `identity` slot", §3.9 "A handle a body passes
+     on"; closes note 226). PL has the label of an `identity` slot as what a
+     `followRef` read consumes at the position that holds the reference, "the
+     `link` entry of the stored link, and the stamp of the run that wrote the
+     link", and says the result is equal to today for `joinAsP1` of
+     `showcase/battleship/multiplayer/repro-minimal.tsx`. The harness read the
+     slot that way before the ruling, and the two rows are still looser by the
+     clause of the input whose handle is passed on. What the run stores, read
+     from the documents after the event: the argument document holds at `data1`
+     and at `data2` one entry each of origin `link`, with the clause of that
+     input. An entry of origin `link` holds what the schema of the link declares
+     and what the link carries (`prepareBoundaryCommitSteps` in
+     `runtime/runner/src/cfc/prepare.ts`, where it persists the result of
+     `linkLabels.persisted`), and the schema of a link to a cell is the cell's
+     own, so the entry repeats the clause the cell's type declares. The
+     transaction of `joinAsP1` reads the argument document at `value/data1` and
+     the document of `data1` at `value`, and reads neither the argument document
+     at `value/data2` nor the document of `data2` (`getReadActivities` of the
+     transaction before its commit). The document the same transaction writes
+     for the child's argument, which holds the links to both cells, has stamps
+     with the clause of `data1` alone. So the run makes no `followRef`
+     observation of a link it only passes on, where PL §2.2 says "a probe of a
+     reference that the transaction does not follow is a `followRef`
+     observation". The harness keeps PL's rule as the row's template and holds a
+     second label beside it, `WriteRow.templateWithoutPassedLinks`: the entries
+     of origin `link` are left out of the label of each `identity` slot that no
+     write edge of the body targets. With it both rows are equal. PL does not
+     say that the `link` entry of a link to a cell holds the cell's declared
+     clause, and the ruling's "nothing of the label of its cell" does not hold
+     for the slot as PL defines it wherever the link's schema declares a label.
+229. **A write row beside the target's declared label, and an edge that passes a
+     reference on** (PL §3.1 "A write edge of a handler"). The template's side
+     of a write row is now joined with the entries of origin `declared` in the
+     document that holds the written value. For an edge with a `reference`
+     member it is also joined with what a value read through the stored link
+     consumes. PL does not say what the integrity of such a row is. The template
+     of the edge mints the body's atom, and with it the row had one atom more
+     than the runtime's label, in 6 corpus rows (`boundSelectRoom` of
+     `examples/scoped-group-chat/main-plain-inputs.tsx`, `moveToPile1` of
+     `showcase/card-piles/main.tsx`). The harness takes the atom as one on the
+     link: the row has the integrity of the value read through the link, as a
+     read has with a stored `followRef` entry, whose integrity the harness
+     leaves out (`consumed` in `compare/harness.ts`).
+230. **Where an `identity` slot is dereferenced** (PL §3.1 "What is compared").
+     `TemplateInputs.slot` of `compare/template.ts` takes a third argument that
+     says whether the slot stands for the value the template passes on: the
+     `slot` node that is the template, the selected branch of a `select`, and
+     the body of a `pick`. The harness joins the value read of the slot's path
+     only there. PL names "the chosen child of a `pick`"; the evaluator takes
+     the body of the `pick` at the chosen child. An input of a `derive`, a
+     condition, a choice and the body of a `fold` have the label of the link.
+231. **The static part by document** (PL §3.1 "Which entries are the static
+     part"; closes the last part of note 211). The harness keeps the `declared`
+     entries of the argument's document, of the cell of each generated input,
+     and now of each state cell the manifest names. `pinned` of
+     `dev/test/cfc-trusted-write/main.tsx` is tighter without the static part
+     where it was looser, and no corpus output is looser without the static
+     part. A cell that a site of a body created is read through the stored link
+     (note 232) and has no address in the harness, so its document is not in the
+     set; no corpus row depends on it.
+232. **A reference a site of a body made** (PL §3.9 of that name, §3.1 "A
+     reference whose target no slot names", §3.11 "What a materializer returns";
+     closes notes 203 and 216). The crate did not change. It writes what a
+     materializer returned as the template of the materializer's body, a
+     `derive` with no input for the three `lift`s of
+     `examples/cfc-spec-gallery/main.tsx`, where PL has "a slot with root
+     `operation`". The two have the same label there, and the harness has no
+     reading for a slot of root `operation`. The harness takes an output as one
+     that passes on a computed reference where its template is the template of a
+     materializer's body, or a `derive` by a body that has an `identity` entry
+     of `Body.computed`, and joins the template's side with what a value read
+     through the stored link consumes. For the first form the link is the one at
+     the output path. For the second the body's result holds the reference at a
+     path the plan does not name: the three corpus rows are the tree an authored
+     function returns, with the handle at `children/0/children/3/props/$value`
+     below it. The harness takes every link stored below the path in the
+     document that holds the value, and cannot tell the link of the reference
+     from another link there. The three rows are equal in confidentiality.
+     Without the atom of a kept output they are looser in integrity, as before
+     (note 203): the document of the tree has stamps with the caveat on every
+     path and an atom beside them, so the run of the node that built the tree
+     had the caveat in its join. Which read brought it in was not examined; PL
+     §3.9 expects it ("tighter for a re-evaluated body ... where the runtime
+     stamps the join of the whole run").
+233. **The two classifications of a row** (PL §3.1 "The atom of a kept output").
+     `corpus.ts report` prints for each category the outputs classified without
+     the atom of a kept output and with it, and for write edges a column with
+     the link entries of a passed handle left out (note 228). `tally` of
+     `compare/corpus.ts` counts them.
+234. **`Binding.result` in source order** (PL §1.1). The emitter holds the
+     members of a record by name, so the order is formed from the paths
+     (`stream_at` in `src/plan.rs`): the members of the record the pattern
+     returns in the order its object literal writes them, in a view node the
+     attributes before the children, and the children by position, compared as
+     numbers. Two things are not source order: the members of a record nested
+     below a result path are in the order of their names, and so are two
+     attributes of one element.
+235. **A tag at a child position, and anywhere else** (PL §1.1; closes the open
+     point of note 213). `jsx_pattern` in `src/plan.rs` returned the callee's
+     `[UI]` wherever the tag was written. It now does so for a tag at a child
+     position of a view node, and a call or a variable there that evaluates to a
+     record with `$UI` is the same. At any other place the tag is the callee's
+     result, with the tree below `$UI`: the outputs of
+     `controls: <Controls>...</Controls>` in the catalog stories are at
+     `controls/$UI/...`. Before the change a variable that holds the result of a
+     pattern, written as a child, had the whole result at the position: the
+     corpus has 2,584 edges where it had 2,616, and the comparison has 12
+     outputs fewer, which were members of a result beside its `[UI]` at a child
+     position.
+236. **A type that contains itself** (PL §1.5 "A recursive type, and what is
+     hashed"). Not done. `src/schema.rs` writes `{}` at the reference, as
+     before. The type checker ends a declaration that reaches itself with
+     `Shape::Unresolved(Why::Recursive)` (`src/types.rs`), which names no
+     declaration, and a type has no record of the name it was declared under.
+     PL's rule needs both: the declaration each reference leads to, and the
+     declared name for the member of `$defs`. `onClick#2` of
+     `dev/self-reference-test/self-reference-test.tsx` is still refused for that
+     reason (note 224).
+237. **`Binding.eventSchema` of an inline handler** (PL §1.1). An inline handler
+     whose parameter has an annotation now has the schema of that type. One
+     without an annotation has none: PL has "the type the checker gives its
+     parameter", which comes from the type of the attribute the handler is
+     written at, and the crate has no types for the attributes of a host
+     element. `Binding.result` for a binding of an element body (PL §1.1,
+     question 78) was not built.
+238. **The tighter write rows.** Each of the 9 rows that are tighter in the last
+     run has clauses in the runtime's label that the template lacks, and in each
+     the clauses are held by a `derived` entry of class `shape` at the written
+     path or below it, which an earlier event of the same scenario stamped. The
+     later write replaced the `value` entry with its own join and left the
+     `shape` entry. `prepareBoundaryCommitSteps` carries such an entry forward
+     until the path is created again; its comment calls the entry left by a
+     deletion a known residual. So the rows are tighter because the template has
+     the label of this write alone, and the runtime's label also has the
+     existence label of what an earlier write stored. None is tighter because
+     the template leaves out a read of the handler.
+
+    | Row | The clauses the template lacks | The entry that holds them |
+    | --- | --- | --- |
+    | `clearLogs` write 0, `dev/gideon-tests/test-record-key-set-56.tsx` | `emptyRecord`, `populatedRecord` | `shape` at `2` to `6` and `length` of the list, which is now empty |
+    | `onClick#3` write 0, `examples/map-demo/map-demo.tsx` | `center`, `zoom` | `shape` at `2` and `length` of `areasOfInterest`, now empty |
+    | `onClick#4` writes 0 and 2, the same module | `selectedStopIndex` | `shape` at the root of `areasOfInterest` and of `stops`, from `onClick#3` |
+    | `closeModal` writes 0 to 2, `examples/text-swapper/text-swapper.tsx` | `leftText` | `shape` at the root of each state cell, from `openEditLeft`; the handler's own join is empty and stores no `value` entry |
+    | `restart` write 0, `showcase/wordsearch/play.tsx` | `puzzle` | `shape` at `at` and `index` of the state cell `anchor`, from `tap` |
+    | `cancelJob` write 1, `system/cfc/trusted-surfaces/long-running-job.tsx` | `jobAuthorization` | `shape` at the root of `jobStatus`, from `startJob` |
+
+239. **The write edges an event's run did not make.** The results now name them
+     (`ModuleResult.notMade`). Before the change of the generator below, 132
+     were not made: 17 in events the runtime refused, and 115 in events that
+     were committed, in 35 modules. 40 of the 115 were read against the
+     handler's source and the generated values. None shows a fault of the
+     harness or of the runtime: in each the handler did not store a new value.
+
+    | Cause | Edges read | Examples |
+    | --- | --- | --- |
+    | The handler writes the value the target already holds, and the storage layer stores no write of an equal value | 13 | `increment`, `decrement`, `reset` of `product/primitives/counter.tsx` (every generated number is 3, so `clamp` gives 3); `setStatus`, `setRating` of `examples/reading-list/reading-item-detail.tsx`; `toggleWithLogging` of `examples/cf-checkbox-cell/cf-checkbox-cell.tsx`; writes 2 to 4 of `saveEdit` and writes 0 and 2 of `openEditRight` of `examples/text-swapper/text-swapper.tsx`, after an earlier event of the scenario |
+    | The handler returns before the write, or does not take the branch, on the generated event | 7 | `toggleIndent`, `setIndent`, `deleteItem` (2) of `examples/simple-list/simple-list.tsx` (index 3 in a list of two); `select` of `product/primitives/option-picker.tsx` (the option is not among the options); `handleTitleKeydown` of `apps/weekly-calendar/event.tsx` (the key is not `Enter`); `rename` of `examples/scoped-user-directory/main.tsx` |
+    | The same, on the state an earlier event of the scenario left | 4 | writes 0 and 1 of `saveEdit` (the side being edited is `null` after `closeModal`); writes 1 and 2 of `tap` of `showcase/wordsearch/play.tsx` |
+    | The event's type is a string and the generator sent `{}` | 4 | `navigate` of `examples/router/router.tsx`; `setForwardRecipient`, `setResearchCommand`, `setSafeLinkSource` of `examples/cfc-spec-gallery/main.tsx` |
+    | The handler removes an element by identity, and the object of the event is no element of the list | 4 | `removeItem` (2) of `examples/todo-list/todo-list.tsx`; `removeItem` of `product/primitives/check-list.tsx`; `removeEntry` of `product/primitives/amount-ledger.tsx` |
+    | An edge at the elements of a list, where the run stored no new element | 2 | write 1 of `archiveCompleted` of `examples/todo-list/todo-list.tsx` and of `clearCompleted` of `product/primitives/check-list.tsx` |
+    | The written value depends on `Math.random` | 6 | `shuffle` (4) of `showcase/card-piles/main.tsx`; `roll` of `showcase/dice/dice.tsx`, which differs from run to run |
+
+     The generator now gives an event values an input does not have: 1 for
+     a number, which is an index inside a generated array, `false`, and the
+     last member of an `enum`. An event whose declared type is a string, a
+     number or a boolean is that value. 13 more edges are made, and the
+     comparison has 152 write rows where it had 144.
+
+240. **The comparison over the corpus, after ruling U1** (replaces the output
+     rows of note 214 and the table of note 225). "Before" is the run at the
+     start of this work, which differs from note 225 by one row of
+     `showcase/dice/dice.tsx`.
+
+    | | before | after |
+    | --- | --- | --- |
+    | outputs compared | 1,313, and 124 bounds | 1,301, and 124 bounds |
+    | without the atom of a kept output: equal | 1,169 | 1,165 |
+    | tighter | 20 | 15 |
+    | atom names the pattern | 76 | 74 |
+    | looser | 48 | 47 |
+    | incomparable | 0 | 0 |
+    | with the atom: tighter | 1,189 | 1,180 |
+    | atom names the pattern | 124 | 121 |
+    | looser, incomparable | 0, 0 | 0, 0 |
+    | looser without the static part | 1 | 0 |
+    | events sent, committed | 226, 212 | 226, 212 |
+    | write edges compared | 143, and 1 bound | 152, and 1 bound |
+    | equal | 130 | 141 |
+    | tighter | 11 | 9 |
+    | looser | 2 | 2 |
+    | looser with the link entries of a passed handle left out | not measured | 0 |
+    | write edges the event's run did not make | 133 | 120 |
+
+    The 47 outputs that are looser without the atom are looser in
+    integrity alone, by notes 202 and 203. The 12 outputs fewer are by
+    note 235. The 2 looser write edges are those of note 228. The 2 write
+    edges that were tighter and are equal are `submit` and `plantBrief` of
+    `examples/cfc-exchange-rules/witnessed-chain.tsx`, whose target declares
+    a policy clause that the template's side now has (note 229).

@@ -86,7 +86,14 @@ whose atom names the pattern where the runtime's names other code is counted in
 a category of its own. The position of a tag that names a pattern is read below
 the `$UI` of the result the run holds there. The generator gives each top-level
 input of a plan a value of its type and a confidentiality atom of its own, and
-each handler an event of the type its event declares.
+each handler an event of the type its event declares. An `identity` slot has the
+label of the link at the position that holds the reference, and is joined with a
+value read of its path only where an output passes the reference on. A write row
+is compared beside the label the target's type declares, and holds a second
+label with the link entries of a handle the body passes on left out. An output
+that passes on a reference the instance computed is compared with both sides
+reading the cell the stored link leads to. The static part is separated by
+document.
 
 Run the tests from the repository root with
 `deno test -A base/pattern-compiler/compare/test/`, and print the tables of the
@@ -102,12 +109,14 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.js
 construct, skips the ones that need `wish` or request an effect, and appends one
 line per module to the results file. `report` prints the modules run and skipped
 by reason, the outputs and write edges compared by category, what was not
-compared by reason, the events committed and refused with the runtime's reason
-for each refusal, the looser rows by what differs, and the outputs the run holds
-no value at by what the run stores there, with one example each. Notes 177 to
-186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what the comparison takes as
-each side's label and what it found, and notes 217 to 227 why the runtime
-refuses an event and what the generator does about it.
+compared by reason, each output classified without the atom of a kept output and
+with it, the events committed and refused with the runtime's reason for each
+refusal, the looser rows by what differs, and the outputs the run holds no value
+at by what the run stores there, with one example each. Notes 177 to 186, 191 to
+193, and 197 on of `SPEC-NOTES.md` say what the comparison takes as each side's
+label and what it found, notes 217 to 227 why the runtime refuses an event and
+what the generator does about it, and notes 228 on what ruling U1 and the
+comparison rules of PL §3.1 changed.
 
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
