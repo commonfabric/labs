@@ -184,6 +184,33 @@ export default pattern(() => {
     withRound("P", 1).startsWith("P\n\nAsk 2") &&
     withRound("P", 1) !== withRound("P", 2)
   );
+  const assert_clues_keep_only_team_targets = assert(() => {
+    // A model named a word not on the board (JOBS) and suggested a board word
+    // as a clue; only the team's in-play words count as targets.
+    const board = normalizeBoard([
+      { word: "apple", owner: "red" },
+      { word: "bank", owner: "red", revealed: true },
+      { word: "berlin", owner: "blue" },
+    ]);
+    const clues = cluesFrom(
+      {
+        clues: [
+          {
+            clue: "steve",
+            number: 2,
+            targetWords: ["jobs", "apple", "bank"],
+            reasoning: "",
+          },
+          { clue: "wall", number: 1, targetWords: ["berlin"], reasoning: "" },
+          { clue: "berlin", number: 1, targetWords: ["apple"], reasoning: "" },
+        ],
+      },
+      board,
+      "red",
+    );
+    return clues.length === 1 && clues[0].clue === "STEVE" &&
+      clues[0].number === 1 && clues[0].targetWords.join() === "APPLE";
+  });
   const assert_clues_from_nothing = assert(() =>
     cluesFrom(undefined).length === 0
   );
@@ -237,7 +264,8 @@ export default pattern(() => {
     helper.board[0].word === "WORD1"
   );
 
-  // A photo upload shows a reading card; Discard hides it.
+  // A photo upload shows a reading card; Discard hides it. The image has no
+  // `timestamp`: a live cf-image-input upload reaches the handler without one.
   const action_upload_photo = action(() =>
     fireEvent(findElement(helper[UI], "cf-image-input"), "oncf-change", {
       detail: {
@@ -246,7 +274,6 @@ export default pattern(() => {
           name: "board.jpg",
           url: "",
           data: "data:image/png;base64,AAAA",
-          timestamp: 0,
           size: 4,
           type: "image/png",
         }],
@@ -343,6 +370,7 @@ export default pattern(() => {
       { assertion: assert_clue_prompt_skips_revealed },
       { assertion: assert_clue_prompt_empty_without_words },
       { assertion: assert_clues_filtered },
+      { assertion: assert_clues_keep_only_team_targets },
       { assertion: assert_clues_from_nothing },
       { assertion: assert_round_varies_prompt },
       { assertion: assert_starts_blank },
