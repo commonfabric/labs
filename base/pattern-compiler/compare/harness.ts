@@ -1045,17 +1045,41 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         binding: number,
       ): { path: string[]; elements: ElementBinding[] } => {
         const record = plan.bindings?.[binding];
-        const [streamPath] = record?.result ?? [];
-        if (streamPath === undefined) {
+        const paths = record?.result ?? [];
+        if (paths.length === 0) {
           throw new Unsupported(
             "a binding whose stream the result does not hold",
           );
         }
+        // The first path the run holds the stream at. A path in a branch
+        // that is not selected, or through a collection with no element,
+        // holds none.
+        let first: unknown;
+        for (const streamPath of paths) {
+          try {
+            return streamAtPath(binding, streamPath);
+          } catch (error) {
+            if (!(error instanceof Unsupported)) throw error;
+            first ??= error;
+          }
+        }
+        throw first;
+      };
+      const streamAtPath = (
+        binding: number,
+        streamPath: string[],
+      ): { path: string[]; elements: ElementBinding[] } => {
+        const record = plan.bindings?.[binding];
         const steps = (record?.within ?? []).flatMap((step) => {
           const { element } = step as { element?: number };
           return element === undefined ? [] : [element];
         });
-        if (streamPath.filter((key) => key === "*").length !== steps.length) {
+        // A binding made outside every element body may have its stream
+        // in each element of a collection: every position holds the one
+        // stream, and no element is bound. Otherwise each `*` is the
+        // collection of one `element` step, in order.
+        const stars = streamPath.filter((key) => key === "*").length;
+        if (stars !== steps.length && steps.length > 0) {
           throw new Unsupported(
             "a result path that does not pass through every enclosing collection",
           );
@@ -1094,7 +1118,12 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             throw new Unsupported("an enclosing collection with no element");
           }
           const position = `${value.length - 1}`;
-          elements.push({ collection: steps[elements.length], key: position });
+          if (steps.length > 0) {
+            elements.push({
+              collection: steps[elements.length],
+              key: position,
+            });
+          }
           cell = cell.key(position as never) as AnyCell;
           path.push(position);
         });

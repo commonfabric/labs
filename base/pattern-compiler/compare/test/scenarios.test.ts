@@ -445,3 +445,46 @@ describe("a handler bound in an element body", () => {
     expect(writes[1].comparison.overall).toBe("equal");
   });
 });
+
+describe("a binding whose stream the result holds at several paths", () => {
+  // `fixtures/outer-stream.tsx`: the binding is made outside every element
+  // body. Its first path is in a branch of a conditional, its second in
+  // each element of a list, and its third at a position of its own.
+  const run = async (shown: boolean, items: string[]) => {
+    const read = (name: string) =>
+      Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
+    const [{ patterns }] = JSON.parse(await read("outer-stream.plan.json"));
+    return await runScenario({
+      program: {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: await read("outer-stream.tsx"),
+        }],
+      },
+      plan: patterns[0].plan,
+      argument: { items, shown },
+      events: [{ binding: 0, event: { by: 2 } }],
+    });
+  };
+
+  it("gets its event at the first path the run holds the stream at", async () => {
+    // The branch is not selected, so the first path holds no stream. The
+    // second passes through a collection the binding is not within: any
+    // position of it holds the one stream, and no element is bound.
+    const { events, writes } = await run(false, ["a", "b"]);
+
+    expect(events).toEqual([
+      { binding: 0, handler: "inc", outcome: "committed" },
+    ]);
+    expect(writes.map((row) => [row.handler, row.write, row.path])).toEqual([
+      ["inc", 0, []],
+    ]);
+  });
+
+  it("goes on to a later path where a collection on the way has no element", async () => {
+    const { events } = await run(false, []);
+
+    expect(events.map((event) => event.outcome)).toEqual(["committed"]);
+  });
+});
