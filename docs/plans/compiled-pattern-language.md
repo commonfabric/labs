@@ -504,9 +504,15 @@ a call leaves out, the first value of a state cell, a moved element,
 a cone with side-writes, the collections a cone's record lists, and
 who places a stream in a computed value are ruled, and so is which
 default is read along a chain of places ([Decided](#decided)).
-Questions 141, 144 to 147, and 149 to 157 below, and questions 81 to
-84 of `execution-and-storage.md`, are open. Questions 152 to 157 are
-what notes 307 to 320 found the rulings to leave undetermined. Of
+Questions 152 to 157 are what notes 307 to 320 found the rulings to
+leave undetermined. Of them 152 to 156 are ruled, and so is question
+145: the identity of a plain value in place, where the callee's
+default is held, a write below the root of an empty state cell, a
+first value stored as a value, and the keys of a derived collection
+passed on unchanged. Questions 141, 144, 146, 147, 149 to 151, and
+157 to 163 below, and questions 81 to 84 of
+`execution-and-storage.md`, are open; 158 to 163 are what those
+rulings leave undetermined. Of
 question 141 the member is ruled, and what it holds beside the collections is open. Of
 question 144 the placing and the check are ruled, and what the check
 covers outside the result is open. Notes 303 to 306 and 321 to 323 are
@@ -756,7 +762,8 @@ changes:
   that event removes an area, which it did not find before the fix of
   the container copy. A cell that an earlier event had set to the
   area's center then reads as nothing, because it holds a reference to
-  a position below the array (question 145). The two values of the
+  a position below the array (question 145; under the ruling it holds
+  a reference by key and reads as nothing all the same). The two values of the
   module that differed after that event are equal, so the module has 4
   values that differ, as before. No other value that was equal differs.
 - **The two added modules.** `showcase/battleship/pass-and-play/main.tsx`
@@ -772,20 +779,20 @@ class:
 
 | Module | Values | Class | Cause |
 | --- | ---: | --- | --- |
-| `examples/map-demo` | 4 | Design gap | A stored reference to a member of an element that is a plain value in place, which is then removed (question 145) |
-| `dev/gideon-tests/test-cell-equals` | 1 | Design gap | `equals` of a reference with an element that is a plain value in place (question 145) |
+| `examples/map-demo` | 4 | Design difference, ruled (question 145) | A stored reference to a member of an element that is a plain value in place, which is then removed |
+| `dev/gideon-tests/test-cell-equals` | 1 | Prototype defect under the ruling of question 145 | `equals` of a reference with an element that is a plain value in place, of which the executor holds a copy |
 | `showcase/wordsearch` | 3 | Neither | The pattern draws its seed from `Math.random`, and the two runs draw two numbers |
 | `system/agent-run` | 4 | Today's runtime, not verified | The scenario's argument holds `run.state`, and today's run reads nothing at `run` |
 | `dev/catalog/catalog` | 2 | Prototype defect, not verified | A child that is `null` in today's run holds nothing in the executor's |
 | `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | A `$cell` attribute holds a pattern's result; today's read gives no `$NAME` below it |
 
-The two rows classed as a design gap are the first differences of the
-comparison with that class. Both are of the case of an array of plain
-values in place, and neither arises over an array of references. They
-come from an element that is a plain value stored in place, which
-today's runtime does not have: it stores an element that is a record as
-a cell of its own. They are two of the four consequences question 145
-lists, and the other two do not show in a comparison of values.
+The first two rows are of the case of an array of plain values in
+place, and neither arises over an array of references. They come from
+an element that is a plain value stored in place, which today's
+runtime does not have: it stores an element that is a record as a cell
+of its own. The ruling of question 145 covers both. Under it the
+second is equal where the executor stores a reference by key, and the
+first is a deliberate difference from today.
 
 ### What the run conformed to
 
@@ -1338,6 +1345,18 @@ is relitigated.
   holds, its stored results included, to the new position. It evaluates
   nothing for the element except the nodes that read the index.
   Evaluating again is permitted, and moving is preferred.
+- An element that is a plain value in place is named by its collection
+  and its key, and a reference to it or to a member of it resolves to
+  the current position at each read and write. So `equals`, two-way
+  binding, and a write through the element work, and a move still
+  evaluates nothing. A cone that passes such an element on stores
+  that reference, by the rule that a value passed on unchanged is
+  stored as a reference, and no copy of the value. After the element
+  is removed such a reference reads as nothing, which remains a
+  difference from today. The case is an array of plain values in
+  place, and the result of another per-element construct where the
+  upstream position holds a value. Over an array of references a
+  reference to an element is the link to its cell.
 - An element of a collection that is the result of a per-element
   construct, such as a `map` or a `filter`, is keyed by the key of the
   upstream element it came from. A change of one upstream element then
@@ -2010,48 +2029,21 @@ as an assumption, which is what the prototype does.
      references, over an array of plain values in place, and over the
      result of another per-element construct.
 145. **What a cone stores that passes on an element that is a plain
-     value** (ES question 79). By ruling a move moves the results of the
-     element's key and evaluates nothing for the element. A link to the
-     position of a plain value stored in place names another value
-     after a move. *Assumed:* such a cone stores the value in the
-     element's result, and no link to the position, so that the row
-     shows the right value once its results have moved with the key.
-     The alternative stores the link and has the move rewrite it. The
-     question is about an array of plain values in place. Over an array
-     of references the result holds the link to the cell, which a move
-     does not change. Over the result of another per-element construct
-     the position of the upstream result is not stable on a move
-     either, and the assumption is extended: the result holds what the
-     upstream position holds, the value or the link to a cell.
-
-     The prototype implements the assumption, and its notes keep the
-     question open and widen it: what is an element that is a plain
-     value stored in place to its readers? Four consequences show,
-     each over an array of plain values in place, and over the result
-     of another per-element construct where the upstream position
-     holds a value. None arises over an array of references.
-     - Identity. A cone that compares the element with a reference,
-       as `equals(selected, item)`, holds a value with no address, and
-       the two compare as two, where today's runtime, for which the
-       element is a cell, finds them equal. One value of the corpus
-       differs for it.
-     - A handler bound in the body is handed the element at its
-       position, which it writes through. The position is kept beside
-       the key for this alone.
-     - A row that binds a member of the element both ways, as
-       `$checked={item.done}`, holds a value, and a write from the
-       tree has no target. A comparison of values does not show it.
-     - A handler that writes a member of the element to a cell, as
-       `center.set(stop.position)`, stores a reference to a position
-       below the array. After the element is removed the reference
-       leads nowhere and the cell reads as nothing, where today's run
-       keeps the value. Four values of the corpus differ for it.
-
-     The two alternatives: a plain value stored in place has an
-     identity that `equals` and a stored reference can name, formed
-     from the collection and the element's key; or a reader of such an
-     element always holds a copy, and the four consequences are the
-     behavior of the language.
+     value** (ES question 79). Settled by ruling: an element that is a
+     plain value in place is named by its collection and its key, a
+     reference to it or to a member of it resolves to the current
+     position at each read and write, and a cone that passes the
+     element on stores that reference and no copy. Two such references
+     are equal where they name the same collection, key and path, and
+     neither equals a reference to a cell. A write through one lands
+     at the position that holds the key. A handler bound in the body
+     holds the same reference as the cones of its row. After removal
+     the reference reads as nothing, a deliberate difference from
+     today. The case is an array of plain values in place, and the
+     result of another per-element construct where the upstream
+     position holds a value; over an array of references nothing
+     changed. Questions 160 to 163 have what the ruling leaves open.
+     The entry keeps its number.
 146. **Which cone with side-writes is of which kind** (ES question 80).
      By ruling a cone with a small, fixed set of write targets is an
      ordinary node and one whose write set is dynamic or very large is
@@ -2188,9 +2180,42 @@ assumption.
      plain values in place or the upstream body computes values, and
      not where the positions hold references to cells.
 
-Two questions above are restated by the same notes. Question 145 has
-the four consequences and the two alternatives. For the assumption of
-ES question 83, in which transaction a first value that is not a
+160. **A write through a reference by key that changes the value** (PL
+     question 112). The key of a plain value is formed from the value,
+     so such a write leaves the position with another key. *Assumed:*
+     the reference holds the key it was made with and reads as nothing
+     after the write; a second write through it in the same run finds
+     no position; and a write through a reference whose key no
+     position holds is refused. The alternative carries the reference
+     to the new key. The case is an array of plain values in place,
+     and the result of another per-element construct where the
+     upstream position holds a stored value; not an array of
+     references.
+161. **How a reference by key is stored, and a key that returns** (PL
+     question 113). *Assumed:* a link whose target is the address of
+     the collection, with the key in the place of a position and the
+     path after it; a client, which cannot read the salt, does not
+     resolve one, and a read through it is pending there until the
+     server's result arrives; and a reference whose key left resolves
+     again when an equal value is added. The same two cases; not an
+     array of references.
+162. **The label of a reference by key** (PL question 114). The key is
+     a salted hash of the value. *Assumed:* the stored reference
+     carries the label of the run that wrote it and nothing for the
+     value; a read through it carries the label of what is stored at
+     the position it resolves to, joined with the label of the
+     collection's array; and a read that resolves to nothing carries
+     the label of the array. The alternative joins the labels of every
+     position's value. The same two cases; not an array of references.
+163. **Which readers hold a reference by key** (PL question 115).
+     *Assumed:* a function body that reads the array through a handle
+     and passes a member on holds one as well, and a handle that names
+     a position by its path names the position and is not equal to a
+     reference by key. The case is an array of plain values in place;
+     not an array of references.
+
+One question above is restated by the notes 307 to 320. For the
+assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
 the value when the cell is created, which for a cell of an element body
 is when the key enters the element table, in all three cases.

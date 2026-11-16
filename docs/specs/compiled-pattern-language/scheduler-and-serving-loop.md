@@ -917,6 +917,25 @@ evaluated. Cone evaluation builds the element table of a collection when it
 evaluates it (`execution-and-storage.md` §2.5). The table holds, per
 key, the position and the binding of each element slot.
 
+**A reference by key.** By ruling an element that is a plain value in
+place is named by its collection and its key, and a reference to it or
+to a member of it resolves to the current position at each read and
+each write (`plan-and-label-templates.md` §1.3). The case is an array
+of plain values in place, and the result of another per-element
+construct where the upstream position holds a value; over an array of
+references a reference to an element is a link to its cell and is
+resolved as any link. A slot whose path crosses a stored reference by
+key is resolved through it: the scheduler takes the position of the
+key from the collection's element table, or computes the keys of the
+array where no loaded instance iterates it
+(`execution-and-storage.md` §2.5), and binds the slot at the path
+below that position. It registers the slot at the collection's
+membership as well as at the bound address, so a move rebinds the
+slot, which makes no reader stale where the value at the path is the
+same, and a removal or an edit of the element in place leaves the
+slot unbound, reading as nothing. A write through such a reference is
+resolved the same way when it is made.
+
 - After the first evaluation of a collection, and after each change of its
   membership, the scheduler registers one entry per key and element
   slot from the table, tagged with the element's key, and removes the
@@ -1751,7 +1770,10 @@ in the place of the walk.
    equal plain values, or links to one cell, have two keys and two
    streams. The handler's element slots are bound at the position that
    holds the key, and each resolves to the value and the label at that
-   position (`execution-and-storage.md` §2.5). By the ruling that labels
+   position (`execution-and-storage.md` §2.5). Where the element is a
+   plain value in place, a state path that holds the element as a
+   handle is given the reference by key, which a write through it
+   resolves to that position when the write is made. By the ruling that labels
    flow per value through the callback of a per-element construct, a
    handler that closes over the element alone writes under the event and
    that element, and under nothing of another element, an equal one
@@ -3730,6 +3752,15 @@ document. Three kinds of thing are affected.
 | A state cell declared in an element body over plain values; the state of an operation declared in such a body; a child instantiated there; and the stream of a handler bound there (`execution-and-storage.md` §2.5) | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
 | A part document at or below a row of a kept collection | Its identifier is derived under the secret of the space for every key, a cell's identity included (`plan-and-label-templates.md` §2.3) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
 | A binding made in a function body that has a copied path | The stream's identifier holds the salted hash of the copy | The stream is pending. A control the speculative run rendered for it sends nothing until the server's link to the stream arrives. A speculative handler that makes such a binding stores no link to it in its overlay entry |
+
+A reference by key, to an element that is a plain value in place,
+holds a key of this kind, and resolving it to a position needs the
+salt. *Assumed* (`plan-and-label-templates.md` §8, question 113): a
+client does not resolve one, and a read through it is pending on the
+client until the server's result arrives. The case is an array of
+plain values in place, and the result of another per-element construct
+where the upstream position holds a value. A reference to an element
+of an array of references is a link, which a client resolves.
 
 A client learns such an identifier from a link the server stored: a kept
 output that passes the state cell on, or the stream link in the rendered

@@ -1830,8 +1830,136 @@ not identifiers equal byte for byte to those of today. By case:
   upstream key, so a change of one upstream element reaches the one
   downstream element in both.
 
+**A plain value in place has an identity.** By ruling an element that
+is a plain value in place is named by its collection and its key, and a
+reference to it, or to a member of it, resolves to the current position
+at each read and each write. This document calls such a reference a
+**reference by key**. It holds three things: the collection, the key of
+the element, and the path below the element, which is empty for the
+element itself. The case is an array of plain values in place, and the
+result of another per-element construct where the upstream position
+holds a value. Over an array of references nothing changes: a reference
+to an element is the link to its cell, which a move does not change.
+
+- **Which collection is named.** For an element of an array of plain
+  values in place it is the array, at its address. An element that a
+  `filter` passes on is the element of the source, so a reference to it
+  names the source and the key the element has there, which is also
+  its key in the result. For an element of a `map` or `flatMap` result
+  whose body computed a value, the collection is the assembled result,
+  as the output that holds it, and the key is the upstream key that
+  the element has in that result ("Derived collections carry their
+  elements' keys", below).
+- **What a cone stores.** A cone that passes such an element on, or a
+  member of it, through its `identity` slot stores the reference by
+  key, by the rule that a value passed on unchanged is stored as a
+  reference (`execution-and-storage.md` §2.4). It stores no copy of
+  the value and no link to the position. The row of
+  `tags.map((tag) => <li>{tag}</li>)` holds, at the child position, the
+  reference to the element of `tags` with the key of its row. A
+  handler bound in the body whose state holds the element, a sandboxed
+  body that is given the element, and the argument of a child that is
+  given it hold the same reference. So every node of one row holds one
+  thing for the element.
+- **A move** changes nothing that a reference by key holds. Nothing is
+  evaluated for it, and the reference resolves to the new position.
+- **A read** through the reference resolves the key to the position
+  that holds it at that time and reads there, at the path. The reader
+  depends on which position holds the key and on what is stored at
+  the path, and a change of either makes it stale.
+- **`equals`** compares what its operands name once the links they
+  hold are resolved (section 3.16). Resolution of a reference by key
+  ends at the reference: it names an element, and no further link. Two
+  references by key are equal where they name the same collection,
+  the same key, and the same path. A reference by key and a reference
+  to a cell are not equal, because a plain value in place is no cell.
+  So `equals(selected, item)` finds, among the rows of a collection,
+  the element that a handler stored in `selected`, before and after a
+  move. The comparison resolves no key to a position and reads nothing
+  of the collection.
+- **A write** through the reference resolves the key when the write is
+  made and lands at the position that holds it, at the path. A member
+  bound both ways, as `$checked={item.done}`, and a handler's
+  `item.key("done").set(true)` therefore write the member of the
+  element where it stands in the array. Where the collection is a
+  value the instance computes, as the assembled result of a `map`
+  whose body computes its values or an array that a `computed` returns
+  whole, the write is refused by the ruling on a write through a
+  handle to a value the instance computes (section 3.11).
+- **After the element is removed** no position holds the key, and a
+  read through the reference reads as nothing. That is a deliberate
+  difference from the runtime of today, which the ruling names: there
+  an element that is a record is a cell of its own, and a reference to
+  it reads the record after the array no longer holds it. A handler
+  that stores a member of an element in a cell, as
+  `center.set(stop.position)` does, stores a reference by key, and the
+  cell reads as nothing once the element is removed. An author who
+  wants the value kept copies it, or makes the elements cells.
+- **Occurrences.** The key holds the occurrence count. Where two equal
+  values stand in a collection and the first is removed, the one that
+  remains is occurrence 0: a reference to occurrence 0 resolves to it,
+  and a reference to occurrence 1 reads as nothing.
+
+Four things the ruling does not determine are assumed, each for an
+array of plain values in place and for the result of another
+per-element construct where the upstream position holds a value. None
+arises over an array of references.
+
+- **A write that changes the value.** The key of a plain value is
+  formed from the value, so a write through a reference by key that
+  changes the value leaves the position with another key, by the rule
+  that a plain value edited in place is a new element (below).
+  *Assumed* (section 8, question 112): the reference holds the key it
+  was made with and is not carried to the new key. After such a write
+  it reads as nothing, the row of the new key is evaluated and holds
+  the reference with the new key, and the state cells, streams and
+  children of the old key go as for any edit in place. A second write
+  through the same reference in one run of a body finds no position.
+  *Assumed* as well: a write through a reference whose key no position
+  holds is refused, as a write through a handle to a value the
+  instance computes is, so in a handler it rejects the event's
+  transaction.
+- **An equal value added again.** *Assumed* (section 8, question 113):
+  a reference whose key left resolves again when a position comes to
+  hold the same key, because the reference holds the collection, the
+  key and the path and nothing else. A child under such a key is
+  likewise made again under the identity of the one torn down
+  (`execution-and-storage.md` §2.5).
+- **How the reference is stored.** *Assumed* (section 8, question
+  113): as a link whose target is the address of the collection, with
+  the key in the place of a position, followed by the path. The key is
+  the salted hash with the occurrence count, so the stored reference
+  reveals the value to no one who cannot read the salt, as an
+  identifier formed from the key does. Resolving the key to a position
+  computes the keys of the positions, which needs the salt. A client
+  cannot read the salt, so it cannot resolve such a reference from the
+  array alone. *Assumed* with the same question: a read through one is
+  pending on a client until the server's result arrives, as a read of
+  per-element state over plain values is
+  (`scheduler-and-serving-loop.md` §11.1).
+- **The label.** *Assumed* (section 8, question 114): the stored
+  reference is a link that a run wrote, and carries the label of that
+  run as any stored link does (section 2.2). A read through it
+  carries, beside the labels of the links crossed, the label of what
+  is stored at the position it resolves to, at the path, joined with
+  the label of the collection's array, which is the label of which
+  position holds the key (section 2.2, "The label of a slot of root
+  `index`"). A read that resolves to nothing carries the label of the
+  collection's array.
+
+Which readers hold a reference by key is ruled for an element that a
+per-element construct hands on. *Assumed* (section 8, question 115):
+the same holds for a function body that reads the array through a
+handle and passes a member on, as `selected.set(items.get()[i])` does,
+because the ruling names the element and not the reader. A handle that
+names a position by its path, as `items.key(2)` does, names the
+position and no element: it reads whatever the position holds, and it
+is not equal to a reference by key, also while the key stands there.
+
 A link to a plain value is keyed by the cell it links to, so two cells that
-hold equal values have two element parts. A hole has no key, gets no cone
+hold equal values have two element parts. A position that holds a
+reference by key has the reference as its element part: the collection,
+the key and the path it names. A hole has no key, gets no cone
 instance, and stays a hole. An explicit `undefined` is a plain value. A
 plain value edited in place is a new element.
 
@@ -1979,7 +2107,7 @@ this.
   Where the first value is the element itself, the cell holds the
   element's value in each of the three cases, and over an array of
   plain values in place it holds no reference to the element ("A
-  plain value in place has an identity", below).
+  plain value in place has an identity", above).
 - **Writing a constant first value at creation as well is legal** and
   is not required. A value written that way has the integrity of the
   run that wrote it. This design does not write it, and no record of
@@ -2023,7 +2151,11 @@ position alone: an element run stays at its position when the elements move,
 and a value edited in place keeps its run. Under the rule above it is
 keyed by its value and its count, so its cone instances and its state
 move with it, and a value edited in place is a new element. Stored
-per-element documents under today's keys are not found again.
+per-element documents under today's keys are not found again. By
+ruling a reference to such an element names the collection and the
+key, where today's is a link to the position: it follows the element
+on a move, where today's stays at the position, and it reads as
+nothing once the element is removed or edited in place.
 
 The runtime of today keeps the index out of the key as well.
 `createMapInstance` in `runtime/runner/src/builtins/map.ts` holds one run
@@ -2077,9 +2209,9 @@ Consequences, which later sections rely on:
   evaluates nothing for the element except the cones that read the
   index. Evaluating again is permitted, and moving is preferred. That
   holds for a cone that passes on, through its `identity` slot, an
-  element that is a plain value stored in place: what such a cone
-  stores is in `execution-and-storage.md` §2.6, under an assumption
-  (its question 79).
+  element that is a plain value stored in place: by ruling such a cone
+  stores a reference by key ("A plain value in place has an identity",
+  above), which a move does not change.
 - **A body that reads the index has this property too.** No key holds
   the index. A move evaluates again the cones that list the index slot,
   for the keys whose position changed, and nothing else of the body. The
@@ -5876,8 +6008,10 @@ enclosing instance, and the rule is the same for each.
   (section 3.9); or a handle that a body returned. The handle resolves through
   the reference to the place it links to, as a slot whose path crosses a stored
   link does (section 2.5), and the write lands there under the template of the
-  writing edge. The target is named as "A handle from a computed input" names it
-  (below), and for a handler bound in the reactive tier it is the `identity`
+  writing edge. Where the element is a plain value in place of a stored array,
+  the reference is a reference by key, and the write lands at the position that
+  holds the key when the write is made (section 1.3). The target is named as
+  "A handle from a computed input" names it (below), and for a handler bound in the reactive tier it is the `identity`
   slot of the state path, which resolves to the output that holds the reference.
   The write-side checks are those of the place where the write lands. In
   `patterns/apps/topics/topic.tsx`, `linksView` is a `computed` that filters the
@@ -7193,8 +7327,11 @@ each operand for `value` (`footprint-analysis.md` §3.4).
 and follows no link, so it has no journaled part: in a body as in the
 reactive tier, its record is the plain `identity` slot of each operand.
 `equals` resolves both operands first, which is why its slots are
-resolved. A resolved slot holds the `link` entry of the position it is
-read at, and the slot of an operand of `equalLinks` that the body does
+resolved. Where resolution ends at a reference by key, to an element
+that is a plain value in place, the call compares the collection, the
+key and the path the reference names, and resolves no key to a
+position (section 1.3). A resolved slot holds the `link` entry of the
+position it is read at, and the slot of an operand of `equalLinks` that the body does
 nothing else with leaves it out (section 2.2). Today `equalLinks`
 compares the links without a transaction (`equalLinks` in
 `runtime/runner/src/cell.ts`), and the label it joins is that of the
@@ -11292,3 +11429,82 @@ this document made.
      the same keys where the positions of the result hold references
      to cells, and differ where the upstream source is an array of
      plain values in place or the upstream body computes its values.
+112. **A write through a reference by key that changes the value**
+     (for the project owner). By ruling an element that is a plain
+     value in place is named by its collection and its key, and a
+     reference to it resolves to the current position at each read and
+     write (section 1.3). The key is formed from the value, so a write
+     through the reference that changes the value leaves the position
+     with another key. *Assumed:* the reference holds the key it was
+     made with. After the write it reads as nothing, and the row of
+     the new key holds a reference with the new key. A handler that
+     writes two members of one element through one reference, as
+     `item.key("done").set(true)` followed by
+     `item.key("at").set(now)`, then finds no position at the second
+     write. *Assumed* as well: a write through a reference whose key
+     no position holds is refused, and in a handler rejects the
+     event's transaction. The alternative carries a reference across
+     a write made through it, so that it names the element at its new
+     key, for the rest of the run or for every holder of the
+     reference; it needs a record of which key continued which. The
+     case is an array of plain values in place. Over the result of
+     another per-element construct whose upstream position holds a
+     value, a write lands only where the upstream collection is
+     stored. Nothing is open over an array of references, where the
+     key does not depend on the value.
+113. **How a reference by key is stored, and a key that returns** (for
+     the project owner). The ruling of question 112's first sentence
+     does not say what form the reference has in a link. *Assumed:* a
+     link whose target is the address of the collection, with the key
+     in the place of a position and the path below the element after
+     it (section 1.3). No form of a written address is defined for it.
+     Resolving the key to a position needs the salt, which a client
+     cannot read. *Assumed:* a client does not resolve one, and a read
+     through it is pending on the client until the server's result
+     arrives. The alternative has the server store the position
+     beside the key, which a move then has to rewrite. *Assumed* as
+     well: a
+     reference whose key left resolves again when a position comes to
+     hold the same key, such as an equal value added after a removal,
+     because the reference holds nothing but the collection, the key
+     and the path. The alternative ends a reference when its key
+     leaves, which needs a mark of the removal in the collection. The
+     case is an array of plain values in place, and the result of
+     another per-element construct where the upstream position holds
+     a value; nothing is open over an array of references.
+114. **The label of a reference by key** (for the project owner). The
+     reference holds the key, which is a salted hash of the element's
+     value with its occurrence count. *Assumed:* the stored reference
+     carries the label of the run that wrote it, as any stored link
+     does, and nothing for the value the key was formed from, because
+     the salt keeps the key from revealing it. A read through the
+     reference carries the label of what is stored at the position it
+     resolves to, joined with the label of the collection's array, as
+     the label of which position holds the key; and a read that
+     resolves to nothing carries the label of the collection's array
+     (sections 1.3 and 2.2). The alternative holds that which position
+     has a key, and that none has it, are facts about the values of
+     every position, and joins their labels. Open with it: whether a
+     holder of the reference who cannot read the element learns, from
+     a read that turns to nothing, that the element was edited or
+     removed. The case is an array of plain values in place, and the
+     result of another per-element construct where the upstream
+     position holds a value; nothing is open over an array of
+     references.
+115. **Which readers hold a reference by key** (for the project owner).
+     By ruling a cone that passes on an element that is a plain value
+     in place stores the reference by key, and the same reference
+     reaches a handler bound in the element body, a sandboxed body
+     used there, and a child's argument (section 1.3). *Assumed:* a
+     function body that reads the array through a handle and passes a
+     member on, as `selected.set(items.get()[i])` does, holds a
+     reference by key for the member as well, so that `equals` finds
+     it among the rows. The alternative gives such a body the address
+     of the position, as for any container it read
+     (`execution-and-storage.md` §2.4), and `equals` then has to
+     resolve a key to compare the two. *Assumed* as well: a handle
+     that names a position by its path, as `items.key(2)` does, names
+     the position, and is not equal to a reference by key while the
+     key stands there. The case is an array of plain values in place.
+     Over an array of references both are references to the cell, and
+     nothing is open.

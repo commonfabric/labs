@@ -1298,15 +1298,30 @@ executor computed for the corpus need the rule: a later
 `items.get().filter(...)`, finds the record only where the elements of
 the filtered list are references to the records of `items`.
 
+What the reference is depends on what was read. A container read from
+a cell, or below a link, carries that address. By ruling an element
+that is a plain value in place of an array carries a reference by key:
+the collection, the element's key, and the path below the element
+(`plan-and-label-templates.md` §1.3). The runtime stores that
+reference where a cone or a body passes the element or a member of it
+on, and no copy and no link to the position. The reference resolves to
+the position that holds the key at each read and each write, so it
+stays right when the element moves, and it reads as nothing once no
+position holds the key. That such a reference reaches a function body
+that read the array through a handle is assumed (its §8, question
+115). One write does not follow the rule of this paragraph: the edge
+of a first value of a state cell always stores a value (section 4.1).
+
 The rule does not decide a write whose value holds a reference into what
 the write replaces. `items.set(items.get().toSpliced(i, 1))` writes to
 the cell of `items` a list whose members carry the addresses they were
-read from. For a member stored in place that address is a position of
-the list the write replaces, and a link to it would name what the write
-itself overwrites. *Assumed* (question 84): where a member of a written
-value carries an address at or below the path the write replaces, and
-that address is a position that holds the value in place, the runtime
-stores the value there and no link. A member that carries the address of
+read from. For a member stored in place that is a reference to an
+element of the list the write replaces, and a reference to it would
+name what the write itself overwrites. *Assumed* (question 84): where
+a member of a written value carries a reference at or below the path
+the write replaces, by key or by position, and the element it names
+is held there in place, the runtime stores the value there and no
+reference. A member that carries the address of
 a cell a link led to is stored as a link, by the rule above.
 
 **Handles.** The runtime hands a body a cell handle for every position of
@@ -1442,17 +1457,39 @@ key:
 **What an element slot reads, by case.** Over an array of references
 the element slots are bound to the cell the position links to, and a
 move changes no binding. Over an array of plain values in place the
-address of an element is its position, which a move changes. The value
-of such an element is the value its key is formed from, so the runtime
-can hold it in the element table with the key, and an evaluation for
-the key then reads no position. A move changes no value that an element
-slot yields, which is why nothing is evaluated for a moved element
-(section 2.6). The position stays in the table beside the key for what
-needs an address: a handler bound in the body is handed the element at
-its position and writes through it, and the label identifiers are read
-there. Over the result of another per-element construct the element
-slots read the results of the upstream body for the same key ("A chain
-of per-element constructs", section 2.6).
+element is stored at its position, which a move changes, and by ruling
+it is named by the collection and its key. The value of such an
+element is the value its key is formed from, so the runtime can hold
+it in the element table with the key, and an evaluation for the key
+then reads no position. A move changes no value that an element slot
+yields, which is why nothing is evaluated for a moved element (section
+2.6). An `identity` slot of the element, or of a member of it, yields
+the reference by key: the collection, the key, and the path
+(`plan-and-label-templates.md` §1.3). A cone that passes the element
+on, a handler bound in the body, a sandboxed body used there, and the
+argument of a child are all given that reference, and each read or
+write through it is resolved to the position the table has for the
+key at that time. The label identifiers are read at that position.
+Over the result of another per-element construct the element slots
+read the results of the upstream body for the same key ("A chain of
+per-element constructs", section 2.6). Where the upstream result holds
+a link at the position, the element is the cell it links to. Where it
+holds a value, the element is named by the upstream result and the
+key, and its reference is by key as well.
+
+**Resolving a reference by key.** A reference by key that is stored
+outside the element body, as in a cell a handler wrote, is resolved by
+whoever reads or writes through it. Where the collection has an
+element table, the table gives the position. Where it has none,
+because no loaded instance iterates the array, the runtime computes
+the keys of the array's positions as step 2 below does, which needs
+the salt of the space (section 5.3). The reader is registered at the
+collection's membership and at the path below the position it resolved
+to, so a move, a removal, and a change at the path each make it stale.
+A reference whose key no position holds reads as nothing. How the
+reference is stored, what a client does that cannot read the salt,
+and what a write does that changes the element's value are assumed
+(`plan-and-label-templates.md` §8, questions 112 and 113).
 
 **Which cones are the body's.** The cones of a collection's body are the
 cones of the plan whose `Cone.within` has the `element` step that names
@@ -1693,57 +1730,59 @@ element's cone instances again is permitted, and moving is preferred.
 The state cells, streams, operation state and children of the key are
 named by the key and do not move.
 
-For an element that is a plain value stored in place, the address the
+For an element that is a plain value stored in place, the place the
 element is read from is its position in the collection's document. A
 cone that passes such an element on through its `identity` slot, as the
-cone of `tags.map((tag) => <li>{tag}</li>)` does, would yield a
-reference to that position, and a row that stored a link to it would
-name, after a move, a position where another value stands: the
-prototype's executor showed `"b"` in the row of `"a"`. *Assumed*
-(question 79): where a cone passes on an element that is a plain value
-stored in place, the element's result holds the value, and no link to
-the position, because the position is not stable. What the row shows
-after a move is then right, because the results move with the key. For
-a position that holds a link the address is the cell's, a move does not
-change it, and the result holds the link.
+cone of `tags.map((tag) => <li>{tag}</li>)` does, would with a link to
+that position name, after a move, a position where another value
+stands. By ruling an element that is a plain value in place is named by
+its collection and its key, and a reference to it or to a member of it
+resolves to the current position at each read and each write
+(`plan-and-label-templates.md` §1.3, "A plain value in place has an
+identity"). The cone stores that reference by key in the element's
+result, by the rule that a value passed on unchanged is stored as a
+reference (section 2.4), and no copy of the value. A move changes
+nothing the reference holds, so the row is right after a move and
+nothing is evaluated for it. For a position that holds a link the
+element is the cell, a move does not change it, and the result holds
+the link. Over the result of another per-element construct the
+result holds what the upstream element is: the link to a cell, or the
+reference by key that names the upstream collection and the key.
 
-The assumption decides what an element that is a plain value stored in
-place is to its readers: a reader holds a copy. The prototype's
-executor implements it, and four consequences show there. Each is about
-an array of plain values in place. None arises over an array of
-references, where the element is a cell, and over the result of another
-per-element construct each arises where the upstream position holds a
-value and not a link.
+Four things follow, each over an array of plain values in place, and
+over the result of another per-element construct where the upstream
+position holds a value and not a link. None arises over an array of
+references, where the element is a cell.
 
 - **Identity.** A cone that compares the element with a reference, as
-  `equals(selected, item)` does, holds a value with no address. A value
-  with an address and one without compare as two. The runtime of today
-  stores an element that is a record as a cell of its own and finds
-  the two equal. One value of the prototype's corpus run differs for
-  it (`patterns/dev/gideon-tests/test-cell-equals.tsx`).
-- **A handler bound in the body** is handed the element at its position
-  and writes through it, as section 2.5 has it. The position is kept
-  beside the key for this, so the handler and the cones of one row hold
-  two different things for one element.
+  `equals(selected, item)` does, holds a reference by key. Two
+  references by key are equal where they name the same collection, key
+  and path, and a reference by key and a reference to a cell are not
+  equal. `equals` resolves no key to a position.
+- **A handler bound in the body** is given the same reference as the
+  cones of its row, and a write through it lands at the position that
+  holds the key when the write is made. The element table keeps the
+  position of each key for that resolution and for the index slot.
 - **A member bound both ways.** A row that binds a member of the
-  element both ways, as `$checked={item.done}` does, holds a value at
-  the attribute, and a write from the rendered tree has no target.
+  element both ways, as `$checked={item.done}` does, holds at the
+  attribute a reference by key with the member's path, and a write
+  from the rendered tree lands in the member of the element where it
+  stands. The write changes the value, so the position then holds
+  another key: the row of the new key is evaluated, and what the old
+  key held is dropped, as for any plain value edited in place.
 - **A stored reference to a member.** A handler that writes a member of
   the element to a cell, as `center.set(stop.position)` does, stores a
-  reference to a position below the array (section 2.4). After the
-  element is removed the reference leads nowhere and the cell reads as
-  nothing, where today's run keeps the value. Four values of the
-  prototype's corpus run differ for it
+  reference by key with the member's path. It follows the element when
+  the element moves. After the element is removed no position holds
+  the key, and the cell reads as nothing. That is a deliberate
+  difference from the runtime of today, for which an element that is a
+  record is a cell of its own that a reference keeps reading. Four
+  values of the prototype's corpus run differ for it
   (`patterns/examples/map-demo/map-demo.tsx`).
 
-The two alternatives of question 79 follow from these. In one, a plain
-value stored in place has an identity that `equals` and a stored
-reference can name, formed from the collection and the element's key,
-so a reference to the element stays right across a move and names
-nothing once the key has left. In the other, a reader of such an
-element always holds a copy, the handler and the stored reference of
-the last two items included, and the four consequences are the
-behavior of the language.
+The prototype's executor stores a copy of the value in the place of
+the reference by key, and one value of its corpus run differs for the
+first item (`patterns/dev/gideon-tests/test-cell-equals.tsx`).
 
 **A chain of per-element constructs.** By ruling an element of a
 collection that is the result of a per-element construct is keyed by
@@ -5127,44 +5166,23 @@ Added by the ruling that the scheduler is switched per space (section 9):
     array of plain values in place, and over the result of another
     per-element construct.
 79. **What a cone stores that passes on an element that is a plain
-    value** (section 2.6; `plan-and-label-templates.md` §1.3). By ruling
-    a move moves what the element's key holds and evaluates nothing for
-    the element. For a plain value stored in place, a link to the
-    element is a link to its position, which a move gives another
-    value. *Assumed:* such a cone stores the value in the element's
-    result and no link to the position, so the row is right once its
-    results have moved. The alternative stores the link and has the
-    move rewrite it to the new position. The assumption departs, for
-    this one case, from the rule that a value passed on unchanged is
-    stored as a reference (section 2.4), as question 84 does for a
-    write. The question is about an array of plain values in place.
-    Over an array of references the result holds the link to the cell,
-    which a move does not change, and nothing is open. Over the result
-    of another per-element construct the position of the upstream
-    result changes on a move as well, and section 2.6 does not state
-    the case. *Assumed* there too: the element's result holds what the
-    upstream position holds, the value or the link to a cell, and no
-    link to the upstream position.
-
-    The prototype's executor implements the assumption, and the values
-    of its corpus run agree with it but for five. Four consequences
-    show (section 2.6), each over an array of plain values in place.
-    A cone that compares the element with a reference holds a value
-    with no address, so `equals` finds two where today's runtime, for
-    which the element is a cell, finds one (one value differs). A
-    handler bound in the body is handed the element at its position
-    and writes through it, so the position is kept beside the key for
-    the handler alone. A row that binds a member of the element both
-    ways holds a value, and a write from the tree has no target. And a
-    handler that writes a member of the element to a cell stores a
-    reference to a position below the array, which leads nowhere once
-    the element is removed, where today's run keeps the value (four
-    values differ). The question for the owner is therefore wider than
-    what a row stores, and has two alternatives. Either a plain value
-    stored in place has an identity that `equals` and a stored
-    reference can name, formed from the collection and the element's
-    key; or a reader of such an element always holds a copy, and the
-    four consequences are the behavior of the language.
+    value** (section 2.6; `plan-and-label-templates.md` §1.3). Not
+    open: by ruling an element that is a plain value in place is named
+    by its collection and its key, a reference to it or to a member of
+    it resolves to the current position at each read and write, and a
+    cone that passes the element on stores that reference by key and
+    no copy. `equals` compares two such references by collection, key
+    and path, a write through one lands at the position that holds the
+    key, a move evaluates nothing, and after removal the reference
+    reads as nothing, which is a deliberate difference from today. The
+    case is an array of plain values in place, and the result of
+    another per-element construct where the upstream position holds a
+    value. Over an array of references the result holds the link to
+    the cell, and nothing changed. What the ruling leaves open is
+    assumed in `plan-and-label-templates.md` (its §8, questions 112 to
+    115): a write that changes the value and so the key, the stored
+    form and a key that returns, the label, and which readers hold
+    such a reference.
 80. **Which cone with side-writes is of which kind** (section 2.3;
     `scheduler-and-serving-loop.md` §7.1). By ruling a cone with a
     small, fixed set of write targets is an ordinary node whose targets
@@ -5591,7 +5609,9 @@ From the prototype's executor, for this document to decide:
     array of references, over an array of plain values in place, and
     over the result of another per-element construct.
 84. **A written value that holds a reference into what the write
-    replaces** (section 2.4). *Assumed:* a member that carries the
-    address of a position inside the replaced path, and that the
-    position holds in place, is stored as its value. It extends question
-    10 of the continuation plan.
+    replaces** (section 2.4). *Assumed:* a member that carries a
+    reference to an element inside the replaced path, by key or by
+    position, where the element is held there in place, is stored as
+    its value. The case is an array of plain values in place; a
+    member that is a reference to a cell is stored as a link. It
+    extends question 10 of the continuation plan.

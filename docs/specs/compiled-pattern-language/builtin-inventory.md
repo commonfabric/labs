@@ -527,6 +527,15 @@ be recomputed, and that its state moves with it.
   whole array, an implementation may evaluate the whole collection
   again on each change in place of keeping results per element. The
   observable result is the same.
+- An element that is a plain value in place is named by its collection
+  and its key. A reference to it, or to a member of it, holds the
+  collection, the key, and the path below the element, and resolves to
+  the position that holds the key at each read and each write. A cone
+  that passes such an element on stores that reference, and no copy.
+  The case is an array of plain values in place, and the result of
+  another per-element construct where the upstream position holds a
+  value. A reference to an element of an array of references is the
+  link to its cell (`plan-and-label-templates.md` §1.3).
 
 For a linked slot this is the key of today. For a plain value it differs:
 the value takes the place of the position.
@@ -585,6 +594,20 @@ the element is keyed by the identity of that cell.
   changes, the cone is dirtied and the key, and with it the state, stays.
 - *A plain value edited in place is a new element.* Its old cone and state
   are released.
+- *A reference to a plain value in place follows the element.* Over an
+  array of plain values in place, `equals` finds two references to one
+  element equal: they name the same collection, key and path. A member
+  bound both ways and a handler's write through the element land at
+  the position that holds the key. A move changes nothing the
+  reference holds. After the element is removed, or edited in place,
+  no position holds the key, and a reference stored elsewhere reads as
+  nothing. That differs from today, deliberately: today a record
+  written into a list is a cell of its own, and a reference to it
+  reads the record after the list no longer holds it. What a write
+  that changes the value does to the reference, how the reference is
+  stored and labeled, and which readers hold one are assumed
+  (`plan-and-label-templates.md` §8, questions 112 to 115). Over an
+  array of references none of this applies.
 - *A hole has no key.* It has neither a value nor an identity, gets no
   cone, and stays a hole in the output, as today. An explicit `undefined`
   is a plain value and is keyed as one.
@@ -3151,7 +3174,7 @@ result pattern and runs as it would in a pattern body.
 | `spaceAccess`, `spaceMembers` | The acting principal's level in the space's access list; the list itself | Yes | A read of the space's access-list document through the call's transaction. The answer depends on who asks, so a computation's read scope narrows to the user (`ownCall` in `builder/space-access.ts`) |
 | `spaceAccessOf` | A named principal's level in the access list | Yes | The same read; the answer does not depend on who asks |
 | `spaceDeleted` | Whether the memory server refused this runtime the space as deleted | Yes, by the read that opens the space | The result is runtime state, from what the server answered (`runtime.spaceAccessWatch`), not a document. Every call also reads the space's access list through the call's transaction, which is what opens a space the runtime has not opened, and that journaled read carries a label (`spaceDeleted` and `aclOf` in `builder/space-access.ts`). The result is the same for every principal, so a computation's read scope stays as it is |
-| `equals` | Whether two cells or values name the same cell, after the links both hold are resolved | Pointer labels only | Link resolution through the frame's transaction (`areLinksSame` in `runtime/runner/src/link-equality.ts`). No target is read |
+| `equals` | Whether two cells or values name the same cell, after the links both hold are resolved. Two references to an element that is a plain value in place of an array are equal where they name the same collection, key and path (`plan-and-label-templates.md` §1.3) | Pointer labels only | Link resolution through the frame's transaction (`areLinksSame` in `runtime/runner/src/link-equality.ts`). No target is read |
 | `equalLinks` | Whether two cells or values hold the same link as it is stored | Pointer labels only | No read at the call. The label is that of the reads that handed the body the two references (`equalLinks` in `runtime/runner/src/cell.ts`) |
 | `getPatternEnvironment()` | A frozen `{ apiUrl }` | No | A constant of the runtime |
 

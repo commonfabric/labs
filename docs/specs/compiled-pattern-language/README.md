@@ -469,6 +469,17 @@ which element keys what they hold is kept
   produces as a whole array, an implementation may evaluate the whole
   collection again on each change, with the same observable result
   ([execution and storage](execution-and-storage.md), §2.6).
+- An element that is a plain value in place is named by its collection
+  and its key. A reference to it or to a member of it resolves to the
+  position the element has at each read and each write, so `equals`,
+  a member bound both ways, and a write through the element work over
+  an array of plain values in place, and a move still evaluates
+  nothing. A cone that passes such an element on stores that
+  reference and no copy. After the element is removed the reference
+  reads as nothing, which is a deliberate difference from today. Over
+  an array of references a reference to an element is the link to its
+  cell ([plan format and label templates](plan-and-label-templates.md),
+  §1.3).
 - Everything an element body holds is per element key, and so per
   occurrence: its state cells, its streams, its effects, and its
   children. Equal elements share nothing, and each has the label of the
@@ -1115,9 +1126,23 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   authored function one of them or the reactive tier calls, and not a
   `handler`, an `action`, or an inline event handler
   ([language subset](language-subset.md), §13, question 26).
-- **Element bodies and equal elements.** The rulings leave four things
+- **A reference to a plain value in place.** By ruling such an element
+  is named by its collection and its key. Four things are assumed, each
+  for an array of plain values in place and for the result of another
+  per-element construct where the upstream position holds a value, and
+  none for an array of references
+  ([plan format and label templates](plan-and-label-templates.md), §8,
+  questions 112 to 115): a write through the reference that changes
+  the value leaves the reference reading as nothing, because the key
+  is formed from the value; the reference is stored as a link that
+  holds the key, a client does not resolve it, and it resolves again
+  when an equal value is added after a removal; a read through it
+  carries the label of the element and of the collection's array; and
+  a function body that reads the array through a handle and passes a
+  member on holds such a reference too.
+- **Element bodies and equal elements.** The rulings leave five things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 36, 90, 101, and 105). By ruling each says which case
+  §8, questions 36, 90, 101, 105, and 111). By ruling each says which case
   of a source it is about: an array of references, an array of plain
   values in place, or the result of another per-element construct
   (§1.3 there). Which state an occurrence has depends on which equal
@@ -1134,7 +1159,10 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   segment holds references or plain values. And what it means that
   the causes of what an element body holds are computed as they were
   in the runtime of today: assumed the same inputs and structure of
-  derivation, not equal identifiers.
+  derivation, not equal identifiers. And whether an output that is
+  the result of another per-element construct on some evaluations
+  only keeps that collection's keys: assumed not, so it is keyed by
+  what its positions hold.
 - **Which default is read.** The default declared nearest the end of
   the chain of places a read resolves through is read, by ruling. Two
   cases are assumed
@@ -1142,7 +1170,12 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   questions 103 and 104): an absent property reads the same default in
   a read of an object whole as in a selection of it, and a stored
   `undefined` reads as an absent value does, with no default written
-  into an argument document when an instance is set up.
+  into an argument document when an instance is set up. For a pattern
+  compiled into another, the entry of `Body.reads` holds the callee's
+  default for a sandboxed body, and a reference the callee passes on
+  carries it, by ruling; where a handler's binding holds it, and that
+  every reference the callee stores carries it, are assumed (question
+  110 there).
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not

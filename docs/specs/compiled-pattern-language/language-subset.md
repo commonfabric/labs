@@ -649,6 +649,26 @@ comes from.
   their keys (`plan-and-label-templates.md`, §1.3), and `find` yields one
   of them.
 
+An element that is a plain value in place can be referred to all the
+same. By ruling it is named by its collection and its key, and a
+reference to it or to a member of it resolves to the position the
+element has at each read and each write. So in a callback over plain
+values, `equals(selected, item)` is true for the element a handler
+stored in `selected`, `$checked={item.done}` writes the member of the
+element in the array, and a handler given `item` writes through it,
+before and after the elements move. Two things differ from an element
+that is a cell. A write that changes the value makes the element a new
+element, as any edit of a plain value in place does, so the callback
+is evaluated for it again, with new state cells. And once
+the element is removed, a reference kept elsewhere, as by
+`center.set(stop.position)`, reads as `undefined`; in the runtime of
+today such a reference keeps reading the record. An author who wants
+the value kept writes a copy, and one who wants the element to keep
+its identity across edits makes the elements cells
+(`plan-and-label-templates.md` §1.3; what a write that changes the
+value does to a reference kept elsewhere is assumed there, §8,
+question 112).
+
 ```tsx
 // Shown for illustration only.
 // Two "glazed" rows have an `open` cell each.

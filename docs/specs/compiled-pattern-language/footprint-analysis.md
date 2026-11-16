@@ -876,6 +876,14 @@ that was read from an input and passed on unchanged. Today such a value
 carries the address it was read from (`annotateWithBackToCellSymbols` in
 `runtime/runner/src/schema.ts`), and a write of it stores a link. This
 document assumes that stays ([§13](#13-open-questions), question 2).
+By ruling, what is stored for an element that is a plain value in
+place of an array, or for a member of it, is a reference that names
+the collection, the element's key, and the path, and that resolves to
+the position the element has at each read and write
+(`plan-and-label-templates.md` §1.3). The footprint is the same for
+it: the body records `identity` and does not read the content. Over an
+array of references the stored reference is the link to the element's
+cell.
 
 The rule lets two bodies leave a cycle of links. A handler that stores
 what `center.get()` returned of an object in a new record stores a link
