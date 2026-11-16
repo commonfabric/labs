@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
-import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
+import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
@@ -22,6 +22,7 @@ import {
   externalizeSchema,
   getStableInternalPathSegment,
   inlineExternalSchemaRefsInValue,
+  inLinkTextOrder,
   isCellLink,
   isSigilLink,
   isWriteRedirectLink,
@@ -44,12 +45,17 @@ import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Runtime } from "../src/runtime.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
+import { withLinkCfcLabelView } from "../src/cfc/link-label-view.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import {
   resetContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
-import { LINK_V1_TAG } from "../src/sigil-types.ts";
+import {
+  type CellLinkRefPayload,
+  LINK_V1_TAG,
+  type SigilLink,
+} from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
@@ -2370,7 +2376,7 @@ describe("link-utils", () => {
     });
   });
 
-  describe("the text form of a link", () => {
+  describe("inLinkTextOrder()", () => {
     // Text a link was written as is compared as text wherever it is kept, so
     // each expected string here is one an earlier build wrote, member order
     // included.
@@ -2382,7 +2388,10 @@ describe("link-utils", () => {
     const textOf = (
       link: NormalizedLink,
       options?: Parameters<typeof createSigilLinkFromParsedLink>[1],
-    ): string => JSON.stringify(createSigilLinkFromParsedLink(link, options));
+    ): string =>
+      JSON.stringify(
+        inLinkTextOrder(createSigilLinkFromParsedLink(link, options)),
+      );
 
     it("writes a link's text form in the fixed member order", () => {
       expect(textOf({
@@ -2433,6 +2442,46 @@ describe("link-utils", () => {
       }, { includeSchema: true, overwrite: "redirect" })).toBe(
         '{"/":{"link@1":{"path":["b"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"space","schema":{"type":"number"},"overwrite":"redirect"}}}',
       );
+    });
+
+    it("writes a payload's members in the fixed order whatever order it holds them in", () => {
+      const link = linkRefFrom<CellLinkRefPayload>({
+        id: target,
+        overwrite: "redirect",
+        path: ["d"],
+        scope: "user",
+        space: spaceOne,
+      });
+      expect(JSON.stringify(inLinkTextOrder(link))).toBe(
+        '{"/":{"link@1":{"path":["d"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"user","overwrite":"redirect"}}}',
+      );
+    });
+
+    it("appends a member outside the fixed order after the fixed ones", () => {
+      const link = withLinkCfcLabelView(
+        createSigilLinkFromParsedLink({
+          id: target,
+          space: spaceOne,
+          path: ["e"],
+        }),
+        { version: 1, entries: [] },
+      );
+      expect(JSON.stringify(inLinkTextOrder(link))).toBe(
+        '{"/":{"link@1":{"path":["e"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","cfcLabelView":{"version":1,"entries":[]}}}}',
+      );
+    });
+
+    it("keeps a member whose value is `undefined` in its place", () => {
+      const ordered = linkRefPayload(
+        inLinkTextOrder(createSigilLinkFromParsedLink({ path: ["f"] })),
+      );
+      expect(Object.keys(ordered)).toEqual(["path", "id"]);
+      expect(ordered.id).toBeUndefined();
+    });
+
+    it("returns a link whose payload is not a plain record as it is", () => {
+      const link = { "/": { [LINK_V1_TAG]: "not a record" } };
+      expect(inLinkTextOrder(link as unknown as SigilLink)).toBe(link);
     });
   });
 });

@@ -39,6 +39,7 @@ import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
+import { inLinkTextOrder } from "../link-utils.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { setResultCell } from "../result-utils.ts";
 import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
@@ -803,7 +804,7 @@ export function sqliteDatabase(
       // explicit and in one place.
       const id = (typeof handle.sourceURI === "string"
         ? stripEntityUriScheme(handle.sourceURI)
-        : undefined) ?? JSON.stringify(handle.getAsLink());
+        : undefined) ?? JSON.stringify(inLinkTextOrder(handle.getAsLink()));
       // Grow-only merge the per-column `ifc` against any prior committed handle
       // value at this (causally-stable) id: the store's effective label is
       // monotone, so a re-derivation reading a weaker `tables` input cannot lower

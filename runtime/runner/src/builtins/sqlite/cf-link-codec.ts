@@ -13,6 +13,7 @@ import type { NormalizedFullLink } from "../../link-types.ts";
 import {
   type CellLink,
   createSigilLinkFromParsedLink,
+  inLinkTextOrder,
   isCellLink,
 } from "../../link-utils.ts";
 
@@ -20,7 +21,8 @@ import {
  * Encode a bound Cell to the stored `_cf_link` sigil-link JSON string: an
  * ABSOLUTE link (id + space + scope, no `base`) with `schema`/`asCell` stripped
  * (`includeSchema: false`), so the row resolves independent of any base
- * document and stores no schema flags.
+ * document and stores no schema flags. Its members are written in
+ * `LINK_TEXT_MEMBER_ORDER`, since SQL compares the column as text.
  */
 export function encodeCellToSigilString(
   cell: Cell<unknown>,
@@ -31,7 +33,7 @@ export function encodeCellToSigilString(
     ...link,
     id: portableId(link.id),
   }, { includeSchema: false });
-  return JSON.stringify(sigil);
+  return JSON.stringify(inLinkTextOrder(sigil));
 }
 
 /**

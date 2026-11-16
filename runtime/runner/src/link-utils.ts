@@ -5,7 +5,7 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import {
   deepFrozenCloneAndInternSchema,
   internSchema,
@@ -40,6 +40,7 @@ import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
 import {
   isObjectNotArray,
   isObjectOrArray,
+  isPlainObject,
 } from "@commonfabric/js-values/types";
 import { getLogger } from "@commonfabric/logger";
 
@@ -435,6 +436,53 @@ export function createSigilLinkFromParsedLink(
     linkRefFrom<CellLinkRefPayload>(reference),
     link.id,
   );
+}
+
+/**
+ * The order a link's members are written in wherever a link is turned into
+ * text that is kept: a `_cf_link` column (`docs/specs/sqlite-builtin/02-cf-link-encoding.md`)
+ * and `Cell.toJSON()`. Text already written is compared as text, by SQL and
+ * by a pattern keying data by a stringified cell, so this order is fixed
+ * whatever order a payload holds its members in.
+ */
+export const LINK_TEXT_MEMBER_ORDER = [
+  "path",
+  "id",
+  "space",
+  "scope",
+  "schema",
+  "overwrite",
+] as const;
+
+/**
+ * Returns a link to what `link` names whose payload lists its members in
+ * {@link LINK_TEXT_MEMBER_ORDER}, then every other member in the order
+ * `link`'s payload holds them, for a link about to be turned into text. A
+ * member whose value is `undefined` keeps its place. A link whose payload is
+ * not a plain record is returned as it is. A snapshot the link names resolves
+ * through the result as it does through `link`.
+ */
+export function inLinkTextOrder(link: SigilLink): SigilLink {
+  const payload = linkRefPayload(link);
+  if (!isPlainObject(payload)) return link;
+  const members = new Map(Object.entries(payload));
+  const ordered: CellLinkRefPayload = {};
+  // Defined rather than assigned, so a member named `__proto__` stays a
+  // member.
+  const append = (key: string, value: unknown) =>
+    Object.defineProperty(ordered, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  for (const key of LINK_TEXT_MEMBER_ORDER) {
+    if (!members.has(key)) continue;
+    append(key, members.get(key));
+    members.delete(key);
+  }
+  for (const [key, value] of members) append(key, value);
+  return pinImmutableCell(linkRefFrom(ordered), payload.id);
 }
 
 /**

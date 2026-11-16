@@ -157,6 +157,7 @@ import {
 import {
   createSigilLinkFromParsedLink,
   declareStreamSchema,
+  inLinkTextOrder,
   isCellLink,
   KeepAsCell,
   type NormalizedFullLink,
@@ -5193,8 +5194,10 @@ export class CellImpl<T extends FabricValue>
     // (the runtime's id among it) and reports differently each run.
     //
     // It carries no weight on the way to storage: a value bound for storage is
-    // recognized as a cell first, and its link read off it directly.
-    return this.toSigilLinkOrNull();
+    // recognized as a cell first, and its link read off it directly. The text
+    // it yields is the link's text form, in `LINK_TEXT_MEMBER_ORDER`.
+    const link = this.toSigilLinkOrNull();
+    return link === null ? null : inLinkTextOrder(link);
   }
 
   get __debugValue(): T {
