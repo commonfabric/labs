@@ -794,6 +794,12 @@ export interface Cone {
   /** Where the cone's code begins in source, for diagnostics. */
   readonly at: SourcePosition;
   /**
+   * Where the cone's code is written. Its `element` steps, outermost
+   * first, name the collections whose element keys an instance of the
+   * cone exists for (section 1.4). Assumed (section 8, question 98).
+   */
+  readonly within: readonly WithinStep[];
+  /**
    * Every slot the value function receives, over all selections. The runtime
    * passes these, the outputs its incoming edges name, and nothing else
    * (sections 1.4 and 7).
@@ -1203,6 +1209,42 @@ its reactive tier included, cannot be compiled in this way, because the
 plan would not end. *Assumed* (section 8, question 45): the compiler
 refuses such a call.
 
+**A constant of the argument, and a path the call leaves out.** A
+constant that the call writes at a path of the callee's argument has no
+record. It is in the value code of the cones that read the path, which
+the compiler emits for that call. The callee can also declare a default
+for a path that the call does not write, as a callee that declares
+`symbol: Default<string, "$">` does where the call writes no `symbol`.
+The rule of section 2.5 ("A default belongs to the place") gives a path
+that resolves to a slot of the caller the default of that slot's schema.
+It gives nothing for a path the call leaves out: the path resolves to no
+slot, and no record holds the callee's argument schema, since the callee
+is no `Child`. In the prototype's comparison the runtime of today, for
+which the callee is an instance with an argument document and a schema,
+read `"$"` at such a path. *Assumed* (section 8, question 100): a path
+the call leaves out reads the default that the callee's declared
+argument type gives the path, which the compiler writes into the value
+code as a constant. A path that the call binds to a slot of the caller
+at which nothing is stored reads the default of the caller's schema, by
+the rule of section 2.5, and the callee's default is not applied.
+
+**Where a slot of `Body.reads` sits in the body's argument.** An entry of
+`Body.computed` has its place in the argument, `at`. An entry of
+`Body.reads` is a slot index, and a slot has a root and a path in the
+instance. For a handler the two give the place: a slot of root `event`
+is below the first parameter and a slot of root `binding` below the
+second, at the slot's path. For a `lift`, a `computed`, or an authored
+function used in the reactive tier they do not. The slot has the root
+and the path of what the caller passed: for a body whose parameter is
+`p` and that reads `p.name`, where the caller passed the path `profile`
+of the argument, the slot has root `argument` and the path
+`["profile", "name"]`, and nothing says that it stands at `["name"]`
+below the parameter. *Assumed* (section 8, question 99): for each use of
+a body that is no handler, the compiler emits beside the plan the path
+in the argument of each slot of `reads`, formed as `ComputedInput.at` is,
+and the runtime builds the slot part of the argument from it
+(`execution-and-storage.md` §2.4).
+
 **The order of `Binding.result`.** The paths are in source order: the
 order in which the positions that hold the stream are written in the
 source of the pattern. The members of an object literal are in the order
@@ -1303,7 +1345,9 @@ is the same for every evaluation, so the path is listed whichever branch
 a run selects. While another branch is selected the position holds what
 that branch has there, which can be nothing or the stream of another
 binding. A reader that finds no link to the stream at one path of
-`result` reads the next.
+`result` reads the next. Whether the value function places the stream
+at such a position, or the runtime does from the paths listed here, is
+question 78 of `execution-and-storage.md` (its §2.2).
 
 *Assumed* (section 8, question 78), since no other rule of the documents
 says how such a path is resolved to one stream:
@@ -1669,7 +1713,10 @@ Consequences, which later sections rely on:
   keys whose position changed, and changes their index slots. The label
   identifiers at the new addresses are normally those at the old ones,
   and then no cone that lists only element slots is evaluated and no
-  label of one is instantiated.
+  label of one is instantiated. One case is open: a cone that passes on,
+  through its `identity` slot, an element that is a plain value stored
+  in place yields a reference to the position, which a move changes
+  (`execution-and-storage.md` §2.6 and its question 79).
 - **A body that reads the index has this property too.** No key holds
   the index. A move evaluates again the cones that list the index slot,
   for the keys whose position changed, and nothing else of the body. The
@@ -1799,6 +1846,21 @@ called for its effects alone is not, the cones of that one are after it.
 with the highest index, whichever cone that is. Every cone of the body
 has slots of root `element`, or reads none and is evaluated per element
 key all the same.
+
+**The `within` of a cone.** The runtime has to know, before it evaluates
+a cone, for which element keys an instance of the cone exists. The slots
+of a cone do not say it, because a cone of an element body can list no
+slot of root `element` or `index`: of the 446 cones of an element body in
+the prototype's corpus plans, 38 list none. An output path does not say
+it either: a `*` stands for a collection and does not name it, and an
+interim output has no `*`. The paragraphs below name the `within` of a
+cone for this. *Assumed* (section 8, question 98): `Cone.within` holds
+the steps of where the cone's code is written, as the `within` of a
+declaration does (section 1.3), and an instance of the cone exists for
+each combination of element keys of the collections that its `element`
+steps name, outermost first (`execution-and-storage.md` §2.5). A cone
+written in the pattern body, outside every element body and every
+pattern compiled in, has the empty list.
 
 **An interim value of an element body.** A value that a declaration
 cone of the callback computes and another cone of the body uses is an
@@ -10426,3 +10488,56 @@ this document made.
     key. The alternative refuses, in the reactive tier, a declared
     value that is not a static initializer, which `language-subset.md`
     would have to state.
+
+    A declared value that is a constant has no record either. The
+    prototype's emitter writes one function per state cell into the
+    value code, which the executor calls when it makes the cell's
+    document. Of the 1,399 such functions of its corpus, 1,377 are a
+    literal, 19 are another expression that reads no slot, and 3 read a
+    slot. *Assumed:* a declared value that reads no slot is in the value
+    code in that form, and has no label. A function that reads a slot
+    reads it through no cone, so no record of the plan lists the read
+    and no template has its label; for those three the write edge
+    assumed above is what gives the record and the label, and the
+    prototype does not emit it. So the question for the owner has two
+    parts: where the plan holds the first value of a state cell, and
+    what the label of a first value computed from an input is.
+    `execution-and-storage.md` §4.1 assumes when the document is
+    written (its question 83).
+98. **The `within` of a cone** (for the project owner). Section 1.4
+    refers to the `within` of a cone, and the runtime needs to know for
+    which element keys an instance of a cone exists before it evaluates
+    it. Neither the slots nor the output paths of a cone say it.
+    *Assumed:* `Cone.within` is a member of the record (section 1.1),
+    with the steps of where the cone's code is written, and its
+    `element` steps name the collections. The prototype holds, beside
+    the plan, for each cone the collections of the element bodies it is
+    written in, outermost first, which is the `element` steps alone. Not
+    determined by this document: whether the member holds the `site`
+    steps as well, as assumed here, or the collections alone; and
+    whether `Cone.entry` is unique without it.
+99. **Where a slot of `Body.reads` sits in the body's argument** (for
+    the project owner). For a handler the root and the path of a slot
+    give its place. For another body they are those of what the caller
+    passed, and only an entry of `Body.computed` has an `at` (section
+    1.1). *Assumed,* as the prototype has it: the compiler emits beside
+    the plan, for each use of a body that is no handler, the path in the
+    argument of each slot of `reads`. The alternative makes an entry of
+    `Body.reads` a record of the slot and its `at`, which puts the place
+    into the plan and its hash. The prototype's corpus plans have 355
+    uses of a body that is no handler, with 1,093 slots placed this way.
+100. **A path that the call of a pattern compiled in leaves out** (for
+     the project owner). Where the callee declares a default for a path
+     and the call does not write the path, no slot and no schema of the
+     plan gives the read a value (section 1.1). *Assumed,* as the
+     prototype has it: the read gives the default of the callee's
+     declared argument type, held as a constant in the value code; and
+     a path that the call binds to a slot of the caller at which
+     nothing is stored reads the default of the caller's schema, and
+     not the callee's. The second part follows the ruling that a
+     default belongs to the stored place, and leaves a callee that
+     declares a default without it where the caller's place declares
+     none. The alternative for that part applies the callee's default
+     where the chain gives none. Without the first part the prototype's
+     executor computed `"undefined420.00"` where the runtime of today
+     shows `"$420.00"`.

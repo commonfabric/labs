@@ -795,11 +795,41 @@ The compiler partitions the pattern body into cones.
   a key function) is one or more cones whose slots include `element` roots.
   They are evaluated once per element key (section 2.5).
 
+**The scope a function is evaluated in.** The value code of a compiled
+pattern is one emitted module (`plan-and-label-templates.md` §1.5). A
+plan can hold code from several source modules: the module of the
+pattern, the modules it imports, and the module of each pattern compiled
+into it. A name that the expression of a cone or a sandboxed body uses,
+and that its source module declares at module scope (a helper function,
+a constant, an import), resolves as it does in the source. So the value
+function of a cone and the function of a sandboxed body are evaluated in
+the scope of the module they are written in, after that module's
+statements of module scope, and a body's function is the one `Body.code`
+identifies by its module and its binding. Module data is frozen and
+functions are stateless (`language-subset.md` §3.3), so one evaluation of
+those statements per loaded copy of the value code serves every call.
+
+No other document fixes the text of the module. *Assumed* (question 81),
+as the prototype's emitter has it. The value code holds one function per
+source module that the plan's code is written in or imports. The body of
+that function is the module's own statements of module scope with the
+types removed, each import as a read of another module's exports, each
+export as a member of an exports object, and the function of every
+`pattern(...)` call left out. After those statements it registers each
+function the plan needs from the module: the value function of a cone
+under `Cone.entry`, and the function of a sandboxed body. A function is
+registered in the module it is written in, the functions of a pattern
+compiled in from another module included. The functions of one call of a
+pattern compiled in are registered inside a function for that call,
+which is given the constants of the call's argument, so that they close
+over those constants and over the names of the scope a handler written
+in place captures.
+
 ### 2.2 Invocation and inputs
 
 The runtime invokes a cone's function with one argument, a host object, and
 the function returns a result record. Both are plain data apart from the
-host's three functions.
+host's four functions.
 
 ```ts
 type Index = number;
@@ -830,6 +860,13 @@ export interface ConeHost {
    * builds the slot part of the argument itself.
    */
   invoke(body: Index, computed: unknown): unknown;
+  /**
+   * A link to the stream of one binding of `Plan.bindings`, for the
+   * element keys this cone instance is evaluated for. The function puts
+   * it at each position of a value it computes where the source writes
+   * the stream. Assumed (section 11, question 78).
+   */
+  stream(binding: Index): unknown;
 }
 
 /** What a cone's value function returns. */
@@ -859,6 +896,45 @@ returns every child of the container, at the path and class of the child
 slot, keyed by the child's key, and the function reads the one at its
 key. The label is instantiated at the chosen child alone, and the cone
 instance is stale when the chosen child changed (section 3.3).
+
+`stream` is an assumption. A value a cone computes can hold the stream
+of a handler, as a rendered tree does at an event attribute.
+`plan-and-label-templates.md` §1.1 lists those positions in
+`Binding.result`, because the instance has to store a link to the stream
+there. The runtime cannot place a stream from the listed paths alone: a
+path with `*` among the children of a view node does not say which
+positions the `*` stands for (its §8, question 78), and a path below a
+conditional holds the stream under one selection only. *Assumed*
+(question 78 of section 11): the value function places the stream, with
+`host.stream`, where the source writes it, and `Binding.result` says
+where that is for a reader of the plan. The alternative has the function
+leave the position empty and the runtime fill in the listed paths, which
+needs a rule for the two cases above. The prototype's executor places
+streams this way, and compared where the stored results of its corpus
+run hold a stream with the listed paths. 431 stored positions are named
+by a listed path and 18 by none. Of the listed paths without `*`, 315
+hold the stream and 12 do not. Of the 18, 14 hold the stream of a binding
+for which the prototype emits no `result` member, and 4 hold a stream
+that is an input of the pattern, which no binding stands for. The 12
+were not examined.
+
+**An output with entries below it.** A constructed value, such as a
+rendered tree, has an entry of `Plan.outputs` for its container and one
+for each member that is not constant (`plan-and-label-templates.md`
+§3.4), and `ConeResult.outputs` is by output index. *Assumed* (question
+82): the function returns the whole constructed value once, under the
+entry at the root of the construction, with the constant members in
+place. It returns nothing under the entries below that one, which are
+paths of the value returned. The object a pattern returns has no
+container entry where its key set is static, and a constant path of it,
+such as `[NAME]: "Counter"`, has no entry at all. The `result` cone
+computes the paths of the result that no other cone computes (its §1.4).
+*Assumed,* under the same question: the value function of the `result`
+cone returns the whole returned record, with the constant paths in place
+and the outputs of other cones read through `host.output`, and the
+runtime stores from it the kept paths that no entry of another cone
+covers. `ConeResult.outputs` has no index for that record. The
+interface above stays as it is until the question is decided.
 
 Six rules hold for an invocation.
 
@@ -941,6 +1017,25 @@ value code, so the runtime neither discovers read sets nor sorts.
   evaluated again in the same transaction only when a write staged in that
   transaction changed something it had read (section 2.7).
 
+**A cone whose only effect is a side-write.** A cone instance is demanded
+when one of its kept outputs is, or when something demanded reads the
+target of one of its write edges (`scheduler-and-serving-loop.md`,
+"Terms" and §4.1).
+A pattern can pass a state cell on by reference at a path of its result
+while a cone of the pattern side-writes that cell and has no kept
+output. In `patterns/dev/test/non-idempotent/accumulator.tsx` a
+`computed` pushes onto a state cell, and the result holds the cell. The
+`identity` slot at the root of the cell makes no edge
+(`plan-and-label-templates.md` §3.11), so no edge leads from the writing
+cone to the `result` cone. A reader that demands the result path is
+handed a link and has not read the cell, and no document says that the
+demand on that path is a demand on the cones that write the cell.
+*Assumed* (question 80): it is. A cone of the pattern's own body with a
+side-write to a cell that a kept path passes on by reference is demanded
+when that path is, and is evaluated before the path is stored. The
+prototype's executor has no reader and evaluates every cone of the
+pattern's own body that has a side-write before it stores the result.
+
 Because the value code is the same on the server and on a client, and the
 order depends only on the plan, the demanded outputs and the values, two
 runtimes that start from the same state evaluate the same cone instances in
@@ -970,6 +1065,15 @@ runtime:
    them (section 2.8);
 6. returns the result to the cone's function, or fails the cone when the
    body threw, exceeded its budget, or returned a value outside its schema.
+
+**Where a slot of `reads` sits in the argument.** For a handler, a slot
+of root `event` is placed below the first parameter and a slot of root
+`binding` below the second, at the slot's path. For another body the root
+and the path of a slot are those of what the caller passed, and do not
+give the place. *Assumed,* with `plan-and-label-templates.md` §1.1 (its
+§8, question 99): the compiler emits the place of each slot of `reads`
+for each use of such a body, and the runtime builds the slot part from
+it.
 
 **What the argument holds at a path.** The runtime builds the argument entry
 by entry. What it puts at an entry's path depends on the entry's class, so
@@ -1005,11 +1109,42 @@ holds a reference stand-in whatever is stored behind it, so a test of
 presence or kind sees presence and no more. These are the stand-ins
 `footprint-analysis.md` asks for (its requests 8 and 17).
 
+An `identity` entry at a position of handle type comes before every
+entry at or below that position. The argument holds the handle, and an
+entry of another class at or below the position is not put into the
+argument: it is what a read through the handle returns ("Handles",
+below). A handler that calls `count.get()` and `count.set(...)` has a
+`value` slot and an `identity` slot at the path `count` of its state,
+and is handed the handle.
+
+**A captured name with no entry.** A `computed`, or another function
+written in place, is called with a binding for every name of the reactive
+tier that its code captures. A name the code mentions and reads nothing
+of, as `flag` in `computed(() => { void flag; ... })`, has no entry of
+`reads` and none of `computed`. It is bound all the same, and holds
+`undefined`, because the path is absent from the argument by the last
+row of the table.
+
 **A value passed on unchanged is stored as a reference.** When a body
 returns or writes a container that carries the address it was read from, or
 a reference stand-in, the runtime stores a link to that address and not a
 copy (`footprint-analysis.md` §3.8). *Assumed*, pending question 10 of the
-continuation plan: the rule stands, as today.
+continuation plan: the rule stands, as today. The values the prototype's
+executor computed for the corpus need the rule: a later
+`items.remove(item)`, with `item` an element of a `map` over
+`items.get().filter(...)`, finds the record only where the elements of
+the filtered list are references to the records of `items`.
+
+The rule does not decide a write whose value holds a reference into what
+the write replaces. `items.set(items.get().toSpliced(i, 1))` writes to
+the cell of `items` a list whose members carry the addresses they were
+read from. For a member stored in place that address is a position of
+the list the write replaces, and a link to it would name what the write
+itself overwrites. *Assumed* (question 84): where a member of a written
+value carries an address at or below the path the write replaces, and
+that address is a position that holds the value in place, the runtime
+stores the value there and no link. A member that carries the address of
+a cell a link led to is stored as a link, by the rule above.
 
 **Handles.** The runtime hands a body a cell handle for every position of
 handle type that its record names: an `identity` slot of `reads`, an
@@ -1072,6 +1207,13 @@ For a slot with `resolved` the handle is the resolved reference.
   paragraph says. A path of a child's argument that a function body gave when it
   instantiated the child is written freely by the child
   (`plan-and-label-templates.md` §3.15).
+- A position of handle type can be bound to a constant: a state path of a
+  binding whose `place` is a constant, or a path of the argument of a
+  pattern compiled in at which the call writes a literal, as `step={5}`
+  does for a callee that declares `step: Writable<number>`. A constant
+  has no position. The body is handed a handle that reads the constant,
+  and a write through it is refused by the ruling above, because a
+  literal is a value the instance produces and no reference.
 
 **A handle or a reference from a computed input.** A handle or a container
 can reach a body in a value the instance computed, such as one another
@@ -1323,7 +1465,7 @@ element part when the value behind the link changes.
 | A child of a captured outer output changes, and the body reaches that output only through a `pick` | The cone instances whose `pick` chose that child (section 3.3) | Those | Their changed kept paths |
 | An element is appended or inserted | The collection's membership; no existing element's cone | The new key's cone instances | The new positions; for an insertion, the positions after it move in the stored array (section 4.2) |
 | An element is removed | The collection's membership | Nothing | The stored array loses the position, and a part document of the row is deleted (section 4.10) |
-| Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
+| Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index, or passes on by reference a plain value stored in place (below) | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
 | A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
 | A plain value is edited in place | Membership: the old key leaves and a new key enters | The new key | The position |
@@ -1335,6 +1477,26 @@ and does not visit the others (section 6.1).
 
 The cutoff applies at every step: a cone instance whose evaluation produces
 the outputs it produced before does not make its consumers stale.
+
+**A moved element that a cone passes on by reference.** For an element
+that is a plain value stored in place, the address the element is read
+from is its position in the collection's document. A cone that passes
+such an element on through its `identity` slot, as the cone of
+`tags.map((tag) => <li>{tag}</li>)` does, yields a reference to that
+position, and the row stores a link to it. After a move the key is bound
+to another position, and the stored link names the earlier one, where
+another value stands. With nothing evaluated, the row of one value shows
+another: the prototype's executor showed `"b"` in the row of `"a"`.
+*Assumed* (question 79), as the executor has it: the runtime records the
+address each element slot of a cone instance was bound to, and a cone
+instance is stale when the bound address of an `identity` slot it read
+changed. For a position that holds a link the address is the cell's, and
+a move does not change it. The assumption evaluates, on a move, cone
+instances that do not read the index, which the ruling on the index does
+not provide for: by the ruling a move evaluates the nodes that read the
+index alone. It is limited to a cone instance that passes on a plain
+value stored in place. The alternative keeps the ruling's wording and
+has the row hold the value and no link to the position.
 
 ### 2.7 Side-writes and bounded iteration
 
@@ -1932,6 +2094,21 @@ says how many scope instances exist.
 | Binding state document | The state of a binding made in a function body: the copied paths, and a link for each cell and each container bound by reference | Section 5.5 | The body's |
 | Instances document | Which instances the evaluations of the instance's computations made | Section 2.8 | One per scope the making cone instances have |
 | Stream document | The entries of the events appended to one stream, and the stream's `eventWatermark`. It exists once the stream received an event (section 4.7) | The stream's identifier (sections 5.2 and 5.5) | As today |
+
+**When a state cell's document is written.** A state cell whose
+declaration gives it no value has no document until it is first assigned
+(section 4.5). A declaration can give the cell a value, which is written
+when the cell is first created (`plan-and-label-templates.md` §1.3), and
+no document says in which transaction that is. *Assumed* (question 83):
+for a cell with no `element` step in `within`, in the transaction that
+creates the instance where the declared value reads no slot, and
+otherwise in the first transaction that evaluates the cone the value is
+computed in (its §8, question 97); for a cell of an element body, in the
+transaction in which the element key enters the element table (section
+2.5). The prototype's executor makes the document of every state cell at
+those times, with or without a declared value, and the run of today's
+runtime it was compared with has the document of every state cell of the
+pattern's body once the instance has settled.
 
 A cell or a child instance that a handler of the instance created is not
 one of the instance's documents. It is reached through whatever link the
@@ -4577,6 +4754,33 @@ Added by the ruling that the scheduler is switched per space (section 9):
     a new instance in one transaction where something demands it at
     once. The prototype's derived count of two transactions to settle
     an instance rests on this assumption.
+78. **Who places a stream in a computed value** (section 2.2;
+    `plan-and-label-templates.md` §1.1, `Binding.result`). *Assumed:*
+    the value function places it, through `ConeHost.stream`, and
+    `Binding.result` describes the positions. The alternative has the
+    runtime fill in the paths of `Binding.result`, which a path with `*`
+    among the children of a view node and a path below a conditional do
+    not determine. In the prototype's corpus run the two agree at 431 of
+    449 stored positions, and at 315 of 327 listed paths without `*`.
+79. **A moved element that is passed on by reference** (section 2.6;
+    `plan-and-label-templates.md` §1.3). For a plain value stored in
+    place, a link to the element is a link to its position, which a move
+    gives another value. *Assumed:* a cone instance is stale when the
+    address its `identity` element slot was bound to changed, so a cone
+    that passes such an element on is evaluated again on a move. That is
+    more than the ruling on the index names, which has a move evaluate
+    the nodes that read the index alone. The alternative has the row
+    hold the value and no link to the position, and evaluates nothing.
+80. **What demands a cone whose only effect is a side-write** (section
+    2.3; `scheduler-and-serving-loop.md` §4.1). Where the result passes
+    a cell on by reference and a cone with no kept output writes that
+    cell, no edge and no read leads from the demand on the result to the
+    writing cone before a reader reads the cell. *Assumed:* demand on a
+    kept path that passes a cell on by reference is demand on the cones
+    of the pattern's own body that side-write the cell. The alternative
+    leaves the cone to the first read of the cell, by the existing rule
+    for the target of a write edge, so that the result is stored before
+    the write is made.
 
 ### 11.2 For another document or the prototype
 
@@ -4823,7 +5027,9 @@ label is concerned:
     alternative gives `ConeHost` a function that takes the choice point
     and the key and binds the child slots before it returns. This
     document owns the host interface, and the interface of section 2.2
-    stays as it is until the question is decided.
+    stays as it is until the question is decided. The prototype's
+    executor yields every child, and the three corpus modules it ran
+    that have such a read computed the values of today's runtime.
 
 <!-- The list restarts so that the numbers stay as cited. -->
 
@@ -4923,3 +5129,36 @@ To the prototype:
 46. **A cone instance evaluated while a body is suspended at a read**
     (section 1.4). Whether the sandbox allows one body to run while another
     waits at a read, and how the budgets of the two are counted.
+
+From the prototype's executor, for this document to decide:
+
+<!-- The list restarts so that the numbers stay as cited. -->
+
+81. **The text of the value-code module** (section 2.1). *Assumed:* one
+    function per source module, with the module's statements of module
+    scope and then a registration of each function the plan needs from
+    it, and a function per call of a pattern compiled in that is given
+    the constants of the call. The prototype emits these texts as
+    members of one record beside the plan and the schema documents, and
+    not as one text, so it forms no `CompiledPattern.valueCode`. Its
+    emitter also writes one function per value a cone computes where
+    section 2.1 has one per cone; the two hold the same code wherever a
+    cone has one value that another record refers to.
+82. **What a value function returns for an output with entries below
+    it, and for the constant paths of the result** (section 2.2).
+    *Assumed:* the whole constructed value under the entry at its root,
+    and for the `result` cone the whole returned record, constants
+    included. The alternatives return each member under its own index
+    as well, and hold the constant paths of the result in the plan.
+83. **When a state cell's document is written** (section 4.1).
+    *Assumed:* for a cell with a declared value, when the instance is
+    created or when the element key enters the element table, and for a
+    declared value that reads a slot at the first evaluation of its
+    cone. A cell with no declared value has no document until it is
+    assigned. It depends on question 97 of
+    `plan-and-label-templates.md`.
+84. **A written value that holds a reference into what the write
+    replaces** (section 2.4). *Assumed:* a member that carries the
+    address of a position inside the replaced path, and that the
+    position holds in place, is stored as its value. It extends question
+    10 of the continuation plan.
