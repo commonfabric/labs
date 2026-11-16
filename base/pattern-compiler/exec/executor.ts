@@ -298,6 +298,28 @@ const coversPosition = (listed: readonly string[], path: readonly string[]) =>
     segment === path[index] || (segment === "*" && /^\d+$/.test(path[index]))
   );
 
+/**
+ * A value in stored form with `value` at a path of it, and with nothing
+ * there where `value` is nothing.
+ */
+const replaced = (
+  holder: unknown,
+  path: readonly string[],
+  value: unknown,
+): unknown => {
+  if (path.length === 0) return value;
+  const [first, ...rest] = path;
+  if (Array.isArray(holder)) {
+    const copy = [...holder];
+    copy[Number(first)] = replaced(copy[Number(first)], rest, value);
+    return copy;
+  }
+  if (!isRecord(holder)) return holder;
+  const { [first]: held, ...others } = holder;
+  const member = replaced(held, rest, value);
+  return member === undefined ? others : { ...others, [first]: member };
+};
+
 const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
   pattern.length <= path.length &&
   pattern.every((segment, index) => segment === "*" || segment === path[index]);
@@ -952,17 +974,25 @@ export class Instance {
   readonly trace: string[] = [];
   /**
    * The evaluations that failed the check of where a stream is stored
-   * (ruling Z11), with the first marker each one held at a position no
-   * listed path of the marker's binding covers.
+   * (rulings Z11 and Z19): one for each marker at a position no listed
+   * path of the marker's binding covers. The evaluation that fails is
+   * the one that stores the value. `output` is the kept output that
+   * holds the position and `held` its path, with the index of the
+   * element in the place of each `*`: that output is not written and
+   * keeps what was stored. `evaluation` is the `entry` of the output's
+   * cone. Where no output of the plan holds the position, `held` is the
+   * position, and `evaluation` is `result`.
    */
   readonly failures: {
     evaluation: string;
+    output?: number;
+    held: string[];
     binding: number;
     path: string[];
   }[] = [];
   /** Every such position, over all failed evaluations, once each. */
   readonly misplaced: { binding: number; path: string[] }[] = [];
-  readonly #checked = new WeakMap<Entry, boolean>();
+  readonly #checked = new WeakMap<Entry, string[][]>();
 
   constructor(
     readonly artifact: Artifact,
@@ -2147,11 +2177,14 @@ export class Instance {
         (host) => result.evaluate(host),
       );
       // A marker at a position of the result that no listed path of its
-      // binding covers fails the evaluation, and no link is stored
-      // (ES §2.2, "The check").
-      if (this.#check(entry)) {
-        this.store.write(new Ref("result", []), this.stored(entry.value));
+      // binding covers fails the evaluation that stores it: the output
+      // that holds the position keeps what was stored, and the other
+      // outputs are stored (ES §2.2, "The check" and "What fails").
+      let stored = this.stored(entry.value);
+      for (const held of this.#check(entry)) {
+        stored = replaced(stored, held, this.#storedAt(held));
       }
+      this.store.write(new Ref("result", []), stored);
       this.#afterWave = true;
       try {
         for (const materializer of this.#materializers) materializer(none);
@@ -2172,9 +2205,11 @@ export class Instance {
    * selected, so it matches under either selection. The check is of the
    * positions of the result alone: a reference in the value is not
    * followed, and a marker stored in another document is not checked.
-   * Returns whether the evaluation stands.
+   * Returns the paths of the outputs that fail, each once: the kept
+   * output that holds the position of a marker no listed path covers
+   * (ruling Z19).
    */
-  #check(entry: Entry): boolean {
+  #check(entry: Entry): string[][] {
     const known = this.#checked.get(entry);
     if (known !== undefined) return known;
     const found: { binding: number; path: string[] }[] = [];
@@ -2194,16 +2229,67 @@ export class Instance {
       }
     };
     walk(entry.value, []);
-    this.#checked.set(entry, found.length === 0);
-    if (found.length === 0) return true;
-    this.failures.push({ evaluation: "result", ...found[0] });
+    const failed: string[][] = [];
     for (const position of found) {
+      const holder = this.#holderOf(position.path);
+      this.failures.push({
+        evaluation: holder.output === undefined
+          ? "result"
+          : this.plan.cones[this.plan.outputs[holder.output].cone].entry,
+        ...holder,
+        ...position,
+      });
+      if (!failed.some((held) => canonical(held) === canonical(holder.held))) {
+        failed.push(holder.held);
+      }
       const id = canonical(position);
       if (!this.misplaced.some((other) => canonical(other) === id)) {
         this.misplaced.push(position);
       }
     }
-    return false;
+    this.#checked.set(entry, failed);
+    return failed;
+  }
+
+  /**
+   * The kept output that holds a position of the result: the entry of
+   * `Plan.outputs` with the longest path that the position is at or
+   * below, with `*` for the index of an element. Where no output of the
+   * plan holds the position, as for a stream at a member of the result,
+   * what is held is the position itself.
+   */
+  #holderOf(path: readonly string[]): { output?: number; held: string[] } {
+    let found: number | undefined;
+    this.plan.outputs.forEach((output, index) => {
+      if (
+        !output.kept || output.path.length === 0 ||
+        !coversPosition(output.path, path.slice(0, output.path.length)) ||
+        output.path.length > path.length
+      ) {
+        return;
+      }
+      if (
+        found === undefined ||
+        output.path.length > this.plan.outputs[found].path.length
+      ) {
+        found = index;
+      }
+    });
+    return found === undefined ? { held: [...path] } : {
+      output: found,
+      held: path.slice(0, this.plan.outputs[found].path.length),
+    };
+  }
+
+  /** What the result document stores at a path, with no link followed. */
+  #storedAt(path: readonly string[]): unknown {
+    let held = this.store.docs.get("result")?.value;
+    for (const segment of path) {
+      if (Array.isArray(held)) held = held[Number(segment)];
+      else if (isRecord(held)) held = held[segment];
+      else return undefined;
+    }
+    return held;
   }
 
   /**

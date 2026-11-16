@@ -352,9 +352,16 @@ it or read through it. When the executor stores a value, it writes in the
 marker's place the link to the stream of that binding for the element keys of
 the cone instance that called. For a marker at a position of the result it
 checks that a path of `Binding.result` covers the position, with `*` for any
-element, and a marker at a position no listed path covers fails the evaluation:
-the result is not stored, and `Instance.failures` has the binding and the
-position. So the crate lists a path for every position at which value code can
+element. A marker at a position no listed path covers fails the evaluation that
+stores it (ruling Z19): the kept output that holds the position is not written
+and keeps what was stored for it, which is nothing where nothing was stored, and
+every other output of the result is stored. `Instance.failures` has, for each
+such marker, the output, its path with the index of the element in the place of
+a `*`, the binding, and the position. For a cone of an element body the output
+that fails is that of the element whose row holds the position, and the rows of
+the other elements are stored, over an array of references, over an array of
+plain values in place, and over the result of another per-element construct
+alike. So the crate lists a path for every position at which value code can
 place a stream: also for a member written after a spread, for two collections
 spread into one array, and for a stream inside a value that the elements of a
 collection hold. A stream that is an input of the pattern is a reference like
