@@ -85,6 +85,35 @@ describe("tally", () => {
     expect(tally(rows, "write", "element").compared).toBe(2);
     expect(tally(rows, "write", "element").withAtom.looser).toBe(1);
   });
+
+  it("counts the rows that are tighter by the coordinator's join as tighter, and apart", () => {
+    // PL §3.1, "The coordinator's join on an element's argument
+    // document": "It is expected, it is counted as tighter, and it is
+    // reported apart".
+    const rows = [
+      row({
+        kind: "write",
+        category: "tighter",
+        within: "element",
+        coordinatorJoin: "tighter",
+      }),
+      row({ kind: "write", category: "tighter", within: "element" }),
+      // The template has no clause and so mints no atom, where the
+      // runtime's label has the join and the atom: looser in integrity.
+      row({
+        kind: "write",
+        category: "looser",
+        within: "element",
+        coordinatorJoin: "no atom",
+      }),
+    ];
+    const counts = tally(rows, "write", "element");
+
+    expect(counts.withAtom.tighter).toBe(2);
+    expect(counts.withAtom.looser).toBe(1);
+    expect(counts.byCoordinatorJoin).toBe(1);
+    expect(counts.noAtomBesideCoordinatorJoin).toBe(1);
+  });
 });
 
 describe("eventOrder", () => {
@@ -133,11 +162,20 @@ describe("resultRow", () => {
       runtimeByOrigin: { all: empty, withoutStatic: empty },
       comparisonWithoutStatic: equal,
       looserByLinkStamp: false,
+      byCoordinatorJoin: binding === 9,
+      noAtomBesideCoordinatorJoin: false,
+      lacking: binding === 9 ? ["stops"] : [],
     });
 
     const rows = [4, 9].map((binding) =>
       resultRow("write", write(binding), undefined)
     );
+    // A row that is tighter by the coordinator's join says so, and names
+    // the clauses the template lacks.
+    expect(rows.map((row) => [row.coordinatorJoin, row.lacks])).toEqual([
+      [undefined, undefined],
+      ["tighter", "C {stops} I {}"],
+    ]);
 
     expect(rows.map((row) => row.path)).toEqual([
       "onClick#1#0/",

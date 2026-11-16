@@ -28,6 +28,7 @@ import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import {
   type Atom,
+  atomKey,
   compareLabels,
   type Comparison,
   type ElementBinding,
@@ -36,6 +37,7 @@ import {
   type Label,
   type Template,
   type TemplateInputs,
+  TRANSFORMED_BY,
 } from "./template.ts";
 
 /** A place a state entry of a binding names, or a write edge targets. */
@@ -231,6 +233,26 @@ export type WriteRow = {
    * (PL §8, question 81).
    */
   looserByLinkStamp: boolean;
+  /**
+   * Whether the row is tighter by the coordinator's join alone (PL §3.1,
+   * "The coordinator's join on an element's argument document"): the
+   * handler is bound in an element body, the row is tighter, and every
+   * clause the template lacks is held by an entry of origin `structure` or
+   * `link` of the argument document of an element's instance on the way
+   * to the handler's stream. The harness does not read which of those
+   * entries the event's transaction consumed.
+   */
+  byCoordinatorJoin: boolean;
+  /**
+   * Whether the row differs by the coordinator's join in confidentiality,
+   * as a row of `byCoordinatorJoin` does, and is looser in integrity by
+   * the atom of the handler's body alone: the template has no clause and
+   * no atom, so its `derive` mints none (PL §3.2, question 66), and the
+   * run's label has the join and so the atom.
+   */
+  noAtomBesideCoordinatorJoin: boolean;
+  /** The clauses the runtime's label has and the template's lacks. */
+  lacking: Atom[];
 };
 
 /** Something the harness did not compare, and why. */
@@ -799,20 +821,25 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           }
           case "event":
             return undefined;
+          // "The slot has no stored address: its value is the position of
+          // the current element" (PL §2.2). A path of a binding's state
+          // that is bound to it has the label of its template.
+          case "index":
+            return undefined;
           default:
             throw new Unsupported(`a slot of root \`${root.kind}\``);
         }
       };
-      // The position a body is given the handle of its element from. "The
-      // slot's label is what a `followRef` read consumes at the position
-      // that holds the reference: the path of the document the body was
-      // given the handle from, such as ... a binding's state document" (PL
-      // §2.2). The run of today gives each run of an element callback an
-      // argument document with the element at `element`, a link to the
-      // position in the source, and a handler bound there reads the
-      // reference from that document. For a path of a binding's state
-      // that is the element itself, that position is returned where the
-      // way has one instance for each step of the binding's `within`.
+      // The position the run of today gives a body the handle of its
+      // element from: each run of an element callback has an argument
+      // document with the element at `element`, a link to the position in
+      // the source. The template reads the slot at the position in the
+      // source (PL §2.2, "The position of a slot of root `element`"), and
+      // takes from here the entry of origin `link` alone, which holds
+      // "the label that the declaration of the source collection gives
+      // the element" (PL §8, question 85). For a path of a binding's
+      // state that is the element itself, the position is returned where
+      // the way has one instance for each step of the binding's `within`.
       const elementHeldAt = (
         slot: number,
         context: Context,
@@ -866,6 +893,12 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               value = (value as Record<string, unknown>)[key];
             }
             return context.event === undefined ? NO_VALUE : value;
+          }
+          if (root.kind === "index") {
+            const binding = context.elements.findLast((element) =>
+              element.collection === root.collection
+            );
+            return binding === undefined ? NO_VALUE : Number(binding.key);
           }
           const cell = slotCell(slot, context);
           return cell === undefined ? NO_VALUE : valueOf(cell);
@@ -1226,6 +1259,67 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         );
       };
 
+      // What the entries of origin `link` at `cell`'s path hold: the label
+      // the reference stored there declares.
+      const linkDeclaration = (cell: AnyCell | undefined): Label => {
+        if (cell === undefined) return { confidentiality: [], integrity: [] };
+        const link = resolveLink(
+          runtime,
+          read,
+          cell.getAsNormalizedFullLink(),
+          "top",
+        );
+        const metadata = readStoredCfcMetadata(read, link);
+        if (metadata === undefined) return consumed(undefined, "followRef");
+        return consumed(
+          cfcLabelViewFromMetadata({
+            ...metadata,
+            labelMap: {
+              ...metadata.labelMap,
+              entries: metadata.labelMap.entries.filter((entry) =>
+                entry.origin === "link"
+              ),
+            },
+          }, link.path),
+          "followRef",
+        );
+      };
+
+      // The clauses of the coordinator's join on the argument documents
+      // of the element instances on the way to the row (PL §3.6, "Today,
+      // the argument document of an element"): the entries of origin
+      // `structure` and `link` of each, at every path.
+      const coordinatorClauses = (): Set<string> => {
+        const found = new Set<string>();
+        if (way.instances.length !== way.within.length + 1) return found;
+        way.within.forEach((step, index) => {
+          if ((step as { element?: number }).element === undefined) return;
+          const instance = way.instances[index + 1];
+          const link = parseLink(instance.getMetaRaw("argument"), instance);
+          if (link === undefined) return;
+          const metadata = readStoredCfcMetadata(
+            read,
+            link as NormalizedFullLink,
+          );
+          if (metadata === undefined) return;
+          const view = cfcLabelViewFromMetadata({
+            ...metadata,
+            labelMap: {
+              ...metadata.labelMap,
+              entries: metadata.labelMap.entries.filter((entry) =>
+                entry.origin === "structure" || entry.origin === "link"
+              ),
+            },
+          }, (link as NormalizedFullLink).path);
+          for (const entry of view?.entries ?? []) {
+            for (const clause of entry.label.confidentiality ?? []) {
+              found.add(atomKey(clause));
+            }
+          }
+        });
+        return found;
+      };
+
       // Whether `template` is the label of a reference the instance
       // computed, whose target no slot names (PL §3.1, "A reference whose
       // target no slot names"): what a materializer returned, which the
@@ -1339,29 +1433,37 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               return evaluated.label;
             }
             if (observes === "identity") {
-              // In a write row the reference is read where the body was
-              // given the handle from.
-              const held = passedHandle === "every entry"
-                ? cell
-                : elementHeldAt(slot, context) ?? cell;
+              // The reference is read at the place the plan gives the
+              // slot: for the handle of an element its position in the
+              // source collection, and for a captured handle the captured
+              // place, with nothing of the argument document of the
+              // element's instance (PL §2.2).
               if (
                 passedHandle !== "every entry" &&
                 passedOn(slot, scope.binding)
               ) {
                 return passedHandle === "the stamp"
-                  ? linkWithoutDeclaration(held)
+                  ? linkWithoutDeclaration(cell)
                   : { confidentiality: [], integrity: [] };
               }
+              // A handle of an element that the body resolves, or reads
+              // or writes through: "the slot's label holds, in the place
+              // of that `link` entry, the label that the declaration of
+              // the source collection gives the element" (PL §2.2,
+              // assumed under question 85).
+              const declared = passedHandle === "every entry"
+                ? []
+                : [linkDeclaration(elementHeldAt(slot, context))];
               // The label of the link: what a `followRef` read at the
               // position that holds the reference consumes, and nothing
               // of the document the reference leads to (PL §2.2, "The
               // label of an `identity` slot"). The slot is dereferenced
               // only where it stands for the reference an output passes
               // on (PL §3.1, "What is compared").
-              const reference = consumed(
-                labelView(held, { lastNode: "top" }),
-                "followRef",
-              );
+              const reference = join([
+                consumed(labelView(cell, { lastNode: "top" }), "followRef"),
+                ...declared,
+              ]);
               return dereference && passed
                 ? join([reference, readSlot(slot, cell, "value")])
                 : reference;
@@ -1550,6 +1652,53 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               }
             }
             return decide("unobserved");
+          },
+          indexOf: (slot) => {
+            const { root } = plan.slots[slot];
+            return root.kind === "index" ? root.collection : undefined;
+          },
+          // Ruling Y2: "the label of the index is the label of the
+          // collection's own array: its length and which link each slot
+          // holds. It holds nothing of what the links point to. It is the
+          // label of the whole array". That is the membership the
+          // collection iterates, and for a collection over a stored slot
+          // the entries of class `followRef` at each slot of the array as
+          // well. A derived collection has its membership template alone.
+          array: (collection, elements) => {
+            const membership = inputs.membership(collection, elements);
+            const { slot } = plan.collections[collection].source;
+            const cell = slot === undefined
+              ? undefined
+              : slotCell(slot, { ...scope, elements });
+            if (cell === undefined) return membership;
+            // An entry of origin `link` at a slot holds what the
+            // reference declares, which is the label of what the link
+            // points to, and is left out.
+            const last = hops(cell).at(-1);
+            const metadata = last === undefined
+              ? undefined
+              : readStoredCfcMetadata(read, last);
+            if (last === undefined || metadata === undefined) {
+              return membership;
+            }
+            const view = cfcLabelViewFromMetadata({
+              ...metadata,
+              labelMap: {
+                ...metadata.labelMap,
+                entries: metadata.labelMap.entries.filter((entry) =>
+                  entry.origin !== "link"
+                ),
+              },
+            }, last.path);
+            const slots = (view?.entries ?? []).flatMap((entry) =>
+              entry.observes === "followRef" && entry.path.length === 1
+                ? entry.label.confidentiality ?? []
+                : []
+            );
+            return join([membership, {
+              confidentiality: slots,
+              integrity: [],
+            }]);
           },
           hereditary: (atom) => atomPropagationClass(atom) === "hereditary",
         };
@@ -1753,6 +1902,23 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         return rows;
       };
 
+      // The number of links stored on the way from `cell`'s path to its
+      // value, and the address of the path. A path that cannot be read
+      // has none.
+      const linksAt = (
+        cell: AnyCell,
+      ): { key: string; links: number } | undefined => {
+        try {
+          const way = hops(cell);
+          return {
+            key: `${way[0].id}/${JSON.stringify(way[0].path)}`,
+            links: way.length - 1,
+          };
+        } catch {
+          return undefined;
+        }
+      };
+
       // The cell each write edge of a body targets, with the path below
       // it up to the first `*`, and the rest of the path.
       const writeTargets = (
@@ -1807,6 +1973,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               write,
               index,
               cell,
+              links: linksAt(cell),
               held: snapshot(value),
               length: Array.isArray(value) ? value.length : undefined,
               below: star < 0 ? undefined : path.slice(star + 1),
@@ -1906,6 +2073,34 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         const worse = (relation: string) =>
           relation === "looser" || relation === "incomparable";
         const withoutStatic = byOrigin(cell, "value", false);
+        // The clauses the runtime's label has and the template lacks.
+        const has = new Set(template.label.confidentiality.map(atomKey));
+        const lacking = [
+          ...new Map(
+            runtimeLabel.confidentiality.map((clause) => [
+              atomKey(clause),
+              clause,
+            ]),
+          ),
+        ].filter(([key]) => !has.has(key));
+        const coordinator = coordinatorClauses();
+        const byJoin = comparison.confidentiality === "tighter" &&
+          lacking.every(([key]) => coordinator.has(key));
+        const integrity = template.label.integrity === "neutral"
+          ? []
+          : template.label.integrity;
+        const unminted = template.label.confidentiality.length === 0 &&
+          integrity.length === 0 && comparison.integrity === "looser" &&
+          compareLabels({
+              ...template.label,
+              integrity: [{
+                type: TRANSFORMED_BY,
+                identity: {
+                  kind: "body",
+                  body: plan.bindings?.[binding]?.handler?.body,
+                },
+              }],
+            }, runtimeLabel).integrity === "equal";
         return {
           binding,
           handler: plan.bindings?.[binding]?.name ?? "",
@@ -1924,6 +2119,9 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           ),
           looserByLinkStamp: worse(comparison.overall) &&
             !worse(compareLabels(withoutStamp.label, runtimeLabel).overall),
+          byCoordinatorJoin: byJoin && comparison.overall === "tighter",
+          noAtomBesideCoordinatorJoin: byJoin && unminted,
+          lacking: lacking.map(([, clause]) => clause),
         };
       };
 
@@ -1933,6 +2131,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         writeTemplates,
         writeRow,
         streamAt,
+        linksAt,
         at,
         read,
       };
@@ -1954,6 +2153,9 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
 
     const writes: WriteRow[] = [];
     const events: EventOutcome[] = [];
+    // The fewest links the harness saw stored at the path of each write
+    // target: what the path holds where no run stored a link there.
+    const fewest = new Map<string, number>();
     for (const { binding, event } of scenario.events ?? []) {
       const record = plan.bindings?.[binding];
       const name = `event of ${record?.name ?? binding}`;
@@ -2104,9 +2306,26 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           }
           // The paths the event's run wrote: a target whose value changed,
           // and for an element target the elements it added.
+          // A target that holds a link where it held a value is written
+          // too, also where the value read through the link is equal.
           const paths: string[][] = [];
+          if (target.links !== undefined) {
+            fewest.set(
+              target.links.key,
+              Math.min(
+                fewest.get(target.links.key) ?? Infinity,
+                earlier.links?.links ?? Infinity,
+                target.links.links,
+              ),
+            );
+          }
+          const linked = target.links !== undefined &&
+            target.links.links > (earlier.links?.links ?? Infinity);
           if (target.below === undefined) {
-            if (earlier.held === undefined || earlier.held !== target.held) {
+            if (
+              earlier.held === undefined || earlier.held !== target.held ||
+              linked
+            ) {
               paths.push([]);
             }
           } else if (target.length !== undefined) {
@@ -2132,17 +2351,31 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             try {
               const evaluated = templates[index];
               if ("error" in evaluated) throw evaluated.error;
-              writes.push(
-                within.writeRow(
-                  binding,
-                  target.write,
-                  index,
-                  within.at(target.cell, path),
-                  path,
-                  found.path,
-                  evaluated,
-                ),
+              const row = within.writeRow(
+                binding,
+                target.write,
+                index,
+                within.at(target.cell, path),
+                path,
+                found.path,
+                evaluated,
               );
+              // "A written path that holds a link, for an edge with no
+              // `reference`" (PL §3.1): the target holds more links than
+              // the fewest the harness saw there. An element the run
+              // added is stored through a link of its own, so a path
+              // below the target is not decided this way.
+              const fewer = fewest.get(target.links?.key ?? "");
+              if (
+                target.write.reference === undefined && path.length === 0 &&
+                target.links !== undefined && fewer !== undefined &&
+                target.links.links > fewer
+              ) {
+                throw new Unsupported(
+                  "a written path that holds a link, for an edge with no `reference`",
+                );
+              }
+              writes.push(row);
             } catch (error) {
               skip(`${what}, ${path.join("/")}`, error, binding);
             }

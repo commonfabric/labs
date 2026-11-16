@@ -81,6 +81,18 @@ export type TemplateInputs = {
   ): string[];
   /** The label of what collection `collection` iterates (§3.2). */
   membership(collection: number, elements: readonly ElementBinding[]): Label;
+  /**
+   * For a slot of root `index`: the collection it names. Such a slot has
+   * no stored address, and its label "is defined by rule and not by a
+   * read" (§2.2, "The label of a slot of root `index`").
+   */
+  indexOf?(slot: number): number | undefined;
+  /**
+   * The label of the array collection `collection` iterates: its length
+   * and which link each slot holds, and nothing of what the links point
+   * to (ruling Y2). Where it is absent, `membership` stands in.
+   */
+  array?(collection: number, elements: readonly ElementBinding[]): Label;
   /** The key `pick` chose in its collection, where the pick names one. */
   picked?(
     pick: number,
@@ -252,8 +264,20 @@ export const evaluateTemplate = (
     switch (node.op) {
       case "const":
         return NEUTRAL;
-      case "slot":
-        return inputs.slot(node.slot, at, passed);
+      case "slot": {
+        const collection = inputs.indexOf?.(node.slot);
+        if (collection === undefined) return inputs.slot(node.slot, at, passed);
+        // The label of the index is that of the whole array, and is the
+        // same for every element (ruling Y2): it is evaluated outside the
+        // element of the collection.
+        const inside = at.findIndex((element) =>
+          element.collection === collection
+        );
+        const outside = inside < 0 ? at : at.slice(0, inside);
+        return inputs.array === undefined
+          ? inputs.membership(collection, outside)
+          : inputs.array(collection, outside);
+      }
       case "derive":
         return derive(
           node.inputs.map((input) => walk(input, at, false)),

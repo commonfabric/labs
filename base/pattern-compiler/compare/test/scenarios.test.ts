@@ -446,6 +446,123 @@ describe("a handler bound in an element body", () => {
   });
 });
 
+describe("an element body where one node reads the index", () => {
+  // `fixtures/index-nodes.tsx`. The list declares `carol` on the array
+  // itself and `alice` on the title of each element. `pickAt` closes over
+  // the index, `clear` over a cell of the pattern alone, and the output
+  // `numbered` reads the index and nothing of the element.
+  const run = async () => {
+    const read = (name: string) =>
+      Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
+    const [{ patterns }] = JSON.parse(await read("index-nodes.plan.json"));
+    return await runScenario({
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: await read("index-nodes.tsx") }],
+      },
+      plan: patterns[0].plan,
+      argument: { items: [{ title: "a" }, { title: "b" }] },
+      events: [{ binding: 0, event: {} }, { binding: 1, event: {} }],
+    });
+  };
+  const clauses = (atoms: unknown[]) => [...new Set(atoms)].sort();
+
+  it("gives the index the label of the list's own array, and nothing of an element", async () => {
+    // Ruling Y2: "the label of the index is the label of the collection's
+    // own array: its length and which link each slot holds. It holds
+    // nothing of what the links point to."
+    const { rows, writes, skipped } = await run();
+
+    expect(skipped.filter(({ what }) => what.startsWith("event of")))
+      .toEqual([]);
+    const numbered = rows.find((row) => row.path.join("/") === "numbered/1");
+    expect(clauses(numbered?.stored.label.confidentiality ?? [])).toEqual([
+      "carol",
+    ]);
+    expect(numbered?.comparison.confidentiality).not.toBe("looser");
+    // A handler whose state holds the index is given the position, under
+    // the same label (PL §1.3, "A handler binding of the reactive tier").
+    const pickAt = writes.find((row) => row.handler === "pickAt");
+    expect(clauses(pickAt?.template.label.confidentiality ?? [])).toEqual([
+      "carol",
+    ]);
+    expect(pickAt?.comparison.confidentiality).not.toBe("looser");
+  });
+
+  it("gives a handler that closes over a captured cell alone nothing of the list", async () => {
+    // PL §3.12, "A handler of an element body": "A handler that closes
+    // over a captured cell alone ... writes under the event and the
+    // label of the link to that cell, and under nothing of the element
+    // or of the collection." PL §3.1, "The coordinator's join on an
+    // element's argument document": the row is tighter by each clause of
+    // that join, "it is expected, it is counted as tighter, and it is
+    // reported apart".
+    const { writes } = await run();
+
+    const clear = writes.find((row) => row.handler === "clear");
+    expect(clear?.template.label.confidentiality).toEqual([]);
+    // The elements are stored in place in the list's document, so the
+    // coordinator's join has the clause of every element.
+    expect(clauses(clear?.runtime.confidentiality ?? [])).toEqual([
+      "alice",
+      "carol",
+    ]);
+    expect(clauses(clear?.lacking ?? [])).toEqual(["alice", "carol"]);
+    expect(clear?.comparison.confidentiality).toBe("tighter");
+    // A template with no clause mints no atom (PL §3.2, question 66), and
+    // the runtime's label has the join and so the atom of the run. The
+    // row is looser in integrity by that atom alone, and is counted
+    // apart from the rows that are tighter by the join.
+    expect(clear?.comparison.integrity).toBe("looser");
+    expect(clear?.byCoordinatorJoin).toBe(false);
+    expect(clear?.noAtomBesideCoordinatorJoin).toBe(true);
+    // `pickAt` has the clause of the array through the index, and lacks
+    // the clause of the elements, which the join has.
+    const pickAt = writes.find((row) => row.handler === "pickAt");
+    expect(clauses(pickAt?.lacking ?? [])).toEqual(["alice"]);
+    expect(pickAt?.comparison.overall).toBe("tighter");
+    expect(pickAt?.byCoordinatorJoin).toBe(true);
+    expect(pickAt?.noAtomBesideCoordinatorJoin).toBe(false);
+  });
+});
+
+describe("a state cell in an element body over two equal plain values", () => {
+  // `fixtures/equal-values.tsx`. PL §1.3, "A state cell is per
+  // occurrence": "A state cell with an `element` step in `within` is legal
+  // over every collection, a collection of plain values included ... Two
+  // rows that show the same value have a flag each."
+  it("is a cell of each occurrence, and the handler of one occurrence writes its own", async () => {
+    const read = (name: string) =>
+      Deno.readTextFile(new URL(`../fixtures/${name}`, import.meta.url));
+    const [{ patterns }] = JSON.parse(await read("equal-values.plan.json"));
+    const [{ plan, unsupported }] = patterns;
+    expect(unsupported).toEqual([]);
+    expect(plan.stateCells).toEqual([
+      { name: "opened", scope: "space", within: [{ element: 0 }] },
+    ]);
+    const run = await runScenario({
+      program: {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: await read("equal-values.tsx"),
+        }],
+      },
+      plan,
+      argument: { tags: ["a", "a"] },
+      events: [{ binding: 0, event: {} }],
+    });
+
+    expect(run.events.map((event) => [event.outcome, event.elements]))
+      .toEqual([["committed", [{ collection: 0, key: "1" }]]]);
+    expect(run.skipped.filter(({ what }) => what.startsWith("event of")))
+      .toEqual([]);
+    expect(run.writes.map((row) => [row.handler, row.write, row.path]))
+      .toEqual([["open", 0, []]]);
+    expect(run.writes[0].comparison.overall).not.toBe("looser");
+  });
+});
+
 describe("a binding whose stream the result holds at several paths", () => {
   // `fixtures/outer-stream.tsx`: the binding is made outside every element
   // body. Its first path is in a branch of a conditional, its second in

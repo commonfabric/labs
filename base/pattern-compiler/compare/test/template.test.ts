@@ -249,6 +249,44 @@ describe("evaluateTemplate", () => {
     ]);
   });
 
+  it("gives a slot of root `index` the label of the array its collection iterates", () => {
+    // PL §2.2, "The label of a slot of root `index`": "Its label is
+    // defined by rule and not by a read." Ruling Y2: "the label of the
+    // collection's own array: its length and which link each slot holds
+    // ... the label of the whole array". Slot 4 is the index of
+    // collection 0, read inside the element `x` of it.
+    const seen: unknown[] = [];
+    const withIndex: TemplateInputs = {
+      ...inputs(),
+      slot: () => {
+        throw new Error("an index slot is not read at an address");
+      },
+      indexOf: (slot) => slot === 4 ? 0 : undefined,
+      array: (collection, elements) => {
+        seen.push([collection, elements]);
+        return { confidentiality: ["array"], integrity: [ENDORSED] };
+      },
+    };
+    const inside = [{ collection: 7, key: "outer" }, {
+      collection: 0,
+      key: "x",
+    }];
+
+    expect(evaluateTemplate(slot(4), withIndex, inside).label).toEqual({
+      confidentiality: ["array"],
+      integrity: [ENDORSED],
+    });
+    // The array is that of the collection, evaluated outside the element
+    // of it: the label is the same for every element.
+    expect(seen).toEqual([[0, [{ collection: 7, key: "outer" }]]]);
+    // Without `array`, the membership the collection iterates stands in.
+    const { array: _, ...withoutArray } = withIndex;
+    expect(evaluateTemplate(slot(4), withoutArray, inside).label).toEqual({
+      confidentiality: ["m"],
+      integrity: [],
+    });
+  });
+
   it("reports a dynamic node it has no reads for", () => {
     const template: Template = { op: "dynamic", reads: 0 };
 

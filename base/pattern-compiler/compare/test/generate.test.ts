@@ -393,7 +393,7 @@ describe("a handler of an element body that resolves the handle of its element",
   // `identity` slot of the handle has `resolved`: the body observes the
   // reference, so the handle is not one that is only passed on (PL §2.2,
   // "A `resolved` slot"; §2.5, "A resolved reference").
-  it("has the label of the links the resolution crosses, as the run has", async () => {
+  it("has the label of the links the resolution crosses, and nothing of the coordinator's join", async () => {
     const { plan, schemas } = await planOf("element-resolved");
     const run = await runScenario({
       program: {
@@ -413,15 +413,21 @@ describe("a handler of an element body that resolves the handle of its element",
       [["committed", [{ collection: 0, key: "1" }]]],
     );
     const [row] = run.writes;
-    // The run crosses the link from the argument to the cell of `items`
-    // and consumes the entry of origin `link` stored there, which holds
-    // the clause the cell's type declares.
+    // The run of today reads the handle at `element` of the argument
+    // document of the element's instance, whose entries hold the clause
+    // of the list's cell: the coordinator's join. The slot of the plan
+    // is read at the element's position in the list and has none of it
+    // (PL §2.2, "The position of a slot of root `element`"; §3.1, "The
+    // coordinator's join on an element's argument document").
     expect(inputsOf(row.runtime.confidentiality)).toEqual(["input:items"]);
-    expect(inputsOf(row.template.label.confidentiality)).toEqual([
-      "input:items",
-    ]);
-    expect(row.comparison.confidentiality).toBe("equal");
-    expect(row.comparison.integrity).toBe("equal");
+    expect(inputsOf(row.template.label.confidentiality)).toEqual([]);
+    expect(inputsOf(row.lacking)).toEqual(["input:items"]);
+    expect(row.comparison.confidentiality).toBe("tighter");
+    // With no clause the template mints no atom (PL §3.2, question 66),
+    // and the run's label has the join and the atom of the run.
+    expect(row.comparison.integrity).toBe("looser");
+    expect(row.byCoordinatorJoin).toBe(false);
+    expect(row.noAtomBesideCoordinatorJoin).toBe(true);
   });
 });
 
@@ -492,6 +498,43 @@ describe("a handler whose write leaves a cycle of links", () => {
     ).toEqual([
       ["event of go, write 0, ", "a label the runtime fails to read"],
       ["event of go, write 1, ", "a label the runtime fails to read"],
+    ]);
+  });
+});
+
+describe("a handler whose run stores a link at the target of an edge with no `reference`", () => {
+  // `fixtures/link-cycle.tsx`, `go` alone: `center.set(area.center)`. The
+  // plan has an edge for a value (write 0) and an edge with `reference`
+  // (write 1) for the one write, and the run stores a link.
+  it("compares the edge with `reference` and counts the other apart", async () => {
+    // PL §3.1, "A written path that holds a link, for an edge with no
+    // `reference`": "such a row is not a row of the comparison and is
+    // counted apart, and where the plan has an edge with `reference` for
+    // the same write, that edge's row is the row of the write."
+    const { plan, schemas } = await planOf("link-cycle");
+    const run = await runScenario({
+      program: {
+        main: fromFileUrl(fixture("link-cycle.tsx")),
+        root: fromFileUrl(fixture("")),
+      },
+      plan,
+      argument: {},
+      inputs: generateInputs(plan, schemas, await scenarioAudience()),
+      events: [{ binding: 1, event: generateEvent(plan, schemas, 1) }],
+    });
+
+    expect(run.events.map(({ handler, outcome }) => [handler, outcome]))
+      .toEqual([["go", "committed"]]);
+    expect(run.writes.map((row) => [row.handler, row.write, row.path]))
+      .toEqual([["go", 1, []]]);
+    expect(run.writes[0].comparison.overall).not.toBe("looser");
+    expect(run.skipped.filter(({ binding }) => binding === 1)).toEqual([
+      {
+        what: "event of go, write 0, ",
+        reason:
+          "a written path that holds a link, for an edge with no `reference`",
+        binding: 1,
+      },
     ]);
   });
 });

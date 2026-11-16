@@ -96,6 +96,17 @@ export type ResultRow = {
    */
   looserByLinkStamp?: boolean;
   /**
+   * For a write edge of a handler bound in an element body: `tighter`
+   * where the row is tighter by the coordinator's join on the argument
+   * document of an element's instance alone, which is expected (PL §3.1),
+   * and `no atom` where it differs by that join in confidentiality and is
+   * looser in integrity by the atom the template does not mint for a
+   * label with no clause.
+   */
+  coordinatorJoin?: "tighter" | "no atom";
+  /** For a write edge: the clauses the template lacks, where it lacks one. */
+  lacks?: string;
+  /**
    * For a write edge of a handler bound in an element body, `element`,
    * and of one bound in a pattern compiled in and in no element body,
    * `site` (the steps of `Binding.within`).
@@ -204,6 +215,14 @@ export const resultRow = (
       ? { templateAlone: categoryOf(row.comparisonOfTemplateAlone) }
       : {
         looserByLinkStamp: row.looserByLinkStamp,
+        ...(row.byCoordinatorJoin
+          ? { coordinatorJoin: "tighter" as const }
+          : row.noAtomBesideCoordinatorJoin
+          ? { coordinatorJoin: "no atom" as const }
+          : {}),
+        ...(row.lacking.length === 0 ? {} : {
+          lacks: showLabel({ confidentiality: row.lacking, integrity: [] }),
+        }),
         ...(within === undefined ? {} : { within }),
       }),
     bound: evaluated.bound,
@@ -490,6 +509,17 @@ export type Tally = {
    * body passes on alone.
    */
   looserByLinkStamp?: number;
+  /**
+   * For a write edge: the rows that are tighter by the coordinator's join
+   * on an element's argument document alone. They are counted as tighter
+   * (PL §3.1).
+   */
+  byCoordinatorJoin?: number;
+  /**
+   * For a write edge: the rows that differ by that join and are looser in
+   * integrity by the atom the template does not mint.
+   */
+  noAtomBesideCoordinatorJoin?: number;
 };
 
 /**
@@ -527,6 +557,10 @@ export const tally = (
       ? {
         looserByLinkStamp:
           compared.filter((row) => row.looserByLinkStamp).length,
+        byCoordinatorJoin:
+          compared.filter((row) => row.coordinatorJoin === "tighter").length,
+        noAtomBesideCoordinatorJoin:
+          compared.filter((row) => row.coordinatorJoin === "no atom").length,
       }
       : {}),
   };
@@ -608,8 +642,34 @@ const report = async (file: string) => {
             CATEGORIES.map((category) =>
               `${category} ${part.withAtom[category]}`
             ).join(", ") +
-            `; looser by the stamp of a passed link ${part.looserByLinkStamp}`,
+            `; looser by the stamp of a passed link ${part.looserByLinkStamp}` +
+            `; tighter by the coordinator's join on an element's argument document ${part.byCoordinatorJoin}` +
+            `; looser by the atom a template with no clause does not mint, beside that join ${part.noAtomBesideCoordinatorJoin}`,
         );
+      }
+      // The tighter rows, by the clauses the template lacks.
+      console.log(
+        "  tighter write edges, by where the handler is bound and what the template lacks:",
+      );
+      for (
+        const [cause, group] of count(
+          of.filter((row) => row.category === "tighter"),
+          (row) =>
+            `${row.within ?? "none"}${
+              row.coordinatorJoin === "tighter"
+                ? ", by the coordinator's join"
+                : ""
+            }, C ${row.confidentiality}, I ${row.integrity}`,
+        )
+      ) {
+        console.log(`    ${`${group.length}`.padStart(4)}  ${cause}`);
+        for (const row of group) {
+          console.log(
+            `            ${row.module} ${row.path} (binding ${row.binding}) lacks ${
+              row.lacks ?? "no clause"
+            }`,
+          );
+        }
       }
     }
     // A row counted under "atom names the pattern" is equal or tighter
