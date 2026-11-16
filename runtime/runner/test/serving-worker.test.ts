@@ -415,24 +415,22 @@ describe("serving-worker", () => {
     expect(held.length).toBe(size);
   });
 
-  it("writes a heap snapshot of each worker's isolate with the spaces placed on it", async () => {
+  it("writes the sampling heap profile of each worker's isolate with the spaces placed on it", async () => {
     await start();
     await startParent(space, 1);
     await readTotal(space, 2);
 
-    const snapshots = await worker.heapSnapshots(directory);
-    expect(snapshots.map((each) => each.spaces)).toEqual([[space]]);
-    const [{ outcome }] = snapshots;
+    const profiles = await worker.heapProfiles(directory);
+    expect(profiles.map((each) => each.spaces)).toEqual([[space]]);
+    const [{ outcome }] = profiles;
     if (!("path" in outcome)) throw new Error(outcome.error);
     expect(outcome.path.startsWith(`${directory}/heap-`)).toBe(true);
-    const file = await Deno.open(outcome.path);
-    try {
-      const head = new Uint8Array(16);
-      await file.read(head);
-      expect(new TextDecoder().decode(head)).toBe('{"snapshot":{"me');
-    } finally {
-      file.close();
-    }
+    expect(outcome.path.endsWith(".heapprofile")).toBe(true);
+    const profile = JSON.parse(await Deno.readTextFile(outcome.path));
+    // The worker has sampled since it started, so its profile holds samples
+    // of what serving the space allocated.
+    expect(profile.samples.length).toBeGreaterThan(0);
+    expect(profile.head.children.length).toBeGreaterThan(0);
     expect(closures.entries).toEqual([]);
     expect(worker.stats().workers).toMatchObject({ serving: 1, failed: 0 });
   });

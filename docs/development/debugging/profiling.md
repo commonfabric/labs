@@ -1032,33 +1032,30 @@ behind one server span the profile just weighed.
 OTEL spans exist behind `OTEL_ENABLED` with a collector to receive them, and are
 the right instrument for a deployed server rather than a local investigation.
 
-### Take a heap snapshot
+### Take a heap profile of a running toolshed
 
-SIGUSR2 to a toolshed writes a V8 heap snapshot of every isolate it runs, for
-finding what holds its memory, whether or not the serving loop runs in
-workers:
+Every isolate of a toolshed, the main thread and each serving worker, runs V8's
+sampling heap profiler from its start. V8 records the stack of about one
+allocation in every 512 KiB and keeps the record while the object lives, so a
+profile attributes what the heap holds now to the functions that allocated it.
+At that interval the sampling costs nothing measurable. SIGUSR2 writes the
+profiles:
 
 ```bash
 kill -USR2 <toolshed pid>
 ```
 
-It writes the main thread's snapshot, then each serving worker's, one at a
-time, into `HEAP_SNAPSHOT_DIR` (default `toolshed-heap-snapshots` under
-`TMPDIR`, else under `/tmp`), and beside them a manifest,
-`heap-<pid>-<time>.json`, naming each file and the spaces placed on its worker.
-The log says when the round starts and where its manifest is. A second signal
-during a round is ignored.
+It writes the main thread's profile and each serving worker's into
+`HEAP_PROFILE_DIR` (default `toolshed-heap-profiles` under `TMPDIR`, else under
+`/tmp`), and beside them a manifest, `heap-<pid>-<time>.json`, naming each file
+and the spaces placed on its worker. The log says when the round starts and
+where its manifest is. A second signal during a round is ignored. The directory
+is created readable by the toolshed's user alone, and each file is made so.
 
-- Each snapshot stops its thread while V8 writes it, and V8 needs memory beside
-  the heap to write it. The worker's watchdog does not count that silence once
-  the worker says it has begun
-  ([serving-loop.md §2](../../specs/server-side-execution/serving-loop.md)); a
-  main thread writing its own answers no requests meanwhile.
-- A file is about the size of the heap it holds, so the directory wants room
-  for the process's heaps together.
-- A snapshot holds what the isolate held, secrets and people's data among it.
-  The directory is created readable by the toolshed's user alone, and each file
-  is made so once written.
+Chrome DevTools' Memory panel loads a `.heapprofile` as an allocation sampling
+profile; two taken apart show which code's live allocations grew in between.
 
-Chrome DevTools' Memory panel loads a `.heapsnapshot`; comparing two taken
-apart shows what grew in between.
+A full heap snapshot of a running toolshed is not offered: V8 needed about
+twelve times the heap to build one (6 GB for a 449 MB heap), with the file
+written whole or in chunks alike, so on a host near its memory limit a snapshot
+of a grown process ends it.
