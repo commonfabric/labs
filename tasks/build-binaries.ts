@@ -782,13 +782,16 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
-      // No `--max-old-space-size`: V8 takes that flag over the heap limit each
-      // serving worker is started with (`SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`),
-      // so every worker could grow to the flag's size, and a compiled binary
-      // reads no V8 flags from its environment to take it back. The main
-      // thread has V8's default, about 4 GB.
+      // The main thread's heap limit, 16 GiB, the same as the toolshed's
+      // `dev` and `production` tasks and `start-local-dev.sh` give it: under
+      // V8's default of about 4 GB, a toolshed's memory server outgrew it on
+      // Estuary (2026-11-16, toolshed 8020). V8 takes the flag over the limit
+      // each serving worker is started with, so the pool holds each worker to
+      // `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` from its heartbeats instead.
+      // A compiled binary reads no V8 flags when it starts, so this is the
+      // limit every deployment runs with.
       //
-      // These two let `perf` on the host name the JavaScript a thread
+      // The other two let `perf` on the host name the JavaScript a thread
       // runs, serving workers' threads included: V8 writes the name and
       // address of each compiled function to `/tmp/perf-<pid>.map`, and
       // gives interpreted frames a native frame of their own. A stalled
@@ -796,7 +799,7 @@ export async function runBuildBinaries(
       // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
       // grows with each function compiled and is never trimmed; these come
       // off once that investigation is done.
-      "--v8-flags=--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",

@@ -472,6 +472,56 @@ describe("serving-worker-recovery", () => {
       expect(overriddenWarnings()).toBe(before);
     });
 
+    it("ends a worker whose limit a process-wide flag replaced, at two heartbeats in a row past its limit", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [grown] = workers();
+      grown.beat(150 * MB);
+      await clock.settle();
+      expect(grown.terminated).toBe(false);
+      grown.beat(150 * MB);
+      await clock.settle();
+      expect(grown.terminated).toBe(true);
+      expect(started.stats().workers).toMatchObject({
+        failed: 1,
+        heapLimited: 1,
+        heapStopped: 1,
+      });
+    });
+
+    it("does not end a worker whose limit a flag replaced for heartbeats past its limit that are not in a row", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      worker.beat(150 * MB);
+      worker.beat(50 * MB);
+      worker.beat(150 * MB);
+      await clock.settle();
+      expect(worker.terminated).toBe(false);
+      expect(started.stats().workers.heapLimited).toBe(0);
+    });
+
+    it("leaves a worker under its own V8 limit to V8, whatever its heartbeats report", async () => {
+      // V8 collects such a worker's garbage before it fails it, and the heap
+      // a heartbeat reports includes garbage.
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      worker.beat(150 * MB);
+      worker.beat(150 * MB);
+      worker.beat(150 * MB);
+      await clock.settle();
+      expect(worker.terminated).toBe(false);
+      expect(started.stats().workers.heapLimited).toBe(0);
+    });
+
     it("leaves a worker serving whose heap is larger than the limit and has not reached it", async () => {
       // The limit bounds the heap's old generation, and the heap a worker
       // reports is all of it, so the size alone ends no worker.
