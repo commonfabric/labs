@@ -52,6 +52,15 @@ const PROGRAM: RuntimeProgram = {
   ],
 };
 
+/** A program with a module its entry's imports do not reach. */
+const PROGRAM_WITH_ROOT: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [
+    ...PROGRAM.files,
+    { name: "/aside.ts", contents: `export const aside = 3;` },
+  ],
+};
+
 const PROGRAM_X: RuntimeProgram = {
   main: "/x.ts",
   files: [{ name: "/x.ts", contents: `export const x = 2;` }],
@@ -240,15 +249,125 @@ describe("cell-cache", () => {
       await plant(id, rootPairStamp(space));
       expect(atomsOn(id)).toEqual([space, space]);
 
+      const before = stored(id).value;
+
       expect(await repair(program.entryIdentity)).toBe("repaired");
       const after = stored(id);
-      expect(after.value?.identity).toBe(program.entryIdentity);
-      expect(after.value?.delegatedModuleIdentities).toEqual(["predecessor"]);
+      expect(after.value).toEqual(before);
       expect(after.cfc?.labelMap.entries).toEqual([{
         path: ["delegatedModuleIdentities"],
         label: { integrity: [COMPILED_INTEGRITY_ATOM] },
         origin: "minted",
       }]);
+    });
+
+    it("rewrites an entry stamped at its root to the value the cache writer stored, its cache-root edge included", async () => {
+      const program = await writeProgram(PROGRAM_WITH_ROOT);
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      const before = stored(id).value;
+      expect(
+        (before!.imports as FabricPlainObject[]).map((imp) => imp.specifier),
+      ).toContain(
+        `cf:cache-root/${
+          program.modules.find((m) => m.filename === "/aside.ts")!.identity
+        }`,
+      );
+      await plant(id, rootPairStamp(space));
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(id).value).toEqual(before);
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    it("drops a list its record's label does not attest", async () => {
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await replaceStored(id, (current) => ({
+        entries: [
+          ...current.cfc!.labelMap.entries.filter((entry) =>
+            (entry as { path: string[] }).path[0] !==
+              "delegatedModuleIdentities"
+          ),
+          ...rootPairStamp(space),
+        ],
+      }));
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(id).value).not.toHaveProperty("delegatedModuleIdentities");
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    for (
+      const [what, attestation] of [
+        ["also holds a clause", { confidentiality: [space] }],
+        ["holds nothing else", {}],
+      ] as const
+    ) {
+      it(`refuses, and erases nothing, where a list's only attestation is in a stamp entry that ${what}`, async () => {
+        // Removing the stamp would remove the attestation, and the grant with
+        // it: on the source record, and on the compiled record erased beside.
+
+        const program = await writeDelegatingProgram();
+        const source = idOf(sourceDocKey(program.entryIdentity));
+        const compiled = idOf(
+          compiledDocKey(RUNTIME_VERSION, program.entryIdentity),
+        );
+        await replaceStored(source, (current) => ({
+          entries: [
+            ...current.cfc!.labelMap.entries.filter((entry) =>
+              (entry as { path: string[] }).path[0] !==
+                "delegatedModuleIdentities"
+            ),
+            {
+              path: ["delegatedModuleIdentities"],
+              origin: "derived",
+              observes: "value",
+              label: {
+                ...attestation,
+                integrity: [COMPILED_INTEGRITY_ATOM],
+              },
+            } as unknown as FabricValue,
+            ...rootPairStamp(space),
+          ],
+        }));
+        await plant(compiled, rootPairStamp(space));
+
+        expect(await repair(program.entryIdentity)).toBe("refused");
+        expect(stored(compiled).value).toBeDefined();
+        expect(stored(source).value?.delegatedModuleIdentities).toEqual([
+          "predecessor",
+        ]);
+      });
+    }
+
+    it("refuses, and leaves the stamp, where a stamped source record's code is not as its identity hashes it", async () => {
+      const crlf: RuntimeProgram = {
+        main: "/crlf.ts",
+        files: [{ name: "/crlf.ts", contents: "export const a = 1;\r\n" }],
+      };
+      const program = await writeProgram(crlf);
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, rootPairStamp(space));
+
+      expect(await repair(program.entryIdentity)).toBe("refused");
+      expect(atomsOn(id)).toEqual([space, space]);
+    });
+
+    it("refuses, and writes nothing, where the repair's transaction is CFC-relevant", async () => {
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, rootPairStamp(space));
+
+      const outcome = await repairCompileCacheStamps(
+        runtime,
+        space,
+        program.entryIdentity,
+        RUNTIME_VERSION,
+        (tx) => tx.markCfcRelevant("cell-cache-stamp-repair test"),
+      );
+
+      expect(outcome).toBe("refused");
+      expect(atomsOn(id)).toEqual([space, space]);
     });
 
     it("writes no stamp placement on the record it rewrites", async () => {

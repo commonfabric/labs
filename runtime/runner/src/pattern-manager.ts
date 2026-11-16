@@ -31,6 +31,7 @@ import {
 import {
   buildSourceDocs,
   type ClosureLoadTally,
+  compileCacheClosureHoldsStamp,
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
   deriveModulePredecessors,
@@ -976,6 +977,14 @@ export class PatternManager {
    * persisted × the variants it wrote there.
    */
   #persistedClosureSpaces = new Map<string, Map<MemorySpace, Set<string>>>();
+
+  /**
+   * The closures, by `stringTupleKey([space, identity])`, whose stamp repair
+   * this session made and that did not end clean or repaired: a refusal
+   * stands until the records change, and a commit this session may not make
+   * stays refused, so neither is tried again here.
+   */
+  #unrepairedStampedClosures = new Set<string>();
 
   /**
    * Failed replications _parked_ for event-driven re-supply (the one supplier
@@ -2760,10 +2769,26 @@ export class PatternManager {
     space: MemorySpace,
     identity: string,
   ): Promise<void> {
+    const key = stringTupleKey([space, identity]);
+    if (this.#unrepairedStampedClosures.has(key)) return;
     try {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
       });
+      const check = this.#runtime.edit();
+      let stamped: boolean;
+      try {
+        stamped = await compileCacheClosureHoldsStamp(
+          this.#runtime,
+          space,
+          identity,
+          runtimeVersion,
+          check,
+        );
+      } finally {
+        check.abort("compile-cache stamp check complete");
+      }
+      if (!stamped) return;
       const outcome = await repairCompileCacheStamps(
         this.#runtime,
         space,
@@ -2774,8 +2799,12 @@ export class PatternManager {
             actionId: `compile-cache/stamp-repair/${identity}`,
             kind: "bookkeeping",
             directCommit: true,
+            ...this.#runtime.delegationForWriteTo(space, undefined),
           }),
       );
+      if (outcome === "refused" || outcome === "conflicted") {
+        this.#unrepairedStampedClosures.add(key);
+      }
       if (outcome !== "clean" && outcome !== "unverified") {
         logger.debug("compile-cache-stamp-repair", () => [
           `entry=${identity}`,

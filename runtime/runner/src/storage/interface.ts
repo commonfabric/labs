@@ -3177,21 +3177,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string };
 
   /**
-   * The trusted writer path for an owner's release of the confidentiality
-   * stored at one path of a document (`cfc/confidentiality-release-plan.ts`).
-   * Requires the transaction's current implementation identity to be the
-   * `cfc-confidentiality-release` builtin, its acting principal to be
-   * authenticated, and the document to sit in that principal's own space.
-   * Removes every stored clause at the path that `input.keep` does not name,
-   * from every component of the label there and from the stored schema, and
-   * writes the envelope inside the privileged system-write scope. A path
-   * holding a `*` segment reaches every position it matches at its depth.
-   * Writes nothing when there is nothing to remove.
-   *
-   * @throws On any of the requirements above, on an unreadable envelope, and
-   *   on everything `planConfidentialityRelease()` refuses.
-   */
-  /**
    * The repair of a compile-cache record a flow stamp labeled: writes
    * `replacement`'s value and label envelope over the document `target` names,
    * or deletes the document when `replacement` is absent, inside the
@@ -3207,6 +3192,21 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
   ): void;
 
+  /**
+   * The trusted writer path for an owner's release of the confidentiality
+   * stored at one path of a document (`cfc/confidentiality-release-plan.ts`).
+   * Requires the transaction's current implementation identity to be the
+   * `cfc-confidentiality-release` builtin, its acting principal to be
+   * authenticated, and the document to sit in that principal's own space.
+   * Removes every stored clause at the path that `input.keep` does not name,
+   * from every component of the label there and from the stored schema, and
+   * writes the envelope inside the privileged system-write scope. A path
+   * holding a `*` segment reaches every position it matches at its depth.
+   * Writes nothing when there is nothing to remove.
+   *
+   * @throws On any of the requirements above, on an unreadable envelope, and
+   *   on everything `planConfidentialityRelease()` refuses.
+   */
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease;

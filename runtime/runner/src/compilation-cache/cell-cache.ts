@@ -14,6 +14,7 @@ import { pathsOverlap } from "@commonfabric/memory/v2/path";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
+import { labelMetadataTemplatesFor } from "../cfc/prepare.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
@@ -2515,14 +2516,63 @@ const holdsStamp = (metadata: CfcMetadata | undefined): boolean =>
     STAMP_ORIGINS.has(entry.origin ?? "") && holdsConfidentiality(entry)
   ) ?? false;
 
-/** The document id a stored import's sigil link names, if it is one. */
-const linkTargetId = (link: unknown): string | undefined => {
-  const parsed = isObjectOrArray(link)
-    ? (link as Record<string, Record<string, { id?: unknown }>>)["/"]
-      ?.["link@1"]
-    : undefined;
-  return typeof parsed?.id === "string" ? parsed.id : undefined;
+/**
+ * Whether the stored import link `link`, read from the record at `base`,
+ * names the whole of the document `target` names: the same space, id and
+ * scope, at the document's root.
+ */
+const linkLandsOn = (
+  link: unknown,
+  base: NormalizedFullLink,
+  target: NormalizedFullLink,
+): boolean => {
+  const parsed = parseLink(link, base);
+  return parsed !== undefined && parsed.space === target.space &&
+    parsed.id === target.id &&
+    normalizeCellScope(parsed.scope) === normalizeCellScope(target.scope) &&
+    parsed.path.length === 0;
 };
+
+/** Whether `entry` is one a repair removes. */
+const isStampEntry = (entry: LabelMapEntry): boolean =>
+  STAMP_ORIGINS.has(entry.origin ?? "");
+
+/**
+ * Whether a record of the closure of `entryIdentity` in `space`, its source
+ * record or its compiled record of `runtimeVersion`, holds a flow stamp, read
+ * in `tx`. It reads the closure's labels and verifies nothing, so a load can
+ * ask it cheaply before {@link repairCompileCacheStamps} does more.
+ */
+export async function compileCacheClosureHoldsStamp(
+  runtime: Runtime,
+  space: MemorySpace,
+  entryIdentity: string,
+  runtimeVersion: string | undefined,
+  tx: IExtendedStorageTransaction,
+): Promise<boolean> {
+  const closure = await loadSourceClosure(runtime, space, entryIdentity, tx);
+  if (closure === undefined) return false;
+  if (runtimeVersion !== undefined) {
+    // One sync pulls the compiled closure, as `loadCompiledClosure()` does.
+    await runtime.getCell(
+      space,
+      compiledDocKey(runtimeVersion, entryIdentity),
+      COMPILED_DOC_SCHEMA,
+      tx,
+    ).sync();
+  }
+  for (const identity of closure.keys()) {
+    const keys = runtimeVersion === undefined
+      ? [sourceDocKey(identity)]
+      : [sourceDocKey(identity), compiledDocKey(runtimeVersion, identity)];
+    for (const key of keys) {
+      const link = runtime.getCell(space, key, undefined, tx)
+        .getAsNormalizedFullLink();
+      if (holdsStamp(readStoredCfcMetadata(tx, link))) return true;
+    }
+  }
+  return false;
+}
 
 /** One record the repair writes, and what it read there when it verified. */
 interface StampRepairTarget {
@@ -2611,6 +2661,12 @@ export async function repairCompileCacheStamps(
     }
     if (!readsOnlyWhatItWrites(tx, plan)) {
       tx.abort("compile-cache stamp repair: read beyond its records");
+      return "refused";
+    }
+    // The labels this writes are the ones it computed; a preparation would
+    // derive them again from the labels it removes.
+    if (tx.getCfcState().relevant) {
+      tx.abort("compile-cache stamp repair: the transaction is CFC-relevant");
       return "refused";
     }
     runtime.prepareTxForCommit(tx);
@@ -2721,8 +2777,11 @@ async function planStampRepair(
       const storedImport = storedImports[index] as Record<string, unknown>;
       if (
         storedImport?.specifier !== imp.specifier ||
-        linkTargetId(storedImport?.link) !==
-          ownKey(sourceDocKey(imp.identity)).id
+        !linkLandsOn(
+          storedImport?.link,
+          link,
+          ownKey(sourceDocKey(imp.identity)),
+        )
       ) {
         return "refused";
       }
@@ -2756,6 +2815,9 @@ async function planStampRepair(
   if (stampedSources.length > 0) await ensureCompilerStack();
 
   const dataIdentities = dataDocIdentities(closure);
+  const stampedSourceIdentities = new Set(
+    stampedSources.map(([identity]) => identity),
+  );
   const plan: StampRepairTarget[] = [];
   const repairedLists = new Map<string, readonly string[]>();
   const repairedClosure = new Map(closure);
@@ -2774,14 +2836,21 @@ async function planStampRepair(
     }
     const metadata = record.metadata!;
     const list = record.value.delegatedModuleIdentities;
+    // An attestation counts only in an entry the repair keeps: one in an
+    // entry it removes would go with it, and the list with it.
     const listAttested = metadata.labelMap.entries.some((entry) =>
-      attestsAt(entry, SOURCE_DELEGATION_PATH) && !holdsConfidentiality(entry)
+      !isStampEntry(entry) && attestsAt(entry, SOURCE_DELEGATION_PATH) &&
+      !holdsConfidentiality(entry)
     );
     const keepList = listAttested && Array.isArray(list) && list.length > 0 &&
       list.every((entry) => typeof entry === "string");
     const kept: LabelMapEntry[] = [];
     for (const entry of metadata.labelMap.entries) {
-      if (STAMP_ORIGINS.has(entry.origin ?? "")) continue;
+      if (isStampEntry(entry)) {
+        // Removing it would remove an attestation a loader honors.
+        if (attestsAt(entry, SOURCE_DELEGATION_PATH)) return "refused";
+        continue;
+      }
       if (holdsConfidentiality(entry)) return "refused";
       if (keepList && attestsAt(entry, SOURCE_DELEGATION_PATH)) {
         kept.push(entry);
@@ -2825,7 +2894,14 @@ async function planStampRepair(
         cfc: {
           version: metadata.version,
           schemaHash: metadata.schemaHash,
-          labelMap: { version: metadata.labelMap.version, entries: kept },
+          labelMap: {
+            version: metadata.labelMap.version,
+            entries: kept,
+            ...(() => {
+              const templates = labelMetadataTemplatesFor(kept);
+              return templates.length > 0 ? { documentEntries: templates } : {};
+            })(),
+          },
         },
       },
     });
@@ -2855,18 +2931,21 @@ async function planStampRepair(
     // compiler's attestation, so it is erased only where the source record
     // still grants every identity it names.
     const live = metadata.labelMap.entries.some((entry) => attestsAt(entry, []))
-      ? (record.whole?.value as { delegatedModuleIdentities?: unknown })
-        ?.delegatedModuleIdentities
+      ? storedStringList(
+        (record.whole?.value as { delegatedModuleIdentities?: unknown })
+          ?.delegatedModuleIdentities,
+      )
       : undefined;
-    if (Array.isArray(live) && live.length > 0) {
+    if (live !== undefined && live.length > 0) {
       const source = sources.get(identity);
-      const granted = repairedLists.get(identity) ??
-        (source?.metadata?.labelMap.entries.some((entry) =>
+      const granted = stampedSourceIdentities.has(identity)
+        ? repairedLists.get(identity) ?? []
+        : source?.metadata?.labelMap.entries.some((entry) =>
+            !isStampEntry(entry) &&
             attestsAt(entry, SOURCE_DELEGATION_PATH)
           )
-          ? source.value.delegatedModuleIdentities as unknown[]
-          : undefined) ??
-        [];
+        ? storedStringList(source.value.delegatedModuleIdentities) ?? []
+        : [];
       if (!live.every((entry) => granted.includes(entry))) return "refused";
     }
     plan.push({
