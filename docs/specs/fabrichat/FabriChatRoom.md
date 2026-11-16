@@ -279,8 +279,8 @@ changes nothing; a refusal writes nothing else. A thread's title is stored the
 same way, labeled with the member who last set it, by `commitSetThreadTitle`,
 which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
-policy names those three, and a later schema can neither add a writer to a
-stored policy nor drop one.
+policy names those three. A stored policy keeps every writer it names, whether
+or not a later schema lists it, and gains one only where a release admits it.
 `canSend` is computed for each session from the reader's access and whether
 their profile resolves.
 

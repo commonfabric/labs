@@ -518,22 +518,6 @@ export class SessionRegistry {
     return this.#sessions.get(sessionKey(space, sessionId));
   }
 
-  hasOpenSessionForPrincipal(
-    space: string,
-    principal: string | undefined,
-  ): boolean {
-    this.#prune();
-    for (const session of this.#sessions.values()) {
-      if (
-        session.space === space &&
-        session.principal === principal
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   sessionsForSpace(space: string): SessionState[] {
     this.#prune();
     const sessions: SessionState[] = [];

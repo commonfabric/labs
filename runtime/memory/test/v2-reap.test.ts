@@ -238,6 +238,25 @@ describe("reap", () => {
     expect(() => Deno.statSync(refused.staged)).toThrow(Deno.errors.NotFound);
   });
 
+  it("throws the link's own error, not `ReapRefused`, when the result path cannot be linked, and removes the staged file", async () => {
+    await build();
+    const staged = await stageReap({ store, out });
+    const unreachable = { ...staged, out: `${dir}/missing/space.sqlite` };
+
+    expect(() => publishReap(unreachable)).toThrow(Deno.errors.NotFound);
+    expect(() => Deno.statSync(staged.staged)).toThrow(Deno.errors.NotFound);
+    expect(() => Deno.statSync(out)).toThrow(Deno.errors.NotFound);
+  });
+
+  it("throws when a staged name cannot be removed for a reason other than its absence", async () => {
+    const staged = `${dir}/staged-directory`;
+    await Deno.mkdir(staged);
+    await Deno.writeTextFile(`${staged}/inside`, "x");
+
+    expect(() => discardReap(staged)).toThrow("Directory not empty");
+    expect(Deno.readTextFileSync(`${staged}/inside`)).toBe("x");
+  });
+
   it("publishes a staged result at the result path, leaving nothing staged", async () => {
     const seq = await build();
     const staged = await stageReap({ store, out });

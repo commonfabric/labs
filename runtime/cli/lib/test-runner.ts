@@ -45,6 +45,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { setLLMResponder } from "@commonfabric/llm";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
@@ -112,7 +113,7 @@ import {
   makeMockFetch,
   readFetchMocks,
 } from "./fetch-mock.ts";
-import { installLlmMocks, readLlmMocks } from "./llm-mock.ts";
+import { LLMMockResponder, readLLMMocks } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import {
   multiUserDescriptorMeta,
@@ -1167,6 +1168,21 @@ function harnessPatternsLeftOut(
 }
 
 /**
+ * A failed result naming each of `unanswered`, the requests no entry of the
+ * test's `llmMocks` answered, or `undefined` when there are none.
+ */
+function llmMocksResult(unanswered: string[]): TestResult | undefined {
+  if (unanswered.length === 0) return undefined;
+  return {
+    name: "llmMocks",
+    passed: false,
+    afterAction: null,
+    error: unanswered.join("\n"),
+    durationMs: 0,
+  };
+}
+
+/**
  * Run a single test pattern file.
  */
 export async function runTestPattern(
@@ -1271,13 +1287,18 @@ export async function runTestPattern(
   const realFetch = globalThis.fetch.bind(globalThis);
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
-
-  // Language-model mocking: a test opts in by exporting a module-scope
-  // `llmMocks` array, read after compile as `fetchMocks` is. The mocks live in
-  // the language-model client, which the whole process shares, so they are
-  // removed when this function returns, after the runtime and the serving loop
-  // that may have asked for them are gone.
-  using llmMockScope = new DisposableStack();
+  let llmResponder: LLMMockResponder | undefined;
+  let llmReported = 0;
+  /** The requests no entry answered that nothing has reported yet. */
+  const unreportedLLMFailures = (): string[] => {
+    const unanswered = llmResponder?.unanswered ?? [];
+    const unreported = unanswered.slice(llmReported);
+    llmReported = unanswered.length;
+    return unreported;
+  };
+  // The test's responder stays installed until the serving loop below has
+  // closed, which this stack, declared before the loop's, outlasts.
+  using llmScope = new DisposableStack();
 
   // On the server-execution arm the memory server has a serving loop beside
   // it, whose runtimes run the handlers this test's events fire. They fetch
@@ -1539,7 +1560,20 @@ export async function runTestPattern(
     // so the entries must be in place before `runtime.run(...)` below. `main` is the
     // module namespace, so a named `fetchMocks` export is reachable.
     fetchMockEntries = readFetchMocks(main);
-    const llmMocks = readLlmMocks(main);
+    // Every request for a language model's answer is answered from the
+    // test's `llmMocks`, or fails, whether or not the test exports any.
+    llmResponder = new LLMMockResponder(readLLMMocks(main));
+    setLLMResponder(llmResponder);
+    llmScope.defer(() => {
+      setLLMResponder(undefined);
+      const late = unreportedLLMFailures();
+      if (late.length > 0) {
+        throw new Error(
+          `${testPath}: requests no llmMocks entry answered, made after the ` +
+            `test's results were collected:\n${late.join("\n")}`,
+        );
+      }
+    });
     readBudgets = parseReadBudgets(main.readBudgets);
 
     // A compile-only run ends here: the program's modules are in the byte
@@ -1574,11 +1608,8 @@ export async function runTestPattern(
       if (readBudgets !== undefined) {
         throw new Error("Read budgets are not supported in multi-user tests");
       }
-      if (llmMocks !== undefined) {
-        throw new Error("`llmMocks` is not supported in multi-user tests");
-      }
       writeLocalPatternCoverage = false;
-      return await withPhase(
+      const result = await withPhase(
         ["runTestPattern", "multiUser"],
         // The participant workers compile the file again in their own
         // processes; passing the resolved root keeps their import resolution
@@ -1589,9 +1620,14 @@ export async function runTestPattern(
             root,
           }),
       );
+      // A run that failed reports only its error, so the requests no entry
+      // answered, often the cause, join that.
+      const llmResult = llmMocksResult(unreportedLLMFailures());
+      if (llmResult === undefined) return result;
+      if (result.error === undefined) result.results.push(llmResult);
+      else result.error += `\n${llmResult.error}`;
+      return result;
     }
-
-    if (llmMocks !== undefined) llmMockScope.use(installLlmMocks(llmMocks));
 
     const testPatternFactory = main.default as Pattern;
 
@@ -2382,6 +2418,9 @@ export async function runTestPattern(
       }
     }
 
+    const llmResult = llmMocksResult(unreportedLLMFailures());
+    if (llmResult !== undefined) results.push(llmResult);
+
     // Print action stats table (sorted by total time, like the shell debug UI)
     if (options.verbose) {
       printActionStatsTable(runtime);
@@ -2439,6 +2478,9 @@ export async function runTestPattern(
     };
   } catch (err) {
     let errorMessage = describeFailure(err);
+    for (const failure of unreportedLLMFailures()) {
+      errorMessage += `\n${failure}`;
+    }
     if (initializationBudgetPending) {
       try {
         await (initializationBudgetSettlement ?? runtime.settled(Infinity));

@@ -2248,6 +2248,7 @@ export class HarnessInteractiveChatService {
     if (
       options.engine === undefined && skillsRoot === undefined &&
       fabricSession === undefined &&
+      options.fabricSessionFactory === undefined &&
       (options.inputCells?.length ?? 0) === 0 &&
       (options.patternRefs?.length ?? 0) === 0
     ) {
@@ -2269,6 +2270,7 @@ export class HarnessInteractiveChatService {
         ...(skillsRoot !== undefined ? { skillsRoot } : {}),
         skillNames: [],
         allowedToolIds: options.allowedToolIds,
+        allowedSubagentProfiles: options.allowedSubagentProfiles,
       },
       onGrantsUnavailable: (error) =>
         console.error("fabric grants unavailable for this turn:", error),

@@ -2316,10 +2316,25 @@ export interface IStorageTransaction {
    * unspecified. The writes it does apply are applied consistently: the
    * transaction's reads, its write details and its commit all include them. A
    * caller that must not land part of a batch aborts the transaction.
+   *
+   * `options` carries nothing but the extended transaction's write-chokepoint
+   * mark, which covers every write of the batch.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError>;
+
+  /**
+   * Optional: report each write `write()` or `writeBatch()` takes without the
+   * extended transaction's write-chokepoint mark (`write-chokepoint.ts`) to
+   * `sink`, before applying it. Such a write came from code holding this
+   * transaction directly, so nothing judged who made it. Each extended
+   * transaction wrapping this one adds a sink as it is built, and counts each
+   * such write as made under no identity. A sink stays for the life of the
+   * transaction: nothing removes one.
+   */
+  reportUnmarkedWrites?(sink: (address: IMemorySpaceAddress) => void): void;
 
   /**
    * Transaction can be cancelled which causes storage provider to stop keeping
@@ -3060,7 +3075,10 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    *
    * This transaction alone, with no enrollment beside it: the measurement runs
    * over documents the asking transaction wrote, so a marker recorded beside
-   * the write always covers the question.
+   * the write always covers the question. A value write on the document made
+   * under any identity but a builtin's (`CfcTxState.nonBuiltinWrites`) is
+   * not the runtime's to vouch for, whatever a builtin writes there after
+   * it, so this then returns `false`.
    *
    * Takes the runtime's mark for the same reason {@link isRuntimeOwnedStore}
    * does: the gate acts on the claim rather than measuring it.

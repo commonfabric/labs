@@ -203,6 +203,77 @@ describe("extended-storage-transaction", () => {
         });
       });
 
+      describe("a write made on the storage transaction beneath it", () => {
+        it("is recorded as a write under no identity by every transaction wrapping it, whatever sink was added first", () => {
+          // A sink stays for the life of the storage transaction, so one added
+          // ahead of a wrapper's leaves the wrapper's in place.
+
+          const first = edit();
+          const inner = first.tx;
+          const earlier: string[] = [];
+          inner.reportUnmarkedWrites!((written) =>
+            earlier.push(written.path.join("/"))
+          );
+          const second = new ExtendedStorageTransaction(inner);
+          setCfcImplementationIdentity(second, {
+            kind: "builtin",
+            builtinId: "storage-ext-tx-builtin",
+          });
+          expect(inner.write(address("beneath", ["x"]), 1).error)
+            .toBeUndefined();
+
+          const recorded = {
+            space,
+            id: "of:beneath",
+            scope: "space",
+            path: ["x"],
+          };
+          expect(first.getCfcState().nonBuiltinWrites).toEqual([recorded]);
+          expect(second.getCfcState().nonBuiltinWrites).toEqual([recorded]);
+          expect(earlier).toEqual(["value/x"]);
+          first.abort();
+        });
+
+        it("is recorded when it is made inside the runtime's privileged scope", () => {
+          // The runtime's privileged persistence writes only through the
+          // write chokepoint, so a write the storage transaction takes without
+          // its mark while that scope is open is still no one's.
+
+          const inner = edit().tx;
+          const beneath = address("beneath-privileged", ["y"]);
+          // The storage transaction takes one more write, unmarked, as it
+          // takes the privileged one.
+          const intercepting = new Proxy(inner, {
+            get(target, key) {
+              if (key === "write") {
+                return (...args: Parameters<typeof inner.write>) => {
+                  const result = target.write(...args);
+                  if (args[0].id !== beneath.id) target.write(beneath, 1);
+                  return result;
+                };
+              }
+              const member = Reflect.get(target, key, target);
+              return typeof member === "function"
+                ? member.bind(target)
+                : member;
+            },
+          });
+          const tx = new ExtendedStorageTransaction(intercepting);
+          tx.accessForTestingOnly.privilegedSystemWrite(
+            address("privileged", ["x"]),
+            1,
+          );
+
+          expect(tx.getCfcState().nonBuiltinWrites).toEqual([{
+            space,
+            id: "of:beneath-privileged",
+            scope: "space",
+            path: ["y"],
+          }]);
+          tx.abort();
+        });
+      });
+
       describe("writeOrThrow()", () => {
         it("refuses a write to a runtime secret, and writes the value of any other document", () => {
           const tx = edit();

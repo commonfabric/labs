@@ -2886,7 +2886,7 @@ const refreshTiming = getLogger("memory", { enabled: false });
 /**
  * The phase clock of one graph's incremental re-evaluation. `enter(name)`
  * closes the phase in progress, if any, and opens `name`; `close()` closes
- * the phase in progress and records the whole as `total`, once. The
+ * the phase in progress and records the whole as `total`. The
  * evaluation closes the clock in a `finally`, so one that throws still
  * records the phase it was in and its total — an expensive failure is the
  * one most worth attributing, and it is skipped and requeued by its caller
@@ -2899,7 +2899,6 @@ const walkPhaseClock = (detail: () => string): {
   const startedAt = performance.now();
   let phaseAt = startedAt;
   let current: string | undefined;
-  let closed = false;
   const record = (name: string, now: number) =>
     refreshTiming.time(phaseAt, now, "memory", "refresh", "walk", name);
   return {
@@ -2910,11 +2909,8 @@ const walkPhaseClock = (detail: () => string): {
       phaseAt = now;
     },
     close() {
-      if (closed) return;
-      closed = true;
       const now = performance.now();
       if (current !== undefined) record(current, now);
-      current = undefined;
       refreshTiming.timeDetailed(
         detail,
         startedAt,

@@ -2,8 +2,8 @@
  * Test: the nested `ifElse` over `pending` and `error` shows the generated
  * object when `generateObject` answers, and the error when it fails.
  *
- * The one mock answers the default prompt. A prompt no mock answers fails the
- * request, and the builtin warns as it reports that as `error`.
+ * The model answers the default prompt and fails the other, as `llmMocks`
+ * states, and the builtin warns as it reports the failure as `error`.
  *
  * Run: deno task cf test patterns/dev/gideon-tests/test-generateobject-error-handling.test.tsx --root patterns --verbose
  */
@@ -21,12 +21,16 @@ import ErrorHandling from "./test-generateobject-error-handling.tsx";
 
 export const llmMocks = [
   {
-    promptIncludes: "a self-watering plant pot",
+    when: { lastMessageContains: "a self-watering plant pot" },
     object: {
       name: "AquaPot",
       description: "A pot that waters the plant from a hidden reservoir.",
       price: 25,
     },
+  },
+  {
+    when: { lastMessageContains: "a lamp that reads aloud" },
+    error: "The model is unavailable.",
   },
 ];
 
@@ -68,7 +72,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           hasText(subject[UI], "Error: ") &&
-          hasText(subject[UI], "no matching mock response")
+          hasText(subject[UI], "The model is unavailable.")
         ),
       },
       { assertion: assert(() => hasText(subject[UI], "result: null")) },

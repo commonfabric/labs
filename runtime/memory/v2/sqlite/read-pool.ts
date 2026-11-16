@@ -56,6 +56,11 @@ export class ReadConnectionPool {
     this.#max = max;
   }
 
+  /** The pooled connections, least recently used first. */
+  get accessForTestingOnly(): { readonly byPath: Map<string, Database> } {
+    return { byPath: this.#byPath };
+  }
+
   /**
    * Returns the pooled connection for `path` in the given mode, opening one
    * on a miss and evicting the oldest past `#max`. Keyed by mode as well as
@@ -83,15 +88,12 @@ export class ReadConnectionPool {
     // an immediate SQLITE_BUSY at the default timeout of 0 — wait instead.
     db.exec("PRAGMA busy_timeout = 5000");
     this.#byPath.set(key, db);
-    if (this.#byPath.size > this.#max) {
-      const oldest = this.#byPath.keys().next().value as string | undefined;
-      if (oldest !== undefined) {
-        const victim = this.#byPath.get(oldest);
-        this.#byPath.delete(oldest);
-        try {
-          victim?.close();
-        } catch { /* best-effort */ }
-      }
+    // Map iteration runs in insertion order, which the bump above keeps in
+    // least-recently-used order.
+    for (const [oldest, victim] of this.#byPath) {
+      if (this.#byPath.size <= this.#max) break;
+      this.#byPath.delete(oldest);
+      victim.close();
     }
     return db;
   }
@@ -125,11 +127,7 @@ export class ReadConnectionPool {
   }
 
   close(): void {
-    for (const db of this.#byPath.values()) {
-      try {
-        db.close();
-      } catch { /* best-effort */ }
-    }
+    for (const db of this.#byPath.values()) db.close();
     this.#byPath.clear();
   }
 }

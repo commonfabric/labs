@@ -1,10 +1,9 @@
 /**
- * Asks the LLM test pattern a question through its message input, and reads
- * the question back from the view and the `question` output.
+ * Asks the LLM test pattern questions through its message input, and reads
+ * the questions and the model's answers back from the view and the outputs.
  *
- * A pattern test has no LLM endpoint: the `generateText` call the question
- * starts fails, so the view shows no answer. The answer branch is covered
- * only where a real endpoint answers.
+ * The test states the model's side in `llmMocks`: it answers the first
+ * question, and the request for the second fails, so the view shows no answer.
  */
 
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
@@ -16,6 +15,20 @@ import {
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
 import LLMTest from "./llm.tsx";
+
+export const llmMocks = [
+  {
+    when: {
+      systemContains: "helpful assistant",
+      lastMessageContains: "What is 2+2?",
+    },
+    text: "4.",
+  },
+  {
+    when: { lastMessageContains: "And 3+3?" },
+    error: "The model is unavailable.",
+  },
+];
 
 export default pattern(() => {
   const subject = LLMTest({ title: "Ask anything" });
@@ -42,7 +55,13 @@ export default pattern(() => {
     subject.question === "And 3+3?" &&
     hasExactText(findElement(subject[UI], "blockquote"), "And 3+3?")
   );
-  const assert_no_answer_without_an_endpoint = assert(() =>
+  const assert_answer_shown = assert(() =>
+    subject.response === "4." &&
+    hasExactText(findElement(subject[UI], "pre"), "4.") &&
+    hasText(subject[UI], "LLM Response:") &&
+    !hasText(subject[UI], "Thinking...")
+  );
+  const assert_no_answer_when_the_request_fails = assert(() =>
     subject.response === undefined &&
     !hasText(subject[UI], "LLM Response:") &&
     !hasText(subject[UI], "Thinking...")
@@ -59,14 +78,15 @@ export default pattern(() => {
       { action: action_ask },
       { settle: true },
       { assertion: assert_question_shown_trimmed },
-      { assertion: assert_no_answer_without_an_endpoint },
+      { assertion: assert_answer_shown },
 
       { action: action_ask_again },
       { settle: true },
       { assertion: assert_second_question_replaces_first },
+      { assertion: assert_no_answer_when_the_request_fails },
     ],
     subject,
-    // The `generateText` call finds no endpoint, and warns that it failed.
+    // The `generateText` call warns that the second request failed.
     allowConsoleWarnings: true,
   };
 });

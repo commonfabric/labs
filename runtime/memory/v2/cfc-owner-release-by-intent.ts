@@ -189,9 +189,6 @@ const sameStrings = (
 const requestProblem = (
   request: OwnerReleaseByIntentRequest,
 ): string | undefined => {
-  if (request.purpose !== OWNER_RELEASE_BY_INTENT_PURPOSE) {
-    return `its purpose is not \`${OWNER_RELEASE_BY_INTENT_PURPOSE}\``;
-  }
   if (!isDID(request.space)) return "its space is not a DID";
   if (!isDID(request.signer)) return "its signer is not a DID";
   if (
@@ -637,9 +634,6 @@ export const judgeOwnerReleaseByIntent = (
     );
   }
   const { request } = record;
-  if (request.purpose !== OWNER_RELEASE_BY_INTENT_PURPOSE) {
-    return refused("its request is made under another purpose");
-  }
   if (
     !verifyOwnerReleaseByIntentSignature({
       request,

@@ -72,6 +72,10 @@ import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import {
+  answerForwardedLLMRequest,
+  type LLMForwardedRequest,
+} from "./llm-mock.ts";
 import type { ServedQuiescence } from "./served-settle.ts";
 import type {
   TestResult,
@@ -272,7 +276,8 @@ export class ParticipantWorker {
 
   /**
    * `servedQuiescence` answers the worker's requests to wait for the serving
-   * loop, which runs here, beside the storage server.
+   * loop, which runs here, beside the storage server. The language-model
+   * requests the worker forwards are answered by this process's responder.
    */
   constructor(
     name: string,
@@ -286,9 +291,18 @@ export class ParticipantWorker {
     );
     this.#worker.onmessage = (
       event: MessageEvent<
-        WorkerResponse | WorkerLifetimeNotice | WorkerQuiescenceRequest
+        | WorkerResponse
+        | WorkerLifetimeNotice
+        | WorkerQuiescenceRequest
+        | LLMForwardedRequest
       >,
     ) => {
+      if ("llmRequest" in event.data) {
+        answerForwardedLLMRequest(event.data).then((answer) =>
+          this.#worker.postMessage(answer)
+        );
+        return;
+      }
       if ("lifetimeLock" in event.data) {
         this.#lifetimeLock = event.data.lifetimeLock;
         return;
@@ -460,13 +474,17 @@ export async function runMultiUserTestPattern(
     // Sequential init: the first worker materializes the shared setup
     // instance (and the wish("#default") seed); the rest resume it.
     for (const [index, spec] of meta.participants.entries()) {
-      const worker = new ParticipantWorker(spec.name, (error) => {
-        // The failed worker may be idle while another participant is waiting.
-        // Reject every worker's requests so that failure reaches the active
-        // await, including during initialization, and cleanup can proceed.
-        // Every worker is terminated again, and waited for, on the way out.
-        for (const worker of workers) void worker.terminate(error);
-      }, server.servedQuiescence);
+      const worker = new ParticipantWorker(
+        spec.name,
+        (error) => {
+          // The failed worker may be idle while another participant is waiting.
+          // Reject every worker's requests so that failure reaches the active
+          // await, including during initialization, and cleanup can proceed.
+          // Every worker is terminated again, and waited for, on the way out.
+          for (const worker of workers) void worker.terminate(error);
+        },
+        server.servedQuiescence,
+      );
       workers.push(worker);
       try {
         const init = await worker.call("init", {
