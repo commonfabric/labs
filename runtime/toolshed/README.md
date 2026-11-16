@@ -281,29 +281,40 @@ signature, or any code.
 
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
-`createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
-`parseInviteLink`, and `INVITE_LINK_SCHEME`. A join link is
-`/join?host&space&invite#code`, with an optional `inviter` DID key in the query;
-the parser refuses any other query key, and any fragment but the code.
-`parseInviteLink` accepts the same invitation in three more forms and returns
-the same result for each: `/open?…#code=…` on any HTTPS origin, or loopback HTTP
-as for `/join`, which a person reaches by asking to open the invitation in
-Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver answers, where
-`join` is the URL's host and its path is empty; and that scheme form without a
-fragment, with the code passed separately as `parseInviteLink(url, { code })`,
-which is how Android delivers it (the code arrives as the intent's `S.code`
-extra). The result's `host` is always the service named in the query, never the
-link's own origin. Other paths, a `/join` or `/open` URL whose query names none
-of `host`, `space`, and `invite`, and `fbrc://setup?n=<nonce>` return
-`undefined`; the last is the reply a Weaver receives while making itself the
-browser's default for the scheme, and is never an invitation. Any other URL on
-the scheme throws `invalid-link`. `inviter` is a display hint that anyone
-holding the link can change; it is checked only syntactically and is not part of
-the code verifier. A recipient cannot read the space ACL before redeeming, and
-afterwards an ACL check can show at most that the DID is an owner, not that it
-issued the link. Like the space DID, it travels in the query, so it reaches the
-shell host's access logs. `issue` accepts a prepared request containing
-`inviteId`, `codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
+`createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`,
+`parseInviteLink`, `buildSpaceLink`, `parseSpaceLink`, and `INVITE_LINK_SCHEME`.
+A join link is `/join?host&space&invite#code`, with an optional `inviter` DID
+key in the query; the parser refuses any other query key, and any fragment but
+the code. `parseInviteLink` accepts the same invitation in three more forms and
+returns the same result for each: `/open?…#code=…` on any HTTPS origin, or
+loopback HTTP as for `/join`, which a person reaches by asking to open the
+invitation in Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver
+answers, where `join` is the URL's host and its path is empty; and that scheme
+form without a fragment, with the code passed separately as
+`parseInviteLink(url, { code })`, which is how Android delivers it (the code
+arrives as the intent's `S.code` extra). The result's `host` is always the
+service named in the query, never the link's own origin. Other paths, a `/join`
+or `/open` URL whose query names none of `host`, `space`, and `invite`,
+`fbrc://setup?n=<nonce>`, and `fbrc://space?…` return `undefined`; `setup` is
+the reply a Weaver receives while making itself the browser's default for the
+scheme, and `space` is a space link (below); neither is an invitation. Any other
+URL on the scheme throws `invalid-link`.
+
+A space link names a space and grants nothing:
+`buildSpaceLink(shell, { host,
+space })` makes `/space?host&space` on the shell
+origin, with no fragment, and `parseSpaceLink` reads it and its scheme form,
+`fbrc://space?host&space`. It opens the space for someone who already has access
+to it, and anyone else is told they don't. `parseSpaceLink` returns `undefined`
+for other paths, a `/space` URL naming neither `host` nor `space`, and any other
+scheme action, and throws `invalid-link` for any other key, a fragment, or a
+malformed space. `inviter` is a display hint that anyone holding the link can
+change; it is checked only syntactically and is not part of the code verifier. A
+recipient cannot read the space ACL before redeeming, and afterwards an ACL
+check can show at most that the DID is an owner, not that it issued the link.
+Like the space DID, it travels in the query, so it reaches the shell host's
+access logs. `issue` accepts a prepared request containing `inviteId`,
+`codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
 `suggestedProfile`, `spaceName` and `issuerName`. Retain the credentials before
 calling it so an uncertain response can be retried with the same ID. The
 convenience `create` accepts the same access/lifetime/limit/suggestion/name

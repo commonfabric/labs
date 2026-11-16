@@ -23,6 +23,7 @@ import {
 
 export {
   buildInviteLink,
+  buildSpaceLink,
   createInviteCredentials,
   INVITE_ACCESS,
   INVITE_LINK_SCHEME,
@@ -33,6 +34,7 @@ export {
   isInviteProfileSuggestion,
   normalizeInviteHost,
   parseInviteLink,
+  parseSpaceLink,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteError,
 } from "@commonfabric/memory/space-invites";
@@ -45,6 +47,7 @@ export type {
   InviteProfileSuggestion,
   InviteRedemption,
   RedeemReceipt,
+  SpaceLink,
 } from "@commonfabric/memory/space-invites";
 
 /**

@@ -311,7 +311,7 @@ export function inviteCodeVerifier(link: InviteLink): string {
  * The custom URL scheme of the invitation link format, shared by every Weaver
  * from any maker as `mailto:` is shared by mail clients, so a browser can hand
  * an invitation to whichever Weaver its owner chose without anyone keeping a
- * list of Weavers. The scheme has two actions, each named by the URL's host:
+ * list of Weavers. The scheme has three actions, each named by the URL's host:
  *
  * - `fbrc://join?host&space&invite[&inviter]#code=…` is an invitation, with
  *   the query and fragment of the canonical `https` link (see
@@ -322,6 +322,10 @@ export function inviteCodeVerifier(link: InviteLink): string {
  *   while making itself the browser's default for the scheme answers on it,
  *   and the Weaver accepts only a nonce it issued. It is never an invitation,
  *   and {@link parseInviteLink} returns undefined for it.
+ *
+ * - `fbrc://space?host&space` is a link to a space, which grants nothing (see
+ *   {@link buildSpaceLink}). It is never an invitation, and
+ *   {@link parseInviteLink} returns undefined for it.
  *
  * Any other URL on the scheme is malformed: the scheme belongs to this link
  * format, so {@link parseInviteLink} refuses it rather than passing it on.
@@ -377,8 +381,8 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
  *
  * A URL that is not an invitation returns undefined: another scheme's URL on
  * any path but `/join` or `/open`, a `/join` or `/open` URL whose query names
- * none of `host`, `space`, and `invite`, and the setup reply,
- * `fbrc://setup?…`. Anything else throws a secret-free
+ * none of `host`, `space`, and `invite`, the setup reply, `fbrc://setup?…`,
+ * and a space link, `fbrc://space?…` (see {@link parseSpaceLink}). Anything else throws a secret-free
  * {@link SpaceInviteError}: `invalid-link` for a malformed invitation or any
  * other {@link INVITE_LINK_SCHEME} URL, such as `fbrc://JOIN?…` or
  * `fbrc:join?…`; `invalid-link` too for a code given both in a fragment and in
@@ -398,7 +402,7 @@ export function parseInviteLink(
     throw new SpaceInviteError("invalid-link");
   }
   if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
-    if (url.hostname === "setup") return undefined;
+    if (url.hostname === "setup" || url.hostname === "space") return undefined;
     if (url.host !== "join" || url.pathname !== "") {
       throw new SpaceInviteError("invalid-link");
     }
@@ -435,4 +439,82 @@ export function parseInviteLink(
   };
   inviteCodeVerifier(invite);
   return invite;
+}
+
+/**
+ * A link to a space: the service that holds it and the space's key. It grants
+ * nothing and carries nothing secret, so anyone may hold it; it opens the
+ * space for someone who already has access, and tells anyone else they don't.
+ * The space's key alone cannot yet say where the space lives, so `host` names
+ * the service.
+ */
+export interface SpaceLink {
+  host: string;
+  space: string;
+}
+
+/** The query keys that make a `/space` URL a space link. */
+const SPACE_LINK_QUERY_KEYS = ["host", "space"] as const;
+
+/**
+ * Builds the canonical space link, `/space?host&space`, on the `shell` origin,
+ * with no fragment. {@link parseSpaceLink} documents its other form.
+ */
+export function buildSpaceLink(shell: string, link: SpaceLink): URL {
+  const host = normalizeInviteHost(link.host);
+  if (!isInviteDIDKey(link.space)) {
+    throw new SpaceInviteError("invalid-request");
+  }
+  const url = new URL("/space", normalizeInviteHost(shell));
+  url.search = new URLSearchParams({ host, space: link.space }).toString();
+  return url;
+}
+
+/**
+ * Parses a space link in either of its forms, each carrying the query `host`
+ * and `space` and nothing else, and no fragment:
+ *
+ * - `https://<origin>/space?…`, the canonical link {@link buildSpaceLink}
+ *   makes, on any secure origin or loopback HTTP;
+ * - `fbrc://space?…`, the {@link INVITE_LINK_SCHEME} form, in which `space` is
+ *   the URL's host and its path is empty.
+ *
+ * `host` is always the service named in the query, never the link's origin.
+ *
+ * A URL that is not a space link returns undefined: another scheme's URL on
+ * any path but `/space`, a `/space` URL whose query names neither `host` nor
+ * `space`, and any {@link INVITE_LINK_SCHEME} URL whose action is not `space`
+ * ({@link parseInviteLink} judges those). Anything else throws a
+ * {@link SpaceInviteError}: `invalid-link` for a malformed space link, and
+ * `invalid-host` for a link or service that is not a secure origin.
+ */
+export function parseSpaceLink(
+  link: string | URL,
+): (SpaceLink & { space: DIDKey }) | undefined {
+  let url: URL;
+  try {
+    url = new URL(link);
+  } catch {
+    throw new SpaceInviteError("invalid-link");
+  }
+  if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
+    if (url.hostname !== "space") return undefined;
+    if (url.host !== "space" || url.pathname !== "") {
+      throw new SpaceInviteError("invalid-link");
+    }
+  } else {
+    if (
+      url.pathname !== "/space" ||
+      !SPACE_LINK_QUERY_KEYS.some((key) => url.searchParams.has(key))
+    ) return undefined;
+    normalizeInviteHost(url.origin);
+  }
+  if (
+    url.username || url.password || url.hash !== "" ||
+    url.href.endsWith("#") ||
+    [...url.searchParams.keys()].sort().join(",") !== "host,space"
+  ) throw new SpaceInviteError("invalid-link");
+  const space = url.searchParams.get("space");
+  if (!isInviteDIDKey(space)) throw new SpaceInviteError("invalid-link");
+  return { host: normalizeInviteHost(url.searchParams.get("host")!), space };
 }
