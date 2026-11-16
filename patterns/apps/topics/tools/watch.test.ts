@@ -25,6 +25,7 @@ import {
 import {
   type BoardView,
   type Clock,
+  consoleLine,
   consoleTerminal,
   showBoard,
   systemClock,
@@ -843,6 +844,29 @@ describe("watch", () => {
       undo();
 
       expect(listening.size).toBe(0);
+    });
+  });
+
+  describe("consoleLine()", () => {
+    it("fills each format specifier with the value after the format, as its kind says", () => {
+      expect(
+        consoleLine(["%s has %d of %i, %f%c", "oven", 2.9, "7", "1.5", ""]),
+      )
+        .toBe("oven has 2 of 7, 1.5");
+      expect(consoleLine(["%o and %O", { a: 1 }, [2]])).toBe(
+        "{ a: 1 } and [ 2 ]",
+      );
+    });
+
+    it("writes `%%` as a percent sign, and leaves a specifier with no value left as it is", () => {
+      expect(consoleLine(["100%% of %s, then %s and %d", "dough"])).toBe(
+        "100% of dough, then %s and %d",
+      );
+    });
+
+    it("says values the format does not take after it, and values with no format inspected", () => {
+      expect(consoleLine(["%s", "one", "two", 3])).toBe("one two 3");
+      expect(consoleLine([{ n: 1 }, "two"])).toBe("{ n: 1 } two");
     });
   });
 

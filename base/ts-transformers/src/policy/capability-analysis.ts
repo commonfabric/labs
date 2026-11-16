@@ -1957,7 +1957,12 @@ function isKnownIdentityEqualsCallee(
   const current = unwrapExpression(expr);
 
   if (ts.isIdentifier(current)) {
-    if (current.text !== "equals" && current.text !== "equalLinks") {
+    // `equalsKey` returns the key `equals` matches by, so it uses its argument
+    // as `equals` does; it has no method form.
+    if (
+      current.text !== "equals" && current.text !== "equalLinks" &&
+      current.text !== "equalsKey"
+    ) {
       return false;
     }
     if (!checker) {

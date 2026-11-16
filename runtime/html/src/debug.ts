@@ -6,11 +6,7 @@
  *        commonfabric.vdom.stats()   — node/listener counts
  */
 
-import {
-  type CellHandle,
-  CellReadRefusedError,
-  isCellHandle,
-} from "@commonfabric/runtime-client";
+import { isCellHandle } from "@commonfabric/runtime-client";
 import {
   isFabricSpecialObject,
   toCompactDebugString,
@@ -44,45 +40,6 @@ function resolveTarget(
   }
 
   return renders.get(elementOrIndex);
-}
-
-/**
- * Subscribe to a cell and resolve with the first defined value, or reject
- * with the refusal when the worker refuses the read, so that a refused tree
- * never reads as an empty one.
- * CellHandle.get() only returns cached values; asSchema() creates a new handle
- * with no cache, so we subscribe and wait for the runtime to deliver the value.
- */
-function readCellAsync<T>(cell: CellHandle<T>): Promise<T | undefined> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const cancel = cell.subscribe((v) => {
-      if (v !== undefined && !settled) {
-        settled = true;
-        // Defer cancel to avoid unsubscribe during callback
-        queueMicrotask(() => cancel());
-        resolve(v);
-      }
-    }, {
-      // A refusal after the promise settled changes nothing it answered.
-      onRefused: (refusal) => {
-        settled = true;
-        queueMicrotask(() => cancel());
-        reject(new CellReadRefusedError(refusal));
-      },
-    });
-    // If the callback fired synchronously with a defined value, we're done.
-    // Otherwise set a timeout so we don't hang forever.
-    if (!settled) {
-      setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          cancel();
-          resolve(undefined);
-        }
-      }, 30000);
-    }
-  });
 }
 
 /**
@@ -291,7 +248,7 @@ export function createVDomDebugHelpers() {
         rows.push({
           index: i++,
           container: parent,
-          cellId: entry.cell.ref()?.id ?? "(none)",
+          cellId: entry.cell.ref().id,
         });
       }
       console.table(rows);
@@ -299,7 +256,9 @@ export function createVDomDebugHelpers() {
 
     /**
      * Read the VDOM tree using the debug schema (children expanded inline).
-     * Returns the raw tree object for inspection.
+     * Returns the raw tree object for inspection, and rejects with the
+     * refusal when the worker refuses the read, so that a refused tree never
+     * reads as an empty one.
      */
     async tree(el?: HTMLElement | number) {
       const target = resolveTarget(el);
@@ -307,7 +266,7 @@ export function createVDomDebugHelpers() {
         console.warn("No active render found.");
         return undefined;
       }
-      return await readCellAsync(target.cell.asSchema(debugVDOMSchema));
+      return await target.cell.asSchema(debugVDOMSchema).pull();
     },
 
     /**
@@ -319,9 +278,7 @@ export function createVDomDebugHelpers() {
         console.warn("No active render found.");
         return;
       }
-      const tree = await readCellAsync(
-        target.cell.asSchema(debugVDOMSchema),
-      );
+      const tree = await target.cell.asSchema(debugVDOMSchema).pull();
       if (!tree) {
         console.warn("Tree is empty.");
         return;

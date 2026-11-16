@@ -428,6 +428,7 @@ export function isHeadEventParked(
     headEvent?.patternChangePending === true ||
     headEvent?.retryReadinessPending === true ||
     headEvent?.presyncPending === true ||
+    headEvent?.multiSpaceCommitPending === true ||
     (headEvent?.notBefore !== undefined && headEvent.notBefore > now);
 }
 
@@ -2033,6 +2034,30 @@ function holdHeadEventForPresync(
 }
 
 /**
+ * Holds the head while a multi-space commit issued before it still has writes
+ * to hand to a later space's replica, and returns whether it did. Such a
+ * commit hands a space its writes only once the server has answered for the
+ * spaces before it, so a handler that ran meanwhile would read none of them:
+ * a second click would not see the first click's writes to its own space.
+ * The head holds its FIFO slot, as it does while its inputs presync, and the
+ * hand-over queues a fresh tick. A one-space commit's writes are in the
+ * replica as the commit is issued, so it holds nothing.
+ */
+function holdHeadEventForMultiSpaceCommits(
+  state: SchedulerEventExecutionState,
+  queuedEvent: QueuedEvent,
+): boolean {
+  const applied = state.runtime.storageManager.multiSpaceCommitsApplied?.();
+  if (applied === undefined) return false;
+  queuedEvent.multiSpaceCommitPending = true;
+  void applied.then(() => {
+    delete queuedEvent.multiSpaceCommitPending;
+    state.queueExecution();
+  });
+  return true;
+}
+
+/**
  * Brings `implementation`'s input documents for `event` into the local replica
  * through its `presyncInputs`, under the event's actor. Never rejects: a
  * failure is logged.
@@ -2126,6 +2151,11 @@ export async function processPullQueuedEventDuringExecute(
   if (state.isHeadEventLoadParked(queuedEvent)) {
     return;
   }
+
+  // The head holds its slot while an earlier multi-space commit hands its
+  // later spaces' writes to their replicas; the hand-over queues a fresh tick.
+  if (queuedEvent.multiSpaceCommitPending) return;
+  if (holdHeadEventForMultiSpaceCommits(state, queuedEvent)) return;
 
   if (
     queuedEvent.notBefore !== undefined &&

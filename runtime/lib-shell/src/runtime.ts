@@ -28,6 +28,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 import { getLogger } from "@commonfabric/logger";
+import { readBuildHash } from "./build-hash.ts";
 
 const logger = getLogger("lib-shell.runtime", {
   enabled: false,
@@ -126,8 +127,12 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    * Populate the default render confidentiality ceiling. Defaults to on:
    * the worker's display sinks gate labeled values against the §8.10.6
    * profile for the acting identity, and author-supplied render-boundary
-   * declassification is denied. `false` opts a host out, which renders
-   * labeled content ungated.
+   * declassification is denied. `false` opts a host out: it declares that it
+   * wants no ceiling (`renderConfidentialityCeiling: null`) and honors
+   * author-supplied declassification (`renderDeclassificationPolicy:
+   * "allow"`), so that labeled content renders ungated but for the authored
+   * boundaries around it. A host declaring neither is given the default
+   * ceiling, with declassification denied, by the worker.
    */
   cfcRenderCeiling?: boolean;
 
@@ -245,24 +250,7 @@ let buildHashPromise: Promise<string | undefined> | undefined;
  * fetched at most once.
  */
 export function fetchBuildHash(): Promise<string | undefined> {
-  if (!buildHashPromise) {
-    buildHashPromise = (async () => {
-      try {
-        const resp = await fetch(
-          new URL("/build-manifest.json", globalThis.location.origin),
-          { cache: "no-store" },
-        );
-        if (resp.ok) {
-          const manifest = await resp.json();
-          // Key must match the worker entry's `out` path in felt.config.ts.
-          return manifest["scripts/worker-runtime.js"] as string | undefined;
-        }
-      } catch {
-        // Manifest not available — compilation cache disabled
-      }
-      return undefined;
-    })();
-  }
+  buildHashPromise ??= readBuildHash();
   return buildHashPromise;
 }
 
@@ -383,7 +371,14 @@ export function createRuntimeClientOptions({
           actingPrincipal,
         ),
       }
-      : {}),
+      // No ceiling, declared as such, since the worker gives a host that
+      // declares none the default one. An authored boundary still narrows
+      // the ceiling of what it encloses, and with the ceiling off it may
+      // declassify as well.
+      : {
+        renderDeclassificationPolicy: "allow" as const,
+        renderConfidentialityCeiling: null,
+      }),
     trustSnapshot: resolvedTrustSnapshot,
     forwardWorkerConsole,
     patternCoverage,
@@ -587,11 +582,7 @@ export class RuntimeInternals extends EventTarget {
     options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     this.#check();
-    const piece = await this.#client.createPiece<T>(source, space, options);
-    if (!piece) {
-      throw new Error("Could not create piece");
-    }
-    return piece;
+    return await this.#client.createPiece<T>(source, space, options);
   }
 
   /**
@@ -776,9 +767,7 @@ export class RuntimeInternals extends EventTarget {
   #dropPattern(space: DID, scope: CellScope, id: string): void {
     const byScope = this.#patternCache.get(space);
     const byId = byScope?.get(scope);
-    if (!byScope || !byId) return;
-    byId.delete(id);
-    if (byId.size > 0) return;
+    if (!byScope || !byId?.delete(id) || byId.size > 0) return;
     byScope.delete(scope);
     if (byScope.size === 0) this.#patternCache.delete(space);
   }

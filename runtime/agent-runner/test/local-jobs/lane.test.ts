@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { Identity } from "@commonfabric/identity";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
 import { join } from "@std/path";
 
@@ -1388,6 +1388,44 @@ describe("local-jobs/lane", () => {
         const run = await nextRun(0);
 
         expect(run.spec.fabric?.inputs).toEqual({ focus: foreign, own });
+        expect(run.spec.fabric?.foreignSpaces).toEqual({
+          [other]: "https://estuary.example/",
+        });
+        run.settle({ outcome: "cancelled" });
+        await Deno.remove(key.dir, { recursive: true });
+      });
+
+      it("drops the route of an input in the space a profile names by name, keeping the route elsewhere", async () => {
+        // Only the session resolves a legacy name to its DID, so the request
+        // routes both spaces and the run keeps the one that is not the
+        // profile's own.
+        const key = await identityKey();
+        const named = await legacySpaceDid("lunch-club");
+        const other =
+          "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        const own = `//${named}/of:fid1:${"B".repeat(43)}`;
+        const foreign = `//${other}/of:fid1:${"A".repeat(43)}`;
+        const { lane, nextRun, enqueue } = laneWith({
+          profiles: new Map([["carry", {
+            ...CARRY,
+            fabric: {
+              ...CARRY.fabric!,
+              space: "lunch-club",
+              identityKeyPath: key.path,
+            },
+          }]]),
+        });
+        await lane.start();
+        enqueue("a", {
+          ...REQUEST,
+          inputs: { own, focus: foreign },
+          foreignSpaces: {
+            [named]: "https://toolshed.example",
+            [other]: "https://estuary.example",
+          },
+        }, "carry");
+        const run = await nextRun(0);
+
         expect(run.spec.fabric?.foreignSpaces).toEqual({
           [other]: "https://estuary.example/",
         });

@@ -3490,9 +3490,11 @@ async function handleInvoke(
     if (pattern) {
       // The model's tool call instantiates the pattern, in a continuation of
       // the dialog's action: no principal's act attributes what its setup
-      // initializes.
+      // initializes, and its transaction holds none of the reads that chose
+      // the pattern.
       runtime.run(tx, pattern, invocationArgs, result, {
         attributeInitialization: false,
+        runtimeStarted: true,
       });
     } else if (handler) {
       // Inject the result cell only when the caller's input does not carry a

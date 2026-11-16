@@ -282,6 +282,10 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   // `cf delegation show` reads one.
   ["cf piece ls --delegations ", "files", "*.json"],
   ["cf delegation show ", "files", "*.json"],
+  // An index chain file, as `cf delegation issue --index` writes one, and the
+  // root-move delegation the same command writes with `--index-root`.
+  ["cf index join --chain ", "files", "*.json"],
+  ["cf index move-root ", "files", "*.json"],
   // Every command whose `--root` is the directory its sources resolve
   // against. The set is hand-maintained, so it is asserted whole.
   ["cf piece new --root ", "dirs", undefined],
@@ -291,6 +295,8 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf test --root ", "dirs", undefined],
   ["cf piece new --test ", "files", "*.tsx"],
   ["cf piece new ", "files", "*.tsx"],
+  ["cf pattern publish ", "files", "*.tsx"],
+  ["cf pattern publish --root ", "dirs", undefined],
   ["cf piece setsrc ", "files", "*.tsx"],
   ["cf check ", "files", "*.tsx"],
   ["cf test ", "files", "*.tsx"],
@@ -459,6 +465,7 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertEquals(options.get("schema"), ["cell get"]);
   assertEquals(options.get("root"), [
     "check",
+    "pattern publish",
     "piece new",
     "piece setsrc",
     "piece survey",

@@ -3,10 +3,16 @@
   "exports": {
     ".": "./mod.ts",
     "./client": "./src/client.ts",
-    "./successors": "./src/successors.ts",
+    "./deploy": "./src/deploy.ts",
     "./feedback": "./src/feedback.ts",
     "./front": "./src/front.ts",
-    "./http-fetch": "./src/http-fetch.ts"
+    "./http-fetch": "./src/http-fetch.ts",
+    "./membership": "./src/membership.ts",
+    "./privacy": "./src/privacy.ts",
+    "./publish": "./src/publish.ts",
+    "./store": "./src/store.ts",
+    "./access": "./src/access.ts",
+    "./join": "./src/join.ts"
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",

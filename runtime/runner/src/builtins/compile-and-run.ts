@@ -368,9 +368,11 @@ export function compileAndRun(
         // how we pass input into the builtin.
 
         // The instantiation is the builtin's, in a continuation of its
-        // action: no principal's act attributes what its setup initializes.
+        // action: no principal's act attributes what its setup initializes,
+        // and its transaction holds none of the reads that chose the program.
         runtime.runSynced(result, pattern, input.get(), {
           attributeInitialization: false,
+          runtimeStarted: true,
         });
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
@@ -579,8 +581,14 @@ function compileAndRunServed(
               // the rule refuses everything the ending writes and the node
               // shows no error. Deciding from an in-memory record of the
               // latest run's program would lose the guarantee that this ending
-              // never lands over a program that replaced it. The test pinning
-              // today's outcome is in `served-effect-refusal-rerun.test.ts`.
+              // never lands over a program that replaced it. Where the store
+              // does admit the label, the read stamps it on everything the
+              // ending writes, the memo's request hash included, and the
+              // node's next run reads the memo and takes the label into its
+              // request, so a program the ceiling admits is refused as well;
+              // an ending that read no input and recorded no hash would end
+              // that, as the `llm` builtins' does. The tests pinning today's
+              // outcomes are in `served-effect-refusal-rerun.test.ts`.
               const current = snapshotQueryResult(
                 inputs.asSchema<RuntimeProgram>(programSchema).withTx(settleTx)
                   .get(),

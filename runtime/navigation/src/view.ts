@@ -275,14 +275,13 @@ export function appViewToUrlPath(view: AppView): `/${string}` {
       case "home":
         return `/`;
     }
-  } else if ("spaceName" in view) {
+  }
+  if ("spaceName" in view) {
     return `${prefix}/${spaceNameSegment(view.spaceName)}${
       pieceUrlSegments(view)
     }`;
-  } else if ("spaceDid" in view) {
-    return `${prefix}/${view.spaceDid}${pieceUrlSegments(view)}`;
   }
-  return `/`;
+  return `${prefix}/${view.spaceDid}${pieceUrlSegments(view)}`;
 }
 
 /**

@@ -3575,7 +3575,7 @@ describe("console/server", () => {
         jsonRequest("/api/index/call", body),
       );
 
-    it("passes a `listEvents` read through with the pattern and limit it named", async () => {
+    it("refuses `listEvents` by name, before the index is touched", async () => {
       const indexed = await indexServer([Response.json({ events: [] })]);
 
       const response = await call(indexed, {
@@ -3583,20 +3583,11 @@ describe("console/server", () => {
         body: { patternId: "ss-2w4nQ8", limit: 5 },
       });
 
-      expect(response.status).toBe(200);
-      expect(indexed.requests).toHaveLength(1);
-      const sent = `${indexed.requests[0].url} ${indexed.requests[0].body}`;
-      expect(sent).toContain("ss-2w4nQ8");
-      expect(sent).toContain("5");
-    });
-
-    it("passes a `listEvents` read naming neither a pattern nor a limit", async () => {
-      const indexed = await indexServer([Response.json({ events: [] })]);
-
-      const response = await call(indexed, { fn: "listEvents" });
-
-      expect(response.status).toBe(200);
-      expect(indexed.requests).toHaveLength(1);
+      expect(response.status).toBe(400);
+      const { error } = await response.json();
+      expect(error).toContain("fn must be one of");
+      expect(error).not.toContain("listEvents");
+      expect(indexed.requests).toEqual([]);
     });
 
     it("answers a host-side failure generically, never with its message", async () => {
@@ -3631,7 +3622,7 @@ describe("console/server", () => {
           description: "Totals an expense list",
           hashtags: ["expenses"],
           keywords: [],
-          ownerDid: "did:key:zOwner",
+          handle: "p-owner00001",
           createdAt: "2026-08-01T00:00:00.000Z",
           events: { run_succeeded: 2 },
           score: 2,

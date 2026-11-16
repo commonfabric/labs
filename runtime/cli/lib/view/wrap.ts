@@ -4,8 +4,6 @@
  */
 
 import {
-  type DisplayCell,
-  displayLine,
   type DisplayMode,
   displayWidth,
   visitDisplayCellSources,
@@ -404,16 +402,16 @@ function buildWordWrapLine(
   firstContinuationSuffixWidth: number,
   continuationSuffixWidth: number,
 ): WordWrapLine | null {
-  const cells = displayLine(line, mode);
-  const characterClasses = classifyDisplayCells(line.text, cells);
+  const characterClasses = classifyDisplayCells(line.text, mode);
+  const width = characterClasses.length;
   let prefixWidth = 0;
   while (
-    prefixWidth < cells.length &&
+    prefixWidth < width &&
     (characterClasses[prefixWidth] & PREFIX_CHARACTER) !== 0
   ) {
     prefixWidth++;
   }
-  if (prefixWidth === cells.length) prefixWidth = 0;
+  if (prefixWidth === width) prefixWidth = 0;
 
   const offsets: number[] = [];
   let offset = 0;
@@ -427,7 +425,7 @@ function buildWordWrapLine(
       ? firstContinuationSuffixWidth
       : continuationSuffixWidth;
     const available = rowWidth - suffixWidth;
-    const remaining = cells.length - offset;
+    const remaining = width - offset;
     let indent = continuationIndentWidth(
       prefixWidth,
       row,
@@ -464,13 +462,13 @@ function buildWordWrapLine(
     );
     offsets.push(offset);
     offset = nextOffset;
-  } while (offset < cells.length);
+  } while (offset < width);
 
   if (
     !indentedAnyRow &&
     hasFixedWrapOffsets(
       offsets,
-      cells.length,
+      width,
       rowWidth,
       firstSuffixWidth,
       firstContinuationSuffixWidth,
@@ -540,34 +538,14 @@ const ASCII_PUNCTUATION =
   /^[\u0021-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u007e]$/u;
 const UNICODE_PUNCTUATION = /^\p{Punctuation}$/u;
 
-function classifyDisplayCells(
-  text: string,
-  cells: readonly DisplayCell[],
-): Uint8Array {
-  const classes = new Uint8Array(cells.length);
-  classes.fill(PREFIX_CHARACTER);
-  let displayCol = 0;
-  let sourceCol = 0;
-  for (const codePoint of text) {
-    while (
-      displayCol < cells.length &&
-      sourceCol >= cells[displayCol].sourceEnd
-    ) {
-      displayCol++;
-    }
-    // Every cell drawn for this code point (a tab can draw several) takes its
-    // classes.
-    for (
-      let d = displayCol;
-      d < cells.length && sourceCol >= cells[d].col;
-      d++
-    ) {
-      if (!isPrefixCharacter(codePoint)) classes[d] &= ~PREFIX_CHARACTER;
-      if (isBreakWhitespaceCharacter(codePoint)) classes[d] |= BREAK_WHITESPACE;
-    }
-    sourceCol++;
-  }
-  return classes;
+/** The classes of each cell `text` draws in `mode`, in display order. */
+function classifyDisplayCells(text: string, mode: DisplayMode): Uint8Array {
+  const classes: number[] = [];
+  visitDisplayCellSources(text, mode, (start, end, drawn) => {
+    classes.push(classifySourceRange(text, start, end, drawn));
+    return true;
+  });
+  return Uint8Array.from(classes);
 }
 
 function needsVariableWordLayout(text: string): boolean {
@@ -575,6 +553,9 @@ function needsVariableWordLayout(text: string): boolean {
   let hasPrefix = false;
   let sawBreakWhitespace = false;
   for (const codePoint of text) {
+    // An overstrike draws a character other than the first one struck, so its
+    // source does not show how it wraps.
+    if (codePoint === "\b") return true;
     if (isBreakWhitespaceCharacter(codePoint)) {
       sawBreakWhitespace = true;
     } else if (sawBreakWhitespace) {
@@ -605,9 +586,9 @@ function wordWrapDiffersFromHard(
   continuationSuffixWidth: number,
 ): boolean {
   let prefixWidth = 0;
-  visitDisplayCellSources(text, mode, (start, end) => {
+  visitDisplayCellSources(text, mode, (start, end, drawn) => {
     if (
-      (classifySourceRange(text, start, end) & PREFIX_CHARACTER) === 0
+      (classifySourceRange(text, start, end, drawn) & PREFIX_CHARACTER) === 0
     ) {
       return false;
     }
@@ -656,7 +637,7 @@ function wordWrapDiffersFromHard(
   prepareRow();
   let displayCol = 0;
   let differs = false;
-  visitDisplayCellSources(text, mode, (start, end) => {
+  visitDisplayCellSources(text, mode, (start, end, drawn) => {
     while (displayCol >= hardEnd) {
       if (continues && sawBreak && !lastWasBreak) {
         differs = true;
@@ -673,7 +654,8 @@ function wordWrapDiffersFromHard(
 
     if (displayCol >= relevantStart) {
       lastWasBreak =
-        (classifySourceRange(text, start, end) & BREAK_WHITESPACE) !== 0;
+        (classifySourceRange(text, start, end, drawn) & BREAK_WHITESPACE) !==
+          0;
       sawBreak ||= lastWasBreak;
     }
     displayCol++;
@@ -682,11 +664,16 @@ function wordWrapDiffersFromHard(
   return differs || continues && sawBreak && !lastWasBreak;
 }
 
+/** The classes of a cell drawn for the source range from `start` to `end` of
+ * `text`. For an overstrike, `drawn` is the character the cell draws, and the
+ * cell takes its classes. */
 function classifySourceRange(
   text: string,
   start: number,
   end: number,
+  drawn?: string,
 ): number {
+  if (drawn !== undefined) return classifySourceRange(drawn, 0, drawn.length);
   let classes = PREFIX_CHARACTER;
   for (let i = start; i < end;) {
     const value = text.codePointAt(i)!;

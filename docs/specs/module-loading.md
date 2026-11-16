@@ -662,14 +662,55 @@ current module may exercise. Since content addressing does not authenticate that
 mutable field, source documents carry the compiler integrity stamp on the
 delegation field alone. Compiled documents authenticate it with their existing
 root compiler stamp. Loaders discard delegation metadata without the applicable
-stamp. The source-update transaction computes a union of proposed entries and
-authenticated entries already stored in either document set under
-`editWithRetry`. It writes the same union to both sets with the source pointer
-and revision, and registers it in the active runtime only after the durable
-commit succeeds. General cache saves ([`writeSourceAndCompiledDocs`][c14])
-preserve authenticated authority already present in either set. Entries
-accumulate because one content-addressed successor can be shared by patterns
-updated from different predecessors.
+stamp. A source update writes no cache document in its own transaction, which
+reads the piece's data and would label every document it wrote with that data's
+flow label. It records what it grants in the piece's `pieceSourceDelegations`
+meta member instead, which names the pattern it is for and which every source
+transition writes for the next pattern (see
+[piece-source-lifecycle.md](piece-source-lifecycle.md)). The member has two
+fields. `edges` holds every delegation edge the piece's history recorded, each
+with every position in the piece's source history at which a transition recorded
+it, a derivation or a terminal entry; nothing is removed from it. `delegations`
+holds, for each module of the named pattern's closure, every predecessor it
+reaches over `edges` along a path whose positions do not increase, so a module
+takes what its predecessor held when the module was granted it, and nothing the
+predecessor was granted later. When the update is prepared, it records each
+successor's edge to the module it succeeds at one past the piece's history
+length, which every transition increases and which is never 0. The predecessor
+record's attested list is closed as of when it was written, and the successor
+takes it in now, so an entry of it the edges do not already reach from the
+successor becomes the successor's own edge at that same position, marked
+terminal: a walk reaches it from the successor, and from whatever reaches the
+successor at that position or later, and goes no further, so the successor gets
+the list as written and nothing a listed module was granted afterward, and no
+module that succeeded the predecessor earlier, or the successor earlier, sees
+it. It then closes the candidate's modules, and the transaction is pinned to
+them. A transition that is no source update carries `edges` as they are and
+closes the next pattern's modules over them, in its own transaction, so a module
+it keeps or brings back keeps what the piece's history granted it and a new
+module gets nothing. The runtime registers the update's delegations once its
+transaction commits. A cache transaction of its own then computes a union of
+those entries and authenticated entries already stored in either document set
+under `editWithRetry`, and writes the same union to both sets. A runtime that
+starts or swaps a piece to the member's pattern registers the `delegations`
+entries whose module is in the closure it verifies, reads nothing else of the
+member, closes nothing, and writes nothing, so the authority holds before that
+second transaction lands, and when it never does. A staging that fails is not
+retried, and the piece's own authority does not depend on it; the piece's next
+committed update stages the closed entries of the modules it then runs. A grant
+whose staging failed stays missing from the records where nothing of the piece's
+carries it to them, and three readers of the records alone are refused it. A
+runtime from before the member that makes any transition of the piece after the
+failed staging, a source update or not, is refused the grant and granted nothing
+more. A source update of another piece from the ungranted module after the
+failed staging takes in its unstaged record, so it is refused the grant, carries
+the loss into that piece's record and on to its successors, and is granted
+nothing more. A write that another piece's module makes through a link after
+the failed staging is refused the grant, and is granted nothing more. A member that is absent or names another
+pattern registers nothing, and the stored entries decide. General cache saves
+([`writeSourceAndCompiledDocs`][c14]) preserve authenticated authority already
+present in either set. Entries accumulate because one content-addressed
+successor can be shared by patterns updated from different predecessors.
 
 Because `identity` is a one-way Merkle hash, internal source links are
 load-bearing and stored explicitly. The parent hash commits to those children's
@@ -713,7 +754,11 @@ the successor inherits the direct predecessor plus the predecessor's
 cumulative delegation list ([`deriveModuleDelegations`][c14]). Each setup
 attempt pins the
 proposal alongside committed authority in its own transaction; ordinary
-transactions cannot observe it. The authority fields commit atomically with the
+transactions cannot observe it. The pinned proposal is also what lets the
+setup, a release, append an alternative to a stored write policy whose
+writer's module the installed one succeeds
+([`cfc-conformance-statement.md`](cfc-conformance-statement.md) §10). The
+authority fields commit atomically with the
 source transition. Rejection publishes no proposed authority, while success
 registers the committed union before the updated pattern starts. This makes an
 update chain cold-reload-stable.
@@ -732,8 +777,14 @@ over the envelopes stored on the piece's argument document and on the piece's
 own document — the latter only where setup would rewrite the result
 projection, as the commit merges it only then — so a stored `writeAuthorizedBy`
 claim the candidate's schema cannot reconcile with is reported by the check
-rather than by the commit. It issues no storage writes and creates no module
-update authority. Verified byte caches and in-memory compiler state may be
+rather than by the commit. The dry run reads through a transaction that cannot
+write, pinned to the delegations the update would propose, derived from the
+two entries' verified source closures as setup derives them, or, for a
+candidate the space does not hold yet, from the modules this session
+evaluated it with, which leave out a module imported only for its types. So
+it judges an appended write-policy alternative as the commit does, except
+where that leaves out a delegation the commit's proposal holds. It issues no storage writes and creates no module update authority.
+Verified byte caches and in-memory compiler state may be
 reused by later operations. Normal storage reads can demand materialization by
 an active server executor; preflight does not freeze the space or suppress
 other actors' writes.
@@ -756,9 +807,12 @@ registers the new pattern's module as inheriting from every other pattern the
 history names. A grant registered for one of them settles nothing about the
 rest, since a later update onto the same successor extends its stored grants
 with that update's own predecessors. If any is missing, the runner first reads
-the new pattern's verified source closure in a transaction without writes,
-which registers whatever delegation that closure durably carries. The start or
-swap proceeds once the read settles, whether or not it added a grant.
+the new pattern's compiled closure, and its verified source closure if a
+grant is still missing, in a transaction without writes, which registers
+whatever delegation that closure durably carries, and the entries the piece's
+`pieceSourceDelegations` member records for that pattern whose module is in
+the closure. The start or swap proceeds once the read settles, whether or not
+it added a grant.
 
 Registration and transitive closure are scoped by the space carrying that
 attestation. Each transaction snapshots the resulting per-space maps, and

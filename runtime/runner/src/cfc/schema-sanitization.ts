@@ -1966,8 +1966,8 @@ const validateAgainstSchemaUncached = (
       // schema is not gated (its type never includes "object").
       //
       // Presence only: `properties` sub-schemas are not enforced against
-      // accessor values (a schema declaring `source` as a number still
-      // matches a FabricRegExp, whose `source` is a string) — the type
+      // accessor values (a schema declaring `length` as a string still
+      // matches a FabricBytes, whose `length` is a number) — the type
       // system doesn't produce such schemas, and the property walk below
       // deliberately stays limited to plain objects.
       const typeAllowsObject = schema.type === undefined ||

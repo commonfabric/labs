@@ -174,6 +174,15 @@ export type NormalizedFullLink = NormalizedLink & {
  */
 export type StoredValuePath = readonly ["value", ...string[]];
 
+/** Throws unless `path` starts with the `value` segment. */
+export function assertStoredValuePath(
+  path: readonly string[],
+): asserts path is StoredValuePath {
+  if (path[0] !== "value") {
+    throw new TypeError(`Not a stored value path: ${JSON.stringify(path)}`);
+  }
+}
+
 export type IMemorySpaceValueAddress = IMemorySpaceAddress & {
   path: StoredValuePath;
 };
@@ -311,6 +320,22 @@ export function areNormalizedLinksSame(
   return link1.id === link2.id && link1.space === link2.space &&
     (link1.scope ?? "space") === (link2.scope ?? "space") &&
     arrayEqual(link1.path, link2.path);
+}
+
+/**
+ * Returns a string two links share exactly when `areNormalizedLinksSame()`
+ * returns `true` for them: their space, id and path, and their scope read as
+ * `space` where it is left out. `addressKey()` keys the same fields with the
+ * scope as stored.
+ *
+ * `id` stands in for the link's own, for a caller that matches ids by a rule
+ * of its own.
+ */
+export function normalizedLinkKey(
+  link: NormalizedLink,
+  id: unknown = link.id,
+): string {
+  return JSON.stringify([link.space, id, link.scope ?? "space", link.path]);
 }
 
 export function areNormalizedLinksSameIgnoringScope(

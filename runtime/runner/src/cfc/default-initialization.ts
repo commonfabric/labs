@@ -28,8 +28,11 @@ export function recordNewProtectedDefaults(
 ): void {
   // Without the previous declaration, absence cannot establish a new field.
   if (previousSchema === undefined) return;
+  // Only whether the document is a record is asked of it, so the read does
+  // not descend.
   const previous = tx.readValueOrThrow(target, {
     meta: ignoreReadForScheduling,
+    nonRecursive: true,
   });
   if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
     return;

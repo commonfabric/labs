@@ -18,7 +18,11 @@
  */
 
 import type { Style } from "@commonfabric/cli/view/ansi";
-import { decodeKeys, type Key } from "@commonfabric/cli/view/keys";
+import {
+  decodeKeys,
+  type Key,
+  type MouseButton,
+} from "@commonfabric/cli/view/keys";
 import { palette as C } from "@commonfabric/cli/view/theme";
 import {
   defaultDisplayFit,
@@ -266,11 +270,23 @@ type Command =
   | { do: "step"; by: 1 | -1 }
   | { do: "readAll" }
   | { do: "scroll"; pane: Pane | "dialog"; by: number }
-  | { do: "thumb"; pane: Pane | "dialog" }
-  | { do: "field"; id: number }
+  | {
+    do: "thumb";
+    pane: Pane | "dialog";
+
+    /** The row of what it scrolls shown at the top as the thumb was drawn. */
+    top: number;
+  }
+  | {
+    do: "field";
+    id: number;
+
+    /** Where the field starts on the screen. */
+    x: number;
+    y: number;
+  }
   | { do: "button"; index: number }
   | { do: "pick"; index: number }
-  | { do: "close" }
   | { do: "next" }
   | { do: "families" }
   | { do: "unfinished" };
@@ -773,7 +789,8 @@ export class Browser implements BoardView {
     // Each key is read as what it is once the keys before it have acted.
     for (const typed of decoded.keys) {
       const key = this.#optionAsAlt(typed);
-      if (key.mouse !== undefined || key.at !== undefined) this.#mouse(key);
+      if (key.at !== undefined) this.#pointerAt(key.name, key.at);
+      else if (key.mouse !== undefined) this.#click(key.mouse);
       else this.#key(key);
       if (this.#quit) return true;
     }
@@ -1007,7 +1024,7 @@ export class Browser implements BoardView {
     // Quitting works from anywhere; an editor's text is kept as a draft as
     // it is typed.
     if (QUIT.has(name)) return this.#run({ do: "quit" });
-    if (this.#menu !== undefined) return this.#menuKey(key);
+    if (this.#menu !== undefined) return this.#menuKey(this.#menu, key);
     const top = this.#dialogs.at(-1);
     if (top !== undefined) return this.#dialogKey(top, key);
     const global: Record<string, Command> = {
@@ -1181,10 +1198,7 @@ export class Browser implements BoardView {
     const selecting = this.#selecting;
     if (selecting === undefined) return;
     if (selecting.kind === "menu") {
-      const item = this.#menuItemAt(x, y);
-      if (item !== undefined && this.#menu !== undefined) {
-        this.#menu = { ...this.#menu, item };
-      }
+      this.#menu = this.#menuItemAt(x, y) ?? this.#menu;
       return;
     }
     const hit = this.#canvas?.at(x, y).click;
@@ -1197,17 +1211,18 @@ export class Browser implements BoardView {
     }
   }
 
-  /** Closes the open menu and runs its item `item`. */
-  #runMenuItem(item: number): void {
-    const menu = this.#menu;
-    if (menu === undefined) return;
-    const chosen = this.#menus()[menu.index].items[item];
+  /** Closes the open menu and runs the item `item` of the menu `index`. */
+  #runMenuItem({ index, item }: { index: number; item: number }): void {
+    const chosen = this.#menus()[index].items[item];
     this.#menu = undefined;
     if (chosen !== undefined && chosen !== "-") this.#run(chosen.act);
   }
 
   /** The item of the open menu at the cell `x`, `y`, if one is there. */
-  #menuItemAt(x: number, y: number): number | undefined {
+  #menuItemAt(
+    x: number,
+    y: number,
+  ): { index: number; item: number } | undefined {
     const menu = this.#menu;
     const rect = this.#rects.get("menu");
     if (menu === undefined || rect === undefined || !inside(rect, x, y)) {
@@ -1215,7 +1230,9 @@ export class Browser implements BoardView {
     }
     const index = y - rect.y - 1;
     const item = this.#menus()[menu.index].items[index];
-    return item === undefined || item === "-" ? undefined : index;
+    return item === undefined || item === "-"
+      ? undefined
+      : { index: menu.index, item: index };
   }
 
   /** The menus, each item saying what it does now. */
@@ -1230,9 +1247,8 @@ export class Browser implements BoardView {
     }));
   }
 
-  #menuKey(key: Key): void {
-    const menu = this.#menu;
-    if (menu === undefined) return;
+  /** Acts on `key` with `menu` open. */
+  #menuKey(menu: { index: number; item: number }, key: Key): void {
     const items = this.#menus()[menu.index].items;
     const step = (by: number) => {
       let item = menu.item;
@@ -1241,7 +1257,8 @@ export class Browser implements BoardView {
       } while (items[item] === "-");
       this.#menu = { ...menu, item };
     };
-    const runItem = (item: number) => this.#runMenuItem(item);
+    const runItem = (item: number) =>
+      this.#runMenuItem({ index: menu.index, item });
     switch (key.name) {
       case "escape":
       case "f10":
@@ -1392,37 +1409,36 @@ export class Browser implements BoardView {
   // The mouse
   //
 
-  #mouse(key: Key): void {
-    if (key.at !== undefined) {
-      const { x, y } = key.at;
-      if (key.name === "drag") {
-        if (this.#dragging !== undefined) this.#drag(y);
-        if (this.#pointer !== undefined) {
-          this.#pointer = { ...this.#pointer, at: { x, y } };
-        }
-        this.#selectAt(x, y);
-        return;
+  /** Acts on the pointer dragged, or the wheel turned, as `name` says, at `at`. */
+  #pointerAt(name: string, { x, y }: { x: number; y: number }): void {
+    if (name === "drag") {
+      if (this.#dragging !== undefined) this.#drag(this.#dragging, y);
+      if (this.#pointer !== undefined) {
+        this.#pointer = { ...this.#pointer, at: { x, y } };
       }
-      const by = key.name === "wheel-up" ? -WHEEL : WHEEL;
-      const top = this.#dialogs.at(-1);
-      const field = top?.kind === "form" ? top.fields[top.focus] : undefined;
-      if (field?.multiline) {
-        // The wheel over an editor moves through its text.
-        for (let step = 0; step < Math.abs(by); step++) {
-          field.field.key({ name: by < 0 ? "up" : "down" });
-        }
-        return;
-      }
-      if (this.#dialogs.length > 0) return this.#scroll("dialog", by);
-      for (const pane of ["list", "reader"] as const) {
-        if (inside(this.#rects.get(pane) ?? NOWHERE, x, y)) {
-          this.#scroll(pane, by);
-        }
+      this.#selectAt(x, y);
+      return;
+    }
+    const by = name === "wheel-up" ? -WHEEL : WHEEL;
+    const top = this.#dialogs.at(-1);
+    const field = top?.kind === "form" ? top.fields[top.focus] : undefined;
+    if (field?.multiline) {
+      // The wheel over an editor moves through its text.
+      for (let step = 0; step < Math.abs(by); step++) {
+        field.field.key({ name: by < 0 ? "up" : "down" });
       }
       return;
     }
-    const mouse = key.mouse;
-    if (mouse === undefined) return;
+    if (this.#dialogs.length > 0) return this.#scroll("dialog", by);
+    for (const pane of ["list", "reader"] as const) {
+      if (inside(this.#rects.get(pane) ?? NOWHERE, x, y)) {
+        this.#scroll(pane, by);
+      }
+    }
+  }
+
+  /** Acts on the primary button going down or coming up, as `mouse` says. */
+  #click(mouse: MouseButton): void {
     const { x, y } = mouse;
     if (!mouse.down) {
       // A press does what it went down on once released over it, and
@@ -1432,8 +1448,8 @@ export class Browser implements BoardView {
       this.#selecting = undefined;
       if (selecting !== undefined) {
         if (selecting.kind === "menu") {
-          const item = this.#menuItemAt(x, y);
-          if (item !== undefined) this.#runMenuItem(item);
+          const at = this.#menuItemAt(x, y);
+          if (at !== undefined) this.#runMenuItem(at);
           return;
         }
         // A release on a row runs the row the selection is on, which is
@@ -1468,7 +1484,7 @@ export class Browser implements BoardView {
         this.#menu = held.click.do === "menu" ? this.#menu : undefined;
         return this.#run(held.click);
       }
-      if (held.href !== undefined) return this.#follow(held.href);
+      if (held.href !== undefined) this.#follow(held.href);
       return;
     }
     // A press starts afresh, whatever became of the last one's release.
@@ -1502,7 +1518,7 @@ export class Browser implements BoardView {
     }
     // Placing a cursor and taking a scroll bar's thumb act at once; the
     // rest waits for the release.
-    if (hit.click?.do === "field") return this.#placeIn(hit.click.id, x, y);
+    if (hit.click?.do === "field") return this.#placeIn(hit.click, x, y);
     if (hit.click?.do === "thumb") return this.#run(hit.click);
     // On a list's row, the press moves the list's selection there, and the
     // keys with it.
@@ -1528,25 +1544,29 @@ export class Browser implements BoardView {
     }
   }
 
-  /** Places the cursor of the field `id` where the cell `x`, `y` shows. */
-  #placeIn(id: number, x: number, y: number): void {
-    const rect = this.#rects.get(`field-${id}`);
-    if (rect === undefined) return;
-    if (id < 0) {
+  /** Places the cursor of `field` where the cell `x`, `y` shows. */
+  #placeIn(
+    field: Extract<Command, { do: "field" }>,
+    x: number,
+    y: number,
+  ): void {
+    if (field.id < 0) {
       this.#focus = "list";
-      this.#search.place(x - rect.x, y - rect.y);
+      this.#search.place(x - field.x, y - field.y);
       return;
     }
     const dialog = this.#dialogs.at(-1);
-    if (dialog?.kind !== "form") return;
-    dialog.focus = id;
-    dialog.fields[id]?.field.place(x - rect.x, y - rect.y);
+    if (dialog?.kind === "form") {
+      dialog.focus = field.id;
+      dialog.fields[field.id]?.field.place(x - field.x, y - field.y);
+    }
   }
 
-  /** Moves a scroll bar's thumb to the row `y`. */
-  #drag(y: number): void {
-    const dragging = this.#dragging;
-    if (dragging === undefined) return;
+  /** Moves the scroll bar's thumb `dragging` holds to the row `y`. */
+  #drag(
+    dragging: { pane: Pane | "dialog"; y: number; top: number },
+    y: number,
+  ): void {
     const { pane } = dragging;
     const rect = this.#rects.get(`bar-${pane}`);
     const scroll = this.#scrolls.get(pane);
@@ -1705,8 +1725,9 @@ export class Browser implements BoardView {
           ["Remove mention", "r"],
           ["Keep it", "k"],
           () => {
-            const absent = this.#absent(topic.number);
-            if (absent !== undefined) return this.#say(absent, true);
+            if (!this.#byNumber.has(topic.number)) {
+              return this.#say(gone(topic.number), true);
+            }
             this.#write(
               {
                 verb: "unmention",
@@ -1748,10 +1769,7 @@ export class Browser implements BoardView {
         return this.#read(`CFC labels of top/${topic.number}`, (width) => {
           const now = this.#byNumber.get(topic.number);
           return now === undefined
-            ? wrap(
-              [span(`top/${topic.number} is no longer on the board.`)],
-              width,
-            )
+            ? wrap([span(gone(topic.number))], width)
             : labelRows(now, width, this.#fit);
         });
       case "goto":
@@ -1850,10 +1868,8 @@ export class Browser implements BoardView {
         this.#dragging = {
           pane: command.pane,
           y: this.#pressedAt,
-          top: this.#scrolls.get(command.pane)?.top ?? 0,
+          top: command.top,
         };
-        return;
-      case "field":
         return;
       case "button": {
         const dialog = this.#dialogs.at(-1);
@@ -1875,31 +1891,29 @@ export class Browser implements BoardView {
       }
       case "unfinished":
         return this.#unfinished();
-      case "close": {
-        const dialog = this.#dialogs.at(-1);
-        if (dialog?.kind === "form") this.#press(dialog, "cancel");
-        else this.#dialogs.pop();
-        return;
-      }
+      // A dialog of authors is on top whenever either is run: its keys,
+      // its buttons, and its rows run them.
       case "pick": {
         const dialog = this.#dialogs.at(-1);
-        if (dialog?.kind !== "authors") return;
-        const author = this.#authorList(dialog)[command.index];
-        this.#dialogs.pop();
-        if (author !== undefined) {
-          this.#run({
-            do: "filter",
-            query: byQuery(author.name, dialog.families),
-          });
+        if (dialog?.kind === "authors") {
+          const author = this.#authorList(dialog)[command.index];
+          this.#dialogs.pop();
+          if (author !== undefined) {
+            this.#run({
+              do: "filter",
+              query: byQuery(author.name, dialog.families),
+            });
+          }
         }
         return;
       }
       case "families": {
         const dialog = this.#dialogs.at(-1);
-        if (dialog?.kind !== "authors") return;
-        dialog.families = !dialog.families;
-        dialog.selected = 0;
-        dialog.top = 0;
+        if (dialog?.kind === "authors") {
+          dialog.families = !dialog.families;
+          dialog.selected = 0;
+          dialog.top = 0;
+        }
         return;
       }
     }
@@ -2228,17 +2242,8 @@ export class Browser implements BoardView {
       present.indexOf(newest) > hidden;
   }
 
-  /** Why Topic `number` cannot be written to, when it is gone. */
-  #absent(number: string): string | undefined {
-    return this.#byNumber.has(number)
-      ? undefined
-      : `top/${number} is no longer on the board.`;
-  }
-
   /** What pressing `act` in the form `dialog` does. */
   #press(dialog: Form, act: FormButton["act"]): void {
-    // Pressed again once a question is answered, it may have closed since.
-    if (!this.#dialogs.includes(dialog)) return;
     const purpose = dialog.purpose;
     const again = () => this.#press(dialog, act);
     const text = (index: number) => dialog.fields[index]?.field.text ?? "";
@@ -2263,8 +2268,7 @@ export class Browser implements BoardView {
     }
     if (act === "theirs" && purpose.to === "compose") {
       const number = purpose.number ?? "";
-      const absent = this.#absent(number);
-      if (absent !== undefined) return this.#say(absent, true);
+      if (!this.#byNumber.has(number)) return this.#say(gone(number), true);
       // Read as the board holds it when drawn, which a live change moves.
       return this.#read(`What top/${number} holds now`, (width) => {
         const topic = this.#byNumber.get(number);
@@ -2312,10 +2316,10 @@ export class Browser implements BoardView {
           }
           return;
         }
-        const absent = this.#absent(purpose.number ?? "");
-        if (absent !== undefined) return this.#say(absent, true);
         const topic = this.#byNumber.get(purpose.number ?? "");
-        if (topic === undefined) return;
+        if (topic === undefined) {
+          return this.#say(gone(purpose.number ?? ""), true);
+        }
         if (kind !== "comment" && !this.#fits(topic.labels)) {
           return this.#say(
             `top/${topic.number} is withheld from this display now.`,
@@ -2555,12 +2559,7 @@ export class Browser implements BoardView {
     );
     const fieldX = x + columns(label);
     const fieldWidth = width - columns(label);
-    this.#rects.set("field--1", {
-      x: fieldX,
-      y: rect.y + 1,
-      width: fieldWidth,
-      height: 1,
-    });
+    const search: Command = { do: "field", id: -1, x: fieldX, y: rect.y + 1 };
     const fieldRow = this.#search.draw(
       fieldWidth,
       1,
@@ -2568,7 +2567,7 @@ export class Browser implements BoardView {
       active ? { bg: C.fgBright, fg: C.ink } : undefined,
     )[0].map((s) => ({
       ...s,
-      click: { do: "field", id: -1 } satisfies Command,
+      click: search,
     }));
     canvas.put(fieldX, rect.y + 1, fieldRow, fieldWidth);
     if (this.#search.text === "") {
@@ -2580,7 +2579,7 @@ export class Browser implements BoardView {
             bg: C.panelHi,
             fg: C.fgDim,
           }),
-          click: { do: "field", id: -1 },
+          click: search,
         }],
         fieldWidth - 1,
       );
@@ -2683,7 +2682,7 @@ export class Browser implements BoardView {
       down: { do: "scroll", pane: "list", by: 1 },
       pageUp: { do: "scroll", pane: "list", by: -rows.height },
       pageDown: { do: "scroll", pane: "list", by: rows.height },
-      thumb: { do: "thumb", pane: "list" },
+      thumb: { do: "thumb", pane: "list", top: scroll.top },
     }, C.editorBg);
   }
 
@@ -2861,7 +2860,7 @@ export class Browser implements BoardView {
         down: { do: "scroll", pane: "reader", by: 1 },
         pageUp: { do: "scroll", pane: "reader", by: -content.height },
         pageDown: { do: "scroll", pane: "reader", by: content.height },
-        thumb: { do: "thumb", pane: "reader" },
+        thumb: { do: "thumb", pane: "reader", top: scroll.top },
       },
       C.editorBg,
     );
@@ -3060,19 +3059,20 @@ export class Browser implements BoardView {
       );
       for (const number of out) {
         const other = this.#byNumber.get(number);
-        if (other === undefined) continue;
-        rows.push(
-          topicLine(
-            both.has(number) ? "↔" : "→",
-            other,
-            mentioned.has(number)
-              ? [span("  "), {
-                ...span("✕", { fg: C.red }),
-                click: { do: "unmention", number },
-              }]
-              : [],
-          ),
-        );
+        if (other !== undefined) {
+          rows.push(
+            topicLine(
+              both.has(number) ? "↔" : "→",
+              other,
+              mentioned.has(number)
+                ? [span("  "), {
+                  ...span("✕", { fg: C.red }),
+                  click: { do: "unmention", number },
+                }]
+                : [],
+            ),
+          );
+        }
       }
       for (const number of into) {
         const other = this.#byNumber.get(number);
@@ -3270,7 +3270,7 @@ export class Browser implements BoardView {
         down: { do: "scroll", pane: "dialog", by: 1 },
         pageUp: { do: "scroll", pane: "dialog", by: -content.height },
         pageDown: { do: "scroll", pane: "dialog", by: content.height },
-        thumb: { do: "thumb", pane: "dialog" },
+        thumb: { do: "thumb", pane: "dialog", top: scroll.top },
       },
       C.panel,
     );
@@ -3441,21 +3441,14 @@ export class Browser implements BoardView {
         { bg: C.editorBg, fg: C.fgBright },
         focused ? { bg: C.fgBright, fg: C.ink } : undefined,
       );
-      if (top) {
-        this.#rects.set(`field-${index}`, {
-          x,
-          y,
-          width: fieldWidth,
-          height: rows,
-        });
-      }
+      const click: Command = { do: "field", id: index, x, y };
       drawn.forEach((row, at) =>
         canvas.put(
           x,
           y + at,
           row.map((s) => ({
             ...s,
-            click: { do: "field", id: index } satisfies Command,
+            click,
           })),
           fieldWidth,
         )
@@ -3527,10 +3520,8 @@ export class Browser implements BoardView {
     ) {
       return undefined;
     }
-    const absent = this.#absent(purpose.number ?? "");
-    if (absent !== undefined) return absent;
     const topic = this.#byNumber.get(purpose.number ?? "");
-    if (topic === undefined) return undefined;
+    if (topic === undefined) return gone(purpose.number ?? "");
     if (!this.#fits(topic.labels)) {
       return `top/${topic.number} is withheld from this display now; it cannot be saved.`;
     }
@@ -3578,7 +3569,7 @@ export class Browser implements BoardView {
           top.families
             ? { key: "N", label: "Names", act: { do: "families" } }
             : { key: "F", label: "Families", act: { do: "families" } },
-          { key: "C", label: "Close", act: { do: "close" } },
+          { key: "C", label: "Close", act: { do: "button", index: 0 } },
         ];
       }
       const typing = top.focus < top.fields.length;
@@ -3648,6 +3639,11 @@ export class Browser implements BoardView {
 //
 
 const NOWHERE: Rect = { x: -1, y: -1, width: 0, height: 0 };
+
+/** Why Topic `number` cannot be written to, being gone from the board. */
+function gone(number: string): string {
+  return `top/${number} is no longer on the board.`;
+}
 
 /** The keys that quit. */
 const QUIT = new Set(["alt-x", "ctrl-q", "ctrl-c"]);
@@ -3731,8 +3727,8 @@ function highlight(
       if (match[0] !== "") {
         const end = match.index + match[0].length;
         ranges.push([
-          bounds.findLast((at) => at <= match.index) ?? 0,
-          bounds.find((at) => at >= end) ?? text.length,
+          maxOf(bounds.filter((at) => at <= match.index)),
+          minOf(bounds.filter((at) => at >= end)),
         ]);
       }
     }

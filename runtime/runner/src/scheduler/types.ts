@@ -28,7 +28,11 @@ export type TelemetryAnnotations = {
   /**
    * Concrete structural surface for a transformer-proven complete source lift.
    * This is runner-owned metadata; raw modules, handlers, and unresolved
-   * redirect surfaces leave it absent and therefore remain fail-closed.
+   * redirect surfaces leave it absent and therefore remain fail-closed. The
+   * reads that resolve it carry `schedulerDependencyRead`, so the flow join
+   * takes nothing of them. While that holds it must decide only whether and
+   * when the action runs, never anything the transaction that resolved it
+   * writes.
    */
   completeSchedulerScopeSummary?: {
     complete: true;
@@ -525,6 +529,15 @@ export type QueuedEvent = {
    * the flag and queues an execution.
    */
   presyncPending?: boolean;
+
+  /**
+   * The FIFO slot is held while a multi-space commit issued before the head
+   * dispatched still has writes to hand to a later space's replica
+   * (`IStorageManager.multiSpaceCommitsApplied()`), so that the handler reads
+   * every write an earlier event committed. The hand-over clears the flag and
+   * queues an execution.
+   */
+  multiSpaceCommitPending?: boolean;
 
   /**
    * The implementation and payload the head's presync covered. A head whose

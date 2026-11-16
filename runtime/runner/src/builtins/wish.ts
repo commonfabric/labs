@@ -2920,12 +2920,14 @@ export function wish(
           actionId: `wish/sidecar-run/${resultCell.sourceURI}`,
           kind: "bookkeeping",
         });
+        // The transaction is the continuation's own, holding none of the
+        // reads that chose the pattern.
         runtime.runner.run(
           runTx,
           pattern,
           inputForTx(runTx),
           resultCell.withTx(runTx),
-          sidecarRunOptions(surface),
+          { ...sidecarRunOptions(surface), runtimeStarted: true },
         );
         runtime.prepareTxForCommit(runTx);
         const { error } = await runTx.commit().settled;

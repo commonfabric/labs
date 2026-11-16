@@ -6,7 +6,6 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
-import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
 import {
   llmBuiltinFixture as fixture,
   llmBuiltinNames,
@@ -733,11 +732,11 @@ describe("llm-served-lifecycle", () => {
       }
     });
 
-    it(`records no ${name} request hash when its refused request's ending is itself rejected`, async () => {
-      // A served request's ending is written in two transactions: the ending,
-      // then the request hash. When the ending's commit is rejected, the hash
-      // must not land on its own, since a node that holds the hash takes the
-      // request as answered and shows no error.
+    it(`records no ${name} request hash in a refused request's ending`, async () => {
+      // A served request that is never sent ends with its refusal as the
+      // error, and records no request hash, which would carry the request's
+      // labels into the node's next request: that run finds no answer and
+      // stages its request again.
 
       const f = await fixture(name);
       const refusal = {
@@ -745,52 +744,19 @@ describe("llm-served-lifecycle", () => {
         message: "Staged request refused",
         reason: "Staged request refused",
       } as const;
-      const rejection = {
-        name: "AuthorizationError",
-        message: "the ending's write was refused",
-      };
-      const settle = f.runtime.editWithRetry.bind(f.runtime);
-      const edit = f.runtime.edit.bind(f.runtime);
-      let endings = 0;
-      let refuseNext = false;
-      f.runtime.editWithRetry = ((...args: Parameters<typeof settle>) => {
-        endings += 1;
-        refuseNext = endings === 1;
-        return settle(...args);
-      }) as typeof settle;
-      f.runtime.edit = ((...args: Parameters<typeof edit>) => {
-        const opened = edit(...args);
-        if (refuseNext) {
-          refuseNext = false;
-          opened.commit = (() => {
-            opened.abort(rejection);
-            return createTransactionCommitReceipt(
-              Promise.resolve({ error: rejection }),
-            );
-          }) as typeof opened.commit;
-        }
-        return opened;
-      }) as typeof edit;
-      const originalError = console.error;
-      const reported: string[] = [];
-      console.error = (...args: unknown[]) => {
-        reported.push(args.map(String).join(" "));
-      };
-      const tx = f.runtime.edit();
       try {
+        const tx = f.runtime.edit();
         f.stage(tx, "refused prompt");
         tx.abort(refusal);
         tx.abandonStagedWork(refusal);
         await f.runtime.settled();
 
-        expect(endings).toBe(1);
-        expect(reported.some((line) => line.includes("was rejected")))
-          .toBe(true);
+        expect(f.output.get()).toMatchObject({
+          pending: false,
+          error: `${name} request was refused before it started`,
+        });
         expect(f.output.key("requestHash").get()).toBeUndefined();
       } finally {
-        console.error = originalError;
-        f.runtime.editWithRetry = settle;
-        f.runtime.edit = edit;
         await f.close();
       }
     });

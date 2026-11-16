@@ -14,7 +14,12 @@ import {
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
-import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
+import {
+  FabricBytes,
+  FabricKeyPair,
+  FabricUnavailable,
+  UNAVAILABLE_PENDING,
+} from "@/fabric-primitives";
 import {
   fabricValueOfTextWithModsForTestingOnly,
   type FixtureRequirements,
@@ -177,6 +182,43 @@ describe("conformance-fixtures", () => {
           [["state"], { array: 1 }],
           [["state", 0], "fvj1:1"],
         ]);
+    });
+
+    it("returns a key pair's algorithm and its two keys, each a byte sequence", () => {
+      const pair = new FabricKeyPair(
+        "Ed25519",
+        new Uint8Array([1, 2]),
+        new Uint8Array([3, 4]),
+      );
+      expect(probesOfForTestingOnly(pair)).toEqual([
+        [[], { instance: "KeyPair@1" }],
+        [["algorithm"], 'fvj1:"Ed25519"'],
+        [["publicKey"], 'fvj1:{"/Bytes@1":"AQI"}'],
+        [["privateKey"], 'fvj1:{"/Bytes@1":"AwQ"}'],
+      ]);
+    });
+
+    it("returns an unavailable value's reason, and its kind and message only where its state has them", () => {
+      expect(probesOfForTestingOnly(UNAVAILABLE_PENDING)).toEqual([
+        [[], { instance: "Unavailable@1" }],
+        [["reason"], 'fvj1:"pending"'],
+      ]);
+      expect(probesOfForTestingOnly(new FabricUnavailable("error", "network")))
+        .toEqual([
+          [[], { instance: "Unavailable@1" }],
+          [["reason"], 'fvj1:"error"'],
+          [["errorKind"], 'fvj1:"network"'],
+        ]);
+      expect(
+        probesOfForTestingOnly(
+          new FabricUnavailable("error", "general", "boom"),
+        ),
+      ).toEqual([
+        [[], { instance: "Unavailable@1" }],
+        [["reason"], 'fvj1:"error"'],
+        [["errorKind"], 'fvj1:"general"'],
+        [["message"], 'fvj1:"boom"'],
+      ]);
     });
 
     it("returns no probe at or under the path of a patch, and the special forms of the containers along it", () => {
@@ -760,7 +802,6 @@ describe("conformance-fixtures", () => {
       const texts = [
         `fvj1:{"${long}":1}`,
         `fvj1:{"/Error@1":{"message":"${long}","name":null,"type":"Error"}}`,
-        `fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"${long}"}}`,
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toEqual({
@@ -774,8 +815,8 @@ describe("conformance-fixtures", () => {
       const texts = [
         `fvj1:{"/Bytes@1":"${state}"}`,
         `fvj1:{"/Hash@1":{"hash":"${state}","tag":"fid1"}}`,
-        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"${state}",` +
-        '"publicKey":"AA"}}',
+        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519",` +
+        `"privateKey":{"/Bytes@1":"${state}"},"publicKey":{"/Bytes@1":"AA"}}}`,
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toEqual({
@@ -847,6 +888,20 @@ describe("conformance-fixtures", () => {
       }
     });
 
+    it("counts a key pair and an unavailable value each as an instance and its state, two deep", () => {
+      const values = [
+        '{"/KeyPair@1":{"algorithm":"Ed25519",' +
+        '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AA"}}}',
+        '{"/Unavailable@1":{"reason":"pending"}}',
+      ];
+      for (const value of values) {
+        expect(requirementsOfText(`fvj1:${nestedIn(floors.depth - 2, value)}`))
+          .toBeUndefined();
+        expect(requirementsOfText(`fvj1:${nestedIn(floors.depth - 1, value)}`))
+          .toEqual({ depth: floors.depth + 1 });
+      }
+    });
+
     it("counts a tag-shaped key under an escape as a record key, the values under `/object` being decoded and those under `/quote` not", () => {
       // Under each escape the sole key reads like a tag; were it taken for
       // one, the record and its key would go uncounted.
@@ -878,15 +933,6 @@ describe("conformance-fixtures", () => {
       });
     });
 
-    it("returns the flavors given, beside the sizes past their floors", () => {
-      const text = `fvj1:[{"/hole":${floors.arrayLength + 1}}]`;
-
-      expect(requirementsOfForTestingOnly({ text }, ["es2025"])).toEqual({
-        flavors: ["es2025"],
-        arrayLength: floors.arrayLength + 1,
-      });
-    });
-
     it("counts a malformed hole run as no element", () => {
       const text = `fvj1:[{"/hole":${floors.arrayLength + 1.5}}]`;
 
@@ -904,7 +950,6 @@ describe("conformance-fixtures", () => {
       expect(meetsRequirementsForTestingOnly(undefined)).toBe(true);
       expect(
         meetsRequirementsForTestingOnly({
-          flavors: ["es2025"],
           arrayLength: 2 ** 26,
           propertyCount: 2 ** 30,
           stringLength: 2 ** 26,
@@ -914,11 +959,6 @@ describe("conformance-fixtures", () => {
           bigintBytes: 2 ** 26,
         }),
       ).toBe(true);
-    });
-
-    it("returns `false` for a flavor this package does not construct", () => {
-      expect(meetsRequirementsForTestingOnly({ flavors: ["es2025", "other"] }))
-        .toBe(false);
     });
 
     it("returns `false` for a size past any of this package's guarantees", () => {

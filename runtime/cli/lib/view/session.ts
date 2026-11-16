@@ -28,6 +28,7 @@ import {
   type DialogButton,
   dialogControlAt,
   type DialogField,
+  type DialogRadioButton,
   type DialogState,
   DIFF_MARGIN_WIDTH,
   type DiffAnnotation,
@@ -42,6 +43,7 @@ import {
   type Match,
   overlayBox,
   type OverlayState,
+  radioButtonAt,
   type ViewState,
 } from "./render.ts";
 import {
@@ -69,6 +71,7 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
+  drawsAsPictures,
   hasNonPrintable,
   sourceColumnOf,
 } from "./display.ts";
@@ -110,7 +113,8 @@ import type {
 } from "./editsource.ts";
 import type { DirEntry, FileGateway } from "./filegateway.ts";
 import { LineEdit } from "./lineedit.ts";
-import type { ViewSettings } from "./settings.ts";
+import { PULL_REQUEST_TOOLS, type ViewSettings } from "./settings.ts";
+import type { MergeMethod, MergeRequest } from "./github.ts";
 import {
   type ActiveWrapMode,
   buildWrapPlan,
@@ -163,16 +167,36 @@ interface InputLineState {
   readonly edit: LineEdit;
 }
 
+/** A set of radio buttons in a dialog that is up, and which is selected. */
+interface RadioButtonsState {
+  readonly kind: "radioButtons";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly buttons: readonly DialogRadioButton[];
+  selected: number;
+}
+
 /** A field of a dialog that is up. */
-type FieldState = CheckBoxState | InputLineState;
+type FieldState = CheckBoxState | InputLineState | RadioButtonsState;
 
 /** The settings dialog while it is up: the settings it opened showing, and
  * its fields. */
 interface SettingsDraft {
   readonly shown: ViewSettings;
+  readonly pullRequestTool: RadioButtonsState;
+  readonly touchGateToken: InputLineState;
   readonly quitOnPullRequest: CheckBoxState;
   readonly webhookRelay: InputLineState;
 }
+
+/** The settings dialog's radio button for each way of handling pull
+ * requests, in the order of {@link PULL_REQUEST_TOOLS}. */
+const PULL_REQUEST_TOOL_BUTTONS: readonly DialogRadioButton[] = [
+  { label: "Just push, and link to them", hotkey: "l" },
+  { label: "Use the GitHub API", hotkey: "a" },
+  { label: "Show them in the browser", hotkey: "s" },
+  { label: "Use touch-gate and a security key", hotkey: "t" },
+];
 
 /** A prompt control the mouse went down on, by its prompt and shortcut letter. */
 interface HeldButton {
@@ -187,7 +211,7 @@ type Mode =
   | "savePrompt"
   | "amendPrompt"
   | "revertPrompt"
-  | "pushPrompt"
+  | "taskPrompt"
   | "settingsPrompt"
   | "filePicker"
   | "jumpList";
@@ -230,6 +254,14 @@ const MOUSE_WHEEL_STEP = 3;
  * request needs. */
 const PUSH_ROWS = 16;
 const PUSH_COLUMNS = 80;
+
+/** How the task dialog names each merge method, as GitHub's merge button
+ * does. */
+const MERGE_VERBS: Readonly<Record<MergeMethod, string>> = {
+  squash: "Squash and merge",
+  merge: "Merge",
+  rebase: "Rebase and merge",
+};
 
 /** Whether two search matches occupy the same displayed range. */
 function sameDisplayedMatch(a: Match, b: Match): boolean {
@@ -324,7 +356,7 @@ export class Session {
   /** How long logical lines continue on later screen rows. */
   #wrapMode: WrapMode = "off";
 
-  /** How non-printable characters are shown; edit mode forces the first mode. */
+  /** How non-printable characters are shown; edit mode forces "pictures". */
   #displayMode: DisplayMode = DISPLAY_MODES[0];
 
   /** Whether the blame column is on. */
@@ -455,6 +487,19 @@ export class Session {
    * settings, calls {@link openSettings}, and clears this. */
   settingsRequested = false;
 
+  /** The last key asked to land the checked-out branch's pull request. The
+   * driver finds the pull request, does what the settings say, and clears
+   * this. */
+  landRequested = false;
+
+  /** The merge the task dialog asked for. The driver starts it, calls
+   * {@link continueTask}, and clears this. */
+  mergeRequested: MergeRequest | null = null;
+
+  /** The task dialog's retry button was pressed. The driver starts the task
+   * again and clears this. */
+  retryRequested = false;
+
   /** The settings the settings dialog's OK button asked to save, and those it
    * opened showing. The driver saves them and clears this. */
   settingsToSave:
@@ -470,26 +515,45 @@ export class Session {
   /** How much context each hunk can reveal, cached against the document. */
   #roomCache?: { doc: Document; room: ReadonlyMap<number, HunkRoom> };
 
-  /** The push dialog's output, a line per entry, the last one still being
+  /** The task dialog's title. */
+  #taskTitle = "";
+
+  /** The task dialog's output, a line per entry, the last one still being
    * written. After a carriage return, the next text starts that line over. */
-  #pushLines: string[] = [""];
-  #pushReturned = false;
+  #taskLines: string[] = [""];
+  #taskReturned = false;
 
-  /** Stops the push the dialog shows, or null once it has finished. */
-  #abortPush: (() => void) | null = null;
+  /** The indexes in {@link #taskLines} of lines drawn emphasized: what a
+   * request asks of the person, as against the text it quotes. */
+  #taskEmphasized = new Set<number>();
 
-  /** How the push ended, once it has. */
-  #pushSummary = "";
+  /** The first of the task dialog's rows of output that it shows, or null
+   * while it shows the end of the output as the output grows. */
+  #taskTop: number | null = null;
 
-  /** What the push dialog says, under the push's output, about watching for
-   * the pushed branch's pull request to open, or "" when it says nothing. */
+  /** Stops the task the dialog shows, or null once it has finished. */
+  #abortTask: (() => void) | null = null;
+
+  /** How the task ended, once it has. */
+  #taskSummary = "";
+
+  /** The label of the button that tries the task again, once it has ended
+   * failing in a way that trying again can fix, or "" for none. */
+  #taskRetry = "";
+
+  /** What the task dialog says, under the task's output, about watching for
+   * the pull request to open or merge and quitting once it has, with
+   * a newline between its lines, or "" when it says nothing. */
   #pullRequestWatch = "";
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
 
-  /** The address of the pushed branch's pull request, once it has opened
-   * while the push dialog was up, until a quit that it did not ask for. */
+  /** The merge the task dialog asks whether to make, while it asks. */
+  #landDraft: MergeRequest | null = null;
+
+  /** The address of the pull request that has opened or merged while the
+   * task dialog was up, until a quit that it did not ask for. */
   #pullRequestUrl: string | null = null;
 
   //
@@ -1289,7 +1353,7 @@ export class Session {
     if (this.#mode === "savePrompt") dialog = this.#saveDialog();
     else if (this.#mode === "amendPrompt") dialog = this.#amendDialog();
     else if (this.#mode === "revertPrompt") dialog = this.#revertDialog();
-    else if (this.#mode === "pushPrompt") dialog = this.#pushDialog();
+    else if (this.#mode === "taskPrompt") dialog = this.#taskDialog();
     else if (this.#mode === "settingsPrompt") dialog = this.#settingsDialog();
     if (!dialog) return null;
     // The focus runs through the fields and then the buttons. -1 means no
@@ -1335,7 +1399,14 @@ export class Session {
   /** The fields of the prompt that is up, in the order it shows them. */
   #fieldStates(): FieldState[] {
     const draft = this.#mode === "settingsPrompt" ? this.#settingsDraft : null;
-    return draft ? [draft.quitOnPullRequest, draft.webhookRelay] : [];
+    return draft
+      ? [
+        draft.pullRequestTool,
+        draft.touchGateToken,
+        draft.quitOnPullRequest,
+        draft.webhookRelay,
+      ]
+      : [];
   }
 
   /** Move the prompt's focus to its control at `index`, counting its fields
@@ -1355,27 +1426,36 @@ export class Session {
   /** Whether a modal prompt is up. */
   #prompting(): boolean {
     return this.#mode === "savePrompt" || this.#mode === "amendPrompt" ||
-      this.#mode === "revertPrompt" || this.#mode === "pushPrompt" ||
+      this.#mode === "revertPrompt" || this.#mode === "taskPrompt" ||
       this.#mode === "settingsPrompt";
   }
 
-  /** Whether the push dialog is up. */
-  get pushDialogUp(): boolean {
-    return this.#mode === "pushPrompt";
+  /** Whether the task dialog is up. */
+  get taskDialogUp(): boolean {
+    return this.#mode === "taskPrompt";
   }
 
-  /** The push dialog: as much of the end of git's output as fits, then how the
-   * push ended, at a fixed size so that it holds still as the output grows,
-   * and under that what it says about watching for the pull request. Abort
-   * stops the push; once it ends, Close takes the dialog down and Quit closes
-   * the viewer. */
-  #pushDialog(): DialogState {
-    const lines = this.#pushLines.at(-1) === ""
-      ? this.#pushLines.slice(0, -1)
-      : this.#pushLines;
-    const output = this.#pushSummary === ""
-      ? lines
-      : [...lines, "", this.#pushSummary];
+  /** The task dialog's rows of output, wrapped, followed by how the task
+   * ended; how many of them it shows; what it says about watching for the
+   * pull request under them; and how wide its rows are. */
+  #taskLayout(): {
+    output: Array<{ text: string; emphasized: boolean }>;
+    rows: number;
+    watch: string[];
+    columns: number;
+  } {
+    const lines = this.#taskLines.at(-1) === ""
+      ? this.#taskLines.slice(0, -1)
+      : this.#taskLines;
+    const output = [
+      ...lines.map((text, i) => ({
+        text,
+        emphasized: this.#taskEmphasized.has(i),
+      })),
+      ...(this.#taskSummary === "" ? [] : ["", this.#taskSummary]).map((
+        text,
+      ) => ({ text, emphasized: false })),
+    ];
     // A line wider than the box wraps after its last space that fits, so that
     // an address no wider than the box stays on one row, and a word wider than
     // the box is broken. Git pads the lines a server sends with spaces when its
@@ -1399,33 +1479,91 @@ export class Session {
     const watch =
       (this.#pullRequestWatch === ""
         ? []
-        : ["", ...wrap(this.#pullRequestWatch)]).slice(0, total - 1);
-    const rows = total - watch.length;
-    const body = output.flatMap(wrap).slice(-rows);
+        : ["", ...this.#pullRequestWatch.split("\n").flatMap(wrap)])
+        .slice(0, total - 1);
+    return {
+      output: output.flatMap(({ text, emphasized }) =>
+        wrap(text).map((row) => ({ text: row, emphasized }))
+      ),
+      rows: total - watch.length,
+      watch,
+      columns,
+    };
+  }
+
+  /** Scroll the task dialog's output by `delta` rows, or to its `edge`.
+   * Scrolled to its end, it follows the output as it grows. */
+  #scrollTask(delta: number, edge: "first" | "last" | null = null): void {
+    const last = this.#taskLastTop();
+    const top = edge === "first"
+      ? 0
+      : edge === "last"
+      ? last
+      : clamp((this.#taskTop ?? last) + delta, 0, last);
+    this.#taskTop = top < last ? top : null;
+  }
+
+  /** The first row of the task dialog's output that it shows at the end of
+   * the output. */
+  #taskLastTop(): number {
+    const { output, rows } = this.#taskLayout();
+    return Math.max(0, output.length - rows);
+  }
+
+  /** The task dialog: as much of the task's output, such as git's, as fits,
+   * then how the task ended, at a fixed size so that it holds still as the
+   * output grows, and under that what it says about watching for the pull
+   * request. It shows the end of the output unless it is scrolled back,
+   * when it holds still as the output grows.
+   * Abort stops the task; once it ends, Close takes the dialog down and Quit
+   * closes the viewer. */
+  #taskDialog(): DialogState {
+    const { output, rows, watch, columns } = this.#taskLayout();
+    const top = Math.min(
+      this.#taskTop ?? output.length,
+      Math.max(0, output.length - rows),
+    );
+    const shown = output.slice(top, top + rows);
+    const body = shown.map((row) => row.text);
     while (body.length < rows) body.push("");
     return {
-      title: "Push",
+      title: this.#taskTitle,
       body: [...body, ...watch],
+      emphasized: shown.flatMap((row, i) => row.emphasized ? [i] : []),
       output: true,
       width: columns,
-      buttons: this.#abortPush
+      buttons: this.#abortTask
         ? [{ label: "Abort", hotkey: "a", kind: "cancel" }]
+        : this.#landDraft
+        // The button's letter is not the `L` that opened the dialog, so that
+        // pressing `L` again does not merge.
+        ? [
+          { label: "Merge", hotkey: "m" },
+          { label: "Cancel", hotkey: "c", kind: "cancel" },
+        ]
         : [
           { label: "Close", hotkey: "c", kind: "cancel" },
+          ...(this.#taskRetry === ""
+            ? []
+            : [{ label: this.#taskRetry, hotkey: "p" }]),
           { label: "Quit", hotkey: "Q" },
         ],
     };
   }
 
-  /** The settings dialog: a check box that turns on quitting when the pushed
-   * branch's pull request opens, the address of the webhook relay that says
-   * when it does, and OK and Cancel. */
+  /**
+   * The settings dialog: radio buttons that choose how the viewer handles
+   * the pushed branch's pull request, the name of the token touch-gate uses,
+   * a check box that turns on quitting when the pull request opens or
+   * merges, the address of the webhook relay that says when it does, and OK
+   * and Cancel.
+   */
   #settingsDialog(): DialogState {
     return {
       title: "Settings",
       body: [],
       fields: this.#fieldStates().map((field): DialogField =>
-        field.kind === "checkBox" ? { ...field } : {
+        field.kind !== "inputLine" ? { ...field } : {
           kind: "inputLine",
           label: field.label,
           hotkey: field.hotkey,
@@ -1663,6 +1801,12 @@ export class Session {
     } else if (jump) {
       this.#jumpSel = move(this.#jumpSel, this.#jumpEntries.length - 1);
       this.#scrollJumpToSelection(this.#jumpSel);
+    } else if (
+      this.#mode === "taskPrompt" && key.name !== "left" &&
+      key.name !== "right"
+    ) {
+      // The task dialog's output scrolls, and Left and Right move the focus.
+      this.#scrollTask(delta, edge);
     } else if (prompt) {
       const dialog = this.#promptDialog()!;
       this.#moveDialogFocus(move(
@@ -1690,6 +1834,10 @@ export class Session {
   #handleWheel(direction: -1 | 1): void {
     this.#message = "";
     const delta = direction * MOUSE_WHEEL_STEP;
+    if (this.#mode === "taskPrompt") {
+      this.#scrollTask(delta);
+      return;
+    }
     if (this.#prompting()) return;
     if (this.#mode === "filePicker") {
       const last = Math.max(0, this.#pickerEntries.length - 1);
@@ -2209,7 +2357,7 @@ export class Session {
     if (!columns) {
       columns = Uint32Array.from(
         displayLine(l, this.#displayMode),
-        (cell) => cell.col,
+        (cell) => cell.sourceEnd,
       );
       this.#displayColumnCache.columns.set(line, columns);
     }
@@ -2217,7 +2365,7 @@ export class Session {
     let hi = columns.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (columns[mid] < sourceCol) lo = mid + 1;
+      if (columns[mid] <= sourceCol) lo = mid + 1;
       else hi = mid;
     }
     return lo;
@@ -2429,7 +2577,6 @@ export class Session {
           : clamp(this.left - this.#horizontalStep(), 0, this.#maxLeft());
         return;
       case "l":
-      case "L":
         this.left = this.#wrapLines
           ? 0
           : clamp(this.left + this.#horizontalStep(), 0, this.#maxLeft());
@@ -2554,6 +2701,9 @@ export class Session {
         return;
       case "O":
         this.settingsRequested = true;
+        return;
+      case "L":
+        this.landRequested = true;
         return;
       case "escape": {
         const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
@@ -2805,8 +2955,11 @@ export class Session {
     this.#cursorOn = true;
     this.#selectedIndex = null;
     // Editing relies on every source column mapping to one display column, which
-    // only the first mode guarantees (it hides nothing and collapses nothing).
-    this.#displayMode = DISPLAY_MODES[0];
+    // only "pictures" guarantees (it hides nothing and collapses nothing).
+    const picturesAppear = this.#currentDoc.lines.some((line) =>
+      !drawsAsPictures(line.text, this.#displayMode)
+    );
+    this.#displayMode = "pictures";
     if (anchor) this.left = cursorCol;
     // Editing works on the full text, so expand every folded file; the top
     // display row becomes its document line.
@@ -2815,12 +2968,16 @@ export class Session {
     this.#buffer.place(topDoc, cursorCol);
     this.#seedHighlighter();
     this.#ensureCursorVisible();
-    if (leftRenderedView && wasWrapped) {
-      this.#message = "Source view; line wrapping turned off for editing.";
-    } else if (leftRenderedView) {
-      this.#message = "Source view for editing.";
-    } else if (wasWrapped) {
-      this.#message = "Line wrapping turned off for editing.";
+    const changes = [
+      leftRenderedView && "source view",
+      wasWrapped && "line wrapping turned off",
+      picturesAppear && "non-printables shown as control pictures",
+    ].filter((change) => change !== false);
+    if (changes.length > 0) {
+      const summary = changes.join("; ");
+      this.#message = `${summary[0].toUpperCase()}${
+        summary.slice(1)
+      } for editing.`;
     }
   }
 
@@ -3659,62 +3816,100 @@ export class Session {
     this.transientMessage = false;
   }
 
-  /** Open the push dialog for a push that has started, which `abort` stops. */
-  beginBranchPush(abort: () => void): void {
+  /** Open the task dialog, titled `title`, for a task that has started, such
+   * as a push, which `abort` stops. */
+  beginTask(title: string, abort: () => void): void {
     this.#overlay = null;
     this.#overlayStack = [];
-    this.#mode = "pushPrompt";
-    this.#pushLines = [""];
-    this.#pushReturned = false;
-    this.#pushSummary = "";
+    this.#mode = "taskPrompt";
+    this.#taskTitle = title;
+    this.#taskLines = [""];
+    this.#taskEmphasized = new Set();
+    this.#taskSummary = "";
+    this.continueTask(abort);
+  }
+
+  /** Start another task, which `abort` stops, in the task dialog, such as
+   * trying again what the last one failed to do. The dialog keeps its output,
+   * which goes on from how the last task ended. */
+  continueTask(abort: () => void): void {
+    const lines = this.#taskLines.at(-1) === ""
+      ? this.#taskLines.slice(0, -1)
+      : this.#taskLines;
+    this.#taskLines = this.#taskSummary === ""
+      ? [...lines, ""]
+      : [...lines, "", this.#taskSummary, ""];
+    this.#taskTop = null;
+    this.#taskReturned = false;
+    this.#taskRetry = "";
+    this.#taskSummary = "";
+    this.#landDraft = null;
     this.#pullRequestWatch = "";
     this.#pullRequestUrl = null;
-    this.#abortPush = abort;
+    this.#abortTask = abort;
     this.#dialogFocus = -1;
   }
 
-  /** Add git's output to the push dialog. A carriage return starts the line
-   * over, which is how git redraws a progress report in place. */
-  appendPushOutput(text: string): void {
+  /** Add a task's output, such as git's, to the task dialog. A carriage
+   * return starts the line over, which is how git redraws a progress report
+   * in place. */
+  appendTaskOutput(text: string, emphasized = false): void {
     for (const part of text.split(/(\r\n|\n|\r)/)) {
       if (part === "\r") {
-        this.#pushReturned = true;
+        this.#taskReturned = true;
       } else if (part === "\n" || part === "\r\n") {
-        this.#pushLines.push("");
-        this.#pushReturned = false;
+        this.#taskLines.push("");
+        this.#taskReturned = false;
       } else if (part !== "") {
-        const last = this.#pushLines.length - 1;
-        this.#pushLines[last] =
-          (this.#pushReturned ? "" : this.#pushLines[last]) + part;
-        this.#pushReturned = false;
+        const last = this.#taskLines.length - 1;
+        this.#taskLines[last] =
+          (this.#taskReturned ? "" : this.#taskLines[last]) + part;
+        this.#taskReturned = false;
+        if (emphasized) this.#taskEmphasized.add(last);
       }
     }
   }
 
-  /** End the push with `summary`, which the dialog shows under the output and
-   * the status line shows once the dialog closes. */
-  finishBranchPush(summary: string): void {
-    this.#abortPush = null;
-    this.#pushSummary = summary;
-    this.#dialogFocus = 0;
-    if (this.#pullRequestUrl !== null) this.#quitForPullRequest();
+  /** End the task with `summary`, which the dialog shows under the output
+   * and the status line shows once the dialog closes. A `retry` other than
+   * "" labels a button that tries the task again. */
+  finishTask(summary: string, retry = ""): void {
+    this.#abortTask = null;
+    this.#taskSummary = summary;
+    this.#taskRetry = retry;
+    if (this.#mode === "taskPrompt") this.#dialogFocus = 0;
+    if (this.#pullRequestUrl !== null) this.#announcePullRequestQuit();
   }
 
-  /** Have the push dialog say `text` about watching for the pushed branch's
-   * pull request, under the push's output. */
+  /** Have the task dialog say `text` about watching for the pull request,
+   * under the task's output. */
   setPullRequestWatch(text: string): void {
     this.#pullRequestWatch = text;
   }
 
   /**
-   * The pushed branch's pull request has opened, at `url`. While the push
-   * dialog is up, close it and quit, as its Quit button does, once the push
-   * has ended; otherwise do nothing.
+   * The pull request at `url` has opened or merged. While the task dialog
+   * is up, have it give the address and say it is quitting, once the task
+   * has ended; otherwise do nothing. {@link completePullRequestQuit} then
+   * quits.
    */
   quitForPullRequest(url: string): void {
-    if (this.#mode !== "pushPrompt") return;
+    if (this.#mode !== "taskPrompt") return;
     this.#pullRequestUrl = url;
-    if (!this.#abortPush) this.#quitForPullRequest();
+    if (!this.#abortTask) this.#announcePullRequestQuit();
+  }
+
+  /** Whether the task dialog says it is quitting for the pull request, until
+   * {@link completePullRequestQuit} quits or a button takes the dialog down. */
+  get pullRequestQuitPending(): boolean {
+    return this.#mode === "taskPrompt" && !this.#abortTask &&
+      this.#pullRequestUrl !== null;
+  }
+
+  /** Close the task dialog and quit, as its Quit button does, when it says
+   * it is quitting for the pull request; otherwise do nothing. */
+  completePullRequestQuit(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
   }
 
   /** What the driver prints once the viewer has closed: the address of the
@@ -3731,9 +3926,22 @@ export class Session {
     this.#message = "";
     this.#settingsDraft = {
       shown: settings,
+      pullRequestTool: {
+        kind: "radioButtons",
+        label: "Pull requests",
+        hotkey: "p",
+        buttons: PULL_REQUEST_TOOL_BUTTONS,
+        selected: PULL_REQUEST_TOOLS.indexOf(settings.pullRequestTool),
+      },
+      touchGateToken: {
+        kind: "inputLine",
+        label: "Name of the touch-gate token",
+        hotkey: "n",
+        edit: new LineEdit(settings.touchGateToken),
+      },
       quitOnPullRequest: {
         kind: "checkBox",
-        label: "Quit when the pushed branch's pull request opens",
+        label: "Quit when the pull request opens or merges",
         hotkey: "q",
         checked: settings.quitOnPullRequest,
       },
@@ -3745,6 +3953,32 @@ export class Session {
       },
     };
     this.#dialogFocus = 0;
+  }
+
+  /**
+   * End the task the task dialog shows, which has found the pull request to
+   * land, by asking whether to merge as `request` describes, saying how and
+   * at which commit as GitHub's merge button does. A merge cannot be undone,
+   * so no button is the default, and Enter does nothing until a button has
+   * the focus. Does nothing unless the task is running.
+   */
+  confirmLand(request: MergeRequest): void {
+    if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
+    this.#abortTask = null;
+    this.#landDraft = request;
+    this.appendTaskOutput(
+      `${MERGE_VERBS[request.method]} pull request ${request.number} of ` +
+        `${request.repository},\nif its head is still ` +
+        `${request.sha.slice(0, 12)}?\n`,
+      true,
+    );
+    this.#dialogFocus = -1;
+  }
+
+  /** Have the task dialog show the end of its output, as it does until it is
+   * scrolled back. */
+  showTaskEnd(): void {
+    this.#taskTop = null;
   }
 
   /** Take away a message that was set to go away on its own, once the driver has
@@ -4258,16 +4492,22 @@ export class Session {
 
   /**
    * An interrupt (SIGINT) arrived. During a push, abort the push and return
-   * true so the driver keeps running and shows how it ended. With unsaved edits
-   * and no prompt already up, raise the save prompt and return true so the
-   * driver keeps running and lets the user answer it. Otherwise return false:
-   * nothing to save, or a second interrupt during the prompt, so the driver
-   * should terminate.
+   * true so the driver keeps running and shows how it ended. While the task
+   * dialog says it is quitting for a pull request, quit for it as Quit does,
+   * keeping its address to print, and return whether the save prompt rose
+   * instead. With unsaved edits and no prompt already up, raise the save
+   * prompt and return true so the driver keeps running and lets the user
+   * answer it. Otherwise return false: nothing to save, or a second interrupt
+   * during the prompt, so the driver should terminate.
    */
   requestQuitFromSignal(): boolean {
-    if (this.#mode === "pushPrompt" && this.#abortPush) {
-      this.#abortPush();
+    if (this.#mode === "taskPrompt" && this.#abortTask) {
+      this.#abortTask();
       return true;
+    }
+    if (this.pullRequestQuitPending) {
+      this.#quitForPullRequest();
+      return !this.quit;
     }
     if (this.#mode === "savePrompt") return false;
     const willPrompt = this.#buffer?.dirty() ?? false;
@@ -4323,6 +4563,16 @@ export class Session {
         this.#pressField(field);
         return;
       }
+      // A radio button's letter selects it, and moves the focus to its set.
+      for (const [i, f] of this.#fieldStates().entries()) {
+        const button = f.kind === "radioButtons"
+          ? f.buttons.findIndex((b) => answers(b.hotkey))
+          : -1;
+        if (f.kind !== "radioButtons" || button < 0) continue;
+        this.#moveDialogFocus(i);
+        f.selected = button;
+        return;
+      }
       index = buttons.findIndex((b) => answers(b.hotkey));
     }
     // An unbound key leaves the prompt up.
@@ -4332,9 +4582,13 @@ export class Session {
 
   /**
    * Applies `key` to the prompt's focused field when the field takes it, and
-   * returns whether it did. A check box takes Space, which toggles it. An
-   * input line takes every key but those that move the focus or close the
-   * dialog: Tab, Shift-Tab, Enter, Escape, and Alt with a letter.
+   * returns whether it did. A check box takes Space, which toggles it. A set
+   * of radio buttons takes the arrow keys, which select the button before or
+   * after the selected one, going round from either end, and Space, which
+   * does nothing, since the selected button is the focused one. An input
+   * line takes
+   * every key but those that move the focus or close the dialog: Tab,
+   * Shift-Tab, Enter, Escape, and Alt with a letter.
    */
   #handleFieldKey(key: Key): boolean {
     const field = this.#fieldStates()[this.#dialogFocus];
@@ -4342,6 +4596,16 @@ export class Session {
       if (key.name !== "space") return false;
       field.checked = !field.checked;
       return true;
+    }
+    if (field?.kind === "radioButtons") {
+      const step = key.name === "up" || key.name === "left"
+        ? -1
+        : key.name === "down" || key.name === "right"
+        ? 1
+        : 0;
+      const n = field.buttons.length;
+      field.selected = (field.selected + step + n) % n;
+      return step !== 0 || key.name === "space";
     }
     if (field?.kind !== "inputLine") return false;
     if (field.edit.handleKey(key, this.#inputColumns())) return true;
@@ -4361,8 +4625,8 @@ export class Session {
    * Focuses a prompt's control and holds it when the mouse goes down on it,
    * drawing a button pushed, and puts an input line's cursor where the mouse
    * went down. The mouse coming up on the control it went down on toggles a
-   * check box and activates a button. The mouse going down or coming up
-   * anywhere else does nothing.
+   * check box, selects the radio button it comes up on, and activates a
+   * button. The mouse going down or coming up anywhere else does nothing.
    */
   #handleClick(
     mouse: MouseButton,
@@ -4390,6 +4654,9 @@ export class Session {
       return;
     } else if (field?.kind === "checkBox") {
       this.#pressField(index);
+    } else if (field?.kind === "radioButtons") {
+      field.selected = radioButtonAt(this, dialog, index, mouse.x, mouse.y) ??
+        field.selected;
     } else if (index >= fields) {
       this.#activateButton(dialog, index - fields, beforeButtonAction);
     }
@@ -4430,31 +4697,53 @@ export class Session {
     else if (this.#mode === "amendPrompt") this.#applyAmendButton(button);
     else if (this.#mode === "revertPrompt") this.#applyRevertButton(button);
     else if (this.#mode === "settingsPrompt") this.#applySettingsButton(button);
-    else this.#applyPushButton(button);
+    else this.#applyTaskButton(button);
   }
 
-  /** Abort stops the push, which then ends; Close takes the dialog down and
-   * leaves how the push ended in the status line; Quit takes it down and quits,
-   * by way of the save prompt when there are unsaved edits. */
-  #applyPushButton(button: DialogButton): void {
-    if (this.#abortPush) this.#abortPush();
-    else this.#closePushDialog(button.hotkey === "Q");
+  /** Abort stops the task, which then ends; Merge asks the driver to merge
+   * as the dialog asked, and Cancel takes the dialog down; Close takes the
+   * dialog down and leaves how the task ended in the status line; the retry
+   * button asks the driver to try the task again; Quit takes the dialog down
+   * and quits, by way of the save prompt when there are unsaved edits,
+   * keeping the address of the pull request the dialog says it is quitting
+   * for. */
+  #applyTaskButton(button: DialogButton): void {
+    const draft = this.#landDraft;
+    this.#landDraft = null;
+    if (this.#abortTask) this.#abortTask();
+    else if (draft && button.kind !== "cancel") this.mergeRequested = draft;
+    else if (draft) this.#closeTaskDialog(false);
+    else if (button.hotkey === "p") this.retryRequested = true;
+    else if (button.hotkey === "Q") this.#quitTaskDialog();
+    else this.#closeTaskDialog(false);
   }
 
-  /** Take the push dialog down, leaving how the push ended in the status
+  #quitTaskDialog(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
+    else this.#closeTaskDialog(true);
+  }
+
+  /** Take the task dialog down, leaving how the task ended in the status
    * line, and quit when `quit` says to, by way of the save prompt when there
    * are unsaved edits. */
-  #closePushDialog(quit: boolean): void {
+  #closeTaskDialog(quit: boolean): void {
     this.#mode = "normal";
-    this.#message = this.#pushSummary;
+    this.#message = this.#taskSummary;
     if (quit) this.#requestQuit();
   }
 
-  /** Close the push dialog and quit for the pull request that has opened,
-   * keeping its address for the driver to print once the viewer closes. */
+  /** Have the task dialog give the address of the pull request that has
+   * opened or merged, and say it is quitting. */
+  #announcePullRequestQuit(): void {
+    this.#pullRequestWatch = `Pull request: ${this.#pullRequestUrl}\nQuitting…`;
+  }
+
+  /** Close the task dialog and quit for the pull request that has opened or
+   * merged, keeping its address for the driver to print once the viewer
+   * closes. */
   #quitForPullRequest(): void {
     const url = this.#pullRequestUrl;
-    this.#closePushDialog(true);
+    this.#closeTaskDialog(true);
     this.#pullRequestUrl = url;
   }
 
@@ -4468,6 +4757,8 @@ export class Session {
       this.settingsToSave = {
         shown: draft.shown,
         settings: {
+          pullRequestTool: PULL_REQUEST_TOOLS[draft.pullRequestTool.selected],
+          touchGateToken: draft.touchGateToken.edit.value.trim(),
           quitOnPullRequest: draft.quitOnPullRequest.checked,
           webhookRelay: draft.webhookRelay.edit.value.trim(),
         },
@@ -5996,15 +6287,16 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  t", "look up a definition by name"],
     ["", ""],
     ["Branch", ""],
-    ["  P", "push the branch to origin, open the pull request page"],
-    ["  O", "settings: quit when the pushed branch's pull request opens"],
+    ["  P", "push the branch to origin, then create its pull request"],
+    ["  L", "land: link to, open, or merge the branch's pull request"],
+    ["  O", "settings: how P and L handle pull requests, and more"],
     ["", ""],
     ["View", ""],
     ["  V", "toggle source / rendered view when the language supports it"],
     ["  #", "line numbers: off / input position / file or message line"],
     ["  B", "blame: when each line last changed, and who changed it"],
     ["  \\", "line wrapping: off / hard / word"],
-    ["  c", "cycle non-printables: pictures / ANSI color / hidden"],
+    ["  c", "cycle non-printables: ANSI color / hidden / pictures"],
     ["  ?", "this help   ·   Q  quit"],
   ];
   const info: Line[] = rows.map(([k, v]) => {

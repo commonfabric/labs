@@ -13,6 +13,7 @@ import { InMemoryProgram } from "@commonfabric/js-compiler/program";
 import {
   composeBundleSourceMap,
   identitySourceMap,
+  parseSourceMap,
 } from "@commonfabric/js-compiler/source-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isPrimitive } from "@commonfabric/js-values/types";
@@ -1167,6 +1168,11 @@ export class Engine extends EventTarget {
    * addressable — and writable-back — under the new runtimeVersion. Returns the
    * `CacheableModule[]` (feed to {@link evaluateCachedModules}) + entry identity.
    * `entryFilename` is the entry module's normalized path.
+   *
+   * `precompiledModulesFor`, where given and the compile is not instrumented
+   * for coverage, is asked for the modules once their identities are known; a
+   * set holding every module skips the type-check, transform and emit step.
+   * Those bodies are verified when they are evaluated, as compiled ones are.
    */
   async compileResolvedToRecordGraph(
     resolvedFiles: Source[],
@@ -1177,6 +1183,8 @@ export class Engine extends EventTarget {
       sourceRoots?: readonly string[];
       dataFiles?: readonly string[];
       sourcePackages?: readonly SourcePackageIdentity[];
+      precompiledModulesFor?:
+        TypeScriptHarnessProcessOptions["precompiledModulesFor"];
     } = {},
   ): Promise<{ modules: CacheableModule[]; entryIdentity: string }> {
     // The scan and the helper injection below parse, and the first
@@ -1321,23 +1329,32 @@ export class Engine extends EventTarget {
     // bytes were admitted from bricking their reload. The identity check below
     // already guarantees this compile reconstructs rather than admits. The
     // deterministic-failure classification covers whatever the compile throws.
-    const emitted = await deterministicCompileStepAsync(() =>
-      this.#compileModules({
-        program: resolvedForCompile,
-        authoredSources: pristineSourceFiles,
-        mounts,
-        moduleIdentities: identityByPath,
-        specifierAliases,
-        storedSource: true,
-        noCheck: false,
-        diagnosticMessages: "typescript",
-        instanceNames: namesInstances(this.#ctRuntime.experimental),
-      }, {
-        ...(options.patternCoverage === undefined
-          ? {}
-          : { patternCoverage: options.patternCoverage }),
-      })
-    );
+    const precompiled = options.patternCoverage === undefined
+      ? await precompiledModulesOf(
+        moduleFiles,
+        identityByPath,
+        identityByPath.get(entryFilename)!,
+        options.precompiledModulesFor,
+      )
+      : undefined;
+    const emitted = precompiled ??
+      await deterministicCompileStepAsync(() =>
+        this.#compileModules({
+          program: resolvedForCompile,
+          authoredSources: pristineSourceFiles,
+          mounts,
+          moduleIdentities: identityByPath,
+          specifierAliases,
+          storedSource: true,
+          noCheck: false,
+          diagnosticMessages: "typescript",
+          instanceNames: namesInstances(this.#ctRuntime.experimental),
+        }, {
+          ...(options.patternCoverage === undefined
+            ? {}
+            : { patternCoverage: options.patternCoverage }),
+        })
+      );
     for (const file of moduleFiles) {
       if (!emitted.has(file.name)) {
         throw deterministicCompileError(
@@ -2149,6 +2166,51 @@ function authoredDebugSourcePath(path: string): string {
   const identityAndPath = path.slice(FABRIC_MOUNT_ROOT.length);
   const pathStart = identityAndPath.indexOf("/");
   return pathStart < 0 ? path : identityAndPath.slice(pathStart);
+}
+
+/**
+ * Helper for `compileResolvedToRecordGraph()`, which asks `precompiledModulesFor`
+ * for `moduleFiles` by identity and returns their bodies as a compile emits
+ * them, by file name, or `undefined` unless every module is held.
+ */
+async function precompiledModulesOf(
+  moduleFiles: readonly Source[],
+  identityByPath: ReadonlyMap<string, string>,
+  entryIdentity: string,
+  precompiledModulesFor:
+    | TypeScriptHarnessProcessOptions["precompiledModulesFor"]
+    | undefined,
+): Promise<Map<string, CompiledTypeScriptModule> | undefined> {
+  if (precompiledModulesFor === undefined) return undefined;
+  const identities: string[] = [];
+  for (const file of moduleFiles) {
+    const identity = identityByPath.get(file.name);
+    if (identity === undefined) return undefined;
+    identities.push(identity);
+  }
+  const held = await precompiledModulesFor({
+    entryIdentity,
+    identities: [...new Set(identities)],
+  });
+  if (held === undefined) return undefined;
+  const emitted = new Map<string, CompiledTypeScriptModule>();
+  for (const [index, file] of moduleFiles.entries()) {
+    const artifact = held.get(identities[index]);
+    if (artifact === undefined) return undefined;
+    emitted.set(file.name, {
+      js: artifact.js,
+      ...(artifact.sourceMap === undefined
+        ? {}
+        : { sourceMap: parseSourceMap(JSON.stringify(artifact.sourceMap)) }),
+      ...(artifact.builderSourceSites === undefined
+        ? {}
+        : { builderSourceSites: artifact.builderSourceSites }),
+      ...(artifact.policyManifests === undefined
+        ? {}
+        : { policyManifests: artifact.policyManifests }),
+    });
+  }
+  return emitted;
 }
 
 function cachedArtifactsIncludePatternCoverage(

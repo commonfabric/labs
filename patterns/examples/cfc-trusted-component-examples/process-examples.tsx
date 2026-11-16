@@ -243,48 +243,49 @@ export const DocumentExportJobExample = pattern<
   };
 });
 
-const EXAMPLE_TITLES = [
-  "Song Identification Recording",
-  "Calendar Availability Policy",
-  "Batch Photo Upload Job",
-  "Document Export Job",
-] as const;
+export default pattern<Record<PropertyKey, never>>(() => {
+  const examples = [
+    SongIdentificationRecordingExample({}),
+    CalendarAvailabilityPolicyExample({}),
+    BatchPhotoUploadJobExample({}),
+    DocumentExportJobExample({}),
+  ] as const;
 
-export default pattern<Record<PropertyKey, never>>(() => ({
-  [NAME]: computed(() => "Process Trusted Component Examples"),
-  [UI]: (
-    <cf-screen title="Process Trusted Component Examples">
-      <cf-vstack gap="3" style={{ padding: "1rem" }}>
-        <cf-card>
-          <cf-vstack slot="content" gap="2">
-            <cf-heading level={2}>Process-oriented trusted UI demos</cf-heading>
-            <cf-label>
-              These untrusted hosts model processes rather than single release
-              buttons: derived song-ID recording, scoped availability policy,
-              and visible long-running jobs.
-            </cf-label>
-            <cf-label>
-              The gallery currently exposes {EXAMPLE_TITLES.length}{" "}
-              example patterns.
-            </cf-label>
-          </cf-vstack>
-        </cf-card>
-        <cf-card>
-          <cf-vstack slot="content" gap="2">
-            <cf-heading level={3}>Catalog</cf-heading>
-            {EXAMPLE_TITLES.map((title, index) => (
-              <div>
-                {index + 1}. {title}
-              </div>
-            ))}
-          </cf-vstack>
-        </cf-card>
-        <div>{SongIdentificationRecordingExample({})}</div>
-        <div>{CalendarAvailabilityPolicyExample({})}</div>
-        <div>{BatchPhotoUploadJobExample({})}</div>
-        <div>{DocumentExportJobExample({})}</div>
-      </cf-vstack>
-    </cf-screen>
-  ),
-  exampleCount: EXAMPLE_TITLES.length,
-}));
+  return {
+    [NAME]: computed(() => "Process Trusted Component Examples"),
+    [UI]: (
+      <cf-screen title="Process Trusted Component Examples">
+        <cf-vstack gap="3" style={{ padding: "1rem" }}>
+          <cf-card>
+            <cf-vstack slot="content" gap="2">
+              <cf-heading level={2}>
+                Process-oriented trusted UI demos
+              </cf-heading>
+              <cf-label>
+                These untrusted hosts model processes rather than single release
+                buttons: derived song-ID recording, scoped availability policy,
+                and visible long-running jobs.
+              </cf-label>
+              <cf-label>
+                The gallery currently exposes {examples.length}{" "}
+                example patterns.
+              </cf-label>
+            </cf-vstack>
+          </cf-card>
+          <cf-card>
+            <cf-vstack slot="content" gap="2">
+              <cf-heading level={3}>Catalog</cf-heading>
+              {examples.map((example, index) => (
+                <div>
+                  {index + 1}. {example[NAME]}
+                </div>
+              ))}
+            </cf-vstack>
+          </cf-card>
+          {examples.map((example) => <div>{example}</div>)}
+        </cf-vstack>
+      </cf-screen>
+    ),
+    exampleCount: examples.length,
+  };
+});

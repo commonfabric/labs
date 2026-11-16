@@ -84,6 +84,7 @@ import {
   partitionOf,
   surfaceName,
   type Unplaced,
+  vanished,
 } from "./test-selection/build.ts";
 import {
   capabilitiesBySuite,
@@ -994,18 +995,24 @@ export async function publish(
   // built without it names surfaces nothing in the tree answers to.
   const suites = await topology();
   const { placed, unplaced } = locateSurfaces(suites, folded.surfaces);
+  // A test renamed or deleted in a file the tree still holds is placed by
+  // that file, so it is `main` having stopped recording it that says it
+  // is gone. It is left out of the manifest, where it would be neither
+  // run nor able to record the passes that would lower its flake share,
+  // and its state stays in the aggregate until `departed` drops it.
+  const stopped = vanished(folded.states, placed);
   // A test the tree no longer holds leaves the aggregate here rather
   // than being carried and rescored for the rest of the store's life.
   // The state written below is the one the next run reads, so dropping
   // the entries from it is the whole of what forgetting an identity is.
-  const left = departed(suites, unplaced, folded);
+  const left = departed(suites, unplaced, folded, stopped);
   for (const key of left) {
     delete folded.aggregate.states[key];
     delete folded.aggregate.files[key];
     folded.states.delete(key);
   }
   const states = new Map(
-    [...folded.states].filter(([key]) => placed.has(key)),
+    [...folded.states].filter(([key]) => placed.has(key) && !stopped.has(key)),
   );
   const observed = laneObservations(folded.aggregate.lanes ?? []);
 
@@ -1088,6 +1095,7 @@ export async function publish(
     reference,
     folded.observations,
     unplaced,
+    stopped,
     left,
     fold.declined,
   );
@@ -1193,6 +1201,7 @@ function summarize(
   reference: ReturnType<typeof plan>,
   observations: number,
   unplaced: Unplaced,
+  stopped: ReadonlySet<string>,
   left: readonly string[],
   declined: number,
 ): void {
@@ -1262,9 +1271,10 @@ function summarize(
   if (left.length > 0) {
     console.log(
       `test selection: ${left.length} identities have left the tree: no ` +
-        `suite claims them and no run of them has been recorded inside ` +
-        `the window a state keeps counters for. Their states are dropped ` +
-        `from the aggregate.`,
+        `suite claims them, or main has stopped recording them in a unit ` +
+        `it still runs, and no run of them has been recorded inside the ` +
+        `window a state keeps counters for. Their states are dropped from ` +
+        `the aggregate.`,
     );
     console.log(
       `test selection: those ${left.length} were recorded by ` +
@@ -1272,6 +1282,20 @@ function summarize(
     );
   }
   const gone = new Set(left);
+  const unrecorded = [...stopped].filter((key) => !gone.has(key));
+  if (unrecorded.length > 0) {
+    console.log(
+      `test selection: main has stopped recording ${unrecorded.length} ` +
+        `identities in units it still runs, so the tree no longer holds ` +
+        `them under those names. They are left out of the manifest, and ` +
+        `their states stay in the aggregate until no run of them is left ` +
+        `inside the window a state keeps counters for.`,
+    );
+    console.log(
+      `test selection: those ${unrecorded.length} were recorded by ` +
+        `${namingSurfaces(unrecorded)}`,
+    );
+  }
   const unclaimed = unplaced.unclaimed.filter((key) => !gone.has(key));
   if (unclaimed.length > 0) {
     console.log(

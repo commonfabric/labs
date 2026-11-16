@@ -141,7 +141,7 @@ import {
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
-import { compileProgram, instanceTx } from "./utils.ts";
+import { addPieceHandlerOf, compileProgram, instanceTx } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
   deriveSystemPatternSource,
@@ -935,19 +935,7 @@ export class PiecesController<T = unknown> {
       throw new Error("Cannot add pieces: default pattern not available");
     }
 
-    const cell = defaultPattern.asSchema({
-      type: "object",
-      properties: {
-        addPiece: { asCell: ["stream"] },
-      },
-    });
-
-    const addPieceHandler = await cell.key("addPiece").pull();
-    if (!isStream(addPieceHandler)) {
-      throw new Error(
-        "Cannot add pieces: addPiece handler not found on default pattern",
-      );
-    }
+    const addPieceHandler = await addPieceHandlerOf(defaultPattern);
 
     const registry = this.#pieceRegistryExport(defaultPattern);
     // A handler's commit updates composition. Keep the derived registry
@@ -1183,12 +1171,9 @@ export class PiecesController<T = unknown> {
     const maxResults = 50; // Prevent too many results from overwhelming the UI
     const resolvedPiece = piece.resolveAsCell();
 
-    if (!piece) return result;
-
     try {
       // Get the argument data - this is where references to other pieces are stored
-      const argumentCell = await this.getArgument(piece);
-      if (!argumentCell) return result;
+      const argumentCell = await this.#syncedArgument(piece);
 
       // Get the raw argument value
       let argumentValue;
@@ -1350,8 +1335,6 @@ export class PiecesController<T = unknown> {
     const maxDepth = 10; // Prevent infinite recursion
     const maxResults = 50; // Prevent too many results from overwhelming the UI
 
-    if (!piece) return result;
-
     const pieceEntityId = getEntityId(piece);
     if (!pieceEntityId) return result;
 
@@ -1475,33 +1458,41 @@ export class PiecesController<T = unknown> {
       return false;
     };
 
-    // Check each piece to see if it references this piece
-    for (const otherPiece of registeredPieces) {
-      if (otherPiece.resolveAsCell().equals(resolvedPiece)) continue; // Skip self
+    const others = registeredPieces.filter((otherPiece) =>
+      !otherPiece.resolveAsCell().equals(resolvedPiece)
+    );
+    // The arguments, where references are commonly found, are synced all at
+    // once, and a piece whose argument cannot be read is passed over alone.
+    const argumentCells = await Promise.all(
+      others.map((otherPiece) =>
+        this.#syncedArgument(otherPiece).catch(() => undefined)
+      ),
+    );
 
+    // Check each piece to see if it references this piece
+    for (const [index, otherPiece] of others.entries()) {
       if (checkRefersToTarget(otherPiece, otherPiece, new Set(), 0)) {
         addReadingPiece(otherPiece);
         continue; // Skip additional checks for this piece
       }
 
-      // Also specifically check the argument data where references are commonly found
+      // Also specifically check the argument data
+      const argumentCell = argumentCells[index];
+      if (argumentCell === undefined) continue;
       try {
-        const argumentCell = await this.getArgument(otherPiece);
-        if (argumentCell) {
-          const argumentValue = argumentCell.getRaw();
+        const argumentValue = argumentCell.getRaw();
 
-          // Check if the argument references our target
-          if (argumentValue && typeof argumentValue === "object") {
-            if (
-              checkRefersToTarget(
-                argumentValue,
-                argumentCell,
-                new Set(),
-                0,
-              )
-            ) {
-              addReadingPiece(otherPiece);
-            }
+        // Check if the argument references our target
+        if (argumentValue && typeof argumentValue === "object") {
+          if (
+            checkRefersToTarget(
+              argumentValue,
+              argumentCell,
+              new Set(),
+              0,
+            )
+          ) {
+            addReadingPiece(otherPiece);
           }
         }
       } catch (_) {
@@ -1531,7 +1522,11 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Returns the `Cell` with argument content, loading the pattern if needed.
+   * Returns the cell over `piece`'s argument, as the argument link in the
+   * piece's metadata names it. This reads that metadata synchronously, so
+   * the piece's own document must be loaded, and it does not sync the
+   * argument: a caller that reads the argument's value syncs or pulls the
+   * returned cell first.
    */
   getArgument<T = unknown>(
     piece: Cell<unknown | T>,
@@ -1962,7 +1957,6 @@ export class PiecesController<T = unknown> {
         () => this.getPieceCell<T>(pieceOrId),
       )
       : pieceOrId;
-    if (!piece) throw new Error("Piece not found");
     const outcome = await timePiecePhase(
       "openPiece.reconcileSource",
       () => reconcilePieceSource(this.runtime, piece),
@@ -2042,7 +2036,6 @@ export class PiecesController<T = unknown> {
         () => this.getPieceCell<T>(pieceOrId, false, undefined, scope),
       )
       : pieceOrId;
-    if (!piece) throw new Error("Piece not found");
     if (
       this.runtime.viewScopedReplicationRequested &&
       await this.runtime.viewReplication.enable(piece.space)
@@ -2076,7 +2069,6 @@ export class PiecesController<T = unknown> {
     const piece = typeof pieceOrId === "string"
       ? await this.getPieceCell<T>(pieceOrId, false, undefined, scope)
       : pieceOrId;
-    if (!piece) throw new Error("Piece not found");
     this.runtime.runner.stop(piece);
     await this.runtime.idle();
   }
@@ -2135,17 +2127,12 @@ export class PiecesController<T = unknown> {
   }
 
   async syncPatternByIdentity(ref: { identity: string; symbol: string }) {
-    if (!ref) throw new Error("pattern identity is required");
     const pattern = await this.runtime.patternManager.loadPatternByIdentity(
       ref.identity,
       ref.symbol,
       this.#space,
     );
     return pattern;
-  }
-
-  async sync(entity: Cell<unknown>, _waitForStorage: boolean = false) {
-    await entity.sync();
   }
 
   /**
@@ -2995,6 +2982,7 @@ export class PiecesController<T = unknown> {
           () =>
             runtime.runSynced(rootToStart, repairPattern, undefined, {
               expectedPatternIdentity: ref,
+              runtimeStarted: true,
             }),
         );
       } catch (repairError) {
@@ -3166,6 +3154,7 @@ export class PiecesController<T = unknown> {
             void this.runtime.setup(tx, pattern, undefined, candidate, {
               prepareForResume: true,
               reapplyStoredSetup: true,
+              runtimeStarted: true,
             });
             return true;
           }),
@@ -3501,6 +3490,7 @@ export class PiecesController<T = unknown> {
         () =>
           this.runtime.runSynced(root.withTx(), pattern, undefined, {
             expectedPatternIdentity: ref,
+            runtimeStarted: true,
           }),
       );
     } catch (materializeError) {
@@ -3517,6 +3507,21 @@ export class PiecesController<T = unknown> {
       );
     }
     return root;
+  }
+
+  /**
+   * Helper for `getReadingFrom()` and `getReadByPieces()`, which read
+   * `piece`'s argument raw: its argument cell, synced. The replica need not
+   * hold either the piece's own document, whose metadata names the argument,
+   * or the argument's, whether because nothing here loaded them or because a
+   * release pass dropped them (`docs/features/document-release.md`), so both
+   * are synced before they are read.
+   */
+  async #syncedArgument(piece: Cell<unknown>): Promise<Cell<unknown>> {
+    await piece.asSchema(undefined).sync();
+    const argument = this.getArgument(piece);
+    await argument.sync();
+    return argument;
   }
 }
 
@@ -3542,9 +3547,6 @@ async function getCellByIdOrPiece(
       undefined,
       options?.targetScope,
     );
-    if (!piece) {
-      throw new Error(`Piece ${cellId} not found`);
-    }
     if (
       getMetaLink(piece, "result") === undefined &&
       getPatternIdentityRef(piece) === undefined &&

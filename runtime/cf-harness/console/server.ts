@@ -347,7 +347,6 @@ const CONSOLE_CREDENTIAL_OWNER = {
 const INDEX_FUNCTIONS = [
   "searchPatterns",
   "listPatterns",
-  "listEvents",
   "getPattern",
 ] as const;
 
@@ -377,13 +376,6 @@ const callPatternIndex = (
       return client.searchPatterns(patternIndexSearchRequest(body));
     case "listPatterns":
       return client.listPatterns();
-    case "listEvents":
-      return client.listEvents({
-        ...(typeof body.patternId === "string"
-          ? { patternId: body.patternId }
-          : {}),
-        ...(typeof body.limit === "number" ? { limit: body.limit } : {}),
-      });
     case "getPattern":
       return client.getPattern({ patternId: body.patternId as string });
   }

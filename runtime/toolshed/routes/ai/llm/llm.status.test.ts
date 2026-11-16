@@ -4,8 +4,14 @@ import { MockLanguageModelV4 } from "ai/test";
 
 import env from "@/env.ts";
 import createApp from "@/lib/create-app.ts";
-import router from "@/routes/ai/llm/llm.index.ts";
-import { MODELS } from "@/routes/ai/llm/models.ts";
+import { createLLMRouter } from "@/routes/ai/llm/llm.router.ts";
+import { createModelRegistry } from "@/routes/ai/llm/models.ts";
+import {
+  memoryCache,
+  MOCK_CAPABILITIES,
+  recordingLogger,
+  refusingFetch,
+} from "@/test/fixtures/llm-models.ts";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -16,7 +22,14 @@ if (env.ENV !== "test") {
 // broke all call for different handling. These drive the real router so the
 // status a caller sees is what is asserted.
 
-const app = createApp().route("/", router);
+const models = createModelRegistry({
+  fetch: refusingFetch,
+  logger: recordingLogger(),
+});
+const app = createApp().route(
+  "/",
+  createLLMRouter({ models, cache: memoryCache() }),
+);
 
 const MOCK_MODEL_NAME = "mock:status-model";
 
@@ -63,34 +76,25 @@ function silentModel(): LanguageModel {
 }
 
 /**
- * Registers `model` under a name that `findModel` resolves, runs `body`, then
- * takes the registration back out of the shared model list.
+ * Registers `model` in this file's registry, runs `body`, then takes the
+ * registration back out.
  */
 async function withMockModel<T>(
   model: LanguageModel | undefined,
   body: () => Promise<T>,
 ): Promise<T> {
   if (model) {
-    MODELS[MOCK_MODEL_NAME] = {
+    models.register({
       model,
       name: MOCK_MODEL_NAME,
-      capabilities: {
-        contextWindow: 1000,
-        maxOutputTokens: 100,
-        streaming: true,
-        systemPrompt: true,
-        stopSequences: true,
-        prefill: false,
-        images: false,
-        reasoning: false,
-      },
+      capabilities: MOCK_CAPABILITIES,
       aliases: [],
-    };
+    });
   }
   try {
     return await body();
   } finally {
-    delete MODELS[MOCK_MODEL_NAME];
+    delete models.models[MOCK_MODEL_NAME];
   }
 }
 

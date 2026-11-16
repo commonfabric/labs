@@ -23,7 +23,7 @@ import {
 } from "../v2.ts";
 import {
   FabricBytes,
-  FabricRegExp,
+  FabricEpochDay,
 } from "@commonfabric/data-model/fabric-primitives";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
@@ -291,17 +291,17 @@ Deno.test("rejects a content-addressed document whose content hashes to neither 
 
 Deno.test("rejects a content-addressed set whose value is not a document", async () => {
   await withEngine((engine) => {
-    // A `FabricRegExp` where the document belongs. Its `value` member is a JS
-    // `RegExp`, which hashes as the `FabricRegExp` itself does, so under this
+    // A `FabricEpochDay` where the document belongs. Its `value` member is
+    // the `bigint` it holds, and the id is that `bigint`'s hash, so under this
     // id the content check alone would pass it.
-    const pattern = new FabricRegExp(/a+/g);
-    const id = `cid:${taggedHashStringOf(pattern)}`;
+    const day = new FabricEpochDay(20_000n);
+    const id = `cid:${taggedHashStringOf(day.value)}`;
     assertThrows(
       () =>
         applyCommit(engine, {
           sessionId: "s:a",
           commit: commit(1, {
-            operations: [{ op: "set", id, value: pattern }],
+            operations: [{ op: "set", id, value: day }],
           }),
         }),
       ProtocolError,
@@ -1522,6 +1522,25 @@ Deno.test("validates the label documents a version-2 CFC envelope references", a
             operations: [
               docWithLabel(`cid:${malformedHash}`),
               setOp(`cid:${malformedHash}`, malformed),
+            ],
+          }),
+        }),
+      ProtocolError,
+      "does not hold a label",
+    );
+
+    // So is one holding a class instance, which shows no own members for a
+    // check of members alone to refuse.
+    const instance = new FabricBytes(new Uint8Array([1, 2, 3]));
+    const instanceHash = taggedHashStringOf(instance);
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "s:a",
+          commit: commit(5, {
+            operations: [
+              docWithLabel(`cid:${instanceHash}`),
+              setOp(`cid:${instanceHash}`, instance),
             ],
           }),
         }),

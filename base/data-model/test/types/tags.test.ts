@@ -77,7 +77,6 @@ import {
   FabricHash,
   FabricKeyPair,
   type FabricPrimitiveValueTag,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
@@ -911,8 +910,8 @@ describe("tags", () => {
       expect(tagOfConvertibleJsValueElseNull([])).toBe(VALUE_TAGS.Array);
     });
 
-    it("returns `JsRegExp` tag for `RegExp` instances", () => {
-      expect(tagOfConvertibleJsValueElseNull(/abc/)).toBe(VALUE_TAGS.JsRegExp);
+    it("returns `null` for `RegExp` instances", () => {
+      expect(tagOfConvertibleJsValueElseNull(/abc/)).toBe(null);
     });
 
     it("returns `null` for null-prototype objects", () => {
@@ -1093,7 +1092,6 @@ describe("tags", () => {
         ["`Set`", Set, VALUE_TAGS.JsSet],
         ["`Date`", Date, VALUE_TAGS.JsDate],
         ["`Uint8Array`", Uint8Array, VALUE_TAGS.JsUint8Array],
-        ["`RegExp`", RegExp, VALUE_TAGS.JsRegExp],
       ] as ReadonlyArray<[string, { prototype: object }, ValueTag]>
     ) {
       it(`returns \`${tag}\` for an object whose prototype is that of ${label}`, () => {
@@ -1153,7 +1151,6 @@ describe("tags", () => {
       FabricEpochNsec,
       FabricHash,
       FabricKeyPair,
-      FabricRegExp,
       FabricUnavailable,
     ];
 

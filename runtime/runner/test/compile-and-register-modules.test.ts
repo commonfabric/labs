@@ -13,7 +13,8 @@ import type { Pattern } from "../src/builder/types.ts";
 import { loadCompiledClosure } from "../src/compilation-cache/cell-cache.ts";
 import type { CompiledModuleArtifact } from "../src/harness/types.ts";
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
-import { CompileTurns } from "../src/harness/compile-interleave.ts";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import type { CompileClaims } from "../src/harness/compile-interleave.ts";
 import type { ModuleByteCache } from "../src/runtime.ts";
 
 /**
@@ -402,7 +403,14 @@ describe("PatternManager.compileAndRegisterModules", () => {
         }
       },
     };
-    const compileTurns = new CompileTurns();
+    // Holds the first turn taken until the test releases it.
+    const released = Promise.withResolvers<void>();
+    const compileTurns: CompileClaims = {
+      async take() {
+        await released.promise;
+        return () => {};
+      },
+    };
     const storages = [
       StorageManager.emulate({ as: signer }),
       StorageManager.emulate({ as: signer }),
@@ -419,14 +427,13 @@ describe("PatternManager.compileAndRegisterModules", () => {
       moduleByteCache: byteCache,
     });
     try {
-      const endHeldTurn = await compileTurns.take();
       const compiled = waiting.patternManager.compileAndRegisterModules(
         program,
       );
       await firstRead.promise;
       await putting.patternManager.compileAndRegisterModules(program);
       expect(reads).toEqual([false, false]);
-      endHeldTurn();
+      released.resolve();
 
       const result = await compiled;
       expect(reads).toEqual([false, false, true]);
@@ -438,6 +445,93 @@ describe("PatternManager.compileAndRegisterModules", () => {
     } finally {
       await waiting.dispose();
       await putting.dispose();
+      for (const storage of storages) await storage.close();
+    }
+  });
+
+  it("ends the compile turn it took when the read that follows the turn fails", async () => {
+    // The first read misses, so the compile takes a turn; the read once the
+    // turn comes throws, as a cache whose file cannot be read does.
+    let reads = 0;
+    const byteCache: ModuleByteCache = {
+      getCompleteSet() {
+        reads += 1;
+        if (reads === 1) return undefined;
+        throw new Error("the cache could not be read");
+      },
+      putAll() {},
+    };
+    const keys: string[] = [];
+    let ended = 0;
+    const compileTurns: CompileClaims = {
+      take(key) {
+        keys.push(key);
+        return Promise.resolve(() => {
+          ended += 1;
+        });
+      },
+    };
+    const storage = StorageManager.emulate({ as: signer });
+    const compiling = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: storage,
+      moduleByteCache: byteCache,
+      compileTurns,
+    });
+    try {
+      await expect(
+        compiling.patternManager.compileAndRegisterModules(program),
+      ).rejects.toThrow("the cache could not be read");
+      expect(keys).toHaveLength(1);
+      expect(ended).toBe(1);
+    } finally {
+      await compiling.dispose();
+      await storage.close();
+    }
+  });
+
+  it("takes the same compile turn for the same modules, and another for others", async () => {
+    const keys: string[] = [];
+    const compileTurns: CompileClaims = {
+      take(key) {
+        keys.push(key);
+        return Promise.resolve(() => {});
+      },
+    };
+    const otherProgram: RuntimeProgram = {
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: [
+          "import { NAME, pattern } from 'commonfabric';",
+          "export default pattern(() => ({ [NAME]: 'another program' }));",
+        ].join("\n"),
+      }],
+    };
+    const storages: ReturnType<typeof StorageManager.emulate>[] = [];
+    const runtimes: Runtime[] = [];
+    /** A runtime with an empty byte cache of its own, taking counted turns. */
+    const compileIn = async (compiled: RuntimeProgram) => {
+      const storage = StorageManager.emulate({ as: signer });
+      storages.push(storage);
+      const built = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+        moduleByteCache: new ProcessModuleByteCache(),
+        compileTurns,
+      });
+      runtimes.push(built);
+      await built.patternManager.compileAndRegisterModules(compiled);
+    };
+    try {
+      await compileIn(program);
+      await compileIn(program);
+      await compileIn(otherProgram);
+      expect(keys).toHaveLength(3);
+      expect(keys[1]).toBe(keys[0]);
+      expect(keys[2]).not.toBe(keys[0]);
+    } finally {
+      for (const built of runtimes) await built.dispose();
       for (const storage of storages) await storage.close();
     }
   });
