@@ -908,10 +908,11 @@ stream of a handler, as a rendered tree does at an event attribute.
 `plan-and-label-templates.md` §1.1 lists those positions in
 `Binding.result`, because the instance has to store a link to the stream
 there. The runtime cannot place a stream from the listed paths alone: a
-path with `*` among the children of a view node does not say which
-positions the `*` stands for (its §8, question 78), and a path below a
-conditional holds the stream under one selection only. By ruling the
-value function places the stream, and the runtime checks where.
+path with `*` among the children of a view node holds the kind of the
+`*` and not the positions it stands for (its §8, question 78), and a
+path below a conditional holds the stream under one selection only. By
+ruling the value function places the stream, and the runtime checks
+where.
 
 - **The marker.** `host.stream` returns a marker for the binding. The
   function places the marker in the value it returns, at each position
@@ -930,10 +931,22 @@ value function places the stream, and the runtime checks where.
   cone instance called.
 - **The check.** For a marker at a position of the instance's result,
   the runtime checks that the position is one that `Binding.result`
-  lists for the marker's binding. A `*` of a listed path matches any
-  element at that position, counted as
-  `plan-and-label-templates.md` §1.1 has it ("From a path to a
-  position"). A path below a conditional matches under either
+  lists for the marker's binding. By ruling a listed path states what
+  each of its `*` stands for, and the check accepts a marker only at a
+  position of the stated kind (`ResultPath.stars`,
+  `plan-and-label-templates.md` §1.1, "What a `*` of a result path
+  stands for"). At a `*` for the positions of a collection whose keys
+  the binding has, the marker of a cone instance is accepted at the
+  position that holds the key of that instance. At a `*` for every
+  position of a collection, or for the one element that holds the
+  stream inside a value, it is accepted at the position of an element
+  of that collection. At a `*` for a member written after a spread it
+  is accepted at the position of that member. The runtime knows which
+  stored position is an element of which collection, and which is a
+  member written beside them, from how it assembled the array. The
+  kinds are the same over an array of references, over an array of
+  plain values in place, and over the result of another per-element
+  construct. A path below a conditional matches under either
   selection. A marker at a position that no listed path of its binding
   covers fails the evaluation, and no link is stored.
 - **What fails.** A marker can be placed by one cone instance, passed

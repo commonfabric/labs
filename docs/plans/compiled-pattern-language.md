@@ -1219,8 +1219,9 @@ is relitigated.
   the runtime stores the value, it replaces each marker by the link to
   the stream of that binding for the element keys of the cone instance,
   and it checks that the position is one that `Binding.result` lists
-  for that binding. A `*` of a listed path matches any element, and a
-  path below a conditional matches under either selection. A marker at
+  for that binding. A `*` of a listed path matches the positions that
+  its kind names (the next item), and a path below a conditional
+  matches under either selection. A marker at
   a position that no listed path covers fails the evaluation. So
   `Binding.result` stays the statement that the label analysis relies
   on, and the compiler owes its completeness: a path for every position
@@ -1228,6 +1229,17 @@ is relitigated.
   that is an input of the pattern is no binding's marker. It is passed
   on as any input is, and the check does not apply to it. The rule is
   the same in an element body over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct.
+- A path of `Binding.result` states what each of its `*` stands for.
+  A `*` covers one of these: one position per element key of a
+  collection the binding is within; every position of a collection
+  whose callback writes the one stream of an outer binding; the one
+  position of a member written after a spread; or the one element
+  that holds the stream inside a value. The check of a stream's
+  position accepts a marker only at a position of the stated kind,
+  and a reader with the plan resolves the path by it
+  (`ResultPath.stars`). The same over an array of references, over an
   array of plain values in place, and over the result of another
   per-element construct.
 - Where a marker stands at a position that no listed path covers, the
@@ -2092,23 +2104,29 @@ as an assumption.
     For a `lift` or a `computed` that passes a handle on at a result
     path the link keeps the label of the reference alone.
 125. **How a result path of a binding names a position inside an
-    element** (PL question 78). *Assumed:* a `*` at the position of
-    each enclosing collection. Two collections spread into one array
-    of children are not told apart by the path. A `*` that no
-    `element` step of the binding names stands for one of three
-    things: every position of a collection whose callback writes the
-    stream of an outer binding, the one position of a member written
-    after a spread, or the one element that holds the stream inside a
-    value (question 130). The path does not say which, so the check of
-    a stream's position accepts a marker at any position from the
-    spread on, and a reader with the plan alone can resolve the path
-    to a wrong position, as the harness of the prototype's comparison
-    did. Open with the resolution: whether `Binding.result` says which
-    of the three such a `*` stands for. *Assumed:* it does not. The
-    path names a
-    position of the stored result, so the question is the same over an
-    array of references, an array of plain values in place, and the
-    result of another per-element construct.
+    element** (PL question 78). Settled by ruling for what a `*`
+    stands for: the path states it. An entry of `Binding.result` holds
+    the path and a kind for each `*` (`ResultPath.stars`): `element`
+    for one position per key of a collection the binding is within,
+    `every` for every position of a collection whose callback writes
+    the stream of an outer binding, `member` for the one position of a
+    member written after a spread, and `inside` for the one element
+    that holds the stream inside a value (question 130). The check
+    accepts a marker only at a position of the stated kind, and a
+    reader with the plan resolves the path by it. *Assumed* beside the
+    ruling: a `*` at the position of each enclosing collection; and
+    kind `member` holds the number of entries written before the
+    member, since the kind alone does not say which of several
+    members is meant. Open: two collections spread into one array of
+    children are not told apart by a `*` of kind `element` or `every`,
+    and the entry does not hold the number of positions stored before
+    a spread. *Assumed:* the runtime knows both from how it assembled
+    the array. The alternative gives such a `*` the ordinal of its
+    spread. The prototype's plans do not hold the kinds. The path
+    names a position of the stored result, so the rule and what is
+    open are the same over an array of references, an array of plain
+    values in place, and the result of another per-element construct;
+    kind `inside` does not arise over an array of references.
 126. **A schema of the plan and the schema the runtime stores an input
     under** (PL question 80). *Assumed:* the comparison stores inputs
     under the runtime's schema. The documents do not say how a schema
@@ -2139,9 +2157,11 @@ as an assumption.
     result at which value code can place the stream, and a marker at
     a position no listed path covers fails the evaluation, so the
     binding cannot be left without a path through the collection.
-    *Assumed:* the path is listed with `*` at the collection, which
-    the check matches at any element, and a reader of the plan alone
-    tries each position. The alternative names the position of the
+    *Assumed:* the path is listed with `*` at the collection. By
+    ruling the `*` states its kind (question 125), here `inside`: the
+    check accepts the marker at the position of an element of the
+    collection, and a reader of the plan alone tries the positions of
+    the collection's elements. The alternative names the position of the
     member in the place of `*`. The source here is an array
     written in place in the pattern body, whose members the instance
     computes: not a stored array of references. A further 5 bindings

@@ -1077,6 +1077,34 @@ export interface Closure {
 }
 
 /**
+ * What one `*` of a result path of a binding stands for (below, "What a
+ * `*` of a result path stands for"). By ruling the path states it.
+ *
+ * - `element`: a collection for whose keys the binding has an `element`
+ *   step. The path stands for one position per key, and the position
+ *   that holds a key holds the stream of that key.
+ * - `every`: a collection that no `element` step of the binding names,
+ *   whose callback writes the stream. Every position of the collection
+ *   holds the one stream.
+ * - `member`: no collection. The one position of a member that is
+ *   written after a spread. `index` is the number of entries, members
+ *   and spreads, that the array or the children are written with before
+ *   that member (assumed; section 8, question 78).
+ * - `inside`: a collection that no `element` step of the binding names,
+ *   of which one element holds the stream inside its value.
+ */
+export type ResultStar =
+  | { readonly kind: "element" | "every" | "inside" }
+  | { readonly kind: "member"; readonly index: number };
+
+/** One path of `Binding.result`. */
+export interface ResultPath {
+  readonly path: Path;
+  /** One entry for each `*` of `path`, in the order of the path. */
+  readonly stars: readonly ResultStar[];
+}
+
+/**
  * A handler bound to state: in the reactive tier, or at a `bind` site of a
  * body (section 3.14). The handler is a body of this plan, or a handler
  * factory received as a value (section 3.21). A factory value is named by
@@ -1164,17 +1192,19 @@ export interface Binding {
    * (section 8, question 75). A path that is listed is one the stream is
    * stored at under some selection of each conditional above it. A path
    * has `*` at the position of each collection it passes through, as the
-   * path of a per-element output has (section 1.4). Where an `element`
-   * step of `within` names the collection, the path stands for one
-   * position per element, and otherwise every position of the
-   * collection holds the one stream (below; section 8, question 78).
+   * path of a per-element output has (section 1.4), and at the position
+   * of a member written after a spread. By ruling the path states what
+   * each `*` stands for, in `stars`: one position per element key, every
+   * position of a collection, the one position of a member after a
+   * spread, or the one element that holds the stream inside a value.
    * By ruling the list is complete: it has a path for every position of
    * the result at which value code can place the stream, and the
    * runtime fails an evaluation that stores the stream's marker at a
    * position no listed path covers (below, "The listed paths are
-   * complete").
+   * complete"). The prose of this document calls `path` the path, and
+   * a path of `Binding.result` the entry.
    */
-  readonly result?: readonly Path[];
+  readonly result?: readonly ResultPath[];
 }
 
 export interface Plan {
@@ -1479,7 +1509,8 @@ spread child, and the positions from a spread on are at `children/*`
 `<ul>{items.map((item) => <Row item={item} />)}</ul>`, a stream at
 `props/onClick` of the root of the tree of `Row` has the path
 `["$UI", "children", "*", "$UI", "props", "onClick"]`, by the second rule
-for a `site` step above.
+for a `site` step above. The `*` of each of the two paths is of kind
+`element` ("What a `*` of a result path stands for", below).
 
 **A path through a collection the binding is not within.** A `*` of a
 path stands for a collection, and an `element` step of the binding's
@@ -1493,9 +1524,11 @@ path stands for a collection, and an `element` step of the binding's
   a link to the stream, and the path of what a callback returns has `*`
   at the collection (section 1.4), so the path is listed, with `*`, and
   every position of the collection holds a link to the one stream. The
-  same holds for an inner collection of a binding of an outer element
-  body: the `*` of the outer collection selects the stream, and every
-  position of the inner one holds it.
+  `*` is of kind `every`. The same holds for an inner collection of a
+  binding of an outer element body: the `*` of the outer collection is
+  of kind `element` and selects the stream, and the `*` of the inner
+  one is of kind `every`, since every position of it holds that
+  stream.
 - **The stream is reached through a member of the element.** A stream
   can be inside a value that the elements of a collection hold, and not
   in what the callback constructs. The case in the corpus is an array
@@ -1509,10 +1542,13 @@ path stands for a collection, and an `element` step of the binding's
   ("The listed paths are complete", below), so the binding has a path
   through the collection. *Assumed* (section 8, question 84): the path
   has `*` at the collection, as the path of a stream that a callback
-  writes for every element has. The check matches a `*` at any
-  element, so it passes at the one position that holds the stream. The
-  `*` stands here for positions that do not hold the stream as well,
-  and a reader that has the plan alone tries each position. The binding
+  writes for every element has. By ruling the path states what the `*`
+  stands for, and here it is of kind `inside`: one element of the
+  collection holds the stream inside its value, and the other positions
+  do not hold it. The check accepts the marker at a position of an
+  element of the collection, and a reader that has the plan alone
+  tries the positions of the collection's elements, and no member
+  written beside them. The binding
   also has the paths at which the result holds the pattern's result
   without passing through the collection. The member can be read with a
   well-known key, as `example[UI]` is, or by a name, as `entry.node` is.
@@ -1523,11 +1559,11 @@ path stands for a collection, and an `element` step of the binding's
   binding then has the `element` step of the upstream collection, and
   the downstream collection has the upstream keys (section 1.3).
   *Assumed* under the same question: the path has `*` at the downstream
-  collection, and the stream at a position is that of the key the
-  position holds. Over an array of references the plan knows no stream
-  inside an element: what the cell behind a reference holds is no value
-  the instance computes, a stream in it is no binding's marker, and no
-  path is listed for it.
+  collection, of kind `element`, and the stream at a position is that
+  of the key the position holds. Over an array of references the plan
+  knows no stream inside an element: what the cell behind a reference
+  holds is no value the instance computes, a stream in it is no
+  binding's marker, and no path is listed for it.
 
 **A position below a conditional.** A position that holds the stream
 under one branch of a `select` is a result path of the binding.
@@ -1552,7 +1588,8 @@ stores the value, it replaces each marker by the link to the stream of
 that binding, for the keys of the cone instance at the `element` steps
 of the binding's `within`, and it checks that the position is one that
 `Binding.result` lists for that binding. A `*` of a listed path matches
-any element of the collection at that position. A path below a
+the positions that its kind names, and no other ("What a `*` of a
+result path stands for", below). A path below a
 conditional matches under either selection. A marker at a position that
 no listed path of its binding covers fails the evaluation. By ruling
 the evaluation that fails is the one that stores the value, also where
@@ -1622,7 +1659,8 @@ a `within` step"), and the compiler owes the following.
 The rule and what the compiler owes are the same in the three cases of
 section 1.3. A marker of a binding of an element body is replaced by
 the link to the stream of the instance's key, and a position is matched
-at the `*`, whether the collection's source is an array of references,
+at the `*` by its kind, whether the collection's source is an array of
+references,
 an array of plain values in place, or the result of another per-element
 construct. What the check covers for a marker stored outside the result
 is assumed in `execution-and-storage.md` (its §2.2 and question 78).
@@ -1631,47 +1669,83 @@ check, with a fixture that binds a handler per element in each of the
 three cases: the stored link has the key of the element in each, and
 without the listed path each fails at the first element.
 
-*Assumed* (section 8, question 78), since no other rule of the documents
-says how such a path is resolved to one stream:
+**What a `*` of a result path stands for.** A `*` of a path of
+`Binding.result` can stand for four things: the positions of a
+collection for whose keys the binding has an `element` step; every
+position of a collection whose callback writes the stream of an outer
+binding; the one position of a member written after a spread; or the
+one element that holds the stream inside a value ("The stream is
+reached through a member of the element", above). By ruling the path
+states which: the entry has, for each `*` of its path and in the order
+of the path, the kind of that `*` (`ResultPath.stars`, with the kinds
+`element`, `every`, `member` and `inside`). Two things follow from the
+ruling.
+
+- **The check accepts a marker only at a position of the stated kind.**
+  At a `*` of kind `element` the marker of a cone instance is accepted
+  at the position that holds the key of that instance, and at no
+  other. At a `*` of kind `every` or `inside` it is accepted at the
+  position of an element of the collection, and not at a member
+  written beside the collection in the same array. At a `*` of kind
+  `member` it is accepted at the position of that member, and not at a
+  position of a collection spread before it. The runtime knows which
+  stored position is which from how it assembled the array (section
+  3.6).
+- **A reader that has the plan resolves the path.** For kind `element`
+  it chooses the position that holds the key whose stream it wants.
+  For kind `every` it chooses any position of the collection. For kind
+  `member` it takes the one position of the member. For kind `inside`
+  it tries the positions of the collection's elements, and the one
+  that holds a link to the stream at the rest of the path is the
+  position.
+
+The kinds are the same whether the collection is over an array of
+references, over an array of plain values in place, or the result of
+another per-element construct. Kind `inside` arises in the last two
+alone ("The stream is reached through a member of the element", above).
+For the result of another per-element construct, and for an output
+that passes one on (`Output.passesCollection`), a `*` is of kind
+`element` where the binding has the `element` step of the collection
+whose keys the result has (section 1.3).
+
+*Assumed* (section 8, question 78), since the ruling is on the kind and
+no other rule of the documents says how a kind is counted to a stored
+position:
 
 - **From a path to a position.** This is the rule of the compiled path,
   for the layout it stores (`execution-and-storage.md` §4.2). Where the
   runtime stores the same positions today is in section 3.1 ("A binding
-  with a `within` step"), and the two differ. A reader that wants the
-  stream of one element chooses, for each `*` whose collection an
-  `element` step names, a position of that collection. For a `*` whose
-  collection no `element` step names and whose callback writes the
-  stream of an outer binding, every position of the collection holds
-  the stream, and the reader chooses any. Such a `*` can stand for two
-  other things, which the next item has. The stored path has the
-  index of that position in the stored array in the place of the `*`:
-  the position in the collection, plus the number of children stored
-  before the spread where the array is the children of a view node. The
-  path does not hold that number, because every position from the first
-  spread on is at `*` (section 3.4). The runtime knows it from how it
-  assembled the array, and a reader that has the plan alone does not.
+  with a `within` step"), and the two differ. The stored path has, in
+  the place of each `*`, the index of the position in the stored
+  array. For a `*` that stands for a collection that is the index of
+  the element in the collection, plus the number of positions stored
+  before the collection's first element: the members written before
+  the spread, and the elements of the collections spread before it.
+  For a `*` of kind `member` it is the number of positions stored
+  before the member. The path does not hold those numbers, because
+  every position from the first spread on is at `*` (section 3.4).
+  The runtime knows them from how it assembled the array.
+- **The `index` of kind `member`.** The kind alone does not say which
+  member a `*` stands for where several members are written after a
+  spread. *Assumed:* the kind holds the number of entries, members and
+  spreads, written before the member. A reader then finds the
+  position by adding one for each member written before it and the
+  length of each collection spread before it.
 - **Two collections spread into one array of children.** The path is a
   result path of each binding all the same: the instance stores the
   links at those positions, and section 3.4 gives each the path
-  `children/*`. The `*` of each binding's path stands for the positions
-  of its own collection alone, which the runtime knows from how it
-  assembled the array (section 3.6). The path does not say which
-  positions those are, so a reader that has the plan alone cannot
-  resolve it. The same holds for a member written after a spread, whose
-  path is `children/*` as well and whose stream is at one position. So
-  a `*` whose collection no `element` step of the binding names stands
-  for one of three things: every position of a collection whose
-  callback writes the stream of an outer binding; the one position of a
-  member written after a spread; or the one element that holds the
-  stream inside a value (above, "The stream is reached through a member
-  of the element"). The path does not say which. Two things follow. The
-  check accepts a marker of such a binding at any position from the
-  spread on, so it does not find a marker at a wrong one of those
-  positions. And a reader that has the plan alone can resolve the path
-  to a position that holds another stream or none. The three meanings
-  are the same whether the collection that is spread is over an array
-  of references, over an array of plain values in place, or the result
-  of another per-element construct.
+  `children/*`. The `*` of each binding's path is of kind `element`
+  or `every` and stands for the positions of its own collection alone.
+  The kind does not say which of the two collections that is, and the
+  path does not hold the length of a collection spread before it. The
+  runtime knows both from how it assembled the array (section 3.6). A
+  reader that has the plan alone has them only where it can name the
+  collections that the array is written with and read their lengths.
+  The alternative gives a `*` that stands for a collection the same
+  `index` that kind `member` has, so that the entry names the spread.
+  This is the same whether a collection that is spread is over an
+  array of references, over an array of plain values in place, or the
+  result of another per-element construct.
 - **From a position to a stream.** The link stored there is to the stream
   of the binding for the element key at that position: the stream named
   by the binding's `name` and `within`, with that key at the `element`
@@ -1686,7 +1760,8 @@ says how such a path is resolved to one stream:
   reaches such a stream only through a link stored elsewhere, such as a
   child's argument or the state of another binding whose handler sends
   to it. A binding whose stream the result holds inside a member of the
-  elements of a collection has a path with `*` (above).
+  elements of a collection has a path with `*` of kind `inside`
+  (above).
 
 This document defines the footprint *record* (`Body.reads`, `computed`,
 `handles`, `writes`, `envelopes`, `outputs`, `calls`, `widenings`). The
@@ -10997,57 +11072,59 @@ this document made.
     verifies `passes`.
 78. **How a result path of a binding names a position inside an element.**
     A binding of an element body has a stream per element key, and
-    `Binding.result` has to say where each is stored. *Assumed,* as
-    section 1.1 has it: the path has `*` at the position of each enclosing
-    collection, as the path of a per-element output has; a reader chooses
-    a position of each collection, and the stored path has the index of
-    that position in the stored array, counted after the children stored
-    before a spread; the link there is to the stream of the element key
-    at that position; and a binding whose stream is at no kept path of
-    what the callback returns has no `result` path. Section 1.4 and the
-    view-node paths of section 3.4 give the form of the path. What is
-    assumed is the resolution, in particular where two collections are
-    spread into one array of children, where the path alone does not say
-    which positions are whose. The alternative gives the path a segment
-    that names the collection, in the place of `*`.
-    `execution-and-storage.md` and `scheduler-and-serving-loop.md` have to
-    agree, since a client resolves the same path to send an event. Three
-    more things the path does not hold, each stated in section 1.1. It
-    does not hold the number of children written before a spread. A `*`
-    whose collection no `element` step of the binding names stands for
-    every position where the callback writes the stream of an outer
-    binding, for one position where the stream belongs to a member written
-    after a spread, and for one position where one element holds the
-    stream inside a value (question 84), and the path does not tell the
-    three apart. So the check accepts a marker of such a binding at any
-    position from the spread on, and a reader with the plan alone can
-    resolve the path to a wrong position: the harness of the prototype's
-    comparison sent an event for a binding whose path was that of a member
-    after a spread to the stream of an element. Open with the resolution:
-    whether `Binding.result` says, for such a `*`, which of the three it
-    stands for. *Assumed:* it does not. A
-    position below a `select` is a result path and holds the stream
-    under one branch only. Section 1.1 takes each of the three as a
-    result path, because the instance stores the link there. A reader
-    that has the plan and no knowledge of how the array was assembled
-    cannot resolve the first two, as it cannot resolve two collections
-    spread into one array. The prototype lists a path for a member written
-    after a spread and for a binding of two collections spread into one
-    array, in the children of a view node and in an array literal. The
-    alternative that names
-    the collection in the path resolves these too, if a member written
-    after a spread is given its position among the members written. Not
+    `Binding.result` has to say where each is stored. Not open, by
+    ruling: the path states what each of its `*` stands for. Section
+    1.1 gives the form: an entry of `Binding.result` holds the path
+    and, for each `*` of it, a kind (`ResultPath.stars`), which is
+    `element` for the positions of a collection the binding has the
+    keys of, `every` where every position of a collection holds the
+    stream of an outer binding, `member` for the one position of a
+    member written after a spread, and `inside` where one element
+    holds the stream inside a value (question 84). The check of a
+    stream's position accepts a marker only at a position of the
+    stated kind, and a reader that has the plan resolves the path by
+    the kind. So the check does not accept the marker of a member
+    after a spread at the position of an element, and a reader does
+    not send an event for such a binding to the stream of an element,
+    as the harness of the prototype's comparison did. The prototype's
+    plans do not hold the kinds. *Assumed,* as section 1.1 has it,
+    since the ruling is on the kind: the path has `*` at the position
+    of each enclosing collection, as the path of a per-element output
+    has; the stored path has the index of the position in the stored
+    array, counted after the positions stored before the collection or
+    the member; the link there is to the stream of the element key at
+    that position; and a binding whose stream is at no kept path of
+    what the callback returns has no `result` path. Section 1.4 and
+    the view-node paths of section 3.4 give the form of the path.
+    *Assumed* with it: kind `member` holds the number of entries
+    written before the member (`index`), because the kind alone does
+    not say which of several members written after a spread is meant.
+    Open: the entry does not hold the number of positions stored
+    before a spread, and where two collections are spread into one
+    array a `*` of kind `element` or `every` does not say which of
+    them it stands for. The runtime knows both from how it assembled
+    the array, and a reader that has the plan alone does not. The
+    alternative gives a `*` that stands for a collection the `index`
+    of its spread as well. `execution-and-storage.md` and
+    `scheduler-and-serving-loop.md` have to agree, since a client
+    resolves the same path to send an event. A position below a
+    `select` is a result path and holds the stream under one branch
+    only. The prototype lists a path for a member written after a
+    spread and for a binding of two collections spread into one array,
+    in the children of a view node and in an array literal. Not
     verified: that the prototype can form the
     address of a state cell that a pattern compiled into an element body
     declares, which a write edge of a handler bound in such a pattern
     needs. A state cell of a pattern compiled in under `site` steps
     alone is found in the run of today as section 3.1 describes ("A
-    binding with a `within` step"). The question is the same in the
-    three cases of section 1.3. The path names a position of the array
-    the instance stores for the construct's result, and the stream at
-    it is that of the key at that position, whether the source is an
-    array of references, an array of plain values in place, or the
-    result of another per-element construct.
+    binding with a `within` step"). The kinds and what is assumed are
+    the same in the three cases of section 1.3. The path names a
+    position of the array the instance stores for the construct's
+    result, and the stream at a `*` of kind `element` is that of the
+    key at that position, whether the source is an array of
+    references, an array of plain values in place, or the result of
+    another per-element construct. Kind `inside` does not arise over
+    an array of references.
 79. **How much of a handler's template is on a link it writes** (for the
     project owner). By ruling, a handle that a body passes on adds nothing
     of the label of its cell, and the link itself carries the label of at
@@ -11146,8 +11223,11 @@ this document made.
     So the binding cannot be left without a path through the
     collection: the element cone passes the member on with the marker
     in it, and the stored position has to be listed. *Assumed:* the
-    path has `*` at the collection. The check matches a `*` at any
-    element, and a reader that has the plan alone tries each position.
+    path has `*` at the collection. By ruling the path states what a
+    `*` stands for, and this one is of kind `inside` (section 1.1;
+    question 78): the check accepts the marker at the position of an
+    element of the collection, and a reader that has the plan alone
+    tries the positions of the collection's elements.
     The alternative: where the source is an array literal and the
     construct keeps positions, as `map` does, the path has the
     position of the member in the place of `*`, which the check then
@@ -11165,10 +11245,10 @@ this document made.
     second source has the same assumption (section 1.1): the result of
     another per-element construct whose elements hold the stream of a
     binding of that construct's body. There the position that holds the
-    stream of a key is the position that holds the key, so the
-    alternative for it names no position. Over an array of references the
-    plan lists no path, because a stream behind a reference is no
-    binding's marker.
+    stream of a key is the position that holds the key, so the `*` is
+    of kind `element` and the alternative for it names no position.
+    Over an array of references the plan lists no path, because a
+    stream behind a reference is no binding's marker.
 85. **The declared label of an element's handle in the compiled path**
     (for the project owner and the specification change). Settled by
     ruling: the label of a slot of root `element` is read at the
