@@ -216,6 +216,7 @@
           "stateCells": [
             {
               "name": "last",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": []
             }
@@ -283,6 +284,15 @@
             "id": "unhashed:schema/4",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": [
+                "string",
+                "undefined"
+              ]
             }
           }
         ],

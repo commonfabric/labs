@@ -119,6 +119,11 @@ fn name_schemas(
             binding["eventSchema"] = name(&document);
         }
     }
+    for cell in plan["stateCells"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = cell.get("schema").cloned() {
+            cell["schema"] = name(&document);
+        }
+    }
     schemas
 }
 
@@ -1940,31 +1945,6 @@ impl<'a> Emitter<'_, '_, 'a> {
         place
     }
 
-    /// Records what each name of an expression the emitter does not
-    /// evaluate is bound to: the initial value of a state cell, which no
-    /// record of the plan holds.
-    fn note_names(&mut self, expression: &Expression<'a>) {
-        struct Names(Vec<(u32, u32, String)>);
-        impl<'a> oxc_ast_visit::Visit<'a> for Names {
-            fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
-                self.0
-                    .push((it.span.start, it.span.end, it.name.to_string()));
-            }
-        }
-        let mut names = Names(Vec::new());
-        oxc_ast_visit::Visit::visit_expression(&mut names, expression);
-        for (start, end, name) in names.0 {
-            if let Some(place) = self.env.get(&name) {
-                let fact = crate::emit::ExprFact {
-                    place: place.clone(),
-                    values: (self.values.len(), self.values.len()),
-                    states: (self.state_cells.len(), self.state_cells.len()),
-                };
-                self.facts.expression((start, end), fact);
-            }
-        }
-    }
-
     fn eval_inner(&mut self, expression: &Expression<'a>, hint: &str) -> Place {
         let expression = unwrap(expression);
         let at = expression.span().start;
@@ -2651,22 +2631,71 @@ impl<'a> Emitter<'_, '_, 'a> {
             .filter(|_| self.resolver.value_def(self.module, identifier).is_none())
     }
 
+    /// The first value a declaration gives the state cell made last
+    /// (ruling Z3; PL §1.3, "The first value of a state cell"). A value
+    /// that is a constant is the default of the cell's schema, and
+    /// nothing is written when the cell is created. Any other value is
+    /// computed by a cone of its own and written once, through a write
+    /// edge of that cone with target `state`, which `StateCell.first`
+    /// names.
+    /// The cone reads what the value is computed from by its value: the
+    /// cell holds the value, and no reference to an input.
+    fn first_value(&mut self, argument: &Expression<'a>, hint: &str) {
+        let cell = self.state_cells.len() - 1;
+        if matches!(unwrap(argument), Expression::Identifier(name) if name.name == "undefined") {
+            return;
+        }
+        // A name of the reactive tier is no constant, whatever a
+        // declaration of the module with the same name holds.
+        let bound = matches!(
+            unwrap(argument),
+            Expression::Identifier(name) if self.env.contains_key(name.name.as_str())
+        );
+        let constant = match bound {
+            true => None,
+            false => self.resolver.constant_value(self.module, argument, 0),
+        };
+        if let Some(constant) = constant {
+            self.state_cells[cell]["$default"] = constant;
+            return;
+        }
+        let saved = self.cone.take();
+        let at = argument.span().start;
+        let mut written = None;
+        let place = self.build(hint, at, |emitter, _| {
+            let (_, template) = emitter.one("value", |emitter| emitter.eval(argument, hint));
+            written = template.clone();
+            template
+        });
+        self.cone = saved;
+        let Place::Value(value, _) = place else {
+            return;
+        };
+        let cone = self.values[value].cone;
+        let mut write = Map::new();
+        write.insert(
+            "target".to_string(),
+            json!({ "kind": "state", "cell": cell, "path": [] }),
+        );
+        if let Some(template) = written {
+            write.insert("template".to_string(), template);
+        }
+        write.insert("constraints".to_string(), json!([]));
+        self.cones[cone].writes.push(Value::Object(write));
+        self.state_cells[cell]["first"] = json!({
+            "$cone": cone,
+            "write": self.cones[cone].writes.len() - 1,
+        });
+    }
+
     fn construct(&mut self, new: &NewExpression<'a>, hint: &str) -> Place {
         match self.constructor_scope(&new.callee) {
             Some(scope) => {
-                for argument in new.arguments.iter().filter_map(Argument::as_expression) {
-                    let saved = self.cone.take();
-                    let place = self.eval(argument, hint);
-                    self.cone = saved;
-                    if !matches!(place, Place::Const | Place::Record(_)) {
-                        self.unsupported(
-                            "an initial value of a state cell that is not a constant",
-                            argument.span().start,
-                        );
-                    }
-                }
                 let place = self.state_cell(scope, hint);
                 self.state_type(new.type_arguments.as_deref());
+                if let Some(argument) = new.arguments.first().and_then(Argument::as_expression) {
+                    self.first_value(argument, hint);
+                }
                 place
             }
             None => {
@@ -2755,10 +2784,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                         };
                         let place = self.state_cell(scope, &cause);
                         self.state_type(call.type_arguments.as_deref());
-                        if name == "of" {
-                            for argument in &arguments {
-                                self.note_names(argument);
-                            }
+                        if let ("of", Some(argument)) = (name, arguments.first()) {
+                            self.first_value(argument, hint);
                         }
                         return place;
                     }
@@ -6258,6 +6285,35 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .and_then(Value::as_u64)
             {
                 operation["implementation"] = json!({ "cone": position[cone as usize] });
+            }
+        }
+        // `StateCell.schema`: the value type of the cell's constructor,
+        // with a first value that is a constant as its default (PL §1.1;
+        // ruling Z3). `StateCell.first` names its cone by its place in
+        // `Plan.cones`.
+        for (index, cell) in self.state_cells.iter_mut().enumerate() {
+            let mut schema = match self.state_types.get(&index) {
+                Some(ty) => self.resolver.schema_of(*ty),
+                None => json!({}),
+            };
+            let Some(cell) = cell.as_object_mut() else {
+                continue;
+            };
+            if let (Some(default), Some(schema)) = (cell.remove("$default"), schema.as_object_mut())
+            {
+                schema.insert("default".to_string(), default);
+            }
+            cell.insert("schema".to_string(), schema);
+            if let Some(cone) = cell
+                .get("first")
+                .and_then(|first| first.get("$cone"))
+                .and_then(Value::as_u64)
+            {
+                let write = cell["first"]["write"].clone();
+                cell.insert(
+                    "first".to_string(),
+                    json!({ "cone": position[cone as usize], "write": write }),
+                );
             }
         }
         let dynamic_reads = std::mem::take(&mut self.dynamic_reads);

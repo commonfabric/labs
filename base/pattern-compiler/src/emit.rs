@@ -777,9 +777,21 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         format!("({code})")
     }
 
-    /// The first value of a state cell (PL §1.3: "the value a declaration
-    /// gives the cell is written when the cell is first created").
+    /// The first value of a state cell where it is not a constant (PL
+    /// §1.3, "The first value of a state cell"): the function of the
+    /// cone `StateCell.first` names, whose value the runtime writes once,
+    /// when the cell is first created. A first value that is a constant
+    /// is the default of the cell's schema and has no code.
     fn state_cell(&mut self, inner: &Expression<'a>, cell: usize) {
+        let Some(first) = self.generator.plan["stateCells"][cell]["first"]["cone"].as_u64() else {
+            return;
+        };
+        let cone = self
+            .generator
+            .finished
+            .position
+            .iter()
+            .position(|index| *index == first as usize);
         // The call that makes the cell is the receiver of a method such
         // as `.for(cause)` written after it.
         let mut inner = inner;
@@ -807,7 +819,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             _ => None,
         };
         let code = match argument {
-            Some(argument) => self.in_cone(None, |rewriter| rewriter.render(argument, Want::Pass)),
+            Some(argument) => self.in_cone(cone, |rewriter| rewriter.render(argument, Want::Use)),
             None => "undefined".to_string(),
         };
         self.generator

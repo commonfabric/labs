@@ -538,7 +538,12 @@ describe("a state cell in an element body over two equal plain values", () => {
     const [{ plan, unsupported }] = patterns;
     expect(unsupported).toEqual([]);
     expect(plan.stateCells).toEqual([
-      { name: "opened", scope: "space", within: [{ element: 0 }] },
+      {
+        name: "opened",
+        scope: "space",
+        within: [{ element: 0 }],
+        schema: plan.stateCells[0].schema,
+      },
     ]);
     const run = await runScenario({
       program: {

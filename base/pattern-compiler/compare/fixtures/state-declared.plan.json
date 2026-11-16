@@ -72,6 +72,7 @@
           "stateCells": [
             {
               "name": "pinned",
+              "schema": "unhashed:schema/2",
               "scope": "space",
               "within": []
             }
@@ -110,6 +111,18 @@
                 "pinned"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": "",
+              "ifc": {
+                "confidentiality": [
+                  "alice"
+                ]
+              },
+              "type": "string"
             }
           }
         ],

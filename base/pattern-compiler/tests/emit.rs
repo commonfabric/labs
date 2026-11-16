@@ -136,20 +136,107 @@ export const P = pattern<{ tag: Tag }>(({ tag }) => {
     assert!(text.contains("$rt.body(0, ($e, $s) => ("), "{text}");
 }
 
+/// The schema document a record of the plan names.
+fn schema_named(text: &str, name: &str, id: &Value) -> Value {
+    pattern_compiler::emit::request(true);
+    let analysis = analyze(&[SourceFile {
+        path: "case.tsx".to_string(),
+        text: text.to_string(),
+    }]);
+    pattern_compiler::emit::request(false);
+    analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some(name))
+        .expect("the pattern")
+        .schemas
+        .iter()
+        .find(|(known, _)| json!(known) == *id)
+        .map(|(_, document)| document.clone())
+        .unwrap_or_else(|| panic!("no schema {id}"))
+}
+
 #[test]
-fn a_state_cell_has_a_function_for_its_first_value() {
-    let (_, code) = emitted(
-        r#"import { pattern, Writable } from "commonfabric";
+fn a_constant_first_value_is_the_default_of_the_schema_of_the_state_cell() {
+    // Ruling Z3 (PL §1.3, "The first value of a state cell"): nothing is
+    // written when the cell is created, so no function gives the value.
+    let text = r#"import { pattern, Writable } from "commonfabric";
+const START = { at: "", tags: ["a"] };
 export const P = pattern<{ note: string }>(({ note }) => {
-  const count = Writable.of(7);
-  return { count, note };
+  const count = Writable.of<number>(7);
+  const draft = Writable.of(START);
+  const empty = Writable.of<string>();
+  return { count, draft, empty, note };
+});
+"#;
+    let (plan, code) = emitted(text, "P");
+    let cells = plan["stateCells"].as_array().expect("state cells");
+    assert_eq!(
+        schema_named(text, "P", &cells[0]["schema"]),
+        json!({ "type": "number", "default": 7 })
+    );
+    // A constant of the module with a static initializer is a constant.
+    assert_eq!(
+        schema_named(text, "P", &cells[1]["schema"])["default"],
+        json!({ "at": "", "tags": ["a"] })
+    );
+    // A declaration that gives no value has a schema with no default.
+    assert_eq!(
+        schema_named(text, "P", &cells[2]["schema"]),
+        json!({ "type": "string" })
+    );
+    for cell in cells {
+        assert!(cell.get("first").is_none(), "{cell}");
+    }
+    assert!(!source(&code).contains("$rt.state("), "{}", source(&code));
+    assert_eq!(code["states"], json!([]));
+}
+
+#[test]
+fn a_first_value_that_is_not_a_constant_is_a_cone_with_a_write_edge_to_the_cell() {
+    // Ruling Z3: the value is computed by a cone and written once, when
+    // the cell is first created, through a write edge with target `state`
+    // that `StateCell.first` names.
+    let (plan, code) = emitted(
+        r#"import { pattern, Writable } from "commonfabric";
+export const P = pattern<{ start: number; items: string[] }>(({ start, items }) => {
+  const count = Writable.of(start);
+  const rows = items.map((item, index) => {
+    const at = Writable.of(index);
+    return { item, at };
+  });
+  return { count, rows };
 });
 "#,
         "P",
     );
     let text = source(&code);
-    assert!(text.contains("$rt.state(0, ($h) => ((7)));"), "{text}");
-    assert_eq!(code["states"], json!([0]));
+    let cell = &plan["stateCells"][0];
+    let first = &cell["first"];
+    let cone = &plan["cones"][first["cone"].as_u64().expect("a cone") as usize];
+    let write = &cone["writes"][first["write"].as_u64().expect("a write") as usize];
+    assert_eq!(
+        write["target"],
+        json!({ "kind": "state", "cell": 0, "path": [] })
+    );
+    // The cone lists the slot the value reads.
+    let start = slot(&plan, "argument", &["start"], "value");
+    assert_eq!(cone["slots"], json!([start]));
+    assert!(
+        text.contains(&format!("$rt.state(0, ($h) => ($h.v($h.slot({start}))));")),
+        "{text}"
+    );
+    // `cell(index)` in an element body: the cone lists the index slot.
+    let index = slot(&plan, "index", &[], "value");
+    let first = &plan["stateCells"][1]["first"];
+    let cone = &plan["cones"][first["cone"].as_u64().expect("a cone") as usize];
+    assert_eq!(cone["slots"], json!([index]));
+    assert!(
+        text.contains(&format!("$rt.state(1, ($h) => ($h.slot({index})));")),
+        "{text}"
+    );
+    assert_eq!(code["states"], json!([0, 1]));
 }
 
 #[test]

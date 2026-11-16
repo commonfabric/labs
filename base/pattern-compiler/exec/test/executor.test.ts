@@ -52,21 +52,83 @@ describe("an instance", () => {
     expect(instance.counts.outputsWithoutEdge).toBe(0);
   });
 
-  it("stores the argument, the result, and one document per state cell", async () => {
+  it("stores no document for a state cell until something writes it", async () => {
     const instance = new Instance(await artifactOf("handler"), {
       secret: "s3cret",
       note: "n",
     });
+
+    // A constant first value is the default of the cell's schema: a read
+    // of the cell reads it, and nothing is written at creation.
+    expect(instance.documents()).toEqual({ "argument": 1, "result": 1 });
+    expect(instance.stateCells()).toEqual([
+      { name: "last", keys: [], value: "" },
+      { name: "log", keys: [], value: [] },
+    ]);
+    expect(instance.result()).toEqual({
+      last: "",
+      log: [],
+      note: "n",
+      record: { $stream: true },
+    });
+
+    instance.send(0, { text: "hello", extra: "x" });
 
     expect(instance.documents()).toEqual({
       "argument": 1,
       "result": 1,
       "state cell": 2,
     });
-    expect(instance.stateCells()).toEqual([
-      { name: "last", keys: [], value: "" },
-      { name: "log", keys: [], value: [] },
-    ]);
+  });
+
+  it("starts a write below the root of an empty cell from the default", async () => {
+    const instance = new Instance(await artifactOf("state-first"), {
+      start: 3,
+      items: [],
+    });
+    const draft = () =>
+      instance.stateCells().find(({ name }) => name === "draft")?.value;
+    expect(draft()).toEqual({ text: "", tags: ["new"] });
+
+    // As a writer through a handle to the cell would write one member.
+    instance.writeState("draft", ["text"], "hello");
+
+    expect(draft()).toEqual({ text: "hello", tags: ["new"] });
+  });
+
+  it("writes a first value that is not a constant once, at creation", async () => {
+    const instance = new Instance(await artifactOf("state-first"), {
+      start: 3,
+      items: ["a", "b"],
+    });
+
+    // `count` and the `at` of each element have a document, and `label`
+    // and `draft`, whose first value is a constant, have none.
+    expect(instance.documents()).toEqual({
+      "argument": 1,
+      "result": 1,
+      "state cell": 3,
+    });
+    const result = () =>
+      instance.result() as {
+        label: string;
+        count: number;
+        rows: { item: string; at: number }[];
+      };
+    expect(result().label).toBe("none");
+    expect(result().count).toBe(3);
+    expect(result().rows).toEqual([{ item: "a", at: 0 }, { item: "b", at: 1 }]);
+
+    // The cell holds the value and no reference to the input: a write of
+    // the cell leaves the input, and a change of the input the cell.
+    instance.send(0, {});
+    expect(result().count).toBe(4);
+    instance.writeArgument(["start"], 9);
+    expect(result().count).toBe(4);
+
+    // A move changes the index, and the cell of a key keeps its value.
+    instance.writeArgument(["items"], ["b", "a"]);
+    expect(result().rows).toEqual([{ item: "b", at: 1 }, { item: "a", at: 0 }]);
   });
 
   it("reads the default of a slot's schema where nothing is stored", async () => {
@@ -185,7 +247,9 @@ describe("an element construct", () => {
       ["b", true],
       ["a", false],
     ]);
-    expect(instance.documents()["state cell"]).toBe(2);
+    // One cell per key, and a document for the one the event wrote.
+    expect(instance.stateCells().length).toBe(2);
+    expect(instance.documents()["state cell"]).toBe(1);
   });
 
   it("evaluates again, after a move, the cones that read the index", async () => {

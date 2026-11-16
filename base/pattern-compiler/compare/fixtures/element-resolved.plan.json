@@ -319,6 +319,7 @@
           "stateCells": [
             {
               "name": "where",
+              "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
             }
@@ -412,6 +413,12 @@
             "id": "unhashed:schema/5",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "default": ""
             }
           }
         ],

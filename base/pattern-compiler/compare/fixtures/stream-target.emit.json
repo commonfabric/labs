@@ -26,13 +26,11 @@
             {
               "module": 0,
               "path": "compare/fixtures/stream-target.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.state(0, ($h) => ((0)));\n$rt.handler(1, ($e, $s) => { const { inc } = $s; return (() => inc.send({ by: 2 }))($e); });\n$rt.value(0, ($h) => ($rt.h(\"div\", { \"onClick\": $h.stream(1) }, [$h.slot(5)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(1, ($e, $s) => { const { inc } = $s; return (() => inc.send({ by: 2 }))($e); });"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.handler(1, ($e, $s) => { const { inc } = $s; return (() => inc.send({ by: 2 }))($e); });\n$rt.value(0, ($h) => ($rt.h(\"div\", { \"onClick\": $h.stream(1) }, [$h.slot(5)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(1, ($e, $s) => { const { inc } = $s; return (() => inc.send({ by: 2 }))($e); });"
             }
           ],
           "outputsBelow": [],
-          "states": [
-            0
-          ],
+          "states": [],
           "unlistedReads": [],
           "unsupported": [],
           "values": [
@@ -357,6 +355,7 @@
           "stateCells": [
             {
               "name": "count",
+              "schema": "unhashed:schema/4",
               "scope": "space",
               "within": []
             }
@@ -405,6 +404,12 @@
                 "by"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "default": 0
             }
           }
         ],

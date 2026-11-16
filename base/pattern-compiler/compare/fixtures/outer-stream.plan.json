@@ -428,6 +428,7 @@
           "stateCells": [
             {
               "name": "count",
+              "schema": "unhashed:schema/7",
               "scope": "space",
               "within": []
             }
@@ -504,6 +505,12 @@
                 "by"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "default": 0
             }
           }
         ],

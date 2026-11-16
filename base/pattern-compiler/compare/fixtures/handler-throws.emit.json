@@ -19,13 +19,11 @@
             {
               "module": 0,
               "path": "compare/fixtures/handler-throws.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst record = handler((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n});\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.state(0, ($h) => ((undefined)));\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst record = handler((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n});\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
-          "states": [
-            0
-          ],
+          "states": [],
           "unlistedReads": [],
           "unsupported": [],
           "values": [],
@@ -244,6 +242,7 @@
           "stateCells": [
             {
               "name": "last",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": []
             }
@@ -311,6 +310,15 @@
             "id": "unhashed:schema/4",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": [
+                "string",
+                "undefined"
+              ]
             }
           }
         ],

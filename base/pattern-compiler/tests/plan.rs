@@ -79,8 +79,15 @@ fn a_state_cell_takes_the_name_of_its_const_and_the_scope_of_its_constructor() {
     let plan = plan_of(&program(LIST), "List");
     assert_eq!(
         plan["stateCells"],
-        json!([{ "name": "filter", "scope": "session", "within": [] }])
+        json!([{
+            "name": "filter",
+            "scope": "session",
+            "within": [],
+            "schema": plan["stateCells"][0]["schema"],
+        }])
     );
+    // `StateCell.schema` names a schema document (PL §1.1).
+    assert!(plan["stateCells"][0]["schema"].is_string());
 }
 
 #[test]
@@ -396,7 +403,12 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
     let plan = plan_of(&analysis, "Outer");
     assert_eq!(
         plan["stateCells"],
-        json!([{ "name": "open", "scope": "space", "within": [{ "site": "row" }] }])
+        json!([{
+            "name": "open",
+            "scope": "space",
+            "within": [{ "site": "row" }],
+            "schema": plan["stateCells"][0]["schema"],
+        }])
     );
     assert_eq!(plan["children"], json!([]));
 }
@@ -431,7 +443,12 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
     let plan = plan_of(&analysis, "Outer");
     assert_eq!(
         plan["stateCells"],
-        json!([{ "name": "open", "scope": "space", "within": [{ "site": "row" }] }])
+        json!([{
+            "name": "open",
+            "scope": "space",
+            "within": [{ "site": "row" }],
+            "schema": plan["stateCells"][0]["schema"],
+        }])
     );
 }
 
@@ -2622,6 +2639,7 @@ fn a_tag_that_names_a_visible_pattern_is_compiled_in_under_a_site_step() {
             "name": "open",
             "scope": "space",
             "within": [{ "element": collection }, { "site": "Row" }],
+            "schema": plan["stateCells"][0]["schema"],
         }])
     );
     assert_eq!(

@@ -78,7 +78,9 @@ const WRITTEN: Record<string, Written[]> = {
  * The fixtures that are run with a generated scenario.
  * `fixtures/link-cycle.tsx` is not among them: its handlers make two cells
  * link to each other, and a read of the whole result of today's run then
- * rejects with a `LinkCycleError` outside the read.
+ * rejects with a `LinkCycleError` outside the read. `fixtures/state-first.tsx`
+ * is not either: it gives a state cell a first value that is not a
+ * constant, which today's cell constructor refuses.
  */
 const GENERATED = [
   "declared-writes",

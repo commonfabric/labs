@@ -338,6 +338,7 @@
           "stateCells": [
             {
               "name": "opened",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": [
                 {
@@ -394,6 +395,12 @@
             "id": "unhashed:schema/4",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "default": false
             }
           }
         ],

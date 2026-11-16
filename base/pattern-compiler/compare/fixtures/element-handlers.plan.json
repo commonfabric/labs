@@ -215,6 +215,7 @@
           "stateCells": [
             {
               "name": "picked",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": []
             }
@@ -292,6 +293,12 @@
             "id": "unhashed:schema/4",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "default": ""
             }
           }
         ],
@@ -1017,11 +1024,13 @@
           "stateCells": [
             {
               "name": "chosen",
+              "schema": "unhashed:schema/8",
               "scope": "space",
               "within": []
             },
             {
               "name": "picked",
+              "schema": "unhashed:schema/8",
               "scope": "space",
               "within": [
                 {
@@ -1157,6 +1166,12 @@
             "id": "unhashed:schema/7",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/8",
+            "schema": {
+              "default": ""
             }
           }
         ],

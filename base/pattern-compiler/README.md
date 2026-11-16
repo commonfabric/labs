@@ -205,21 +205,27 @@ place in the body's argument.
 A module's text registers a setup function for the pattern (`$rt.setup`) and for
 each pattern compiled into it, and each setup function registers a value
 function per value (`$rt.value`), the function of the body of each element
-construct (`$rt.element`), the function that gives a state cell its first value
-(`$rt.state`), and the function of a handler written in place (`$rt.handler`).
-The function of a sandboxed body is registered in the module it is written in
-(`$rt.body`).
+construct (`$rt.element`), the function of a first value of a state cell that is
+not a constant (`$rt.state`), and the function of a handler written in place
+(`$rt.handler`). The function of a sandboxed body is registered in the module it
+is written in (`$rt.body`).
+
+A first value of a state cell that is a constant is the default of
+`StateCell.schema`, and no code gives it. Any other first value is computed by a
+cone that has a write edge with target `state`, which `StateCell.first` names.
 
 `exec/executor.ts` runs an artifact on an argument, with Deno: it loads the
-module texts, makes the argument document, the result document and one document
-per state cell in memory, evaluates the kept outputs and the result, evaluates
-the body of an element construct once per element key, and handles an event by
-running the handler's body and evaluating again what read a position the body
-wrote. It instantiates no label, checks no constraint, persists nothing, and
-answers every effect as pending. It does not narrow a slot to its observation
-class, does not instantiate a pattern or bind a handler in a function body, and
-does not evaluate `reduce`, `elementById` or the debug strings. From the
-repository root:
+module texts, makes the argument document and the result document in memory,
+writes a first value that is not a constant once when its cell is created, makes
+the document of a state cell with the first write to it and reads the default of
+the cell's schema until then, evaluates the kept outputs and the result,
+evaluates the body of an element construct once per element key, and handles an
+event by running the handler's body and evaluating again what read a position
+the body wrote. It instantiates no label, checks no constraint, persists
+nothing, and answers every effect as pending. It does not narrow a slot to its
+observation class, does not instantiate a pattern or bind a handler in a
+function body, and does not evaluate `reduce`, `elementById` or the debug
+strings. From the repository root:
 
 ```sh
 base/pattern-compiler/target/release/pattern-compiler emit path/to/module.tsx > artifact.json

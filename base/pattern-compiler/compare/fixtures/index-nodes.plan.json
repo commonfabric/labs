@@ -574,11 +574,13 @@
           "stateCells": [
             {
               "name": "chosen",
+              "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
             },
             {
               "name": "cleared",
+              "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
             }
@@ -678,6 +680,12 @@
             "id": "unhashed:schema/5",
             "schema": {
               "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "default": 0
             }
           }
         ],

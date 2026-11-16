@@ -67,6 +67,12 @@ export type Plan = {
     name: string;
     scope: string;
     within: { element?: number; site?: string }[];
+    /** The schema of the cell's value, with a constant first value as
+     * its default. */
+    schema?: string;
+    /** The cone and its write edge that give a first value that is not
+     * a constant. */
+    first?: { cone: number; write: number };
   }[];
   operations: { kind: string; name: string }[];
   bindings: {
@@ -672,6 +678,8 @@ export class Instance {
   readonly #open = new Set<string>();
   /** The element table of each collection, by the keys around it. */
   readonly #tables = new Map<string, Element[]>();
+  /** The state cells that exist, by the identifier of their document. */
+  readonly #cells = new Map<string, { cell: number; keys: string[] }>();
   readonly #queue: { stream: StreamRef; event: unknown }[] = [];
   #result: Thunk | undefined;
   #created = 0;
@@ -697,14 +705,13 @@ export class Instance {
     this.store.create("argument", "argument", this.stored(argument));
     this.store.create("result", "result", undefined);
     this.#load();
-    // A state cell of the pattern's own body has its document from the
-    // start, and one of an element body from when its key enters the
-    // element table.
+    // A state cell of the pattern's own body exists from the start, and
+    // one of an element body from when its key enters the element table.
     this.#declare(new Map());
     this.settle();
   }
 
-  /** Makes the documents of the state cells declared for a context. */
+  /** Creates the state cells declared for a context. */
   #declare(context: Context): void {
     const steps = [...context.keys()];
     this.plan.stateCells.forEach((cell, index) => {
@@ -712,9 +719,9 @@ export class Instance {
         step.element === undefined ? [] : [step.element]
       );
       if (canonical(within) !== canonical(steps)) return;
-      // The function of a cell of a pattern compiled in inside a cone is
-      // registered when that cone is first evaluated.
-      if (!this.#states.has(index)) return;
+      // The function of the first value of a cell of a pattern compiled
+      // in inside a cone is registered when that cone is first evaluated.
+      if (cell.first !== undefined && !this.#states.has(index)) return;
       this.stateCell(index, new Host(this, context, undefined));
     });
   }
@@ -882,18 +889,31 @@ export class Instance {
   }
 
   /**
-   * The document of a state cell, made when it is first read, with the
-   * value its declaration gives it (PL §1.3).
+   * A state cell, created when it is first named (PL §1.3, "The first
+   * value of a state cell"). A first value that is a constant is the
+   * default of the cell's schema: nothing is written, the cell has no
+   * document until something writes it, and a read of it reads the
+   * default. A first value that is not a constant is computed by the
+   * cone `StateCell.first` names and written once, here.
    */
   stateCell(cell: number, host: Host): Ref {
     const record = this.plan.stateCells[cell];
     const keys = this.keysOf(record.within, host);
     const id = `state:${cell}:${canonical(keys)}`;
-    if (!this.store.has(id)) {
-      this.store.create(id, "state cell", undefined);
-      const first = this.#states.get(cell);
+    if (!this.#cells.has(id)) {
+      this.#cells.set(id, { cell, keys });
+      const schema = this.schemaOf(record.schema);
+      this.store.declare(
+        id,
+        "state cell",
+        typeof schema === "object" ? schema.default : undefined,
+      );
+      const first = record.first === undefined
+        ? undefined
+        : this.#states.get(cell);
       if (first !== undefined) {
-        const reader = new Host(this, host.context, undefined);
+        const reader = new Host(this, host.context, record.first?.cone);
+        this.counts.evaluations += 1;
         this.store.write(new Ref(id, []), this.stored(first(reader)));
       }
     }
@@ -1396,19 +1416,31 @@ export class Instance {
     return this.store.read(new Ref("result", []));
   }
 
-  /** The value of each state cell that has a document. */
+  /**
+   * The value of each state cell that exists: what its document holds,
+   * or the default of its schema where nothing wrote it.
+   */
   stateCells(): { name: string; keys: string[]; value: unknown }[] {
-    const cells: { name: string; keys: string[]; value: unknown }[] = [];
-    for (const [id, document] of this.store.docs) {
-      if (document.kind !== "state cell") continue;
-      const [, cell, keys] = id.match(/^state:(\d+):(.*)$/s) ?? [];
-      cells.push({
-        name: this.plan.stateCells[Number(cell)].name,
-        keys: JSON.parse(keys),
-        value: this.store.read(new Ref(id, [])),
-      });
-    }
-    return cells;
+    return [...this.#cells].map(([id, { cell, keys }]) => ({
+      name: this.plan.stateCells[cell].name,
+      keys,
+      value: this.store.read(new Ref(id, [])),
+    }));
+  }
+
+  /**
+   * Writes a path of a state cell of the pattern's own body, as a writer
+   * that holds a handle to the cell does, and evaluates what read it.
+   */
+  writeState(name: string, path: string[], value: unknown): void {
+    const cell = this.plan.stateCells.findIndex((record) =>
+      record.name === name &&
+      record.within.every((step) => step.element === undefined)
+    );
+    if (cell < 0) throw new Unsupported(`no state cell named \`${name}\``);
+    const ref = this.stateCell(cell, new Host(this, new Map(), undefined));
+    this.store.write(ref.key(...path), this.stored(value));
+    this.settle();
   }
 
   /**

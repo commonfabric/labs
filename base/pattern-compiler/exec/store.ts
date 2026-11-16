@@ -130,6 +130,13 @@ const MAX_LINKS = 64;
 
 export class Store {
   readonly docs = new Map<string, { kind: string; value: unknown }>();
+  /**
+   * The places that hold nothing until a write: a state cell has no
+   * document when it is created, and a read of it reads the default of
+   * its schema (`plan-and-label-templates.md` §1.3, "The first value of
+   * a state cell").
+   */
+  readonly declared = new Map<string, { kind: string; default: unknown }>();
   /** Counts the writes and the evaluations whose value changed. */
   clock = 0;
   /** Every write: where, and the clock after it. */
@@ -147,8 +154,17 @@ export class Store {
     this.log.push({ doc: id, path: [], at: this.clock });
   }
 
-  has(id: string): boolean {
-    return this.docs.has(id);
+  /** Names a place that gets its document with the first write. */
+  declare(id: string, kind: string, fallback: unknown): void {
+    this.declared.set(id, { kind, default: fallback });
+  }
+
+  /** What a place holds: its document, or its default where it has none. */
+  #held(id: string): unknown {
+    const document = this.docs.get(id);
+    return document === undefined
+      ? this.declared.get(id)?.default
+      : document.value;
   }
 
   /**
@@ -163,7 +179,7 @@ export class Store {
     reads?: Position[],
   ): { ref: Ref; value: unknown } {
     let doc = ref.doc;
-    let value = this.docs.get(doc)?.value;
+    let value = this.#held(doc);
     let at: string[] = [];
     let schema = ref.schema;
     let rest = [...ref.path];
@@ -181,7 +197,7 @@ export class Store {
         doc = value.$link.doc;
         rest = [...value.$link.path, ...rest];
         at = [];
-        value = this.docs.get(doc)?.value;
+        value = this.#held(doc);
       }
       const segment = rest.shift();
       if (segment === undefined) break;
@@ -257,9 +273,22 @@ export class Store {
   write(ref: Ref, value: unknown): void {
     const located = this.locate(ref, !isLink(value) && !isStream(value));
     const { doc, path } = located.ref;
-    const document = this.docs.get(doc);
-    if (document === undefined) return;
-    if (JSON.stringify(located.value) === JSON.stringify(value)) return;
+    let document = this.docs.get(doc);
+    if (document === undefined) {
+      // The first write of a declared place makes its document. A write
+      // below the root starts from the default the place read as.
+      const declared = this.declared.get(doc);
+      if (declared === undefined) return;
+      document = {
+        kind: declared.kind,
+        value: path.length === 0
+          ? undefined
+          : structuredClone(declared.default),
+      };
+      this.docs.set(doc, document);
+    } else if (JSON.stringify(located.value) === JSON.stringify(value)) {
+      return;
+    }
     if (path.length === 0) {
       document.value = value;
     } else {
