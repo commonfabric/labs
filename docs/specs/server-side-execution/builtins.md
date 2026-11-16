@@ -152,16 +152,14 @@ inputs' labels, as a result does.
 
 `llm-dialog`'s ending reads its inputs only to find the scope they select,
 which only a caller with no publication binding needs, so an ending with one
-reads none, and the holder rule has no label of theirs to refuse it by.
+reads none, and carries no label of theirs.
 
 `compileAndRun`'s ending is not yet written that way. It decides whether a
-refused request is still its target's by reading the program, so where the
-holder rule refuses the request over the program's label, it refuses the ending
-too, and the node shows no error. Where the store does admit the label, the
-read stamps it on everything the ending writes, the memo's request hash
-included, so the node's next run takes it into its request, and a program the
-ceiling admits is refused as well. Deciding from an in-memory record of the
-latest run's program would end both, but would let an abandoned request's ending
+refused request is still its target's by reading the program, and the read
+stamps the program's label on everything the ending writes, the memo's request
+hash included, so the node's next run takes it into its request, and a program
+the ceiling admits is refused as well. Deciding from an in-memory record of the
+latest run's program would end that, but would let an abandoned request's ending
 land over a program another transaction put in its place before the node ran
 again, which the ending is held not to do. `fetch-program`'s ending reads the
 inputs and the cache to decide whether the request is still the node's, so it

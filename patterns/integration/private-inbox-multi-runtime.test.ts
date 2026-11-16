@@ -77,14 +77,6 @@ const writeRefusals = (
 ): number => cfcCount(counts, "write-policy-gate");
 
 /**
- * The writer-fit misfits of a served run's cross-holder clauses (§8.12.5.1),
- * out of one runtime's logger counts.
- */
-const crossHolderMisfits = (
-  counts: Record<string, Record<string, { total: number }> | number>,
-): number => cfcCount(counts, "writer-fit-cross-holder");
-
-/**
  * The trusted surface and action of the button on Home's refusal notice, as
  * `patterns/system/private-inbox/private-inbox.tsx` declares them
  * (`TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE`,
@@ -1359,21 +1351,27 @@ describe("private inbox across runtimes", () => {
     expect(await rows(sender)).toEqual(await rows(owner));
   });
 
-  it("refuses a stranger's served copy of the offers", {
+  it("lands a stranger's served copy of the offers", {
     ignore: !SERVER_EXECUTION,
   }, async () => {
+    // A served run is measured as any run is, so the copy commits, carrying
+    // the owner's clause. `owner-private-inbox-multi-runtime.test.ts` reads
+    // the copy's label, and says what then delivers it to the stranger
+    // (Topics top/3173).
+
     await offer("private");
 
     const before = (await harness.servingDiagnostics()).loggerCounts;
     await stranger.send("copyOffers");
-    await harness.settle();
-    // Refused for the copy's own write: the misfit is the holder rule's.
-    const after = (await harness.servingDiagnostics()).loggerCounts;
-    expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
-    expect(crossHolderMisfits(after)).toBeGreaterThan(
-      crossHolderMisfits(before),
+    await harness.settleUntil(async () =>
+      ((await owner.read(["copiedOffers"])) as unknown[]).length > 0 ||
+      writeRefusals((await harness.servingDiagnostics()).loggerCounts) >
+        writeRefusals(before)
     );
-    expect(await stranger.read(["copiedOffers"])).toEqual([]);
+    const after = (await harness.servingDiagnostics()).loggerCounts;
+    expect(writeRefusals(after)).toBe(writeRefusals(before));
+    expect(((await owner.read(["copiedOffers"])) as unknown[]).length)
+      .toBeGreaterThan(0);
   });
 
   it("replaces an inbox in Home's own private-inbox space with another piece in that space, leaving the refused one's offers in it", async () => {
@@ -1494,10 +1492,11 @@ describe("private inbox across runtimes", () => {
   // The two cases below copy the offers in a derivation, which keeps running
   // once started, so they come last. What a session reads afterwards is no
   // evidence here: this fixture's inbox space grants every principal `WRITE`,
-  // so each session's own runtime can run the same derivation itself. The
-  // served run's refusal is what each case checks.
+  // so each session's own runtime can run the same derivation itself. That
+  // the serving loop refuses no write of the served run is what each case
+  // checks.
 
-  it("refuses a stranger's served derivation of the offers", {
+  it("refuses no write of a stranger's served derivation of the offers", {
     ignore: !SERVER_EXECUTION,
   }, async () => {
     await offer("private");
@@ -1506,16 +1505,13 @@ describe("private inbox across runtimes", () => {
     await stranger.send("setDerivedCopy", { on: true });
     await harness.settle();
     const after = (await harness.servingDiagnostics()).loggerCounts;
-    expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
-    expect(crossHolderMisfits(after)).toBeGreaterThan(
-      crossHolderMisfits(before),
-    );
+    expect(writeRefusals(after)).toBe(writeRefusals(before));
     await stranger.send("setDerivedCopy", { on: false });
     await harness.settle();
   });
 
   it(
-    "refuses the served derivation of a piece a stranger's handler starts over a link to the offers",
+    "refuses no write of the served derivation of a piece a stranger's handler starts over a link to the offers",
     {
       ignore: !SERVER_EXECUTION,
     },
@@ -1529,10 +1525,7 @@ describe("private inbox across runtimes", () => {
       await stranger.send("startLinkedCopier");
       await harness.settle();
       const after = (await harness.servingDiagnostics()).loggerCounts;
-      expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
-      expect(crossHolderMisfits(after)).toBeGreaterThan(
-        crossHolderMisfits(before),
-      );
+      expect(writeRefusals(after)).toBe(writeRefusals(before));
     },
   );
 });

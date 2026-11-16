@@ -278,17 +278,21 @@ async function invoke<T>(
 }
 
 /**
- * The writer-fit misfits of a served run's cross-holder clauses (§8.12.5.1)
- * this process has logged, the in-process serving loop's among them.
+ * The commits the CFC write gate has refused in this process, the in-process
+ * serving loop's among them.
  */
-const crossHolderMisfits = (): number =>
-  getLogger("cfc").countsByKey["writer-fit-cross-holder"]?.debug ?? 0;
+const writeRefusals = (): number => {
+  const counts = getLogger("cfc").countsByKey["write-policy-gate"];
+  return counts === undefined
+    ? 0
+    : counts.debug + counts.info + counts.warn + counts.error;
+};
 
 /**
  * Observes a failed handler's generic terminal result without a value receipt.
  * `withheld` says the handling reads data the stream's space doesn't admit, so
  * a served one records its outcome withheld (events.md §5) and nothing of how
- * it ended; it is then seen to fail by the holder rule's refusal of its write.
+ * it ended; it is then seen to fail by the write gate's refusal of its commit.
  */
 async function rejectInvocation<T>(
   runtime: Runtime,
@@ -312,7 +316,7 @@ async function rejectInvocation<T>(
       | StreamEventsDocValue
       | undefined)?.entries ?? [];
   const index = entries().length;
-  const misfitsBefore = crossHolderMisfits();
+  const refusedBefore = writeRefusals();
   sendEvent(stream, event as T);
   if (withheld) {
     await awaitAdmitted(server, () => {
@@ -325,7 +329,7 @@ async function rejectInvocation<T>(
       status: undefined,
       reason: undefined,
     });
-    expect(crossHolderMisfits()).toBeGreaterThan(misfitsBefore);
+    expect(writeRefusals()).toBeGreaterThan(refusedBefore);
     return;
   }
   await awaitAdmitted(server, () => {

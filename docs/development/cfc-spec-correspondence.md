@@ -429,20 +429,6 @@ the route's pseudocode, so the kernel manifest carries no row for it until the
 next regeneration after the ruling. @danfuzz directed landing it this way. The
 conformance statement's §8 records the gap.
 
-The served-run holder rule (§8.12.5.1) implements
-[specs#95](https://github.com/commonfabric/specs/pull/95) ahead of its
-ruling. A served run, of any kind, admits a clause it read from a
-store whose holders don't include every holder of the target only by the
-target's residency. It refuses more than the pin at strict and persists
-nothing new, so it meets step 4's fail-closed condition against the pin.
-Against the proposal it admits one case more: residency's owner case, which
-lets a `PersonalSpace(P)` clause into a store bound to `P` and comes from the
-residency the pin's specs#68 marker already covers. Its two deciding sites
-carry the `SPEC-PENDING` marker, and the citation, to a
-section the snapshot does not hold, is exempted in
-`tasks/check-cfc-correspondence.ts`. The conformance statement's §5 records
-the gap and where the runtime differs from the proposal.
-
 The release that appends a write-policy alternative (§8.15.13 carve-out (c))
 implements [specs#96](https://github.com/commonfabric/specs/pull/96), stacked
 on [specs#52](https://github.com/commonfabric/specs/pull/52), ahead of its
