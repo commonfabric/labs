@@ -130,11 +130,18 @@ next.
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; its notes
-  through 272 are written into the documents, and notes 273 to 280,
-  which measure cost, are written into
+  lists the places where it found the documents ambiguous. Its notes
+  through 272 and notes 281 to 302 are written into the documents.
+  Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
-  below. No compared row of the corpus evaluates the label of an
+  below, and notes 303 to 306, the results of the value comparison,
+  into
+  [What the prototype's executor computes](#what-the-prototypes-executor-computes).
+  The latest prototype commit read is `3e518147df`, at which the crate
+  also emits value code and an executor runs a plan with it: in the
+  fixtures 122 of 122 compared values equal those of today's runtime,
+  and in the corpus 4,472 of 4,537, over the 186 modules the executor
+  runs. No compared row of the corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
   below the elements of a collection and by handlers with no
   compared write edge. Two fixtures of the prototype test the label of
@@ -1031,7 +1038,9 @@ answer goes to the specification with the document.
 
 10. **A value passed on unchanged is a reference** (FA question 2).
     *Assumed:* yes, as today, which makes "the stored value is a link to
-    the original" a rule of the language.
+    the original" a rule of the language. The values of the prototype's
+    corpus run need the rule. What a write stores where the reference
+    leads into what the write replaces is question 84 of ES.
 11. **A label-only change** (SS question 8). *Assumed:* a demanded kept
     output is instantiated again without running value code.
 
@@ -1329,6 +1338,8 @@ as an assumption.
 103. **How value code reads the child a dynamic key chose** (PL question
     46). *Assumed:* it is handed every child. `execution-and-storage.md`
     §2.2 gives `ConeHost.slot` no key, which disagrees with PL §3.18.
+    The assumption was enough for the three corpus modules with such a
+    read that the prototype's executor ran.
 104. **The plan record of `wish`** (PL questions 47 and 48). *Assumed:*
     one operation of kind `wish`, whose result is read through slots
     rooted at the operation and labeled with the request joined with
@@ -1535,13 +1546,61 @@ as an assumption.
     value from the index or another input. *Assumed:* a declared
     value that is not a constant is a write edge to the state cell,
     performed once when the cell is first created. The alternative
-    refuses such a declaration in the reactive tier.
+    refuses such a declaration in the reactive tier. No record holds a
+    constant first value either. *Assumed:* a first value that reads no
+    slot is in the value code, as a function per state cell, and has no
+    label. The prototype emits such a function for every state cell and
+    no write edge: of 1,399, 3 read a slot, through no cone, so that no
+    record lists the read and no template has its label. The question
+    is where the plan holds the first value, and what the label of one
+    computed from an input is.
 140. **The transaction that creates an instance outside a handler**
     (ES question 77). *Assumed:* one transaction that writes the
     argument and evaluates nothing, so that a new instance settles in
     two transactions. The alternative evaluates in the creating
     transaction. The derived count of two transactions to settle
     rests on the assumption.
+
+**From the prototype's executor.** Each is written into the documents
+as an assumption, which is what the prototype does.
+
+141. **The `within` of a cone** (PL question 98). PL §1.4 refers to
+     it, and nothing else in a plan says for which element keys an
+     instance of a cone exists. *Assumed:*
+     `Cone.within` holds the steps of where the cone's code is written,
+     and its `element` steps name the collections. Open beside the
+     member itself: whether it holds the `site` steps or the
+     collections alone.
+142. **Where a slot of `Body.reads` sits in the body's argument** (PL
+     question 99). For a body that is no handler, the root and the path
+     of a slot are those of what the caller passed. *Assumed:* the
+     compiler emits the place of each such slot beside the plan. The
+     alternative gives an entry of `Body.reads` an `at`, as an entry of
+     `Body.computed` has.
+143. **A path that the call of a pattern compiled in leaves out** (PL
+     question 100). *Assumed:* it reads the default of the callee's
+     declared argument type, held in the value code; and a path bound
+     to a slot of the caller at which nothing is stored reads the
+     default of the caller's schema, not the callee's.
+144. **Who places a stream in a computed value** (ES question 78).
+     *Assumed:* the value function, through a fourth function of
+     `ConeHost`, and `Binding.result` describes the positions. The
+     alternative has the runtime fill in the paths of `Binding.result`,
+     which a path with `*` and a path below a conditional do not
+     determine.
+145. **A moved element that is passed on by reference** (ES question
+     79). For a plain value stored in place, the row holds a link to
+     the position, which a move gives another value. *Assumed:* a cone
+     instance that passes such an element on is evaluated again when
+     the address its element slot was bound to changed. This evaluates
+     more on a move than the ruling on the index names. The alternative
+     has the row hold the value and evaluates nothing.
+146. **What demands a cone whose only effect is a side-write** (ES
+     question 80), where the result passes the written cell on by
+     reference and no output of the cone is kept. *Assumed:* demand on
+     the kept path that passes the cell on is demand on the cones of
+     the pattern's own body that write it. The alternative leaves the
+     cone to the first read of the cell.
 
 ## Open, and not needing the owner
 
@@ -1576,6 +1635,22 @@ as an assumption.
 - **Uneven wording.** `language-subset.md` says selector where the other
   documents say key function, and it cites open questions of the newer
   documents by number.
+- **Four assumptions `execution-and-storage.md` made from the
+  prototype's executor** (its questions 81 to 84): the text of the
+  value-code module, with one function per source module so that a
+  name of module scope resolves as in the source; what a value function
+  returns for a constructed value and for the constant paths of the
+  result; when the document of a state cell with a declared value is
+  written; and what a write stores where a value passed on unchanged
+  refers into what the write replaces.
+- **Defects of the prototype that the value comparison depends on:** a
+  pattern compiled in at a call inside an initializer is evaluated in
+  the caller's cone; the cone of an array written in place lists no
+  slot of what its members hold; a constant captured by a handler that
+  is not a literal at the binding is held as `null`; no code is emitted
+  for a `reduce` in the reactive tier or a spread in the argument of a
+  pattern; and 8 modules with 23 differing values, and 8 modules whose
+  value code fails, are not examined.
 
 The open questions each document ends with stay where they are.
 
