@@ -481,21 +481,23 @@ The strict-only delta is:
   every value write made under an identity other than a builtin's, an
   unattributed or a verified one alike (`CfcTxState.unattestedWrites`), and a
   document such a write reached is measured, marker or not, as any writer's
-  would be. A later builtin write to the same path does not lift that: a
-  builtin can read the transaction's view and write it back, so its write is
-  no evidence that the value is its own, and the rule cannot rely on every
-  builtin guarding what it carries. The cache writer does guard its
-  delegation-list carry: a list another identity wrote in the transaction is
-  no candidate (`writtenByAnotherIdentity()` in `cell-cache.ts`). The
-  annotations it carries bear no evidence and leave the record measured. So
-  after a labeled read, a pattern's or
-  an unattributed host's write of a cache record misfits, whether it comes
-  before or after the cache writer's in the transaction, or in a transaction
-  of its own. A write made under any builtin identity is the runtime's own and
-  stays exempt. The compiler's attestation is held to the same line as every
-  runtime-minted atom: `gateRuntimeMintedIntegrity` treats a schema's evidence
-  at a path such a write overlaps as it treats an unattributed write's, so a
-  record keeps no attestation over a value another identity chose.
+  would be. A later builtin write to the same path does not lift that: a builtin
+  can read the transaction's view and write it back, so its write is no evidence
+  that the value is its own, and the rule cannot rely on every builtin guarding
+  what it carries. The cache writer does guard its delegation-list carry: a list
+  another identity wrote in the transaction is carried into neither record's
+  list (`writtenByAnotherIdentity()` in `cell-cache.ts`), and on a compiled
+  record, whose attestation sits at its root, another identity's write anywhere
+  on it excludes its list. It carries the annotations even where another
+  identity wrote them: they bear no evidence, and that identity's write leaves
+  the record measured. So after a labeled read, a pattern's or an unattributed
+  host's write of a cache record misfits, whether it comes before or after the
+  cache writer's in the transaction, or in a transaction of its own. A write
+  made under any builtin identity is the runtime's own and stays exempt. The
+  compiler's attestation is held to the same line as every runtime-minted atom:
+  `gateRuntimeMintedIntegrity` treats a schema's evidence at a path such a write
+  overlaps as it treats an unattributed write's, so a record keeps no
+  attestation over a value another identity chose.
 
   One thing this class does NOT take from §18.6.2 is its write-side mirror.
   That section states its read exclusion as mirroring "the write-side rule
