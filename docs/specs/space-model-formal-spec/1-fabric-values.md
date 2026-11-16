@@ -1532,11 +1532,19 @@ produces a `ProblematicValue` (Section 3.5) rather than an instance.
 **The message has a default, and the default is not state.** `message`
 returns the stored message, or a fixed message for the kind when none is
 stored; `rawMessage` returns the stored message alone, `null` when there is
-none. A message given at construction that equals its kind's default is
-stored as no message at all, so the two ways of arriving at the default are
-one state: they encode alike, hash alike, and are equal by content. The
-default text is presentation, never encoded or hashed, and may change without
-a format change.
+none. The default text is presentation, and may change without a format
+change.
+
+This implementation stores a message given to the constructor that equals its
+kind's default as no message at all, so the two ways a caller can ask for the
+default construct one state: those two instances encode alike, hash alike, and
+are equal by content. That is a fact about how this implementation builds an
+instance from a caller's arguments, not a rule of either wire format or of the
+hash: to a format, a message is a string like any other. Decoding keeps a state
+exactly as it arrived, so a decoded state whose message equals its kind's
+default keeps that message. Such an instance is a different state from one
+constructed with the same text: it re-encodes with the message, hashes with
+it, and is unequal by content to the constructed one.
 
 **Prefab instances.** The two transient reasons each have one exported
 instance, `UNAVAILABLE_PENDING` and `UNAVAILABLE_SYNCING`, and both wire

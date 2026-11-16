@@ -19,8 +19,15 @@ import {
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
   REALM_CODEC,
+  UnknownValue,
 } from "@/codec-common";
-import type { RealmCodecValue } from "@/codec-realm";
+import type { RealmCodecValue, RealmEncodedValue } from "@/codec-realm";
+import {
+  jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
+  newDefaultRealmCodecEngine,
+  realmFromFabricValue,
+} from "@/codecs.ts";
 import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 
 /** Fixed public-key bytes for deterministic tests. */
@@ -32,6 +39,17 @@ const PRIVATE_BYTES = new Uint8Array([250, 251, 252, 253]);
 /** Returns a fresh instance holding material. */
 function materialPair(): FabricKeyPair {
   return new FabricKeyPair("ExampleAlgorithm", PUBLIC_BYTES, PRIVATE_BYTES);
+}
+
+/**
+ * Returns the realm form of a value tagged `KeyPair@1` over `state`, built by
+ * hand so that it can carry a state this class never writes.
+ */
+function realmFormOf(state: object): RealmEncodedValue {
+  const marker = realmFromFabricValue(null)[0];
+  const tagged = [marker, CODEC_TYPE_TAGS.KeyPair, state];
+
+  return [marker, tagged as RealmCodecValue];
 }
 
 /** A fixed non-extractable pair, so identity checks have a stable subject. */
@@ -390,6 +408,17 @@ describe("FabricKeyPair", () => {
             }),
           ).toBe(false);
         });
+
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(
+            codec.canDecode({
+              algorithm: "ExampleAlgorithm",
+              publicKey: new FabricBytes(PUBLIC_BYTES),
+              privateKey: new FabricBytes(PRIVATE_BYTES),
+              extra: "x",
+            }),
+          ).toBe(false);
+        });
       });
 
       describe("decode()", () => {
@@ -524,6 +553,27 @@ describe("FabricKeyPair", () => {
           ).toBe(false);
         });
 
+        it("returns `false` for a material state holding a key it does not read", () => {
+          expect(
+            codec.canDecode({
+              algorithm: "ExampleAlgorithm",
+              publicKey: new ArrayBuffer(1),
+              privateKey: new ArrayBuffer(1),
+              extra: "x",
+            }),
+          ).toBe(false);
+        });
+
+        it("returns `false` for a handle state holding a key it does not read", async () => {
+          const { publicKey, privateKey } = await generatePair();
+
+          expect(codec.canDecode({ publicKey, privateKey, extra: "x" }))
+            .toBe(false);
+          expect(
+            codec.canDecode({ algorithm: undefined, publicKey, privateKey }),
+          ).toBe(false);
+        });
+
         it("returns `false` for state that is not a record", () => {
           expect(codec.canDecode(123)).toBe(false);
         });
@@ -569,6 +619,57 @@ describe("FabricKeyPair", () => {
           expect(decoded.cryptoKeyPair.privateKey).toBe(source.privateKey);
         });
       });
+    });
+  });
+
+  describe("under an engine", () => {
+    const env = NULL_LIVE_ENVIRONMENT;
+
+    it("decodes JSON whose state holds a key it does not read to a `ProblematicValue` preserving the state", () => {
+      const state = {
+        algorithm: "ExampleAlgorithm",
+        publicKey: new FabricBytes(PUBLIC_BYTES),
+        privateKey: new FabricBytes(PRIVATE_BYTES),
+        extra: "x",
+      };
+      const text = jsonFromFabricValue(
+        new UnknownValue(CODEC_TYPE_TAGS.KeyPair, state),
+      );
+      const decoded = newDefaultJsonCodecEngine({ lenient: true })
+        .decode(text, env);
+
+      expect(decoded).toBeInstanceOf(ProblematicValue);
+      expect((decoded as ProblematicValue).wireTypeTag)
+        .toBe(CODEC_TYPE_TAGS.KeyPair);
+      expect(jsonFromFabricValue((decoded as ProblematicValue).state))
+        .toBe(jsonFromFabricValue(state));
+      expect(() => newDefaultJsonCodecEngine().decode(text, env)).toThrow();
+    });
+
+    it("decodes a realm form whose state holds a key it does not read to a `ProblematicValue` reporting the state", () => {
+      // The state holds buffers, which are not `FabricValue`s, so what the
+      // `ProblematicValue` preserves is a rendering of it.
+
+      const stateWithExtra = () => ({
+        algorithm: "ExampleAlgorithm",
+        publicKey: new ArrayBuffer(1),
+        privateKey: new ArrayBuffer(2),
+        extra: "x",
+      });
+      const decoded = newDefaultRealmCodecEngine({ lenient: true })
+        .decode(realmFormOf(stateWithExtra()), env);
+
+      expect(decoded).toBeInstanceOf(ProblematicValue);
+      expect((decoded as ProblematicValue).wireTypeTag)
+        .toBe(CODEC_TYPE_TAGS.KeyPair);
+      expect((decoded as ProblematicValue).state)
+        .toMatch(/algorithm.*publicKey.*privateKey.*extra/);
+      expect(() =>
+        newDefaultRealmCodecEngine().decode(
+          realmFormOf(stateWithExtra()),
+          env,
+        )
+      ).toThrow();
     });
   });
 

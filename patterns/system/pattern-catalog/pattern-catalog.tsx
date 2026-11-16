@@ -203,8 +203,12 @@ export interface GetItButtonInput {
   catalog: PatternCatalog;
   patternId: string;
   destination: CatalogDestination;
-  /** The button's label; "Get it" by default. */
-  label?: string;
+  /**
+   * The name of the place `destination` stands for, as the person knows it
+   * (such as the loom's name). The button says it installs onto this; it says
+   * nothing about where when the name is absent.
+   */
+  destinationName?: string;
 }
 
 /** What `GetItButton` returns. */
@@ -218,14 +222,18 @@ export interface GetItButtonOutput {
 }
 
 /**
- * The one way to get a pattern: a person's tap on this button. It shows the
- * answer to the latest request for its pattern and destination, and stays
+ * The one way to get a pattern: a person's tap on this button. The button is a
+ * `cf-pattern-install`, which says in its own words what a tap does: "Install
+ * “title” onto destination", with the title taken from the catalog's own
+ * `entries` for `patternId` (the id when the window does not hold it), never
+ * from text the caller passes. It shows the answer to the latest request for
+ * its pattern and destination, and stays
  * disabled while that request is open, once it is placed, and while the
  * catalog cannot answer, no host acts on its requests, or there is nowhere to
  * put the pattern.
  */
 export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
-  ({ catalog, patternId, destination, label }) => {
+  ({ catalog, patternId, destination, destinationName }) => {
     const getIt = requestGetIt({
       getItRequests: catalog.getItRequests,
       getItAnswers: catalog.getItAnswers,
@@ -234,6 +242,10 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       patternId,
       destination,
     });
+    const patternTitle = computed(() =>
+      (catalog.entries ?? []).find((entry) => entry?.patternId === patternId)
+        ?.title ?? ""
+    );
     const latest = computed(() =>
       latestRequest(catalog.getItRequests, patternId, destination)
     );
@@ -244,6 +256,7 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
         { state: "started" };
     });
     const blocked = computed((): string => {
+      if (!patternId) return "There is no pattern to get";
       if (!destination) return "There is nowhere to put it";
       if (catalog.status?.state !== "ready") {
         const reason = catalog.status?.reason ??
@@ -279,13 +292,14 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
           data-ui-pattern={GET_IT_SURFACE}
           data-ui-event-integrity={GET_IT_SURFACE}
         >
-          <cf-button
+          <cf-pattern-install
             data-ui-action={GET_IT_ACTION}
+            patternId={patternId}
+            patternTitle={patternTitle}
+            destinationName={destinationName}
             disabled={disabled}
             onClick={getIt}
-          >
-            {computed(() => label || "Get it")}
-          </cf-button>
+          />
           <span
             style={{
               fontSize: "13px",

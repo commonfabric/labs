@@ -515,9 +515,10 @@ whose type tag is `Unavailable@1` and whose encoded state is its state record
 (`1-fabric-values.md` Section 1.4.12): a plain object holding `reason`, then
 for reason `error` also `errorKind`, and `message` when one is stored, hashed
 per Section 4.13. It therefore hashes alike with an `UnknownValue` carrying
-the same tag and state. The default message a kind supplies is not part of the
-state, so an `error` whose message is its kind's default hashes as one with no
-message. Section 7.20 works an example.
+the same tag and state. The hash covers the state record as it stands: a
+default message the class supplies when none is stored is not part of that
+record, and a stored message is, whatever its text. Section 7.20 works an
+example.
 
 ### 4.19 Cycles
 
