@@ -10,6 +10,7 @@ import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 
 import { type Artifact, Instance, Unsupported } from "../exec/executor.ts";
+import { eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
   type EventOutcome,
   type Plan,
@@ -406,6 +407,8 @@ export const compareValues = (
     // An event the runtime refused changed nothing, and the executor,
     // which checks no label, is not sent it.
     if (outcome.outcome !== "committed") return;
+    // The seed today's run had for this event (`random.ts`).
+    seedRandom(eventSeed(index));
     try {
       const handled = instance.send(
         binding,
@@ -423,6 +426,8 @@ export const compareValues = (
       comparison.failedEvents.push(
         `${artifact.plan.bindings[binding].name}: ${category}: ${detail}`,
       );
+    } finally {
+      restoreRandom();
     }
   });
   comparison.streams = instance.streamPositions();

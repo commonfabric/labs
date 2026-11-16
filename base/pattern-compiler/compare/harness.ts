@@ -26,6 +26,7 @@ import type { RuntimeProgram } from "../../../runtime/runner/src/harness/types.t
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import { eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
   type Atom,
   atomKey,
@@ -2343,7 +2344,12 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
     // The fewest links the harness saw stored at the path of each write
     // target: what the path holds where no run stored a link there.
     const fewest = new Map<string, number>();
-    for (const { binding, event } of scenario.events ?? []) {
+    for (
+      const [sent, { binding, event }] of (scenario.events ?? []).entries()
+    ) {
+      // A handler that draws from `Math.random` draws what the executor
+      // draws for the same event (`random.ts`).
+      seedRandom(eventSeed(sent));
       const record = plan.bindings?.[binding];
       const name = `event of ${record?.name ?? binding}`;
       const inElement = (record?.within ?? []).some((step) =>
@@ -2573,6 +2579,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         });
       });
     }
+    restoreRandom();
 
     // Whether an output with no value has one once it is read on its own:
     // the first read of the outputs reads a path up to its first `*`.

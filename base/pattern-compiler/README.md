@@ -419,7 +419,11 @@ deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts again valu
 ```
 
 `run` keeps what today's runtime computed in the results file, and `again` runs
-the executor alone on the crate's current output against it. Notes 281 on of
+the executor alone on the crate's current output against it. Before each event
+the comparison seeds `Math.random` alike on both sides (`compare/random.ts`), so
+a handler that draws a number, as the shuffle of
+`patterns/showcase/card-piles/main.tsx` does, draws the same one in today's run
+and in the executor's (`compare/fixtures/random.tsx`). Notes 281 on of
 `SPEC-NOTES.md` list what the executor needed that the plan and the documents do
 not give, and what the comparison found. Notes 307 on say what the rulings of
 2026-11-16 on those needs changed in the crate and the executor, what they leave

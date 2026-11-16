@@ -90,6 +90,10 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 5, event: {} },
     ],
   }],
+  "random": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
   "flat-keys": [{
     argument: {
       groups: [

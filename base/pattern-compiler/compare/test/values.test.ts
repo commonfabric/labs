@@ -56,6 +56,16 @@ describe("firstDifference", () => {
 });
 
 describe("the values of a fixture", () => {
+  it("are equal for a handler that draws from `Math.random`, which is seeded on both sides", async () => {
+    const [{ comparison }] = await compareFixtures("random");
+
+    expect(comparison.notExecuted).toBeUndefined();
+    expect(comparison.failedEvents).toEqual([]);
+    expect(comparison.differences).toEqual([]);
+    // The settled values and those after each of the two events.
+    expect(comparison.compared).toBe(18);
+  });
+
   it("are equal for a handler that sets a cell and pushes onto a list", async () => {
     const [{ comparison }] = await compareFixtures("handler");
 
