@@ -5838,7 +5838,7 @@ export class Server {
           // a distinct file per principal/session, so each needs its own DDL run
           // even though (space, id, schema) match.
           const key = `${space}\0${id}\0${scopeKey}\0${JSON.stringify(tables)}`;
-          if (!this.#ensuredSchemas.has(key)) {
+          if (this.#ensuredSchemas.get(key) === undefined) {
             ensureTables(
               engine.database,
               tables as Record<string, TableSchema>,

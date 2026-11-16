@@ -3250,7 +3250,7 @@ export const parseMemoryProtocolFlags = (
   if (!isPlainObject(value)) {
     return null;
   }
-  for (const name in BOOLEAN_MEMORY_PROTOCOL_FLAGS) {
+  for (const name of Object.keys(BOOLEAN_MEMORY_PROTOCOL_FLAGS)) {
     if (value[name] !== undefined && typeof value[name] !== "boolean") {
       return null;
     }
