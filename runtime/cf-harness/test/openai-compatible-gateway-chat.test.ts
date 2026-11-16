@@ -1,4 +1,9 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { encodeBase64 } from "@std/encoding/base64";
+import { join } from "@std/path";
+import { createHarnessImageAttachment } from "../src/image-attachments.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
@@ -320,4 +325,104 @@ Deno.test("other Responses failures pass the body through", async () => {
     Error,
     "responses request failed (400)",
   );
+});
+
+describe("openai-compatible-gateway", () => {
+  describe("OpenAICompatibleGatewayModelClient", () => {
+    describe("complete() on Chat Completions", () => {
+      const PNG = new Uint8Array([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a,
+      ]);
+
+      const attachImage = async () => {
+        const directory = await Deno.makeTempDir();
+        await Deno.writeFile(join(directory, "image.png"), PNG);
+        return {
+          directory,
+          attachment: await createHarnessImageAttachment({
+            workspaceHostPath: directory,
+            cwd: directory,
+            path: "image.png",
+          }),
+        };
+      };
+
+      it("sends a user message's text and images as content parts", async () => {
+        const { directory, attachment } = await attachImage();
+        try {
+          const captured: Captured[] = [];
+          const client = clientWith(captured, () => ({
+            body: assistantText("A PNG."),
+          }));
+
+          await client.complete(turn({
+            transcript: [
+              {
+                role: "user",
+                content: "What is this?",
+                imageAttachments: [attachment],
+              },
+              { role: "user", content: "", imageAttachments: [attachment] },
+            ],
+          }));
+
+          const image = {
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${encodeBase64(PNG)}` },
+          };
+          expect(captured[0].body.messages).toEqual([
+            {
+              role: "user",
+              content: [{ type: "text", text: "What is this?" }, image],
+            },
+            { role: "user", content: [image] },
+          ]);
+        } finally {
+          await Deno.remove(directory, { recursive: true });
+        }
+      });
+
+      it("returns the response's native model tool results on the assistant message", async () => {
+        const client = clientWith([], () => ({
+          body: {
+            ...assistantText("Searched."),
+            native_model_tool_results: [
+              {
+                type: "google_search",
+                provider: "google",
+                providerMetadata: { queries: ["tallest tower"] },
+                sources: [{ url: "https://example.com/" }],
+              },
+              { type: "google_search" },
+            ],
+          },
+        }));
+
+        const result = await client.complete(
+          turn({ nativeModelToolIds: ["google_search"] }),
+        );
+
+        expect(result.assistant.nativeModelToolResults).toEqual([
+          {
+            type: "cf-harness.native-model-tool-result",
+            toolId: "google_search",
+            provider: "google",
+            providerMetadata: { queries: ["tallest tower"] },
+            sources: [{ url: "https://example.com/" }],
+          },
+          {
+            type: "cf-harness.native-model-tool-result",
+            toolId: "google_search",
+          },
+        ]);
+      });
+    });
+  });
 });

@@ -1,4 +1,5 @@
 import type {
+  PatternIndexClient,
   PatternIndexEventType,
   PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
@@ -973,15 +974,6 @@ export const runPatternTool: HarnessToolDefinition<
       );
     }
     const { sourceText, patternId } = input;
-    if (sourceText !== undefined && patternId !== undefined) {
-      return errorOutput(
-        "error",
-        "run_pattern takes sourceText or patternId, not both; pass your own source or the id of an indexed pattern",
-      );
-    }
-    if (sourceText === undefined && patternId === undefined) {
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
-    }
     // The run's index client and its ledger, held once: which of the index
     // paths below run is decided by the call and by whether the run has an
     // index at all, and both questions are settled here rather than at each of
@@ -990,14 +982,28 @@ export const runPatternTool: HarnessToolDefinition<
     // it had to say.
     const getPatternIndexClient = context.getPatternIndexClient;
     const patternIndexLedger = context.patternIndexLedger;
-    if (
-      patternId !== undefined &&
-      (getPatternIndexClient === undefined || patternIndexLedger === undefined)
+    let named:
+      | { sourceText: string }
+      | { patternId: string; getClient: () => Promise<PatternIndexClient> };
+    if (sourceText !== undefined) {
+      if (patternId !== undefined) {
+        return errorOutput(
+          "error",
+          "run_pattern takes sourceText or patternId, not both; pass your own source or the id of an indexed pattern",
+        );
+      }
+      named = { sourceText };
+    } else if (patternId === undefined) {
+      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
+    } else if (
+      getPatternIndexClient === undefined || patternIndexLedger === undefined
     ) {
       return errorOutput(
         "error",
         "run_pattern patternId requires a pattern index; configure --pattern-index-url, or pass sourceText instead",
       );
+    } else {
+      named = { patternId, getClient: getPatternIndexClient };
     }
     if (sourceText !== undefined) {
       const sourceTextBytes = new TextEncoder().encode(sourceText).length;
@@ -1099,13 +1105,13 @@ export const runPatternTool: HarnessToolDefinition<
     // quote indexed source goes only to the artifact.
     let program: RuntimeProgram;
     let pattern: Pattern;
-    if (patternId !== undefined && getPatternIndexClient !== undefined) {
+    if ("patternId" in named) {
       try {
         ({ program, pattern } = await compileIndexedPattern({
           runtime: pieces.runtime,
           space,
-          patternId,
-          getClient: getPatternIndexClient,
+          patternId: named.patternId,
+          getClient: named.getClient,
         }));
       } catch (error) {
         if (!(error instanceof IndexedPatternError)) throw error;
@@ -1119,10 +1125,10 @@ export const runPatternTool: HarnessToolDefinition<
             : {}),
         };
       }
-    } else if (sourceText !== undefined) {
+    } else {
       program = {
         main: RUN_PATTERN_SOURCE_MAIN,
-        files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: sourceText }],
+        files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: named.sourceText }],
       };
       // A `cf:pattern:` import resolves from the space's own source cache, and
       // for a pattern this space has never run there is nothing there to
@@ -1159,12 +1165,6 @@ export const runPatternTool: HarnessToolDefinition<
           withRuntimeModuleCorrection(describeFailure(error)),
         );
       }
-    } else {
-      // Unreachable: a call naming neither was refused above, and one naming
-      // a `patternId` without an index with it. The pair's exclusivity is a
-      // fact about those checks rather than about the input type, so the
-      // branch is written out instead of asserted away.
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
     }
     // An input's value must match the compiled pattern's argument schema for
     // its key before any piece exists, so a mismatch is a model-correctable

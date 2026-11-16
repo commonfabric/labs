@@ -13,6 +13,7 @@ import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
   type HandleTokenHasher,
+  markHandleDescribed,
   mergeHarnessHandleTables,
   mintAddressHandle,
   mintReferentHandle,
@@ -974,6 +975,23 @@ describe("handle-table", () => {
 
       expect(() => assertValidHarnessHandleTable(broken)).toThrow(
         "unknown capability",
+      );
+    });
+
+    it("throws for a described mark other than `true`", async () => {
+      const { table } = await mintAddressHandle(
+        createHarnessHandleTable("run-1"),
+        LINK_A,
+      );
+      const marked = markHandleDescribed(table, table.entries[0].token);
+      expect(() => assertValidHarnessHandleTable(marked)).not.toThrow();
+
+      const broken = {
+        ...table,
+        entries: [{ ...table.entries[0], described: false }],
+      } as unknown as HarnessHandleTable;
+      expect(() => assertValidHarnessHandleTable(broken)).toThrow(
+        "has a described mark that is not `true`",
       );
     });
 

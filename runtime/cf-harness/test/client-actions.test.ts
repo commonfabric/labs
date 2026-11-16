@@ -109,6 +109,8 @@ Deno.test("a url's authority must be well-formed, as Loom's final validator hold
       "https://bücher.example",
       "https://[::1",
       "https://[example.com]/",
+      "https://[::g]/",
+      "https://[12345::1]/",
       "https://[::1%25eth0]/",
       "https://[1:2:3:4:5:6:7:8:9]/",
       "https://[1::2::3]/",

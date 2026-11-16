@@ -489,31 +489,24 @@ const COMMAND_NAME_SCHEMA = {
 } as const;
 
 /**
- * Helper for the command tools, which waits for the run's catalog read
- * unless the turn is cancelled first. The read is shared with every other
- * caller in the run, so a cancelled turn stops waiting for it without
- * ending it.
+ * Helper for the command tools, which starts the run's catalog read unless
+ * the turn is already cancelled, and waits for it unless the turn is
+ * cancelled first. The read is shared with every other caller in the run, so
+ * a cancelled turn stops waiting for it without ending it.
  */
 const unlessCancelled = <T>(
-  reading: Promise<T>,
+  read: () => Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T | "cancelled"> => {
-  if (signal === undefined) return reading;
+  if (signal === undefined) return read();
   if (signal.aborted) return Promise.resolve("cancelled");
-  return new Promise((resolve, reject) => {
-    const cancel = () => resolve("cancelled");
-    signal.addEventListener("abort", cancel, { once: true });
-    reading.then(
-      (value) => {
-        signal.removeEventListener("abort", cancel);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", cancel);
-        reject(error);
-      },
-    );
-  });
+  const reading = read();
+  const cancelled = Promise.withResolvers<"cancelled">();
+  const cancel = () => cancelled.resolve("cancelled");
+  signal.addEventListener("abort", cancel, { once: true });
+  return Promise.race([reading, cancelled.promise]).finally(() =>
+    signal.removeEventListener("abort", cancel)
+  );
 };
 
 /** Lists the commands this run's host lets it run. */
@@ -558,7 +551,10 @@ export const listCommandsTool: HarnessToolDefinition<
     }
     // An explicit listing asks the host afresh, and what it reads is the
     // catalog `run_command` checks calls against from then on.
-    const listed = await unlessCancelled(source.refresh(), context.signal);
+    const listed = await unlessCancelled(
+      () => source.refresh(),
+      context.signal,
+    );
     if (listed === "cancelled") {
       return fail("cancelled", "The turn was cancelled during the host call.");
     }
@@ -688,21 +684,20 @@ interface SendableCall {
 }
 
 /**
- * Helper for command tools, which checks one call against the run's catalog:
- * a call to send, or the result that says why nothing was sent.
+ * Helper for command tools, which pairs a well-formed call with the entry the
+ * run's catalog shows for its command, if any.
  */
-const checkCall = (
+const sendableCall = (
   outputId: ToolOutputId,
-  call: RunCommandCall,
+  invocation: LoomCommandInvocation,
   catalog: LoomCommandCatalog,
-): SendableCall | RunCommandCallOutput => {
-  const read = readCall(call);
-  if ("reason" in read) return notSent(outputId, "invalid_input", read.reason);
-  const { invocation } = read;
-  const { command } = invocation;
-  const entry = catalog.entries.find((candidate) => candidate.name === command);
-  return { outputId, invocation, entry };
-};
+): SendableCall => ({
+  outputId,
+  invocation,
+  entry: catalog.entries.find((candidate) =>
+    candidate.name === invocation.command
+  ),
+});
 
 /** A call the command layer answered, its answer not yet measured. */
 interface AnsweredCall {
@@ -763,6 +758,8 @@ const sendCall = async (
   ) {
     return notSent(outputId, "invalid_input", INVALID_CALL_REASON);
   }
+  // Checked last, after every read the call needed, so a turn cancelled
+  // while they ran sends nothing.
   if (context.signal?.aborted) {
     return notSent(
       outputId,
@@ -933,8 +930,11 @@ export const runCommandTool: HarnessToolDefinition<
   },
   async effectClassOf(input, context) {
     const source = catalogSourceOf(context);
-    if (source === undefined || context.signal?.aborted) return "write";
-    const listed = await unlessCancelled(source.current(), context.signal);
+    if (source === undefined) return "write";
+    const listed = await unlessCancelled(
+      () => source.current(),
+      context.signal,
+    );
     if (listed === "cancelled" || listed.status !== "ok") return "write";
     const calls = Array.isArray(input.calls) ? input.calls : [input];
     if (calls.length === 0) return "write";
@@ -990,10 +990,14 @@ export const runCommandTool: HarnessToolDefinition<
       const sent = await mapWithFanIn(numbered, RUN_COMMAND_FAN_IN, (
         { call, outputId: callOutputId },
       ) => {
-        const checked = checkCall(callOutputId, call, listed.catalog);
-        return "invocation" in checked
-          ? sendCall(context, config, checked)
-          : Promise.resolve(checked);
+        const read = readCall(call);
+        return "reason" in read
+          ? Promise.resolve(notSent(callOutputId, "invalid_input", read.reason))
+          : sendCall(
+            context,
+            config,
+            sendableCall(callOutputId, read.invocation, listed.catalog),
+          );
       });
       return await measureBatch(context, outputId, sent);
     }
@@ -1004,9 +1008,11 @@ export const runCommandTool: HarnessToolDefinition<
     }
     const listed = await readCatalog(context, source, outputId);
     if (!("catalog" in listed)) return listed;
-    const checked = checkCall(outputId, input, listed.catalog);
-    if (!("invocation" in checked)) return checked;
-    const sent = await sendCall(context, config, checked);
+    const sent = await sendCall(
+      context,
+      config,
+      sendableCall(outputId, read.invocation, listed.catalog),
+    );
     if (!isAnswered(sent)) return sent;
     return await measureAnswer(
       context,
@@ -1027,14 +1033,7 @@ const readCatalog = async (
   source: LoomCommandCatalogSource,
   outputId: ToolOutputId,
 ): Promise<{ catalog: LoomCommandCatalog } | RunCommandCallOutput> => {
-  if (context.signal?.aborted) {
-    return notSent(
-      outputId,
-      "cancelled",
-      "The turn was cancelled before the command.",
-    );
-  }
-  const listed = await unlessCancelled(source.current(), context.signal);
+  const listed = await unlessCancelled(() => source.current(), context.signal);
   if (listed === "cancelled") {
     return notSent(
       outputId,
@@ -1159,9 +1158,6 @@ const measureBatch = async (
     },
   };
 };
-
-/** The command tools, in registration order. */
-export const LOOM_COMMAND_TOOLS = [listCommandsTool, runCommandTool] as const;
 
 /**
  * The model-context observation a command's answer contributes: its label

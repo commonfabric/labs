@@ -5,13 +5,19 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   OPENAI_CODEX_MODELS_URL,
   OpenAICodexResponsesClient,
 } from "../src/model/openai-codex-responses.ts";
 import type { OpenAICodexOAuthCredential } from "../src/auth/types.ts";
-import type { HarnessModelAttemptDiagnostic } from "../src/model/client.ts";
+import type {
+  HarnessModelAttemptDiagnostic,
+  HarnessModelTurnRequest,
+} from "../src/model/client.ts";
+import type { SleepWatch } from "../src/model/machine-sleep.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { createHarnessImageAttachment } from "../src/image-attachments.ts";
 
@@ -1701,4 +1707,296 @@ Deno.test("Codex Responses leaves an attempt the machine did not sleep through a
   assertEquals(result.assistant.content, "awake throughout");
   assertEquals([sleep.watch.started, sleep.watch.stops], [1, 1]);
   assertEquals(sleep.watch.open, []);
+});
+
+describe("openai-codex-responses", () => {
+  describe("OpenAICodexResponsesClient", () => {
+    const turn = (
+      overrides: Partial<HarnessModelTurnRequest> = {},
+    ): HarnessModelTurnRequest => ({
+      model: "gpt-5.4",
+      transcript: [{ role: "user", content: "hi" }],
+      tools: [],
+      nativeModelToolIds: [],
+      runId: "run-edge",
+      ...overrides,
+    });
+
+    const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> => {
+      try {
+        await promise;
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected a rejection");
+    };
+
+    /** A client whose every attempt is answered by `respond`, never retried. */
+    const clientServing = (
+      respond: () => Response,
+      options: { watchSleep?: SleepWatch } = {},
+    ) => {
+      const traffic = { resolves: 0, fetches: 0 };
+      const client = new OpenAICodexResponsesClient({
+        transportRetries: 0,
+        ...options,
+        credentialResolver: {
+          resolve: () => {
+            traffic.resolves += 1;
+            return Promise.resolve(credential);
+          },
+        },
+        fetchFn: () => {
+          traffic.fetches += 1;
+          return Promise.resolve(respond());
+        },
+      });
+      return { client, traffic };
+    };
+
+    const streamOf = (text: string): Response =>
+      new Response(text, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const completedHello = {
+      type: "response.completed",
+      response: {
+        status: "completed",
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "hello" }],
+        }],
+      },
+    };
+
+    describe("constructor", () => {
+      it("throws for an endpoint other than the pinned Responses endpoint", () => {
+        expect(() =>
+          new OpenAICodexResponsesClient({
+            credentialResolver: { resolve: () => Promise.resolve(credential) },
+            endpoint: "https://example.test/backend-api/codex/responses",
+          })
+        ).toThrow(
+          "OpenAI Codex credentials may only be sent to the pinned Responses endpoint",
+        );
+      });
+    });
+
+    describe("complete()", () => {
+      it("throws for a positive compaction threshold before any provider traffic", async () => {
+        const { client, traffic } = clientServing(() => sse(completedHello));
+
+        await expect(client.complete(turn({ compactThreshold: 1_000 })))
+          .rejects.toThrow(
+            "openai-codex does not support server-side compaction in this release",
+          );
+        expect(traffic).toEqual({ resolves: 0, fetches: 0 });
+      });
+
+      it("rejects with the signal's reason before any provider traffic when already aborted", async () => {
+        const { client, traffic } = clientServing(() => sse(completedHello));
+        const controller = new AbortController();
+        const reason = new Error("canceled before the turn");
+        controller.abort(reason);
+
+        await expect(client.complete(turn({ signal: controller.signal })))
+          .rejects.toBe(reason);
+        expect(traffic).toEqual({ resolves: 0, fetches: 0 });
+      });
+
+      it("rejects with the signal's reason before resolving credentials when aborted during conversion", async () => {
+        const { client, traffic } = clientServing(() => sse(completedHello));
+        const controller = new AbortController();
+        const reason = new Error("canceled while converting");
+
+        // The transcript converts asynchronously, so an abort issued right
+        // after the call lands while it is converting.
+        const completion = client.complete(turn({ signal: controller.signal }));
+        controller.abort(reason);
+
+        await expect(completion).rejects.toBe(reason);
+        expect(traffic).toEqual({ resolves: 0, fetches: 0 });
+      });
+
+      it("returns the reply past SSE blocks without data and the [DONE] marker", async () => {
+        const { client } = clientServing(() =>
+          streamOf(
+            ": keep-alive\n\n" +
+              "event: ping\n\n" +
+              `data: ${JSON.stringify(completedHello)}\n\n` +
+              "data: [DONE]\n\n",
+          )
+        );
+
+        const result = await client.complete(turn());
+
+        expect(result.assistant.content).toBe("hello");
+      });
+
+      it("returns the reply when the attempt observer throws", async () => {
+        const { client } = clientServing(() => sse(completedHello));
+        let observed = 0;
+
+        const result = await client.complete(turn({
+          onAttempt: () => {
+            observed += 1;
+            throw new Error("observer failed");
+          },
+        }));
+
+        expect(result.assistant.content).toBe("hello");
+        expect(observed).toBe(1);
+      });
+
+      it("rejects with the signal's reason when aborted while the attempt is recorded", async () => {
+        const { client } = clientServing(() => sse(completedHello));
+        const controller = new AbortController();
+        const reason = new Error("canceled while recording");
+
+        await expect(client.complete(turn({
+          signal: controller.signal,
+          onAttempt: () => controller.abort(reason),
+        }))).rejects.toBe(reason);
+      });
+
+      it("rejects with the signal's reason when aborted while reading an error body", async () => {
+        const controller = new AbortController();
+        const reason = new Error("canceled while reading the error body");
+        const { client } = clientServing(() =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(stream) {
+                controller.abort(reason);
+                stream.error(new Error("connection reset"));
+              },
+            }, { highWaterMark: 0 }),
+            { status: 503 },
+          )
+        );
+
+        await expect(client.complete(turn({ signal: controller.signal })))
+          .rejects.toBe(reason);
+      });
+
+      describe("when the stream is unusable", () => {
+        const unusable = (
+          name: string,
+          respond: () => Response,
+          message: string,
+        ) => {
+          it(`rejects as provider-unavailable for ${name}`, async () => {
+            const { client } = clientServing(respond);
+
+            const error = await rejectionOf(client.complete(turn()));
+
+            expect(error).toBeInstanceOf(HarnessControlError);
+            expect(error).toMatchObject({
+              code: "provider-unavailable",
+              message,
+            });
+          });
+        };
+
+        unusable(
+          "a response without a body",
+          () => new Response(null, { status: 200 }),
+          "Codex Responses stream did not include a body",
+        );
+        unusable(
+          "an event that is not an object",
+          () => streamOf("data: [1]\n\n"),
+          "Codex Responses stream contained a non-object event",
+        );
+        unusable(
+          "a terminal event without a response object",
+          () => sse({ type: "response.completed", response: "done" }),
+          "Codex Responses terminal event did not include a response object",
+        );
+        unusable(
+          "a stream that ends partway through an event",
+          () => streamOf(`data: ${JSON.stringify(completedHello)}`),
+          "Codex Responses stream ended with an incomplete SSE event",
+        );
+        unusable(
+          "a stream whose read fails",
+          () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(stream) {
+                  stream.error(new Error("connection reset"));
+                },
+              }),
+              { status: 200 },
+            ),
+          "Codex Responses stream read failed",
+        );
+      });
+
+      describe("when the machine sleeps", () => {
+        /** A watch whose sleep the test reports by calling `slept`. */
+        const sleepWatch = () => {
+          let onSlept: ((sleptMs: number) => void) | undefined;
+          return {
+            watchSleep: (callback: (sleptMs: number) => void) => {
+              onSlept = callback;
+              return () => {
+                onSlept = undefined;
+              };
+            },
+            slept: (ms: number) => onSlept?.(ms),
+          };
+        };
+
+        it("cancels the body and reports the sleep when it slept while the request was in flight", async () => {
+          const sleep = sleepWatch();
+          let canceled = false;
+          const { client } = clientServing(() => {
+            sleep.slept(5_000);
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                cancel() {
+                  canceled = true;
+                },
+              }),
+              { status: 200 },
+            );
+          }, sleep);
+
+          const error = await rejectionOf(client.complete(turn()));
+
+          expect(error).toMatchObject({
+            code: "provider-unavailable",
+            message:
+              "Codex Responses exchange was cut off: the machine slept for 5 s while it was open",
+          });
+          expect(canceled).toBe(true);
+        });
+
+        it("reports the sleep rather than the read failure it caused", async () => {
+          const sleep = sleepWatch();
+          const { client } = clientServing(() =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(stream) {
+                  stream.error(new Error("connection reset"));
+                  sleep.slept(7_000);
+                },
+              }, { highWaterMark: 0 }),
+              { status: 200 },
+            ), sleep);
+
+          const error = await rejectionOf(client.complete(turn()));
+
+          expect(error).toMatchObject({
+            code: "provider-unavailable",
+            message:
+              "Codex Responses exchange was cut off: the machine slept for 7 s while it was open",
+          });
+        });
+      });
+    });
+  });
 });

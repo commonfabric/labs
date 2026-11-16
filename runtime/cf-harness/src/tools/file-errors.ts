@@ -168,3 +168,18 @@ export const classifyPathResolutionError = (
     ? "path_outside_workspace"
     : "unknown";
 };
+
+/**
+ * The error code for a failure to find or read a file on the host: `notFound`
+ * for a path that does not exist, `permission_denied` for one this process may
+ * not read, and `unknown` for anything else.
+ */
+export const fileSystemErrorCode = <NotFound extends string>(
+  error: unknown,
+  notFound: NotFound,
+): NotFound | "permission_denied" | "unknown" =>
+  error instanceof Deno.errors.NotFound
+    ? notFound
+    : error instanceof Deno.errors.PermissionDenied
+    ? "permission_denied"
+    : "unknown";

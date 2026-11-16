@@ -14,7 +14,10 @@ import {
   type FirstPartyHttpSigner,
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import type { PatternIndexFetch } from "./http-fetch.ts";
 
@@ -734,6 +737,21 @@ export class PatternIndexError extends Error {
       this.retryAt = retryAt;
     }
   }
+
+  /**
+   * A 2xx answer this client cannot read. `problem` is the client's own
+   * account of what is wrong, naming fields and never quoting the answer, so
+   * unlike a service's `detail` it is part of `message`.
+   */
+  static malformed(
+    fn: string,
+    status: number,
+    problem: string,
+  ): PatternIndexError {
+    const error = new PatternIndexError(fn, status);
+    error.message = `pattern index ${fn} answer is malformed: ${problem}`;
+    return error;
+  }
 }
 
 export interface PatternIndexClientOptions {
@@ -756,6 +774,44 @@ const ownField = (value: unknown, key: string): unknown =>
   isObjectOrArray(value) && !Array.isArray(value)
     ? Object.getOwnPropertyDescriptor(value, key)?.value
     : undefined;
+
+/**
+ * What keeps `program` from being a {@link PatternIndexProgram}, or
+ * `undefined` when nothing does, as when there is no program at all. Names
+ * fields, never their values, so the answer is safe to show whoever asked.
+ */
+const programProblem = (program: unknown): string | undefined => {
+  if (program === undefined) return undefined;
+  if (!isObjectNotArray(program)) {
+    return "program is not an object";
+  }
+  if (typeof ownField(program, "main") !== "string") {
+    return "program.main is not a string";
+  }
+  const mainExport = ownField(program, "mainExport");
+  if (mainExport !== undefined && typeof mainExport !== "string") {
+    return "program.mainExport is not a string";
+  }
+  const files = ownField(program, "files");
+  if (!Array.isArray(files)) return "program.files is not an array";
+  for (const [index, file] of files.entries()) {
+    for (const key of ["name", "contents"]) {
+      if (typeof ownField(file, key) !== "string") {
+        return `program.files[${index}].${key} is not a string`;
+      }
+    }
+  }
+  for (const key of ["sourceRoots", "dataFiles"]) {
+    const list = ownField(program, key);
+    if (
+      list !== undefined &&
+      !(Array.isArray(list) && list.every((entry) => typeof entry === "string"))
+    ) {
+      return `program.${key} is not an array of strings`;
+    }
+  }
+  return undefined;
+};
 
 /**
  * Joins an index function onto the configured base, keeping every segment the
@@ -814,10 +870,14 @@ export class PatternIndexClient {
    * Posts `payload` to one index function and returns its parsed answer.
    *
    * @throws PatternIndexError when the index answers non-2xx, or when a 2xx
-   * answer does not parse as JSON — a body the caller cannot read is a
-   * failure of the call rather than a result.
+   * answer does not parse as JSON or `problem` finds fault with it — a body
+   * the caller cannot read is a failure of the call rather than a result.
    */
-  async #call<T>(fn: string, payload: Record<string, unknown>): Promise<T> {
+  async #call<T>(
+    fn: string,
+    payload: Record<string, unknown>,
+    problem?: (answer: unknown) => string | undefined,
+  ): Promise<T> {
     const url = functionUrl(this.#baseUrl, fn);
     // The proof commits to the body hash, so the bytes signed and the bytes
     // sent must be identical — serialize once.
@@ -838,11 +898,15 @@ export class PatternIndexClient {
       headers,
       body,
     });
-    return await this.#readResponse<T>(fn, response);
+    return await this.#readResponse<T>(fn, response, problem);
   }
 
   /** Parses a service response while keeping its failure detail artifact-only. */
-  async #readResponse<T>(fn: string, response: Response): Promise<T> {
+  async #readResponse<T>(
+    fn: string,
+    response: Response,
+    problem?: (answer: unknown) => string | undefined,
+  ): Promise<T> {
     const text = await response.text();
     let parsed: unknown;
     try {
@@ -863,12 +927,9 @@ export class PatternIndexClient {
         typeof resetsAt === "string" ? resetsAt : undefined,
       );
     }
-    if (parsed === undefined) {
-      throw new PatternIndexError(
-        fn,
-        response.status,
-        "answer was not JSON",
-      );
+    const fault = parsed === undefined ? "it is not JSON" : problem?.(parsed);
+    if (fault !== undefined) {
+      throw PatternIndexError.malformed(fn, response.status, fault);
     }
     return parsed as T;
   }
@@ -905,13 +966,23 @@ export class PatternIndexClient {
     });
   }
 
+  /**
+   * Reads one pattern, with its program when `includeSource` asks for it.
+   *
+   * @throws PatternIndexError when the answer carries a program without the
+   * shape of a {@link PatternIndexProgram}, naming what is missing.
+   */
   getPattern(request: PatternIndexGetRequest): Promise<PatternIndexPattern> {
-    return this.#call<PatternIndexPattern>("getPattern", {
-      patternId: request.patternId,
-      ...(request.includeSource !== undefined
-        ? { includeSource: request.includeSource }
-        : {}),
-    });
+    return this.#call<PatternIndexPattern>(
+      "getPattern",
+      {
+        patternId: request.patternId,
+        ...(request.includeSource !== undefined
+          ? { includeSource: request.includeSource }
+          : {}),
+      },
+      (answer) => programProblem(ownField(answer, "program")),
+    );
   }
 
   /**

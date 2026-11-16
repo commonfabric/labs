@@ -145,10 +145,8 @@ const createContext = (options: ContextOptions): HarnessToolContext => {
     resolvePath: (path) => options.sandbox.resolvePath(path, "/workspace"),
     resolveHostPath: (path) => `/tmp/cf-harness-workspace${path}`,
     resolveHostRootPath: () => "/tmp/cf-harness-workspace",
-    hostPathToWorkspacePath: () => undefined,
     isHostPathWithinWorkspace: () => Promise.resolve(true),
     isHostPathWithinArtifactRoot: () => Promise.resolve(false),
-    doesHostPathIntersectArtifactRoot: () => Promise.resolve(false),
     setCurrentDir: () => {},
     nextOutputId(toolId) {
       sequence += 1;
@@ -487,6 +485,27 @@ describe("run_skill_script on an acquired skill's script", () => {
 
     expect(output.status).toBe("error");
     expect(output.error?.code).toBe("script_not_allowlisted");
+    expect(sandbox.calls.length).toBe(0);
+  });
+
+  it("refuses a script the acquisition did not fetch, naming the acquisition", async () => {
+    const output = await runSkillScriptTool.invoke(
+      createContext({
+        sandbox,
+        executions,
+        acquiredSkills: [acquiredSkill()],
+        skillActivations: activationsHoldingTheAcquiredSkill(),
+        allowSkillScripts: true,
+      }),
+      { skill: PIN, path: "scripts/other.sh" },
+    );
+
+    expect(output.status).toBe("error");
+    expect(output.error).toEqual({
+      code: "script_not_indexed",
+      message: `script not acquired at pin ${PIN}: scripts/other.sh`,
+    });
+    expect(output.acquisition).toEqual(acquisition());
     expect(sandbox.calls.length).toBe(0);
   });
 
