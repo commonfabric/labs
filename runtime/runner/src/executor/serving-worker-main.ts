@@ -80,10 +80,15 @@ export function serveFromPort(
   port: PortLike,
   options: ServingWorkerMainOptions = {},
 ): void {
+  // From here on, so the profile covers what serving allocates from the
+  // first message. The init waits for it and answers with its failure, if
+  // any, rather than the worker ending on an unhandled rejection first.
+  const sampling = startHeapSampling();
+  sampling.catch(() => {});
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
-    await startHeapSampling();
+    await sampling;
     // A timer on this thread, so that the watchdog on the server's thread hears
     // nothing once this thread stops (serving-loop.md §2). It also runs once
     // a handler of this thread has ended at the heap limit, which is how the

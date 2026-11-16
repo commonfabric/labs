@@ -71,9 +71,10 @@ export async function writeHeapProfiles(
 }
 
 /**
- * Starts sampling the main thread's heap, then writes heap profiles each
- * time this process receives SIGUSR2, as the module's header describes,
- * logging where they went.
+ * Starts sampling the main thread's heap and writes heap profiles each time
+ * this process receives SIGUSR2, as the module's header describes, logging
+ * where they went. The signal is handled from the call on; one that arrives
+ * before sampling has started waits for it.
  */
 export async function listenForHeapProfileSignal(options: {
   directory: string;
@@ -83,7 +84,7 @@ export async function listenForHeapProfileSignal(options: {
   log: (...data: unknown[]) => void;
   error: (...data: unknown[]) => void;
 }): Promise<void> {
-  await startHeapSampling();
+  const sampling = startHeapSampling();
   let writing = false;
   Deno.addSignalListener("SIGUSR2", () => {
     if (writing) {
@@ -112,4 +113,5 @@ export async function listenForHeapProfileSignal(options: {
         writing = false;
       });
   });
+  await sampling;
 }
