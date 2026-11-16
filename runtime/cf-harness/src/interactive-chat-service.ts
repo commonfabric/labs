@@ -2269,6 +2269,7 @@ export class HarnessInteractiveChatService {
         ...(skillsRoot !== undefined ? { skillsRoot } : {}),
         skillNames: [],
         allowedToolIds: options.allowedToolIds,
+        allowedSubagentProfiles: options.allowedSubagentProfiles,
       },
       onGrantsUnavailable: (error) =>
         console.error("fabric grants unavailable for this turn:", error),

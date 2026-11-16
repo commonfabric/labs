@@ -17,6 +17,7 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
+import type { HarnessSubagentProfile } from "../src/contracts/subagent.ts";
 import type {
   HarnessPatternRef,
   HarnessPatternRefSpec,
@@ -33,6 +34,7 @@ import {
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
 } from "../src/interactive-chat-service.ts";
+import { PIECE_SOURCE_TOOL_GUIDANCE } from "../src/tool-guidance.ts";
 import type {
   HarnessPromptLoopResult,
   RunHarnessTranscriptOptions,
@@ -579,6 +581,38 @@ describe("interactive chat session context", () => {
     // The reference is what the caller attached, so a turn that cannot have
     // it does not run without it.
     expect(seen).toEqual([]);
+  });
+
+  it("opens a turn with the rule for changing a piece's source only where the session's policy offers the profile that changes it", async () => {
+    const contextOf = async (
+      allowedSubagentProfiles: readonly HarnessSubagentProfile[],
+    ): Promise<string[]> => {
+      const seen: HarnessTranscriptMessage[][] = [];
+      const service = new HarnessInteractiveChatService({
+        basePromptLoopOptions: { engine: stubEngine({ inputCells: [] }) },
+        createPromptLoop: recordingLoop(seen),
+      });
+      await service.startSession("req-session", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+        model: "gpt-test",
+        policy: {
+          type: "cf-harness.chat-policy",
+          toolMode: "workspace-write",
+          allowedToolIds: ["delegate_task", "describe_handle"],
+          allowedSubagentProfiles,
+        },
+      });
+      await runTurn(service, "turn-1", "add a due date to the tracker");
+      return seen[0].map((message) => message.content);
+    };
+
+    expect(await contextOf(["default", "pattern-author"])).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+    expect(await contextOf(["default", "web_fetch"])).not.toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
   });
 });
 

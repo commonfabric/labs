@@ -20,6 +20,7 @@ import {
   COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
+  PIECE_SOURCE_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
   RESEARCH_TOOL_GUIDANCE,
   RESOLVE_PIECE_TOOL_GUIDANCE,
@@ -80,6 +81,7 @@ const guidanceFor = (...tags: HarnessTaskTag[]): string =>
       fabricSessionAvailable: true,
       loomCommandsAvailable: true,
       loomRetrievalAvailable: true,
+      subagentProfiles: HARNESS_SUBAGENT_PROFILES,
     }),
     { tags: new Set(tags), depth: "standard" },
   ).join("\n\n");
@@ -180,6 +182,28 @@ describe("tool-guidance", () => {
     expect(guidanceFor("respond")).toEqual("");
   });
 
+  it("gives every task but a respond one the rule for changing a piece's source", () => {
+    // A run can come to hold a piece partway through, from a command's answer
+    // or a resolved slug, whatever its task was tagged at the start.
+    for (
+      const tag of [
+        "find",
+        "act",
+        "pieces",
+        "author",
+      ] satisfies HarnessTaskTag[]
+    ) {
+      expect(guidanceFor(tag), tag).toContain(PIECE_SOURCE_TOOL_GUIDANCE);
+    }
+    expect(guidanceFor("respond")).not.toContain(PIECE_SOURCE_TOOL_GUIDANCE);
+  });
+
+  it("states the rule for changing a piece's source once, outside the handle rules", () => {
+    expect(PIECES_TOOL_GUIDANCE).not.toContain("pattern-author");
+    expect(guidanceFor("pieces").split(PIECE_SOURCE_TOOL_GUIDANCE))
+      .toHaveLength(2);
+  });
+
   it("guides only the tools a session's backings carry", () => {
     expect(toolGuidanceContextMessages({
       fabricSessionAvailable: false,
@@ -201,6 +225,51 @@ describe("tool-guidance", () => {
 });
 
 describe("conditional host guidance", () => {
+  it("gives the rule for changing a piece's source only to a run that can delegate to the profile that changes it", () => {
+    const sourceRuleOf = (backing: {
+      fabricSessionAvailable: boolean;
+      allowedToolIds?: readonly BuiltinToolId[];
+      subagentProfiles?: readonly HarnessSubagentProfile[];
+    }): boolean =>
+      toolGuidanceContextMessages({
+        loomCommandsAvailable: false,
+        loomRetrievalAvailable: false,
+        ...backing,
+      }).includes(PIECE_SOURCE_TOOL_GUIDANCE);
+
+    for (
+      const allowedToolIds of [undefined, [
+        "delegate_task",
+      ]] satisfies (BuiltinToolId[] | undefined)[]
+    ) {
+      expect(sourceRuleOf({
+        fabricSessionAvailable: true,
+        allowedToolIds,
+        subagentProfiles: ["default", "pattern-author"],
+      })).toBe(true);
+    }
+    // The profile's source tools exist only over a fabric session.
+    expect(sourceRuleOf({
+      fabricSessionAvailable: false,
+      subagentProfiles: ["default", "pattern-author"],
+    })).toBe(false);
+    expect(sourceRuleOf({
+      fabricSessionAvailable: true,
+      allowedToolIds: ["describe_handle", "run_command"],
+      subagentProfiles: ["default", "pattern-author"],
+    })).toBe(false);
+    for (
+      const subagentProfiles of [undefined, [], [
+        "default",
+        "web_fetch",
+        "web_search",
+      ]] satisfies (HarnessSubagentProfile[] | undefined)[]
+    ) {
+      expect(sourceRuleOf({ fabricSessionAvailable: true, subagentProfiles }))
+        .toBe(false);
+    }
+  });
+
   it("requires command backing and run_command in an explicit allow-list", () => {
     for (
       const allowedToolIds of [[], ["bash"], [
