@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type Artifact, Instance } from "../executor.ts";
+import { type Artifact, Host, Instance } from "../executor.ts";
 import { Ref, Store } from "../store.ts";
 
 // The executor of `execution-and-storage.md` (ES) on the artifacts of the
@@ -562,6 +562,222 @@ describe("the `within` of a cone", () => {
     instance.writeArgument(["tags"], ["skip", "y", "z", "x"]);
 
     expect(instance.counts.elementEvaluations - before).toBe(10);
+  });
+});
+
+// Ruling Z11 on `fixtures/stream-marker.tsx`: `host.stream` gives value
+// code a marker, and the executor replaces it when it stores the value
+// and checks the position against `Binding.result`.
+describe("the stream of a binding in a computed value", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells. Those of `tags` are
+  // plain values stored in place, and the last list is over the result of
+  // a `filter` of them.
+  const argument = (shown = false) => ({
+    pool: { a: { title: "a" }, b: { title: "b" } },
+    items: [link("a"), link("b")],
+    tags: ["x", "skip", "y"],
+    shown,
+  });
+  type Stored = {
+    props: Record<string, unknown>;
+    children: Stored[];
+  };
+  const tree = (instance: Instance) =>
+    (instance.store.docs.get("result")?.value as { $UI: Stored }).$UI;
+  const streamsOf = (rows: Stored[]) => rows.map((row) => row.props.onClick);
+  const without = (artifact: Artifact, binding: number, path: string[]) => {
+    const copy = structuredClone(artifact);
+    const record = copy.plan.bindings[binding];
+    record.result = (record.result ?? []).filter((listed) =>
+      JSON.stringify(listed) !== JSON.stringify(path)
+    );
+    return copy;
+  };
+
+  it("is a marker that value code can do nothing with", async () => {
+    const instance = new Instance(
+      await artifactOf("stream-marker"),
+      argument(),
+    );
+    const host = new Host(instance, new Map(), undefined);
+
+    const marker = host.stream(0) as Record<string, unknown>;
+
+    // No member to send an event with, none to read through, and none
+    // that names the binding or a key.
+    expect(Object.isFrozen(marker)).toBe(true);
+    expect(Reflect.ownKeys(marker)).toEqual([]);
+    for (const name of ["send", "get", "set", "key", "binding", "keys"]) {
+      expect(name in marker).toBe(false);
+    }
+    expect(JSON.stringify(marker)).toBe("{}");
+    // A read of it and a read below it give no value of the stream.
+    expect(host.v(marker)).toBe(marker);
+    expect(host.at(marker, ["count"])).toBe(undefined);
+  });
+
+  it("is stored as the one stream of a binding outside every element body", async () => {
+    const instance = new Instance(
+      await artifactOf("stream-marker"),
+      argument(true),
+    );
+    const stored = instance.store.docs.get("result")?.value as {
+      inc: unknown;
+    };
+    const one = { $stream: { binding: 0, keys: [] } };
+
+    // At a member of the result, below the conditional, and after the
+    // spread of a collection.
+    expect(stored.inc).toEqual(one);
+    expect(tree(instance).children[0].props.onClick).toEqual(one);
+    expect(tree(instance).children[1].children[2].props.onClick).toEqual(one);
+    expect(instance.failures).toEqual([]);
+  });
+
+  it("is stored as the stream of the instance's key over references", async () => {
+    const instance = new Instance(
+      await artifactOf("stream-marker"),
+      argument(),
+    );
+
+    expect(streamsOf(tree(instance).children[1].children.slice(0, 2)))
+      .toEqual([
+        { $stream: { binding: 1, keys: ['cell:argument:["pool","a"]#0'] } },
+        { $stream: { binding: 1, keys: ['cell:argument:["pool","b"]#0'] } },
+      ]);
+
+    // An event for the stream of the second key reads that element.
+    instance.send(1, {}, [1]);
+
+    expect((instance.result() as { chosen: string }).chosen).toBe("b");
+  });
+
+  it("is stored as the stream of the instance's key over plain values in place", async () => {
+    const instance = new Instance(
+      await artifactOf("stream-marker"),
+      argument(),
+    );
+
+    expect(streamsOf(tree(instance).children[2].children)).toEqual([
+      { $stream: { binding: 2, keys: ['value:"x"#0'] } },
+      { $stream: { binding: 2, keys: ['value:"skip"#0'] } },
+      { $stream: { binding: 2, keys: ['value:"y"#0'] } },
+    ]);
+
+    instance.send(2, {}, [1]);
+
+    expect((instance.result() as { chosen: string }).chosen).toBe("skip");
+  });
+
+  it("is stored as the stream of the instance's key over the result of a `filter`", async () => {
+    const instance = new Instance(
+      await artifactOf("stream-marker"),
+      argument(),
+    );
+
+    // The keys are those of the elements the `filter` kept.
+    expect(streamsOf(tree(instance).children[3].children)).toEqual([
+      { $stream: { binding: 3, keys: ['value:"x"#0'] } },
+      { $stream: { binding: 3, keys: ['value:"y"#0'] } },
+    ]);
+
+    instance.send(3, {}, [1]);
+
+    expect((instance.result() as { chosen: string }).chosen).toBe("y");
+  });
+
+  it("fails the evaluation that stores a marker at a position no listed path covers", async () => {
+    const artifact = without(await artifactOf("stream-marker"), 0, ["inc"]);
+
+    const instance = new Instance(artifact, argument());
+
+    expect(instance.failures).toEqual([{
+      evaluation: "result",
+      binding: 0,
+      path: ["inc"],
+    }]);
+    // No link is stored: the result holds what it held before.
+    expect(instance.store.docs.get("result")?.value).toBe(undefined);
+  });
+
+  it("matches a `*` of a listed path at any element, in each of the three bodies", async () => {
+    const artifact = await artifactOf("stream-marker");
+    const paths = [1, 2, 3].map((binding) =>
+      artifact.plan.bindings[binding].result
+    );
+
+    expect(paths).toEqual([
+      [["$UI", "children", "1", "children", "*", "props", "onClick"]],
+      [["$UI", "children", "2", "children", "*", "props", "onClick"]],
+      [["$UI", "children", "3", "children", "*", "props", "onClick"]],
+    ]);
+    expect(new Instance(artifact, argument()).failures).toEqual([]);
+    // Without its path, each fails at the first element that holds it.
+    for (const binding of [1, 2, 3]) {
+      const instance = new Instance(
+        without(artifact, binding, paths[binding - 1]![0]),
+        argument(),
+      );
+      expect(instance.failures).toEqual([{
+        evaluation: "result",
+        binding,
+        path: [
+          "$UI",
+          "children",
+          `${binding}`,
+          "children",
+          "0",
+          "props",
+          "onClick",
+        ],
+      }]);
+    }
+  });
+
+  it("matches a path below a conditional under either selection", async () => {
+    const artifact = await artifactOf("stream-marker");
+    const below = ["$UI", "children", "0", "props", "onClick"];
+    expect(artifact.plan.bindings[0].result).toContainEqual(below);
+
+    // The branch that writes the stream is selected, or the other one.
+    expect(new Instance(artifact, argument(true)).failures).toEqual([]);
+    expect(new Instance(artifact, argument(false)).failures).toEqual([]);
+    // Without the path, the evaluation fails under the selection that
+    // stores the marker, and under the other one it does not.
+    const unlisted = without(artifact, 0, below);
+    expect(new Instance(unlisted, argument(false)).failures).toEqual([]);
+    expect(new Instance(unlisted, argument(true)).failures).toEqual([{
+      evaluation: "result",
+      binding: 0,
+      path: below,
+    }]);
+  });
+
+  it("passes a stream that is an input of the pattern on as an input", async () => {
+    const artifact = await artifactOf("stream-marker");
+    const instance = new Instance(artifact, argument());
+    const stored = instance.store.docs.get("result")?.value as {
+      outside: { $link: { doc: string; path: string[] } };
+    };
+
+    // The stored position holds a link to the place of the input, and no
+    // stream of a binding: no path of `Binding.result` names it, and the
+    // check does not apply.
+    expect(stored.outside.$link.doc).toBe("argument");
+    expect(stored.outside.$link.path).toEqual(["outside"]);
+    const passed = tree(instance).children[4].props.onClick as {
+      $link: { doc: string; path: string[] };
+    };
+    expect(passed.$link.path).toEqual(["outside"]);
+    expect(instance.failures).toEqual([]);
+    // A read of the position gives a stream, as a read of a binding's
+    // stream does.
+    expect((instance.result() as { outside: unknown }).outside).toEqual({
+      $stream: true,
+    });
   });
 });
 

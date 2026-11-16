@@ -341,6 +341,25 @@ const report = async (file: string, verbose: boolean) => {
       }`,
     );
   }
+  const failing = executed.filter((result) =>
+    (result.comparison?.failedEvaluations ?? 0) > 0
+  );
+  console.log(
+    "evaluations that stored a stream's marker at a position no listed " +
+      `path covers: ${
+        executed.reduce(
+          (sum, result) => sum + (result.comparison?.failedEvaluations ?? 0),
+          0,
+        )
+      }, in ${failing.length} modules`,
+  );
+  if (verbose) {
+    for (const result of failing) {
+      for (const { name, path } of result.comparison?.misplaced ?? []) {
+        console.log(`    ${result.module}: ${name} at /${path.join("/")}`);
+      }
+    }
+  }
   const documents = new Map<string, number>();
   for (const result of executed) {
     for (

@@ -258,6 +258,23 @@ the rest of a wave, where an input of it changed, and what the cone writes makes
 its readers stale for the next wave. `Instance.trace` lists the cones evaluated,
 in order. `plan --corpus` counts the cones of each kind.
 
+Value code places the stream of a binding by calling `$h.stream(binding)` and
+putting what it is given at the position (ES §2.2, "Value code places a
+stream"). The executor gives it a marker with no member: the code cannot send to
+it or read through it. When the executor stores a value, it writes in the
+marker's place the link to the stream of that binding for the element keys of
+the cone instance that called. For a marker at a position of the result it
+checks that a path of `Binding.result` covers the position, with `*` for any
+element, and a marker at a position no listed path covers fails the evaluation:
+the result is not stored, and `Instance.failures` has the binding and the
+position. So the crate lists a path for every position at which value code can
+place a stream: also for a member written after a spread, for two collections
+spread into one array, and for a stream inside a value that the elements of a
+collection hold. A stream that is an input of the pattern is a reference like
+any other input, and what passes it on stores a link to its place. This is the
+same for an element body over an array of references, over an array of plain
+values in place, and over the result of another per-element construct.
+
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's
 own body, after the instance settled and after each event.

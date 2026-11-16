@@ -68,6 +68,13 @@ export type ValueComparison = {
   counts?: Instance["counts"];
   /** The stored positions of streams against `Binding.result`. */
   streams?: ReturnType<Instance["streamPositions"]>;
+  /**
+   * The evaluations that failed the check of where a stream is stored
+   * (`Instance.failures`), and every position that held a marker no
+   * listed path of its binding covers, with the binding's name.
+   */
+  failedEvaluations?: number;
+  misplaced?: { binding: number; name?: string; path: string[] }[];
   /** The events the executor's handler did not run to its end for. */
   failedEvents: string[];
 };
@@ -408,6 +415,12 @@ export const compareValues = (
     }
   });
   comparison.streams = instance.streamPositions();
+  comparison.failedEvaluations = instance.failures.length;
+  comparison.misplaced = instance.misplaced.map(({ binding, path }) => ({
+    binding,
+    name: artifact.plan.bindings[binding]?.name,
+    path,
+  }));
   comparison.runtimeDocuments = runtime.documents?.end;
   comparison.documents = instance.documents();
   comparison.counts = instance.counts;

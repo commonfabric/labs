@@ -56,6 +56,19 @@ const WRITTEN: Record<string, Written[]> = {
       note: "n",
     },
   }],
+  "stream-marker": [true, false].map((shown) => ({
+    argument: {
+      items: [{ title: "a" }, { title: "b" }],
+      tags: ["x", "skip", "y"],
+      shown,
+    },
+    events: [
+      { binding: 0, event: { by: 2 } },
+      { binding: 1, event: {} },
+      { binding: 2, event: {} },
+      { binding: 3, event: {} },
+    ],
+  })),
   "callee-default": [true, false].map((given) => ({
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),

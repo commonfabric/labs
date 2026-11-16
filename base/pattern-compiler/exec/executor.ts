@@ -15,11 +15,15 @@
 import {
   isLink,
   isStream,
+  isStreamSchema,
+  markerOf,
   type Position,
   Ref,
   type Schema,
   schemaBelow,
   Store,
+  StreamMarker,
+  streamOf,
   StreamRef,
   withDefaults,
 } from "./store.ts";
@@ -260,11 +264,6 @@ const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
  */
 const MAX_PASSES = 10;
 
-/** Whether a schema declares the position it describes as a stream. */
-const isStreamSchema = (schema: Schema | undefined): boolean =>
-  typeof schema === "object" && Array.isArray(schema.asCell) &&
-  schema.asCell.includes("stream");
-
 /** Whether a schema declares a handle at a position below its own. */
 const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
   if (typeof schema !== "object" || depth > 6) return false;
@@ -277,6 +276,16 @@ const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
     (member.asCell !== undefined || declaresHandle(member, depth + 1))
   );
 };
+
+/**
+ * Whether a path `Binding.result` lists covers a position of the result:
+ * segment for segment, with `*` for any element of a collection.
+ */
+const coversPosition = (listed: readonly string[], path: readonly string[]) =>
+  listed.length === path.length &&
+  listed.every((segment, index) =>
+    segment === path[index] || (segment === "*" && /^\d+$/.test(path[index]))
+  );
 
 const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
   pattern.length <= path.length &&
@@ -425,6 +434,16 @@ export class Handle {
       this.instance.queue(new StreamRef(binding, keys), event);
       return;
     }
+    // A stream the instance was given, which the argument holds nothing
+    // for, takes no event: the executor has no other instance. The send
+    // is a write of the handler all the same.
+    if (
+      located.value === undefined &&
+      isStreamSchema(located.ref.schema ?? this.declared)
+    ) {
+      this.instance.written(this);
+      return;
+    }
     this.set(event);
   }
 
@@ -512,14 +531,9 @@ export class Host {
       ? rest.reduce(schemaBelow, instance.schemaOf(slot.schema))
       : undefined;
     if (slot.observes === "identity") {
-      // An input declared as a stream that the argument gives nothing for
-      // reads as a stream that takes no event.
-      if (
-        found instanceof Ref && isStreamSchema(schema) &&
-        instance.store.locate(found, true).value === undefined
-      ) {
-        return new StreamRef(-1, []);
-      }
+      // A stream that is an input of the pattern is a reference like any
+      // other: what passes it on stores a link to its place (ES §2.2, "A
+      // stream that is an input of the pattern").
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
     return withDefaults(this.v(found), schema);
@@ -612,12 +626,15 @@ export class Host {
     return used;
   }
 
-  /** The stream of a binding, for the element keys of this evaluation. */
-  stream(binding: number): StreamRef {
-    return new StreamRef(
-      binding,
-      this.instance.keysOf(this.instance.plan.bindings[binding].within, this),
-    );
+  /**
+   * A marker for the stream of a binding (ES §2.2, `ConeHost.stream`),
+   * for the element keys this evaluation has at the `element` steps of
+   * the binding's `within`. The code that is given it can place it in a
+   * value and can do nothing else with it: the marker has no member, and
+   * `v` and `at` read nothing through it.
+   */
+  stream(binding: number): StreamMarker {
+    return markerOf(this.instance.streamFor(binding, this.context));
   }
 
   /** A value with every reference in it replaced by what it refers to. */
@@ -626,6 +643,8 @@ export class Host {
       return this.instance.store.read(value, this.reads);
     }
     if (value instanceof StreamRef) return { $stream: true };
+    // A marker is read through by nothing: it stays the marker.
+    if (value instanceof StreamMarker) return value;
     if (value instanceof Handle) return value.get();
     if (Array.isArray(value)) return value.map((member) => this.v(member));
     if (isRecord(value)) {
@@ -648,7 +667,7 @@ export class Host {
         found = segment === "length" ? found.length : undefined;
       } else if (typeof found !== "object" || found === null) {
         return undefined;
-      } else if (found instanceof StreamRef) {
+      } else if (found instanceof StreamRef || found instanceof StreamMarker) {
         return undefined;
       } else {
         found = (found as Record<string, unknown>)[`${segment}`];
@@ -679,8 +698,13 @@ export class Host {
     // computed input").
     for (const { at, observes } of instance.plan.bodies[body].computed) {
       if (observes !== "identity" || at.includes("*")) continue;
+      // A marker at such a path is handed to the body as the reference
+      // to its stream (ES §2.2, assumed there under question 78).
       const reference = this.at(computed, at);
-      if (reference instanceof Ref || reference instanceof StreamRef) {
+      if (
+        reference instanceof Ref || reference instanceof StreamRef ||
+        reference instanceof StreamMarker
+      ) {
         argument = instance.placed(
           argument,
           at,
@@ -717,6 +741,7 @@ export class Host {
     if (value instanceof Ref || value instanceof StreamRef) {
       return this.v(value);
     }
+    if (value instanceof StreamMarker) return { $stream: true };
     if (Array.isArray(value)) return value.map((member) => this.pass(member));
     if (isRecord(value)) {
       return Object.fromEntries(
@@ -819,6 +844,19 @@ export class Instance {
    * `result` for the result, in the order the evaluations ended.
    */
   readonly trace: string[] = [];
+  /**
+   * The evaluations that failed the check of where a stream is stored
+   * (ruling Z11), with the first marker each one held at a position no
+   * listed path of the marker's binding covers.
+   */
+  readonly failures: {
+    evaluation: string;
+    binding: number;
+    path: string[];
+  }[] = [];
+  /** Every such position, over all failed evaluations, once each. */
+  readonly misplaced: { binding: number; path: string[] }[] = [];
+  readonly #checked = new WeakMap<Entry, boolean>();
 
   constructor(
     readonly artifact: Artifact,
@@ -1059,6 +1097,17 @@ export class Instance {
 
   // ----- places -----
 
+  /**
+   * The stream of a binding for the element keys a context has at the
+   * `element` steps of the binding's `within`.
+   */
+  streamFor(binding: number, context: Context): StreamRef {
+    return new StreamRef(
+      binding,
+      this.keysOf(this.plan.bindings[binding].within, { context }),
+    );
+  }
+
   /** The element keys of the `element` steps of a `within`. */
   keysOf(
     within: readonly { element?: number }[],
@@ -1173,6 +1222,9 @@ export class Instance {
     if (value instanceof StreamRef) {
       return { $stream: { binding: value.binding, keys: [...value.keys] } };
     }
+    // The link to the stream a marker stands for, in the marker's place
+    // (ES §2.2, "The replacement").
+    if (value instanceof StreamMarker) return this.stored(streamOf(value));
     if (value instanceof Handle) return this.stored(value.target);
     if (value instanceof Thunk) return undefined;
     if (typeof value === "function") return undefined;
@@ -1229,6 +1281,9 @@ export class Instance {
     const declared = slot === undefined
       ? undefined
       : this.schemaOf(this.plan.slots[slot].schema);
+    if (value instanceof StreamMarker) {
+      return new Handle(this, streamOf(value), host, slot, [], declared);
+    }
     if (value instanceof Ref || value instanceof StreamRef) {
       return new Handle(this, value, host, slot, [], declared);
     }
@@ -1850,7 +1905,12 @@ export class Instance {
         "value",
         (host) => result.evaluate(host),
       );
-      this.store.write(new Ref("result", []), this.stored(entry.value));
+      // A marker at a position of the result that no listed path of its
+      // binding covers fails the evaluation, and no link is stored
+      // (ES §2.2, "The check").
+      if (this.#check(entry)) {
+        this.store.write(new Ref("result", []), this.stored(entry.value));
+      }
       this.#afterWave = true;
       try {
         for (const materializer of this.#materializers) materializer(none);
@@ -1860,6 +1920,49 @@ export class Instance {
       this.#declare(none);
       if (this.store.clock === before) break;
     }
+  }
+
+  /**
+   * Checks the markers in the value of the result against
+   * `Binding.result` (PL §1.1, "The listed paths are complete"): each
+   * marker has to be at a position that a listed path of its binding
+   * covers. A `*` of a listed path matches any element at that position.
+   * A listed path below a conditional is listed whichever branch is
+   * selected, so it matches under either selection. The check is of the
+   * positions of the result alone: a reference in the value is not
+   * followed, and a marker stored in another document is not checked.
+   * Returns whether the evaluation stands.
+   */
+  #check(entry: Entry): boolean {
+    const known = this.#checked.get(entry);
+    if (known !== undefined) return known;
+    const found: { binding: number; path: string[] }[] = [];
+    const walk = (value: unknown, path: string[]) => {
+      if (value instanceof StreamMarker) {
+        const { binding } = streamOf(value);
+        const listed = this.plan.bindings[binding]?.result ?? [];
+        if (!listed.some((entry) => coversPosition(entry, path))) {
+          found.push({ binding, path });
+        }
+      } else if (Array.isArray(value)) {
+        value.forEach((member, index) => walk(member, [...path, `${index}`]));
+      } else if (isRecord(value)) {
+        for (const [name, member] of Object.entries(value)) {
+          walk(member, [...path, name]);
+        }
+      }
+    };
+    walk(entry.value, []);
+    this.#checked.set(entry, found.length === 0);
+    if (found.length === 0) return true;
+    this.failures.push({ evaluation: "result", ...found[0] });
+    for (const position of found) {
+      const id = canonical(position);
+      if (!this.misplaced.some((other) => canonical(other) === id)) {
+        this.misplaced.push(position);
+      }
+    }
+    return false;
   }
 
   /**
@@ -1940,12 +2043,7 @@ export class Instance {
       }
     };
     walk(this.store.docs.get("result")?.value, []);
-    const names = (listed: string[], path: string[]) =>
-      listed.length === path.length &&
-      listed.every((segment, index) =>
-        segment === path[index] ||
-        (segment === "*" && /^\d+$/.test(path[index]))
-      );
+    const names = coversPosition;
     const counts = {
       atListedPath: 0,
       atNoListedPath: 0,
@@ -2127,7 +2225,7 @@ export class Instance {
       } else if (place.output !== undefined) {
         found = host.at(host.output(place.output), rest);
       } else if (place.stream !== undefined) {
-        found = host.stream(place.stream);
+        found = this.streamFor(place.stream, context);
       } else {
         found = host.at(place.constant, rest);
       }

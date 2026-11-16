@@ -103,6 +103,41 @@ export class StreamRef {
   constructor(readonly binding: number, readonly keys: readonly string[]) {}
 }
 
+/**
+ * What `ConeHost.stream` gives value code for the stream of a binding
+ * (`execution-and-storage.md` §2.2, "Value code places a stream"): an
+ * object with no member. Value code can put it into a value and can do
+ * nothing else with it. Which stream it stands for is held here, where
+ * value code does not reach, and the runtime reads it when it stores the
+ * value.
+ */
+export class StreamMarker {
+  constructor() {
+    Object.freeze(this);
+  }
+}
+
+const markers = new WeakMap<StreamMarker, StreamRef>();
+
+/** A marker for a stream: the binding, and the keys of the instance. */
+export const markerOf = (stream: StreamRef): StreamMarker => {
+  const marker = new StreamMarker();
+  markers.set(marker, stream);
+  return marker;
+};
+
+/** The stream a marker stands for. */
+export const streamOf = (marker: StreamMarker): StreamRef => {
+  const stream = markers.get(marker);
+  if (stream === undefined) throw new Error("a marker of no stream");
+  return stream;
+};
+
+/** Whether a schema declares the position it describes as a stream. */
+export const isStreamSchema = (schema: Schema | undefined): boolean =>
+  typeof schema === "object" && Array.isArray(schema.asCell) &&
+  schema.asCell.includes("stream");
+
 /** A position that a read observed: the document and the path. */
 export type Position = { doc: string; path: readonly string[] };
 
@@ -225,7 +260,9 @@ export class Store {
   /**
    * The value at a reference, with every link in it replaced by the value
    * at its target. A link whose target is being read already gives
-   * `undefined`. The stream of a binding reads as `{ $stream: true }`.
+   * `undefined`. The stream of a binding reads as `{ $stream: true }`,
+   * and so does a position that holds nothing and that the schema of the
+   * reference declares as a stream: a stream the instance was given.
    */
   read(ref: Ref, reads?: Position[]): unknown {
     return this.#deep(ref, reads, new Set());
@@ -235,6 +272,9 @@ export class Store {
     const located = this.locate(ref, true, reads);
     const id = `${located.ref.doc}\u0000${located.ref.path.join("\u0000")}`;
     if (open.has(id)) return undefined;
+    if (located.value === undefined && isStreamSchema(located.ref.schema)) {
+      return { $stream: true };
+    }
     open.add(id);
     // A container that is copied to fill in a default keeps the address
     // it was read from.
