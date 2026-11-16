@@ -365,9 +365,13 @@ alike. So the crate lists a path for every position at which value code can
 place a stream: also for a member written after a spread, for two collections
 spread into one array, and for a stream inside a value that the elements of a
 collection hold. A stream that is an input of the pattern is a reference like
-any other input, and what passes it on stores a link to its place. This is the
-same for an element body over an array of references, over an array of plain
-values in place, and over the result of another per-element construct.
+any other input, and what passes it on stores a link to its place. A sandboxed
+body that is handed a marker in its computed argument gets a handle to the
+stream, and a stream that a body returns into the result is stored as the link
+to it and checked against no listed path (ruling Z20;
+`compare/fixtures/stream-returned.tsx`). This is the same for an element body
+over an array of references, over an array of plain values in place, and over
+the result of another per-element construct.
 
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's

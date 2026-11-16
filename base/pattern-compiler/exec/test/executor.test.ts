@@ -2444,3 +2444,78 @@ describe("a key that left its collection", () => {
     );
   });
 });
+
+// Ruling Z20 on `fixtures/stream-returned.tsx`: a stream that a function
+// body returns into the result is allowed and not checked. The body is
+// handed the stream of a binding as a handle, and what it returns holds
+// a reference, which is stored as a link as any reference a body returns
+// is. No path of `Binding.result` names the position.
+describe("a stream a function body returns into the result", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells, and those of `tags`
+  // plain values stored in place.
+  const start = async () => {
+    const artifact = await artifactOf("stream-returned");
+    const instance = new Instance(artifact, {
+      pool: { a: { title: "a" }, b: { title: "b" } },
+      items: [link("a"), link("b")],
+      tags: ["x", "y"],
+    });
+    return { artifact, instance };
+  };
+  type Stored = {
+    wrapped: { again: unknown };
+    rows: { again: unknown }[];
+    labels: { again: unknown }[];
+  };
+  const stored = (instance: Instance) =>
+    instance.store.docs.get("result")?.value as Stored;
+
+  it("stores the link to the stream of a binding outside every element body, and checks nothing", async () => {
+    const { artifact, instance } = await start();
+
+    expect(artifact.plan.bindings[0].result).toEqual([["inc"]]);
+    expect(stored(instance).wrapped.again).toEqual({
+      $stream: { binding: 0, keys: [] },
+    });
+    expect(instance.failures).toEqual([]);
+    // An event sent through the stored link is handled by the binding.
+    instance.send(0, { by: 3 });
+    expect((instance.result() as { count: number }).count).toBe(3);
+  });
+
+  it("stores the link to the stream of the element's key over references", async () => {
+    const { artifact, instance } = await start();
+
+    expect(artifact.plan.bindings[1].result).toBe(undefined);
+    expect(stored(instance).rows.map((row) => row.again)).toEqual([
+      { $stream: { binding: 1, keys: ['cell:argument:["pool","a"]#0'] } },
+      { $stream: { binding: 1, keys: ['cell:argument:["pool","b"]#0'] } },
+    ]);
+    expect(instance.failures).toEqual([]);
+  });
+
+  it("stores the link to the stream of the element's key over plain values in place", async () => {
+    const { artifact, instance } = await start();
+
+    expect(artifact.plan.bindings[2].result).toBe(undefined);
+    expect(stored(instance).labels.map((row) => row.again)).toEqual([
+      { $stream: { binding: 2, keys: ['value:"x"#0'] } },
+      { $stream: { binding: 2, keys: ['value:"y"#0'] } },
+    ]);
+    expect(instance.failures).toEqual([]);
+  });
+
+  it("counts the positions as held at no listed path", async () => {
+    const { instance } = await start();
+
+    // `inc` is at its listed path. The five streams the bodies returned
+    // are at no listed path, and none fails a check.
+    expect(instance.streamPositions()).toMatchObject({
+      atListedPath: 1,
+      atNoListedPath: 5,
+    });
+  });
+});

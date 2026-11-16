@@ -69,6 +69,10 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 3, event: {} },
     ],
   })),
+  "stream-returned": [{
+    argument: { items: [{ title: "a" }, { title: "b" }], tags: ["x", "y"] },
+    events: [{ binding: 0, event: { by: 2 } }],
+  }],
   "flat-keys": [{
     argument: {
       groups: [

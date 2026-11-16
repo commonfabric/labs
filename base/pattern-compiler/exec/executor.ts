@@ -859,12 +859,20 @@ export class Host {
     return instance.returned(run(argument));
   }
 
-  /** A computed value as a body is handed it: a reference as a handle. */
+  /**
+   * A computed value as a body is handed it: what a reference names, read
+   * as a value. A marker is handed as a handle to its stream, wherever it
+   * is in the value: the body can send to it and can return it, and what
+   * it returns holds the reference to the stream, which is stored as a
+   * link and not checked against `Binding.result` (ruling Z20).
+   */
   pass(value: unknown): unknown {
     if (value instanceof Ref || value instanceof StreamRef) {
       return this.v(value);
     }
-    if (value instanceof StreamMarker) return { $stream: true };
+    if (value instanceof StreamMarker) {
+      return this.instance.handleOf(value, this);
+    }
     if (Array.isArray(value)) return value.map((member) => this.pass(member));
     if (isRecord(value)) {
       return Object.fromEntries(
