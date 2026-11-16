@@ -188,7 +188,7 @@ describe("private inbox through a labeled pointer across runtimes", () => {
     });
   });
 
-  it("does the same through the ensure's hand-off, for a Home without the creating stream", async () => {
+  it("creates its own inbox in place of the one it holds through the ensure's hand-off, for a Home without the creating stream", async () => {
     // The host creates no inbox first for this Home, so its ensure, in a run
     // that has read the labeled holder, sends the creating step its event.
     // That holds only while an event carries no label of the run that sent
