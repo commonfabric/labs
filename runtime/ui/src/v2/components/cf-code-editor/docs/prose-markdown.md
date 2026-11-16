@@ -102,6 +102,14 @@ draws it is `features/prose-math.ts`, and KaTeX itself is reached only through
   correction when they differ. CodeMirror's `focusChangeEffect` would drop its
   transaction whenever another lands first, which the editor's own updates do.
 
+The editor adds `proseMath` ahead of `createProseMarkdownPlugin()`, so the
+formulas' decorations take precedence. CodeMirror wraps a widget only in marks
+of equal or lower precedence, so this is what puts a formula inside the Markdown
+around it: a table cell, bold text, a link. A table row hides anything it holds
+outside a cell, so a formula left unwrapped there would not be drawn. A table
+cell's mark is inclusive for the same reason, so it opens before and closes
+after a formula at the cell's edges.
+
 KaTeX runs with `trust` off, so `\href`, `\url`, `\includegraphics` and the
 `\html…` commands draw nothing of the author's choosing. A size a formula asks
 for is capped at 10em (`maxSize`), and its macro expansions at 1000

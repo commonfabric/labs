@@ -38,6 +38,54 @@ for (
   });
 }
 
+Deno.test("prose table draws formulas and line breaks inside their cells", async () => {
+  const markdown = [
+    "| Rule | Certification |",
+    "| --- | --- |",
+    "| $a$ | $\\underline{x}$ := $\\underline{y}$ |",
+    "| mid $b$ mid | first<br>second |",
+  ].join("\n");
+  const editor = new CFCodeEditor();
+  editor.mode = "prose";
+  editor.math = true;
+  editor.value = markdown;
+  editor.style.width = "600px";
+  document.body.append(editor);
+  try {
+    await editor.updateComplete;
+    const root = editor.shadowRoot!;
+    const formulas = Array.from(root.querySelectorAll(".cm-prose-math"));
+    assertEquals(
+      formulas.map((formula) =>
+        formula.querySelector("annotation")?.textContent
+      ),
+      ["a", "\\underline{x}", "\\underline{y}", "b"],
+    );
+    for (const formula of formulas) {
+      assert(formula.closest(".cm-prose-table-cell"));
+      assert(formula.getBoundingClientRect().width > 0);
+    }
+    const cell = root.querySelector(".cm-prose-br")?.closest(
+      ".cm-prose-table-cell",
+    );
+    assert(cell);
+    // The top of the text node in `cell` that reads `text`.
+    const top = (text: string) => {
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (walker.currentNode.textContent !== text) continue;
+        const range = document.createRange();
+        range.selectNodeContents(walker.currentNode);
+        return range.getBoundingClientRect().top;
+      }
+      throw new Error(`No text "${text}" in the cell.`);
+    };
+    assert(top("second") > top("first"));
+  } finally {
+    editor.remove();
+  }
+});
+
 Deno.test("prose table aligns columns and reveals source for editing", async () => {
   const editor = new CFCodeEditor();
   editor.mode = "prose";

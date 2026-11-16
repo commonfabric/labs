@@ -187,6 +187,11 @@ const LINE_BREAK_TAG = /^<br\s*\/?>$/i;
 
 const hiddenReplace = Decoration.replace({});
 
+const tableCellMark = Decoration.mark({
+  class: "cm-prose-table-cell",
+  inclusive: true,
+});
+
 /**
  * Build prose decorations from an EditorState.
  *
@@ -213,8 +218,11 @@ export function buildProseDecorations(
         if (rCursor.name === "TableDelimiter") {
           decorations.push(hidden.range(rCursor.from, rCursor.to));
         } else if (rCursor.name === "TableCell") {
+          // Inclusive, so the cell opens before and closes after a widget
+          // that replaces text at its edges, such as a formula, and wraps
+          // it. Anything a row holds outside a cell is hidden.
           decorations.push(
-            Decoration.mark({ class: "cm-prose-table-cell" }).range(
+            tableCellMark.range(
               rCursor.from,
               rCursor.to,
             ),

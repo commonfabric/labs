@@ -3183,16 +3183,19 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Prose mode's Markdown rendering, with formulas once KaTeX has loaded.
-   * Until then, formulas show as their TeX.
+   * Until then, formulas show as their TeX. The formulas come first, so
+   * their decorations take precedence: CodeMirror wraps a widget only in
+   * marks of equal or lower precedence, and a formula belongs inside the
+   * Markdown around it, such as a table cell.
    */
   #proseExtension(): Extension {
     if (this.mode !== "prose") return [];
     const katex = this.#drawsMath ? this.#katex : undefined;
     return [
-      createProseMarkdownPlugin(),
       katex === undefined
         ? []
         : proseMath(this._editorView?.hasFocus ?? false, katex.renderFormula),
+      createProseMarkdownPlugin(),
     ];
   }
 
