@@ -203,6 +203,38 @@ describe("extended-storage-transaction", () => {
         });
       });
 
+      describe("a write made on the storage transaction beneath it", () => {
+        it("is recorded as a write under no identity by every transaction wrapping it, whatever sink was added first", () => {
+          // A sink stays for the life of the storage transaction, so one added
+          // ahead of a wrapper's leaves the wrapper's in place.
+
+          const first = edit();
+          const inner = first.tx;
+          const earlier: string[] = [];
+          inner.reportUnmarkedWrites!((written) =>
+            earlier.push(written.path.join("/"))
+          );
+          const second = new ExtendedStorageTransaction(inner);
+          setCfcImplementationIdentity(second, {
+            kind: "builtin",
+            builtinId: "storage-ext-tx-builtin",
+          });
+          expect(inner.write(address("beneath", ["x"]), 1).error)
+            .toBeUndefined();
+
+          const recorded = {
+            space,
+            id: "of:beneath",
+            scope: "space",
+            path: ["x"],
+          };
+          expect(first.getCfcState().nonBuiltinWrites).toEqual([recorded]);
+          expect(second.getCfcState().nonBuiltinWrites).toEqual([recorded]);
+          expect(earlier).toEqual(["value/x"]);
+          first.abort();
+        });
+      });
+
       describe("writeOrThrow()", () => {
         it("refuses a write to a runtime secret, and writes the value of any other document", () => {
           const tx = edit();

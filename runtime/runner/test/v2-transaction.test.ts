@@ -20,6 +20,7 @@ import {
   isInternalVerifierRead,
   stableInternalVerifierRead,
 } from "../src/storage/reactivity-log.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 
 const signer = await Identity.fromPassphrase("v2-transaction");
 const space = signer.did();
@@ -1066,6 +1067,77 @@ describe("v2-transaction", () => {
           ])
         ).toThrow("Cannot clone");
         expect(tx.hasWrites!()).toBe(true);
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  describe("reportUnmarkedWrites()", () => {
+    // A write that arrives without the extended transaction's write-chokepoint
+    // mark is reported to every sink added, and a marked one to none.
+
+    /** A storage transaction with two sinks, and what each was told. */
+    const withSinks = (storage: ReturnType<typeof StorageManager.emulate>) => {
+      const tx = storage.edit();
+      const reported: [string[], string[]] = [[], []];
+      for (const seen of reported) {
+        tx.reportUnmarkedWrites!((address) =>
+          seen.push(address.path.join("/"))
+        );
+      }
+      return { tx, reported };
+    };
+
+    const address: IMemorySpaceAddress = {
+      space,
+      id: "of:v2-transaction-unmarked",
+      type,
+      path: ["value"],
+    };
+
+    it("reports an unmarked write to every sink, and a marked one to none", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const { tx, reported } = withSinks(storage);
+        expect(tx.write(address, { a: 1 }).error).toBeUndefined();
+        expect(
+          tx.write(
+            { ...address, path: ["value", "a"] },
+            2,
+            writeChokepointMark(),
+          ).error,
+        ).toBeUndefined();
+
+        expect(reported).toEqual([["value"], ["value"]]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("reports each write of an unmarked batch, and none of a marked one", async () => {
+      const storage = StorageManager.emulate({ as: signer });
+      try {
+        const { tx, reported } = withSinks(storage);
+        expect(tx.write(address, {}, writeChokepointMark()).error)
+          .toBeUndefined();
+        expect(
+          tx.writeBatch!([
+            { address: { ...address, path: ["value", "x"] }, value: 1 },
+            { address: { ...address, path: ["value", "y"] }, value: 2 },
+          ]).error,
+        ).toBeUndefined();
+        expect(
+          tx.writeBatch!(
+            [{ address: { ...address, path: ["value", "z"] }, value: 3 }],
+            writeChokepointMark(),
+          ).error,
+        ).toBeUndefined();
+
+        expect(reported).toEqual([
+          ["value/x", "value/y"],
+          ["value/x", "value/y"],
+        ]);
       } finally {
         await storage.close();
       }
