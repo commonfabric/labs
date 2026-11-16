@@ -406,6 +406,18 @@ is relitigated.
   a move evaluates those nodes alone, and the state, streams, and
   children of the body stay with their element. A value-derived key
   is salted with a secret of the space.
+- The label of the index is the label of the collection's own array:
+  its length and which link each slot holds. It holds nothing of what
+  the links point to, which is what a `findIndex` reads and the index
+  does not. It is the label of the whole array, not of the slots up
+  to the element's position.
+- A state cell declared with a value from the index keeps what it
+  holds when its element moves, because the declared value is written
+  at first creation only. A cell or child that a function body makes
+  under an explicit cause that holds the index is named by the cause,
+  so a move names another. A binding of a function body that copies
+  the index is a stream named by the copied value, so a move names
+  another stream.
 - Everything an element body holds is per element key, and so per
   occurrence: its state cells, its streams, its effects, and its
   children. Equal elements share nothing. A body with no state of its
@@ -939,20 +951,6 @@ as an assumption.
     stream.
 137. **The key of an element of a `filter` result** (PL question 91).
     *Assumed:* it keeps the key it has in the source, count included.
-
-138. **State and identity that derive from the index** (PL question
-    92). *Assumed:* a state cell declared with a value from the index
-    keeps what it holds when its element moves, because the declared
-    value is written at first creation only. A cell or child that a
-    function body makes under an explicit cause that holds the index
-    is named by the cause, so a move names another; the alternative
-    is a compile error. A binding of a function body that copies the
-    index is a stream named by the copied value, so a move names
-    another stream.
-139. **The label of the index** (PL question 93). *Assumed:* the
-    whole membership the collection iterates. The alternative is the
-    membership through the element's position alone, as `findIndex`
-    has.
 
 ## Open, and not needing the owner
 
