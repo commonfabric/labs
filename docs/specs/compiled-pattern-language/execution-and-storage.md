@@ -128,6 +128,23 @@ describe the part of a transaction that concerns one instance. Section 1.6
 describes the commit preparation, which runs once per transaction over
 everything staged in it.
 
+**From the creation of an instance to its settled result.** An instance
+that a handler creates gets its result document and its argument
+document in that event's transaction (section 1.4). Its cone instances
+are evaluated when something demands a kept output of it, in one
+derivation transaction: that of the change of demand, or the one behind
+the batch where the demand already stands. That transaction evaluates
+every demanded cone instance of the instance to a fixed point, and
+those of its children in the same space (section 1.5). So an instance
+that requests no effect and has no child in another space settles in
+two transactions, the one that creates it and one derivation
+transaction. No row of the table is the creation of an instance by
+something that is no handler, such as a command that starts a pattern
+in a space. *Assumed* (section 11, question 77): such a creation is one
+transaction that writes the argument document and what links to the
+result cell, and it evaluates nothing, so the count is two there as
+well.
+
 ### 1.2 The sequence
 
 **An event's transaction** has these steps.
@@ -4548,6 +4565,18 @@ Added by the ruling that the scheduler is switched per space (section 9):
     which its former elements were created. The alternative removes the
     entry in the transaction that removes the path, which is tighter
     than today.
+77. **The transaction that creates an instance outside a handler**
+    (section 1.1). The causes of section 1.1 cover an instance that a
+    handler or a computation creates. They do not cover one that a
+    command or a client creates directly, as the first instance of a
+    space is. *Assumed:* one transaction writes the argument document
+    and the link to the result cell and evaluates nothing, and the
+    first demand opens the derivation transaction that evaluates the
+    instance. The alternative evaluates the instance in the creating
+    transaction, as the acting principal of the creation, which settles
+    a new instance in one transaction where something demands it at
+    once. The prototype's derived count of two transactions to settle
+    an instance rests on this assumption.
 
 ### 11.2 For another document or the prototype
 
