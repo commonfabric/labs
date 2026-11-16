@@ -3508,13 +3508,14 @@ export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, 
     );
 }
 
-/// PL §8, question 78: "where two collections are spread into one array
-/// of children ... the path alone does not say" which positions are whose.
-/// The emitter gives such a binding no path, and none to a binding whose
-/// stream is at no kept path of what the callback returns, and counts
-/// each under its reason.
+/// PL §1.1, "From a path to a position": "Two collections spread into one
+/// array of children. The path is a result path of each binding all the
+/// same: the instance stores the links at those positions, and section
+/// 3.4 gives each the path `children/*`." A binding whose stream is at no
+/// kept path of what the callback returns has no path, and is counted
+/// under that reason.
 #[test]
-fn a_binding_of_an_element_body_has_no_result_path_where_the_rule_gives_none() {
+fn a_binding_of_two_collections_spread_into_one_array_has_the_path_of_the_spread() {
     let analysis = program(
         r#"import { Writable, handler, pattern, UI } from "commonfabric";
 interface Item { title: string }
@@ -3543,22 +3544,150 @@ export const P = pattern<{ items: Item[]; more: Item[]; chosen: Writable<string>
         .flat_map(|module| &module.plans)
         .find(|plan| plan.name.as_deref() == Some("P"))
         .expect("the plan");
-    for binding in found.plan["bindings"].as_array().expect("bindings") {
-        assert!(binding.get("result").is_none(), "{binding}");
-    }
-    let mut reasons: Vec<&str> = found
+    let spread = r#"[["$UI","children","*","props","onClick"]]"#.to_string();
+    assert_eq!(
+        results_of(&found.plan, "select"),
+        [
+            (r#"[{"element":0}]"#.to_string(), "null".to_string()),
+            (r#"[{"element":1}]"#.to_string(), spread.clone()),
+            (r#"[{"element":2}]"#.to_string(), spread),
+        ]
+    );
+    let reasons: Vec<&str> = found
         .element_bindings
         .iter()
         .map(|(_, reason)| reason.as_str())
         .collect();
-    reasons.sort_unstable();
+    assert_eq!(reasons, ["its stream is at no kept path of the result"]);
+}
+
+/// PL §1.1, "From a path to a position": "The same holds for a member
+/// written after a spread, whose path is `children/*` as well and whose
+/// stream is at one position." Ruling Z11 has the list complete, so the
+/// stream of a member written after a spread has that path, in a view
+/// node's children and in an array literal, also where the member is a
+/// conditional. The collection spread before it is over records in
+/// `items`, over plain values in `tags`, and the result of a `filter` in
+/// the third list: the path is the same in the three.
+#[test]
+fn a_stream_written_after_a_spread_has_the_path_of_the_positions_from_the_spread_on() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
+  state.count.set(state.count.get() + 1);
+});
+export const P = pattern<{ items: Item[]; tags: string[]; show: boolean; count: Writable<number> }>(
+  ({ items, tags, show, count }) => {
+    const first = bump({ count });
+    const second = bump({ count });
+    const third = bump({ count });
+    const fourth = bump({ count });
+    return {
+      [UI]: (
+        <div>
+          <ul>
+            <li onClick={first}>before</li>
+            {items.map((item) => <li>{item.title}</li>)}
+            <li onClick={first}>after</li>
+            <li><b onClick={first}>inside</b></li>
+          </ul>
+          <ol>
+            {tags.map((tag) => <li>{tag}</li>)}
+            {show ? <li onClick={second}>shown</li> : null}
+          </ol>
+          <p>
+            {tags.filter((tag) => tag !== "skip").map((tag) => <i>{tag}</i>)}
+            <i onClick={third}>after</i>
+          </p>
+        </div>
+      ),
+      rows: [...items.map((item) => ({ title: item.title })), { pick: fourth }],
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let result = |name: &str| results_of(&plan, name)[0].1.clone();
     assert_eq!(
-        reasons,
-        [
-            "its stream is at no kept path of the result",
-            "two collections are spread into one array",
-            "two collections are spread into one array",
-        ]
+        result("first"),
+        concat!(
+            r#"[["$UI","children","0","children","0","props","onClick"],"#,
+            r#"["$UI","children","0","children","*","props","onClick"],"#,
+            r#"["$UI","children","0","children","*","children","0","props","onClick"]]"#
+        )
+    );
+    assert_eq!(
+        result("second"),
+        r#"[["$UI","children","1","children","*","props","onClick"]]"#
+    );
+    assert_eq!(
+        result("third"),
+        r#"[["$UI","children","2","children","*","props","onClick"]]"#
+    );
+    assert_eq!(result("fourth"), r#"[["rows","*","pick"]]"#);
+}
+
+/// PL §1.1, "The stream is reached through a member of the element": for
+/// an array literal of the results of patterns compiled in, "the binding
+/// has a path through the collection", assumed there (section 8, question
+/// 84) to have "`*` at the collection". The member is read as the
+/// callee's result at a child position (`entry.node`, with the tree below
+/// `$UI`) or as its tree (`entry.node[UI]`). The source is an array of
+/// plain values in place, which hold the results. `again` is over the
+/// result of another per-element construct, whose elements hold the
+/// stream of a binding of that construct's body: the path has the `*` of
+/// the second collection, at whose positions the links are stored.
+#[test]
+fn a_stream_reached_through_a_member_of_an_element_has_a_path_through_the_collection() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
+  state.count.set(state.count.get() + 1);
+});
+const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.item.title);
+});
+const Story = pattern<{ label: string }>(({ label }) => {
+  const count = Writable.of(0);
+  return { [UI]: <button onClick={bump({ count })}>{label}</button>, count };
+});
+export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, chosen }) => {
+  const sections = [
+    { label: "one", node: Story({ label: "one" }) },
+    { label: "two", node: Story({ label: "two" }) },
+  ];
+  const rows = items.map((item) => ({ title: item.title, pick: select({ item, chosen }) }));
+  return {
+    [UI]: (
+      <div>
+        <ul>{sections.map((entry) => <li>{entry.node}</li>)}</ul>
+        <ol>{sections.map((entry) => <li>{entry.node[UI]}</li>)}</ol>
+        <p>{rows.map((row) => <i onClick={row.pick}>{row.title}</i>)}</p>
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let through = concat!(
+        r#"[["$UI","children","0","children","*","children","0","$UI","props","onClick"],"#,
+        r#"["$UI","children","1","children","*","children","0","props","onClick"]]"#
+    );
+    for name in ["bump#1", "bump#2"] {
+        assert_eq!(
+            results_of(&plan, name),
+            [(r#"[{"site":"Story"}]"#.to_string(), through.to_string())]
+        );
+    }
+    let rows = results_of(&plan, "select");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].1,
+        r#"[["$UI","children","2","children","*","props","onClick"]]"#
     );
 }
 

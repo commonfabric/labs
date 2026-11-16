@@ -1179,9 +1179,15 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         }
         // The first path the run holds the stream at. A path in a branch
         // that is not selected, or through a collection with no element,
-        // holds none.
+        // holds none. A path with no `*` names one position, and is tried
+        // before a path with one, which a reader with the plan alone can
+        // not always resolve (PL §8, question 78).
         let first: unknown;
-        for (const streamPath of paths) {
+        const ordered = [
+          ...paths.filter((streamPath) => !streamPath.includes("*")),
+          ...paths.filter((streamPath) => streamPath.includes("*")),
+        ];
+        for (const streamPath of ordered) {
           try {
             return streamAtPath(binding, streamPath);
           } catch (error) {
@@ -1234,6 +1240,19 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 holders.length === 0
                   ? "children that hold no assembled array"
                   : "children that hold two assembled arrays",
+              );
+            }
+            // The path of a member written after a spread is `children/*`
+            // as well (PL §1.1, "From a path to a position"). For a
+            // binding made outside every element body the path does not
+            // say whether its `*` stands for the elements of the
+            // collection or for a member written after it, so where the
+            // run holds a child after the assembled array the harness
+            // resolves no position.
+            if (steps.length === 0 && holders[0] < value.length - 1) {
+              throw new Unsupported(
+                "a path from a spread on that does not say which position " +
+                  "holds the stream",
               );
             }
             cell = cell.key(`${holders[0]}` as never) as AnyCell;

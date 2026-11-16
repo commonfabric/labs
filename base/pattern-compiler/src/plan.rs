@@ -390,11 +390,13 @@ struct Emitter<'r, 'm, 'a> {
     hints: Vec<(String, u32)>,
     /// The handles bound to a computed value (ruling T3).
     handle_writes: Vec<HandleWrite>,
-    /// The bindings whose stream is below an element of a collection that
-    /// is spread into an array of children beside another spread, where
-    /// the path alone does not say which positions are whose (PL §8,
-    /// question 78).
-    spread_beside_another: BTreeSet<usize>,
+    /// For each collection: the streams its elements hold before the body
+    /// runs, each with its path below an element. An array written in
+    /// place holds the stream of a binding of a pattern compiled in at a
+    /// member, and the assembled result of another construct holds the
+    /// streams its body placed (PL §1.1, "The stream is reached through a
+    /// member of the element").
+    member_streams: Vec<Vec<(Vec<String>, usize)>>,
     /// The patterns whose source the plan holds code of, by the module
     /// and the start of the function: the pattern the plan is compiled
     /// from, then each pattern compiled in, in the order of its first
@@ -1995,11 +1997,35 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Self::extend(&object, &index.value.to_string())
                     }
                     key => {
+                        // A key the pattern API names, as `[UI]`: the
+                        // member is at a static path, and a stream below
+                        // it is at the path below the read.
+                        let named = match key {
+                            Expression::Identifier(key)
+                                if matches!(key.name.as_str(), "UI" | "NAME")
+                                    && !self.env.contains_key(key.name.as_str()) =>
+                            {
+                                Some(format!("${}", key.name))
+                            }
+                            _ => None,
+                        };
                         let key = self.eval(key, hint);
                         if matches!(object, Place::Const) && matches!(key, Place::Const) {
                             return Place::Const;
                         }
-                        self.pick(&object, &key, hint, at)
+                        let picked = self.pick(&object, &key, hint, at);
+                        if let (Some(named), Place::Value(value, below)) = (named, &picked) {
+                            if below.is_empty() {
+                                let mut found = Vec::new();
+                                self.stream_paths(
+                                    &Self::extend(&object, &named),
+                                    &mut Vec::new(),
+                                    &mut found,
+                                );
+                                self.values[*value].streams = found;
+                            }
+                        }
+                        picked
                     }
                 }
             }
@@ -2187,6 +2213,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // "`derive` by expression code over the `enumeration`
                     // of each spread operand".
                     let later = &array.elements[rest..];
+                    // The streams at the positions from the spread on:
+                    // those below an element of a spread operand, and
+                    // those of a member written after the first spread.
+                    let mut streams: Vec<(Vec<String>, usize)> = Vec::new();
                     let star = self.build(hint, at, |emitter, cone| {
                         let mut inputs: Vec<Option<Value>> = Vec::new();
                         let mut enumerations: Vec<Option<Value>> = Vec::new();
@@ -2195,6 +2225,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                                 ArrayExpressionElement::Elision(_) => {}
                                 ArrayExpressionElement::SpreadElement(spread) => {
                                     let place = emitter.eval(&spread.argument, hint);
+                                    if let Place::Value(value, path) = &place {
+                                        if path.is_empty() {
+                                            for (at, binding) in &emitter.values[*value].streams {
+                                                if at.first().is_some_and(|first| first == "*") {
+                                                    streams.push((at[1..].to_vec(), *binding));
+                                                }
+                                            }
+                                        }
+                                    }
                                     match &place {
                                         Place::Slot(root, path) => {
                                             let slot = emitter.slot(root, path, "enumeration");
@@ -2219,13 +2258,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                                 }
                                 element => {
                                     if let Some(element) = element.as_expression() {
-                                        inputs.push(
-                                            emitter
-                                                .one("identity", |emitter| {
-                                                    emitter.eval(element, hint)
-                                                })
-                                                .1,
-                                        );
+                                        let (place, template) = emitter
+                                            .one("identity", |emitter| emitter.eval(element, hint));
+                                        emitter.stream_paths(&place, &mut Vec::new(), &mut streams);
+                                        inputs.push(template);
                                     }
                                 }
                             }
@@ -2236,6 +2272,10 @@ impl<'a> Emitter<'_, '_, 'a> {
                         inputs.push(joined(enumerations?));
                         Some(joined(inputs))
                     });
+                    if let Place::Value(value, _) = &star {
+                        streams.dedup();
+                        self.values[*value].streams = streams;
+                    }
                     fields.insert("*".to_string(), star);
                 }
                 Place::Record(fields)
@@ -2969,6 +3009,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         self.collections.push(record);
         self.iterated.push(iterated.clone());
+        self.member_streams.push(Vec::new());
         // The cone the `reduce` is written in computes `init`.
         let initial = initial.map(|initial| {
             let (cone, made) = self.computing(hint, at);
@@ -3155,6 +3196,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             "source": source,
         }));
         self.iterated.push(iterated.clone());
+        self.member_streams.push(self.streams_of_elements(receiver));
         // The body: one cone, evaluated once per element key.
         let saved_env = self.env.clone();
         let saved_cone = self.cone.take();
@@ -4078,8 +4120,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut fields = BTreeMap::new();
         let mut position = 0usize;
         let mut later: Option<Vec<Option<Value>>> = None;
-        // The spread children, and the streams below an element of one.
-        let mut spreads = 0usize;
+        // The streams at the positions from the first spread on: those
+        // below an element of a spread child, and those of a child
+        // written after the first spread.
         let mut element_streams: Vec<(Vec<String>, usize)> = Vec::new();
         for child in children {
             let (place, spread) = match child {
@@ -4124,14 +4167,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                 later = Some(Vec::new());
             }
             if spread {
-                spreads += 1;
                 if let Place::Value(value, path) = &place {
                     if path.is_empty() {
                         for (at, binding) in &self.values[*value].streams {
                             if at.first().is_some_and(|first| first == "*") {
-                                element_streams.push((at[1..].to_vec(), *binding));
+                                let entry = (at[1..].to_vec(), *binding);
+                                if !element_streams.contains(&entry) {
+                                    element_streams.push(entry);
+                                }
                             }
                         }
+                    }
+                }
+            } else if later.is_some() {
+                // "A member written after a spread, whose path is
+                // `children/*` as well and whose stream is at one
+                // position" (PL §1.1, "From a path to a position").
+                let mut found = Vec::new();
+                self.stream_paths(&place, &mut Vec::new(), &mut found);
+                for entry in found {
+                    if !element_streams.contains(&entry) {
+                        element_streams.push(entry);
                     }
                 }
             }
@@ -4183,16 +4239,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                 Some(joined(later.into_iter().collect::<Option<Vec<Value>>>()?))
             });
             // "The positions from a spread on are at `children/*`" (PL
-            // §1.1). Where two collections are spread into one array the
-            // path does not say which positions are whose (PL §8,
-            // question 78), and the binding gets no path.
-            match &star {
-                Place::Value(value, _) if spreads == 1 => {
-                    self.values[*value].streams = element_streams;
-                }
-                _ => self
-                    .spread_beside_another
-                    .extend(element_streams.into_iter().map(|(_, binding)| binding)),
+            // §1.1). Where two collections are spread into one array, "the
+            // path is a result path of each binding all the same", and so
+            // is the path of a member written after a spread: the list is
+            // complete (ruling Z11), and the path does not say which
+            // positions are whose (PL §8, question 78).
+            if let Place::Value(value, _) = &star {
+                self.values[*value].streams = element_streams;
             }
             fields.insert("*".to_string(), star);
         }
@@ -5825,8 +5878,56 @@ impl<'a> Emitter<'_, '_, 'a> {
                     found.push((at, *binding));
                 }
             }
+            // A member of an element, passed on: the streams the element
+            // holds at that member or below it.
+            Place::Slot(Root::Element(collection), member)
+            | Place::Read(Root::Element(collection), member, _) => {
+                for (position, binding) in
+                    self.member_streams.get(*collection).into_iter().flatten()
+                {
+                    if position.starts_with(member) {
+                        let mut at = path.clone();
+                        at.extend(position[member.len()..].iter().cloned());
+                        found.push((at, *binding));
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    /// The streams the elements of what a construct iterates hold, each
+    /// with its path below an element: for an array written in place the
+    /// streams below each member, and for the assembled result of another
+    /// construct the streams below `*`.
+    fn streams_of_elements(&self, receiver: &Place) -> Vec<(Vec<String>, usize)> {
+        let mut found: Vec<(Vec<String>, usize)> = Vec::new();
+        let mut add = |entry: (Vec<String>, usize)| {
+            if !found.contains(&entry) {
+                found.push(entry);
+            }
+        };
+        match receiver {
+            Place::Record(fields) => {
+                for (name, member) in fields {
+                    if name != "*" && name.parse::<usize>().is_err() {
+                        continue;
+                    }
+                    let mut below = Vec::new();
+                    self.stream_paths(member, &mut Vec::new(), &mut below);
+                    below.into_iter().for_each(&mut add);
+                }
+            }
+            Place::Value(value, path) if path.is_empty() => {
+                for (at, binding) in &self.values[*value].streams {
+                    if at.first().is_some_and(|first| first == "*") {
+                        add((at[1..].to_vec(), *binding));
+                    }
+                }
+            }
+            _ => {}
+        }
+        found
     }
 
     /// Where the result holds the stream of a binding, the binding names
@@ -7433,7 +7534,7 @@ pub fn emit_module<'a>(
             iterated: Vec::new(),
             hints: Vec::new(),
             handle_writes: Vec::new(),
-            spread_beside_another: BTreeSet::new(),
+            member_streams: Vec::new(),
             patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),
@@ -7493,7 +7594,6 @@ pub fn emit_module<'a>(
         }
         let hints = std::mem::take(&mut emitter.hints);
         let handle_writes = std::mem::take(&mut emitter.handle_writes);
-        let spread_beside_another = std::mem::take(&mut emitter.spread_beside_another);
         tags.push((*start, std::mem::take(&mut emitter.tags)));
         let argument_schema = emitter
             .root_types
@@ -7518,12 +7618,10 @@ pub fn emit_module<'a>(
                         .is_some_and(|steps| steps.iter().any(|step| step.get("element").is_some()))
             })
             .map(|(index, _)| {
-                let reason = if spread_beside_another.contains(&index) {
-                    "two collections are spread into one array"
-                } else {
-                    "its stream is at no kept path of the result"
-                };
-                (index, reason.to_string())
+                (
+                    index,
+                    "its stream is at no kept path of the result".to_string(),
+                )
             })
             .collect();
         plans.push(PatternPlan {
