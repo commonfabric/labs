@@ -131,14 +131,14 @@ next.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
   lists the places where it found the documents ambiguous. Its notes through
-  272, notes 281 to 302, notes 307 to 320, and notes 325 to 341 are written
-  into the documents.
+  272, notes 281 to 302, notes 307 to 320, notes 325 to 341, and notes 344
+  to 363 are written into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
-  below, and notes 303 to 306, 321 to 324, and 342 and 343, the results of the
-  value comparison, into
+  below, and notes 303 to 306, 321 to 324, 342 and 343, and 364 to 366, the
+  results of the value comparison, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `59055fd0c5`. From commit
+  The latest prototype commit read is `77993077e4`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -147,7 +147,13 @@ next.
   152 of 152 in the fixtures and 4,485 of 4,539 in the corpus, over 187
   modules. At `59055fd0c5`, with the rulings on the collections a cone lists
   and on who places a stream implemented, they are 280 of 280 in the fixtures
-  and 4,642 of 4,735 in the corpus, over 194 modules. No compared row of the
+  and 4,642 of 4,735 in the corpus, over 194 modules. At `77993077e4`, with
+  a record that a handler writes into a list stored as a document of its
+  own and with the rulings on a plain value in place, a derived collection
+  passed on, a write below the root of an empty state cell, a first value,
+  the callee's default, and `[SELF]` implemented, they are 489 of 490 in the
+  fixtures and 4,641 to 4,650 of 4,735 in the corpus, over 194 modules. The
+  range is one module that draws from `Math.random`. No compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
   below the elements of a collection and by handlers with no
@@ -502,8 +508,16 @@ implement the rulings on the collections a cone's record lists and on
 who places a stream, and the executor has a `reduce` in the reactive
 tier, the record of a key of a list, and a cell made with `new`. Those
 are notes 325 to 341, which are written into the documents, and notes
-342 and 343, which run the comparison again. Each part below gives the
-figures of each commit, the earliest first.
+342 and 343, which run the comparison again. At commit `77993077e4` the
+executor stores a record that a handler writes into a list as a
+document of its own, as today's runtime does, and the crate and the
+executor implement the rulings on the identity of a plain value in
+place, on an output that passes a derived collection on, on a write
+below the root of an empty state cell, on a first value stored as a
+value, on where the callee's default is held, and on the name bound to
+`[SELF]`. Those are notes 344 to 363, which are written into the
+documents, and notes 364 to 366, which run the comparison again. Each
+part below gives the figures of each commit, the earliest first.
 
 Notes 281 to 302 say what the executor needed that the
 documents did not give, and are written into the documents. Of the
@@ -531,8 +545,11 @@ in part: what a key that left its collection keeps, what a `*` of a
 result path stands for, the key of an element that a `flatMap`
 contributes, and the record of a key of a list. Each entry says what
 stays open, and question 167 is what the ruling on 166 leaves
-undetermined in the reactive tier. Notes 303 to 306, 321 to 323, and
-342 are the results here.
+undetermined in the reactive tier. Questions 168 to 173 are what notes
+344 to 363 found undetermined, and questions 149, 160, 161, and 163 are
+restated with what the prototype observed under their assumptions.
+Notes 303 to 306, 321 to 323, 342, and 364 and 365 are the results
+here.
 Nothing was timed.
 
 Note 324 says what the later round did not keep to and did not verify.
@@ -564,6 +581,21 @@ of today's runtime over the corpus was made: the executor was run again
 against the values of the earlier run, and the change to the
 comparison's harness, which resolves a result path with no `*` first, is
 exercised by the fixtures alone.
+
+Note 366 says the same of the round of commit `77993077e4`. The fixture
+of a record written into a list was red before the change, and its unit
+tests were written with the change. The tests of the reference by key
+were written after the store and before the executor was complete, and
+they found a defect: a state path that a handler declares with a data
+type was handed a handle. The unit tests of the keys of a derived
+collection passed on were written with the change, and the test that
+removes the mark shows what the mark decides. The tests of a write
+below the root of an empty state cell and of `[SELF]` describe what the
+executor did and changed no code. The test of the emitter's `equals`
+was written after the code. The counts of evaluations over the corpus
+differ by a few from those of the run of commit `59055fd0c5` before any
+change of this round, which was not examined. No fresh run of today's
+runtime over the corpus was made.
 
 ### What is compared, and what is not
 
@@ -606,7 +638,14 @@ fixture uses the scenario its label test writes, where it writes one.
   body as with `of`. It still instantiates no pattern and binds no
   handler in a function body: the artifact names a compiled pattern by
   hash and holds no plan of a pattern from another module, and the
-  executor has one instance over one store. It reads `spaceOf` as the
+  executor has one instance over one store. At commit `77993077e4` it
+  stores a record that `set`, `push` or `addUnique` writes into an
+  array as a document of its own, with a link in the array, as today's
+  runtime does. It names that document by a counter, keeps in place a
+  record that is set at one position of an array and the records of an
+  array that a body creates a cell with, and writes no default of the
+  argument into the argument document, where today's runtime writes
+  one. It reads `spaceOf` as the
   space it is given and has no acting principal. It does not use
   `Cone.writes`,
   `ConeResult.selections`, or `ConeResult.picks`: a body's side-write
@@ -731,6 +770,55 @@ which it covers.
   plain values in place with the index, and one over the result of a
   `map`. A step that reads an outer input is not compared, because the
   compiler of today's runtime refuses it.
+
+At commit `77993077e4`, 32 of the 36 fixtures are run, in 39 runs, and
+489 of 490 compared values are equal. The added runs are one of
+`fixtures/list-records.tsx` with 84 values, one of
+`fixtures/value-identity.tsx` with 44, one of
+`fixtures/passes-collection.tsx` with 2, one of
+`fixtures/state-below.tsx` with 54, and two of
+`fixtures/absent-state.tsx` with 12, and `fixtures/callee-default.tsx`
+has 22 values where it had 8. `fixtures/self.tsx` is not compared,
+beside the three fixtures that were not compared before.
+
+- **`list-records`.** A handler writes records into a list with `push`
+  and with `set`, and the executor stores each as a document of its
+  own with a link in the list, as today's runtime does. The list is an
+  array of references. All 84 values are equal.
+- **`value-identity`.** A row over an array of plain values in place,
+  with each test beside the same row over an array of references. It
+  has the three handlers of question 160: one write through the
+  element's reference commits and the row loses its state, two writes
+  in turn are rejected, and one `update` commits. Over the array of
+  references all three commit and the row keeps its state.
+- **`passes-collection`.** An output that passes the result of a
+  `filter` on, over an array of references and over an array of plain
+  values in place, each with a `map` over the output, which is the
+  case of the result of another per-element construct. Over
+  references the keys are those of the cells with the mark or without
+  it. Over plain values a `filter` that drops the first of two equal
+  values leaves the second with the count it has in the source, and
+  without the mark the count is lost.
+- **`state-below`.** A write of one member, and a `push`, below the
+  root of a state cell that has no document, in the pattern's body and
+  in an element body over an array of references, over an array of
+  plain values in place, and over the result of a `filter`. The
+  executor instantiates no label, so the label of the members taken
+  from the default is not exercised.
+- **`absent-state`.** A handler whose state path is bound to a value
+  that is nothing and whose body has an entry at a member below the
+  path. The executor places nothing at the path.
+- **`callee-default`.** One of its 22 values differs: a path of the
+  callee's result that passes on a path the caller left empty. A read
+  addressed at the path gives the callee's default in both runs.
+  Today's read of the whole result gives nothing there, and the
+  comparison reads the whole result (question 149). It is today's
+  runtime and not the design. The record is the same for a callee in
+  an element body in each of the three cases.
+- **`self`.** The name bound to `[SELF]` placed in a value, in the
+  pattern's body and in an element body over an array of references
+  and over an array of plain values in place. The executor stores a
+  link to the result.
 
 ### The corpus
 
@@ -869,13 +957,17 @@ class:
 | `dev/catalog/catalog` | 2 | Prototype defect, not verified | A child that is `null` in today's run holds nothing in the executor's |
 | `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | A `$cell` attribute holds a pattern's result; today's read gives no `$NAME` below it |
 
-The first two rows are of the case of an array of plain values in
-place, and neither arises over an array of references. They come from
-an element that is a plain value stored in place, which today's
-runtime does not have: it stores an element that is a record as a cell
-of its own. The ruling of question 145 covers both. Under it the
-second is equal where the executor stores a reference by key, and the
-first is a deliberate difference from today.
+The classes of the first two rows are those given at that commit, and
+they are wrong. Both modules fill their list with `push`. Today's
+runtime gives a record so written a document of its own and stores a
+link in the list, so both lists are arrays of references, and neither
+row is of the case of an array of plain values in place. The executor
+of that commit stored such a record in place, which is a defect of the
+prototype. Both rows are equal at commit `77993077e4`, below. Today's
+runtime does hold records in place: the records of the argument that
+an instance is created with, and of a default
+(`plan-and-label-templates.md` §1.3, "Which stored forms make which
+case").
 
 ### The corpus at commit `59055fd0c5`
 
@@ -937,6 +1029,91 @@ commit. What the notes give of the changes:
 - **Documents.** The 26 documents more are 5 argument and 5 result
   documents of the added modules, 5 state cells, and 11 records of a
   key.
+
+### The corpus at commit `77993077e4`
+
+The figures are of the executor alone, run again on the crate's output
+of this commit against the values that today's runtime computed in the
+run of commit `96f3b83a73` over the 272 modules. No fresh run of today's
+runtime was made.
+
+| | `59055fd0c5` | `77993077e4` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 194 | 194 |
+| Every value equal and every event handled | 167 | 168 or 169 |
+| Values compared | 4,735 | 4,735 |
+| Values equal | 4,642 | 4,641 to 4,650 |
+| Values that differ | 93 | 85 to 94 |
+| Modules with a difference | 24 | 22 or 23 |
+| Committed events the executor does not handle | 15 of 293 | 15 of 293 |
+| Documents the executor stored | 535 | 598 |
+
+The range is `showcase/card-piles/main.tsx` alone: 0, 6 or 9 of its 28
+values differ from one run to the next, by what `Math.random` draws.
+Without that module 85 values differ, in 22 modules. What the notes
+give of the changes:
+
+- **Ten values that differed are equal.** 4 of
+  `examples/map-demo/map-demo.tsx` and 1 of
+  `dev/gideon-tests/test-cell-equals.tsx`: both modules fill their list
+  with `push`, so their elements are cells in today's runtime, and the
+  executor stores them so. The two rows were classed as a design
+  difference and as a defect under the ruling of question 145, and
+  both were a defect of the prototype, which stored such a record in
+  place. The case is an array of references. And 5 of
+  `apps/person-workbench/main.tsx`: a handler whose body has an entry
+  at a state path and one at a member below it was handed a record
+  with the member where the path was bound to a value that is
+  nothing, and the executor places nothing there.
+- **Two values that were equal differ,** both in
+  `dev/gideon-tests/test-handler-capture-key-equals.tsx`. A handler of
+  a row finds its element with `inboxItems.key(i).equals(inboxItem)`.
+  The handle of `key(i)` names the position, the row's element is a
+  reference by key, the two are not equal under the assumption of
+  question 163, and the handler removes nothing. Today's runtime finds
+  the element, because both name the position there. The case is an
+  array of plain values in place; over an array of references both
+  resolve to the cell.
+- **`card-piles` varies.** Its handler reads two piles, shuffles the
+  cards, and sets both piles. Under the assumption of question 163
+  the first pile then holds references by key into the second, which
+  is set next, and the cards that changed piles read as nothing.
+  Today's runtime stores copies. The executor of the earlier commit
+  stored a link to the position, which read whatever card stood
+  there, and the cards of the scenario are all equal. The case is an
+  array of plain values in place.
+- **No other value changed.** The rulings on a derived collection
+  passed on, on a write below the root of an empty state cell, on a
+  first value, on the callee's default, and on `[SELF]` changed no
+  value of the corpus. No event of the run is refused for a reference
+  whose key no position holds.
+- **Documents.** The 63 documents more are the 64 documents of a
+  record that a handler wrote into a list, less one record of a key.
+
+The notes make no table over all the values that differ at this
+commit. They class the following, which earlier commits left
+unexplained or not examined. The other differences have the classes of
+the tables above.
+
+| Module | Values | Class | Cause |
+| --- | ---: | --- | --- |
+| `product/primitives/demo/atoms-demo` | 11 | Prototype defect, and a write the documents refuse | A handler of a pattern compiled in sorts `rows`, which the call writes as a literal. The crate holds `null` for each constant of it, and the handler ends early |
+| `product/primitives/demo/atoms-demo` | 4 | Prototype defect | What four events that are not handled leave: `step`, `min` and `items` are constants the crate holds as `null`, where the handler expects a handle |
+| `system/agent-run` | 4 | The scenario, not verified by a run | The generator gives `run` no value for four required members of type `unknown`, and today's read of `run` under its schema gives nothing |
+| `dev/catalog/catalog` | 2 | Prototype defect, not verified | As at commit `96f3b83a73` |
+| `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | As at commit `96f3b83a73` |
+| `dev/gideon-tests/test-handler-capture-key-equals` | 2 | Assumption of question 163, open | A handle that names a position compared with a reference by key |
+| `showcase/card-piles` | 0, 6 or 9 | Assumption of question 163, open | A handler that moves plain values between two arrays |
+
+With the crate's constants right, the first row would still differ:
+the handler writes through a handle to a constant of the call, which
+the compiled path refuses (`execution-and-storage.md` §2.4), and
+today's runtime writes the callee's argument document. The rows of
+`agent-run`, `catalog` and `cfc-spec-gallery` rest on a reading of the
+source and of the two values. The last two rows are of the case of an
+array of plain values in place, and neither arises over an array of
+references.
 
 ### What the run conformed to
 
@@ -1075,6 +1252,40 @@ counts of plans are over all 382 corpus patterns.
   The fold is not kept per key, so one changed element evaluates every
   step.
 
+At commit `77993077e4` the plan and the run have the following, over
+the corpus.
+
+- **A record written into a list.** 64 documents of a record that a
+  handler wrote into a list exist after the scenarios. Each such list
+  is an array of references.
+- **A reference by key.** A reference to an element that is a plain
+  value in place holds the key at the array and the path below the
+  element, and the store finds the position that holds the key at
+  each read and each write. The key holds the value with no salt, a
+  limit of the prototype. An element of a `map` or `flatMap` result
+  whose body computes a value is passed on as that value, because the
+  executor stores no assembled result at an address of its own
+  (question 161). Value code calls the host's `equals` with each
+  operand as the reference it is, at 18 calls (question 171).
+- **A derived collection passed on.** 27 outputs in 15 modules have
+  the mark `Output.passesCollection`. A `computed` with a block body
+  that returns the result, and a result path of a sandboxed body that
+  passes its input on, have no mark; both are limits of the
+  prototype. The mark is the same whether the upstream source holds
+  references or plain values in place, since the plan does not say
+  which.
+- **The callee's default.** 51 entries of `Body.reads`, in 9 modules,
+  hold a default, and 78 entries of `Binding.state` hold one (question
+  158). Value code of a callee hands the host a reference with the
+  callee's default 42 times (question 169). Where code of the caller
+  names a path of the callee's result that passes the path on, the
+  crate writes a read of the caller's slot with no default, which is
+  a defect of the crate.
+- **A first value.** A member of handle type of a first value that is
+  not a constant is stored as a value, where
+  `execution-and-storage.md` §4.1 assumes a link (question 155): a
+  limit of the prototype.
+
 ### Documents
 
 The executor stores an argument document, a result document, and one
@@ -1101,8 +1312,11 @@ over the 189 modules of the wider set, 509 and 99. At commit
 `59055fd0c5`, over 194 modules, it stores 535 documents, 2.8 per
 module; the 26 more include 5 state cells and 11 records of a key of a
 list, which the executor stores as documents of their own (question
-166). The notes give no
-other row of the table for that commit. The prototype's cost model
+166). At commit `77993077e4`, over the same 194 modules, it stores 598
+documents, 3.1 per module; 64 of them are records that a handler wrote
+into a list, each a document of its own as in today's runtime. The
+notes give no
+other row of the table for those two commits. The prototype's cost model
 still counts one document per state cell, which is an upper bound under
 the ruling, and the derived figures of [Storage](#storage) are not
 computed again.
