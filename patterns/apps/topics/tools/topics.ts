@@ -711,7 +711,7 @@ async function invoke<T>(
       : new UnsettledWrite(
         `${message}\nThe write may have committed: run the same command ` +
           `with \`--invocation ${id}\` to settle it without writing twice.`,
-        { invocation: id, reason: message, cause: error },
+        { reason: message, cause: error },
       );
   };
   let stdout: string;
@@ -762,7 +762,7 @@ async function invoke<T>(
       ? error
       : new UnsettledWrite(
         describeFailure(error),
-        { invocation: id, reason: describeFailure(error), cause: error },
+        { reason: describeFailure(error), cause: error },
       );
   }
 }
@@ -785,34 +785,23 @@ export class UnconfirmedWrite extends Error {
  */
 export class UnsettledWrite extends Error {
   readonly #reason: string;
-  readonly #invocation: string;
 
   /**
-   * A write of the invocation `invocation` that failed for `reason`, saying
-   * `message`, which may add how to settle it from the command line.
+   * A write that failed for `reason`, saying `message`, which may add how to
+   * settle it from the command line.
    */
   constructor(
     message: string,
-    { invocation, reason, cause }: {
-      invocation: string;
-      reason: string;
-      cause: unknown;
-    },
+    { reason, cause }: { reason: string; cause: unknown },
   ) {
     super(message, { cause });
     this.name = "UnsettledWrite";
     this.#reason = reason;
-    this.#invocation = invocation;
   }
 
   /** What went wrong, without how to settle it from the command line. */
   get reason(): string {
     return this.#reason;
-  }
-
-  /** The invocation that settles the write. */
-  get invocation(): string {
-    return this.#invocation;
   }
 }
 
@@ -839,7 +828,7 @@ async function step(
       `${reason}: run the same command with ` +
         `\`--invocation ${written.invocation}\` to run it without writing ` +
         "again.",
-      { invocation: written.invocation, reason: `${reason}.`, cause: error },
+      { reason: `${reason}.`, cause: error },
     );
   }
 }
@@ -1676,7 +1665,7 @@ export async function browseWrite(
     }
     return {
       result: "written",
-      report: printed.join("\n").split("\n")[0] || "Done.",
+      report: printed.join("\n").split("\n")[0],
     };
   } catch (error) {
     return error instanceof UnsettledWrite

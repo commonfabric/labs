@@ -95,11 +95,6 @@ export class PanelRead {
     });
   }
 
-  /** The cell the panel reads. */
-  get cell(): CellHandle {
-    return this.#cell;
-  }
-
   /** Whether anything has been heard of the cell yet. */
   get loaded(): boolean {
     return this.#whole !== undefined;

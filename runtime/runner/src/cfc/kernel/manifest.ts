@@ -497,13 +497,19 @@ export const MANIFEST: readonly ManifestRow[] = [
     lean: "`Cfc/ResultWiring.lean`: `create`, `restate`",
     relation: "missing",
     decidedToday: [
+      { file: PREPARE, symbol: "resultWiringsByTarget" },
       { file: PREPARE, symbol: "withRestatedResultWirings" },
       { file: PREPARE, symbol: "ownRestampContainerPaths" },
+      { file: PREPARE, symbol: "prepareBoundaryCommitSteps" },
     ],
-    note: "a setup's result wiring is taken as written at the root of its " +
-      "document whether or not the setup wrote it, so the root's " +
-      "membership is re-minted each setup; a container reached only so " +
-      "mints no existence entry",
+    note: "a root of references only is taken as written at the root of its " +
+      "document whether or not the setup wrote it, so its membership is " +
+      "re-minted each setup that restates it; a root holding data is " +
+      "taken from an asking setup the runtime did not start on its own " +
+      "(`runtimeStarted`), whose persist region re-derives the root's " +
+      "value entry from the attempt's join and drops the derived value " +
+      "entries below it, ahead of specs#98; no restatement mints an " +
+      "existence entry",
   },
   {
     file: PROPAGATION,

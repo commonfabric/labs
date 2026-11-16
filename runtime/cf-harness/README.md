@@ -46,6 +46,21 @@ piece identity after checking that the run holds an unrestricted whole piece.
 Source-reader references need a retained Page first: read the source, write the
 relevant material with `page.write`, then compose the Page receipt's `ref`.
 
+The same bridge runs the other way. Any string in a command's answer that spells
+a piece's stored address (`pattern:<space>/<piece-id>`, or the
+`pattern:<space>/of:<piece-id>` form Loom records components in) reaches the
+model as the handle the run holds for that piece, once the bridge has checked it
+is a whole Pattern Instance in the session's own space. So an agent that
+inspects a Loom can describe and call the pieces in it. An address it cannot
+hold is dropped, and a `<key>_unheld` member, or `{unheld}` in a list, says why:
+`foreign-space`, `limit` (past 32 distinct pieces in one answer), or
+`unavailable` for everything else. An absent piece, a cell that is no Pattern
+Instance and a failed read all answer `unavailable`, so a raw address cannot
+probe what a space holds. This is half of the rule that an address never reaches
+a model; the other half is the host's: it must not spell a piece's address to an
+agent run any other way, such as a pane url, which the bridge cannot recognize.
+Loom keeps its render blocks out of what an agent run reads for that reason.
+
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry
 no more than those three values, whatever the data behind it turned out to be.
@@ -327,8 +342,10 @@ What works today:
 - GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
   cache usage detail; estimates use the public OpenAI token schedule and are
   kept distinct from provider-reported cost
-- stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
+- stable prompt-cache affinity across an interactive session, and across the
+  jobs of an agent-runner profile that names a `cacheAffinityKey` (sent as the
+  provider prompt-cache key in place of each run's id), plus opt-in reasoning
+  effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
@@ -832,10 +849,13 @@ A follow-up accepts `--image` and `--input-cell` with the same formats and
 limits as a first run. Images are snapshotted under the new run's artifact
 directory and attached to its new prompt. New input cells mint handles into the
 carried table, so earlier tokens still resolve. Attachment names are retained
-across continuations; a new input cell whose name is already held is refused
-before any model request. `assignedPieces` also carries forward. When no new
-input cells are supplied, their confirmed slugs are announced as attachments, as
-in later chat turns.
+across continuations. An input cell that gives a held name to the cell the name
+already stands for adds nothing, so a host may attach on a follow-up what it
+attached before. One that gives a held name to any other cell is refused before
+any model request, and so is a piece address spelled by slug under a held name,
+since the check compares the references as written. `assignedPieces` also
+carries forward. When no new input cells are supplied, their confirmed slugs are
+announced as attachments, as in later chat turns.
 
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
@@ -1601,8 +1621,9 @@ parse, targets an unadmitted space, names a piece the space does not hold, or
 arrives on a run without a fabric session fails the run before the model is
 involved. The cells are recorded in run state (`inputCells`), replayed rather
 than re-minted on resume, and reported in the operator summary as `inputCells:`.
-A continuation retains those names and tokens and appends its new attachments;
-reusing a held attachment name is refused.
+A continuation retains those names and tokens and appends its new attachments. A
+held attachment name stays available to the cell it names and is refused for any
+other.
 
 #### Inspecting a handle's shape
 
@@ -2009,9 +2030,8 @@ unify them.
 
 ### Pattern-index client
 
-The shared signed client, successor resolution, search-body composition, and
-feedback vocabulary live in
-[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+The shared signed client, search-body composition, and feedback vocabulary live
+in [`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
 configuration and identity loading live in `src/pattern-index/factory.ts`;
 composition, publication gates, the session ledger, probes, retrieval scoring,
 and tools remain in this package.
@@ -2054,27 +2074,26 @@ establish either an entry's intended audience or who evaluated it.
 
 ### Pattern generations in search
 
-The shared index client resolves discovery for `search_patterns`, private
-research, and the console's Index search. It reads the discoverable catalog and
-follows each entry's `priorPatternId` to find replacements, including a
-successor outside the original query's result limit. Only same-owner links
-participate. An unambiguous chain contributes its final generation once, at the
-earliest matching position. A penalized final generation removes that chain from
-the answer; a branch or cycle fails the affected search instead of choosing a
-generation arbitrarily.
+The pattern index resolves discovery itself, for `search_patterns`, private
+research, and the console's Index search alike: the shared client returns its
+`searchPatterns` answer as given. Each matched generation whose same-owner
+successor chain is unambiguous is replaced by the chain's final discoverable
+generation, once, at the earliest position any generation of the chain matched,
+and the replacement names the matched generation in `supersedes`. A chain that
+branches or cycles is withheld from the answer rather than failing the search,
+and a replacement below the search's quality floor is withheld without bringing
+back the generation it replaced. Resolution runs over the whole ranked list
+before the result limit, so a successor outside the limit still takes its
+predecessor's place. The service's `docs/api.md` states the rule.
 
-Replacement metadata, schemas, quality, and signals describe the successor.
-Where the index supports generation evidence, its combined signal summary
-includes an attributed `inherited` portion: predecessor ID, publication cutoff,
-event counts, and score. The harness preserves that attribution; a proven tier
-can come entirely from predecessor evidence before the successor has run. Older
-deployments supply only that generation's own event counts and score. Query-term
-counts are omitted on a replacement because the index measured them against the
-predecessor. The catalog is refreshed for every nonempty search; create-only
-metadata is cached by identity within the client, and failed reads are not
-cached. This requires one metadata read per catalog entry on the first search
-and for each newly discovered identity thereafter. No source is requested. An
-unavailable catalog or metadata read fails discovery explicitly.
+Replacement metadata, quality, and signals describe the successor, and a row
+carries a display `name` when the index holds or can derive one. Where the index
+supports generation evidence, its combined signal summary includes an attributed
+`inherited` portion: predecessor ID, publication cutoff, event counts, and
+score. The harness preserves that attribution; a proven tier can come entirely
+from predecessor evidence before the successor has run. Query-term counts on a
+replacement are those of the generation that matched. A search is one signed
+request; no catalog or metadata read accompanies it.
 
 `getPattern`, attached pattern references, and `cf:pattern:` imports continue to
 resolve the exact requested identity. Search resolution changes recommendations,

@@ -226,8 +226,6 @@
     "commonfabric": "./base/api/index.ts",
     "commonfabric/cfc": "./base/api/cfc-authoring.ts",
     "commonfabric/schema": "./base/api/schema.ts",
-    "core-js/proposals/explicit-resource-management": "https://esm.sh/core-js@3.46.0/proposals/explicit-resource-management",
-    "core-js/proposals/async-explicit-resource-management": "https://esm.sh/core-js@3.46.0/proposals/async-explicit-resource-management",
     "@commonfabric/ports": "./ports.json",
     "@astral/astral": "jsr:@astral/astral@0.5.6",
     // Cliffy rolls as a set; see the "Cliffy" section in the dependency guide.

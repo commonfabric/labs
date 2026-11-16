@@ -732,13 +732,13 @@ describe("resume-presync-plan-count", () => {
     await resumer.patternManager.compilePattern(TREE_PROGRAM, { space });
     let mints = 0;
     const minted = new Set<string>();
-    resumer.derivedInternalCellIds.accessForTestingOnly.mintRecorder = (
+    resumer.derivedInternalCellIds.accessForTestingOnly.observeMints((
       resultId,
       partialCause,
     ) => {
       mints += 1;
       minted.add(JSON.stringify([resultId, partialCause]));
-    };
+    });
     const resumed = resumer.getCell<{ rows: { value: number }[] }>(
       space,
       cellId,

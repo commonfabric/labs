@@ -98,6 +98,15 @@ describe("CFSubmitInput", () => {
       expect(el.value).toBe("Ada");
     });
 
+    it("keeps what the user typed when initialValue arrives afterwards", () => {
+      const el = new CFSubmitInput();
+      internals(el).willUpdate(new Map());
+      internals(el)._onInput({ target: { value: "Sam" } } as unknown as Event);
+      el.initialValue = "Sam Lee";
+      internals(el).willUpdate(new Map());
+      expect(el.value).toBe("Sam");
+    });
+
     it("does not seed when initialValue is empty", () => {
       const el = new CFSubmitInput();
       internals(el).willUpdate(new Map());

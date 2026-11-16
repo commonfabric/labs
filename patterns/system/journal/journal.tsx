@@ -20,7 +20,7 @@ type JournalSubject = {
 };
 
 // Raw journal entry as stored - subject is a cell link, not a Cell
-type JournalEntry = {
+export type JournalEntry = {
   timestamp?: number;
   eventType?: string;
   subject?: Writable<JournalSubject>;

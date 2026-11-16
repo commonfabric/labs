@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path/from-file-url";
 import {
   collectPatternFiles,
+  isIframeGuestBundle,
   isPatternSource,
   matchesPatternFilter,
   normalizePatternPath,
@@ -74,6 +75,36 @@ describe("isPatternSource", () => {
     expect(
       isPatternSource("connectors/example/pattern/guest.ts", "."),
     ).toBe(true);
+  });
+});
+
+describe("isIframeGuestBundle", () => {
+  it("returns true for a guest.js anywhere in an iframe pattern's tree", () => {
+    expect(
+      isIframeGuestBundle(
+        "patterns/showcase/iframe-board/guest.js",
+        "patterns",
+      ),
+    )
+      .toBe(true);
+    expect(
+      isIframeGuestBundle(
+        "patterns/showcase/iframe-board/editor/guest.js",
+        "patterns",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for a guest's source, and for a guest.js outside an iframe pattern", () => {
+    expect(
+      isIframeGuestBundle(
+        "patterns/showcase/iframe-board/guest.ts",
+        "patterns",
+      ),
+    )
+      .toBe(false);
+    expect(isIframeGuestBundle("patterns/showcase/board/guest.js", "patterns"))
+      .toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 /** Native host confirmation for sharing an exact, runtime-verified snapshot. */
 
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
+import { ContextConsumer } from "@lit/context";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 
@@ -18,8 +18,14 @@ import {
 type SnapshotPreview = Awaited<
   ReturnType<RuntimeClient["prepareSnapshotShare"]>
 >;
+/** What the component asks of the runtime. */
+export interface SnapshotShareRuntime {
+  prepareSnapshotShare: RuntimeClient["prepareSnapshotShare"];
+  commitSnapshotShare(id: string): Promise<CellHandle>;
+  cancelSnapshotShare: RuntimeClient["cancelSnapshotShare"];
+}
 type ReviewBinding = {
-  runtime: RuntimeClient;
+  runtime: SnapshotShareRuntime;
   source: CellHandle;
   recipient: CellHandle;
   result?: CellHandle;
@@ -178,9 +184,8 @@ export class CFShareSnapshot extends BaseElement {
   ];
 
   /** Runtime supplied by the host's context provider. */
-  @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
-  accessor runtime: RuntimeClient | undefined;
+  accessor runtime: SnapshotShareRuntime | undefined;
 
   /** Source cell whose exact JSON value is reviewed. */
   @property({ attribute: false })
@@ -215,6 +220,17 @@ export class CFShareSnapshot extends BaseElement {
   #busy = false;
   #error = "";
   #generation = 0;
+
+  constructor() {
+    super();
+    new ContextConsumer(this, {
+      context: runtimeContext,
+      subscribe: true,
+      callback: (runtime) => {
+        this.runtime = runtime;
+      },
+    });
+  }
 
   /** Exercises host workflow without manufacturing a trusted DOM event. */
   get accessForTestingOnly(): {
@@ -305,7 +321,7 @@ export class CFShareSnapshot extends BaseElement {
   }
 
   /** Teardown can outlive its runtime connection, so cancellation is best effort. */
-  #releasePreview(runtime: RuntimeClient, id: string): void {
+  #releasePreview(runtime: SnapshotShareRuntime, id: string): void {
     void runtime.cancelSnapshotShare(id).catch(() => {});
   }
 

@@ -145,6 +145,8 @@ const nameOf = (found: Cell<unknown>) =>
 
 const errorOf = (found: Cell<unknown>) =>
   found.key("error").asSchema({ type: "string" }).get();
+const errorCodeOf = (found: Cell<unknown>) =>
+  found.key("errorCode").asSchema({ type: "string" }).get();
 
 describe("wish-profile-unavailable", () => {
   const selects: [string, Roster, string][] = [
@@ -204,6 +206,8 @@ describe("wish-profile-unavailable", () => {
       const found = await fixture.wish("#profile");
       expect(errorOf(found)).toContain("Could not load document");
       expect(errorOf(found)).not.toContain("No profile exists yet");
+      // A failure, which a reader must not take for "no profile yet".
+      expect(errorCodeOf(found)).toBe("failed");
     } finally {
       await fixture.dispose();
     }

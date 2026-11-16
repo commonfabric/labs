@@ -1142,7 +1142,7 @@ describe("executor owner routing", () => {
 
       // The space's genesis is the first commit its owner admits.
       const pSpace = await serving.createSpace({ owner: aliceSigner.did() });
-      expect(onB.notices.map((n) => [n.space, n.seq])).toEqual([[pSpace, 1]]);
+      expect(onB.notices[0]).toMatchObject({ space: pSpace, seq: 1 });
       const acl = await servers.B.readDocument(pSpace, `of:${pSpace}`);
       expect(acl?.value).toEqual({ [aliceSigner.did()]: "OWNER" });
 
@@ -1171,8 +1171,8 @@ describe("executor owner routing", () => {
       homeCell.withTx(tx).set({ value: 32 });
       expect((await tx.commit().settled).error).toBeUndefined();
 
-      // The owner commits the batch under the carried actor and reports it
-      // warm, which activates the space there.
+      // The owner commits the batch under the carried actor, and reports
+      // that commit, and only that one, as warm.
       const pEngine = await servers.B.engineForSpace(pSpace);
       const provisionedId = foreignCell.getAsNormalizedFullLink().id;
       const provisionedSeq = () =>
@@ -1184,8 +1184,8 @@ describe("executor owner routing", () => {
       expect(meta.class).toBe("authored");
       expect(meta.acting_principal).toBe(aliceSigner.did());
       expect(
-        onB.notices.find((n) => n.space === pSpace && n.seq > 1)?.warm,
-      ).toBe(true);
+        onB.notices.filter((n) => n.warm).map((n) => [n.space, n.seq]),
+      ).toEqual([[pSpace, provisionedSeq()]]);
       await activated("B", pSpace);
 
       // The home commit followed, on the sender's own server.

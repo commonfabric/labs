@@ -20,10 +20,10 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
-- `requires`: present where the case applies only to a reader that constructs a
-  flavor of regular expression, or that guarantees more by some measure of size
-  than every reader must, as [`value-probes.md`](value-probes.md#requirements)
-  describes. A reader that does not meet it skips the entry.
+- `requires`: present where the case applies only to a reader that guarantees
+  more by some measure of size than every reader must, as
+  [`value-probes.md`](value-probes.md#requirements) describes. A reader that
+  does not meet it skips the entry.
 - `text`: the text to decode. For a case that starts from a value, it is the
   value's canonical text, as [Exact text](#exact-text) describes, with `null`
   wherever a patch puts what no text carries.
@@ -126,3 +126,9 @@ mark rather than leaving it to mislead.
 `Map` and `Set` values are not among the cases, their codecs being stubs pending
 general `FabricInstance` support. Nor is a value holding a cycle, which the mods
 can state and which re-encodes to a refusal.
+
+Nor is any value as large as a floor that section 12 of
+[`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md#12-implementation-guarantees)
+sets, by any measure. An implementation tests the guarantees it states itself:
+at the figures it states, in whatever way suits its host, and through each path
+it offers, whether decoding, encoding, hashing or comparing.

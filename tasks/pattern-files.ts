@@ -155,6 +155,18 @@ export function isIframeGuestSource(
   return fileName !== undefined && IFRAME_GUEST_BASENAMES.has(fileName);
 }
 
+/**
+ * Whether a path under the patterns root is an iframe pattern's guest bundle:
+ * the module `deno bundle` writes from its guest source, which the pattern
+ * reads as a data file.
+ */
+export function isIframeGuestBundle(
+  path: string,
+  patternsDir: string,
+): boolean {
+  return iframeFileName(patternKey(path, patternsDir)) === "guest.js";
+}
+
 /** The file name of a pattern key that lies in an iframe pattern's tree. */
 function iframeFileName(key: string): string | undefined {
   const segments = key.split("/");

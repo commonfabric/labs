@@ -32,6 +32,7 @@ describe("immutable-cell-retention", () => {
       cell: { held: "cell" },
       link: { held: "link" },
       explicit: { held: "explicit" },
+      droppedStoreReleased: true,
       queued: { held: "queued" },
       parsed: { held: "parsed" },
       relative: { held: "relative" },

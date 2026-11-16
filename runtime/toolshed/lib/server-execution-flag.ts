@@ -1,7 +1,8 @@
 // The toolshed process's ONE resolution of the server-execution v2 flag
 // (docs/specs/server-side-execution/; docs/plans/server-execution-v2.md
 // Phase 7): the environment's explicit `EXPERIMENTAL_SERVER_EXECUTION`
-// value when set, else the first-party default. Both consumers in this
+// value when set, else the value of the deployment this toolshed follows
+// (`EXPERIMENTAL_FOLLOWED_POSTURE`), else the first-party default. Both consumers in this
 // process — the serving-host bootstrap (`server-execution.ts`) and the
 // memory server's service-principal grant (`routes/storage/memory.ts`) —
 // read THIS, so they can never disagree about the posture. Kept a leaf
@@ -10,15 +11,15 @@
 
 import {
   type EnvReader,
-  experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
 } from "@commonfabric/runner";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 
 /** Whether THIS toolshed process runs the server-execution v2 posture:
- * the explicit env value if present (`"true"` / `"false"`), else
- * `SERVER_EXECUTION_DEFAULT_ENABLED`. */
+ * the explicit env value if present (`"true"` / `"false"`), else the
+ * followed deployment's, else `SERVER_EXECUTION_DEFAULT_ENABLED`. */
 export function serverExecutionEnabledFromEnv(envGet: EnvReader): boolean {
-  return experimentalOptionsFromEnv(envGet).serverExecution ??
+  return experimentalOptionsWithFollowedPosture(envGet).serverExecution ??
     SERVER_EXECUTION_DEFAULT_ENABLED;
 }
 

@@ -326,6 +326,33 @@ describe("in-space allocation", () => {
       await later.storageManager.synced();
       expect(laterUnderOwnGrant()).toContain(true);
     });
+
+    it("throws for a space named by its DID or by a cell", () => {
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+      const cell = runtime.getCell(home, "in-space self-owned target");
+
+      for (const target of [home, cell]) {
+        expect(() => Child.inSpace(target, { selfOwned: true })).toThrow(
+          "makes a space its own owner only when it creates it",
+        );
+      }
+      expect(() => Child.inSpace("mine", { selfOwned: true })).not.toThrow();
+    });
+
+    it("throws for an OWNER grant beside it, whatever principal the grant names", () => {
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      const Child = pattern<{ value: string }>(({ value }) => ({ value }));
+
+      expect(() =>
+        Child.inSpace("mine", { selfOwned: true, grants: { [home]: "OWNER" } })
+      ).toThrow("grants OWNER to nobody in a space that owns itself");
+      expect(() =>
+        Child.inSpace("mine", { selfOwned: true, grants: { [home]: "WRITE" } })
+      ).not.toThrow();
+      expect(() => Child.inSpace("mine", { grants: { [home]: "OWNER" } })).not
+        .toThrow();
+    });
   });
 
   it("puts a name used from two calling spaces in two spaces", async () => {

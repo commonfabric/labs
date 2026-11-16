@@ -18,7 +18,6 @@
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
@@ -141,8 +140,8 @@ const shownConfidentiality = (
  *
  * @throws When the release is refused (see
  *   `IExtendedStorageTransaction.releaseCfcConfidentiality()`), when the path
- *   still shows an unkept clause, when a link it crosses was retargeted, or
- *   when its commit fails.
+ *   still shows an unkept clause, or when its commit fails, as it does once a
+ *   link the path crosses is retargeted.
  */
 export async function releaseCellConfidentiality(
   cell: Cell<unknown>,
@@ -183,22 +182,8 @@ export async function releaseCellConfidentiality(
     const location = target.path.length === 0
       ? "<root>"
       : target.path.join("/");
-    if (
-      !deepEqual(
-        resolveLink(
-          runtime,
-          tx,
-          cell.getAsNormalizedFullLink(),
-          lastNode,
-        ),
-        target,
-      )
-    ) {
-      throw new Error(
-        `Cannot lower confidentiality at ${location}: a link the path ` +
-          "crosses changed while the release was prepared.",
-      );
-    }
+    // Reading the label view resolves the path again in `tx`, so the commit
+    // conflicts with a retargeting of any link the path crosses.
     const unreachable = shownConfidentiality(cell.withTx(tx), lastNode).find((
       clause,
     ) => !keep.some((kept) => sameClause(kept, clause)));

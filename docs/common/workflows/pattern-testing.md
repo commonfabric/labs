@@ -187,6 +187,14 @@ Reading a single node:
 - `hasText(node, expected)` — whether the subtree's text contains `expected`.
 - `hasExactText(node, expected)` — whether the subtree's text, trimmed, equals
   `expected`.
+- `isElement(node, name)` — whether the node is an element with that tag name.
+- `styleOf(node, key)` — one resolved entry of the node's `style` prop.
+- `viewShows(root, present, absent)` — whether the subtree's text contains
+  every string in `present` and none in `absent`, read in one walk.
+- `pickerLabels(picker)` — the labels of the `items` a picker such as
+  `cf-autocomplete` offers, in order.
+- `inOrder(text, parts)` — whether `parts` appear in `text` in that order, each
+  one starting after the end of the one before it.
 
 Searching for a node:
 
@@ -203,6 +211,58 @@ Searching for a node:
 - `findElementByText(root, name, expected)` and
   `findElementByExactText(root, name, expected)` — the same search narrowed to
   a tag name.
+- `findNodes(root, predicate)` and `findElements(root, name)` — every node the
+  predicate accepts, or every element with that tag name, in document order.
+- `countElements(root, name)` — how many elements with that tag name the
+  subtree holds, nested ones included.
+- `innermostNode(root, accept)` — the first node `accept` admits that has no
+  admitted node inside it, such as the row itself rather than every container
+  that also carries its text.
+- `isButton(label)` — a predicate for a clickable node whose whole text is
+  `label`.
+- `rowWith(root, text, label)` — the row that shows `text` and holds a button
+  labeled `label`: the innermost node holding both.
+  `buttonInRow(root, text, label)` is that button.
+
+Pressing a control:
+
+- `fireEvent(node, prop, event)` and `fireClick(node)` — send an event to the
+  handler a node binds, as described under
+  [Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export).
+- `clickButton(root, label)` — clicks the first button whose whole text is
+  `label`.
+- `sendMessage(root, message)` — sends `message` from the view's
+  `cf-message-input`, as a person pressing send does.
+- `clickInRow(root, text, label)` — clicks the button `buttonInRow` finds.
+
+Typing into a control:
+
+- `setBound(node, prop, value)` — writes `value` through the cell the node
+  binds under `prop`, such as `$value`, `$checked` or `$result`, as the control
+  does when the user types or picks in it. It works in an `action` and in a
+  handler that receives the view as a `Cell<VNode>`, and fails when the node is
+  missing or binds no cell under `prop`.
+- `typeInto(root, placeholder, value)` — the `$value` case, for the input with
+  that placeholder.
+- `answerOwnerCheck(root, isOwner)` — answers a `cf-owner-view` the way the
+  shell does, through its `$result`.
+
+Writing through a binding:
+
+A value read resolves a `$`-prop such as `$checked` or `$value` to the plain
+value its binding holds, so a test that acts as the bound control walks the
+view as cells instead. A handler declares the view as a `Writable<VNode>` in
+its state and is bound with `subject[UI]`; `viewCell(ui)` makes that cell
+walkable by key.
+
+- `findViewCell(cell, predicate)` — the cell holding the first node the
+  predicate accepts, searched in the order `findNode` searches.
+- `boundViewCell(view, predicate, prop)` — the cell the first accepted node
+  binds as `prop`. Setting it writes whatever the binding links to, as the
+  control does, and it throws when no such node binds `prop`.
+
+`patterns/dev/gideon-tests/test-checkbox-computed.test.tsx` checks boxes this
+way.
 
 ## Writing Actions
 
@@ -267,28 +327,28 @@ the rendered tree to the node, read the prop, and send it an event:
 ```tsx
 // Shown at module scope.
 import { action, pattern, UI } from "commonfabric";
-import { findElementByText, propsOf } from "../../tools/test-support/vnode-helpers.ts";
+import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
 import MapDemo from "./map-demo.tsx";
 
 export default pattern(() => {
   const subject = MapDemo({ areasOfInterest: [] });
 
-  const action_add_area = action(() => {
-    const button = findElementByText(subject[UI], "cf-button", "+ Add Area");
-    const onClick = propsOf(button)?.onClick;
-    if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
-      (onClick as { send: (event: Record<string, never>) => void }).send({});
-    }
-  });
+  const action_add_area = action(() => clickButton(subject[UI], "+ Add Area"));
 
   return { [TESTS]: [{ action: action_add_area }], subject };
 });
 ```
 
 `patterns/examples/map-demo/map-demo.test.tsx` drives both an inline arrow and a
-bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers does
-the same for any event prop, and fails when the node binds nothing under it;
-`fireClick(node)` is its `onClick` case, with an empty event.
+bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers
+sends an event to any event prop, and fails when the node binds nothing under
+it; `fireClick(node)` is its `onClick` case, with an empty event, and
+`clickButton(root, label)` clicks the first button whose whole text is
+`label`.
+`sendMessage(root, message)` sends from the view's `cf-message-input` as a
+person pressing send does. `setBound(node, prop, value)` writes through the cell
+a control binds under a `$` prop, such as `$value` or `$checked`, as the control
+does when a person edits it.
 `patterns/examples/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
 a `cf-input` by firing its `oncf-submit`.
 
@@ -594,6 +654,41 @@ Run that action as the first step, and assert the seed landed before anything
 depends on it — reading the seeded value back, rather than only its absence
 from a filtered view, so an unresolved wish fails the test instead of passing
 it for the wrong reason.
+
+### Mocking Language-Model Calls
+
+A test never reaches a model. A pattern that calls `generateObject`,
+`generateText`, `llm`, or `llmDialog` gets its answers from an `llmMocks` array
+the test file exports at module scope. An entry with `object` answers a
+`generateObject` request, including one given tools, which receives the object
+as its `presentResult` call; an entry with `text` answers any of the others
+with that reply. Each entry answers one request, the first of its kind whose
+last message contains `promptIncludes`, and is then used up. A request no entry answers fails, and the
+builtin reports that as the call's `error`, so an empty array is how a test
+reaches the error path, and an item whose request is sent a second time shows
+up as an error rather than passing unnoticed.
+
+```tsx
+// Shown at module scope.
+export const llmMocks = [
+  {
+    promptIncludes: "a self-watering plant pot",
+    object: { name: "AquaPot", price: 25 },
+  },
+  { promptIncludes: "Hello", text: "Hi there" },
+];
+```
+
+The language-model builtins warn as they trace each request, and a request no
+entry answers fails with a warning, so such a test returns
+`allowConsoleWarnings: true`.
+`patterns/dev/gideon-tests/test-llm-dumb-map-generateobject.test.tsx` mocks a
+request per list item, and
+`patterns/dev/gideon-tests/test-generateobject-error-handling.test.tsx` shows
+both the answered and the failed request.
+`patterns/dev/experimental/chat-note.test.tsx` answers a `generateText` reply.
+A multi-user test cannot declare
+`llmMocks`.
 
 ### Testing Initial State
 

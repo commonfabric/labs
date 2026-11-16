@@ -4,8 +4,12 @@ import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 
 import env from "@/env.ts";
-import { StatsResponseSchema as declared } from "@/routes/health/health.routes.ts";
-import createApp from "@/lib/create-app.ts";
+import {
+  index as indexRoute,
+  StatsResponseSchema as declared,
+} from "@/routes/health/health.routes.ts";
+import createApp, { createRouter } from "@/lib/create-app.ts";
+import { healthIndex } from "@/routes/health/health.handlers.ts";
 import router from "@/routes/health/health.index.ts";
 
 if (env.ENV !== "test") {
@@ -28,6 +32,29 @@ Deno.test("health routes", async (t) => {
     assertEquals(json.gitSha, null);
     assertEquals(response.headers.get("x-cf-git-sha"), null);
   });
+
+  await t.step(
+    "GET /_health names a known commit in the body and the header",
+    async () => {
+      const known = createRouter().openapi(indexRoute, healthIndex("abc123"));
+      const response = await known.request("/_health");
+      assertEquals(response.status, 200);
+      assertEquals((await response.json()).gitSha, "abc123");
+      assertEquals(response.headers.get("x-cf-git-sha"), "abc123");
+    },
+  );
+
+  await t.step(
+    "GET /api/health/dash returns the dashboard page, which reads the stats route",
+    async () => {
+      const response = await app.request("/api/health/dash");
+      assertEquals(response.status, 200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      const page = await response.text();
+      expect(page).toContain("<title>Health Dashboard</title>");
+      expect(page).toContain('fetch("/api/health/stats")');
+    },
+  );
 
   await t.step(
     "GET /api/health/serving-loop-realm answers 404 while no serving loop runs here",

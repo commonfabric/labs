@@ -512,7 +512,7 @@ The fit measurement joins the target's declared policy with
 `Space(<the space the document resides in>)`. A space-scoped document also
 carries `PersonalSpace(<that same space>)`, the addition proposed by
 [specs#71](https://github.com/commonfabric/specs/pull/71). That proposal is
-closed without merging. The runtime implements its proposed own-space rule
+open and unruled. The runtime implements its proposed own-space rule
 at the strict default, ahead of a ruling and a reconciled pin. The existing
 specs#68 marker covers the base residency work; the own-space addition has
 neither a separate marker nor a default-off dial. This is a nonconforming

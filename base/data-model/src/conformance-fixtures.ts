@@ -29,7 +29,12 @@ import {
   FabricMap,
   FabricSet,
 } from "@/fabric-instances";
-import { FabricRegExp } from "@/fabric-primitives";
+import {
+  FabricBytes,
+  FabricKeyPair,
+  type FabricPrimitiveClassesByName,
+  FabricUnavailable,
+} from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
@@ -113,7 +118,7 @@ export type TextWithMods = {
  * A measure of a value's size by which `3-json-encoding.md` section 12 has an
  * implementation state a guarantee: the longest array, the largest record, the
  * longest string, the longest byte sequence, the longest registered symbol's
- * key, and the depth.
+ * key, the depth, and the largest bigint.
  */
 export type SizeMeasure =
   | "arrayLength"
@@ -121,17 +126,17 @@ export type SizeMeasure =
   | "stringLength"
   | "bytesLength"
   | "symbolKeyLength"
-  | "depth";
+  | "depth"
+  | "bigintBytes";
 
 /**
- * What a reader must support to read a fixture entry, a reader that does not
- * skipping the entry: the flavors of regular expression whose patterns it must
- * construct, and by each measure the guarantee it must state at least, given
- * only where that is past the measure's floor.
+ * What a reader must support to read a fixture entry (a reader that does not
+ * skips the entry): by each measure the guarantee it must state at least,
+ * given only where that is past the measure's floor.
  */
-export type FixtureRequirements =
-  & { readonly flavors?: readonly string[] }
-  & { readonly [Measure in SizeMeasure]?: number };
+export type FixtureRequirements = {
+  readonly [Measure in SizeMeasure]?: number;
+};
 
 /** Makers of examples of each class in one of the class tables. */
 export type ExampleMakers<ClassesByName> = {
@@ -255,6 +260,7 @@ const SIZE_MEASURES: readonly SizeMeasure[] = [
   "bytesLength",
   "symbolKeyLength",
   "depth",
+  "bigintBytes",
 ];
 
 /**
@@ -269,22 +275,37 @@ export const SIZE_FLOORS: { readonly [Measure in SizeMeasure]: number } = Object
     stringLength: 2 ** 24,
     bytesLength: 2 ** 24,
     symbolKeyLength: 2 ** 10,
-    depth: 2 ** 10,
+    depth: 2 ** 9,
+    bigintBytes: 2 ** 21,
   });
 
 /**
  * This package's guarantee by each measure, as its README states it, no
  * figure being written `Infinity`.
  */
-const SIZE_GUARANTEES: { readonly [Measure in SizeMeasure]: number } = Object
+export const SIZE_GUARANTEES: {
+  readonly [Measure in SizeMeasure]: number;
+} = Object
   .freeze({
     arrayLength: 2 ** 26,
     propertyCount: Infinity,
     stringLength: 2 ** 26,
     bytesLength: 2 ** 27,
     symbolKeyLength: 2 ** 26,
-    depth: 2 ** 11,
+    depth: 2 ** 9,
+    bigintBytes: 2 ** 26,
   });
+
+/**
+ * The instances of the data model that this package implements as primitives,
+ * each class name paired with the tag its codec writes.
+ */
+const INSTANCES_AS_PRIMITIVES = Object.freeze(
+  {
+    FabricKeyPair: CODEC_TYPE_TAGS.KeyPair,
+    FabricUnavailable: CODEC_TYPE_TAGS.Unavailable,
+  } as const,
+);
 
 /**
  * The tags of the primitives, whose states hold no value of their own: a
@@ -296,25 +317,21 @@ const PRIMITIVE_TAGS: ReadonlySet<string> = new Set([
   CODEC_TYPE_TAGS.SpecialNumber,
   CODEC_TYPE_TAGS.Symbol,
   CODEC_TYPE_TAGS.Undefined,
-  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS),
+  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS).filter((tag) =>
+    !Object.values<string>(INSTANCES_AS_PRIMITIVES).includes(tag)
+  ),
 ]);
 
 /**
- * Returns what a reader must support to read the entry for `stated`: `flavors`,
- * which a case marks by hand, and by each measure the size of the value its
- * text writes, where that is past the measure's floor. Returns `undefined`
- * where a reader need support nothing beyond the floors.
+ * Returns what a reader must support to read the entry for `stated`: by each
+ * measure the size of the value its text writes, where that is past the
+ * measure's floor. Returns `undefined` where a reader need support nothing
+ * beyond the floors.
  */
 export function requirementsOf(
   stated: TextWithMods,
-  flavors?: readonly string[],
 ): FixtureRequirements | undefined {
-  const requires:
-    & { flavors?: readonly string[] }
-    & { -readonly [Measure in SizeMeasure]?: number } = {};
-  if (flavors !== undefined) {
-    requires.flavors = flavors;
-  }
+  const requires: { -readonly [Measure in SizeMeasure]?: number } = {};
   const sizes = sizesOf(stated);
   for (const measure of SIZE_MEASURES) {
     if (sizes[measure] > SIZE_FLOORS[measure]) {
@@ -325,10 +342,8 @@ export function requirementsOf(
 }
 
 /**
- * Indicates whether this package meets `requires`: that it constructs each
- * flavor named, which it does for exactly the flavors a `FabricRegExp` can
- * give a JavaScript `RegExp` of, and that its guarantee by each measure named
- * is at least the size named.
+ * Indicates whether this package meets `requires`: that its guarantee by each
+ * measure named is at least the size named.
  */
 export function meetsRequirements(
   requires: FixtureRequirements | undefined,
@@ -336,18 +351,9 @@ export function meetsRequirements(
   if (requires === undefined) {
     return true;
   }
-  const constructs = (flavor: string) => {
-    try {
-      new FabricRegExp(flavor, "", "").value;
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  return (requires.flavors ?? []).every(constructs) &&
-    SIZE_MEASURES.every((measure) =>
-      (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
-    );
+  return SIZE_MEASURES.every((measure) =>
+    (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
+  );
 }
 
 /**
@@ -355,8 +361,9 @@ export function meetsRequirements(
  * `3-json-encoding.md` section 12 measures it, read from the text: the longest
  * array, a `/hole` run counting every hole it stands for; the largest record,
  * any object in the JSON body counting; the longest string, byte sequence and
- * registered symbol's key; and the depth. Each is zero for a text that is not
- * `fvj1:` JSON.
+ * registered symbol's key; the depth; and the size of the largest bigint, a
+ * `BigInt@1` value or a temporal quantity's, in bytes. Each is zero for a text
+ * that is not `fvj1:` JSON.
  */
 function sizesOf(
   { text, unclaimed = [] }: TextWithMods,
@@ -368,6 +375,7 @@ function sizesOf(
     bytesLength: 0,
     symbolKeyLength: 0,
     depth: 0,
+    bigintBytes: 0,
   };
   const note = (measure: SizeMeasure, size: number) => {
     largest[measure] = Math.max(largest[measure], size);
@@ -449,8 +457,8 @@ function sizesOf(
 
 /**
  * Notes the sizes of what the state of a primitive under `tag` holds: the
- * bytes a base64url state or field writes, a registered symbol's key, and any
- * other string.
+ * bytes a base64url state or field writes, whether a byte sequence's or a
+ * bigint's, a registered symbol's key, and a hash's algorithm tag.
  */
 function measurePrimitiveState(
   tag: string,
@@ -461,12 +469,12 @@ function measurePrimitiveState(
     (typeof state === "object" && state !== null)
       ? Object.getOwnPropertyDescriptor(state, name)?.value
       : undefined;
-  const noteBytes = (written: unknown) => {
+  const noteBytes = (
+    written: unknown,
+    measure: "bytesLength" | "bigintBytes" = "bytesLength",
+  ) => {
     if (typeof written === "string") {
-      note(
-        "bytesLength",
-        Math.floor(written.replace(/=+$/, "").length * 3 / 4),
-      );
+      note(measure, Math.floor(written.replace(/=+$/, "").length * 3 / 4));
     }
   };
   const noteString = (written: unknown) => {
@@ -483,11 +491,6 @@ function measurePrimitiveState(
       noteString(fieldOf("tag"));
       noteBytes(fieldOf("hash"));
       break;
-    case CODEC_TYPE_TAGS.KeyPair:
-      noteString(fieldOf("algorithm"));
-      noteBytes(fieldOf("publicKey"));
-      noteBytes(fieldOf("privateKey"));
-      break;
     case CODEC_TYPE_TAGS.Symbol:
       if (typeof state === "string") {
         note("symbolKeyLength", codePointCountOf(state));
@@ -498,15 +501,12 @@ function measurePrimitiveState(
     case CODEC_TYPE_TAGS.DurationNsec:
     case CODEC_TYPE_TAGS.EpochDay:
     case CODEC_TYPE_TAGS.EpochNsec:
+      noteBytes(state, "bigintBytes");
+      break;
     case CODEC_TYPE_TAGS.SpecialNumber:
     case CODEC_TYPE_TAGS.Undefined:
       // A number, written as a string or not at all.
       break;
-    default:
-      noteString(state);
-      if (typeof state === "object" && state !== null) {
-        Object.values(state).forEach(noteString);
-      }
   }
 }
 
@@ -1257,7 +1257,7 @@ interface InstanceFields<Class> {
 
   /**
    * The fields of `value`, in the order their probes take, or `undefined` if
-   * it is not of this class.
+   * it is not of this class or has no fields to probe.
    */
   readonly fieldsOf: (value: FabricValue) => InstanceField[] | undefined;
 
@@ -1274,12 +1274,12 @@ interface InstanceFields<Class> {
 
 /**
  * Returns how the fields of instances of `cls` are found, `fieldsOfInstance`
- * returning those of one instance, and `madeOf` making a new one like
- * `like` from fields.
+ * returning those of one instance, or `undefined` for one with no fields to
+ * probe, and `madeOf` making a new one like `like` from fields.
  */
 function fielded<Class extends abstract new (...args: never) => object>(
   cls: Class,
-  fieldsOfInstance: (value: InstanceType<Class>) => InstanceField[],
+  fieldsOfInstance: (value: InstanceType<Class>) => InstanceField[] | undefined,
   madeOf: (
     like: InstanceType<Class>,
     fields: ReadonlyMap<string, FabricValue>,
@@ -1303,14 +1303,22 @@ function isInstanceOf<Class extends abstract new (...args: never) => object>(
 }
 
 /**
- * The fields of every concrete instance class, keyed the way the instance
- * class table keys the classes. Its type is what holds it complete. The
- * open-ended part of an instance is always one field holding a record, so
- * that its keys are probed as a record's are.
+ * The classes whose values are instances in the data model, keyed the way the
+ * class tables key them: every concrete instance class, and the primitive
+ * classes {@link INSTANCES_AS_PRIMITIVES} names.
+ */
+type InstanceClassesByName =
+  & FabricInstanceClassesByName
+  & Pick<FabricPrimitiveClassesByName, keyof typeof INSTANCES_AS_PRIMITIVES>;
+
+/**
+ * The fields of every class {@link InstanceClassesByName} names. Its type is
+ * what holds it complete. The open-ended part of an instance is always one
+ * field holding a record, so that its keys are probed as a record's are.
  */
 const INSTANCE_FIELDS: {
-  readonly [Name in keyof FabricInstanceClassesByName]: InstanceFields<
-    FabricInstanceClassesByName[Name]
+  readonly [Name in keyof InstanceClassesByName]: InstanceFields<
+    InstanceClassesByName[Name]
   >;
 } = {
   FabricError: fielded(
@@ -1338,6 +1346,18 @@ const INSTANCE_FIELDS: {
         cause: fields.get("cause"),
         extras: recordField(fields, "extras"),
       }),
+  ),
+  FabricKeyPair: fielded(
+    FabricKeyPair,
+    // A pair holding handles has no state, so no fields, and is left to the
+    // encoder to refuse.
+    (value) => value.hasMaterial ? Object.entries(value.state) : undefined,
+    (_like, fields) =>
+      new FabricKeyPair(
+        stringField(fields, "algorithm"),
+        bytesField(fields, "publicKey"),
+        bytesField(fields, "privateKey"),
+      ),
   ),
   FabricLink: fielded(
     FabricLink,
@@ -1368,6 +1388,15 @@ const INSTANCE_FIELDS: {
         stringField(fields, "error"),
       ),
   ),
+  FabricUnavailable: fielded(
+    FabricUnavailable,
+    (value) => Object.entries(value.state),
+    // Its fields are strings, which the codec never decodes to `null`, so no
+    // patch replaces one and the instance they make is `like` itself. Making
+    // one afresh through the constructor would drop a message equal to its
+    // kind's default, which the state holds as it arrived.
+    (like) => like,
+  ),
   UnknownValue: fielded(
     UnknownValue,
     (value) => [["state", value.state]],
@@ -1387,6 +1416,22 @@ function stringField(
   const held = fields.get(name);
   if (typeof held !== "string") {
     throw new Error(`Field \`${name}\` not a string: ${String(held)}`);
+  }
+  return held;
+}
+
+/**
+ * Returns the byte sequence `fields` holds under `name`.
+ *
+ * @throws If it holds anything else there.
+ */
+function bytesField(
+  fields: ReadonlyMap<string, FabricValue>,
+  name: string,
+): FabricBytes {
+  const held = fields.get(name);
+  if (!(held instanceof FabricBytes)) {
+    throw new Error(`Field \`${name}\` not a byte sequence`);
   }
   return held;
 }
@@ -1426,7 +1471,7 @@ function instanceMadeOf(
 
 /**
  * Returns the fields of `value`, in the order their probes take, or
- * `undefined` if it is not an instance.
+ * `undefined` if it is not an instance with fields to probe.
  */
 function instanceFieldsOf(value: FabricValue): InstanceField[] | undefined {
   for (const entry of Object.values(INSTANCE_FIELDS)) {

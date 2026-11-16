@@ -19,14 +19,6 @@ import type {
 } from "./interface.ts";
 import * as Address from "./transaction/address.ts";
 
-// A differential merges one notification batch's changes per address
-// IDENTITY — per scope instance (key-vocabulary.md §1 site 8), so two
-// instances of one doc in a batch never collapse into one change entry.
-// `identity` is the session the batch belongs to: the changes arrive
-// scope-NAMED on today's per-session wire, and the owning session's
-// identity maps each name to the same instance the session's reads map to.
-export const create = (identity: ScopeKeyIdentity) => new Changes(identity);
-
 interface Memory {
   get(entry: IMemoryAddress): State | undefined;
 }
@@ -333,9 +325,6 @@ export const checkout = (
   return checkout;
 };
 
-export const load = (states: Iterable<State>, identity: ScopeKeyIdentity) =>
-  create(identity).set(states);
-
 class Checkout {
   #model: Map<string, State> = new Map();
   constructor(readonly identity: ScopeKeyIdentity) {}
@@ -354,34 +343,17 @@ class Checkout {
   }
 }
 
+// A differential merges one notification batch's changes per address
+// IDENTITY — per scope instance (key-vocabulary.md §1 site 8), so two
+// instances of one doc in a batch never collapse into one change entry.
+// `identity` is the session the batch belongs to: the changes arrive
+// scope-NAMED on today's per-session wire, and the owning session's
+// identity maps each name to the same instance the session's reads map to.
 class Changes implements IMergedChanges {
   #model: Map<string, IMemoryChange> = new Map();
   constructor(readonly identity: ScopeKeyIdentity) {}
   *[Symbol.iterator]() {
     yield* this.#model.values();
-  }
-
-  /**
-   * Adds new state to the changeset.
-   */
-  set(states: Iterable<State>) {
-    for (const state of states) {
-      addStateChange(this, state, undefined, state.is);
-    }
-    return this;
-  }
-
-  /**
-   * Captures changes between what is in the given memory and
-   * provided state.
-   */
-  update(memory: Memory, states: Iterable<State>) {
-    for (const state of states) {
-      const before = memory.get(toAddress(state))?.is;
-      const after = state.is;
-      addStateChange(this, state, before, after);
-    }
-    return this;
   }
 
   add(change: IMemoryChange) {
@@ -395,9 +367,5 @@ class Changes implements IMergedChanges {
 
   toJSON() {
     return [...this.#model.values()];
-  }
-
-  close(): IMergedChanges {
-    return this;
   }
 }

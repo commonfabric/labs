@@ -168,10 +168,10 @@ its value is a map from anchor id to offset. Anyone who may write the space
 changes the anchors by writing that document, as they would any entity, and
 Memory refuses a write that leaves anything other than such a map in it
 ([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
-§7.8). When an edit moves an anchor, Memory rewrites the document's value in
-the transaction that integrates the edit and leaves the rest of the document,
-its label included, as it was. An edit that moves no anchor leaves the
-document alone.
+§7.8). In the transaction that integrates an edit, Memory rewrites the
+document's value where the edit moved an anchor, and labels every anchor
+with the field's confidentiality, moved or not, as described below. The rest
+of the document is left as it was.
 
 Releasing a field keeps its anchors, since the released text is the text they
 refer to, and so does deleting the field's entity, which releases its fields.
@@ -211,24 +211,94 @@ returns it as a cell
 writes the anchors.
 
 An anchor says something about the field's text: where text is, how far apart
-two points are, and whatever its writer put in the id. Contextual Flow Control
-has no rule of its own for anchors, so the anchors document carries the label
-its writers' transactions gave it. A handler that reads the field before it
-writes the anchors writes them under the field's confidentiality, by the
-ordinary flow from what a transaction read to what it wrote, and a later
-reader of those anchors is tainted as a reader of the field is.
+two points are, and whatever its writer put in the id. The anchors document
+carries a Contextual Flow Control label from two sources.
 
-A writer that does not read the field leaves the anchors under whatever it did
-read, and Memory adds no label when it rewrites their offsets, although the
-offsets it writes follow the field's edits. A reader of such anchors learns
-where the field was edited and by how much, and the field's length from an
-anchor written past its end, without the field's taint. Whether Memory should
-join the field's label onto the document is an open decision (the spec's
-deferred decisions, §7.17).
+The first is the transaction that writes an anchor. An anchor a transaction
+writes carries the confidentiality of what that transaction read, by the
+ordinary flow from what a transaction read to what it wrote: the field, if the
+handler read it before writing the anchors, and any confidential link it
+followed to reach the field or the anchors, since which document a link led
+to is something an offset in that document can reveal. A writer that does
+not read the field leaves the anchors under whatever it did read, which for a
+writer that read nothing is no label at all: an offset its writer chose says
+nothing about the field. Writing one anchor labels that anchor alone; the
+other anchors in the document keep the labels they had.
 
-The anchors take none of the field's integrity, and the field's write policy
-does not govern them: a pattern that wants only certain handlers to move
-anchors declares a write policy on the anchors cell.
+The second is Memory. An offset Memory computed from an edit says where the
+field was edited and by how much, and, for an anchor written past the end of
+the text, how long the field is. Which anchors an edit moves also says where
+it fell. So when an edit integrates, Memory labels every anchor of the
+field, moved or not, with the label the field's document holds over the
+field at that edit, in the same transaction. It reads the label entries
+of the field's stored envelope that lie at, above or inside the field's path,
+in the field's own scope instance. The label-metadata templates are left
+out: they are keyed against the stored document rather than its value, so
+none labels the field, not even a field that is the whole value, whose path
+is a prefix of every path, or one named `cfc`. For a field in a user or
+session instance, it also reads each broader instance of the same document,
+and takes from it what the runner's read ceiling holds a reader of the
+field to: the entries at those paths that a read of the value consumes. A
+broader instance can hold a label the field's own instance does not, such as
+the stamp of a whole value a writer set there. The label of the pointer the
+broader slot holds is not one of those entries: every user's redirect is
+that one stored link, so its label speaks for whichever user's write stored
+it. The field's integrity is what a read of the whole field carries: from
+the entries at or above its path, not those inside it, whose claims hold for
+part of the text only, and from the field's own instance alone, since
+whoever wrote a broader instance did not write this one. Memory joins the
+field's label into
+the label of each anchor's offset, the one derived entry of the value class
+at the anchor's path. The join keeps every clause either label held, since
+a moved offset is computed from the old one. Its integrity is the meet of
+the two: a hereditary claim both the anchor's writer and the field hold
+stays, and every other is dropped, for an anchor the edit did not move too,
+since its offset now points into text the edit changed. Where there is no
+such entry, the anchor's writer vouched for nothing, so Memory makes one
+holding the field's confidentiality, and none where the field holds no
+confidentiality. A derived entry of no class at the path is consumed by a
+read of the offset too, so its integrity is met with the field's as well,
+and its clauses stay. Every
+other label at the path stays as it was. A later reader
+of that offset is tainted as a reader of the field was, whoever wrote the
+anchor. An anchor the edit left where it was is labeled too: labeling only
+the anchors that moved would show where the edit fell. An anchor written
+since the last edit carries its writer's label alone until the next one.
+
+The label is of the offset Memory wrote, and lasts as long as that offset
+does:
+
+- Each later edit joins what the field holds then into the label each
+  anchor carries.
+- The field's label changing without an edit leaves the anchors' labels as
+  they were.
+- A write that replaces the anchor's offset replaces the label with the
+  writer's own, as a write of any derived value does. An offset written by a
+  transaction that read nothing confidential is unlabeled again.
+- Releasing the field leaves the labels in place, with the anchors.
+
+Where an edit to a field with anchors integrates and Memory cannot read the
+field's envelope, it refuses the edit and moves nothing, so that no offset is stored that is
+less confidential than the field it came from. It checks the envelope with
+the checks the runner uses, so it refuses one of a version it does not know,
+one that names no schema, a label of a shape it does not know, and a label
+held by reference in an envelope of a version that does not define that
+spelling. Of the labels, it resolves only those that bear on the field: it
+refuses the edit for a reference among them that no stored label document
+backs, and leaves a reference elsewhere in the envelope unresolved. It does
+not compare a label document with its hash, since the store installs a
+`cid:` document only when its content hashes to its id. It reads the anchors
+document's envelope only when it has a label to add to it, and refuses the
+edit when that envelope cannot be read, or when a label it holds by
+reference at an anchor's path has no stored label document behind it.
+
+An edit can only narrow the integrity an anchor carries: a claim survives
+it only where the anchor's writer made it and the field holds it too. Where
+the field holds no confidentiality and Memory cannot read the anchors
+document's envelope, it leaves that envelope as it is rather than refuse the
+edit, since there is no clause to add and no reader honors an envelope it
+cannot read. The field's write policy does not govern the anchors: a pattern that wants only certain
+handlers to move anchors declares a write policy on the anchors cell.
 
 ## Checkpoints, reconnect, and reset
 

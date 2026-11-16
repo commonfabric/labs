@@ -131,4 +131,18 @@ describe("verifiedWalkChildValues()", () => {
     const yielded = collect(ns);
     expect(yielded).toContain(good);
   });
+
+  it("skips a key whose property is gone by the time it is read", () => {
+    // A proxy can list a key it then describes as absent, as a property
+    // deleted between listing and reading would be.
+
+    const kept = () => {};
+    const proxy = new Proxy({ kept }, {
+      ownKeys: () => ["kept", "vanished"],
+      getOwnPropertyDescriptor: (target, key) =>
+        Reflect.getOwnPropertyDescriptor(target, key),
+    });
+
+    expect(collect(proxy)).toStrictEqual([kept]);
+  });
 });

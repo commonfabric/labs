@@ -1041,6 +1041,13 @@ deno task cf check patterns/examples/iframe-quick-notes/main.tsx --no-run
 If the pattern is intentionally outside the repository, pass its directory as
 `--root`; otherwise the CLI uses the repository as its source boundary.
 
+In this repository, test the guest with a `guest.test.ts` beside it.
+`openGuestPage()` from `patterns/tools/test-support/iframe-guest.ts` loads the
+guest into its `guest.html` in Deno and serves it in-memory cells and presence
+rooms through the real bridge, so the test drives the document and reads back
+what the guest wrote. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is
+a complete example.
+
 Launch a repository pattern against local servers from the repository root.
 Start the servers first:
 

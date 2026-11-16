@@ -20,9 +20,10 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import {
-  EmulatedStorageManager,
-  newLoopbackServer,
-} from "@commonfabric/runner/storage/cache.deno";
+  type ServingMemoryServer,
+  startServingMemoryServer,
+} from "@commonfabric/runner/executor/serving-memory-server.deno";
+import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   deriveSelectedValue,
@@ -52,7 +53,7 @@ const signer = await Identity.fromPassphrase("cf-selection-write-claims");
 const space = signer.did();
 
 describe("deriveSelectedValue()", () => {
-  let server: ReturnType<typeof newLoopbackServer>;
+  let serving: ServingMemoryServer;
   let storages: EmulatedStorageManager[];
   let runtimes: Runtime[];
   let reader: Runtime;
@@ -64,7 +65,9 @@ describe("deriveSelectedValue()", () => {
   // A runtime with the posture `loadPieces()` gives a `cf` process, over a
   // storage connection of its own to the one server.
   const connect = (errors: Array<{ message: string }>): Runtime => {
-    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const storage = EmulatedStorageManager.connectTo(serving.server, {
+      as: signer,
+    });
     storages.push(storage);
     const runtime = new Runtime(runtimePresets.remoteClient({
       apiUrl: new URL(import.meta.url),
@@ -79,7 +82,12 @@ describe("deriveSelectedValue()", () => {
   };
 
   beforeEach(async () => {
-    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    // The `remoteClient` posture follows the server-execution default, and on
+    // the ON arm a handler runs on the serving loop beside the memory server,
+    // so the writes below need one to land.
+    serving = await startServingMemoryServer({
+      apiUrl: new URL(import.meta.url),
+    });
     storages = [];
     runtimes = [];
 
@@ -112,6 +120,9 @@ describe("deriveSelectedValue()", () => {
       url: "https://example.com/notes",
     });
     await writer.idle();
+    // On the ON arm each send's write is the serving loop's; this waits for
+    // it to arrive back here. Off, there is no overlay and nothing to wait on.
+    await writer.speculationOverlay?.waitForIntentQuiescence();
     await running.pull();
     expect(writerErrors).toEqual([]);
     await writer.patternManager.flushCompileCacheWrites();
@@ -141,7 +152,7 @@ describe("deriveSelectedValue()", () => {
       await runtime.dispose({ closeStorage: false });
     }
     for (const storage of storages) await storage.close();
-    await server.close();
+    await serving.close();
   });
 
   it("returns a selected field its source protects by owner and writer", async () => {

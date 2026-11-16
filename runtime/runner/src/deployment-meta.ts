@@ -91,6 +91,10 @@ export const SHELL_FLAG_SOURCES = {
   // a parent binds it to, so the shell has to run the naming mode of the
   // deployment whose spaces it opens.
   instanceNames: "deployment",
+  // A client's own opt-in: the deployment's half is its server's offer, so
+  // the shell takes it from its build, and a host embedding a release shell
+  // from the shell's host toggle (`runtime/shell/src/lib/host-toggles.ts`).
+  syncCidReferences: "build",
 } as const satisfies Record<keyof ExperimentalOptions, ShellFlagSource>;
 
 /** The flags {@link SHELL_FLAG_SOURCES} gives the deployment. */
@@ -328,12 +332,7 @@ async function readDeploymentMeta(
  * which is a proxy upgrading the connection to TLS.
  */
 function staysOnDeployment(url: string, apiUrl: URL): boolean {
-  let final: URL;
-  try {
-    final = new URL(url);
-  } catch {
-    return false;
-  }
+  const final = new URL(url);
   return final.origin === apiUrl.origin ||
     (apiUrl.protocol === "http:" && final.protocol === "https:" &&
       final.host === apiUrl.host);
@@ -413,8 +412,11 @@ async function readMetaOnce(
   }
 }
 
-/** Waits `ms`, or until `signal` aborts, whichever comes first. */
-function waitUnlessAborted(ms: number, signal: AbortSignal) {
+/**
+ * Waits `ms`, or until `signal` aborts, whichever comes first, and not at all
+ * when `signal` has already aborted.
+ */
+export function waitUnlessAborted(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve) => {
     if (signal.aborted) {
       resolve();
@@ -464,7 +466,9 @@ function memoryUrlFromMeta(
       `[deployment-meta] ${metaUrl} redirected to ` +
         `${meta.redirectedOffOrigin}, which is not this API URL's ` +
         `deployment; Memory opens on ${apiUrl.origin}. If the deployment is ` +
-        `served from ${originOf(meta.redirectedOffOrigin)}, set the API URL ` +
+        `served from ${
+          new URL(meta.redirectedOffOrigin).origin
+        }, set the API URL ` +
         `to that origin.`,
     );
     return undefined;
@@ -513,15 +517,6 @@ function logPostureUnread(
 /** `serverExecution` as {@link logPostureUnread} names its value. */
 function serverExecutionWord(enabled: boolean): string {
   return `\`serverExecution\` ${enabled ? "on" : "off"}`;
-}
-
-/** The origin of `url`, or `url` itself where it does not parse. */
-function originOf(url: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return url;
-  }
 }
 
 /**

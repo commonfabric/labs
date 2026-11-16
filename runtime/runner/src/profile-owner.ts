@@ -204,7 +204,7 @@ export async function loadProfileOwnerDocuments(
   runtime: Runtime,
   profile: Cell<unknown>,
 ): Promise<void> {
-  if (!await loadDocument(runtime, profile)) return;
+  await loadDocument(runtime, profile);
   const link = unlessCyclic(() => profile.resolveAsCell())
     ?.getAsNormalizedFullLink();
   if (link === undefined) return;
@@ -224,6 +224,6 @@ export async function loadProfileOwnerDocuments(
     }
     if (pending === undefined) return;
     loaded.add(`${pending.space}/${pending.id}`);
-    if (!await loadDocument(runtime, runtime.getCellFromLink(pending))) return;
+    await loadDocument(runtime, runtime.getCellFromLink(pending));
   }
 }

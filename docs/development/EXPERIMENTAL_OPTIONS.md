@@ -37,7 +37,7 @@ was last checked against the code.
 | [`readerSchemaPrecedence`](#readerschemaprecedence)                         | `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE` env, or `RuntimeOptions.experimental`                                                                   | on                                                                                   | Robin McCollum (#6338)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | on for a web client under server execution, no effect without it; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, on by default under server execution |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
-| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **on** (`SERVER_EXECUTION_DEFAULT_ENABLED = true`; explicit `false` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; the ON soak runs on main; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
@@ -59,6 +59,7 @@ was last checked against the code.
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
+| [`syncCidReferencesV1`](#synccidreferencesv1) | server: `MEMORY_SYNC_CID_REFERENCES` env on toolshed (the memory `Server`'s `syncCidReferences` option); client: `EXPERIMENTAL_SYNC_CID_REFERENCES` env, or `RuntimeOptions.experimental` (negotiated per connection) | server on, client off | Dan Bornstein (#9719) | measure the bandwidth saved against the extra round trip, then graduate or remove | implemented; servers on, clients off by default |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
@@ -422,7 +423,8 @@ flags it adopts from the deployment it runs against.
   [`runtime/memory/v2/server-execution-default.ts`](../../runtime/memory/v2/server-execution-default.ts)
   (a test pins the cell to the constant); the dated status entries below
   carry its history (landed flip-ready dark at `false` 2026-08-16; flipped
-  ON 2026-08-28; each later flip has its own entry). OW28's served
+  ON 2026-08-28; rolled back 2026-09-03; flipped ON again 2026-11-11; each
+  flip has its own entry). OW28's served
   `compileAndRun` lifecycle has direct acceptance coverage. The Phase-7
   ordered gates still apply; a flip record does not establish their
   current verdicts. The default
@@ -488,6 +490,17 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-11-11 (the re-FLIP).** The constant is `true` again, by
+  the owner's rollout decision. This is the data-only change the 2026-09-02
+  hygiene provides for: the constant, this entry and the summary cell, and a
+  delta in the plan's coordination block, with no workflow, test, role, or
+  build-job edit. The CI roles resolve `default` = ON and `opposite` = OFF:
+  the default lanes run the ON arm with the ON-arm skip registry, the
+  opposite lanes are the explicit-`false` OFF guard on the
+  `toolshed-baked-opposite` build with the `server-execution-off` record
+  variant, and authored-pattern coverage rides the opposite lanes. An
+  explicit `false` selects OFF per deployment and is the rollback lever.
+  The ON soak resumes at this change's merge.
 - **Status on 2026-10-31 (the verbs on the space's memory session).** Under
   ON, the toolshed's memory server runs the verbs as `pattern.lifecycle`
   requests and advertises `patternLifecycle`, and
@@ -1759,6 +1772,56 @@ the per-epic implementation notes).
   delete the negotiation and the expanded-form encoder and always send the
   compact form.
 
+### `syncCidReferencesV1`
+
+- **Toggle via.** One switch on each side, and references flow only on a
+  connection where both are on:
+  - **Server:** the memory `Server`'s `syncCidReferences` option, which
+    toolshed sets from `MEMORY_SYNC_CID_REFERENCES` (on unless `false` or
+    `0`; any other spelling refuses startup). A server advertises the
+    capability unless it is turned off.
+  - **Client:** the runtime's `syncCidReferences` experimental option, from
+    `RuntimeOptions.experimental` (how a host that constructs a runtime sets
+    it), `EXPERIMENTAL_SYNC_CID_REFERENCES` (a process that reads env, and
+    the shell's build define of the same name), or, in the labs shell, the
+    per-profile `localStorage` key `syncCidReferences` set to `"true"` (how a
+    host loading a release shell in a WebView sets it, or
+    `commonfabric.syncCidReferences(true)` from the console; next runtime).
+    The runtime hands it to its memory connections
+    (`ConnectOptions.syncCidReferences`), whose `hello` then advertises the
+    capability. It is client-authoritative, so a client never adopts it from
+    a deployment
+    ([host embedding](../features/host-embedding.md), seam 13).
+- **Purpose.** A schema document's bytes are the same in every space that
+  stores it, so a client reading many spaces built from one pattern receives
+  the same closure from each. On a connection where both sides are on, a server
+  names a `cid:` schema document its registry holds by id and seq alone, unless
+  the schema names a principal (a DID anywhere in its closure), which keeps its
+  body. The client
+  takes the body from its own registry, and fetches what a frame lacks with one
+  `graph.query` for all of it, sharing a fetch already in flight from the same
+  host: any space's on a direct connection, the same space's on a routed one. A
+  schema that names a principal is always fetched from the space that named it
+  ("Delivery by reference" in
+  [`content-addressed-schemas.md`](../specs/content-addressed-schemas.md)).
+  Measured on a FabriChat fixture, a narrow read of 5 rooms' roots received
+  52% fewer bytes, and at 20 rooms the reader's heap grew a third less per room.
+- **The trade it measures.** A frame naming a body its client lacks waits one
+  round trip for it, and the session's later frames wait behind it. The option
+  stays an option until a measurement says whether the bandwidth saved
+  outweighs that.
+- **Current default and planned end state.** Servers advertise it by default;
+  clients do not, so nothing changes for a client until its runtime or host
+  opts in. A deployment turns it off with `MEMORY_SYNC_CID_REFERENCES=false`,
+  which delivers every client every body whatever it advertises. The end state
+  is to graduate it, with clients on by default, or to remove it, on that
+  measurement.
+- **Status on 2026-11-11.** Implemented; servers on, clients off by default.
+- **Path to removal.** Graduating: advertise the capability unconditionally on
+  both sides and delete the server option, the toolshed setting and the client
+  option. Removing: delete the reference rewrite, the client's resolution and
+  fetch, the capability and the three settings.
+
 ### `messageCompressionV1`
 
 - **Toggle via.** `setMessageCompressionConfig()` in
@@ -2023,8 +2086,13 @@ the per-epic implementation notes).
   is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
-  `cfcRenderCeiling` localStorage key records. The end state is to remove the
-  toggle and make the ceiling unconditional.
+  `cfcRenderCeiling` localStorage key records. Opting out declares no ceiling to
+  the worker (`renderConfidentialityCeiling: null`) and allows author
+  declassification (`renderDeclassificationPolicy: "allow"`): a host that
+  declares nothing is given the same default ceiling the toggle populates, with
+  declassification denied, so a host's renders and reads go ungated only where
+  it declares `null`, as the toggle does. The end state is to remove the toggle
+  and make the ceiling unconditional.
 - **Status on 2026-09-23.** Exchange resolution is implemented, including
   module policies. Where reader membership is required, missing or unsynced
   ACL evidence keeps the content blocked; a reader grant admits it and a
@@ -2201,29 +2269,61 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop, its host and every serving runtime run in a Web
-  Worker of the toolshed process instead of on the thread that answers the
+- **Purpose.** The serving loop's hosts and serving runtimes run in worker
+  threads of the toolshed process, one worker per served space up to a cap and
+  shared past it, instead of on
+  the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
-  behind it. The worker reads the store through its own SQLite connections and
+  behind it, as on one worker every other space's wave does. A worker reads the
+  store through its own SQLite connections and
   reaches the memory server over a port: wave commits cross to a sink on the
   main thread, which applies every commit the server fans out; the serving
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
+  The pool that places spaces on workers takes five more variables from the
+  same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
+  many workers spaces are placed on before a space joins a worker that
+  already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
+  serves every space from one worker),
+  `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
+  of a placement (default 1 in the toolshed; `0` keeps none),
+  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, the largest each worker's heap may
+  grow before that worker alone is ended (default 2048 in the toolshed, 256
+  at least, and the literal `0` for none; a worker with a limit is a
+  `node:worker_threads` thread, and one without is a Deno `Worker`, as the
+  serving memory server tests build starts), and
+  `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
+  be together before workers kept only for parked runtimes are closed
+  (default none), and `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, how long a
+  worker may send no message, its heartbeats included, before it is killed
+  (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
+  comes at the first check at or past that many seconds of silence in a row:
+  15 kills at 20. The serving memory server tests build reads the first.
+  Where the workers' runtimes compile takes two more:
+  `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
+  holds for every serving runtime (default 1), and
+  `SERVER_EXECUTION_COMPILE_CACHE_DIR`, the compiled-module cache directory
+  every toolshed on the host shares (default `compiled-modules` under
+  `CACHE_DIR`).
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
-  file store. The worker entry builds its process's compiled-module byte cache,
-  as the main-thread loop does. Run with the variable `true`, the pattern
-  integration suites the `MultiRuntimeHarness` drives pass under the worker;
+- **Status on 2026-11-14.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space up to the cap
+  (`SERVER_EXECUTION_MAX_WORKERS`, 4 by default), past which spaces share
+  workers. The workers compile in the
+  process's compile workers and share the host's compiled-module cache
+  directory, as the main-thread loop does. Run with the variable `true`,
+  the pattern integration suites the `MultiRuntimeHarness` drives pass with a
+  worker per space under the runner's own cap of 16;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
-  that way yet: in CI the worker runs in the toolshed-backed lanes and the
-  worker's own unit tests.
+  that way yet: in CI the workers run in the toolshed-backed lanes and the
+  workers' own unit tests.
 - **Path to removal.** Soak with the default on, then delete the knob and the
   in-process arm.
 
@@ -2727,6 +2827,27 @@ handshake's job stays what it is: refusing a connection whose peer resolved a
 wire contract differently — which, for a client that adopts, is a mismatch
 that should no longer arise.
 
+### A server that follows another deployment
+
+A client that talks to two servers can run only one posture, so the two
+servers have to run the same one. A local toolshed whose client also talks to
+a hosted deployment is the case: Loom's runs beside its owner's hosted home.
+Such a toolshed follows the hosted deployment's posture. Whoever starts it
+reads the deployment's `/api/meta` and passes its `experimental` object, as
+JSON, in `EXPERIMENTAL_FOLLOWED_POSTURE`. The toolshed resolves every flag it
+reads, for its own runtime, its serving runtimes and its memory route, with
+`experimentalOptionsWithFollowedPosture`: an explicit `EXPERIMENTAL_*` wins,
+otherwise the followed posture's value for a `"server"` flag, otherwise the
+default, the rule `adoptServerExperimentalOptions` applies for a client. As
+for a client, a followed posture silent on `readerSchemaPrecedence` or
+`agentBuiltin` is an older deployment's and gives each the legacy `false`,
+and a followed posture of `null`, which a deployment publishes before its
+Runtime exists, adopts nothing. The toolshed then publishes the posture it
+resolved, so its own clients adopt the followed deployment's flags in turn.
+Any other value that is not a JSON object stops the toolshed from starting. The toolshed does not fetch the posture itself:
+the launcher decides what to do when the deployment cannot be reached, for
+instance starting with the last posture it saw.
+
 ## Enabling flags locally
 
 Set the environment variables before building the shell (for browser-side flags)
@@ -2757,7 +2878,8 @@ For the enforcement mode in the interactive tools, use `CF_CFC_MODE`.
 ## Verifying flags are working
 
 When any experimental flag is explicitly overridden, the `Runtime` constructor
-logs it on startup, for example:
+logs it on startup (`serverExecution` only where it differs from the
+first-party default), for example:
 
 ```
 Experimental flag overrides: modernCellRep=true

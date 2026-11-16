@@ -1,6 +1,5 @@
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
-import { entityKey } from "./keys.ts";
 import type { MaterializerIndexState } from "./materializers.ts";
 import type { NodeRegistry, SchedulerNode } from "./node-record.ts";
 import { forEachOverlappingWriter } from "./scheduling-writes.ts";
@@ -112,18 +111,24 @@ const LIVENESS_EQUIVALENCE_CHECK: boolean = (() => {
   }
 })();
 
-function assertLivenessEquivalence(
+/**
+ * Throws when a node's incrementally maintained `liveRefs` differs from a full
+ * rebuild ({@link recomputeLiveRefs}), naming `site` and each drifted node.
+ * The rebuilt counts stand either way. Does nothing unless `enabled`.
+ */
+export function assertLivenessEquivalence(
   state: SchedulerLivenessState,
   site: string,
+  enabled: boolean = LIVENESS_EQUIVALENCE_CHECK,
 ): void {
-  if (!LIVENESS_EQUIVALENCE_CHECK) return;
+  if (!enabled) return;
   const records = [...state.nodes.nodes()];
   const incremental = records.map((record) => record.liveRefs);
   recomputeLiveRefs(state);
   const drift: string[] = [];
   records.forEach((record, i) => {
     if (record.liveRefs !== incremental[i]) {
-      const name = (record.action as { name?: string }).name || "<anonymous>";
+      const name = record.action.name || "<anonymous>";
       drift.push(
         `${name}: incremental=${incremental[i]} rebuilt=${record.liveRefs}`,
       );
@@ -327,23 +332,6 @@ function withdrawDemandFrom(
   }
 
   propagateDemand(state, seeds);
-}
-
-export function groupReadsByEntity(
-  reads: readonly IMemorySpaceAddress[],
-  identity: ScopeKeyIdentity,
-): Map<SpaceScopeAndURI, IMemorySpaceAddress[]> {
-  const readsByEntity = new Map<SpaceScopeAndURI, IMemorySpaceAddress[]>();
-  for (const read of reads) {
-    const entity = entityKey(read, identity);
-    let entityReads = readsByEntity.get(entity);
-    if (!entityReads) {
-      entityReads = [];
-      readsByEntity.set(entity, entityReads);
-    }
-    entityReads.push(read);
-  }
-  return readsByEntity;
 }
 
 /**

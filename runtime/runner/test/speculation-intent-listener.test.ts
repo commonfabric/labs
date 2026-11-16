@@ -283,21 +283,24 @@ describe("intent listener — scripted notification seam (design (e) pins 1–5,
     });
     scripted.seed(SPACE, SIDECAR, {
       entries: [
+        { eventId: "mine", stream: { id: "s", path: [] }, seq: 1 },
         null,
         "not-an-entry",
         7,
-        { eventId: "mine", stream: { id: "s", path: [] }, seq: 4 },
       ] as unknown as StreamEventsDocValue["entries"],
     });
+    // The check at the fire scans back from the tail, past the malformed
+    // entries, to the well-formed one.
     destination.trackIntent(SPACE, SIDECAR, "mine");
+    expect(destination.intentCheckMaxVisits).toBe(4);
     expect(destination.pendingIntentCount).toBe(1);
 
     scripted.deliver(SPACE, SIDECAR, (value) => {
-      value.entries![3].status = "dropped";
-      value.entries![3].reason = "gone";
+      value.entries![0].status = "dropped";
+      value.entries![0].reason = "gone";
     }, [
-      ["value", "entries", "3", "status"],
-      ["value", "entries", "3", "reason"],
+      ["value", "entries", "0", "status"],
+      ["value", "entries", "0", "reason"],
     ]);
     await flushMicrotasks();
     expect(outcomes).toEqual(["dropped:mine"]);

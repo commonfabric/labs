@@ -9,6 +9,7 @@
  */
 
 import type { SessionViewInterest } from "@commonfabric/memory/v2";
+import { isServingSessionOf } from "@commonfabric/memory/v2/server";
 
 /**
  * The view interests of each space's sessions, read from the server once and
@@ -74,9 +75,10 @@ export class ViewInterestCache {
   }
 
   /**
-   * The interests of `space`'s sessions, those of `excludePrincipal` left
-   * out: the held list when the server has reported no change since it was
-   * read, and otherwise the list `read` returns, which is held in its place.
+   * The interests of `space`'s sessions, those of `excludePrincipal`'s
+   * serving sessions (`isServingSessionOf()`) left out: the held list when
+   * the server has reported no change since it was read, and otherwise the
+   * list `read` returns, which is held in its place.
    */
   async interestsFor(
     space: string,
@@ -104,8 +106,8 @@ export class ViewInterestCache {
         this.#interests.set(space, interests);
       }
     }
-    return excludePrincipal === undefined ? [...interests] : interests.filter((
-      interest,
-    ) => interest.principal !== excludePrincipal);
+    return interests.filter((interest) =>
+      !isServingSessionOf(interest, excludePrincipal)
+    );
   }
 }

@@ -2,17 +2,24 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
-import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
-import { Identity } from "@commonfabric/identity";
+import {
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
+import { type AsBytes, Identity, type Signer } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { utf8Compare } from "@commonfabric/text/utf8";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
+  storedList,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { refusingServer } from "./support/refusing-server.ts";
 import {
   commitCustodySeal,
   CUSTODY_SEAL_READER,
@@ -128,6 +135,9 @@ const TERMS = {
 
 const SEAL_IDENTITY = { kind: "builtin", builtinId: "cfc-custody-seal" };
 
+/** What the message a seal signs to key an actor's entry begins with. */
+const ENTRY_KEY_DOMAIN = "cfc-custody-seal/entry-key/v1\n";
+
 /** Prepares with no sources allowed beyond the actor's own `User` clauses. */
 const prepareCustodySeal = (
   draft: Cell<unknown>,
@@ -184,24 +194,41 @@ const setup = async (
   const server: MemoryV2Server.Server = newSharedServer({
     subscriptionRefreshDelayMs: 0,
   });
+  // Every runtime reaches the server through this stand-in, so a test can
+  // have it refuse a space from some point on.
+  const refusing = refusingServer(server);
   const managers: EmulatedStorageManager[] = [];
   const created: Runtime[] = [];
+  /**
+   * A runtime acting for `identity`, signing as `signer`. `posture.actor`
+   * names the acting principal each transaction is opened under, and
+   * `posture.readCeiling` the runtime's read ceiling.
+   */
   const runtimeFor = (
     identity: Identity,
-    signer: Identity = identity,
+    signer: Signer = identity,
+    posture: {
+      actor?: () => string;
+      readCeiling?: readonly CfcConfClause[];
+    } = {},
   ): Runtime => {
-    const storageManager = EmulatedStorageManager.connectTo(server, {
-      as: signer,
-    });
+    const storageManager = EmulatedStorageManager.connectTo(
+      refusing.server as MemoryV2Server.Server,
+      { as: signer },
+    );
     managers.push(storageManager);
+    const actor = posture.actor ?? (() => identity.did());
     const runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
       trustSnapshotProvider: () => ({
         id: identity.did(),
-        actingPrincipal: identity.did(),
+        actingPrincipal: actor(),
       }),
       ...(trust === undefined ? {} : { cfcTrustConfig: trust }),
+      ...(posture.readCeiling === undefined
+        ? {}
+        : { cfcReadMaxConfidentiality: posture.readCeiling }),
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
     });
@@ -245,6 +272,8 @@ const setup = async (
     runtimes,
     runtimeFor,
     roomAcl,
+    /** From now on, refuses every request naming `space`. */
+    refuse: (space: string) => refusing.refuse(space, "unauthorized"),
     terms: terms.withTx(undefined),
     room(identity: Identity, policy = P, box?: Cell<unknown>): CustodyRoom {
       const runtime = runtimes.get(identity)!;
@@ -961,6 +990,66 @@ describe("cfc-custody-seal", () => {
       }
     });
 
+    it("refuses an anchor or a box other code changed before the entry is written", async () => {
+      // Each is checked when the seal is reviewed and when its anchor is
+      // written, and again in the entry's own transaction, which is what
+      // refuses a change landing in between. The anchor's writer claim
+      // refuses other code, so the anchor is changed here as a store that
+      // failed to hold the claim would let it be.
+      for (const changed of ["custodyAnchor", "custodyBox"] as const) {
+        const fixture = await setup();
+        try {
+          const instance = hashStringOf(TERMS);
+          const runtime = fixture.runtimes.get(alice)!;
+          const target = runtime.getCell(S, {
+            [changed]: { policy: P, instance },
+          });
+          const draft = await fixture.draft(alice, honestStance);
+          const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+          beforeEntry(runtime, async () => {
+            const tx = runtime.edit();
+            if (changed === "custodyAnchor") {
+              // Integrity of its own on the anchor's label, which the entry
+              // would inherit from its one labeled read.
+              const at = { ...target.getAsNormalizedFullLink(), path: ["cfc"] };
+              const envelope = tx.readOrThrow(at);
+              if (
+                !isFabricPlainObject(envelope) ||
+                !isFabricPlainObject(envelope.labelMap)
+              ) throw new Error("The anchor holds no label map.");
+              seedStoredEnvelope(tx, at, {
+                ...envelope,
+                labelMap: {
+                  ...envelope.labelMap,
+                  entries: [
+                    ...storedList(envelope.labelMap.entries),
+                    { path: [], label: { integrity: ["squatted-claim"] } },
+                  ],
+                },
+              });
+            } else {
+              setCfcImplementationIdentity(tx, {
+                kind: "verified",
+                moduleIdentity: "sha256:attacker",
+                symbol: "squat",
+                bindingPath: ["squat"],
+              });
+              target.withTx(tx).set({} as never);
+            }
+            expect((await tx.commit().settled).error).toBeUndefined();
+          });
+          await expect(commitCustodySeal(prepared.consent, trustedClick()))
+            .rejects.toThrow(
+              changed === "custodyBox"
+                ? "Custody seal refuses a box the seal did not create"
+                : "Custody seal refuses an anchor the seal did not create",
+            );
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
     it("writes the actor-private receipt to the actor's home space", async () => {
       const fixture = await setup();
       try {
@@ -1468,6 +1557,36 @@ describe("cfc-custody-seal", () => {
           },
         );
         await fixture.seal(alice, honestStance, scoped.key("box"));
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a box cell in the room space that redirects writes out of it", async () => {
+      const fixture = await setup();
+      try {
+        const binding = roomBox(fixture);
+        const elsewhere = fixture.runtimes.get(mallory)!.getCell(
+          mallory.did(),
+          "custody-room-box",
+        );
+        await writeAsOtherCode(
+          fixture,
+          mallory,
+          binding,
+          (runtime, tx) =>
+            runtime.getCellFromLink(
+              elsewhere.getAsNormalizedFullLink(),
+              undefined,
+              tx,
+            ).getAsWriteRedirectLink(),
+          undefined,
+          { raw: true },
+        );
+        await expect(fixture.seal(alice, honestStance, binding)).rejects
+          .toThrow(
+            "Custody seal links the box only from a cell in the room space",
+          );
       } finally {
         await fixture.dispose();
       }
@@ -2098,6 +2217,71 @@ describe("cfc-custody-seal", () => {
         await expect(
           prepareCustodySeal(draft, fixture.room(alice, policyOf(unknown))),
         ).rejects.toThrow(/not installed in the room space/);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses terms a link places in a space not named by a DID", async () => {
+      const fixture = await setup();
+      try {
+        const runtime = fixture.runtimes.get(alice)!;
+        const tx = runtime.edit();
+        runtime.getCellFromLink(fixture.terms, undefined, tx).setRaw({
+          "/": {
+            "link@1": {
+              id: "of:custody-terms",
+              space: "custody-room",
+              path: [],
+            },
+          },
+        } as never);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow("Custody terms must live in a space named by a DID");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses terms that name no stance schema", async () => {
+      const fixture = await setup();
+      try {
+        const { stanceSchema: _, ...withoutSchema } = TERMS;
+        await fixture.setTerms(withoutSchema);
+        const draft = await fixture.draft(alice, honestStance);
+        await expect(prepareCustodySeal(draft, fixture.room(alice)))
+          .rejects.toThrow("Custody terms must name a `stanceSchema`");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses terms or a box cell held by another runtime", async () => {
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        const elsewhere = fixture.runtimes.get(bob)!;
+        await expect(
+          prepareCustodySeal(draft, {
+            ...fixture.room(alice),
+            terms: elsewhere.getCellFromLink(fixture.terms),
+          }),
+        ).rejects.toThrow(
+          "Custody seal handles must belong to the same runtime",
+        );
+        await expect(
+          prepareCustodySeal(draft, {
+            ...fixture.room(alice),
+            box: elsewhere.getCell(S, "room-cells").key("box"),
+          }),
+        ).rejects.toThrow(
+          "Custody seal handles must belong to the same runtime",
+        );
+        expect(
+          (await prepareCustodySeal(draft, fixture.room(alice))).actor,
+        ).toBe(alice.did());
       } finally {
         await fixture.dispose();
       }
@@ -2941,6 +3125,75 @@ describe("cfc-custody-seal", () => {
     });
   });
 
+  describe("a write the store refuses", () => {
+    /**
+     * Runs `step` before each call of `runtime.editWithRetry` it names by
+     * index, and `after` once the call at `afterIndex` has returned: the
+     * seal's first call writes its anchor, and its second its entry.
+     */
+    const aroundCommits = (
+      runtime: Runtime,
+      steps: { before?: number; after?: number; step: () => void },
+    ) => {
+      const original = runtime.editWithRetry.bind(runtime);
+      let calls = 0;
+      runtime.editWithRetry = (async (
+        ...args: Parameters<Runtime["editWithRetry"]>
+      ) => {
+        const call = calls++;
+        if (call === steps.before) steps.step();
+        const result = await original(...args);
+        if (call === steps.after) steps.step();
+        return result;
+      }) as Runtime["editWithRetry"];
+    };
+
+    it("refuses a seal whose anchor the store refuses", async () => {
+      const fixture = await setup();
+      try {
+        aroundCommits(fixture.runtimes.get(alice)!, {
+          before: 0,
+          step: () => fixture.refuse(S),
+        });
+        await expect(fixture.seal(alice)).rejects.toThrow(
+          "Custody seal could not create its anchor",
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose receipt the store refuses", async () => {
+      const fixture = await setup();
+      try {
+        aroundCommits(fixture.runtimes.get(alice)!, {
+          after: 0,
+          step: () => fixture.refuse(alice.did()),
+        });
+        await expect(fixture.seal(alice)).rejects.toThrow(
+          "Custody seal receipt failed",
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose entry the store refuses", async () => {
+      const fixture = await setup();
+      try {
+        aroundCommits(fixture.runtimes.get(alice)!, {
+          before: 1,
+          step: () => fixture.refuse(S),
+        });
+        await expect(fixture.seal(alice)).rejects.toThrow(
+          "Custody seal failed",
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
   describe("the actor's source policy", () => {
     /** Writes a settings document holding `value` into `space`. */
     const settings = async (
@@ -3012,6 +3265,132 @@ describe("cfc-custody-seal", () => {
     });
   });
 
+  describe("the acting runtime", () => {
+    /**
+     * `identity` as a signer, except that a request to sign an entry key is
+     * answered by `signEntryKey`.
+     */
+    const signingEntryKeysWith = (
+      identity: Identity,
+      signEntryKey: Signer["sign"],
+    ): Signer => ({
+      did: () => identity.did(),
+      verifier: identity.verifier,
+      keyPair: identity.keyPair,
+      sign: <T>(payload: AsBytes<T>) =>
+        new TextDecoder().decode(
+            payload.subarray(0, ENTRY_KEY_DOMAIN.length),
+          ) ===
+            ENTRY_KEY_DOMAIN
+          ? signEntryKey(payload)
+          : identity.sign(payload),
+    });
+
+    /** Makes `runtime` Alice's, holding the room's policy as hers does. */
+    const actAsAlice = (fixture: Fixture, runtime: Runtime) => {
+      runtime.registerCfcPolicyManifests(undefined, [CUSTODY]);
+      fixture.runtimes.set(alice, runtime);
+    };
+
+    it("refuses a signer that cannot sign the entry key, or signs it two ways", async () => {
+      let calls = 0;
+      for (
+        const [signEntryKey, refusal] of [
+          [
+            () => ({ error: new Error("the key is locked") }),
+            "Custody seal could not sign its entry key",
+          ],
+          [
+            <T>(payload: AsBytes<T>) =>
+              (calls++ % 2 === 0 ? alice : carol).sign(payload),
+            "Custody seal requires a deterministic signer",
+          ],
+        ] as const
+      ) {
+        const fixture = await setup();
+        try {
+          actAsAlice(
+            fixture,
+            fixture.runtimeFor(
+              alice,
+              signingEntryKeysWith(alice, signEntryKey),
+            ),
+          );
+          const draft = await fixture.draft(alice, honestStance);
+          await expect(prepareCustodySeal(draft, fixture.room(alice)))
+            .rejects.toThrow(refusal);
+        } finally {
+          await fixture.dispose();
+        }
+      }
+    });
+
+    it("refuses a runtime with no authenticated actor", async () => {
+      const fixture = await setup();
+      try {
+        const draft = await fixture.draft(alice, honestStance);
+        const anonymous = fixture.runtimeFor(alice, alice, {
+          actor: () => "",
+        });
+        actAsAlice(fixture, anonymous);
+        await expect(
+          prepareCustodySeal(
+            anonymous.getCellFromLink(draft.getAsNormalizedFullLink()),
+            fixture.room(alice),
+          ),
+        ).rejects.toThrow("Custody seal requires an authenticated actor");
+        await expect(
+          readCustodySourcePolicy(
+            anonymous.getCell(alice.did(), "custody-sources"),
+          ),
+        ).rejects.toThrow("Custody seal requires an authenticated actor");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a seal whose acting principal changed before its entry is written", async () => {
+      const fixture = await setup();
+      try {
+        let actor = alice.did();
+        const runtime = fixture.runtimeFor(alice, alice, {
+          actor: () => actor,
+        });
+        actAsAlice(fixture, runtime);
+        const draft = await fixture.draft(alice, honestStance);
+        const prepared = await prepareCustodySeal(draft, fixture.room(alice));
+        beforeEntry(runtime, () => {
+          actor = mallory.did();
+          return Promise.resolve();
+        });
+        await expect(commitCustodySeal(prepared.consent, trustedClick()))
+          .rejects.toThrow("Custody seal actor changed after review");
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("refuses a runtime whose read ceiling withholds the room's custody", async () => {
+      // The entry's one labeled read is of the anchor, labeled for the room's
+      // policy or its readers, which a ceiling admitting only the actor's own
+      // clause withholds.
+      const fixture = await setup();
+      try {
+        actAsAlice(
+          fixture,
+          fixture.runtimeFor(alice, alice, {
+            readCeiling: [cfcAtom.user(alice.did())],
+          }),
+        );
+        await expect(fixture.seal(alice)).rejects.toThrow(
+          "Custody seal requires a runtime whose read ceiling admits the room's custody",
+        );
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
+
   describe("the release it previews", () => {
     const rule = (integrity: readonly unknown[]) => ({
       name: "release",
@@ -3074,6 +3453,8 @@ describe("cfc-custody-seal", () => {
           { kind: "verified", moduleIdentity: MODULE },
           { kind: "verified", symbol: "projectBallot" },
           { kind: "builtin" },
+          // Code the runtime could not identify names no code at all.
+          { kind: "unsupported", className: "Function", reason: "opaque" },
         ]
       ) {
         expect(

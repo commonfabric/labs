@@ -1,6 +1,6 @@
 /**
  * What a create leaves on a serving worker's heap. Serves a fresh board from a
- * `ServingWorker` the way a toolshed does, creates Topics through the board's
+ * `ServingWorkerPool` the way a toolshed does, creates Topics through the board's
  * `addTopic` verb, and has the worker write its own heap snapshot after the
  * first `<first>` creates and again after `<more>` more. The growth between
  * the two, divided by `<more>`, is what one create leaves; `heap-retained.ts`
@@ -20,7 +20,7 @@ import { createSession, Identity } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import { type Cell, Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { ServingWorker } from "@commonfabric/runner/executor/serving-worker-host";
+import { ServingWorkerPool } from "@commonfabric/runner/executor/serving-worker-host";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { sendVerbEvent } from "@commonfabric/piece/verb-call";
@@ -65,7 +65,7 @@ const server = newLoopbackServer({
   store: toFileUrl(`${storeDir}/`),
   delegatingDids: [serviceSigner.did()],
 });
-const worker = new ServingWorker({
+const worker = new ServingWorkerPool({
   server,
   identity: serviceSigner,
   apiUrl: new URL(import.meta.url),

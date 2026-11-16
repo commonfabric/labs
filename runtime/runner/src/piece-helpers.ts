@@ -217,7 +217,6 @@ export function schemaWithScopedLinkRequiredsRelaxed(
     // Parsing against the containing cell resolves "inherit" to the
     // containing scope, so the normalized scope is always concrete.
     const first = parseLink(value, base);
-    if (first === undefined) return false;
     if (
       scopeRank(first.scope ?? DEFAULT_CELL_SCOPE) >
         scopeRank(DEFAULT_CELL_SCOPE)
@@ -235,11 +234,12 @@ export function schemaWithScopedLinkRequiredsRelaxed(
         scopeRank(terminal.scope ?? DEFAULT_CELL_SCOPE) >
           scopeRank(DEFAULT_CELL_SCOPE);
     } catch (error) {
-      logger.debug("scoped-link-relax-chain", () => [
+      logger.debug(
+        "scoped-link-relax-chain",
         "chain resolution failed; keeping strict required",
         first,
         error,
-      ]);
+      );
       return false;
     }
   };
@@ -309,10 +309,11 @@ export function cellWithScopedLinkRequiredsRelaxed<T>(
   try {
     raw = cell.getRaw();
   } catch (error) {
-    logger.debug("scoped-link-relax-raw", () => [
+    logger.debug(
+      "scoped-link-relax-raw",
       "raw read failed; keeping strict schema",
       error,
-    ]);
+    );
     return cell;
   }
   const relaxed = schemaWithScopedLinkRequiredsRelaxed(
@@ -369,12 +370,7 @@ export async function compileAndSavePattern(
   // Route through the content-addressed cell cache in the target space so the
   // compiled module set + source docs are written back (awaited) and reused on
   // subsequent loads (CT-1623).
-  const pattern = await runtime.patternManager.compilePattern(patternSrc, {
+  return await runtime.patternManager.compilePattern(patternSrc, {
     space: options.space,
   });
-  if (!pattern) {
-    throw new Error("No default pattern found in the compiled exports.");
-  }
-
-  return pattern;
 }

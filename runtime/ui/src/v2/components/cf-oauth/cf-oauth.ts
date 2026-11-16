@@ -20,6 +20,31 @@ export interface OAuthData {
 }
 
 /**
+ * The parts of the window `CFOAuth` reaches: the network, the popup it opens,
+ * the message the popup posts back, and the timer that notices the popup
+ * closing.
+ */
+export interface OAuthWindow {
+  readonly location: { readonly origin: string };
+  fetch(input: string, init: RequestInit): Promise<Response>;
+  open(
+    url: string,
+    target: string,
+    features: string,
+  ): { readonly closed: boolean } | null;
+  addEventListener(
+    type: "message",
+    listener: (event: MessageEvent) => void,
+  ): void;
+  removeEventListener(
+    type: "message",
+    listener: (event: MessageEvent) => void,
+  ): void;
+  setInterval(handler: () => void, timeout: number): number;
+  clearInterval(id: number): void;
+}
+
+/**
  * CFOAuth - Generic OAuth authentication component
  *
  * Parameterized by provider name, brand color, and login endpoint.
@@ -60,11 +85,14 @@ export class CFOAuth extends BaseElement {
   declare loginEndpoint: string;
   declare tokenField: string;
 
-  private _pollIntervalId: ReturnType<typeof setInterval> | null = null;
+  private _pollIntervalId: number | null = null;
   private _boundMessageListener: ((event: MessageEvent) => void) | null = null;
+  #window: OAuthWindow;
 
-  constructor() {
+  /** Constructs an element that reaches the window through `window`. */
+  constructor(window: OAuthWindow = globalThis) {
     super();
+    this.#window = window;
     this.authStatus = "";
     this.isLoading = false;
     this.authResult = null;
@@ -77,11 +105,11 @@ export class CFOAuth extends BaseElement {
 
   private _cleanup() {
     if (this._pollIntervalId !== null) {
-      clearInterval(this._pollIntervalId);
+      this.#window.clearInterval(this._pollIntervalId);
       this._pollIntervalId = null;
     }
     if (this._boundMessageListener) {
-      globalThis.removeEventListener("message", this._boundMessageListener);
+      this.#window.removeEventListener("message", this._boundMessageListener);
       this._boundMessageListener = null;
     }
   }
@@ -113,7 +141,7 @@ export class CFOAuth extends BaseElement {
     };
 
     try {
-      const response = await fetch(this.loginEndpoint, {
+      const response = await this.#window.fetch(this.loginEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -130,7 +158,7 @@ export class CFOAuth extends BaseElement {
       this._cleanup();
 
       const messageListener = (event: MessageEvent) => {
-        if (event.origin !== globalThis.location.origin) return;
+        if (event.origin !== this.#window.location.origin) return;
 
         if (event.data && event.data.type === "oauth-callback") {
           this.authResult = event.data.result;
@@ -145,9 +173,9 @@ export class CFOAuth extends BaseElement {
       };
 
       this._boundMessageListener = messageListener;
-      globalThis.addEventListener("message", messageListener);
+      this.#window.addEventListener("message", messageListener);
 
-      const authWindow = globalThis.open(
+      const authWindow = this.#window.open(
         resp.url,
         "_blank",
         "width=800,height=800,left=200,top=200",
@@ -161,7 +189,7 @@ export class CFOAuth extends BaseElement {
         return;
       }
 
-      this._pollIntervalId = setInterval(() => {
+      this._pollIntervalId = this.#window.setInterval(() => {
         if (authWindow.closed) {
           if (!this.authResult) {
             this.authStatus =

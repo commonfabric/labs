@@ -1,6 +1,16 @@
-import { assert, type OpaqueCell, pattern, TESTS, UI } from "commonfabric";
 import {
+  assert,
+  NAME,
+  type OpaqueCell,
+  pattern,
+  TESTS,
+  UI,
+} from "commonfabric";
+import {
+  findElement,
   findElementByText,
+  findNode,
+  hasExactText,
   propValue,
   textContent,
 } from "../../../patterns/tools/test-support/vnode-helpers.ts";
@@ -10,6 +20,7 @@ import GithubActivity, {
   type GithubPullRequestFields,
   type GithubPullRequestIndex,
   type PullRequestDetail,
+  type PullRequestStatus,
 } from "./main.tsx";
 
 const publicCommits = [
@@ -174,6 +185,81 @@ const EmptyPullRequestIndexFixture = pattern<void, GithubPullRequestIndex>(
   () => ({ ...index, pullRequests: [] }),
 );
 
+// The statuses the fixture above leaves out, one pull request each.
+const otherStatuses: PullRequestStatus[] = [
+  "tests-running",
+  "merge-conflicts",
+  "merge-blocked",
+];
+
+const OtherStatusesIndexFixture = pattern<void, GithubPullRequestIndex>(
+  () => ({
+    ...index,
+    pullRequests: otherStatuses.map((status, offset) => ({
+      ...pullRequests[1],
+      id: `PR_${21 + offset}`,
+      number: 21 + offset,
+      title: `Pull request ${21 + offset}`,
+      status,
+    })),
+  }),
+);
+
+/** The health snapshot of a host in `status`, carrying `sync` if given. */
+const hostHealth = (
+  status: string,
+  sync?: GithubHostHealth["sync"],
+): GithubHostHealth => {
+  const { sync: _sync, lastComplete: _lastComplete, ...rest } = health;
+  return { ...rest, status, ...(sync === undefined ? {} : { sync }) };
+};
+
+const isElement = (node: unknown, name: string): boolean =>
+  typeof node === "object" && node !== null && "name" in node &&
+  node.name === name;
+
+/** Whether `root` renders a `cf-badge` reading `label` in `color`. */
+const hasBadge = (root: unknown, label: string, color: string): boolean =>
+  findNode(
+    root,
+    (node) =>
+      isElement(node, "cf-badge") && hasExactText(node, label) &&
+      propValue(node, "color") === color,
+  ) !== undefined;
+
+/** The value cell of the table row under `root` headed `header`. */
+const rowValue = (root: unknown, header: string): string =>
+  textContent(
+    findElement(
+      findNode(root, (node) =>
+        isElement(node, "tr") &&
+        hasExactText(findElement(node, "th"), header)),
+      "td",
+    ),
+  ).trim();
+
+/** The number the summary card under `root` labeled `label` shows. */
+const statValue = (root: unknown, label: string): string =>
+  textContent(
+    findElement(
+      findNode(root, (node) =>
+        isElement(node, "cf-vstack") &&
+        hasExactText(findElement(node, "cf-text"), label)),
+      "cf-heading",
+    ),
+  ).trim();
+
+const emptyStateMessages = (root: unknown): string[] => {
+  const messages: string[] = [];
+  findNode(root, (node) => {
+    if (isElement(node, "cf-empty-state")) {
+      messages.push(String(propValue(node, "message")));
+    }
+    return false;
+  });
+  return messages;
+};
+
 export default pattern(() => {
   const detail = PullRequestDetailFixture();
   const pullRequestIndex = PullRequestIndexFixture({ detail });
@@ -186,6 +272,42 @@ export default pattern(() => {
   const emptySubject = GithubActivity({
     repoUrl: "https://github.com/example/widget",
     pullRequestIndex: emptyPullRequestIndex,
+  });
+  const otherStatusesSubject = GithubActivity({
+    repoUrl: "https://github.com/example/widget",
+    pullRequestIndex: OtherStatusesIndexFixture(),
+    health: hostHealth("degraded", {
+      reason: "periodic",
+      status: "failed",
+      startedAt: "2026-08-28T10:00:00.000Z",
+      completedAt: "2026-08-28T10:00:01.000Z",
+      error: "One repository was unavailable",
+    }),
+  });
+  const readySubject = GithubActivity({
+    repoUrl: "https://github.com/example/widget",
+    pullRequestIndex: emptyPullRequestIndex,
+    health: hostHealth("ready", {
+      reason: "periodic",
+      status: "complete",
+      startedAt: "2026-08-28T10:00:00.000Z",
+      completedAt: "2026-08-28T10:00:01.000Z",
+      pullRequestCount: 0,
+    }),
+  });
+  const startingSubject = GithubActivity({
+    repoUrl: "https://github.com/example/widget",
+    pullRequestIndex: emptyPullRequestIndex,
+    health: hostHealth("starting"),
+  });
+  const syncingSubject = GithubActivity({
+    repoUrl: "https://github.com/example/widget",
+    pullRequestIndex: emptyPullRequestIndex,
+    health: hostHealth("syncing", {
+      reason: "manual",
+      status: "running",
+      startedAt: "2026-08-28T10:00:00.000Z",
+    }),
   });
   const assert_keeps_every_synced_pull_request = assert(() =>
     subject.pullRequestCount === 4 && subject.pullRequests.length === 4
@@ -222,6 +344,58 @@ export default pattern(() => {
     emptySubject.repositoryCount === 0 &&
     emptySubject.pullRequests.length === 0
   );
+  const assert_names_the_viewer = assert(() =>
+    subject[NAME] === "GitHub pull requests: octocat"
+  );
+  const assert_colors_each_status = assert(() =>
+    hasBadge(subject[UI], "Ready to land", "primary") &&
+    hasBadge(subject[UI], "Tests failed", "danger") &&
+    hasBadge(subject[UI], "Draft", "neutral") &&
+    hasBadge(subject[UI], "Visibility unknown", "accent") &&
+    hasBadge(otherStatusesSubject[UI], "Tests running", "accent") &&
+    hasBadge(otherStatusesSubject[UI], "Merge conflicts", "danger") &&
+    hasBadge(otherStatusesSubject[UI], "Merge blocked", "neutral") &&
+    !hasBadge(otherStatusesSubject[UI], "Ready to land", "primary")
+  );
+  const assert_counts_other_statuses = assert(() =>
+    otherStatusesSubject.pullRequestCount === 3 &&
+    otherStatusesSubject.readyToLandCount === 0 &&
+    otherStatusesSubject.needsAttentionCount === 2 &&
+    statValue(otherStatusesSubject[UI], "Tests running") === "1"
+  );
+  const assert_colors_each_host_state = assert(() =>
+    hasBadge(readySubject[UI], "ready", "primary") &&
+    hasBadge(otherStatusesSubject[UI], "degraded", "danger") &&
+    hasBadge(startingSubject[UI], "starting", "accent") &&
+    hasBadge(syncingSubject[UI], "syncing", "accent") &&
+    hasBadge(emptySubject[UI], "index available", "primary")
+  );
+  const assert_renders_each_sync_state = assert(() =>
+    rowValue(readySubject[UI], "Last sync") === "complete" &&
+    rowValue(readySubject[UI], "Reported PR count") === "0" &&
+    rowValue(otherStatusesSubject[UI], "Last sync") === "failed" &&
+    rowValue(otherStatusesSubject[UI], "Error") ===
+      "One repository was unavailable" &&
+    rowValue(syncingSubject[UI], "Last sync") === "running" &&
+    rowValue(syncingSubject[UI], "Sync completed") === "—"
+  );
+  const assert_dashes_a_missing_sync = assert(() =>
+    [
+      "Last sync",
+      "Reason",
+      "Sync started",
+      "Sync completed",
+      "Reported PR count",
+      "Error",
+    ].every((header) => rowValue(startingSubject[UI], header) === "—")
+  );
+  const assert_renders_empty_states = assert(() => {
+    const messages = emptyStateMessages(emptySubject[UI]).join(",");
+    return messages ===
+        "No synchronized pull requests,No recent pull-request activity," +
+          "No connector health snapshot is connected" &&
+      emptyStateMessages(subject[UI]).length === 0;
+  });
   const assert_renders_public_repository_commits = assert(() => {
     const ui = renderGithubCommits(publicCommits);
     const text = textContent(ui);
@@ -246,6 +420,13 @@ export default pattern(() => {
       { assertion: assert_stopped_host_is_neutral },
       { assertion: assert_renders_sync_metadata },
       { assertion: assert_supports_empty_generations },
+      { assertion: assert_names_the_viewer },
+      { assertion: assert_colors_each_status },
+      { assertion: assert_counts_other_statuses },
+      { assertion: assert_colors_each_host_state },
+      { assertion: assert_renders_each_sync_state },
+      { assertion: assert_dashes_a_missing_sync },
+      { assertion: assert_renders_empty_states },
       { assertion: assert_renders_public_repository_commits },
       { assertion: assert_renders_empty_public_repository },
     ],

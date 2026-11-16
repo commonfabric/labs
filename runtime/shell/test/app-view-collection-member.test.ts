@@ -23,12 +23,13 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { type AppView, urlToAppView } from "@commonfabric/navigation";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 // The reader `cf cell get` takes an address through, which is what a citation
 // the view offers has to satisfy. The CLI's package exports only its command
 // tree, so the module is reached by path.
 import { normalizeLLMFriendlyRef } from "../../cli/lib/llm-friendly-ref.ts";
+
+import { templateBindings } from "./lit-template-markup.ts";
 
 function installBrowserGlobals(): () => void {
   const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -112,41 +113,6 @@ function captureErrors(): { lines: string[]; restore: () => void } {
       console.error = real;
     },
   };
-}
-
-/**
- * Every value bound to the property `name` across nested Lit template
- * results, in the order the walk reaches them.
- *
- * A template result carries its literal text in `strings` and its bound
- * values in `values`, in step, so the chunk before a value ends with that
- * binding's own `.name="`. Reading a binding by name is what keeps this off
- * counting positions, which a template gains and loses. Returning every match
- * rather than the first is what tells a binding holding `undefined` from a
- * name nothing binds: the first is `[undefined]` and the second is `[]`.
- */
-function templateBindings(value: unknown, name: string): unknown[] {
-  if (!isObjectOrArray(value)) return [];
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => templateBindings(entry, name));
-  }
-  const template = value as {
-    strings?: readonly string[];
-    values?: readonly unknown[];
-  };
-  const strings = template.strings ?? [];
-  const values = template.values ?? [];
-  const bound: unknown[] = [];
-  for (let index = 0; index < values.length; index++) {
-    if (strings[index]?.endsWith(`.${name}="`)) {
-      bound.push(values[index]);
-    } else {
-      for (const binding of templateBindings(values[index], name)) {
-        bound.push(binding);
-      }
-    }
-  }
-  return bound;
 }
 
 /** Where a resolution lands, as the runtime answers it. */
@@ -234,6 +200,30 @@ interface StubRuntime {
    * `undefined`.
    */
   nameWithSlug(slug: string | undefined): void;
+
+  /** How many times the slug's document has been asked for. */
+  slugCells: number;
+
+  /** How many subscriptions to the slug's document have been opened. */
+  subscriptions: number;
+
+  /**
+   * Refuse every request for the slug's document from here on with `error`,
+   * or none when given `undefined`.
+   */
+  failSlugCells(error: Error | undefined): void;
+
+  /** Hold every request for the slug's document from here on. */
+  holdSlugCells(): void;
+
+  /** Release the held requests, oldest first, and let what they finish settle. */
+  releaseSlugCells(): Promise<void>;
+
+  /**
+   * Report a change to the newest subscription to the slug's document, as a
+   * new value or as a refusal of its read, and let what it starts settle.
+   */
+  notify(kind: "value" | "refused"): Promise<void>;
 }
 
 function stubRuntime(
@@ -271,6 +261,31 @@ function stubRuntime(
     releaseOldest: async () => {},
     releaseNewest: async () => {},
     releaseNewestFirst: async () => {},
+    slugCells: 0,
+    subscriptions: 0,
+    failSlugCells: () => {},
+    holdSlugCells: () => {},
+    releaseSlugCells: async () => {},
+    notify: async () => {},
+  };
+  let slugCellFailure: Error | undefined;
+  stub.failSlugCells = (error) => {
+    slugCellFailure = error;
+  };
+  let heldSlugCells: Array<() => void> | undefined;
+  stub.holdSlugCells = () => {
+    heldSlugCells = [];
+  };
+  stub.releaseSlugCells = async () => {
+    const pending = heldSlugCells ?? [];
+    heldSlugCells = undefined;
+    for (const release of pending) release();
+    for (let hop = 0; hop < 8; hop++) await Promise.resolve();
+  };
+  let subscriber: { value: () => void; refused: () => void } | undefined;
+  stub.notify = async (kind) => {
+    subscriber?.[kind]();
+    for (let hop = 0; hop < 4; hop++) await Promise.resolve();
   };
   let loadFailure: Error | undefined;
   stub.failLoads = (error) => {
@@ -349,12 +364,27 @@ function stubRuntime(
       setBreakpoints: () => Promise.resolve(),
     }),
     getSlug: () => Promise.resolve(pieceSlug),
-    getSlugCell: () =>
-      Promise.resolve({
-        subscribe: () => () => {
-          stub.cancels++;
+    getSlugCell: () => {
+      stub.slugCells++;
+      const failure = slugCellFailure;
+      const opened = failure ? Promise.reject(failure) : Promise.resolve({
+        subscribe: (
+          onValue: () => void,
+          options: { onRefused: () => void },
+        ) => {
+          stub.subscriptions++;
+          subscriber = { value: onValue, refused: options.onRefused };
+          return () => {
+            stub.cancels++;
+          };
         },
-      }),
+      });
+      if (!heldSlugCells) return opened;
+      const queue = heldSlugCells;
+      return new Promise((resolve, reject) => {
+        queue.push(() => opened.then(resolve, reject));
+      });
+    },
     invalidatePattern: () => {},
   };
   // Replaced, never scheduled: the poll is the subject, and firing it by
@@ -427,7 +457,11 @@ interface AppViewLike {
   runtimeLoadErrors: readonly Reported[];
   render(): unknown;
   updated(changed: Map<string, unknown>): void;
-  _selectedPattern: { run(): void; taskComplete: Promise<unknown> };
+  _selectedPattern: {
+    run(): void;
+    abort(): void;
+    taskComplete: Promise<unknown>;
+  };
   readonly accessForTestingOnly: { readonly slugRevision: number };
 }
 
@@ -741,6 +775,38 @@ describe("AppView collection members", () => {
       // A collection's name with no member after it names no member, so
       // there is nothing for a citation to resolve to.
       expect(citedReference(view)).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it("cites nothing once the address moves off a member, before its resolution runs again", async () => {
+    // The member's resolution has answered, and then the address moves to
+    // one naming no member. A render can come before the next resolution, and
+    // what the last one answered is no citation for the address now shown.
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const cases = [
+        { moved: viewOf({}), cited: undefined },
+        { moved: viewOf({ pieceSlug: "top" }), cited: undefined },
+      ];
+      const outcomes = [];
+      for (const { moved } of cases) {
+        const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+        const view = appViewOver(
+          XAppView as never,
+          stub,
+          viewOf({ pieceSlug: "top", pieceMember: "42" }),
+        );
+        view._selectedPattern.run();
+        await view._selectedPattern.taskComplete;
+        // The control: on the address it resolved, the member is cited.
+        expect(citedReference(view)).toBe("//naming-demo/top/42");
+        view.app = { identity: {}, config: {}, view: moved };
+        outcomes.push({ moved, cited: citedReference(view) });
+      }
+      expect(outcomes).toStrictEqual(cases);
     } finally {
       restore();
     }
@@ -1788,6 +1854,428 @@ describe("AppView collection members", () => {
       // error naming it belongs to no view the reader is looking at.
       expect(templateBindings(view.render(), "runtimeError")).toEqual([
         undefined,
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("watches a slug that names no member as the slug alone", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:board", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top" }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+
+      expect(stub.resolved).toEqual([[SPACE, "top", undefined]]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the watch it has through an update that leaves the reference as it was", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view.app = {
+        identity: {},
+        config: { showSidebar: true },
+        view: viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      };
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+
+      expect({ asked: stub.slugCells, cancels: stub.cancels }).toEqual({
+        asked: 1,
+        cancels: 0,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("opens no subscription for a slug document that arrives after the address moved on", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      stub.holdSlugCells();
+      view.updated(new Map([["app", undefined]]));
+      view.app = {
+        identity: {},
+        config: {},
+        view: viewOf({ pieceSlug: "top", pieceMember: "43" }),
+      };
+      view.updated(new Map([["app", undefined]]));
+      await stub.releaseSlugCells();
+
+      // Member 42's document arrived for a watch the view had already
+      // replaced, so only member 43's opened anything.
+      expect({
+        subscriptions: stub.subscriptions,
+        resolved: stub.resolved,
+      }).toEqual({ subscriptions: 1, resolved: [[SPACE, "top", "43"]] });
+    } finally {
+      restore();
+    }
+  });
+
+  it("re-resolves on each change the slug document reports after the first", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      const opening = stub.resolved.length;
+
+      // A subscription reports the value it opened on, which the resolution
+      // that opened it has already asked about.
+      await stub.notify("value");
+      const afterFirst = stub.resolved.length;
+      await stub.notify("value");
+      const afterValue = stub.resolved.length;
+      await stub.notify("refused");
+
+      expect({
+        afterFirst: afterFirst - opening,
+        afterValue: afterValue - opening,
+        afterRefused: stub.resolved.length - opening,
+      }).toEqual({ afterFirst: 0, afterValue: 1, afterRefused: 2 });
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports a slug document it cannot open, and keeps the watch", async () => {
+    const restore = installBrowserGlobals();
+    const errors = captureErrors();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      stub.failSlugCells(new Error("the document would not open"));
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+
+      expect({ asked: stub.slugCells, errors: errors.lines }).toEqual({
+        asked: 1,
+        errors: [
+          "[AppView] Failed to watch slug cell: Error: the document would not open",
+        ],
+      });
+    } finally {
+      errors.restore();
+      restore();
+    }
+  });
+
+  it("drops a watch whose runtime was disposed before its slug document opened, so the next update asks again", async () => {
+    const restore = installBrowserGlobals();
+    const errors = captureErrors();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime(
+        { pieceId: "fid1:member-42", pathAfter: [] },
+        true,
+      );
+      stub.failSlugCells(new Error("the runtime is gone"));
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+
+      expect({ asked: stub.slugCells, errors: errors.lines }).toEqual({
+        asked: 2,
+        errors: [],
+      });
+    } finally {
+      errors.restore();
+      restore();
+    }
+  });
+
+  it("says nothing of a slug document that fails to open after the address moved on", async () => {
+    const restore = installBrowserGlobals();
+    const errors = captureErrors();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      stub.holdSlugCells();
+      stub.failSlugCells(new Error("the document would not open"));
+      view.updated(new Map([["app", undefined]]));
+      stub.failSlugCells(undefined);
+      view.app = {
+        identity: {},
+        config: {},
+        view: viewOf({ pieceSlug: "top", pieceMember: "43" }),
+      };
+      view.updated(new Map([["app", undefined]]));
+      await stub.releaseSlugCells();
+
+      expect({ subscriptions: stub.subscriptions, errors: errors.lines })
+        .toEqual({ subscriptions: 1, errors: [] });
+    } finally {
+      errors.restore();
+      restore();
+    }
+  });
+
+  it("keeps what it shows, and reports the fault, when re-resolving fails", async () => {
+    const restore = installBrowserGlobals();
+    const errors = captureErrors();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+      const before = view.accessForTestingOnly.slugRevision;
+
+      stub.answer(new Error("the transport dropped"));
+      await stub.poll();
+
+      expect({
+        revision: view.accessForTestingOnly.slugRevision,
+        errors: errors.lines,
+      }).toEqual({
+        revision: before,
+        errors: [
+          "[AppView] Failed to re-resolve a slug reference: Error: the transport dropped",
+        ],
+      });
+    } finally {
+      errors.restore();
+      restore();
+    }
+  });
+
+  it("asks for no reload from an answer reached through a runtime the view has let go of", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+      const before = view.accessForTestingOnly.slugRevision;
+
+      // The runtime is gone from the view, and the update that would stop the
+      // watch on it has not run yet when the watch's poll lands on news.
+      view.rt = undefined;
+      stub.answer({ pieceId: "fid1:member-42-replaced", pathAfter: [] });
+      await stub.poll();
+
+      expect(view.accessForTestingOnly.slugRevision).toBe(before);
+    } finally {
+      restore();
+    }
+  });
+
+  it("shows no runtime error naming a piece before any run has resolved the address", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view.runtimeLoadErrors = [{
+        space: SPACE,
+        pieceId: "of:fid1:member-42",
+        message: "the piece threw",
+      }];
+
+      // Nothing has said which piece the address reaches, so an error naming
+      // a piece names none this view is showing.
+      const before = templateBindings(view.render(), "runtimeError");
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+
+      expect({
+        before,
+        after: templateBindings(view.render(), "runtimeError"),
+      }).toEqual({
+        before: [undefined],
+        after: [{ kind: "piece", error: view.runtimeLoadErrors[0] }],
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("cites nothing while the space an address names is still resolving", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+      expect(citedReference(view)).toBe("//naming-demo/top/42");
+
+      // The address moves to member 42 of another space, whose DID is not
+      // known yet, so no run has resolved it: member 42 of the first space is
+      // no answer for it.
+      view.app = {
+        identity: {},
+        config: {},
+        view: viewOf({
+          spaceName: "other-demo",
+          pieceSlug: "top",
+          pieceMember: "42",
+        }),
+      };
+      view.space = undefined;
+
+      expect(citedReference(view)).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it("loads nothing for a resolution that lands after its run was abandoned", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+
+      stub.hold();
+      view._selectedPattern.run();
+      view._selectedPattern.abort();
+      await stub.releaseOldest();
+
+      expect({ resolved: stub.resolved.length, started: stub.started })
+        .toEqual({ resolved: 1, started: [] });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps what it shows when an abandoned run's resolution faults", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceSlug: "top", pieceMember: "42" }),
+      );
+      view.updated(new Map([["app", undefined]]));
+      await stub.settle();
+      view._selectedPattern.run();
+      await view._selectedPattern.taskComplete;
+
+      // A run the view abandoned faults. The fault reached no answer, and the
+      // run that met it is not the view's to report for, so the piece on
+      // screen stands as what the view shows.
+      stub.answer(new Error("the transport dropped"));
+      stub.hold();
+      view._selectedPattern.run();
+      view._selectedPattern.abort();
+      await stub.releaseOldest();
+      const before = view.accessForTestingOnly.slugRevision;
+
+      // A poll reaching the piece on screen is no news.
+      stub.answer({ pieceId: "fid1:member-42", pathAfter: [] });
+      await stub.poll();
+      await stub.releaseOldest();
+
+      expect(view.accessForTestingOnly.slugRevision).toBe(before);
+    } finally {
+      restore();
+    }
+  });
+
+  it("loads nothing for a piece addressed by id whose run was abandoned while it was found", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XAppView } = await import("../src/views/AppView.ts");
+      const stub = stubRuntime({ pieceId: "fid1:member-42", pathAfter: [] });
+      const view = appViewOver(
+        XAppView as never,
+        stub,
+        viewOf({ pieceId: "fid1:piece" }),
+      );
+
+      stub.holdLoads();
+      view._selectedPattern.run();
+      view._selectedPattern.abort();
+      await stub.releaseLoads();
+
+      // Only the lookup that finds the piece, never the load that starts it.
+      expect(stub.started).toEqual([
+        [SPACE, "fid1:piece", { start: false, scope: "space" }],
       ]);
     } finally {
       restore();

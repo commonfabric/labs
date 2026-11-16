@@ -1,9 +1,11 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run --allow-env
+import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { hasExecutableCode } from "./executable-source.ts";
 import { type LcovFileCoverage, parseLcovReports } from "./lcov.ts";
 import { normalizeLcovInstancePaths } from "./write-coverage-lcov.ts";
 import { PACKAGE_ROOTS, packageDirOf } from "./package-layout.ts";
+import { isIframeGuestBundle, PATTERNS_DIR } from "./pattern-files.ts";
 
 export const COVERAGE_PROFILE_ARTIFACT_PREFIX = "coverage-profile-";
 export const COVERAGE_METRIC_PREFIX = "coverage-debt:";
@@ -53,7 +55,7 @@ export interface CoverageDebtMetric {
   uncoveredLines: number;
 }
 
-interface SourceFile {
+export interface SourceFile {
   absolutePath: string;
   relativePath: string;
   metricGroup: string;
@@ -96,23 +98,28 @@ export async function collectCoverageDebtMetricsFromCoverage(options: {
   rootDir: string;
   coverage: ReadonlyMap<string, LcovFileCoverage>;
 }): Promise<CoverageDebtMetric[]> {
-  const sourceFiles = await collectSourceFiles(options.rootDir);
-  const lcovCoverage = options.coverage;
+  return coverageDebtMetrics(
+    await collectFileCoverageDebt({
+      sourceFiles: await collectSourceFiles(options.rootDir),
+      coverage: options.coverage,
+    }),
+  );
+}
 
+/**
+ * The debt metrics of a set of files: the sum of their figures for each
+ * metric group, and the sum of all of them.
+ */
+function coverageDebtMetrics(
+  files: readonly FileCoverageDebt[],
+): CoverageDebtMetric[] {
   let workspaceUncovered = 0;
   const groupUncovered = new Map<string, number>();
-  const groupNames = new Set(sourceFiles.map((source) => source.metricGroup));
-
-  for (const source of sourceFiles) {
-    const coverage = lcovCoverage.get(source.absolutePath);
-    const uncovered = coverage
-      ? countUncoveredProfileLines(coverage)
-      : await debtWithoutCoverageRecord(source);
-
-    workspaceUncovered += uncovered;
+  for (const file of files) {
+    workspaceUncovered += file.uncoveredLines;
     groupUncovered.set(
-      source.metricGroup,
-      (groupUncovered.get(source.metricGroup) ?? 0) + uncovered,
+      file.metricGroup,
+      (groupUncovered.get(file.metricGroup) ?? 0) + file.uncoveredLines,
     );
   }
 
@@ -121,14 +128,76 @@ export async function collectCoverageDebtMetricsFromCoverage(options: {
     uncoveredLines: workspaceUncovered,
   }];
 
-  for (const group of [...groupNames].sort()) {
+  const groups = [...groupUncovered].sort(([a], [b]) => a < b ? -1 : 1);
+  for (const [group, uncoveredLines] of groups) {
     metrics.push({
       name: `${COVERAGE_METRIC_PREFIX} ${group} uncovered lines`,
-      uncoveredLines: groupUncovered.get(group) ?? 0,
+      uncoveredLines,
     });
   }
 
   return metrics;
+}
+
+/** One tracked source file's share of the debt metrics. */
+export interface FileCoverageDebt {
+  relativePath: string;
+  metricGroup: string;
+  uncoveredLines: number;
+
+  /**
+   * Whether the report has a record naming at least one line of the
+   * file. A file without one was charged by `debtWithoutCoverageRecord()`.
+   */
+  hasRecord: boolean;
+}
+
+/**
+ * The uncovered line count of each of `sourceFiles`, in the order given,
+ * by the rules the debt metrics use, which are sums of these counts.
+ */
+export async function collectFileCoverageDebt(options: {
+  sourceFiles: readonly SourceFile[];
+  coverage: ReadonlyMap<string, LcovFileCoverage>;
+}): Promise<FileCoverageDebt[]> {
+  const files: FileCoverageDebt[] = [];
+  for (const source of options.sourceFiles) {
+    const coverage = lineRecord(options.coverage, source.absolutePath);
+    files.push({
+      relativePath: source.relativePath,
+      metricGroup: source.metricGroup,
+      uncoveredLines: coverage
+        ? countUncoveredProfileLines(coverage)
+        : await debtWithoutCoverageRecord(source),
+      hasRecord: coverage !== undefined,
+    });
+  }
+  return files;
+}
+
+/**
+ * The files of `sourceFiles`, which `collectSourceFiles(rootDir)` returned,
+ * at or below `under`, a path taken relative to `rootDir`. A path that
+ * holds none of them is an error, so that a misspelled one is not read as
+ * one that owes nothing.
+ */
+export function sourceFilesUnder(
+  rootDir: string,
+  sourceFiles: readonly SourceFile[],
+  under: string,
+): SourceFile[] {
+  const prefix = toPosix(path.relative(
+    path.resolve(rootDir),
+    path.resolve(rootDir, under),
+  ));
+  const files = sourceFiles.filter((source) =>
+    prefix === "" || source.relativePath === prefix ||
+    source.relativePath.startsWith(`${prefix}/`)
+  );
+  if (files.length === 0) {
+    throw new Error(`no tracked source file under ${under}`);
+  }
+  return files;
 }
 
 export interface MeasuredSetDebtOptions {
@@ -181,21 +250,14 @@ export async function collectMeasuredSetDebt(
     options.member,
     options.members,
   );
-  const lcovCoverage = parseLcov(options.lcov, options.rootDir);
-  let uncoveredLines = 0;
-  let files = 0;
-  for (const source of sourceFiles) {
-    const record = lcovCoverage.get(source.absolutePath);
-    // A record naming a file and carrying no line says nothing about it,
-    // so it is read as the absence of a record rather than as a file
-    // every line of which ran.
-    const coverage = record?.lineHits.size ? record : undefined;
-    if (coverage) files += 1;
-    uncoveredLines += coverage
-      ? countUncoveredProfileLines(coverage)
-      : await debtWithoutCoverageRecord(source);
-  }
-  return { uncoveredLines, files };
+  const scored = await collectFileCoverageDebt({
+    sourceFiles,
+    coverage: parseLcov(options.lcov, options.rootDir),
+  });
+  return {
+    uncoveredLines: scored.reduce((sum, file) => sum + file.uncoveredLines, 0),
+    files: scored.filter((file) => file.hasRecord).length,
+  };
 }
 
 /** The tracked source files one workspace member owns. */
@@ -295,7 +357,7 @@ export async function collectUncoveredLinesForFiles(
     const absolutePath = path.normalize(
       path.join(options.rootDir, relativePath),
     );
-    const coverage = lcovCoverage.get(absolutePath);
+    const coverage = lineRecord(lcovCoverage, absolutePath);
 
     let uncoveredLines: number[];
     if (coverage) {
@@ -463,6 +525,15 @@ export function shouldTrackSourceFile(relativePath: string): boolean {
     return false;
   }
 
+  // An iframe pattern's guest bundle is generated from the guest's source,
+  // which is what the metric counts.
+  if (
+    normalized.startsWith(`${PATTERNS_DIR}/`) &&
+    isIframeGuestBundle(normalized, PATTERNS_DIR)
+  ) {
+    return false;
+  }
+
   const parts = normalized.split("/");
   return !parts.some((part) => EXCLUDED_PATH_PARTS.has(part));
 }
@@ -551,6 +622,20 @@ export function parseLcov(
   });
 }
 
+/**
+ * The record `coverage` holds for `absolutePath`, when it names at least
+ * one line. A record naming a file and carrying no line says nothing
+ * about it, so it is read as the absence of a record rather than as a
+ * file every line of which ran.
+ */
+function lineRecord(
+  coverage: ReadonlyMap<string, LcovFileCoverage>,
+  absolutePath: string,
+): LcovFileCoverage | undefined {
+  const record = coverage.get(absolutePath);
+  return record?.lineHits.size ? record : undefined;
+}
+
 export function countUncoveredProfileLines(coverage: LcovFileCoverage): number {
   return uncoveredProfileLineNumbers(coverage).length;
 }
@@ -622,23 +707,80 @@ async function* walkFiles(dir: string): AsyncGenerator<string> {
   }
 }
 
-if (import.meta.main) {
-  const args = new Map<string, string>();
-  for (const arg of Deno.args) {
-    const match = /^--([^=]+)=(.*)$/.exec(arg);
-    if (match) args.set(match[1], match[2]);
-  }
+const USAGE = `Usage: deno run --allow-read --allow-write --allow-run \\
+  --allow-env tasks/coverage-metrics.ts [--root=<dir>] \\
+  (--profile-dir=<dir> | --lcov=<file>) [--by-file [--under=<path>]]`;
 
-  const rootDir = args.get("root") ?? Deno.cwd();
-  const coverageProfileDir = args.get("profile-dir");
-  if (!coverageProfileDir) {
-    console.error("--profile-dir is required.");
-    Deno.exit(1);
-  }
-
-  const metrics = await collectCoverageDebtMetrics({
-    rootDir,
-    coverageProfileDir,
+/**
+ * Run the command-line interface, and return what it prints: the debt
+ * metrics as JSON, or with `--by-file` one line per file that owes
+ * anything, giving its uncovered line count, whether the report has a
+ * record for it, and its path, largest count first and then in UTF-16
+ * code unit order of path. A usage error throws, as does a report that has
+ * no line of any tracked source file the root holds, which is what a
+ * report of nothing, or one read against the wrong root, looks like.
+ */
+export async function main(args: string[]): Promise<string> {
+  const parsed = parseArgs(args, {
+    string: ["root", "profile-dir", "lcov", "under"],
+    boolean: ["by-file"],
+    unknown: (arg) => {
+      throw new Error(`unknown argument ${arg}\n${USAGE}`);
+    },
   });
-  console.log(JSON.stringify({ metrics }, null, 2));
+  if (parsed.under !== undefined && !parsed["by-file"]) {
+    throw new Error(`--under needs --by-file\n${USAGE}`);
+  }
+  for (const name of ["root", "profile-dir", "lcov", "under"] as const) {
+    if (parsed[name] === "") {
+      throw new Error(`--${name} needs a value\n${USAGE}`);
+    }
+  }
+  const { "profile-dir": profileDir, lcov: lcovPath } = parsed;
+  let lcov: string;
+  if (profileDir !== undefined && lcovPath === undefined) {
+    lcov = await lcovFromCoverageProfile(profileDir);
+  } else if (lcovPath !== undefined && profileDir === undefined) {
+    lcov = await Deno.readTextFile(lcovPath);
+  } else {
+    throw new Error(`give one of --profile-dir and --lcov\n${USAGE}`);
+  }
+
+  const rootDir = path.resolve(parsed.root ?? Deno.cwd());
+  const coverage = parseLcov(lcov, rootDir);
+  const sourceFiles = await collectSourceFiles(rootDir);
+  if (
+    !sourceFiles.some((source) => lineRecord(coverage, source.absolutePath))
+  ) {
+    throw new Error(
+      `the report has no line of a tracked source file under ${rootDir}`,
+    );
+  }
+  if (!parsed["by-file"]) {
+    const metrics = coverageDebtMetrics(
+      await collectFileCoverageDebt({ sourceFiles, coverage }),
+    );
+    return JSON.stringify({ metrics }, null, 2);
+  }
+
+  const files = await collectFileCoverageDebt({
+    sourceFiles: parsed.under === undefined
+      ? sourceFiles
+      : sourceFilesUnder(rootDir, sourceFiles, parsed.under),
+    coverage,
+  });
+  return files
+    .filter((file) => file.uncoveredLines > 0)
+    .sort((a, b) =>
+      b.uncoveredLines - a.uncoveredLines ||
+      (a.relativePath < b.relativePath ? -1 : 1)
+    )
+    .map((file) =>
+      `${file.uncoveredLines}\t${
+        file.hasRecord ? "record" : "no-record"
+      }\t${file.relativePath}`
+    )
+    .join("\n");
 }
+
+if (import.meta.main) console.log(await main(Deno.args));

@@ -213,6 +213,8 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
     const messagesInSelectedRoom = selectedRoomValue.messages;
     const messageCount = messagesInSelectedRoom.length;
     const displayedRoomLabel = selectedRoomValue.name || "No room";
+    // The per-user name resolves here, outside the `.map()` below.
+    const myName = senderName(name);
     const send = sendMessage({
       name,
       selectedRoom,
@@ -292,7 +294,7 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                         <cf-vstack gap="2">
                           {messagesInSelectedRoom.map((message) => {
                             const author = message.author;
-                            const isMine = author === senderName(name);
+                            const isMine = author === myName;
                             return (
                               <div
                                 style={{

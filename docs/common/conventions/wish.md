@@ -26,6 +26,7 @@ const wishResult = wish<{ content: string }>({ query: "#note" });
 | `candidates` | `T[]`   | All matching pieces                                                                                                                                     |
 | `[UI]?`      | `VNode` | Built-in UI: the picker when several match; else a link to the found piece's `[UI]`, a view or a sub-pattern's result, or a `cf-cell-link` to the piece |
 | `error`      | `any`   | Error message if resolution failed                                                                                                                      |
+| `errorCode`  | `"no-match" \| "failed"` | Set with `error`: `"no-match"` when the wish confirmed nothing matches (a reader may offer to make one), `"failed"` when it could not look or read what it found. Treat an unknown code as `"failed"` |
 
 Access the resolved piece via `wishResult.result`:
 
@@ -56,8 +57,14 @@ profile rules below). If no readable match remains and a candidate load failed,
 Wish reports the load error. The legacy
 `#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
-collection produces a no-match error. A failed discovery-collection load, or a
-candidate load failure with no readable match, produces a load error.
+collection produces a no-match error (`errorCode: "no-match"`). A failed
+discovery-collection load, or a candidate load failure with no readable match,
+produces a load error (`errorCode: "failed"`). So does a search that could not
+look: favorites, which live in the home space, cannot be searched without the
+requesting user's identity (a serving runtime whose run names none), and a
+search that finds nothing elsewhere then reports `"failed"`. A reader that acts
+on "nothing there", such as offering to create the missing thing, checks
+`errorCode`, not the message.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
@@ -233,7 +240,20 @@ for `wish({ query: "#profile" })`:
 - **0 profiles:** the trusted profile-create surface (same input as the home
   Profile tab). Submitting a name creates the viewer's first profile and leaves
   the current view in place; the wish reacts once the link exists. `.result` is
-  `undefined` and `error` is set until the first profile exists.
+  `undefined` and `error` is set, with `errorCode: "no-match"`, until the first
+  profile exists. The roster counts as empty when the home lists none of the
+  user's own profiles, or only retired ones (a retired entry whose document is
+  absent included).
+  Otherwise it reports `errorCode: "failed"` and offers no creation: when the
+  selected profile fails to load, and when every profile the home lists and has
+  not retired is confirmed absent ("Profile data is unavailable"). The home
+  says such a profile exists, so its absence is missing data, not "no profile
+  yet", and creating one would add a second profile beside it. When the
+  viewer's host has suggested a profile, the surface starts its name field
+  with the suggested name and shows the suggested picture with a control that
+  removes it (see "A host's profile suggestion" below). The viewer may also
+  choose a picture of their own ("Choose image"), suggested or not, and the
+  profile they create starts with it.
 - **1 profile:** a link to that profile.
 - **2+ profiles, a valid default set:** a link to the default profile.
 - **2+ profiles, no valid default:** the **profile picker**
@@ -263,6 +283,32 @@ surface per process, not on every re-run of the wish behind it.
 
 When rendering profile data from a shared piece, use a user-scoped result schema
 for the rendered output so each viewer sees their own home profile projection.
+
+### A host's profile suggestion
+
+A host that knows who its user is before they have a profile, as Web Weaver
+does from an invitation made for one person, suggests a name and a picture with
+`RuntimeClient.offerProfileSuggestion()`. The runtime stores the suggestion in
+the user's home space, in a document no pattern can address
+(`offerProfileSuggestion()` in `runtime/runner/src/profile-suggestion.ts`), and
+the wish hands the create surface a link to it as `profileSuggestion`. The
+runtime that builds the surface derives that link from the home space of the
+user the surface is for, so a space server building it on a user's behalf
+hands it that user's suggestion. No pattern supplies one.
+
+The surface offers it and applies nothing on its own: the user edits the name,
+keeps, removes, or replaces the picture, and creates the profile with the same
+trusted click as ever. Removing or choosing a picture is recorded on the
+surface itself; the host's suggestion is left as the host stored it. Unlike the
+create, these two choices are not yet gated to a gesture on the surface (see
+the "CFC debt" section of `patterns/system/profile-create/README.md`). A
+picture the user chose becomes the profile's picture, and once they remove the
+picture the profile starts with none. Only when the user made no picture choice
+does the profile take the picture the suggestion holds. Either picture is set
+through the profile's `setPicture` by the runtime that creates it, so its label
+names the profile's owner, as a reader of a face requires. The suggestion
+stays stored for the host to replace; the surface is shown only while the user
+has no profile.
 
 ### Favorites vs Mentionables vs Profile
 

@@ -62,7 +62,7 @@ const createEngine = async (): Promise<{ engine: Engine; path: string }> => {
 };
 
 const headSeqOf = (engine: Engine): number =>
-  (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+  (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 
 const withLiveLease = (engine: Engine): string => {
   const holder = executionLeaseHolder(SERVICE);

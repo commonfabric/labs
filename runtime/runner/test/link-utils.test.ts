@@ -8,21 +8,26 @@ import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import type { JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema, MutableJSONSchemaObj } from "../src/builder/types.ts";
+import type { Cell } from "../src/cell.ts";
 import {
   areNormalizedLinksSame,
   areNormalizedLinksSameIgnoringScope,
   createLLMFriendlyLink,
   createSigilLinkFromParsedLink,
+  declareStreamSchema,
   decodeJsonPointer,
   encodeJsonPointer,
   externalizeLinkSchemasInValue,
+  externalizeSchema,
+  getStableInternalPathSegment,
   inlineExternalSchemaRefsInValue,
   isCellLink,
   isSigilLink,
   isWriteRedirectLink,
   KeepAsCell,
   type NormalizedLink,
+  ownerStreamSchema,
   parseLink,
   parseLinkOrThrow,
   parseLLMFriendlyLink,
@@ -37,6 +42,8 @@ import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Runtime } from "../src/runtime.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import {
   resetContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
@@ -439,6 +446,123 @@ describe("link-utils", () => {
     });
   });
 
+  describe("parseLink() base", () => {
+    it("throws given a base that is neither a cell nor a link", () => {
+      const link = createSigilLinkFromParsedLink({ path: ["a"] });
+
+      expect(parseLink(link, { id: "of:base", space, path: [] })?.id).toBe(
+        "of:base",
+      );
+      expect(() =>
+        parseLink(link, { id: "of:base", space, path: "a" } as never)
+      ).toThrow("Unexpected link base");
+    });
+  });
+
+  describe("declareStreamSchema()", () => {
+    it("returns a stream declaration accepting no event for a `false` schema", () => {
+      expect(declareStreamSchema(false)).toEqual({
+        not: true,
+        asCell: ["stream"],
+      });
+      expect(declareStreamSchema(true)).toEqual({ asCell: ["stream"] });
+      expect(ContextualFlowControl.declaresStream(declareStreamSchema(false)))
+        .toBe(true);
+    });
+  });
+
+  describe("getStableInternalPathSegment()", () => {
+    it("returns a string, number, or symbol cause as it is", () => {
+      const symbol = Symbol("cause");
+      expect(getStableInternalPathSegment("cause")).toBe("cause");
+      expect(getStableInternalPathSegment(3)).toBe(3);
+      expect(getStableInternalPathSegment(symbol)).toBe(symbol);
+      expect(getStableInternalPathSegment(undefined)).toBeUndefined();
+    });
+
+    it("returns a boolean or `null` cause, and an object cause, as their JSON text", () => {
+      expect(getStableInternalPathSegment(true)).toBe("true");
+      expect(getStableInternalPathSegment(null)).toBe("null");
+      expect(getStableInternalPathSegment({ b: 1 })).toBe('{"b":1}');
+    });
+
+    it("keeps a non-finite stream cause apart from a `null` one", () => {
+      expect(getStableInternalPathSegment({ stream: null })).toBe(
+        "stream:null",
+      );
+      expect(getStableInternalPathSegment({ stream: NaN })).toBe("stream:NaN");
+      expect(getStableInternalPathSegment({ stream: Infinity })).toBe(
+        "stream:Infinity",
+      );
+      expect(getStableInternalPathSegment({ stream: "s" })).toBe("stream:s");
+    });
+
+    it("returns the text of a cause JSON cannot encode", () => {
+      expect(getStableInternalPathSegment(10n)).toBe("10");
+    });
+  });
+
+  describe("externalizeSchema()", () => {
+    it("returns a schema the decomposer refuses as it is", () => {
+      const schema: MutableJSONSchemaObj = {
+        definitions: { A: { type: "string" } },
+      };
+
+      expect(externalizeSchema(schema)).toBe(schema);
+    });
+
+    it("throws an error other than a refusal", () => {
+      const schema = { default: new Map() } as unknown as MutableJSONSchemaObj;
+
+      expect(() => externalizeSchema(schema)).toThrow("Cannot hash value");
+    });
+  });
+
+  describe("ownerStreamSchema()", () => {
+    const manifestEntryFor = (target: Cell<unknown>) => ({
+      link: createSigilLinkFromParsedLink({
+        ...target.getAsNormalizedFullLink(),
+        schema: declareStreamSchema(undefined),
+      }, { includeSchema: true }),
+    });
+
+    it("returns the schema of the owner's manifest entry for the document, past entries that are not records", () => {
+      const doc = runtime.getCell(space, "owned stream", undefined, tx);
+      const owner = runtime.getCell(space, "stream owner", undefined, tx);
+      doc.setMetaRaw("result", owner.getAsLink(), rawMetaWriteAuthorization);
+      owner.setMetaRaw(
+        "internal",
+        ["not a record", manifestEntryFor(doc)],
+        rawMetaWriteAuthorization,
+      );
+
+      expect(ContextualFlowControl.declaresStream(ownerStreamSchema(doc)))
+        .toBe(true);
+    });
+
+    it("returns `undefined` when the owner's manifest names other documents only", () => {
+      const doc = runtime.getCell(space, "unowned stream", undefined, tx);
+      const other = runtime.getCell(space, "other stream", undefined, tx);
+      const owner = runtime.getCell(space, "other owner", undefined, tx);
+      doc.setMetaRaw("result", owner.getAsLink(), rawMetaWriteAuthorization);
+      owner.setMetaRaw(
+        "internal",
+        [manifestEntryFor(other)],
+        rawMetaWriteAuthorization,
+      );
+
+      expect(ownerStreamSchema(doc)).toBeUndefined();
+    });
+
+    it("returns `undefined` when the owner keeps no manifest", () => {
+      const doc = runtime.getCell(space, "orphan stream", undefined, tx);
+      const owner = runtime.getCell(space, "bare owner", undefined, tx);
+      doc.setMetaRaw("result", owner.getAsLink(), rawMetaWriteAuthorization);
+
+      expect(ownerStreamSchema(doc)).toBeUndefined();
+    });
+  });
+
   describe("parseLinkOrThrow", () => {
     it("should return parsed link for valid links", () => {
       const cell = runtime.getCell(space, "test");
@@ -503,6 +627,31 @@ describe("link-utils", () => {
       const cell = runtime.getCell(space, "test");
       expect(areLinksSame(cell, null)).toBe(false);
       expect(areLinksSame(null, cell)).toBe(false);
+    });
+
+    it("returns whether two links resolve to the same place when asked to resolve first", () => {
+      const target = runtime.getCell(space, "resolved target", undefined, tx);
+      const alias = runtime.getCell(space, "resolved alias", undefined, tx);
+      alias.setRaw(target.getAsLink());
+      const other = runtime.getCell(space, "resolved other", undefined, tx);
+
+      expect(areLinksSame(alias, target)).toBe(false);
+      expect(areLinksSame(alias, target, undefined, true, tx, runtime))
+        .toBe(true);
+      expect(areLinksSame(alias, other, undefined, true, tx, runtime))
+        .toBe(false);
+    });
+
+    it("throws when asked to resolve first without a transaction or a runtime", () => {
+      const first = runtime.getCell(space, "first");
+      const second = runtime.getCell(space, "second");
+
+      expect(() => areLinksSame(first, second, undefined, true)).toThrow(
+        "Provide tx to resolve before comparing",
+      );
+      expect(() => areLinksSame(first, second, undefined, true, tx)).toThrow(
+        "Provide runtime to resolve before comparing",
+      );
     });
   });
 
@@ -1056,6 +1205,19 @@ describe("link-utils", () => {
         expect(mutable).not.toBe(first);
         expect(Object.isFrozen(mutable)).toBe(false);
       }
+    });
+
+    it("keeps a boolean definition in `$defs` as it is while stripping a schema definition", () => {
+      const result = sanitizeSchemaForLinks({
+        $defs: {
+          Anything: true,
+          Handle: { type: "string", asCell: ["cell"] },
+        },
+        $ref: "#/$defs/Handle",
+      }) as { $defs: Record<string, JSONSchema> };
+
+      expect(result.$defs.Anything).toBe(true);
+      expect(result.$defs.Handle).toEqual({ type: "string" });
     });
 
     it("interns a mutable input without freezing it or caching later edits", () => {

@@ -52,6 +52,48 @@ describe("isCodecTypeTag", () => {
     expect(isCodecTypeTag("quote@1")).toBe(true);
   });
 
+  describe("limits", () => {
+    // Each component, prefix or name, is at most 100 characters; a tag has at
+    // most ten components; and a version is at most ten digits.
+
+    const longest = "N".repeat(100);
+    const tooLong = "N".repeat(101);
+
+    it("returns `true` for a tag at each limit", () => {
+      expect(isCodecTypeTag("a.b.c.d.e.f.g.h.i.j@1")).toBe(true);
+      expect(isCodecTypeTag(`${longest}.Boop@1`)).toBe(true);
+      expect(isCodecTypeTag(`${longest}@1`)).toBe(true);
+      expect(isCodecTypeTag(`sys.${longest}@1`)).toBe(true);
+      expect(isCodecTypeTag("Abc@1234567890")).toBe(true);
+      expect(isCodecTypeTag("sys.Abc@9999999999")).toBe(true);
+    });
+
+    it("returns `true` for a tag at every limit at once", () => {
+      const components = Array.from({ length: 10 }, () => longest);
+
+      expect(isCodecTypeTag(`${components.join(".")}@9999999999`)).toBe(true);
+    });
+
+    it("returns `false` for a tag with eleven components", () => {
+      expect(isCodecTypeTag("a.b.c.d.e.f.g.h.i.j.k@1")).toBe(false);
+    });
+
+    it("returns `false` for a tag with a prefix of 101 characters", () => {
+      expect(isCodecTypeTag(`${tooLong}.Boop@1`)).toBe(false);
+      expect(isCodecTypeTag(`sys.${tooLong}.Boop@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a name of 101 characters", () => {
+      expect(isCodecTypeTag(`${tooLong}@1`)).toBe(false);
+      expect(isCodecTypeTag(`sys.${tooLong}@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a version of eleven digits", () => {
+      expect(isCodecTypeTag("Abc@12345678901")).toBe(false);
+      expect(isCodecTypeTag("sys.Abc@10000000000")).toBe(false);
+    });
+  });
+
   it("returns `false` for a malformed namespace prefix", () => {
     expect(isCodecTypeTag("sys..Boop@1")).toBe(false);
     expect(isCodecTypeTag(".Boop@1")).toBe(false);

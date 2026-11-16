@@ -955,4 +955,102 @@ describe("fetch-program-served-lifecycle", () => {
       }
     });
   }
+
+  it("stages nothing for a run after graph teardown", async () => {
+    const f = fixture();
+    await f.seed(aliceOne, "user");
+    f.cancels[0]();
+    const announcements = f.publications.length;
+    const tx = f.stage(aliceOne);
+    expect(tx.getCfcState().outbox).toHaveLength(0);
+    expect(f.publications).toHaveLength(announcements);
+    await commit(tx);
+    expect(f.cacheState(aliceOne, "user")).toBeUndefined();
+  });
+
+  it("starts one resolution when two accepted attachments both dispatch", async () => {
+    const f = fixture();
+    await acceptedAttachments(f);
+    const response = Promise.withResolvers<Response>();
+    using network = stub(globalThis, "fetch", () => response.promise);
+    try {
+      await f.dispatches[0]();
+      await f.dispatches[1]();
+      response.resolve(
+        new Response('export default { result: "done" };', {
+          headers: { "content-type": "application/javascript" },
+        }),
+      );
+      await runtime.settled();
+      expect(network.calls).toHaveLength(1);
+      expect(f.cacheState(aliceOne, "user")).toBe("success");
+    } finally {
+      response.resolve(new Response("cleanup"));
+      f.cancels[0]();
+      await runtime.settled();
+    }
+  });
+
+  it("releases the claim when an attachment accepted only after its release failed leaves the other to fail", async () => {
+    // The first attachment's release fails while the second owns the claim,
+    // and its acceptance arrives afterward. It must not rejoin the owner's
+    // attachments, or the second's failure would leave the claim held for an
+    // attachment that will never dispatch.
+
+    const f = fixture();
+    await f.seed(aliceOne, "user");
+    const first = f.stage(aliceOne, true, true);
+    await commit(first);
+    const later = Date.now() + 10_001;
+    const second = (() => {
+      using _clock = stub(Date, "now", () => later);
+      return f.stage(aliceOne, true, true);
+    })();
+    await commit(second);
+    expect(f.dispatches).toHaveLength(2);
+    expect(f.accepted).toHaveLength(2);
+    using network = stub(
+      globalThis,
+      "fetch",
+      () => Promise.reject(new Error("Unexpected HTTP dispatch")),
+    );
+    using _first = rejectRelease(first);
+    using _second = rejectRelease(second);
+
+    f.accepted[1]();
+    await runtime.settled();
+    await f.dispatches[0]();
+    await runtime.settled();
+    f.accepted[0]();
+    await runtime.settled();
+    expect(f.cacheState(aliceOne, "user")).toBe("fetching");
+
+    await f.dispatches[1]();
+    await runtime.settled();
+    expect(network.calls).toHaveLength(0);
+    expect(f.cacheState(aliceOne, "user")).toBe("idle");
+  });
+
+  it("opens no transaction for a resolution that fails after stop", async () => {
+    const f = fixture();
+    await f.seed(aliceOne, "user");
+    await commit(f.stage(aliceOne));
+    const issued = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    using _network = stub(globalThis, "fetch", () => {
+      issued.resolve();
+      return response.promise;
+    });
+    const dispatched = f.dispatches[0]();
+    await issued.promise;
+    // Stopping releases the claim in a transaction of its own; the spy
+    // counts only what the failed resolution opens after it.
+    f.cancels[0]();
+    using edits = spy(runtime, "edit");
+    response.reject(new Error("program network failure"));
+    await dispatched;
+    await runtime.settled();
+    expect(edits.calls).toHaveLength(0);
+    expect(f.cacheState(aliceOne, "user")).toBe("idle");
+  });
 });

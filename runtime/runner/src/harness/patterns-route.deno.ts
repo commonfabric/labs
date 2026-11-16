@@ -435,9 +435,8 @@ function validSourceRoot(name: string): boolean {
   let decoded: string;
   try {
     decoded = decodeURIComponent(path);
-  } catch (error) {
-    if (error instanceof URIError) return false;
-    throw error;
+  } catch {
+    return false;
   }
   // Check traversal after decoding, but retain the encoded name in the
   // program: the HTTP compiler hashes URL pathnames. A second escape layer

@@ -20,8 +20,15 @@ import { deliverOpenPath } from "../src/lib/open-path.ts";
 
 const SPACE = "did:key:z6Mk-open-path" as CellRef["space"];
 
-/** A piece whose result holds `stored`, and the requests made of it. */
-function piece(stored: Record<string, unknown>) {
+/**
+ * A piece whose result holds `stored`, and the requests made of it. A read of
+ * what is stored is refused, or fails with `failure`, when the piece is
+ * `unreadable`.
+ */
+function piece(
+  stored: Record<string, unknown>,
+  unreadable?: { refused: true } | { failure: Error },
+) {
   const ref: CellRef = {
     id: "of:fid1:open-path-piece" as CellRef["id"],
     space: SPACE,
@@ -57,6 +64,12 @@ function piece(stored: Record<string, unknown>) {
               },
             },
           });
+        }
+        if (unreadable && "failure" in unreadable) {
+          return Promise.reject(unreadable.failure);
+        }
+        if (unreadable) {
+          return Promise.resolve({ refused: { refusedBy: "display-ceiling" } });
         }
         return Promise.resolve({
           value: "openPath" in stored ? { openPath: stored.openPath } : {},
@@ -98,6 +111,28 @@ describe("deliverOpenPath()", () => {
       expect(sends).toEqual([]);
     });
   }
+
+  it("returns `false`, sending nothing, when the worker refuses the read", async () => {
+    const { cell, sends } = piece({ openPath: { $stream: true } }, {
+      refused: true,
+    });
+
+    expect(await deliverOpenPath(cell, "Notes/today.md", () => true)).toBe(
+      false,
+    );
+    expect(sends).toEqual([]);
+  });
+
+  it("rejects, sending nothing, when the read fails for another reason", async () => {
+    const failure = new Error("connection lost");
+    const { cell, sends } = piece({ openPath: { $stream: true } }, {
+      failure,
+    });
+
+    await expect(deliverOpenPath(cell, "Notes/today.md", () => true)).rejects
+      .toBe(failure);
+    expect(sends).toEqual([]);
+  });
 
   it("sends nothing when the claim is withdrawn", async () => {
     const { cell, sends } = piece({ openPath: { $stream: true } });

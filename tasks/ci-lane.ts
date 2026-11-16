@@ -139,7 +139,7 @@ import {
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
-import { appendSummary, say } from "./step-summary.ts";
+import { appendSummary, say, setStepOutput } from "./step-summary.ts";
 import {
   errorExcerpt,
   type FailedCommand,
@@ -802,14 +802,8 @@ export function batchesOf(
     // A `describe` that fails as a whole is recorded under its own title,
     // and the outermost `describe` registers one test under its title, so
     // skipping that title skips every leaf inside it. A title enclosing a
-    // chosen name therefore stays off the list, and its hooks run, so its
-    // own cost is part of what the unit takes.
+    // chosen name therefore stays off the list, and its hooks run.
     const around = new Set([...names].flatMap(enclosingNames));
-    const runs = whole
-      ? all
-      : all.filter((entry) =>
-        names.has(entry.test.n) || around.has(entry.test.n)
-      );
     const request: UnitRequest = {
       unit,
       skip: whole ? [] : all
@@ -817,7 +811,6 @@ export function batchesOf(
           !names.has(entry.test.n) && !around.has(entry.test.n)
         )
         .map((entry) => entry.test.n),
-      cost: runs.reduce((total, entry) => total + entry.cost, 0),
     };
     const suiteKnows = known.get(suiteId) ?? new Set();
     known.set(suiteId, suiteKnows);
@@ -1701,14 +1694,15 @@ export interface Missed {
  * An identity that went unaccounted for while its unit recorded costs an
  * excusal rather than the run, unless what the pass registered shows the
  * tree holds no such test. A manifest is hours old by construction, and it
- * holds every identity the default branch recorded in a file the tree
- * still holds, so it names tests renamed since. No run of this tree can
- * record one of those, and its missing record says
- * nothing about whether an invocation stopped, so it is set apart as
- * absent and an excusal stands beside it. Where the pass's registrations
- * say nothing about a unit, as for a suite whose processes leave no name
- * map or a process that stopped before leaving one, the identity stays
- * unaccounted for.
+ * holds every identity the default branch was still recording in a file the
+ * tree held then, so it can name tests the tree under test does not hold,
+ * such as one renamed since. Only that tree's registrations show which those
+ * are. No run of the tree can record an identity they show absent, and its
+ * missing record says nothing about whether an invocation stopped, so it is
+ * set apart as absent and an excusal stands beside it. Where the pass's
+ * registrations say nothing about a unit, as for a suite whose processes
+ * leave no name map or a process that stopped before leaving one, the
+ * identity stays unaccounted for.
  */
 export function accountFor(
   batch: Batch,
@@ -2999,20 +2993,20 @@ export async function runLane(
   const workDir = await Deno.makeTempDir({
     prefix: "ci-lane-",
     // Under the job's own temporary directory where there is one, which
-    // is where a workflow step can upload what a failing lane left
-    // behind.
+    // is where a workflow step can upload what a lane kept.
     ...(temp === undefined ? {} : { dir: temp }),
   });
-  // A lane that passed leaves nothing behind. A lane that failed in a job
-  // keeps what its capabilities wrote, because a server's log is what
-  // says why a suite could not reach it, and a workflow step can upload
+  // A lane that passed with no failure excused leaves nothing behind. A
+  // lane in a job that failed, or that excused a failure, keeps what its
+  // capabilities wrote, because a server's log is what says why a suite
+  // could not reach it or why a test failed, and a workflow step uploads
   // the directory from the job's temporary directory. Anywhere else
   // nothing would collect it, and one directory would accumulate per
   // failed run.
   // A removal that fails is reported rather than thrown, so that it never
   // replaces the error a failing lane is ending with.
-  const leaveWorkDir = async (passed: boolean) => {
-    if (passed || temp === undefined) {
+  const leaveWorkDir = async (keep: boolean) => {
+    if (!keep || temp === undefined) {
       await Deno.remove(workDir, { recursive: true }).catch((error) =>
         console.log(
           `ci-lane: could not remove ${workDir}: ${describeFailure(error)}`,
@@ -3042,7 +3036,7 @@ export async function runLane(
       { partial: true },
     );
   } catch (error) {
-    await leaveWorkDir(false);
+    await leaveWorkDir(true);
     throw error;
   }
   if (spool !== undefined) {
@@ -3088,6 +3082,9 @@ export async function runLane(
   const notes: string[] = [];
   // Repeats a unit did not need, which the lane names without failing for.
   const omitted: string[] = [];
+  // The identities that failed and did not fail the run, once every batch
+  // has run.
+  let excusedFailures: string[] = [];
   // The batches the lane has not begun, and where it heard it was to stop.
   let notStarted = [...batches];
   let stoppedIn: string | undefined;
@@ -3211,10 +3208,12 @@ export async function runLane(
     // excusal is heard before any is recorded, and a report of this run
     // says what it did not fail for from what it did rather than from
     // what the manifest would have it do.
+    excusedFailures = [...excused].filter((key) => !unexcused.has(key))
+      .sort();
     if (spool !== undefined) {
       spoolRecords(
         spool,
-        [...excused].filter((key) => !unexcused.has(key)).sort().map((key) =>
+        excusedFailures.map((key) =>
           measurementRecord(excusedMeasurementName(key), 0, true)
         ),
       );
@@ -3274,7 +3273,7 @@ export async function runLane(
     // and the logs are large.
     if (!ok) {
       await describeCapabilityLogs(opened.logs);
-      await leaveWorkDir(false);
+      await leaveWorkDir(true);
     }
   }
   // A lane that has passed so far keeps its directory until its coverage
@@ -3299,7 +3298,13 @@ export async function runLane(
   // A signal can arrive while the conversion runs, and a lane told to stop
   // has failed whenever it was told.
   if (stop.signal !== undefined) ok = false;
-  if (undecided) await leaveWorkDir(ok);
+  // A failure that did not fail the run is one a later run can only
+  // explain from what the servers wrote, so its directory is kept too.
+  const kept = !ok || excusedFailures.length > 0;
+  if (undecided) await leaveWorkDir(kept);
+  // What the job's upload step reads, which a lane that passed would
+  // otherwise not reach.
+  if (kept && temp !== undefined) setStepOutput("kept", "true");
   const marked = await markMeasuredFailures(options, suites, failedUnits);
   if (compileCacheState !== undefined) {
     await writeCompileCacheState(options, compileCacheState);
@@ -3341,8 +3346,8 @@ export async function runLane(
     notes,
     omitted,
     logs: "the output above" +
-      (!ok && temp !== undefined
-        ? `, and ${workDir}, which the job uploads as its lane-failure artifact`
+      (kept && temp !== undefined
+        ? `, and ${workDir}, which the job uploads as its lane-kept artifact`
         : ""),
     seconds: (performance.now() - startedAt) / 1000,
   };

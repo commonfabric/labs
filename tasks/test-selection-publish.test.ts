@@ -1910,6 +1910,116 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
   });
 });
 
+describe("publish() over an aggregate holding a test renamed in its file", () => {
+  const NOW = new Date("2026-08-20T12:00:00.000Z");
+  const STATE = stateObjectName("2026-08-19", "0");
+  const RENAMED = JSON.stringify(["unit", "memory", "space > erases"]);
+  const FLAKY = JSON.stringify(["unit", "memory", "space > reads"]);
+  const WRITES = JSON.stringify(["unit", "memory", "space > writes"]);
+
+  /** A state that disagrees with itself in one run of every ten. */
+  function flaky(...ordersOnMain: string[]): IdentityState {
+    return {
+      ...emptyState(),
+      runsByDay: { "2026-08-19": 100 },
+      failuresByDay: { "2026-08-19": 10 },
+      flakesByDay: { "2026-08-19": 10 },
+      ordersOnMain,
+    };
+  }
+
+  /**
+   * An aggregate carrying two flaky tests of one file, of which `main`
+   * last recorded one a day before the other.
+   */
+  function carrying(renamed = flaky("2026-08-18")): string {
+    return JSON.stringify({
+      schema: MANIFEST_SCHEMA_VERSION,
+      day: "2026-08-19",
+      catchRule: NEW_REAL_TEST_FAILURE_RULE,
+      folded: [],
+      compacted: [],
+      states: {
+        [RENAMED]: renamed,
+        [FLAKY]: flaky("2026-08-18", "2026-08-19"),
+      },
+      files: { [RENAMED]: UNIT, [FLAKY]: UNIT },
+    });
+  }
+
+  /** One run of `main` in today's order recording a test of the file. */
+  function seeded(commit: string, at: string, name: string): string {
+    return buildObjectBody(
+      { ...ciContext(`report-${commit}`, commit, at), shuffleSeed: 20260820 },
+      [{
+        line: "record",
+        test: { k: "unit", s: "memory", n: name },
+        outcome: "pass",
+        durationMs: 40,
+        file: UNIT,
+      }],
+    );
+  }
+
+  /** `main` running the file today, which no longer holds the first. */
+  function today(renamed?: IdentityState): Record<string, string> {
+    return {
+      [STATE]: carrying(renamed),
+      [CI(DAY, "1")]: seeded(
+        "c1",
+        "2026-08-20T01:00:00.000Z",
+        "space > writes",
+      ),
+      [CI(DAY, "2")]: seeded("c2", "2026-08-20T02:00:00.000Z", "space > reads"),
+    };
+  }
+
+  it("lists and withholds the flaky test main runs, not the renamed one", async () => {
+    const { store, created } = fakeStore(today());
+    expect(
+      await publish(["--days", "1"], store, NOW, needsFile, noPrevious),
+    ).toBe(0);
+    const manifest = await publishedManifest(created);
+    expect(manifest.entries.map((entry) => testIdentityKey(entry.test)))
+      .toEqual([FLAKY, WRITES]);
+    expect(manifest.withheld.map((entry) => testIdentityKey(entry.test)))
+      .toEqual([FLAKY]);
+    // Its history is kept: a branch ran it inside the window, and `main`
+    // running it again is what brings it back.
+    const written = [...created.keys()].find((name) =>
+      name.includes("/state/")
+    )!;
+    const after = parseAggregate(await gunzipToText(created.get(written)!))!;
+    expect(after.states[RENAMED]!.flakesByDay).toEqual({ "2026-08-19": 10 });
+  });
+
+  it("says how many tests main has stopped recording", async () => {
+    const { store } = fakeStore(today());
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, needsFile, noPrevious)
+    );
+    expect(said).toContain("main has stopped recording 1 identities");
+    expect(said).toContain("unit:memory 1");
+  });
+
+  it("drops the renamed test once nothing records it, and counts it once", async () => {
+    const { store, created } = fakeStore(
+      today({ ...emptyState(), ordersOnMain: ["2026-08-18"] }),
+    );
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, needsFile, noPrevious)
+    );
+    expect(said).toContain("1 identities have left the tree");
+    expect(said).not.toMatch(/main has stopped recording \d+ identities/);
+    const written = [...created.keys()].find((name) =>
+      name.includes("/state/")
+    )!;
+    const after = parseAggregate(await gunzipToText(created.get(written)!))!;
+    expect(Object.keys(after.states)).not.toContain(RENAMED);
+    expect(Object.keys(after.states)).toContain(FLAKY);
+  });
+});
+
 describe("publish() over a topology two suites read the same way", () => {
   const NOW = new Date("2026-08-20T12:00:00.000Z");
 

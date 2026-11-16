@@ -321,7 +321,9 @@ whose remote profile space is offline.
 > and the renderer throws *"Bidirectionally bound property $profile is not
 > reactive"*, blanking the whole pattern. Build each view as static JSX and switch
 > with `ifElse(cond, staticA, staticB)` as a child of a static wrapper; gate only
-> *siblings* reactively. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
+> *siblings* reactively. Repro:
+> `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in
+> `runtime/runner/test/h-binding-validation.test.ts`.
 
 ### Build the roster by join
 
@@ -855,6 +857,14 @@ has not resolved yet: the runtime creates the space once that run ends,
 discards what it wrote, and runs it again, and that next run gets the DID.
 [`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
 details.
+
+`spaceOf(target)` follows the links `target` holds, reading the document each
+one names. A pattern that holds cells in other spaces by link, such as a list
+of `Cell<unknown>` handles, and needs only each one's space, calls
+`spaceOfLink(target)` instead: it returns the space the cell's own link names
+and reads nothing there. It returns `undefined` in the same cases `spaceOf()`
+does, for a `target` of `undefined` and in a run naming an unresolved
+`inSpace()` space.
 
 ### Telling a deleted space
 

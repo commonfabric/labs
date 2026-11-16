@@ -290,13 +290,8 @@ describe("serving-memory-server", () => {
       expect(serving.close()).toBe(first);
       await first;
       await serving[Symbol.asyncDispose]();
-      // The in-process host reports its counters after it closes; a worker
-      // is gone with its counters.
-      if (serving.host.host === undefined) {
-        expect(serving.host.stats()).toBeUndefined();
-      } else {
-        expect(serving.host.stats()?.activeSpaces).toBe(0);
-      }
+      // The loop reports its counters after it closes, on either arm.
+      expect(serving.host.stats()?.activeSpaces).toBe(0);
     });
   });
 

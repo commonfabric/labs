@@ -1,9 +1,10 @@
 /**
  * Tests WordSearchPlay: a word is found by tapping its two ends, in either
- * order; taps that are not a word's two ends find nothing; tapping the
- * waiting letter again lets it go; finding every word solves the puzzle;
- * starting over forgets this puzzle's finds; and a reshuffled puzzle, with
- * the same words elsewhere, starts unsolved.
+ * order; taps that are not a word's two ends find nothing; clicking the
+ * waiting letter again lets it go; finding every word solves the puzzle, and
+ * the piece's name says so; starting over forgets this puzzle's finds; a
+ * reshuffled puzzle, with the same words elsewhere, starts unsolved; and a
+ * tap past the grid is refused.
  *
  * Run: deno task cf test patterns/showcase/wordsearch/play.test.tsx
  */
@@ -12,6 +13,7 @@ import {
   assert,
   computed,
   handler,
+  NAME,
   pattern,
   type Stream,
   TESTS,
@@ -21,6 +23,7 @@ import {
 import {
   childNodes,
   findNode,
+  fireClick,
   propValue,
   readValue,
   textContent,
@@ -126,6 +129,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert(() => play.foundCount === 0 && !play.solved) },
+      { assertion: assert(() => play[NAME] === "Word Search") },
       { assertion: assert(() => startOverDisabled(play[UI])) },
 
       // A word's first letter, then its last: found.
@@ -174,9 +178,11 @@ export default pattern(() => {
       },
       { assertion: assert(() => textContent(play[UI]).includes("Not a word")) },
 
-      // Tapping the waiting letter again lets it go.
+      // Clicking the waiting letter again lets it go.
       {
-        action: action(() => play.tap.send({ index: waiting(play[UI]) })),
+        action: action(() =>
+          fireClick(cellButtons(play[UI])[waiting(play[UI])], "waiting cell")
+        ),
       },
       { assertion: assert(() => waiting(play[UI]) === -1) },
 
@@ -186,6 +192,7 @@ export default pattern(() => {
       {
         assertion: assert(() => textContent(play[UI]).includes("All 3 found")),
       },
+      { assertion: assert(() => play[NAME] === "Word Search, solved") },
 
       // Finding a word twice counts it once.
       { action: tapEnds({ puzzle, tap, n: 0, reversed: true }) },
@@ -249,6 +256,16 @@ export default pattern(() => {
         }),
       },
       { assertion: assert(() => pair.foundCount === 2 && pair.solved) },
+
+      // A tap past the grid's last cell is refused loudly, and changes
+      // nothing.
+      { action: action(() => play.tap.send({ index: 64 })) },
+      {
+        assertion: assert(() =>
+          found.get().length === 1 && waiting(play[UI]) === -1
+        ),
+      },
     ],
+    expectRuntimeErrors: ["WordSearchPlay: no cell 64 in a 8×8 grid"],
   };
 });

@@ -33,12 +33,15 @@ describe(
 
     it("reports a wait for async work that fails as the assertion's failure", async () => {
       // The fixture has no `settle` step, so the first bare `settled()` call
-      // is the wait the assertion's read triggers; later calls run as normal
-      // so teardown drains the fetch the read started.
+      // the test's runtime makes is the wait the assertion's read triggers;
+      // later calls run as normal so teardown drains the fetch the read
+      // started. On the server-execution arm the serving runtimes share the
+      // prototype, and a serving loop's rest waits on its runtime's
+      // `settled()`, which is no wait of the assertion's.
       const settled = Runtime.prototype.settled;
       let rejected = false;
       using _settled = stub(Runtime.prototype, "settled", function (maxRounds) {
-        if (maxRounds === undefined && !rejected) {
+        if (maxRounds === undefined && !rejected && !this.servingPosture) {
           rejected = true;
           return Promise.reject(new Error("async work never settled"));
         }

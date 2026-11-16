@@ -2762,6 +2762,35 @@ describe("wish built-in", () => {
       expect(resolved?.result).toBeUndefined();
     });
 
+    async function searchHashtag(label: string) {
+      const wishPattern = pattern(() => ({
+        result: wish({ query: "#nothinghere" }),
+      }));
+      const resultCell = runtime.getCell<{
+        result?: { error?: string; errorCode?: string; result?: unknown };
+      }>(patternSpace.did(), `hashtag-search-${label}`, undefined, tx);
+      const result = runtime.run(tx, wishPattern, {}, resultCell);
+      await tx.commit().settled;
+      tx = runtime.edit();
+      await result.pull();
+      return result.key("result").get();
+    }
+
+    it("reports a favorites search it could not make as failed, not no-match", async () => {
+      runtime.homeSpacePrincipalFor = () => undefined;
+      const resolved = await searchHashtag("no-identity");
+      expect(resolved?.result).toBeUndefined();
+      expect(resolved?.error).toContain("User identity DID not available");
+      expect(resolved?.errorCode).toBe("failed");
+    });
+
+    it("reports a favorites search that found nothing as no-match", async () => {
+      const resolved = await searchHashtag("with-identity");
+      expect(resolved?.result).toBeUndefined();
+      expect(resolved?.error).toMatch(/No favorites found matching/);
+      expect(resolved?.errorCode).toBe("no-match");
+    });
+
     it("resolves #chatManager to the home chat manager", async () => {
       const resolved = await resolveHomeTarget(
         "chat-manager",

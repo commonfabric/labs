@@ -1,7 +1,8 @@
 /**
- * Catalog validation gates both newly discovered rooms and retained membership.
- * Changes to optional fields and offer receipts invalidate the whole catalog;
- * future states and revisions retain the catalog's forward-compatible meaning.
+ * Catalog validation gates the rooms a membership lists. Changes to optional
+ * fields and offer receipts invalidate the whole catalog; future states and
+ * revisions retain the catalog's forward-compatible meaning. A manager sharing
+ * the catalog with no membership of its own lists none of its rooms.
  */
 
 import {
@@ -45,7 +46,7 @@ export default pattern(() => {
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),
     outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
   } as ManagerArg);
-  const discovered = FabriChatManagerCore({
+  const unjoined = FabriChatManagerCore({
     myProfile: profile,
     sessionProfile: profile,
     sharedSpaceCatalog: catalog,
@@ -86,10 +87,10 @@ export default pattern(() => {
   });
   const removeEntry = action(() => catalog.key("entries").set({}));
   const listed = assert(() =>
-    manager.rooms.length === 1 && discovered.rooms.length === 1
+    manager.rooms.length === 1 && unjoined.rooms.length === 0
   );
   const absent = assert(() =>
-    manager.rooms.length === 0 && discovered.rooms.length === 0
+    manager.rooms.length === 0 && unjoined.rooms.length === 0
   );
 
   return {
@@ -124,8 +125,7 @@ export default pattern(() => {
       { assertion: listed },
       {
         assertion: assert(() =>
-          manager.rooms[0]?.revision === "future-revision" &&
-          discovered.rooms[0]?.revision === "future-revision"
+          manager.rooms[0]?.revision === "future-revision"
         ),
       },
       { action: removeEntry },

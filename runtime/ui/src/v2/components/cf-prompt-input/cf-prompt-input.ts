@@ -404,6 +404,12 @@ export class CFPromptInput extends BaseElement {
   private _uploadPromises: Map<string, Promise<void>> = new Map();
 
   /**
+   * Pasted web images still being fetched, which become attachments once they
+   * arrive, so a submit waits for them as it waits for uploads.
+   */
+  #pastes: Set<Promise<void>> = new Set();
+
+  /**
    * Whether a submit is awaiting in-flight uploads, which disables the send
    * button.
    */
@@ -426,6 +432,8 @@ export class CFPromptInput extends BaseElement {
   private _mentionsOverlay: HTMLDivElement | null = null;
   private _resizeObs?: ResizeObserver;
   private _raf?: number;
+  /** The window this element listens to for resizing and scrolling. */
+  #view: Window | null = null;
 
   constructor() {
     super();
@@ -453,14 +461,13 @@ export class CFPromptInput extends BaseElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this._resizeObs = new ResizeObserver(() =>
-      this._repositionMentionsOverlay()
-    );
+    this._resizeObs = new ResizeObserver(() => this._positionMentionsOverlay());
     this._resizeObs.observe(this);
-    globalThis.addEventListener("resize", this._onWindowChange, {
+    this.#view = this.ownerDocument.defaultView;
+    this.#view?.addEventListener("resize", this._onWindowChange, {
       passive: true,
     });
-    globalThis.addEventListener("scroll", this._onWindowChange, true);
+    this.#view?.addEventListener("scroll", this._onWindowChange, true);
   }
 
   override disconnectedCallback(): void {
@@ -468,15 +475,13 @@ export class CFPromptInput extends BaseElement {
     for (const att of this.attachments.values()) this._revokePreview(att);
     this._resizeObs?.disconnect();
     this._resizeObs = undefined;
-    globalThis.removeEventListener("resize", this._onWindowChange);
-    globalThis.removeEventListener("scroll", this._onWindowChange, true);
+    this.#view?.removeEventListener("resize", this._onWindowChange);
+    this.#view?.removeEventListener("scroll", this._onWindowChange, true);
+    this.#view = null;
     this._unmountMentionsOverlay();
   }
 
-  private _onWindowChange = () => {
-    if (!this.mentionController.isShowing) return;
-    this._repositionMentionsOverlay();
-  };
+  private _onWindowChange = () => this._positionMentionsOverlay();
 
   override firstUpdated(
     changedProperties: Map<string | number | symbol, unknown>,
@@ -533,24 +538,32 @@ export class CFPromptInput extends BaseElement {
     const textarea = this._textareaElement as any;
     if (!textarea || !textarea.value?.trim()) return;
 
-    const text = textarea.value;
-
-    // Wait for any in-flight attachment uploads so each attachment carries its
-    // blob `url` before we emit. Without this, a quick submit races the async
-    // upload and the consumer receives a ref-less attachment (the bug that made
-    // a captured image silently vanish). The send button is disabled while
+    // Wait until no pasted image is still being fetched and no attachment is
+    // still uploading, including those that begin during the wait, so each
+    // attachment is there and carries its blob `url` before we emit. Without
+    // this, a quick submit races the async work and the consumer receives a
+    // ref-less attachment, or none. The send button is disabled while
     // _sending so the user sees the brief wait.
-    const pending = Array.from(this._uploadPromises.values());
-    if (pending.length > 0) {
+    if (this.#pastes.size > 0 || this._uploadPromises.size > 0) {
       this._sending = true;
       this.requestUpdate();
       try {
-        await Promise.allSettled(pending);
+        while (this.#pastes.size > 0 || this._uploadPromises.size > 0) {
+          await Promise.allSettled([
+            ...this.#pastes,
+            ...this._uploadPromises.values(),
+          ]);
+        }
       } finally {
         this._sending = false;
         this.requestUpdate();
       }
     }
+
+    // Read after the wait, during which a failed pasted image restores text
+    // and the person may change what they typed, or clear it.
+    const text = textarea.value;
+    if (!text.trim()) return;
 
     // Block the send if any opted-in upload failed or never produced a `url`.
     // Emitting it would hand the consumer an attachment with neither a usable
@@ -579,7 +592,6 @@ export class CFPromptInput extends BaseElement {
     const attachments = Array.from(this.attachments.values()).map(
       toSendAttachment,
     );
-
     // Clear the textarea and attachments
     textarea.value = "";
     this.value = "";
@@ -600,8 +612,6 @@ export class CFPromptInput extends BaseElement {
 
   private _handleStop(event?: Event) {
     event?.preventDefault();
-
-    if (this.disabled) return;
 
     // Emit the stop event
     this.emit("cf-stop");
@@ -640,20 +650,7 @@ export class CFPromptInput extends BaseElement {
     const textarea = event.target as HTMLTextAreaElement;
     this.value = textarea.value;
 
-    // Auto-resize textarea if enabled
-    if (this.autoResize) {
-      textarea.style.height = "auto";
-      textarea.style.height = `${
-        Math.min(
-          textarea.scrollHeight,
-          parseFloat(
-            getComputedStyle(this).getPropertyValue(
-              "--cf-prompt-input-max-height",
-            ) || "12rem",
-          ) * 16,
-        )
-      }px`;
-    }
+    this.#fitHeight(textarea);
 
     // Let mention controller handle input changes
     this.mentionController.handleInput(event);
@@ -714,9 +711,11 @@ export class CFPromptInput extends BaseElement {
         // text flavor (or an http(s) src) is worth restoring.
         const fallbackText = plain || (src.startsWith("data:") ? "" : src);
         event.preventDefault();
-        void this._attachRemoteImage(src).then((ok) => {
+        const paste = this._attachRemoteImage(src).then((ok) => {
           if (!ok) this._insertTextAtCursor(fallbackText);
         });
+        this.#pastes.add(paste);
+        void paste.finally(() => this.#pastes.delete(paste));
         return;
       }
     }
@@ -769,9 +768,9 @@ export class CFPromptInput extends BaseElement {
     markdown: string,
     _mentionCell: CellHandle<Mentionable>,
   ): void {
+    // A mention is offered only once an `@` is typed into the textarea, so the
+    // textarea is there to insert into.
     const textarea = this._textareaElement as HTMLTextAreaElement;
-    if (!textarea) return;
-
     const cursorPos = textarea.selectionStart;
     const textBeforeCursor = this.value.substring(0, cursorPos);
     const lastAtIndex = textBeforeCursor.lastIndexOf("@");
@@ -828,15 +827,10 @@ export class CFPromptInput extends BaseElement {
     }
   }
 
-  /** Insert text at the current cursor (or append if the textarea is absent). */
+  /** Insert text at the current cursor in the textarea pasted into. */
   private _insertTextAtCursor(text: string): void {
     if (!text) return;
-    const textarea = this._textareaElement as HTMLTextAreaElement | null;
-    if (!textarea) {
-      this.value = this.value + text;
-      this.requestUpdate();
-      return;
-    }
+    const textarea = this._textareaElement as HTMLTextAreaElement;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const before = this.value.substring(0, start);
@@ -851,14 +845,11 @@ export class CFPromptInput extends BaseElement {
   private _imageNameFromUrl(src: string, mimeType: string): string {
     const ext = mimeType.split("/")[1]?.split("+")[0] || "png";
     if (src.startsWith("data:")) return `pasted-image.${ext}`;
-    try {
-      const path = new URL(src).pathname;
-      const base = path.substring(path.lastIndexOf("/") + 1);
-      if (base && base.includes(".")) return base;
-      if (base) return `${base}.${ext}`;
-    } catch {
-      // not a parseable URL — fall through
-    }
+    // `src` was fetched, so it parses.
+    const path = new URL(src).pathname;
+    const base = path.substring(path.lastIndexOf("/") + 1);
+    if (base && base.includes(".")) return base;
+    if (base) return `${base}.${ext}`;
     return `pasted-image.${ext}`;
   }
 
@@ -1039,21 +1030,13 @@ export class CFPromptInput extends BaseElement {
       (data instanceof File || data instanceof Blob) &&
       (data.type || "").startsWith("image/")
     ) {
-      try {
-        attachment.previewUrl = URL.createObjectURL(data);
-      } catch {
-        // No object URL available (non-browser env) — fall back to the icon.
-      }
+      attachment.previewUrl = URL.createObjectURL(data);
     }
   }
 
   private _revokePreview(attachment: PromptAttachment | undefined): void {
     if (attachment?.previewUrl) {
-      try {
-        URL.revokeObjectURL(attachment.previewUrl);
-      } catch {
-        // ignore
-      }
+      URL.revokeObjectURL(attachment.previewUrl);
       attachment.previewUrl = undefined;
     }
   }
@@ -1102,26 +1085,13 @@ export class CFPromptInput extends BaseElement {
    * Get icon for attachment type
    */
   private _getAttachmentIcon(type: PromptAttachment["type"]): string {
-    switch (type) {
-      case "file":
-        return "📎";
-      case "clipboard":
-        return "📋";
-      default:
-        return "📄";
-    }
+    return type === "file" ? "📎" : "📋";
   }
 
   private _getAttachmentVariant(
     type: PromptAttachment["type"],
-  ): "default" | "primary" | "accent" {
-    switch (type) {
-      case "clipboard":
-        return "accent";
-      case "file":
-      default:
-        return "default";
-    }
+  ): "default" | "accent" {
+    return type === "clipboard" ? "accent" : "default";
   }
 
   /**
@@ -1191,28 +1161,23 @@ export class CFPromptInput extends BaseElement {
     if (!text) return;
 
     const textarea = this._textareaElement as HTMLTextAreaElement;
-    if (!textarea) return;
-
     this.value = this.value + (this.value ? " " : "") + text;
     textarea.value = this.value;
 
-    // Auto-resize and notify
-    if (this.autoResize) {
-      textarea.style.height = "auto";
-      textarea.style.height = `${
-        Math.min(
-          textarea.scrollHeight,
-          parseFloat(
-            getComputedStyle(this).getPropertyValue(
-              "--cf-prompt-input-max-height",
-            ) || "12rem",
-          ) * 16,
-        )
-      }px`;
-    }
+    this.#fitHeight(textarea);
 
     this.emit("cf-input", { value: this.value });
     textarea.focus();
+  }
+
+  /**
+   * Grows or shrinks the textarea to fit its content when `autoResize` is
+   * set. Its `max-height`, `--cf-prompt-input-max-height`, caps the height.
+   */
+  #fitHeight(textarea: HTMLTextAreaElement) {
+    if (!this.autoResize) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
   }
 
   /**
@@ -1314,11 +1279,10 @@ export class CFPromptInput extends BaseElement {
   }
 
   /**
-   * Render the mentions dropdown into the overlay
+   * Render the mentions dropdown into the overlay, which `updated()` mounts
+   * just before
    */
   private _renderMentionsOverlay() {
-    if (!this._mentionsOverlay) return;
-
     const filteredMentions = this.mentionController.getFilteredMentions();
 
     if (filteredMentions.length === 0) {
@@ -1378,7 +1342,7 @@ export class CFPromptInput extends BaseElement {
         )}
       </div>
     `;
-    render(tpl, this._mentionsOverlay);
+    render(tpl, this._mentionsOverlay!);
   }
 
   /**
@@ -1386,14 +1350,12 @@ export class CFPromptInput extends BaseElement {
    */
   private _positionMentionsOverlay() {
     if (!this._mentionsOverlay) return;
+    // The overlay holds the dropdown whenever it is mounted, and the textarea
+    // has rendered by the time anything is typed into it.
     const dropdown = this._mentionsOverlay.querySelector(
       ".mentions-dropdown",
-    ) as HTMLElement | null;
-    if (!dropdown) return;
-
+    ) as HTMLElement;
     const textarea = this._textareaElement as HTMLTextAreaElement;
-    if (!textarea) return;
-
     const rect = textarea.getBoundingClientRect();
     // Start below the textarea
     let top = rect.bottom + 2;
@@ -1428,13 +1390,6 @@ export class CFPromptInput extends BaseElement {
       dropdown.style.top = `${Math.round(top)}px`;
       dropdown.style.left = `${Math.round(left)}px`;
     });
-  }
-
-  /**
-   * Reposition the mentions overlay (for resize/scroll)
-   */
-  private _repositionMentionsOverlay() {
-    this._positionMentionsOverlay();
   }
 
   /**

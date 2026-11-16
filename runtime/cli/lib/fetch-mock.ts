@@ -7,9 +7,8 @@
  * the mock instead of the network. Driving the in-flight request to completion
  * stays the harness's job via the `{ settle: true }` step (`runtime.settled()`).
  *
- * This is the generic-HTTP (`fetchJson`) seam; LLM calls
- * (`generateText`/`generateObject`) mock separately at the `LLMClient` layer
- * (`@commonfabric/llm`).
+ * This is the generic-HTTP (`fetchJson`) seam; language-model calls mock
+ * through a test's `llmMocks` export instead (`llm-mock.ts`).
  */
 
 import type { RuntimeFetch } from "@commonfabric/runner";

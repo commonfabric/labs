@@ -1,0 +1,3 @@
+{"date":"2026-11-11","from":{"k":"unit","s":"shell","n":"login view signs in as the identity a Loom pairing code redeems"},"to":{"k":"unit","s":"shell","n":"LoginView > on localhost > pairing with a Loom > signs in as the identity a pairing code redeems"}}
+{"date":"2026-11-11","from":{"k":"unit","s":"shell","n":"login view opens the Loom pairing form from a saved credential"},"to":{"k":"unit","s":"shell","n":"LoginView > on localhost > pairing with a Loom > opens the pairing form from a saved credential"}}
+{"date":"2026-11-11","from":{"k":"unit","s":"shell","n":"login view shows why a Loom pairing did not sign in"},"to":{"k":"unit","s":"shell","n":"LoginView > on localhost > pairing with a Loom > shows why a code did not sign in, and drops that on the way back"}}

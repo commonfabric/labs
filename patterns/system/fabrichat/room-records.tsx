@@ -22,7 +22,9 @@
  * `FabriChatRoom.md` names them. `commitSetTitle` writes the title a member
  * last set, a record of its own beside the one the room's creator wrote, and
  * `commitSetThreadTitle` the title of one of its threads, a record of its own
- * for each thread, beside the thread's messages.
+ * for each thread, beside the thread's messages. `commitWindow` writes the
+ * sending session's windows onto the messages, which are no part of the
+ * room's record.
  *
  * A handler destructures its state and uses the cells inline, and a helper it
  * shares takes each cell as an argument of its own, never the state or an
@@ -47,6 +49,7 @@ import {
   type Stream,
   type TrustedActionWrite,
   Writable,
+  type WriteAuthorizedBy,
   type WritePolicyAnyOf,
 } from "commonfabric";
 import type {
@@ -61,6 +64,9 @@ import {
   isSingleEmoji,
   type ShownIn,
   type ViewItem,
+  type WindowAnchor,
+  windowCount,
+  windowSlice,
 } from "./logic.ts";
 import type { commitStart } from "./manager.tsx";
 import {
@@ -111,7 +117,8 @@ const NSEC_PER_SEC = 1_000_000_000n;
  * The policy every room starts from, a group room's. `about.policy` states
  * it, and the handlers read `deletionIsObliteration` and `maxAttachments`
  * from it, so the two cannot disagree; `maxWindowCount` bounds
- * `messages.latest`. The other settings are stated for the policy's shape,
+ * `messages.latest` and each window, and `maxOpenWindows` how many windows a
+ * session has open. The other settings are stated for the policy's shape,
  * which a user's Home carries, and read by nothing. A room's
  * `ownersMayObliterate` is `ownersMayObliterateIn()`'s.
  */
@@ -320,6 +327,42 @@ export type MessagesCell = Writable<MessagesValue>;
 
 /** A link to one stored message. */
 export type MessageCell = Cell<MessageRecord>;
+
+/**
+ * A run of consecutive messages from one view of the room's messages, as a
+ * session's `openWindow` last set it (`ChatMessageWindow.md`).
+ */
+export interface ChatMessageWindow {
+  /** The `openWindow` request that set the window as it is now. */
+  requestId: string;
+
+  /** For a thread's window, the thread's root; absent for the main one. */
+  root?: MessageCell;
+
+  /** The messages in the window, oldest first. */
+  messages: MessageCell[];
+
+  /** Whether the view has messages older than the window's first. */
+  hasOlder: boolean;
+
+  /** Whether the view has messages newer than the window's last. */
+  hasNewer: boolean;
+}
+
+/** A session's open windows, by the `windowId` its client chose. */
+export type ChatMessageWindows = Record<string, ChatMessageWindow>;
+
+/** A session's windows onto the messages, written only by `commitWindow`. */
+export type WindowsValue = WriteAuthorizedBy<
+  ChatMessageWindows,
+  typeof commitWindow
+>;
+
+/**
+ * The cell holding a session's windows, absent until the first opens: only
+ * `commitWindow` writes it, so it has no default for anything else to write.
+ */
+export type WindowsCell = Writable<WindowsValue>;
 
 /**
  * What a room created by a manager says about itself: written once, by the
@@ -810,6 +853,17 @@ export interface ComposerAttachment {
 }
 
 /**
+ * A file taken out of a composer before a send, whose entry the composer is
+ * removing from the store again: the request adding it, and whether the
+ * composer has sent the store's `remove` for the entry yet, under
+ * `removalRequestId()` of that request.
+ */
+export interface TakenOutAttachment extends ComposerAttachment {
+  /** Whether the composer has sent the store's `remove` for the entry. */
+  removing?: boolean;
+}
+
+/**
  * Where a rendered composer keeps its drafts, reply, edit, and attachments.
  */
 export interface ComposerState {
@@ -824,6 +878,14 @@ export interface ComposerState {
    * the request adding it to the space's store.
    */
   attaching?: ComposerAttachment[];
+
+  /**
+   * The files taken out of the composer whose removal from the store has not
+   * settled: each whose `add` has yet to answer, whose `remove` has yet to
+   * answer, or whose `remove` the store refused, which the composer shows
+   * until the person dismisses it.
+   */
+  takenOut?: TakenOutAttachment[];
 
   /** The message being edited. */
   editing?: MessageCell;
@@ -1433,10 +1495,67 @@ const composedAttachments = (
 };
 
 /**
+ * The request id under which a composer removes the entry that its request
+ * `requestId` added. It is the same on every run, so the store acts on one
+ * `remove` for an entry however often it is sent, and never on a second one
+ * after refusing the first.
+ */
+export const removalRequestId = (requestId: string): string =>
+  `${requestId}-remove`;
+
+/**
+ * Whether `outcome`, of a composer's `remove`, leaves the entry out of the
+ * store: done, or refused because the store holds no such entry.
+ */
+const isRemoved = (outcome: FileRequestOutcome): boolean =>
+  outcome.status === "done" || outcome.code === "not-found";
+
+/**
+ * Helper for the composer's handlers, which moves each file in `takenOut` on
+ * as far as the store's outcomes allow, and keeps what is left as the
+ * composer's files taken out. A file whose `add` is done has its entry
+ * removed with the store's `remove`; one whose `add` was refused added
+ * nothing, and one whose removal is done, or found no entry, is removed, and
+ * neither is kept. One whose `add` or `remove` has yet to answer is kept, and
+ * so is one whose `remove` was refused otherwise, which the composer shows
+ * and never sends again. Each request's outcome is read by its id alone.
+ */
+const settleTakenOut = (
+  composer: ComposerCell,
+  store: Cell<FileStoreOutput> | undefined,
+  takenOut: readonly TakenOutAttachment[],
+): void => {
+  const target = store?.resolveAsCell();
+  if (target === undefined) {
+    composer.key("takenOut").set(
+      takenOut.length === 0 ? undefined : [...takenOut],
+    );
+    return;
+  }
+  const requests = target.key("requests");
+  const outcomeOf = (requestId: string) =>
+    requests.key(requestId).get() as FileRequestOutcome | undefined;
+  const kept = takenOut.flatMap((file): TakenOutAttachment[] => {
+    const removalId = removalRequestId(file.requestId);
+    if (file.removing === true) {
+      const removal = outcomeOf(removalId);
+      return removal !== undefined && isRemoved(removal) ? [] : [file];
+    }
+    const added = outcomeOf(file.requestId);
+    if (added === undefined) return [file];
+    if (added.status !== "done") return [];
+    target.key("remove").send({ requestId: removalId, entry: added.entry });
+    return [{ ...file, removing: true }];
+  });
+  composer.key("takenOut").set(kept.length === 0 ? undefined : kept);
+};
+
+/**
  * Sends a rendered composer's text, from `ChatSendSurface`, replying in the
  * main conversation to the message the composer holds, if any, and attaching
  * the files the store added for it. Ends that reply and those attachments, and
- * clears the draft only if it still identifies the submitted edit.
+ * clears the draft only if it still identifies the submitted edit. Moves the
+ * composer's files taken out on, as `settleTakenOut()` does.
  */
 export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
   (event, { myProfile, messages, composer, store, joined }) => {
@@ -1445,6 +1564,7 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
     const reply = link?.get() === undefined ? undefined : link;
     if (reply !== undefined) checkComposedQuote(reply, "main");
     const attaching = composer.get()?.attaching ?? [];
+    const takenOut = composer.get()?.takenOut ?? [];
     sendInto(
       event,
       composedAttachments(attaching, store),
@@ -1456,6 +1576,7 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
     clearSubmittedDraft(event, composer.key("draft"));
     if (reply !== undefined) composer.key("replyTo").set(undefined);
     if (attaching.length > 0) composer.key("attaching").set(undefined);
+    if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
   },
 );
 
@@ -1521,7 +1642,22 @@ export interface DropAttachmentState {
   /** The session's composer state, whose attachment the control removes. */
   composer: ComposerCell;
 
+  /**
+   * The space's file store, from which the control removes the entry the
+   * request added; absent while the space keeps none.
+   */
+  store?: Cell<FileStoreOutput>;
+
   /** The request adding the attachment removed. */
+  requestId: string;
+}
+
+/** What a composer's control dismissing a refused removal is bound to. */
+export interface DismissRemovalState {
+  /** The session's composer state, whose file taken out the control drops. */
+  composer: ComposerCell;
+
+  /** The request that added the file whose removal was refused. */
   requestId: string;
 }
 
@@ -1542,7 +1678,12 @@ export const prepareAttach = handler<unknown, PrepareAttachState>(
  * the request adding it. The store's outcome for each request says which
  * entry it added, or why it refused, and the composer's send reads that. Each
  * request is named by the event's key and the file's place in it, so every
- * run of one event names the same requests, and the store adds each file once.
+ * run of one event names the same requests, and the store adds each file once:
+ * a file attached again is a new request, whatever became of the last. A run
+ * of an event the composer has handled already adds none of its requests to
+ * the attachments again: not one they hold, nor one taken out, nor one the
+ * store has answered, whose file was sent, taken out or refused since. Moves
+ * the composer's files taken out on, as `settleTakenOut()` does.
  *
  * @throws If the space has no store, or the files would make more
  *   attachments than the room's policy allows.
@@ -1562,8 +1703,16 @@ export const commitAttach = handler<UploadEvent, AttachState>(
       throw new Error(`A message can have at most ${max} attachments.`);
     }
     const key = eventKey();
-    const added = files.map((file, index) => {
+    const takenOut = composer.get()?.takenOut ?? [];
+    const requests = target.key("requests");
+    const held = new Set(
+      [...attaching, ...takenOut].map((file) => file.requestId),
+    );
+    const added = files.flatMap((file, index) => {
       const requestId = `attach-${key}-${index}`;
+      if (held.has(requestId) || requests.key(requestId).get() !== undefined) {
+        return [];
+      }
       target.key("add").send({
         requestId,
         name: file.name,
@@ -1572,21 +1721,45 @@ export const commitAttach = handler<UploadEvent, AttachState>(
         size: file.size,
         onConflict: "rename",
       });
-      return { requestId, name: file.name };
+      return [{ requestId, name: file.name }];
     });
     composer.key("attaching").set([...attaching, ...added]);
+    if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);
   },
 );
 
 /**
- * Takes one file out of the composer's attachments. Its entry stays in the
- * store, where the request put it.
+ * Takes one file out of the composer's attachments, and removes the entry its
+ * request added from the store: at once where the request is done, and
+ * otherwise once a later run of one of the composer's handlers finds it done,
+ * as `settleTakenOut()` does. A request the store refused added nothing to
+ * remove.
  */
 export const dropAttachment = handler<unknown, DropAttachmentState>(
-  (_event, { composer, requestId }) => {
+  (_event, { composer, store, requestId }) => {
     const attaching = composer.get()?.attaching ?? [];
+    const dropped = attaching.find((file) => file.requestId === requestId);
+    if (dropped === undefined) return;
     const kept = attaching.filter((file) => file.requestId !== requestId);
+    const takenOut = composer.get()?.takenOut ?? [];
     composer.key("attaching").set(kept.length === 0 ? undefined : kept);
+    settleTakenOut(composer, store, [...takenOut, {
+      requestId: dropped.requestId,
+      name: dropped.name,
+    }]);
+  },
+);
+
+/**
+ * Drops a file taken out of the composer whose removal the store refused, so
+ * that the composer stops showing the refusal. The composer never sends that
+ * removal again, and the entry stays in the store.
+ */
+export const dismissRemoval = handler<unknown, DismissRemovalState>(
+  (_event, { composer, requestId }) => {
+    const takenOut = composer.get()?.takenOut ?? [];
+    const kept = takenOut.filter((file) => file.requestId !== requestId);
+    composer.key("takenOut").set(kept.length === 0 ? undefined : kept);
   },
 );
 
@@ -2027,3 +2200,129 @@ export const commitSetThreadTitle = handler<
   outcomes.key(requestId).set({ status: "done" });
   refusal.set("");
 });
+
+/** A request that opens, moves, or closes one of a session's windows. */
+export interface RoomWindowEvent {
+  /** Chosen by the client; shown in the window once an open is fulfilled. */
+  requestId: string;
+
+  /** The window to set or close, chosen by the client. */
+  windowId: string;
+
+  /** The root of the thread to show; absent for the main conversation. */
+  root?: MessageCell;
+
+  /** Which end of its view the window holds; required to open one. */
+  from?: WindowAnchor;
+
+  /** The most messages to show, capped by the room's `maxWindowCount`. */
+  count?: number;
+}
+
+/** What `commitWindow` is bound to. */
+export interface WindowActState {
+  /** Whether the binding opens (or moves) a window, or closes one. */
+  op: "open" | "close";
+
+  /** The room's messages, which the binding reads and never writes. */
+  messages: Cell<MessagesValue>;
+
+  /** The session's windows. */
+  windows: WindowsCell;
+}
+
+/**
+ * The view of `messages` a window shows, oldest first: the main
+ * conversation's, or, where `root` names one, the thread it roots, the root's
+ * own cell first. `undefined` where `root` names no message of the room's main
+ * conversation, in the room's space, or one that is in a thread itself, which
+ * roots none.
+ */
+const windowView = (
+  messages: Cell<MessagesValue>,
+  root: MessageCell | undefined,
+): MessageCell[] | undefined => {
+  const { entries } = messageEntries(messages);
+  if (root === undefined) {
+    return entries.filter((entry) => entry.inMain).map((entry) => entry.cell);
+  }
+  const key = isInRoomOf(messages, root) ? viewKeyOf(root) : undefined;
+  const rootEntry = entries.find((entry) => entry.key === key);
+  if (
+    key === undefined || rootEntry === undefined || !rootEntry.inMain ||
+    rootEntry.replyTo?.thread !== undefined
+  ) {
+    return undefined;
+  }
+  return [
+    rootEntry.cell,
+    ...entries.filter((entry) => entry.replyTo?.thread === key).map((entry) =>
+      entry.cell
+    ),
+  ];
+};
+
+/** `from` as a `WindowAnchor`, or `undefined` for anything else. */
+const windowAnchorOf = (from: unknown): WindowAnchor | undefined => {
+  if (typeof from !== "object" || from === null) return undefined;
+  const anchor = from as Record<string, unknown>;
+  if (anchor.before === "end") return { before: "end" };
+  if (anchor.after === "start") return { after: "start" };
+  return undefined;
+};
+
+/**
+ * Opens, moves, or closes one of the sending session's windows onto the
+ * messages: sets it to the run of its view `from` and `count` name, or
+ * removes it. It changes nothing but that session's windows, so it keeps no
+ * request memory: repeating a request sets or removes the same window again. A
+ * request it can't fulfill (no window to close, no end to hold, a root that
+ * roots no thread, a session at `maxOpenWindows` opening another) changes
+ * nothing.
+ *
+ * A room's stored result can hold, at `messages/windows`, a writer claim
+ * naming this handler, and a release keeps every stored claim: a room set up
+ * with that claim can take no program whose result leaves the position
+ * without the session's windows, which only this handler writes.
+ */
+export const commitWindow = handler<RoomWindowEvent, WindowActState>(
+  (event, { op, messages, windows }) => {
+    const windowId = event?.windowId;
+    if (typeof windowId !== "string" || windowId === "") return;
+    const current = (windows.get() ?? {}) as ChatMessageWindows;
+    if (op === "close") {
+      if (!Object.hasOwn(current, windowId)) return;
+      windows.set(
+        Object.fromEntries(
+          Object.entries(current).filter(([id]) => id !== windowId),
+        ) as WindowsValue,
+      );
+      return;
+    }
+    const requestId = event?.requestId;
+    if (typeof requestId !== "string") return;
+    if (
+      !Object.hasOwn(current, windowId) &&
+      Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
+    ) {
+      return;
+    }
+    const anchor = windowAnchorOf(event?.from);
+    if (anchor === undefined) return;
+    const root = event?.root?.resolveAsCell();
+    const view = windowView(messages, root);
+    if (view === undefined) return;
+    const slice = windowSlice(
+      view.length,
+      anchor,
+      windowCount(event?.count, FABRICHAT_POLICY.maxWindowCount),
+    );
+    windows.key(windowId).set({
+      requestId,
+      ...(root === undefined ? {} : { root: view[0] }),
+      messages: view.slice(slice.start, slice.end),
+      hasOlder: slice.hasOlder,
+      hasNewer: slice.hasNewer,
+    });
+  },
+);

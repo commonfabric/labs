@@ -8,6 +8,7 @@ import { findKeyMaterial } from "@/shared/key-material.ts";
 import {
   type CellRef,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   RequestType,
   type UploadBlobRequest,
 } from "@/protocol/mod.ts";
@@ -455,6 +456,40 @@ describe("RuntimeClient", () => {
       const { client } = clientAnswering({});
 
       expect(await client.joinVisitedRoom(space)).toBeUndefined();
+    });
+  });
+
+  describe("offerProfileSuggestion()", () => {
+    it("sends the name alone when no picture is offered", async () => {
+      const { client, requests } = clientAnswering({});
+
+      await client.offerProfileSuggestion({ name: "Sam Lee" });
+
+      expect(requests).toEqual([{
+        type: RequestType.OfferProfileSuggestion,
+        name: "Sam Lee",
+      }]);
+    });
+
+    it("sends a copy of the picture as a `FabricBytes`", async () => {
+      const { client, requests } = clientAnswering({});
+      const picture = new Uint8Array([0x89, 0x50, 1]);
+
+      const offered = client.offerProfileSuggestion({
+        name: "Sam Lee",
+        picture,
+      });
+      // Written before anything is awaited: a request that carried the
+      // caller's array, rather than a copy, would show this byte.
+      picture[0] = 0xff;
+      await offered;
+
+      expect(requests.length).toBe(1);
+      const request = requests[0] as OfferProfileSuggestionRequest;
+      expect(request.type).toBe(RequestType.OfferProfileSuggestion);
+      expect(request.name).toBe("Sam Lee");
+      expect(request.picture).toBeInstanceOf(FabricBytes);
+      expect(request.picture?.slice()).toEqual(new Uint8Array([0x89, 0x50, 1]));
     });
   });
 

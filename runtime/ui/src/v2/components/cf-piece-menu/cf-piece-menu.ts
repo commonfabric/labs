@@ -1312,10 +1312,8 @@ export class CFPieceMenu extends BaseElement {
     const visited = new Set<Element>([element]);
     let current: Element | null = element;
     while (current) {
-      const root: Node | undefined = typeof current.getRootNode === "function"
-        ? current.getRootNode()
-        : undefined;
-      const shadowHost: Element | null = root && "host" in root
+      const root = current.getRootNode();
+      const shadowHost: Element | null = "host" in root
         ? (root as ShadowRoot).host
         : null;
       const next: Element | null = current.assignedSlot ??
@@ -1332,9 +1330,8 @@ export class CFPieceMenu extends BaseElement {
   #composedShadowRoots(element: Element): ShadowRoot[] {
     const roots = new Set<ShadowRoot>();
     for (const item of [element, ...this.#composedAncestors(element)]) {
-      if (typeof item.getRootNode !== "function") continue;
       const root = item.getRootNode();
-      if (root && "host" in root) roots.add(root as ShadowRoot);
+      if ("host" in root) roots.add(root as ShadowRoot);
     }
     return [...roots];
   }

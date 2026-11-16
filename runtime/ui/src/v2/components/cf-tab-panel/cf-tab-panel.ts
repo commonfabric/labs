@@ -1,5 +1,6 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import type { CFTab } from "../cf-tab/cf-tab.ts";
 
 /**
  * CFTabPanel - Content panel component associated with a tab
@@ -121,9 +122,9 @@ export class CFTabPanel extends BaseElement {
     // Find the associated tab with the same value
     const parentTabs = this.closest("cf-tabs");
     if (parentTabs) {
-      const associatedTab = parentTabs.querySelector(
-        `cf-tab[value="${this.value}"]`,
-      );
+      const associatedTab = Array.from(
+        parentTabs.querySelectorAll<CFTab>("cf-tab"),
+      ).find((tab) => tab.value === this.value);
       if (associatedTab && !associatedTab.id) {
         // Generate an ID if the tab doesn't have one
         associatedTab.id = `tab-${this.value}`;
@@ -153,5 +154,11 @@ export class CFTabPanel extends BaseElement {
    */
   toggle(): void {
     this.hidden = !this.hidden;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-tab-panel": CFTabPanel;
   }
 }

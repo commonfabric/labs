@@ -185,11 +185,6 @@ describe("fabrichat add offer across runtimes", () => {
 
     // Ada adds Grace by her address alone. Her manager offers Grace the room
     // through the profile it lists for her, and the room reads the verdict.
-    // Under server execution the served offer reads `people` as a runtime of
-    // Ada's has derived it, and no session here derives her rooms, so it finds
-    // no profile for Grace, and queues a notice instead.
-    // TODO(danfuzz): Expect `offered` under server execution too, once a
-    // served run derives what it reads.
     await ada.send(
       "addMember",
       {
@@ -209,18 +204,13 @@ describe("fabrichat add offer across runtimes", () => {
       await ada.read(["$VIEWS", "room", "addRequests", "add-grace"], {
         piece: room,
       }),
-    ).toEqual({
-      status: "done",
-      delivery: SERVER_EXECUTION ? "noticed" : "offered",
-    });
+    ).toEqual({ status: "done", delivery: "offered" });
 
     // The offer reached the inbox Grace's profile points at, keyed by the room
     // and the add.
-    if (!SERVER_EXECUTION) {
-      await harness.settleUntil(() =>
-        graceHolds(addMemberOfferId(room.space, "add-grace"))
-      );
-    }
+    await harness.settleUntil(() =>
+      graceHolds(addMemberOfferId(room.space, "add-grace"))
+    );
 
     // Grace, a member of the room now, reads it, and none of Ada's adds. Her
     // runtime reached the room's space before the add admitted her and

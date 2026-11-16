@@ -161,29 +161,19 @@ export class CFRadio extends BaseElement {
       this.setAttribute("exportparts", "radio,indicator");
     }
     super.connectedCallback();
-    this._updateAriaAttributes();
+    this.#updateAriaAttributes();
 
     // Host owns role="radio" and focus — handle interaction here so
     // keyboard (Space) and click both work regardless of where in the
     // component they land.
-    this.addEventListener("click", this._handleClick);
-    this.addEventListener("keydown", this._handleKeydown);
-
-    // Check if within a radio group
-    const radioGroup = this.closest("cf-radio-group");
-    if (radioGroup) {
-      // Let the radio group manage the name
-      const groupName = radioGroup.getAttribute("name");
-      if (groupName && !this.name) {
-        this.name = groupName;
-      }
-    }
+    this.addEventListener("click", this.#handleClick);
+    this.addEventListener("keydown", this.#handleKeydown);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener("click", this._handleClick);
-    this.removeEventListener("keydown", this._handleKeydown);
+    this.removeEventListener("click", this.#handleClick);
+    this.removeEventListener("keydown", this.#handleKeydown);
   }
 
   override updated(
@@ -194,7 +184,7 @@ export class CFRadio extends BaseElement {
     if (
       changedProperties.has("checked") || changedProperties.has("disabled")
     ) {
-      this._updateAriaAttributes();
+      this.#updateAriaAttributes();
     }
   }
 
@@ -231,13 +221,13 @@ export class CFRadio extends BaseElement {
     `;
   }
 
-  private _updateAriaAttributes() {
+  #updateAriaAttributes() {
     this.setAttribute("aria-checked", String(this.checked));
     this.setAttribute("aria-disabled", String(this.disabled));
     this.tabIndex = this.disabled ? -1 : 0;
   }
 
-  private _handleClick(event: Event) {
+  #handleClick(event: Event) {
     if (this.disabled || this.checked) {
       event.preventDefault();
       event.stopPropagation();
@@ -261,7 +251,7 @@ export class CFRadio extends BaseElement {
     }
   }
 
-  private _handleKeydown(event: KeyboardEvent) {
+  #handleKeydown(event: KeyboardEvent) {
     if (this.disabled) {
       return;
     }
@@ -269,21 +259,18 @@ export class CFRadio extends BaseElement {
     // Handle Space key
     if (event.key === " " || event.key === "Spacebar") {
       event.preventDefault();
-      this._handleClick(event);
+      this.#handleClick(event);
     }
   }
+}
 
-  /**
-   * Focus the radio button programmatically
-   */
-  override focus(): void {
-    super.focus();
+declare global {
+  interface HTMLElementTagNameMap {
+    "cf-radio": CFRadio;
   }
 
-  /**
-   * Blur the radio button programmatically
-   */
-  override blur(): void {
-    super.blur();
+  interface HTMLElementEventMap {
+    /** Sent by a radio to the cf-radio-group around it when clicked. */
+    "radio-click": CustomEvent<{ radio: CFRadio }>;
   }
 }

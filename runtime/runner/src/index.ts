@@ -53,6 +53,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
   MAX_ENFORCEMENT_SINK_GOVERNANCE,
@@ -127,6 +129,7 @@ export {
   UnreportedAuthoredBoundaryError,
 } from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
+export { isSpaceAccessRefusal } from "./storage/space-access-refusal.ts";
 export { transactionFailureMessage } from "./storage/transaction-errors.ts";
 export type {
   EntityIdListOptions,
@@ -151,12 +154,13 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  isWithheldDelivery,
   pullProjected,
   readProjected,
-  resolveWriteTarget,
   sendEvent,
   setCell,
   sinkProjected,
+  syncCellForIdentity,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -270,12 +274,15 @@ export {
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceDelegations,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   isStoredArgumentSchemaRefusal,
   keepLaterConfirmation,
   knownPieceReleasedAt,
   mergeSchemaDefaults,
+  normalizePieceSourceOrigin,
   patternIdentityKey,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,

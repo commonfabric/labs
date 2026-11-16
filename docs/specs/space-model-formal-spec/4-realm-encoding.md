@@ -46,8 +46,8 @@ most of a value passes through untouched and tagging is reserved for what
 genuinely needs it.
 
 Tagging is not the same question as what the transport can carry, and the two
-should not be conflated. A `FabricRegExp` is tagged here even though cloning
-carries a native `RegExp` perfectly well, because it is a class instance and
+should not be conflated. A `FabricBytes` is tagged here even though cloning
+carries a native `Uint8Array` perfectly well, because it is a class instance and
 reconstructing one is a codec's job under any format.
 
 ### 1.1 Transport Requirements
@@ -293,8 +293,9 @@ and nothing inside one is validated except by the codec itself, reading the
 fields it knows (Section 7.1). The reserved-key rule of Section 3.2, the cycle
 rule of Section 4, and the refusals of Section 6 all describe values the walk
 reaches; none of them reaches into a terminal state. A `Hash@1` state carrying
-a `constructor` key or a reference back to itself therefore decodes, because
-its codec reads `tag` and `hash` and never looks.
+a `constructor` key or a reference back to itself is therefore not refused by
+the walk. Its codec refuses it instead, reading `tag` and `hash` and refusing a
+state holding any other field (Section 7.1).
 
 This is what terminality buys and what it costs. A codec that wants its state
 examined declares itself nonterminal, and then every rule here applies to that
@@ -316,8 +317,7 @@ form.
 | `FabricEpochDay` | `EpochDay@1` | `bigint` |
 | `FabricEpochNsec` | `EpochNsec@1` | `bigint` |
 | `FabricKeyPair` | `KeyPair@1` | `{ algorithm: string, publicKey: ArrayBuffer, privateKey: ArrayBuffer }`, or `{ publicKey: CryptoKey, privateKey: CryptoKey }` |
-| `FabricRegExp` | `RegExp@1` | `{ source, flags, flavor }` |
-| `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, errorMessage }` |
+| `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, message }` |
 | `symbol` | `Symbol@1` | `string` (the registry key) |
 
 The `tag` of a `Hash@1` state is the hash's algorithm tag, which is in the
@@ -331,12 +331,12 @@ the transferable object in the tree rather than having to reach through a view
 and reason about its offset. Both byte-carrying types do this. A bare
 `Uint8Array` is therefore not a form this format emits.
 
-Four of these differ from their JSON counterparts in kind rather than in
+Three of these differ from their JSON counterparts in kind rather than in
 spelling, which is most of the reason this format exists, and they differ along
 two axes.
 
 `FabricBytes` carries bytes as bytes, where JSON must represent them as
-base64url text. `FabricRegExp` and `FabricUnavailable` are terminal here and
+base64url text. `FabricUnavailable` is terminal here and
 nonterminal under JSON — concrete proof that terminality belongs to the pair
 (class, format) rather than to the class. `FabricHash` differs on **both** axes
 at once: terminal here and nonterminal under JSON, and carrying its hash as a
@@ -553,11 +553,17 @@ which arrive intact. Nothing here emits one, which is what rules them out --
 the assumption at the top of this section, and the one place it does load-
 bearing work.
 
-**A field of a codec's state that the codec does not read is ignored, not
-refused.** A state is matched by what it must carry, so a record arriving with
-more than that decodes as though the extra were absent. Two implementations
-would otherwise be free to disagree — one ignoring, one refusing — over data
-that cloning carries perfectly well and that a peer can send.
+**A state holding a field that its codec does not read is refused.** A codec
+reads the whole of a state it decodes, so a record arriving with more than that
+is one it did not write, and decoding it without the extra would build a value
+that re-encodes and hashes differently from what was sent. It is a malformation
+like any other, and settles against leniency into a `ProblematicValue` that
+keeps the state as it arrived. This agrees with the JSON format's "Decoding
+validation" note (Section 3 of [3-json-encoding.md](./3-json-encoding.md)). A
+codec whose state is open-ended by design reads every field it is handed, so
+the rule refuses nothing there: `Error@1` reads each field beyond its fixed
+ones as one of the error's own properties, and `Link@1`'s state is its payload
+whole.
 
 **An absent field is not the same as one present holding `undefined`.** Where a
 codec's state has an optional field, what its absence means applies to a field
@@ -568,12 +574,7 @@ a peer can send one on purpose — and reading it as absent would silently answe
 a question the wire did ask.
 
 `Unavailable@1` is the codec this reaches, on its two optional fields. An absent
-`errorKind` is the state of a transient reason and an absent `errorMessage`
-that of an error with no stored message; `{ reason: "error", errorKind:
-undefined }` and `{ reason: "error", errorKind: "sync", errorMessage:
-undefined }` are refused, each being a field that is present and not a string.
-
-`RegExp@1` has no optional field. `source`, `flags` and `flavor` are all
-required, as they are under JSON (`3-json-encoding.md` Section 3), and there is
-no default flavor, so `{}`, `{ source: "a", flags: "g" }` and
-`{ source: undefined, flags: "g", flavor: "es2025" }` are all refused.
+`errorKind` is the state of a transient reason and an absent `message` that of
+an error with no stored message; `{ reason: "error", errorKind: undefined }`
+and `{ reason: "error", errorKind: "sync", message: undefined }` are refused,
+each being a field that is present and not a string.

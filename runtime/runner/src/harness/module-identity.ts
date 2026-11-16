@@ -78,10 +78,11 @@ export interface ModuleIdentityOptions {
   dataFiles?: ReadonlySet<string>;
 
   /**
-   * Modules already scanned, by name, as {@link scanModules} returns them. A
-   * module with an entry here is resolved from it rather than parsed again.
+   * Import lists already known, by module name: scans as {@link scanModules}
+   * returns them, or lists a compiler-stamped document attests. A module with
+   * an entry here is resolved from it rather than parsed again.
    */
-  declarations?: ReadonlyMap<string, ModuleDeclarations>;
+  declarations?: ReadonlyMap<string, Pick<ModuleDeclarations, "imports">>;
 }
 
 interface ModuleNode {

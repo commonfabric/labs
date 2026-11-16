@@ -76,7 +76,9 @@ import { patternTestExperimentalOptions } from "./pattern-test-experimental-opti
 import {
   collectServedErrors,
   type EventError,
+  servedCfcRefusalWarnings,
   servedRuntimeErrors,
+  servedThrows,
 } from "./served-errors.ts";
 import {
   type RuntimeErrorExpectation,
@@ -764,13 +766,18 @@ const handlers: Record<
     return Promise.resolve({
       runtimeErrors: [
         ...runtimeErrors.map((error) => String(error)),
-        ...servedRuntimeErrors(servedErrors, runtimeErrors),
+        ...servedRuntimeErrors(servedThrows(servedErrors), runtimeErrors),
         ...continuousUiErrors.map((error) =>
           `[continuous $UI] ${String(error)}`
         ),
       ],
       consoleErrors: [...consoleErrors],
-      consoleWarnings: [...consoleWarnings],
+      // A served commit CFC refused is a denial, reported among the warnings
+      // as the single-user runner reports it (`served-errors.ts`).
+      consoleWarnings: [
+        ...consoleWarnings,
+        ...servedCfcRefusalWarnings(servedErrors),
+      ],
       nonIdempotent: rt().getIdempotencyViolations?.()?.map((violation) => {
         const { actionId, differingWriteKeys } = violation as {
           actionId?: string;

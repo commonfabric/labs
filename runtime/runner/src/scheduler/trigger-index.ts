@@ -52,7 +52,19 @@ export interface TriggerIndexState {
   };
 }
 
-export interface TriggerSubscriptionState extends TriggerIndexState {
+/** The parts of the trigger index an action's read delta updates. */
+export type TriggerReadState = Pick<
+  TriggerIndexState,
+  | "scopeKeyIdentity"
+  | "triggers"
+  | "nonRecursiveTriggers"
+  | "actionTriggerEntities"
+>;
+
+export interface TriggerSubscriptionState
+  extends
+    TriggerReadState,
+    Pick<TriggerIndexState, "removeActionFromEntities"> {
   readonly cancels: WeakMap<Action, Cancel>;
   readonly getActionId: (action: Action) => string;
   readonly onTriggerUnsubscribe?: (
@@ -141,55 +153,11 @@ export class SchedulerTriggerSubscriptions implements TriggerSubscriptionState {
     return this.#state.onTriggerUnsubscribe;
   }
 
-  addActionReads(
-    action: Action,
-    reads: IMemorySpaceAddress[],
-    shallowReads: IMemorySpaceAddress[],
-  ): {
-    entities: Set<SpaceScopeAndURI>;
-    triggerPathsByEntity: Map<SpaceScopeAndURI, SortedAndCompactPaths>;
-  } {
-    return this.#state.triggerIndex.addActionReads(action, reads, shallowReads);
-  }
-
   removeActionFromEntities(
     action: Action,
     entities: Iterable<SpaceScopeAndURI>,
   ): void {
     this.#state.triggerIndex.removeActionFromEntities(action, entities);
-  }
-
-  removeSpace(space: MemorySpace): void {
-    this.#state.triggerIndex.removeSpace(space);
-  }
-
-  collectReadersForWrite(write: IMemorySpaceAddress): Set<Action> {
-    return this.#state.triggerIndex.collectReadersForWrite(write);
-  }
-
-  hasRegisteredTriggers(): boolean {
-    return this.#state.triggerIndex.hasRegisteredTriggers();
-  }
-
-  clear(): void {
-    this.#state.triggerIndex.clear();
-  }
-
-  collectTriggeredActionsForChange(
-    space: MemorySpace,
-    change: IMemoryChange,
-  ): {
-    entity: SpaceScopeAndURI;
-    hasMatchingTriggerPaths: boolean;
-    triggeredActions: Action[];
-
-    /** For each triggered action, a read path of its whose value changed. */
-    triggerPaths: ReadonlyMap<Action, readonly MemoryAddressPathComponent[]>;
-  } {
-    return this.#state.triggerIndex.collectTriggeredActionsForChange(
-      space,
-      change,
-    );
   }
 }
 
@@ -365,7 +333,7 @@ export class SchedulerTriggerIndex implements TriggerIndexState {
 }
 
 export function applyActionReadDelta(
-  state: TriggerIndexState,
+  state: TriggerReadState,
   action: Action,
   prevLog: Pick<ReactivityLog, "reads" | "shallowReads">,
   nextLog: Pick<ReactivityLog, "reads" | "shallowReads">,

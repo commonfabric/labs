@@ -425,13 +425,11 @@ function mayReadAsCell(
  *  OBJECT. A value that is not a decodable link is left as-is (the asCell read
  *  then yields undefined rather than crashing the whole query). */
 function decodeRowLinkColumns(
-  rows: readonly unknown[],
+  rows: readonly Record<string, unknown>[],
   cols: readonly string[],
 ): unknown[] {
   if (cols.length === 0) return rows as unknown[];
-  return rows.map((row) => {
-    if (!row || typeof row !== "object") return row;
-    const r = row as Record<string, unknown>;
+  return rows.map((r) => {
     // Copy lazily: only allocate a new row object once a link column actually
     // decodes to a different value. Rows with no link columns (or only
     // null/non-link values) are returned as-is — no per-row spread on the
@@ -449,7 +447,7 @@ function decodeRowLinkColumns(
       out ??= { ...r };
       out[c] = decoded;
     }
-    return out ?? row;
+    return out ?? r;
   });
 }
 
@@ -1426,12 +1424,14 @@ export function sqliteQuery(
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
-          "sqliteQuery",
-          effectKey,
+          {
+            builtinId: "sqliteQuery",
+            effectKey,
+            identity: runIdentity,
+            scope,
+            attributeToBuiltin: true,
+          },
           (settleTx) => {
-            if (runIdentity !== undefined) {
-              settleTx.tx.scopeKeyIdentity = runIdentity;
-            }
             // The cancellation is asked again here, not only where this was
             // scheduled: `editWithRetry` runs this callback once per attempt,
             // and a retry is where the time passes in which a node can go
@@ -1649,11 +1649,6 @@ export function sqliteQuery(
               throw new Error(
                 "sqlite: storage provider does not support queries " +
                   "(sqliteQuery unavailable)",
-              );
-            }
-            if (crossSpace && servedRun && !actingReader) {
-              throw new Error(
-                "sqlite: cross-space served queries require a reader",
               );
             }
             const reader = crossSpace && servedRun && actingReader

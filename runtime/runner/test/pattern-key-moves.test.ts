@@ -22,6 +22,8 @@ const MOVES = Object.entries(MOVED_PATTERN_KEYS);
 // The targets of moves whose pattern was deleted after the move. The table
 // keeps their entries, since stored programs can still name the old keys.
 const DELETED_TARGETS = new Set([
+  "system/home/home-ben.tsx",
+  "system/link-tool/link-tool.tsx",
   "system/profile-look/profile-look.test.ts",
   "system/profile-look/profile-look.ts",
 ]);

@@ -24,9 +24,11 @@ import {
   unmarkUiInputBlindWriteTx,
 } from "../src/storage/reactivity-log.ts";
 import {
+  cfcAcquisitionViewForDereferenceTraces,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
 } from "../src/cfc/label-view-state.ts";
+import type { CfcDereferenceTrace } from "../src/cfc/types.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("snapshot memo test");
@@ -665,6 +667,92 @@ describe("snapshot memo", () => {
     expect(viaB?.entries[0].label.confidentiality).toEqual(["secret-b"]);
   });
 
+  it("gives one slot's dereferences to two targets each its own target's labels", () => {
+    const labeled = (cause: string, label: string) => {
+      const link = runtime.getCell(space, cause, undefined, tx)
+        .getAsNormalizedFullLink();
+      seedStoredEnvelope(tx, {
+        space,
+        id: link.id,
+        type: "application/json",
+        path: [],
+      }, {
+        value: cause,
+        cfc: {
+          version: 1,
+          schemaHash: "test-schema",
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: [label] } }],
+          },
+        },
+      });
+      return { ...link, path: [] };
+    };
+    const slot = labeled("two-targets-slot", "slot");
+    const first = labeled("two-targets-first", "first");
+    const second = labeled("two-targets-second", "second");
+    const confidentiality = (target: typeof first) =>
+      cfcLabelViewForDereference(tx, slot, target)?.entries.map(({ label }) =>
+        label.confidentiality
+      );
+
+    expect(confidentiality(first)).toEqual([["slot", "first"]]);
+    expect(confidentiality(second)).toEqual([["slot", "second"]]);
+    expect(confidentiality(first)).toEqual([["slot", "first"]]);
+    // A repeated dereference is answered with the view already made.
+    expect(cfcLabelViewForDereference(tx, slot, first)).toBe(
+      cfcLabelViewForDereference(tx, slot, first),
+    );
+  });
+
+  it("carries a slot's label of every observation class to all a dereference reaches", () => {
+    const slot = runtime.getCell(space, "classed-slot", undefined, tx)
+      .getAsNormalizedFullLink();
+    const target = runtime.getCell(space, "classed-target", undefined, tx)
+      .getAsNormalizedFullLink();
+    seedStoredEnvelope(tx, {
+      space,
+      id: slot.id,
+      type: "application/json",
+      path: [],
+    }, {
+      value: { link: "slot" },
+      cfc: {
+        version: 1,
+        schemaHash: "test-schema",
+        labelMap: {
+          version: 1,
+          entries: [
+            { path: ["link"], label: { confidentiality: ["plain"] } },
+            {
+              path: ["link"],
+              label: { confidentiality: ["reference"] },
+              observes: "followRef",
+            },
+          ],
+        },
+      },
+    });
+
+    const view = cfcLabelViewForDereference(
+      tx,
+      { ...slot, path: ["link"] },
+      { ...target, path: [] },
+    );
+
+    // The class-less root entry is what a rebase carries to every position
+    // below, so it holds the slot's `followRef` label as well as its own.
+    expect(view?.entries).toEqual([
+      { path: [], label: { confidentiality: ["plain", "reference"] } },
+      {
+        path: [],
+        label: { confidentiality: ["reference"] },
+        observes: "followRef",
+      },
+    ]);
+  });
+
   it("re-reads a document's stored labels after a write", () => {
     const { holder } = linkingCell("labels2-holder", "labels2-target");
     const link = holder.key("target").getAsNormalizedFullLink();
@@ -676,6 +764,74 @@ describe("snapshot memo", () => {
     cfcLabelViewForDereferenceTraces(tx, traces);
 
     expect(cfcMetadataReadCount()).toBeGreaterThan(afterFirst);
+  });
+
+  describe("acquisition views", () => {
+    /**
+     * A trace from the `["target"]` slot of a document labeled `label` at its
+     * root to the root of another document, after writing that label.
+     */
+    const labeledSlotTrace = (label: string): CfcDereferenceTrace[] => {
+      const holder = runtime.getCell(space, "acquired-holder", undefined, tx)
+        .getAsNormalizedFullLink();
+      const target = runtime.getCell(space, "acquired-target", undefined, tx)
+        .getAsNormalizedFullLink();
+      seedStoredEnvelope(tx, {
+        space,
+        id: holder.id,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { target: "slot" },
+        cfc: {
+          version: 1,
+          schemaHash: "test-schema",
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: [label] } }],
+          },
+        },
+      });
+      return [{
+        source: { ...holder, path: ["target"] },
+        target: { ...target, path: [] },
+        kind: "value",
+      }];
+    };
+
+    const acquired = (traces: CfcDereferenceTrace[]) =>
+      cfcAcquisitionViewForDereferenceTraces(tx, traces)?.entries.map((
+        { path, label },
+      ) => ({ path, label }));
+
+    it("reads the stored labels of a dereference once", () => {
+      const traces = labeledSlotTrace("slot-secret");
+
+      const first = acquired(traces);
+      const afterFirst = cfcMetadataReadCount();
+      const second = acquired(traces);
+
+      // The slot's document and the target's are both read the first time.
+      expect(afterFirst).toBe(2);
+      expect(cfcMetadataReadCount()).toBe(afterFirst);
+      expect(first).toEqual([{
+        path: [],
+        label: { confidentiality: ["slot-secret"] },
+      }]);
+      expect(second).toEqual(first);
+    });
+
+    it("carries the slot's new labels after a write", () => {
+      expect(acquired(labeledSlotTrace("first"))).toEqual([{
+        path: [],
+        label: { confidentiality: ["first"] },
+      }]);
+
+      expect(acquired(labeledSlotTrace("second"))).toEqual([{
+        path: [],
+        label: { confidentiality: ["second"] },
+      }]);
+    });
   });
 
   it("reads for real inside an ambient-read-meta scope", () => {

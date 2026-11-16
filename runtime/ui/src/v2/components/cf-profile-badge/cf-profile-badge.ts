@@ -45,6 +45,19 @@ export type ProfileBadgeTooltip = {
   pinnedCount: number;
 };
 
+const { picture: _picture, avatar: _avatar, ...namedProperties } =
+  ProfileBadgeSchema.properties;
+
+/**
+ * The fields of a profile the badge reads from the profile's own cell: all
+ * it shows but the face, which it reads from the cell holding each face
+ * field, so that the face's bytes are delivered once.
+ */
+const ProfileNamedSchema = {
+  ...ProfileBadgeSchema,
+  properties: namedProperties,
+} as const;
+
 /**
  * Extracts the tooltip details (bio + pinned-piece count) from a subscribed
  * profile-cell value. `bio` is the owner-authored free-text description;
@@ -104,6 +117,19 @@ const spaceRootReads = new WeakMap<
 >();
 
 /**
+ * The schema the space cell is loaded under, which reads none of its value.
+ * Where the root links is a position, which `resolveAsCell()` answers; a read
+ * of the value would follow the link into the root piece, and take in labels
+ * of fields the badge never shows, which the worker's display ceiling can
+ * refuse.
+ */
+export const SPACE_CELL_LOAD_SCHEMA = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+} as const;
+
+/**
  * Helper for {@link spaceRootOf}, which reads the piece `space`'s root links.
  * The space cell is loaded before its root is read.
  */
@@ -114,6 +140,7 @@ const readSpaceRoot = async (
   const spaceCell = await runtime.getCell<{ defaultPattern: unknown }>(
     space,
     space,
+    SPACE_CELL_LOAD_SCHEMA,
   );
   // Loaded first: a space cell this runtime has not received resolves to
   // itself, which would answer "not a profile" for a profile that is one.
@@ -684,8 +711,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    * the resolve and update steps, which a test drives directly.
    */
   get accessForTestingOnly(): {
-    state: ProfileBadgeState;
-    seal: IdentitySeal | undefined;
+    readonly state: ProfileBadgeState;
+    readonly seal: IdentitySeal | undefined;
     profileKnown: boolean;
     readonly verified: boolean;
     readonly face: {
@@ -701,14 +728,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       get state() {
         return outerThis._state;
       },
-      set state(value) {
-        outerThis._state = value;
-      },
       get seal() {
         return outerThis._seal;
-      },
-      set seal(value) {
-        outerThis._seal = value;
       },
       get profileKnown() {
         return outerThis.#profileKnown;
@@ -909,11 +930,12 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
         {
           [NAME]?: string;
           name?: string;
-          picture?: FabricBytes;
-          avatar?: string;
           bio?: string;
           elements?: Array<{ title?: string }>;
         }
+      >(ProfileNamedSchema);
+      const face = resolved.asSchema<
+        { picture?: FabricBytes; avatar?: string }
       >(ProfileBadgeSchema);
       // The runtime-attested label rides each subscription update
       // (`includeCfcLabel`), read on the sink's tracked tx — so verification
@@ -936,14 +958,14 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       // Only a face field whose own cell represents the principal the label
       // names is drawn.
       const cancelPicture = observeWrittenPrincipal(
-        named.key("picture"),
+        face.key("picture"),
         (picture) => {
           this.#written = { ...this.#written, picture };
           this.#applyFace();
         },
       );
       const cancelAvatar = observeWrittenPrincipal(
-        named.key("avatar"),
+        face.key("avatar"),
         (avatar) => {
           this.#written = { ...this.#written, avatar };
           this.#applyFace();
@@ -987,14 +1009,14 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   /**
-   * Navigate to the bound profile's page (CT-1750). No-op unless the resolved
-   * cell is a navigable root piece. Mirrors cf-cell-link's navigation; Cmd/Ctrl
-   * opens in a new tab.
+   * Navigate to the bound profile's page (CT-1750). Called only while the
+   * badge is navigable, which it is only when the resolved cell is a root
+   * piece; a no-op once `noNavigate` is set. Mirrors cf-cell-link's
+   * navigation; Cmd/Ctrl opens in a new tab.
    */
   private _navigateToProfile(newTab: boolean): void {
-    if (this.noNavigate) return;
     const cell = this._resolvedCell;
-    if (!cell || cell.ref().path.length > 0) return;
+    if (this.noNavigate || !cell) return;
     const view = { spaceDid: cell.space(), pieceId: cell.id() };
     if (newTab) {
       openInNewTab(view);

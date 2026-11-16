@@ -15,6 +15,7 @@ import {
   getMemoryProtocolFlags,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
+  parseMemoryProtocolFlags,
   PATTERN_LIFECYCLE_MAX_BYTES,
   type ResponseMessage,
   type ServerMessage,
@@ -225,6 +226,30 @@ describe("pattern.lifecycle", () => {
       server.setPatternLifecycleHandler(undefined);
       expect((await greet(server)).hello.flags.patternLifecycle).toBe(false);
     });
+
+    it("advertises that its lifecycle verbs take an origin, and parses an older server's silence as `false`", async () => {
+      const server = serverWith();
+      server.setPatternLifecycleHandler(recording().handler);
+      expect((await greet(server)).hello.flags.patternLifecycleOrigins).toBe(
+        true,
+      );
+      expect(
+        parseMemoryProtocolFlags({ patternLifecycle: true })
+          ?.patternLifecycleOrigins,
+      ).toBe(false);
+    });
+
+    it("advertises that `setsrc` and `follow` take a scope, and parses an older server's silence as `false`", async () => {
+      const server = serverWith();
+      server.setPatternLifecycleHandler(recording().handler);
+      expect((await greet(server)).hello.flags.patternLifecycleScopes).toBe(
+        true,
+      );
+      expect(
+        parseMemoryProtocolFlags({ patternLifecycle: true })
+          ?.patternLifecycleScopes,
+      ).toBe(false);
+    });
   });
 
   describe("request", () => {
@@ -243,9 +268,33 @@ describe("pattern.lifecycle", () => {
       expect(calls).toEqual([{
         space: SPACE,
         principal: ALICE,
+        sessionId,
         verb: "upload",
         body: { program: { main: "/a.tsx" } },
       }]);
+    });
+
+    it("hands each verb to the handler, `follow` among them", async () => {
+      const server = serverWith();
+      const { calls, handler } = recording();
+      server.setPatternLifecycleHandler(handler);
+      const { wire, sessionId } = await openSession(server, ALICE);
+      const verbs = ["upload", "instantiate", "setsrc", "follow"];
+
+      for (const verb of verbs) {
+        const requestId = crypto.randomUUID();
+        await wire.receive({
+          type: "pattern.lifecycle",
+          requestId,
+          space: SPACE,
+          sessionId,
+          verb,
+          body: { piece: "of:piece" },
+        });
+        expect((await wire.response(requestId)).error).toBeUndefined();
+      }
+
+      expect(calls.map((call) => call.verb)).toEqual(verbs);
     });
 
     it("refuses with `server-execution-off` when no handler is installed", async () => {
@@ -565,6 +614,7 @@ describe("pattern.lifecycle", () => {
         expect(calls).toEqual([{
           space: SPACE,
           principal: TEST_SESSION_OPEN_PRINCIPAL,
+          sessionId: session.sessionId,
           verb: "setsrc",
           body: { piece: "p" },
         }]);

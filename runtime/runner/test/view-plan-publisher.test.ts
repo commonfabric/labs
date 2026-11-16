@@ -13,6 +13,7 @@ import type { EventHandler } from "../src/scheduler/types.ts";
 import { rendererVDOMSchema } from "../src/schemas.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { viewInputFingerprint } from "../src/view-input-basis.ts";
 import type { ViewExecutionNode } from "../src/view-replication.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
@@ -863,5 +864,64 @@ describe("view plan publisher", () => {
       inline.getAsNormalizedFullLink().id,
     );
     expect(selection.eligibleActions).toEqual([]);
+  });
+
+  it("omits an inline argument from delivered view inputs", async () => {
+    const inline = fixture.runtime.getImmutableCell(space, { count: 1 });
+    await fixture.runtime.editWithRetry((tx) => {
+      fixture.root.withTx(tx).set({
+        $UI: {
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [fixture.output, {
+            type: "vnode",
+            name: "cf-input",
+            props: { $value: fixture.input },
+            children: [],
+          }],
+        },
+      });
+      fixture.root.withTx(tx).setMetaRaw(
+        "argument",
+        inline.getAsLink(),
+        rawMetaWriteAuthorization,
+      );
+    });
+    await publish();
+    const selection = fixture.publications.calls.at(-1)!.args[2];
+    expect(selection.inputs?.map((input) => input.id)).toContain(
+      fixture.root.getAsNormalizedFullLink().id,
+    );
+    expect(selection.inputs?.map((input) => input.id)).not.toContain(
+      inline.getAsNormalizedFullLink().id,
+    );
+  });
+
+  it("fingerprints a producer's read of a document the replica does not hold", async () => {
+    const absent = fixture.runtime.getCell<number>(space, "absent", {
+      type: "number",
+    });
+    const [producer] = fixture.nodes;
+    fixture.nodes[0] = {
+      ...producer,
+      log: {
+        ...producer.log,
+        reads: [
+          ...producer.log.reads,
+          toMemorySpaceAddress(absent.getAsNormalizedFullLink()),
+        ],
+      },
+    };
+    await publish();
+    const selection = fixture.publications.calls.at(-1)!.args[2];
+    const reads = selection.producers?.[0].basis?.reads ?? [];
+    const fingerprintOf = (id: string) =>
+      reads.find((read) => read.id === id)?.fingerprint;
+    expect(fingerprintOf(absent.getAsNormalizedFullLink().id)).toBe(
+      viewInputFingerprint(undefined, []),
+    );
+    expect(fingerprintOf(fixture.input.getAsNormalizedFullLink().id)).not
+      .toBe(viewInputFingerprint(undefined, []));
   });
 });

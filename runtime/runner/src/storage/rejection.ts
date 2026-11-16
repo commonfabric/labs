@@ -246,6 +246,31 @@ export function isStaleReadConflict(
 }
 
 /**
+ * A commit this replica refused without the server's verdict, sent or not,
+ * because a commit whose optimistic layer its reads went through has been
+ * refused or dropped:
+ * `pending dependency rejected: localSeq=…` (storage/v2.ts
+ * `#preSendRejection()`) and `pending dependency dropped locally: localSeq=…`
+ * (`#makeCascadeRejection()`). Unlike the engine's `pending dependency not
+ * resolved`, which {@link isStaleReadConflict} leaves out because the
+ * dependency's fate is still open, the dependency's fate is decided here, so
+ * a run made again over the base without its layer converges. Head-anchored,
+ * as {@link isStaleReadConflict} is.
+ *
+ * The first shape's `readyToRetry` waits for every such layer to be dropped.
+ * The second carries none, and its layer has been dropped by the time the
+ * refusal is delivered, so a re-run reads without it either way.
+ */
+export function isDeadDependencyRejection(
+  error: { name?: string; message?: string } | undefined | null,
+): boolean {
+  return isConflictRejection(error) &&
+    typeof error?.message === "string" &&
+    (error.message.startsWith("pending dependency rejected: ") ||
+      error.message.startsWith("pending dependency dropped locally: "));
+}
+
+/**
  * A stale-basis inconsistency: a value the transaction read changed on this
  * replica between the read and the commit (see storage/v2-transaction.ts
  * `validate()`). Like a conflict it is resolved by re-running the transaction
@@ -403,9 +428,11 @@ export function isCfcEnforcementRejection<
  * tagged every one of them a verdict (see {@link TERMINAL_REJECTION_NAMES}).
  *
  * NOTE the asymmetry with a callback that THROWS: `editWithRetry` aborts that
- * transaction and returns immediately without retrying, because a thrown
- * callback is a failure rather than a request for a fresh attempt. `abort()` is
- * the affordance for "discard this attempt and run me again".
+ * transaction and reports the throw without a retry, because a thrown callback
+ * is a failure rather than a request for a fresh attempt. The re-runs a throw
+ * gets are absence reconciliation's: one each time a document the attempt read
+ * as absent turns out to exist, while the retry budget lasts. `abort()` is the
+ * affordance for "discard this attempt and run me again".
  */
 export function isDiscardedAttemptRejection(
   error: { name?: string } | undefined | null,

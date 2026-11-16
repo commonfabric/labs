@@ -61,6 +61,7 @@
     "spaceDeleted",
     "spaceMembers",
     "spaceOf",
+    "spaceOfLink",
     "sqliteDatabase",
     "str",
     "table",
@@ -95,6 +96,7 @@
     "SqliteTableSchemas",
     "UnavailableErrorKind",
     "UnavailableReason",
+    "UnavailableState",
     "VNode"
   ],
   "collections": [],
@@ -193,7 +195,6 @@
     "FabricMount",
     "FabricNativeWrapper",
     "FabricRef",
-    "FabricRegExp",
     "FabricValueLayer",
     "FabricValuePlus",
     "Fact",

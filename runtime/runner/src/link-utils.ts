@@ -181,16 +181,6 @@ export function parseLinkOrThrow(
   return result;
 }
 
-export function areMaybeLinkAndNormalizedLinkSame(
-  link: any,
-  normalizedLink: NormalizedLink,
-  base?: Cell | NormalizedLink,
-): boolean {
-  const normalizedLink2 = parseLink(link, base);
-  if (!normalizedLink2) return false;
-  return areNormalizedLinksSame(normalizedLink, normalizedLink2);
-}
-
 // Link identity (`areNormalizedLinksSame` and neighbors) lives in
 // ./link-types.ts — one canonical implementation — and reaches importers of
 // this module through the `export *` above.
@@ -789,14 +779,6 @@ function recursiveStripAsCellFromSchema(
   context: SanitizeContext,
   depth: number,
 ): any {
-  // Handle null/undefined/boolean schemas
-  if (
-    !isObjectOrArray(schema) ||
-    typeof schema === "boolean"
-  ) {
-    return schema;
-  }
-
   // Prevent infinite recursion from proxy objects or very deep schemas
   // JSON Schema shouldn't need more than ~50 levels of nesting in practice
   if (depth > 100) {
@@ -1001,11 +983,10 @@ function schemaLosesStreamCellMarker(
 }
 
 function removeStrippedStreamPropertiesFromRequired(
-  originalSchema: unknown,
-  result: unknown,
+  originalSchema: JSONSchemaObj,
+  result: Record<string, unknown>,
   context: SanitizeContext,
 ): void {
-  if (!isObjectOrArray(originalSchema) || !isObjectOrArray(result)) return;
   const properties = originalSchema.properties;
   if (!isObjectOrArray(properties)) return;
   if (!Array.isArray(result.required)) return;

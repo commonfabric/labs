@@ -1,7 +1,15 @@
-import { describe, it } from "@std/testing/bdd";
+// First, so that the document it installs is there when CodeMirror loads.
+import { window } from "../../../test-utils/dom.ts";
+
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { FakeTime } from "@std/testing/time";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { cursorCharRight } from "@codemirror/commands";
 import {
+  atomicMentionRefRanges,
+  createMentionRefDecorationPlugin,
   findRefToken,
   mentionRefDecorations,
   mentionRefEditFilter,
@@ -75,6 +83,51 @@ function hidden(
     },
   );
   return found;
+}
+
+/** Every view `openView()` has opened and `closeViews()` not yet destroyed. */
+const openViews: EditorView[] = [];
+
+/**
+ * An editor showing `doc` in the test document, with the cursor at `cursor`,
+ * every mention extension installed, and no key announced.
+ */
+function openView(doc: string, cursor = 0): EditorView {
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      selection: { anchor: cursor },
+      extensions: [
+        mentionRefField,
+        mentionRefEditFilter,
+        refShortNameField,
+        atomicMentionRefRanges,
+        createMentionRefDecorationPlugin(),
+      ],
+    }),
+    parent: document.body,
+  });
+  openViews.push(view);
+  return view;
+}
+
+/** Destroys every view `openView()` opened, and empties the document. */
+function closeViews(): void {
+  for (const view of openViews.splice(0)) view.destroy();
+  window.document.body.replaceChildren();
+}
+
+/** The pills `view` draws, as their text and short name. */
+function drawnPills(
+  view: EditorView,
+): Array<{ text: string | null; shortName: string | null }> {
+  return Array.from(
+    view.contentDOM.querySelectorAll(".cm-mention-ref-pill"),
+    (element) => ({
+      text: element.textContent,
+      shortName: element.getAttribute("data-short-name"),
+    }),
+  );
 }
 
 describe("mention-refs", () => {
@@ -515,6 +568,103 @@ describe("mention-refs", () => {
 
     it("returns null where the digits do not end at the cursor", () => {
       expect(shortNameQueryAt("#42 and more")).toBeNull();
+    });
+  });
+
+  describe("atomicMentionRefRanges", () => {
+    afterEach(closeViews);
+
+    it("moves the cursor over a mention's key in one step", () => {
+      // "See [Note][key].": the label runs from 5 to 9, and the mention ends
+      // at 18.
+      const view = openView(`See [Note][${KEY}].`, 3);
+      view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+
+      const steps = [];
+      for (let step = 0; step < 8; step++) {
+        cursorCharRight(view);
+        steps.push(view.state.selection.main.head);
+      }
+      expect(steps).toEqual([4, 5, 6, 7, 8, 9, 18, 19]);
+    });
+
+    it("moves the cursor one character at a time through a reference link the map does not hold", () => {
+      const view = openView(`[N][${KEY}]`);
+      view.dispatch({ effects: setKnownRefKeys.of([OTHER_KEY]) });
+
+      cursorCharRight(view);
+      cursorCharRight(view);
+      cursorCharRight(view);
+      expect(view.state.selection.main.head).toBe(3);
+    });
+  });
+
+  describe("createMentionRefDecorationPlugin()", () => {
+    afterEach(closeViews);
+
+    it("renders a reference link as plain text until its key is announced", () => {
+      const view = openView(`See [Note][${KEY}].`);
+      expect(view.contentDOM.textContent).toBe(`See [Note][${KEY}].`);
+      expect(drawnPills(view)).toEqual([]);
+
+      view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+      expect(view.contentDOM.textContent).toBe("See Note.");
+      expect(drawnPills(view)).toEqual([{ text: "Note", shortName: null }]);
+    });
+
+    it("renders the short name announced for a mention on its pill", () => {
+      const view = openView(`See [Note][${KEY}].`);
+      view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+
+      view.dispatch({ effects: setRefShortNames.of({ [KEY]: "42" }) });
+      expect(drawnPills(view)).toEqual([{ text: "Note", shortName: "42" }]);
+    });
+
+    it("renders `[Label]` with the key hidden while the focused cursor is inside", () => {
+      const view = openView(`See [Note][${KEY}].`);
+      view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+      view.focus();
+      view.dispatch({ selection: { anchor: 6 } });
+      expect(view.contentDOM.textContent).toBe("See [Note].");
+      expect(drawnPills(view)).toEqual([]);
+    });
+
+    it("renders a pill again once the editor loses focus", () => {
+      const time = new FakeTime();
+      try {
+        const view = openView(`See [Note][${KEY}].`);
+        view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+        view.focus();
+        view.dispatch({ selection: { anchor: 6 } });
+        expect(drawnPills(view)).toEqual([]);
+
+        // CodeMirror reports a focus change a few milliseconds after the
+        // event, with no transaction of its own.
+        view.contentDOM.blur();
+        time.tick(50);
+        expect(view.contentDOM.textContent).toBe("See Note.");
+        expect(drawnPills(view)).toEqual([{ text: "Note", shortName: null }]);
+      } finally {
+        time.restore();
+      }
+    });
+
+    it("renders a mention an edit adds", () => {
+      const view = openView("See .");
+      view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+
+      view.dispatch({ changes: { from: 4, insert: `[Note][${KEY}]` } });
+      expect(drawnPills(view)).toEqual([{ text: "Note", shortName: null }]);
+    });
+
+    it("renders a mention an edit makes by naming a known key", () => {
+      // The keys are the same length, so the viewport stays as it was.
+      const view = openView(`[Note][${OTHER_KEY}]`);
+      view.dispatch({ effects: setKnownRefKeys.of([KEY]) });
+      expect(drawnPills(view)).toEqual([]);
+
+      view.dispatch({ changes: { from: 7, to: 13, insert: KEY } });
+      expect(drawnPills(view)).toEqual([{ text: "Note", shortName: null }]);
     });
   });
 });

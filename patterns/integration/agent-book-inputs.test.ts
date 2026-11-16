@@ -28,11 +28,9 @@ describe("book agent input handles", () => {
     const identity = await Identity.fromPassphrase("book input handles");
     const storageManager = StorageManager.emulate({ as: identity });
     const previousAgent = Deno.env.get("EXPERIMENTAL_AGENT_BUILTIN");
-    const previousServer = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
     let instance: NormalizedFullLink | undefined;
     try {
       Deno.env.set("EXPERIMENTAL_AGENT_BUILTIN", "true");
-      Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", "false");
       const fixture = join(
         PATTERNS,
         "integration/fixtures/agent-book-inputs.tsx",
@@ -43,6 +41,10 @@ describe("book agent input handles", () => {
         storageHost: {
           identity,
           storageManager,
+          // The observer and the hook below come with a caller-supplied
+          // store, which a run that resolves ON refuses, so this runs on the
+          // OFF arm.
+          serverExecution: false,
           onPatternInstantiated: (value) => {
             if (value.main?.endsWith("/book-recommendations/main.tsx")) {
               instance = value.cell;
@@ -150,9 +152,6 @@ describe("book agent input handles", () => {
       if (previousAgent === undefined) {
         Deno.env.delete("EXPERIMENTAL_AGENT_BUILTIN");
       } else Deno.env.set("EXPERIMENTAL_AGENT_BUILTIN", previousAgent);
-      if (previousServer === undefined) {
-        Deno.env.delete("EXPERIMENTAL_SERVER_EXECUTION");
-      } else Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", previousServer);
       await storageManager.close();
     }
   });

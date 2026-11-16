@@ -19,6 +19,10 @@ import {
   isConcurrentWatchRefreshEnabled,
   setupConcurrentWatchRefreshToggle,
 } from "./concurrent-watch-refresh.ts";
+import {
+  isSyncCidReferencesEnabled,
+  setupSyncCidReferencesToggle,
+} from "./sync-cid-references.ts";
 
 /**
  * Install every `commonfabric.*` host-toggle console command. Run once at
@@ -29,6 +33,7 @@ export function setupHostToggles(): void {
   setupWorkerConsoleToggle();
   setupCfcRenderCeilingToggle();
   setupConcurrentWatchRefreshToggle();
+  setupSyncCidReferencesToggle();
 }
 
 /**
@@ -62,4 +67,14 @@ export function runtimeHostFlags(): {
     patternCoverage: isPatternCoverageEnabled(),
     concurrentWatchRefresh: isConcurrentWatchRefreshEnabled(),
   };
+}
+
+/**
+ * The host toggles that set a runtime experimental option, read at runtime
+ * creation and laid over the options the deployment resolved. A toggle that
+ * is off contributes nothing, leaving the option at what the deployment and
+ * build gave it.
+ */
+export function runtimeExperimentalHostFlags(): { syncCidReferences?: true } {
+  return isSyncCidReferencesEnabled() ? { syncCidReferences: true } : {};
 }

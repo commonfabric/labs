@@ -93,6 +93,18 @@ describe("topicsBrowserPostureOf()", () => {
       .toBe(false);
   });
 
+  it("reports served views from the toolshed when the shell declares no posture, and none where it serves off", () => {
+    const served = (experimental: Record<string, boolean>) =>
+      undeclared(topicsBrowserPostureOf(
+        { experimental, shellServerExecutionDefine: null },
+        { kind: "read", servedByToolshed: true, source: "var x = 1;" },
+      )).servedViews;
+    expect(served({ serverExecution: true })).toBe(true);
+    expect(served({ serverExecution: true, webViewScopedReplication: false }))
+      .toBe(false);
+    expect(served({ serverExecution: false })).toBe(false);
+  });
+
   it("reads the shell's posture from the bundle when the toolshed reports no baked define", () => {
     const posture = declared(topicsBrowserPostureOf(
       {

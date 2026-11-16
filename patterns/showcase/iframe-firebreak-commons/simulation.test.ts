@@ -28,6 +28,13 @@ const input: IframeInputData = {
   maximumTurns: 8,
 };
 
+/** Returns the first tile of the board before any action that satisfies `test`. */
+function initialTile(test: (tile: TileState) => boolean): TileState {
+  const tile = reduceSimulation(input, []).tiles.find(test);
+  if (!tile) throw new Error("The board has no such tile.");
+  return tile;
+}
+
 describe("simulation", () => {
   describe("initializeRenderer()", () => {
     it("surfaces and preserves a renderer bootstrap failure", () => {
@@ -57,6 +64,25 @@ describe("simulation", () => {
         colno: 0,
         stacktrace: failure.stack,
       }]);
+    });
+
+    it("describes a thrown value that is not an error", () => {
+      const reported: RendererFailureAlarm[] = [];
+
+      reportRendererFailure("WebGL lost", (alarm) => reported.push(alarm));
+
+      expect(reported[0].description).toBe("WebGL lost");
+      expect(reported[0].stacktrace).toContain("WebGL lost");
+    });
+
+    it("reports the message as the trace of an error without a stack", () => {
+      const reported: RendererFailureAlarm[] = [];
+      const failure = new Error("WebGL unavailable");
+      failure.stack = undefined;
+
+      reportRendererFailure(failure, (alarm) => reported.push(alarm));
+
+      expect(reported[0].stacktrace).toBe("WebGL unavailable");
     });
   });
 
@@ -212,6 +238,39 @@ describe("simulation", () => {
       expect(target.fire).toBe(0);
     });
 
+    it("spreads only to neighbors that are dry, unburned, and unprotected", () => {
+      const tile = (id: string, x: number, y: number): TileState => ({
+        id,
+        x,
+        y,
+        terrain: "forest",
+        fire: 0,
+        firebreak: false,
+        wetUntilTurn: 0,
+        residents: 0,
+        evacuatedResidents: 0,
+        lostResidents: 0,
+        burned: false,
+      });
+      const source: TileState = { ...tile("source", 1, 1), fire: 2 };
+      const lake: TileState = { ...tile("lake", 0, 1), terrain: "water" };
+      const firebreak: TileState = {
+        ...tile("firebreak", 1, 0),
+        firebreak: true,
+      };
+      const wet: TileState = { ...tile("wet", 1, 2), wetUntilTurn: 1 };
+      const open = tile("open", 2, 1);
+
+      advanceFire(input, 1, [source, lake, firebreak, wet, open]);
+
+      expect(source.fire).toBe(3);
+      expect(source.burned).toBe(true);
+      expect(open.fire).toBe(1);
+      expect(lake.fire).toBe(0);
+      expect(firebreak.fire).toBe(0);
+      expect(wet.fire).toBe(0);
+    });
+
     it("normalizes custom dimensions for the simulation and renderer", () => {
       expect(normalizedBoardDimensions({ columns: 100, rows: 2 })).toEqual({
         columns: 12,
@@ -223,12 +282,135 @@ describe("simulation", () => {
       expect(normalizedMaximumTurns(-4)).toBe(1);
     });
 
+    it("uses the smallest board and turn limit for a size that is not finite", () => {
+      expect(normalizedBoardDimensions({ columns: NaN, rows: Infinity }))
+        .toEqual({ columns: 5, rows: 4 });
+      expect(normalizedMaximumTurns(NaN)).toBe(1);
+    });
+
+    it("mixes every terrain into the board, varying down each column", () => {
+      const { tiles } = reduceSimulation(DEFAULT_INPUT, []);
+
+      expect(new Set(tiles.map((tile) => tile.terrain))).toEqual(
+        new Set(["water", "grass", "forest", "settlement"]),
+      );
+      for (let x = 0; x < DEFAULT_INPUT.columns; x++) {
+        const column = tiles.filter((tile) => tile.x === x);
+        expect(new Set(column.map((tile) => tile.terrain)).size)
+          .toBeGreaterThan(1);
+      }
+    });
+
+    it("rejects a deployment to a tile that is not on the board", () => {
+      const result = reduceSimulation(input, [{
+        id: "off-board",
+        actorId: "crew-alice",
+        turn: 1,
+        type: "water",
+        tileId: "tile-99-99",
+      }]);
+
+      expect(result.rejectedActionIds).toEqual(["off-board"]);
+    });
+
+    it("rejects water on a tile that is not burning", () => {
+      const dry = initialTile((tile) =>
+        tile.fire === 0 && tile.terrain !== "water"
+      );
+      const lake = initialTile((tile) => tile.terrain === "water");
+
+      const result = reduceSimulation(input, [
+        {
+          id: "dry",
+          actorId: "crew-alice",
+          turn: 1,
+          type: "water",
+          tileId: dry.id,
+        },
+        {
+          id: "lake",
+          actorId: "crew-bob",
+          turn: 1,
+          type: "water",
+          tileId: lake.id,
+        },
+      ]);
+
+      expect(result.acceptedActionIds).toEqual([]);
+      expect(result.rejectedActionIds).toEqual(["dry", "lake"]);
+      expect(result.tiles.find((tile) => tile.id === dry.id)?.wetUntilTurn)
+        .toBe(0);
+    });
+
+    it("evacuates a settlement's residents once, and only a settlement", () => {
+      const settlement = initialTile((tile) => tile.terrain === "settlement");
+      const forest = initialTile((tile) => tile.terrain === "forest");
+      const evacuate = (
+        id: string,
+        actorId: string,
+        tileId: string,
+      ): SimulationAction => ({
+        id,
+        actorId,
+        turn: 1,
+        type: "evacuate",
+        tileId,
+      });
+
+      const result = reduceSimulation(input, [
+        evacuate("a-first", "crew-alice", settlement.id),
+        evacuate("b-again", "crew-bob", settlement.id),
+        evacuate("c-forest", "crew-carol", forest.id),
+      ]);
+
+      expect(result.acceptedActionIds).toEqual(["a-first"]);
+      expect(result.rejectedActionIds).toEqual(["b-again", "c-forest"]);
+      expect(result.evacuatedResidentCount).toBe(settlement.residents);
+    });
+
+    it("stops the drill at the advance that leaves nothing burning", () => {
+      const fires = reduceSimulation(input, []).tiles.filter((tile) =>
+        tile.fire > 0
+      );
+      const actions: SimulationAction[] = [
+        ...fires.map((tile, index): SimulationAction => ({
+          id: `water-${index}`,
+          actorId: `crew-${index}`,
+          turn: 1,
+          type: "water",
+          tileId: tile.id,
+        })),
+        { id: "advance-1", actorId: "crew-0", turn: 1, type: "advance-turn" },
+        { id: "advance-2", actorId: "crew-0", turn: 2, type: "advance-turn" },
+      ];
+
+      const result = reduceSimulation(input, actions);
+
+      expect(result.turn).toBe(2);
+      expect(result.status).toBe("contained");
+      expect(result.acceptedActionIds).toContain("advance-1");
+      expect(result.rejectedActionIds).toEqual(["advance-2"]);
+    });
+
     it("describes watering only while its protection is current", () => {
       const tile = reduceSimulation(input, []).tiles[0];
       tile.wetUntilTurn = 2;
 
       expect(describeTile(tile, 2)).toContain("recently watered");
       expect(describeTile(tile, 3)).not.toContain("recently watered");
+    });
+
+    it("describes a fire's intensity and a firebreak's protection", () => {
+      const tile = initialTile((candidate) => candidate.fire > 0);
+
+      expect(describeTile(tile, 1)).toContain("fire intensity 2");
+      expect(describeTile(tile, 1)).not.toContain("firebreak protected");
+
+      tile.fire = 0;
+      tile.firebreak = true;
+
+      expect(describeTile(tile, 1)).toContain("firebreak protected");
+      expect(describeTile(tile, 1)).not.toContain("fire intensity");
     });
 
     it("describes evacuated, lost, and remaining residents separately", () => {

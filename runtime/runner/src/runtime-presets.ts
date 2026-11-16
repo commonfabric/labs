@@ -139,6 +139,9 @@
  * | compileTurns               | core-default (unset) — NEVER set by a preset:    |
  * |                            | only that same factory builds runtimes that      |
  * |                            | yield while they compile and share a byte cache  |
+ * | moduleCompiler             | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory hands its runtimes the    |
+ * |                            | compile worker its serving host owns             |
  *
  * One named departure a caller can opt into: `cfcPosture: "max-enforcement"`
  * (a `CoreParams` field) lays the {@link MAX_ENFORCEMENT_CFC_OPTIONS} bundle
@@ -237,6 +240,7 @@ export const RUNTIME_OPTION_KEYS = [
   "fetch",
   "servingPosture",
   "compileTurns",
+  "moduleCompiler",
 ] as const satisfies readonly (keyof RuntimeOptions)[];
 
 export type RuntimeOptionKey = (typeof RUNTIME_OPTION_KEYS)[number];
@@ -256,6 +260,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   parseFlagValue,
   parseServerExperimentalOptions,
   SERVER_EXPERIMENTAL_PATH,

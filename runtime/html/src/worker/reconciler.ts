@@ -93,6 +93,8 @@ import {
   readRefusal,
   type RenderLabelSummary,
   rootRenderPolicyFor,
+  schemaLabelSummary,
+  UNREADABLE_LABELS,
 } from "./display-fit.ts";
 import { generateChildKeys } from "./keying.ts";
 import type {
@@ -1110,7 +1112,15 @@ export class WorkerReconciler {
    * `cf-render` cell is. A reference's read stops at the document it lands on
    * and leaves that document's contents to the render mounted from it.
    * Elsewhere a nested render root is decided on everything the bound cell
-   * reaches. A read that could not complete, one
+   * reaches. A binding whose entry is `complete` is decided on the read its
+   * component makes, `schema` as `componentReadSchema()` resolves it: a field
+   * the component does not read does not decide it, and a field it reads
+   * does, however the handle is typed, wherever the policy is one a nested
+   * render would be held to (`#rootPolicyCovers()`); elsewhere it is decided
+   * on everything the bound cell reaches, as an uncovered nested render root
+   * is. The entry is reviewed like the component itself, as
+   * {@link ComponentPropRead} says.
+   * A read that could not complete, one
    * whose space is out of reach or whose labels or links could not be read,
    * withholds the binding and is never taken for an empty read. While a
    * binding {@link ACCESS_PLACEHOLDER_BINDINGS} names is withheld because the
@@ -1148,9 +1158,13 @@ export class WorkerReconciler {
     let shown: boolean | undefined = replacing || undefined;
     let consumed: SinkConsumedLabel | undefined;
     let first = true;
-    const renders = componentReadContracts[state.tagName]?.[propName]?.renders;
-    const covered = renders !== undefined &&
-      this.#rootPolicyCovers(state.renderPolicy);
+    const contract = componentReadContracts[state.tagName]?.[propName];
+    const renders = contract?.renders;
+    // Whether the binding is decided on the reads its contract entry declares
+    // rather than on its handle's schema: a nested render root, or an entry
+    // whose read is complete.
+    const declared = renders !== undefined || contract?.complete === true;
+    const covered = declared && this.#rootPolicyCovers(state.renderPolicy);
     // The empty path is the binding's own reference, which the read of the
     // binding decides.
     const paths = renders?.filter((path) => path.length > 0) ?? [];
@@ -1205,16 +1219,17 @@ export class WorkerReconciler {
       }
     };
     // The component reads the binding under the schema the handle it is
-    // handed carries, or the one it projects that handle to.
-    const hostRead = renders === undefined ? read : read.asSchema(
-      covered
-        ? componentReadSchema(
+    // handed carries, or the one it projects that handle to. A declared read
+    // the policy does not cover is decided on everything the binding reaches.
+    const hostRead = !declared ? read : covered
+      ? read.asSchema(
+        componentReadSchema(
           state.tagName,
           propName,
           this.#bindingSchema(cell.getAsNormalizedFullLink().schema),
-        ) ?? true
-        : true,
-    );
+        ) ?? true,
+      )
+      : read.asSchema(true);
     // The binding hands the host a handle whose reads take in the whole
     // value, so its decision is made on the read they are decided on: each
     // value as the worker hands it to a host (`hostValueOf()`), so a field the
@@ -2129,17 +2144,9 @@ export class WorkerReconciler {
     try {
       labelView = this.#resolveCellLabelView(cell);
     } catch {
-      return { labelSource: "unreadable", confidentiality: [], integrity: [] };
+      return UNREADABLE_LABELS;
     }
-    if (labelView === undefined) {
-      return {
-        labelSource: "schema",
-        confidentiality: confidentialityLabelsFromCellSchema(
-          cell,
-        ) as readonly CfcConfClause[],
-        integrity: [],
-      };
-    }
+    if (labelView === undefined) return schemaLabelSummary(cell);
     return {
       labelSource: "stored",
       confidentiality: confidentialityLabels(labelView),

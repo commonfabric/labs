@@ -59,6 +59,49 @@ describe("isInterchangeTag", () => {
     expect(isInterchangeTag("caf\u00e9")).toBe(false);
   });
 
+  describe("limits", () => {
+    // Each component, prefix or name, is at most 100 characters; a tag has at
+    // most ten components; and a version is at most ten digits. A tag of one
+    // component and a tag of several are separate alternatives of the syntax,
+    // so each limit is checked in both where it can reach both.
+
+    const longest = "n".repeat(100);
+    const tooLong = "n".repeat(101);
+
+    it("returns `true` for a tag of one component at each limit", () => {
+      expect(isInterchangeTag(longest)).toBe(true);
+      expect(isInterchangeTag(`${longest}@1`)).toBe(true);
+      expect(isInterchangeTag("sha@1234567890")).toBe(true);
+    });
+
+    it("returns `true` for a tag of several components at each limit", () => {
+      expect(isInterchangeTag("a.b.c.d.e.f.g.h.i.j@1")).toBe(true);
+      expect(isInterchangeTag(`${longest}.sha@1`)).toBe(true);
+      expect(isInterchangeTag(`sys.${longest}@1`)).toBe(true);
+      expect(isInterchangeTag("sys.sha@9999999999")).toBe(true);
+    });
+
+    it("returns `false` for a tag with eleven components", () => {
+      expect(isInterchangeTag("a.b.c.d.e.f.g.h.i.j.k@1")).toBe(false);
+      expect(isInterchangeTag("a.b.c.d.e.f.g.h.i.j.k")).toBe(false);
+    });
+
+    it("returns `false` for a tag of one component with 101 characters", () => {
+      expect(isInterchangeTag(tooLong)).toBe(false);
+      expect(isInterchangeTag(`${tooLong}@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag of several components, one with 101 characters", () => {
+      expect(isInterchangeTag(`${tooLong}.sha@1`)).toBe(false);
+      expect(isInterchangeTag(`sys.${tooLong}@1`)).toBe(false);
+    });
+
+    it("returns `false` for a tag with a version of eleven digits", () => {
+      expect(isInterchangeTag("sha@12345678901")).toBe(false);
+      expect(isInterchangeTag("sys.sha@10000000000")).toBe(false);
+    });
+  });
+
   it("returns `false` for a tag padded with whitespace or a newline", () => {
     // The syntax is anchored at both ends and is not multiline.
 

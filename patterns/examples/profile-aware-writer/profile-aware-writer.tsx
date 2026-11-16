@@ -15,7 +15,8 @@ type Input = {
   title?: string | Default<"Profile-Aware Writer">;
 };
 
-const handleSend = handler<
+// Takes the trimmed message as the topic, ignoring a blank one.
+export const handleSend = handler<
   { detail: { message: string } },
   { topic: Writable<string> }
 >((event, { topic }) => {
@@ -81,7 +82,7 @@ Write content personalized to the user when appropriate.`;
         {result.pending
           ? (
             <div style="margin-top: 16px;">
-              <cf-loader show-elapsed /> Generating personalized content...
+              <cf-loader showElapsed /> Generating personalized content...
             </div>
           )
           : result.result

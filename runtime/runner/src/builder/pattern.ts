@@ -66,7 +66,6 @@ import {
   REPLAYABLE_BUILTIN_REFS,
   SUBPATTERN_ARGUMENT_BUILTIN_REFS,
 } from "./builtin-replayability.ts";
-import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
 import { instanceNameOf, instancePartialCause } from "./instance-name.ts";
 import {
   pushOntoFrameStack,
@@ -323,16 +322,8 @@ function factoryFromPattern<T, R>(
         // the handler's body finished, and no earlier: until the cell has a
         // link, the handler may still name it with `.for()`.
         linkCellOutsideHandlerSpace(value);
-        const { frame, nodes, path, scope, name } = exportCell(value);
-        if (isReactive(value) && frame !== getTopFrame()) {
-          throw new Error(
-            closureCaptureErrorMessage({
-              capturedCell: { path, scope, name },
-            }),
-          );
-        }
         allCells.add(value);
-        nodes.forEach((node: NodeRef) => {
+        exportCell(value).nodes.forEach((node: NodeRef) => {
           if (!allNodes.has(node)) {
             allNodes.add(node);
             node.inputs = collectCellsAndNodes(node.inputs);
@@ -497,12 +488,7 @@ function factoryFromPattern<T, R>(
   const cellReferenceForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): AliasBinding["$alias"] | undefined => {
-    const { cell: top, path, external, scope, schema, kind } = exportCell(
-      cell,
-    );
-    // If we have an external id, don't bother with all this
-    if (external) return undefined;
-
+    const { cell: top, path, scope, schema, kind } = exportCell(cell);
     // A stream's alias says so in its schema, which is what lets a link built
     // from the alias resolve as a stream with nothing read at its target.
     const aliasSchema = kind === "stream"
@@ -552,13 +538,8 @@ function factoryFromPattern<T, R>(
     );
     if (path.length > 0 || external) return;
 
-    const cellReference = cellReferenceForCell(cell);
-    if (cellReference === undefined) return;
-    if (
-      cellReference.partialCause !== undefined &&
-      cellReference.path.length === 0
-    ) {
-      const partialCause = cellReference.partialCause!;
+    const partialCause = cellReferenceForCell(cell)?.partialCause;
+    if (partialCause !== undefined) {
       const descriptorSchema = kind === "stream"
         ? declareStreamSchema(schema)
         : schema;
@@ -607,7 +588,6 @@ function factoryFromPattern<T, R>(
     serializationPath, // path where we encountered the cell
     ignoreSelfAliases,
   ) => {
-    const { cell: top } = exportCell(cell);
     const cellReference = cellReferenceForCell(cell);
     if (cellReference === undefined) return undefined;
     if (cellReference.cell !== undefined) {
@@ -628,32 +608,12 @@ function factoryFromPattern<T, R>(
     }
 
     const sanitizedSchema = aliasSchemaFor(cellReference.schema);
-    const partialCause = derivedInternalPartialCausesByRoot.get(top);
-    if (partialCause !== undefined) {
-      if (!deepEqual(partialCause, cellReference.partialCause)) {
-        throw new Error(
-          `Inconsistent partial cause for cell. This is a bug in the pattern serializer, please report it.\n` +
-            `Cell path: ${exportCell(cell).path.join(".")}\n` +
-            `Existing partial cause: ${JSON.stringify(partialCause)}\n` +
-            `New partial cause: ${JSON.stringify(cellReference.partialCause)}`,
-        );
-      }
-      return {
-        $alias: {
-          ...cellReference,
-          ...(sanitizedSchema !== undefined && { schema: sanitizedSchema }),
-        },
-      };
-    } else if (
-      cellReference.cell === "argument" || cellReference.cell === "result"
-    ) {
-      return {
-        $alias: {
-          ...cellReference,
-          ...(sanitizedSchema !== undefined && { schema: sanitizedSchema }),
-        },
-      };
-    }
+    return {
+      $alias: {
+        ...cellReference,
+        ...(sanitizedSchema !== undefined && { schema: sanitizedSchema }),
+      },
+    };
   };
   // Creates a query (i.e. aliases) into the cells for the result
   const result = withAliasBindings(
@@ -714,7 +674,7 @@ function factoryFromPattern<T, R>(
     return { module, inputs, outputs } satisfies Node;
   });
 
-  const pattern: Pattern & toEncodableForm & toJSON = {
+  const pattern: Pattern = {
     // Deep-frozen, each with a root of its own. Binding a node narrows the
     // argument schema at every slot it binds, and `schemaAtPath()` keeps a
     // narrowing only for a deep-frozen schema.
@@ -729,11 +689,6 @@ function factoryFromPattern<T, R>(
     ...(derivedInternalCells.length > 0 ? { derivedInternalCells } : {}),
     result,
     nodes: serializedNodes,
-    // Important that this refers to patternFactory, as .program will be set on
-    // pattern afterwards (see factory.ts:exportsCallback)
-    toEncodableForm: () => patternToEncodableForm(patternFactory),
-    // What `JSON.stringify(SomePattern)` returns, which pattern source uses.
-    toJSON: () => patternToEncodableForm(patternFactory),
   };
   freezePartialCauses(pattern);
 
@@ -1024,8 +979,11 @@ const UNMODELED_SCHEMA_KEYWORDS: readonly string[] = [
  *   disqualify, but `asCell` bindings granting a write-capable handle,
  *   schema-less handlers, sub-pattern arguments,
  *   op-sub-pattern builtin inputs (map/filter/flatMap), and every input of a
- *   non-replayable node (`llmDialog` writes through its inputs) still do;
- * - it is not a stream.
+ *   non-replayable node (`llmDialog` writes through its inputs) still do.
+ *
+ * A stream is never tagged, because it never has a writer: a node's
+ * `outputs` is the fresh cell its factory mints, and a handler's stream is
+ * bound under its `$event` input.
  *
  * The failure directions are asymmetric by design. SHAPE questions fail open
  * only where write capability is provably absent — writes in schema-carrying
@@ -1138,10 +1096,9 @@ function assignComputedCellKinds(
     // by value alone can let an earlier read-only path suppress a later
     // writable path. The pair guard still terminates actual value/schema
     // cycles.
-    const seenSchemas = seen.get(target);
-    if (seenSchemas?.has(schema)) return;
-    if (seenSchemas) seenSchemas.add(schema);
-    else seen.set(target, new Set([schema]));
+    const seenSchemas = seen.get(target) ?? new Set<object>();
+    if (seenSchemas.has(schema)) return;
+    seen.set(target, seenSchemas.add(schema));
     if (Array.isArray(target)) {
       const items = schema.items;
       if ("prefixItems" in schema && !Array.isArray(schema.prefixItems)) {
@@ -1171,10 +1128,7 @@ function assignComputedCellKinds(
       }
       return;
     }
-    // A `FabricPrimitive` falls to the fail-safe `collectAll()` below: its
-    // contents are not reachable by property name, so walking one here would
-    // collect nothing and leave a cell root inside it undisqualified from the
-    // `computed` tag -- the ack-and-drop this function exists to prevent. A
+    // A `FabricPrimitive` is atomic and holds no cell, so it is not walked. A
     // `FabricInstance` is refused here.
     if (isWalkableObjectOrArray(target) && !isReactive(target)) {
       const properties = isObjectNotArray(schema.properties)
@@ -1192,11 +1146,7 @@ function assignComputedCellKinds(
         // handler receives at most a plain, unwritable value — nothing to
         // collect.
       }
-      return;
     }
-    // Anything else (pattern factories, non-cell reactives, exotic objects):
-    // unmodeled — fail safe.
-    collectAll();
   };
 
   // Roots bound into a node's inputs disqualify when the node could write
@@ -1280,7 +1230,6 @@ function assignComputedCellKinds(
     if (writers === undefined || writers.length === 0) return;
     if (writers.some(writerDisqualifies)) return;
     if (disqualified.has(root)) return;
-    if (exportCell(root).kind === "stream") return;
     const descriptor = derivedInternalCells.find((candidate) =>
       deepEqual(candidate.partialCause, partialCause)
     );

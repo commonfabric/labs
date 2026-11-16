@@ -21,7 +21,15 @@ import {
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
+import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
+import {
+  findIndexedPiece,
+  type PatternIndexStore,
+  patternIndexStoreRoot,
+} from "@commonfabric/pattern-index/store";
 import {
   ownerReleaseByIntentRequest,
   ownerReleaseByIntentSignature,
@@ -49,6 +57,7 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  PieceSourceChangedError,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
 } from "@commonfabric/piece/ops";
@@ -168,9 +177,11 @@ import { loadIdentity } from "./identity.ts";
 import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
+  followPieceOnServer,
   instantiatePieceOnServer,
   type LifecycleClientConfig,
   ServedLifecycleError,
+  type ServedPieceScope,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -201,6 +212,22 @@ export interface EntryConfig {
   /** Data file paths stored with the piece and never compiled. */
   dataFilePaths?: string[];
 }
+
+/**
+ * A published pattern to create a piece from, in place of local source. The
+ * index is read as the space's identity, the principal the piece is created
+ * as.
+ */
+export interface IndexedPatternEntry {
+  /** The pattern's id in the index, as a search answers it. */
+  patternId: string;
+
+  /** Base URL of the pattern index that serves it. */
+  patternIndexUrl: string;
+}
+
+/** Where a new piece's program comes from: local files, or the index. */
+export type PieceEntry = EntryConfig | IndexedPatternEntry;
 
 export interface SpaceConfig {
   apiUrl: string;
@@ -261,6 +288,12 @@ export interface PieceConfig extends SpaceConfig {
 
 export interface SetPiecePatternOptions {
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
 }
 
 export interface GetCellValueOptions {
@@ -550,8 +583,16 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   loadIdentity?: typeof loadIdentity;
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
+  getProgramFromIndex?: typeof getProgramFromIndex;
+
+  /** The transport index reads go over, in place of the global `fetch`. */
+  patternIndexFetch?: PatternIndexFetch;
+
+  /** The local index membership record, in place of the user's own. */
+  patternIndexStore?: PatternIndexStore;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
+  followPieceOnServer?: typeof followPieceOnServer;
 
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
@@ -890,6 +931,51 @@ async function getPinnedProgramFromFile(
     console.error(renderPinRewrite(rewrite));
   }
   return result.program;
+}
+
+/**
+ * The program a published pattern deploys as, fetched and compiled into the
+ * space the way cf-harness's `run_pattern` deploys one: the published patterns
+ * it imports are drawn into the space first, so its `cf:pattern:` imports
+ * resolve, and a failure's message never quotes the indexed source.
+ *
+ * Compiling here, ahead of creation, is what gives a creation the shared
+ * path's failures: creation compiles the program again, from the cache this
+ * compile filled, and a served creation compiles it on the server.
+ *
+ * Unlike a program read from local files, this one's fabric imports are not
+ * pinned: it deploys exactly as the index serves it, as `run_pattern` deploys
+ * it.
+ *
+ * @throws IndexedPatternError when the index, a composed import, or the
+ * compile fails.
+ */
+async function getProgramFromIndex(
+  pieces: PiecesController,
+  config: SpaceConfig,
+  entry: IndexedPatternEntry,
+  deps: PieceOperationDependencies = {},
+): Promise<RuntimeProgram> {
+  const signer = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  const { program } = await compileIndexedPattern({
+    runtime: pieces.runtime,
+    space: pieces.getSpace(),
+    patternId: entry.patternId,
+    // Signs as the identity and presents the chain from the person's index
+    // root when this machine holds one, as every index call from `cf` does.
+    getClient: () =>
+      openPatternIndexClient({
+        baseUrl: entry.patternIndexUrl,
+        signer,
+        ...(deps.patternIndexFetch === undefined
+          ? {}
+          : { fetchFn: deps.patternIndexFetch }),
+        ...(deps.patternIndexStore === undefined
+          ? {}
+          : { store: deps.patternIndexStore }),
+      }),
+  });
+  return program;
 }
 
 // Returns an array of metadata about pieces to display.
@@ -1786,7 +1872,25 @@ function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
       }
       return storageManager.runPatternLifecycle(space, verb, body);
     },
+    takesOrigins: async (space) => {
+      const flags = await storageManager?.serverFlags?.(space);
+      return flags === undefined
+        ? undefined
+        : flags?.patternLifecycleOrigins === true;
+    },
+    takesScopes: async (space) =>
+      (await storageManager?.serverFlags?.(space))?.patternLifecycleScopes,
   };
+}
+
+/**
+ * The scope a served verb names `scope`'s requester instance at: none for a
+ * piece's space instance, which the verb addresses by its id alone.
+ */
+function servedScope(
+  scope: PieceConfig["pieceScope"],
+): ServedPieceScope | undefined {
+  return scope === undefined || scope === "space" ? undefined : scope;
 }
 
 /**
@@ -1804,7 +1908,7 @@ async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
   program: RuntimeProgram,
-  entry: EntryConfig,
+  repository: string | undefined,
   options: {
     input?: object;
     start?: boolean;
@@ -1822,9 +1926,7 @@ async function createWithReceipt(
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
-        ...(entry.repository === undefined
-          ? {}
-          : { repository: entry.repository }),
+        ...(repository === undefined ? {} : { repository }),
         ...(options?.slug === undefined ? {} : { slug: options.slug }),
         ...(options?.force === undefined ? {} : { force: options.force }),
         register: true,
@@ -1906,7 +2008,20 @@ async function createWithReceipt(
 }
 
 /**
- * Creates a new piece from source code and optional input.
+ * The error reporting that `cf piece new` found no space where it was pointed,
+ * naming the command that creates one.
+ */
+function noSpaceAnswers(error: SpaceNotFoundError): Error {
+  return new Error(
+    `${error.message}. Opening a space never creates one; create one ` +
+      `with: ${cliCommand(["space", "create"])}`,
+    { cause: error },
+  );
+}
+
+/**
+ * Creates a new piece from source code, or from a published pattern, and
+ * optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
  * refuses one, and `force` takes it. With a request key or a serving
@@ -1917,7 +2032,7 @@ async function createWithReceipt(
  */
 export async function newPiece(
   config: SpaceConfig,
-  entry: EntryConfig,
+  entry: PieceEntry,
   options?: {
     /** Initial argument committed during setup, before registration or start. */
     input?: object;
@@ -1954,13 +2069,7 @@ export async function newPiece(
       );
     }
   } catch (error) {
-    if (error instanceof SpaceNotFoundError) {
-      throw new Error(
-        `${error.message}. Opening a space never creates one; create one ` +
-          `with: ${cliCommand(["space", "create"])}`,
-        { cause: error },
-      );
-    }
+    if (error instanceof SpaceNotFoundError) throw noSpaceAnswers(error);
     throw new Error(
       `Could not initialize the space's default pattern: ${
         describeFailure(error)
@@ -1980,14 +2089,27 @@ export async function newPiece(
     );
   }
 
-  const program = await timeCliPhase(
-    "newPiece.getProgramFromFile",
-    () =>
-      (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
-        pieces,
-        entry,
-      ),
-  );
+  const program = "patternId" in entry
+    ? await timeCliPhase(
+      "newPiece.getProgramFromIndex",
+      () =>
+        (deps.getProgramFromIndex ?? getProgramFromIndex)(
+          pieces,
+          config,
+          entry,
+          deps,
+        ),
+    )
+    : await timeCliPhase(
+      "newPiece.getProgramFromFile",
+      () =>
+        (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
+          pieces,
+          entry,
+        ),
+    );
+  // A published pattern carries no repository locator of its own.
+  const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
   // scheduler `idle()` that never resolves, and the runtime surfaces no
   // event that a start has definitively failed (a thrown pattern reports its
@@ -2026,12 +2148,32 @@ export async function newPiece(
           config,
           pieces,
           program,
-          entry,
+          repository,
           options,
           deps,
           boundStart,
         ),
-    );
+    ).catch(async (error) => {
+      // The serving side refuses a space with no history as `forbidden`,
+      // the answer it gives a caller without WRITE, so that the verb is not
+      // an existence oracle. Whether a space exists is an ordinary read, so
+      // the refusal is told apart here, where it is reported, and a name that
+      // reaches no space reads as it does when the client ensures the root.
+      // A read that fails tells nothing apart, and the refusal stands.
+      if (
+        served && error instanceof ServedLifecycleError &&
+        error.code === "forbidden" &&
+        await pieces.runtime.spaceExists(pieces.getSpace()).then(
+          (exists) => !exists,
+          () => false,
+        )
+      ) {
+        throw noSpaceAnswers(
+          new SpaceNotFoundError(pieces.getSpace(), pieces.getSpaceName()),
+        );
+      }
+      throw error;
+    });
     noteWroteTo(config.space);
     return id;
   }
@@ -2039,7 +2181,7 @@ export async function newPiece(
     "newPiece.create",
     () =>
       boundStart(pieces.create(program, {
-        repository: entry.repository,
+        repository,
         start: options?.start,
         ...(options?.input === undefined ? {} : { input: options.input }),
       })),
@@ -2209,15 +2351,18 @@ async function updateOnServer(
   config: PieceConfig,
   pieces: PiecesController,
   pieceId: string,
+  scope: PieceConfig["pieceScope"],
   program: RuntimeProgram,
   entry: EntryConfig,
   options: SetPiecePatternOptions,
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
+  const served = servedScope(scope);
   const receipt = await (deps.setPieceSourceOnServer ??
     setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
+      ...(served === undefined ? {} : { scope: served }),
       program,
       ...(entry.repository === undefined
         ? {}
@@ -2225,11 +2370,26 @@ async function updateOnServer(
       ...(options.dangerouslyAllowIncompatibleSchema
         ? { dangerouslyAllowIncompatibleSchema: true }
         : {}),
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     });
   noteWroteTo(config.space);
+  // A server from before `setsrc` took an origin drops the field and
+  // detaches the piece, and its receipt names no origin.
+  if (options.origin !== undefined && receipt.origin === undefined) {
+    throw new Error(
+      `The source update committed as revision ${receipt.revisionId}, but ` +
+        `this deployment does not record an origin with \`setsrc\` yet, ` +
+        `so the piece follows nothing.`,
+    );
+  }
   let refresh: PatternUpdateReceipt["refresh"];
   try {
-    const cell = await pieces.getPieceCell(receipt.pieceId, false);
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
     await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
@@ -2245,6 +2405,7 @@ async function updateOnServer(
     seq: receipt.seq,
     revisionId: receipt.revisionId,
     detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
     refresh,
   };
 }
@@ -2267,10 +2428,18 @@ export interface FollowPieceSourceOptions
 
 /** A follow receipt includes the incompatibility this invocation accepted. */
 export type FollowPieceSourceResult =
-  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | { status: "incompatible"; message: string }
   | (Extract<PieceSourceActionResult, { status: "applied" }> & {
     acceptedIncompatibility?: string;
   });
+
+/**
+ * What a follow sent to a deployment whose memory server cannot read a
+ * `follow` request is refused with.
+ */
+const FOLLOW_NOT_SERVED =
+  "This deployment serves piece lifecycle verbs, and `follow` is not " +
+  "served yet: its memory server could not read the request.";
 
 /**
  * Points a piece at `origin` and adopts what that origin currently serves,
@@ -2279,14 +2448,25 @@ export type FollowPieceSourceResult =
  *
  * This is how a piece created detached — a profile made before the runtime
  * claimed origins for children of system pieces, say — is put on the
- * lifecycle a release reaches. Unlike `setsrc`, which detaches, the origin
- * is recorded with the revision. The transition carries the same writer
- * delegation a `setsrc` does, since it is the owner's explicit act.
+ * lifecycle a release reaches. The origin is recorded with the revision, and
+ * the source adopted is what the origin serves now; a `setsrc` that names an
+ * origin records it over source the caller supplies instead, and one that
+ * names none detaches. The transition carries the same writer delegation a
+ * `setsrc` does, since it is the owner's explicit act.
  *
- * @throws Error when the deployment serves piece lifecycle verbs (the served
- * update takes no origin), when the piece cannot be resolved, or when the
- * origin cannot be read or does not compile; `PieceSourceChangedError` when
- * the piece is off a pin `options` names.
+ * Against a deployment that serves piece lifecycle verbs, the serving runtime
+ * resolves the origin, reviews the candidate and commits the transition
+ * (docs/features/server-pattern-lifecycle.md), on this identity's instance
+ * of a piece addressed at a scope, and this connection then asks the server
+ * for the piece's result, reporting a failure of that as `executionWarning`.
+ * Nothing changes the source in this process there.
+ *
+ * @throws Error when the piece cannot be resolved, or when the origin cannot
+ * be read or does not compile; against a serving deployment, also when its
+ * memory server cannot read a `follow` request;
+ * `ServedLifecycleError` (`scope-unsupported`) for a piece addressed at a
+ * scope on a deployment whose verbs do not take one;
+ * `PieceSourceChangedError` when the piece is off a pin `options` names.
  */
 export async function followPieceSource(
   config: PieceConfig,
@@ -2295,20 +2475,25 @@ export async function followPieceSource(
   deps: PieceOperationDependencies = {},
 ): Promise<FollowPieceSourceResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
-  // Against a serving deployment a source transition is the serving
-  // runtime's to commit, and the served update verb carries no origin yet;
-  // a client-side repoint there would commit outside the served lifecycle.
-  if (servesLifecycleVerbs(pieces)) {
-    throw new Error(
-      "This deployment serves piece lifecycle verbs, and `follow` is not " +
-        "served yet; the served update takes no origin.",
-    );
-  }
   const resolvedConfig = await resolvePieceConfigWithPieces(
     config,
     pieces,
     deps,
   );
+  // Against a serving deployment a source transition is the serving
+  // runtime's to commit; a client-side repoint there would commit outside
+  // the served lifecycle.
+  if (servesLifecycleVerbs(pieces)) {
+    return await followOnServer(
+      config,
+      pieces,
+      resolvedConfig.piece,
+      resolvedConfig.pieceScope,
+      origin,
+      options,
+      deps,
+    );
+  }
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2316,7 +2501,32 @@ export async function followPieceSource(
     resolvedConfig.pieceScope,
   );
   const action = { kind: "repoint" as const, url: origin };
-  const pins = {
+  const pins = followPins(options);
+  const reviewed = await piece.changeSource(action, pins);
+  if (
+    reviewed.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const confirmed = await piece.changeSource(action, {
+      ...pins,
+      confirmedChange: reviewed.prepared,
+    });
+    if (confirmed.status !== "applied") return confirmed;
+    noteWroteTo(config.space);
+    return { ...confirmed, acceptedIncompatibility: reviewed.message };
+  }
+  if (reviewed.status === "applied") noteWroteTo(config.space);
+  return reviewed;
+}
+
+/** The pins `options` names, as a source change takes them. */
+function followPins(options: FollowPieceSourceOptions): {
+  expectedPattern?: { identity: string; symbol: string };
+  expectedRevision?: string | null;
+} {
+  return {
     ...(options.expectedPattern === undefined
       ? {}
       : { expectedPattern: options.expectedPattern }),
@@ -2324,31 +2534,88 @@ export async function followPieceSource(
       ? {}
       : { expectedRevision: options.expectedRevision }),
   };
-  let result: FollowPieceSourceResult = await piece.changeSource(action, pins);
-  if (
-    result.status === "incompatible" &&
-    options.dangerouslyAllowIncompatibleSchema
-  ) {
-    // Confirm only this review and its pinned candidate. Changed source
-    // state or retained input may require a new review by the caller.
-    const acceptedIncompatibility = result.message;
-    result = await piece.changeSource(action, {
-      ...pins,
-      confirmedChange: result.prepared,
-    });
-    if (result.status === "applied") {
-      result = { ...result, acceptedIncompatibility };
+}
+
+/**
+ * The served half of `followPieceSource`: the serving runtime reviews the
+ * candidate and commits the follow, and this connection then asks the
+ * server for the piece's result, which is what makes the new source run,
+ * reporting a failure of that as `executionWarning`, since the follow is
+ * durable whatever the refresh did. A refusal the review answers with
+ * comes back as it does from a client-side follow: an incompatible
+ * candidate as the result, a piece off a pin as `PieceSourceChangedError`.
+ */
+async function followOnServer(
+  config: PieceConfig,
+  pieces: PiecesController,
+  pieceId: string,
+  scope: PieceConfig["pieceScope"],
+  origin: string,
+  options: FollowPieceSourceOptions,
+  deps: PieceOperationDependencies,
+): Promise<FollowPieceSourceResult> {
+  const served = servedScope(scope);
+  let receipt: Awaited<ReturnType<typeof followPieceOnServer>>;
+  try {
+    receipt = await (deps.followPieceOnServer ?? followPieceOnServer)(
+      lifecycleClient(pieces),
+      {
+        space: pieces.getSpace(),
+        piece: pieceId,
+        ...(served === undefined ? {} : { scope: served }),
+        origin,
+        ...followPins(options),
+        ...(options.dangerouslyAllowIncompatibleSchema
+          ? { dangerouslyAllowIncompatibleSchema: true }
+          : {}),
+      },
+    );
+  } catch (error) {
+    if (error instanceof ServedLifecycleError) {
+      if (error.code === "incompatible") {
+        return { status: "incompatible", message: error.message };
+      }
+      if (error.code === "source-moved") {
+        throw new PieceSourceChangedError(error.message);
+      }
     }
+    // A memory server that predates the verb refuses the frame unread.
+    if (error instanceof Error && error.name === "InvalidMessageError") {
+      throw new Error(FOLLOW_NOT_SERVED, { cause: error });
+    }
+    throw error;
   }
-  if (result.status === "applied") noteWroteTo(config.space);
-  return result;
+  noteWroteTo(config.space);
+  let executionWarning: string | undefined;
+  try {
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
+  } catch (error) {
+    executionWarning = describeFailure(error);
+  }
+  return {
+    status: "applied",
+    ...(receipt.acceptedIncompatibility === undefined
+      ? {}
+      : { acceptedIncompatibility: receipt.acceptedIncompatibility }),
+    ...(executionWarning === undefined ? {} : { executionWarning }),
+  };
 }
 
 /**
  * Replaces the piece's source and returns its setup transaction receipt.
- * Against a serving deployment the update is the serving runtime's to
- * commit; a piece addressed at a scope keeps the client-side path, since
- * the served verb takes the piece's id alone.
+ * The update detaches the piece unless `options.origin` names the origin it
+ * follows from then on. Against a serving deployment the update is the
+ * serving runtime's to commit, on this identity's instance of a piece
+ * addressed at a scope, and nothing changes the source in this process.
+ *
+ * @throws ServedLifecycleError (`scope-unsupported`) for a piece addressed
+ * at a scope on a serving deployment whose verbs do not take one.
  */
 export async function setPiecePattern(
   config: PieceConfig,
@@ -2364,13 +2631,12 @@ export async function setPiecePattern(
   );
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
-  if (
-    servesLifecycleVerbs(pieces) && resolvedConfig.pieceScope === undefined
-  ) {
+  if (servesLifecycleVerbs(pieces)) {
     return await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
+      resolvedConfig.pieceScope,
       program,
       entry,
       options,
@@ -2388,6 +2654,7 @@ export async function setPiecePattern(
     ...(options.dangerouslyAllowIncompatibleSchema
       ? { dangerouslyAllowIncompatibleSchema: true }
       : {}),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
   return receipt;
@@ -2442,6 +2709,10 @@ export async function savePiecePattern(
     );
   }
   await writeSourcePackage(program, outPath);
+  await recordSavedIndexSource(
+    piece.id,
+    program.files.map((file) => join(outPath, file.name)),
+  );
   // Finding what the source declares parses it, which reaches the compiler.
   // deno-lint-ignore cf-imports/no-inline-module-import
   const { undeclaredDataFileWarning } = await import(
@@ -2449,6 +2720,28 @@ export async function savePiecePattern(
   );
   const warning = undeclaredDataFileWarning(program);
   if (warning !== undefined) console.log(warning);
+}
+
+/**
+ * Where the piece came from the pattern index (`cf piece new --from-index`),
+ * remembers that the files `written` are that pattern's source, so
+ * publishing it again credits the original as `remixedFrom`. Best effort: a
+ * missing or unreadable record costs that credit and nothing else.
+ */
+async function recordSavedIndexSource(
+  pieceId: string,
+  written: readonly string[],
+): Promise<void> {
+  try {
+    const found = await findIndexedPiece(patternIndexStoreRoot(), pieceId);
+    if (found !== undefined) {
+      await found.store.recordSource(written, found.patternId);
+    }
+  } catch (error) {
+    console.error(
+      `Could not record where this source came from: ${describeFailure(error)}`,
+    );
+  }
 }
 
 /**

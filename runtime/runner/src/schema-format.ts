@@ -287,7 +287,6 @@ function schemaToTypeStringInner(
     if (props && "pattern" in props && "extraParams" in props) {
       // This is a PatternToolResult schema - format as a handler
       const extraParamsSchema = props.extraParams;
-      if (depth >= maxDepth) return "(e: {...}) => void";
       const paramType = schemaToTypeString(extraParamsSchema, nextOpts);
       return `(e: ${paramType}) => void`;
     }

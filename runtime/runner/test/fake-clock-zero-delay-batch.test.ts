@@ -2,9 +2,9 @@
 // The fake-clock harness fires every zero-delay timer from one `kick()`, in
 // registration order, in a single real task. Two properties of that batch are
 // load-bearing for code that takes a turn of the event loop without waiting on
-// a timer — the memory transport's frame pump and the memory server's
-// subscription refresh both do, through `armTurn`, because waking Deno's loop
-// for a timer costs milliseconds.
+// a timer — the memory transport's frame pump, the memory server's
+// subscription refresh and the scheduler's passes all do, through `armTurn`,
+// because waking Deno's loop for a timer costs milliseconds.
 //
 // A `setImmediate` has to be one of the batch. Left to the real event loop it
 // would run ahead of every turn the harness was holding, and no `settle()` or

@@ -100,6 +100,31 @@ export interface TransformerDiagnosticInfo {
 
 export type CompilationErrorType = "MODULE_NOT_FOUND" | "ERROR";
 
+/**
+ * What a {@link CompilationError} holds once it is built, as plain data. A
+ * compile error that crossed a structured clone is rebuilt from these, since
+ * the diagnostic it was first built from holds the whole source file.
+ */
+export interface CompilationErrorFields {
+  /** The text the error's frame quotes. */
+  readonly source?: string;
+
+  /** The file the error is in. */
+  readonly file?: string;
+
+  /** The 1-based line the error is on. */
+  readonly line?: number;
+
+  /** The 1-based column the error starts at. */
+  readonly column?: number;
+
+  /** The message, after any rewriting. */
+  readonly message: string;
+
+  /** What kind of error it is. */
+  readonly type: CompilationErrorType;
+}
+
 export class CompilationError {
   source?: string;
   file?: string;
@@ -108,11 +133,26 @@ export class CompilationError {
   message: string;
   type: CompilationErrorType;
 
+  /**
+   * Builds the error a TypeScript diagnostic reports, or rebuilds one from
+   * the fields an earlier one held. `messageTransformer` and `authoredSource`
+   * apply to a diagnostic alone: fields already carry what they produced.
+   */
   constructor(
-    { diagnostic, source }: ErrorDetails,
+    input: ErrorDetails | CompilationErrorFields,
     messageTransformer?: DiagnosticMessageTransformer,
     authoredSource?: AuthoredSourceLookup,
   ) {
+    if (!("diagnostic" in input)) {
+      this.source = input.source;
+      this.file = input.file;
+      this.line = input.line;
+      this.column = input.column;
+      this.message = input.message;
+      this.type = input.type;
+      return;
+    }
+    const { diagnostic, source } = input;
     const { file, start } = diagnostic;
     const { message, type } = this.#parseMessage(
       diagnostic.messageText,
@@ -199,8 +239,13 @@ export class CompilationError {
 export class CompilerError extends Error {
   override name = "CompilerError";
   #errors: CompilationError[];
+
+  /**
+   * Builds the error the given diagnostics report, or rebuilds one from the
+   * fields of its errors ({@link CompilationErrorFields}).
+   */
   constructor(
-    errorDetails: ErrorDetails[],
+    errorDetails: readonly (ErrorDetails | CompilationErrorFields)[],
     messageTransformer?: DiagnosticMessageTransformer,
     authoredSource?: AuthoredSourceLookup,
   ) {

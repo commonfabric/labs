@@ -1010,7 +1010,19 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  * Note: Schema-typed overload available via "commonfabric/schema"
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
+  /**
+   * The cell this one's links lead to. The returned cell takes the nearest
+   * schema a crossed link stores that constrains, whatever this cell's own
+   * schema declares. This cell's schema stays only where it declares a stream
+   * and the stored schema declares nothing but one, and a `default` this cell
+   * declares carries over where the stored schema declares none.
+   *
+   * So a read of the returned cell can return `undefined` where a read of this
+   * cell returns the target. For this cell's own projection, read by key, or
+   * re-type the returned cell with `asSchema()`.
+   */
   resolveAsCell(): C;
+
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
 
@@ -3816,11 +3828,24 @@ export type WishParams = {
   headless?: boolean;
 };
 
+/**
+ * Why a wish holds an `error`:
+ * - `"no-match"`: the wish looked and confirmed nothing matches, such as a
+ *   `#profile` wish for a user with no profile yet, or a hashtag search with
+ *   no match. A reader may offer to make one.
+ * - `"failed"`: the wish could not look, or what it found could not be read.
+ *
+ * A reader treats a code it does not know as `"failed"`.
+ */
+export type WishErrorCode = "no-match" | "failed";
+
 export type WishState<T> = {
   // A failed wish should have result of undefined and candidates of []
   result: T | undefined;
   candidates: T[];
   error?: any;
+  /** Set whenever `error` is, saying which kind of error it is. */
+  errorCode?: WishErrorCode;
   [UI]?: VNode;
 };
 
@@ -4454,6 +4479,26 @@ export type SpaceOfFunction = <T>(
 ) => DID | undefined;
 
 export declare const spaceOf: SpaceOfFunction;
+
+/**
+ * Returns the DID of the space `target`'s own link names, without following
+ * it or any link it reaches, and without reading anything in that space: so a
+ * pattern can tell which space a cell it holds by link is in, as a list of
+ * entries read as links needs to, at no cost in the space it names. A cell a
+ * value holds at a position typed `Cell<unknown>` is such a link, as is each
+ * cell `linksOf()` returns. Where the link names a document that links
+ * elsewhere in turn, this is the space of that document, not of the value it
+ * leads to, which `spaceOf()` returns.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`, or
+ * the run has named an `inSpace()` target whose space is not resolved yet, as
+ * for `spaceOf()`. Call it where `spaceOf()` can be called.
+ */
+export type SpaceOfLinkFunction = <T>(
+  target: AnyCell<T> | undefined,
+) => DID | undefined;
+
+export declare const spaceOfLink: SpaceOfLinkFunction;
 
 /**
  * Returns whether the space `target` names is deleted, so a pattern that keeps

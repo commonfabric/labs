@@ -818,6 +818,29 @@ describe("CodeMirror operation collaboration", () => {
     expect(controller.active).toBe(false);
   });
 
+  it("settles a waiter, and rejects only the drain's owner, when the drain rejects", async () => {
+    // The error handler throwing is what makes a drain reject: the controller
+    // reports every failure of its own through the handler instead.
+
+    const { controller, view, errors } = controllerHarness({
+      initial: inactiveSnapshot("abc"),
+      followup: inactiveSnapshot("abc"),
+      apply: () => Promise.reject(new Error("apply failed")),
+      onError: () => {
+        throw new Error("handler failed");
+      },
+    });
+
+    await controller.start();
+    view.dispatch({ changes: { from: 1, insert: "X" } });
+    const owner = controller.localDocChanged();
+    const waiter = controller.localDocChanged();
+
+    await expect(owner).rejects.toThrow("handler failed");
+    await expect(waiter).resolves.toBe(undefined);
+    expect(errors.map((error) => error.message)).toEqual(["apply failed"]);
+  });
+
   it("fails closed when an apply response advertises another codec", async () => {
     let cancellations = 0;
     const resolution = {
@@ -1958,6 +1981,9 @@ function controllerHarness(options: {
   release?: () => void | Promise<void>;
   close?: () => void;
 
+  /** Called after the harness records each error the controller reports. */
+  onError?: (error: Error) => void;
+
   /**
    * Called as each query of the field starts, with the query's position in
    * the order they are made. A promise it returns holds that query's snapshot
@@ -2021,7 +2047,10 @@ function controllerHarness(options: {
     view,
     compartment,
     clientId: "alice",
-    onError: (error) => errors.push(error),
+    onError: (error) => {
+      errors.push(error);
+      options.onError?.(error);
+    },
   });
   return { controller, view, errors };
 }

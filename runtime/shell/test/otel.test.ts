@@ -1,10 +1,10 @@
-import { assert, assertEquals } from "@std/assert";
-import { initBrowserOtel } from "../src/lib/otel.ts";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import type { RuntimeTelemetryMarkerResult } from "@commonfabric/runtime-client";
+import type { RuntimeTelemetryOtelBridge } from "@commonfabric/runner/telemetry-otel-bridge";
 
-// initBrowserOtel reports a setup failure by returning null, so a provider that
-// no longer matches the SDK would turn telemetry off rather than raise
-// anything. These drive the real web SDK and OTLP exporter against a receiver
-// on the loopback interface and check what lands on the wire.
+import { browserTelemetrySink, initBrowserOtel } from "../src/lib/otel.ts";
 
 const TELEMETRY_ENABLED_KEY = "telemetryEnabled";
 
@@ -41,76 +41,205 @@ async function withReceiver(
   return requests;
 }
 
-Deno.test("browser telemetry stays off unless the flag is set", async () => {
-  localStorage.removeItem(TELEMETRY_ENABLED_KEY);
-  const requests = await withReceiver(async (apiUrl) => {
-    const sink = await initBrowserOtel({
-      apiUrl,
-      userDid: "did:key:zTestUser",
-      spaceDid: "did:key:zTestSpace",
-      environment: "test",
-    });
-    assertEquals(sink, null);
+/** Runs `body` with `console.error` captured, returning what it logged. */
+async function capturingErrors(
+  body: () => Promise<void>,
+): Promise<unknown[][]> {
+  const logged: unknown[][] = [];
+  const error = stub(console, "error", (...args: unknown[]) => {
+    logged.push(args);
   });
-  assertEquals(requests.length, 0);
-});
+  try {
+    await body();
+  } finally {
+    error.restore();
+  }
+  return logged;
+}
 
-Deno.test(
-  "a marker becomes a span carrying the merged resource",
-  // The batch processor holds a flush timer until the sink is shut down, which
-  // the body below performs.
-  { sanitizeOps: false, sanitizeResources: false },
-  async () => {
-    localStorage.setItem(TELEMETRY_ENABLED_KEY, "true");
-    try {
+const OPTIONS = {
+  userDid: "did:key:zTestUser",
+  spaceDid: "did:key:zTestSpace",
+  environment: "test",
+};
+
+/** A run long enough for the bridge to make a span of it. */
+const RUN_COMPLETE: RuntimeTelemetryMarkerResult = {
+  type: "scheduler.run.complete",
+  actionId: "test-action",
+  durationMs: 50,
+  timeStamp: 1,
+};
+
+describe("otel", () => {
+  describe("initBrowserOtel()", () => {
+    // `initBrowserOtel()` reports a setup failure by returning `null`, so a
+    // provider that no longer matches the SDK would turn telemetry off rather
+    // than raise anything. These drive the real web SDK and OTLP exporter
+    // against a receiver on the loopback interface and check what lands on
+    // the wire.
+
+    it("returns `null`, sending nothing, unless the flag is set", async () => {
+      localStorage.removeItem(TELEMETRY_ENABLED_KEY);
       const requests = await withReceiver(async (apiUrl) => {
-        const sink = await initBrowserOtel({
-          apiUrl,
-          userDid: "did:key:zTestUser",
-          spaceDid: "did:key:zTestSpace",
-          environment: "test",
+        expect(await initBrowserOtel({ apiUrl, ...OPTIONS })).toBe(null);
+      });
+      expect(requests.length).toBe(0);
+    });
+
+    it("returns `null` when `localStorage` cannot be read", async () => {
+      localStorage.setItem(TELEMETRY_ENABLED_KEY, "true");
+      const getItem = stub(Storage.prototype, "getItem", () => {
+        throw new DOMException("Storage is disabled.", "SecurityError");
+      });
+      try {
+        const requests = await withReceiver(async (apiUrl) => {
+          expect(await initBrowserOtel({ apiUrl, ...OPTIONS })).toBe(null);
         });
-        assert(sink !== null, "telemetry setup failed and was disabled");
+        expect(requests.length).toBe(0);
+      } finally {
+        getItem.restore();
+        localStorage.removeItem(TELEMETRY_ENABLED_KEY);
+      }
+    });
 
-        // The bridge only turns a completed run into a span once it lasted at
-        // least actionRunSpanThresholdMs, which defaults to 10.
-        sink.handleMarker({
-          type: "scheduler.run.complete",
-          actionId: "test-action",
-          durationMs: 50,
-          timeStamp: 1,
-          // deno-lint-ignore no-explicit-any
-        } as any);
+    it("returns `null`, logging the failure, when setup throws", async () => {
+      class UnprintableUrl extends URL {
+        override toString(): string {
+          throw new Error("Unprintable.");
+        }
+      }
+      localStorage.setItem(TELEMETRY_ENABLED_KEY, "true");
+      try {
+        let sink: unknown;
+        const logged = await capturingErrors(async () => {
+          sink = await initBrowserOtel({
+            apiUrl: new UnprintableUrl("http://127.0.0.1/"),
+            ...OPTIONS,
+          });
+        });
+        expect(sink).toBe(null);
+        expect(logged).toEqual([[
+          "[otel] browser OpenTelemetry init failed:",
+          new Error("Unprintable."),
+        ]]);
+      } finally {
+        localStorage.removeItem(TELEMETRY_ENABLED_KEY);
+      }
+    });
 
-        // Shutting the sink down flushes the processor, and the flush resolves
-        // only once the exporter has its response, so the receiver has already
-        // recorded the request by the time this returns.
-        await sink.shutdown();
+    it(
+      "exports a marker as a span carrying the merged resource",
+      // The batch processor holds a flush timer until the sink is shut down,
+      // which the body below performs.
+      { sanitizeOps: false, sanitizeResources: false },
+      async () => {
+        localStorage.setItem(TELEMETRY_ENABLED_KEY, "true");
+        try {
+          const requests = await withReceiver(async (apiUrl) => {
+            const sink = await initBrowserOtel({ apiUrl, ...OPTIONS });
+            if (sink === null) {
+              throw new Error("telemetry setup failed and was disabled");
+            }
+
+            // The bridge only turns a completed run into a span once it
+            // lasted at least `actionRunSpanThresholdMs`, which defaults to 10.
+            sink.handleMarker(RUN_COMPLETE);
+
+            // Shutting the sink down flushes the processor, and the flush
+            // resolves only once the exporter has its response, so the
+            // receiver has already recorded the request by the time this
+            // returns.
+            await sink.shutdown();
+          });
+
+          const traces = requests.find((r) =>
+            r.path === "/api/telemetry/v1/traces"
+          );
+          // The payload holds these strings verbatim, so it can be checked for
+          // them without decoding it. Dropping the SDK's default attributes
+          // still exports spans, just anonymous ones, so nothing else here
+          // would notice their absence.
+          expect(traces?.body).toContain("toolshed-ui");
+          expect(traces?.body).toContain("did:key:zTestUser");
+          expect(traces?.body).toContain("telemetry.sdk.version");
+        } finally {
+          localStorage.removeItem(TELEMETRY_ENABLED_KEY);
+        }
+      },
+    );
+  });
+
+  describe("browserTelemetrySink()", () => {
+    /** A bridge and provider that log to `steps`, failing where told to. */
+    function parts(fail: { bridge?: boolean; provider?: boolean } = {}) {
+      const steps: string[] = [];
+      const bridge: RuntimeTelemetryOtelBridge = {
+        handleMarker: (marker) => steps.push(`marker ${marker.type}`),
+        shutdown: () => {
+          steps.push("bridge shutdown");
+          if (fail.bridge) throw new Error("bridge refused");
+        },
+      };
+      const provider = {
+        shutdown: () => {
+          steps.push("provider shutdown");
+          return fail.provider
+            ? Promise.reject(new Error("provider refused"))
+            : Promise.resolve();
+        },
+      };
+      return { steps, bridge, provider };
+    }
+
+    it("passes each marker to the bridge", () => {
+      const { steps, bridge, provider } = parts();
+      const sink = browserTelemetrySink(bridge, provider, {});
+
+      sink.handleMarker(RUN_COMPLETE);
+
+      expect(steps).toEqual(["marker scheduler.run.complete"]);
+    });
+
+    it("stamps later spans with the space it is given, and with none once cleared", () => {
+      const { bridge, provider } = parts();
+      const attributes = { "user.did": "did:key:zUser" };
+      const sink = browserTelemetrySink(bridge, provider, attributes);
+
+      sink.setSpace("did:key:zOther");
+      expect(attributes).toEqual({
+        "user.did": "did:key:zUser",
+        "space.did": "did:key:zOther",
       });
 
-      const traces = requests.find((r) =>
-        r.path === "/api/telemetry/v1/traces"
-      );
-      assert(traces !== undefined, "no span export reached the proxy");
+      sink.setSpace(undefined);
+      expect(attributes).toEqual({ "user.did": "did:key:zUser" });
+    });
 
-      // The payload holds these strings verbatim, so it can be checked for them
-      // without decoding it.
-      assert(
-        traces.body.includes("toolshed-ui"),
-        "the export did not carry service.name",
-      );
-      assert(
-        traces.body.includes("did:key:zTestUser"),
-        "the export did not carry user.did",
-      );
-      // Dropping these still exports spans, just anonymous ones, so nothing
-      // else here would notice their absence.
-      assert(
-        traces.body.includes("telemetry.sdk.version"),
-        "the export did not carry the SDK's default resource attributes",
-      );
-    } finally {
-      localStorage.removeItem(TELEMETRY_ENABLED_KEY);
-    }
-  },
-);
+    it("shuts the bridge down, then the provider, logging nothing", async () => {
+      const { steps, bridge, provider } = parts();
+      const sink = browserTelemetrySink(bridge, provider, {});
+
+      const logged = await capturingErrors(() => sink.shutdown());
+
+      expect(steps).toEqual(["bridge shutdown", "provider shutdown"]);
+      expect(logged).toEqual([]);
+    });
+
+    it("still shuts the provider down, logging both failures, when each step throws", async () => {
+      const { steps, bridge, provider } = parts({
+        bridge: true,
+        provider: true,
+      });
+      const sink = browserTelemetrySink(bridge, provider, {});
+
+      const logged = await capturingErrors(() => sink.shutdown());
+
+      expect(steps).toEqual(["bridge shutdown", "provider shutdown"]);
+      expect(logged).toEqual([
+        ["[otel] bridge shutdown failed:", new Error("bridge refused")],
+        ["[otel] provider shutdown failed:", new Error("provider refused")],
+      ]);
+    });
+  });
+});

@@ -2012,7 +2012,9 @@ const backlinksOf = lift((
  * cells are `unknown`, compared by identity and never read through.
  *
  * A URL naming no piece resolves with no cell, which is how an ordinary web
- * link stays an ordinary web link.
+ * link stays an ordinary web link. A reference into another space is kept
+ * whether or not its piece is still there: it reads as present without the
+ * piece being loaded, and whoever shows it reads the piece through it.
  */
 const mentionsOf = lift((
   { references, mentioned, linkTargets }: {

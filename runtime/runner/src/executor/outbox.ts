@@ -79,6 +79,10 @@ interface InflightEffect {
   retirement: Promise<void>;
   candidates: EffectCandidate[] | undefined;
   countsAsRequest: boolean;
+
+  /** Whether a candidate's flush has passed its release check and started
+   * the request's work. */
+  dispatched: boolean;
 }
 
 /** Per-space egress budgets (Phase 6 — serving-loop.md §5's
@@ -245,10 +249,9 @@ export class SpaceOutbox {
     return Math.max(1, Math.floor(rate));
   }
 
-  /** Continuous refill up to the burst capacity. */
-  #refillEgressTokens(): void {
-    const rate = this.#budget?.egressRatePerSecond;
-    if (rate === undefined || rate <= 0) return;
+  /** Continuous refill at `rate` tokens per second, up to the burst
+   * capacity. */
+  #refillEgressTokens(rate: number): void {
     const now = this.#now();
     const elapsed = Math.max(0, now - this.#egressRefilledAt);
     if (elapsed <= 0) return;
@@ -263,7 +266,7 @@ export class SpaceOutbox {
   #msUntilEgressToken(): number {
     const rate = this.#budget?.egressRatePerSecond;
     if (rate === undefined || rate <= 0) return 0;
-    this.#refillEgressTokens();
+    this.#refillEgressTokens(rate);
     if (this.#egressTokens >= 1) return 0;
     return Math.ceil(((1 - this.#egressTokens) / rate) * 1000);
   }
@@ -335,7 +338,6 @@ export class SpaceOutbox {
    * No gate binds that identity; the drop is the sanctioned
    * crash-equivalent posture (memo re-miss re-fires on re-activation). */
   close(): void {
-    if (this.#closed) return;
     this.#closed = true;
     while (this.#dispatchWaiters.length > 0) {
       this.#dispatchWaiters.shift()?.();
@@ -354,6 +356,19 @@ export class SpaceOutbox {
    * selected dispatch attachment's seal. */
   carriageFor(effectKey: string): WaveRunContext | undefined {
     return this.#carriage.get(effectKey);
+  }
+
+  /**
+   * Whether `effectKey`'s request has gone out and its carriage is still
+   * held: true from the moment a candidate's flush passes its release check
+   * until the effect retires. A completion committed meanwhile commits under
+   * that carriage. During a flush whose release check refuses the request,
+   * and once every candidate's has, this is false, since that carriage
+   * retires as soon as the flush returns.
+   */
+  hasDispatchedCarriage(effectKey: string): boolean {
+    return this.#inflight.get(effectKey)?.dispatched === true &&
+      this.#carriage.has(effectKey);
   }
 
   /**
@@ -417,6 +432,7 @@ export class SpaceOutbox {
           retirement: retired.promise,
           candidates: [candidate],
           countsAsRequest,
+          dispatched: false,
         };
         this.#inflight.set(key, entry);
         if (countsAsRequest) this.#stats.memo.inflight += 1;
@@ -513,6 +529,7 @@ export class SpaceOutbox {
       this.#capturing = undefined;
       if (flushResult === POST_COMMIT_RELEASE_REJECTED) continue;
       dispatched = true;
+      entry.dispatched = true;
       break;
     }
     entry.candidates = undefined;

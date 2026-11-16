@@ -217,6 +217,20 @@ describe("fabric import specifiers", () => {
     expect(formatFabricRef(pinned)).toBe(`cf:/kitchen/todo-list@${HASH}`);
   });
 
+  it("throws for a pin that is not a hash", () => {
+    const ref = parseFabricRef("cf:/kitchen/todo-list")!;
+    expect(() => withPin(ref, "abc")).toThrow("malformed pin");
+  });
+
+  it("throws for a space that is neither a DID nor a slug, naming the slug rule", () => {
+    expect(() => parseFabricRef("cf:/Kitchen_Space/todo-list")).toThrow(
+      "Slug must use lowercase letters, numbers, and single hyphens between words.: cf:/Kitchen_Space/todo-list",
+    );
+    expect(parseFabricRef("cf:/kitchen-space/todo-list")?.space).toBe(
+      "kitchen-space",
+    );
+  });
+
   it("withPin on a pattern: URI ref is consistent with the conflicting-pin rule", () => {
     const ref = parseFabricRef(`cf:pattern:${HASH}`)!;
     // Equal pin: already content-addressed; no pin is added.

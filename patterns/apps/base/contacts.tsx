@@ -211,7 +211,7 @@ export default pattern<Input, Output>(({ contacts, groups }) => {
 
         <cf-resizable-panel-group direction="horizontal" style="flex: 1;">
           {/* Left: Contact List */}
-          <cf-resizable-panel default-size="35" min-size="25" max-size="50">
+          <cf-resizable-panel defaultSize={35} minSize={25} maxSize={50}>
             <cf-vscroll style="height: 100%;">
               <cf-vstack style="gap: 4px; padding: 8px;">
                 {/* Render contact list using reactive .map() */}
@@ -273,7 +273,7 @@ export default pattern<Input, Output>(({ contacts, groups }) => {
           <cf-resizable-handle />
 
           {/* Right: Detail View - just render the piece's [UI] */}
-          <cf-resizable-panel default-size="65" min-size="30">
+          <cf-resizable-panel defaultSize={65} minSize={30}>
             {computed(() => {
               const idx = selectedIndex.get();
               if (idx < 0 || idx >= (contacts.get() || []).length) {

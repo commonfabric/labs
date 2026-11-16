@@ -82,6 +82,7 @@ export function wishStateSchemaForResult(
         items: candidateSchema,
       },
       error: true,
+      errorCode: { type: "string" },
       // An opaque handle with no value shape, which a read under this schema
       // hands on without following, and which a pre-sync of the state does
       // not load the target of. Every reader of a wish reads its state under

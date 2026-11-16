@@ -623,19 +623,16 @@ export class CodeMirrorCollaborationController {
         return;
       }
 
-      const previousCursor = this.#cursor;
-      const becameActive = previousCursor === null;
-      if (becameActive) {
-        this.#cursor = { epoch: snapshot.cursor.epoch, version: 0 };
-      } else if (previousCursor.epoch !== snapshot.cursor.epoch) {
+      const becameActive = this.#cursor === null;
+      const activeCursor = this.#cursor ??= {
+        epoch: snapshot.cursor.epoch,
+        version: 0,
+      };
+      if (activeCursor.epoch !== snapshot.cursor.epoch) {
         this.#install(snapshot);
         return;
       }
 
-      const activeCursor = this.#cursor;
-      if (activeCursor === null) {
-        throw new Error("Active CodeMirror snapshot has no operation cursor");
-      }
       const current = {
         epoch: activeCursor.epoch,
         version: getSyncedVersion(this.#view.state),
@@ -734,9 +731,9 @@ export class CodeMirrorCollaborationController {
    * submission integrates, and the next round trip carries it.
    */
   async #drain(): Promise<void> {
-    while (
-      this.#canProcess() && sendableUpdates(this.#view.state).length !== 0
-    ) {
+    while (this.#canProcess()) {
+      const submission = codeMirrorSubmission(this.#view.state);
+      if (submission === undefined) return;
       // CodeMirror keeps an update's origin transaction across rebases, so
       // the oldest unconfirmed update still heading the queue after a round
       // trip means that round trip confirmed nothing, and repeating it would
@@ -744,7 +741,7 @@ export class CodeMirrorCollaborationController {
       // its oldest update; a later update left unconfirmed heads the next
       // round trip and is judged there.
       const oldest = sendableUpdates(this.#view.state)[0].origin;
-      await this.#submit();
+      await this.#submit(submission);
       if (
         this.#canProcess() &&
         sendableUpdates(this.#view.state)[0]?.origin === oldest
@@ -756,12 +753,10 @@ export class CodeMirrorCollaborationController {
     }
   }
 
-  /** Submits every unconfirmed update in one apply and integrates the result. */
-  async #submit(): Promise<void> {
+  /** Submits `submission`'s updates in one apply and integrates the result. */
+  async #submit(submission: CodeMirrorSubmission): Promise<void> {
     this.#sending = true;
     try {
-      const submission = codeMirrorSubmission(this.#view.state);
-      if (submission === undefined) return;
       const base = this.#cursor === null
         ? null
         : { epoch: this.#cursor.epoch, version: submission.baseVersion };

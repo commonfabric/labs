@@ -195,6 +195,8 @@ describe("wish-home-root", () => {
       const { found, stop } = await runWish("#profile", "profile wish");
       try {
         expect(found.get()?.error).toBe("No profile exists yet");
+        // Confirmed none, which a reader may offer to create.
+        expect(found.get()?.errorCode).toBe("no-match");
         await createSurface(found);
         expect(homeSlot()).toBeUndefined();
       } finally {

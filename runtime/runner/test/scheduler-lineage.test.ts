@@ -222,4 +222,56 @@ describe("SpeculationLineage", () => {
     expect(stops).toBe(1);
     expect(queueExecutions()).toBe(1);
   });
+
+  it("reports a drop that throws and still drops the origin's other events", () => {
+    const origin = createOriginTx();
+    const first = queuedEvent("evt:drop-throws", origin);
+    const second = queuedEvent("evt:drop-after", origin);
+    const failure = new Error("drop failed");
+    const removed: QueuedEvent[] = [];
+    const errors: unknown[] = [];
+    const lineage = new SpeculationLineage({
+      dropQueuedEvent: (event) => {
+        if (event === first) throw failure;
+        removed.push(event);
+      },
+      queueExecution: () => {},
+      onError: (error) => errors.push(error),
+    });
+    let stops = 0;
+
+    lineage.recordEvent(origin, first);
+    lineage.recordEvent(origin, second);
+    lineage.recordPieceStop(origin, () => stops++);
+    origin.settle(errorResult);
+
+    expect(errors).toEqual([failure]);
+    expect(removed).toEqual([second]);
+    expect(stops).toBe(1);
+  });
+
+  it("reports a piece stop that throws and still runs the origin's other stops", () => {
+    const origin = createOriginTx();
+    const { lineage, errors } = createLineageHooks();
+    const failure = new Error("stop failed");
+    let stops = 0;
+
+    lineage.recordPieceStop(origin, () => {
+      throw failure;
+    });
+    lineage.recordPieceStop(origin, () => stops++);
+    origin.settle(errorResult);
+
+    expect(errors).toEqual([failure]);
+    expect(stops).toBe(1);
+  });
+
+  it("returns without error from a release for an origin it holds no record of", () => {
+    const origin = createOriginTx();
+    const { lineage } = createLineageHooks();
+
+    expect(() => lineage.release(origin, queuedEvent("evt:unknown", origin)))
+      .not.toThrow();
+    expect(lineage.originStatus(origin)).toBe("confirmed");
+  });
 });

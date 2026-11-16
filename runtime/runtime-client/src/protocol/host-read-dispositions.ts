@@ -146,6 +146,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.GetHomeSpaceCell]: reference,
   [RequestType.EnsureHomePatternRunning]: lifecycle,
   [RequestType.JoinVisitedRoom]: write,
+  [RequestType.OfferProfileSuggestion]: write,
   [RequestType.Idle]: lifecycle,
   [RequestType.ListEventAttention]: {
     kind: "no-cell-value",

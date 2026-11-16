@@ -221,6 +221,17 @@ export abstract class ScriptedSessionTransport
   /** Called for each hello before hello.ok goes out (e.g. count connections). */
   protected onHello(_helloCount: number): void {}
 
+  /**
+   * What the response to the `openCount`th session.open (counting from 1)
+   * adds: whether it `resumed` the session the client names, rather than
+   * replacing it, and the catch-up `sync` a resume carries.
+   */
+  protected sessionOpened(
+    _openCount: number,
+  ): { resumed?: true; sync?: SessionSync } {
+    return {};
+  }
+
   /** Flags advertised on hello.ok — override to script an older server
    * (e.g. one without `pendingReadStacks`) or a newer one. Scripted
    * transports do NOT advertise `verdictCatchUpMarkers` by default: a
@@ -278,6 +289,7 @@ export abstract class ScriptedSessionTransport
             sessionId: message.session?.sessionId ?? this.#script.sessionId,
             serverSeq: this.openServerSeq(),
             sessionOpen: this.#sessionOpen,
+            ...this.sessionOpened(this.#sessionOpenCount),
           },
         });
         return;

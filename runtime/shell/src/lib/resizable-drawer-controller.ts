@@ -1,4 +1,4 @@
-import { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 export interface ResizableDrawerConfig {
   initialHeight?: number;
@@ -7,6 +7,9 @@ export interface ResizableDrawerConfig {
   resizeDirection?: "up" | "down";
   storageKey?: string;
 }
+
+/** The part of a touch event a drag reads: where each finger is. */
+type TouchPosition = { touches: ArrayLike<Pick<Touch, "clientY">> };
 
 /**
  * Controller for managing resizable drawer behavior.
@@ -68,7 +71,7 @@ export class ResizableDrawerController implements ReactiveController {
     return this.#isResizing;
   }
 
-  handleResizeStart = (e: MouseEvent) => {
+  handleResizeStart = (e: Pick<MouseEvent, "clientY" | "preventDefault">) => {
     e.preventDefault();
     this.#startResize(e.clientY);
 
@@ -76,7 +79,9 @@ export class ResizableDrawerController implements ReactiveController {
     document.addEventListener("mouseup", this.#handleResizeEnd);
   };
 
-  handleTouchResizeStart = (e: TouchEvent) => {
+  handleTouchResizeStart = (
+    e: TouchPosition & Pick<Event, "preventDefault">,
+  ) => {
     e.preventDefault();
     if (e.touches.length === 1) {
       this.#startResize(e.touches[0].clientY);
@@ -85,10 +90,13 @@ export class ResizableDrawerController implements ReactiveController {
         passive: false,
       });
       document.addEventListener("touchend", this.#handleTouchEnd);
+      document.addEventListener("touchcancel", this.#handleTouchEnd);
     }
   };
 
+  /** Starts a drag from `clientY`, ending any drag already under way. */
   #startResize(clientY: number) {
+    this.#cleanup();
     this.#resizeStartY = clientY;
     this.#startHeight = this.#drawerHeight;
     this.#isResizing = true;
@@ -109,11 +117,11 @@ export class ResizableDrawerController implements ReactiveController {
     this.#host.requestUpdate();
   }
 
-  #handleResizeMove = (e: MouseEvent) => {
+  #handleResizeMove = (e: Pick<MouseEvent, "clientY">) => {
     this.#updateHeight(e.clientY);
   };
 
-  #handleTouchMove = (e: TouchEvent) => {
+  #handleTouchMove = (e: TouchPosition) => {
     if (e.touches.length === 1) {
       this.#updateHeight(e.touches[0].clientY);
     }
@@ -147,6 +155,7 @@ export class ResizableDrawerController implements ReactiveController {
     this.#cleanup();
   };
 
+  /** Ends a touch drag when the finger lifts or the browser cancels it. */
   #handleTouchEnd = () => {
     this.#cleanup();
   };
@@ -167,6 +176,7 @@ export class ResizableDrawerController implements ReactiveController {
     document.removeEventListener("mouseup", this.#handleResizeEnd);
     document.removeEventListener("touchmove", this.#handleTouchMove);
     document.removeEventListener("touchend", this.#handleTouchEnd);
+    document.removeEventListener("touchcancel", this.#handleTouchEnd);
 
     this.#host.requestUpdate();
   }

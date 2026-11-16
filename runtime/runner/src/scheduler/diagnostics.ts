@@ -186,7 +186,6 @@ export function summarizeTriggerTraceValue(
 }
 
 export function getPieceMetadataFromFrame(frame?: Frame): {
-  spellId?: string;
   patternId?: string;
   space?: string;
   pieceId?: string;
@@ -253,7 +252,7 @@ export function handleSchedulerError(
   action: unknown,
   eventId?: string,
 ): void {
-  const { pieceId, spellId, patternId, space } = getPieceMetadataFromFrame(
+  const { pieceId, patternId, space } = getPieceMetadataFromFrame(
     (error as Error & { frame?: Frame }).frame,
   );
 
@@ -271,7 +270,6 @@ export function handleSchedulerError(
   const errorWithContext = error as ErrorWithContext;
   errorWithContext.action = action as ErrorWithContext["action"];
   if (pieceId) errorWithContext.pieceId = pieceId;
-  if (spellId) errorWithContext.spellId = spellId;
   if (patternId) errorWithContext.patternId = patternId;
   if (space) errorWithContext.space = space as MemorySpace;
   if (eventId !== undefined) errorWithContext.eventId = eventId;
@@ -296,8 +294,4 @@ export function handleSchedulerError(
     ...(patternId ? [`\n  patternId: ${patternId}`] : []),
     ...(error.stack ? [`\n${error.stack}`] : []),
   );
-}
-
-export function queueTask(fn: () => void): ReturnType<typeof setTimeout> {
-  return setTimeout(fn, 0);
 }

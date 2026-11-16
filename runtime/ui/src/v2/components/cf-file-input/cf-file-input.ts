@@ -281,16 +281,9 @@ export class CFFileInput extends BaseElement {
   }
 
   /**
-   * Determine if a file should be compressed
-   * Base class: never compress (subclasses override)
-   */
-  protected shouldCompressFile(_file: File): boolean {
-    return false;
-  }
-
-  /**
-   * Compress a file
-   * Subclasses override this for specific compression logic
+   * Returns `file` compressed as the element sees fit, before it is checked
+   * against `maxSizeBytes` and processed. The base class returns it as is;
+   * subclasses override this for specific compression logic.
    */
   protected compressFile(file: File): Promise<Blob> {
     return Promise.resolve(file);
@@ -384,7 +377,6 @@ export class CFFileInput extends BaseElement {
   }
 
   private _getFileIcon(mimeType: string): string {
-    if (mimeType.startsWith("image/")) return "🖼️";
     if (mimeType === "application/pdf") return "📄";
     if (mimeType.startsWith("video/")) return "🎬";
     if (mimeType.startsWith("audio/")) return "🎵";
@@ -439,11 +431,8 @@ export class CFFileInput extends BaseElement {
 
       for (const file of Array.from(files)) {
         try {
-          // Check if should compress (subclass decides)
-          let fileToProcess: Blob = file;
-          if (this.shouldCompressFile(file)) {
-            fileToProcess = await this.compressFile(file);
-          }
+          // Compress as the subclass decides
+          const fileToProcess = await this.compressFile(file);
 
           // Check file size AFTER compression if maxSizeBytes is set
           if (this.maxSizeBytes && fileToProcess.size > this.maxSizeBytes) {

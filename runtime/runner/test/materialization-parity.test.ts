@@ -887,6 +887,95 @@ describe("materialization-parity", () => {
         target.getAsLink({ includeSchema: true }),
       );
     });
+
+    it("keeps a `true` branch in the compound a typed branch's handle carries", async () => {
+      // `true` mints no handle and matches the value alongside the typed
+      // branch, so the merge keeps the handle, and a read through it projects
+      // the whole value because the `true` admits it.
+      await handleReadsInBothModes(
+        "typed-handle-true-branch",
+        {
+          type: "object",
+          properties: {
+            h: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { id: { type: "number" } },
+                  asCell: ["cell"],
+                },
+                true,
+              ],
+            },
+          },
+        },
+        stored,
+        { anyOf: [idBranch, true] },
+      );
+    });
+
+    it("keeps a `false` branch in the compound a typed branch's handle carries", async () => {
+      // `false` matches nothing and mints nothing. The handle carries the
+      // whole compound, so a read through it projects the two branches that
+      // name fields and drops the field neither names.
+      await handleReadsInBothModes(
+        "typed-handle-false-branch",
+        {
+          type: "object",
+          properties: {
+            h: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { id: { type: "number" } },
+                  asCell: ["cell"],
+                },
+                nameBranch,
+                false,
+              ],
+            },
+          },
+        },
+        { id: 1, name: "one" },
+        { anyOf: [idBranch, nameBranch, false] },
+      );
+    });
+  });
+
+  describe("a handle entry that names no kind", () => {
+    it("reads as `undefined` in both modes, where a kinded entry reads as a handle", async () => {
+      // A stored schema arrives as JSON, so an `asCell` entry can carry a
+      // scope and no kind. There is then no handle to mint.
+      const write = runtime.edit();
+      runtime.getCell(space, "kindless-entry", undefined, write).setRaw({
+        p: 1,
+        q: 2,
+      });
+      await write.commit().settled;
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          p: JSON.parse('{"type":"number","asCell":[{"scope":"user"}]}'),
+          q: { type: "number", asCell: [{ kind: "cell", scope: "user" }] },
+        },
+      };
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const value = runtime.getCell<{ p: unknown; q: unknown }>(
+            space,
+            "kindless-entry",
+            schema,
+            tx,
+          ).get();
+          expect(value.p).toBe(undefined);
+          expect(isCell(value.q)).toBe(true);
+        } finally {
+          await tx.commit().settled;
+        }
+      }
+    });
   });
 
   describe("a schema that omits `type`", () => {

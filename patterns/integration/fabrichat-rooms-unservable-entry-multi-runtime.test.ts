@@ -4,9 +4,9 @@
  * one for a space on another host, or for one not yet created. The manager
  * looks for a room behind every saved entry; a space it can't serve leaves
  * that entry's room unfound, and the groups the person creates are still
- * listed. A membership the person keeps in a room in such a space leaves that
- * room unlisted the same way, and the people of the rooms listed are still
- * read. A saved entry for a served space that holds no room, and a catalog
+ * listed. A membership the person keeps in a room in such a space is listed,
+ * since the list reads no room, and the people of the other rooms listed are
+ * still read: that room's roster holds back no other's. A saved entry for a served space that holds no room, and a catalog
  * with no other entry, are the controls.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
@@ -153,14 +153,14 @@ describe("fabrichat rooms beside an unservable catalog entry across runtimes", (
           const ada = await start(serverExecution, undefined);
           await rememberUnservedRoom(ada, kind);
           expect(await ada.read(["people"])).toEqual({});
-          expect(await listedKinds(ada)).toEqual([]);
+          expect(await listedKinds(ada)).toEqual([kind]);
 
           await createGroup(ada, "g-first");
           expect(await ada.read(["people"])).toEqual({});
-          expect(await listedKinds(ada)).toEqual(["group"]);
+          expect(await listedKinds(ada)).toEqual(["group", kind]);
           await createGroup(ada, "g-second");
           expect(await ada.read(["people"])).toEqual({});
-          expect(await listedKinds(ada)).toEqual(["group", "group"]);
+          expect(await listedKinds(ada)).toEqual(["group", "group", kind]);
         });
       }
 

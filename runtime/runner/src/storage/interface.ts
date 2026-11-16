@@ -291,6 +291,19 @@ export type StoredDocumentAddress = {
   scopeKey?: ScopeKey;
 };
 
+/** How a release pass (`IStorageManager.releaseUnreadDocuments()`) runs. */
+export type ReleaseOptions = {
+  /**
+   * Whether the pass completes a release something asked for, such as a
+   * stop: each hold token live as the pass begins, once collected, then asks
+   * for a pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
+   * releases what the token alone kept. Absent, a token's collection asks
+   * for nothing on this pass's account. Closing the manager forgets every
+   * follow-up.
+   */
+  followUpOnCollection?: boolean;
+};
+
 export interface IStorageManager extends IStorageSubscriptionCapability {
   id: string;
 
@@ -409,6 +422,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * runtimes' alike, so they cannot serve two modes.
    */
   setInstanceNames?(enabled: boolean): void;
+
+  /**
+   * Chooses whether the sessions this manager opens from here on take `cid:`
+   * schema documents by reference (`ConnectOptions.syncCidReferences` of the
+   * memory client). A `Runtime` calls this at construction. A manager
+   * without the method, or one no runtime has called it on, takes every
+   * body.
+   *
+   * @throws If another choice is already declared, or if a session is
+   * already open and the choice would change: the manager's connections are
+   * its runtimes' alike, so they cannot serve both.
+   */
+  setSyncCidReferences?(enabled: boolean): void;
 
   /**
    * Keeps session-scoped documents in the local replica when enabled.
@@ -655,7 +681,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     observer: (status: ClientUpdateRequired) => void,
   ): Cancel;
 
-  /** The latest authoritative access loss for a space, cleared on reopening. */
+  /**
+   * The latest authoritative access loss for a space, cleared on reopening.
+   * The memory-backed manager's answer is one `isSpaceAccessRefusal()` holds
+   * of, as is its `authorizationError()`.
+   */
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
   /**
@@ -703,9 +733,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
 
   /**
    * Observes authoritative denial and recovery after an authorized reopen,
-   * and a refusal of a space already refused that turns out to be its
-   * deletion. Read `spaceAccessError()` for the current verdict. Initial
-   * successful opens and transient connection failures do not emit.
+   * a refusal of a space already refused that turns out to be its deletion,
+   * and a space whose first connection never completed a handshake that a
+   * `retrySpaceAccess()` reached. Read `spaceAccessError()` for the current
+   * verdict. Initial successful opens and transient connection failures do
+   * not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
@@ -759,6 +791,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     promise: Promise<unknown>,
     context?: () => PendingCommitContext,
   ): void;
+
+  /**
+   * Register a multi-space commit whose later spaces' writes are not yet in
+   * those spaces' replicas. The transaction layer commits such a transaction
+   * one space at a time and hands a space's writes to its replica only once
+   * the server has answered for the spaces before it, so until then a read
+   * of a later space does not see them. `applied` settles once the commit
+   * has handed its last space's writes to that space's replica, or has
+   * stopped short of it. Called synchronously as the commit is issued.
+   */
+  trackMultiSpaceCommitApplying?(applied: Promise<void>): void;
+
+  /**
+   * Settles once every multi-space commit registered with
+   * `trackMultiSpaceCommitApplying()` so far has handed its writes to its
+   * replicas, or stopped; `undefined` when none is still handing them over.
+   */
+  multiSpaceCommitsApplied?(): Promise<void> | undefined;
 
   /** Snapshot pending work without waiting for durability or starting I/O. */
   getDiagnostics?(): StorageDiagnostics;
@@ -852,6 +902,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): object;
 
   /**
+   * Calls `observer` when a document's hold token (`holdDocument()`) has been
+   * collected that a pass asked to follow up found live
+   * (`ReleaseOptions.followUpOnCollection`), while it was still that
+   * document's token and its space was open, so that the next
+   * `releaseUnreadDocuments()` can release a document nothing holds any
+   * more. One collection can call it once for each of many tokens. Returns a
+   * cancel that removes it.
+   */
+  subscribeHoldsCollected?(observer: () => void): Cancel;
+
+  /**
    * Adds a way for the manager to learn whether something reads a document;
    * a document any of them reads keeps its watches through
    * `releaseUnreadDocuments()` and stays loaded when its watches go. Returns
@@ -874,7 +935,7 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * loaded or read since the previous call began, which a later call may
    * release.
    */
-  releaseUnreadDocuments?(): Promise<boolean>;
+  releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -1783,7 +1844,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 
@@ -2561,7 +2624,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * (see {@link MergeableOpDelta}), forwarded to the underlying transaction after
    * resolving the link to a memory address.
    */
-  recordMergeableOp?(link: NormalizedFullLink, delta: MergeableOpDelta): void;
+  recordMergeableOp(link: NormalizedFullLink, delta: MergeableOpDelta): void;
 
   /**
    * Record text changes to the string addressed by `link`, forwarded to the
@@ -3335,7 +3398,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * identical. These two methods let `Cell.get()` cache its result keyed by the
    * stable value of the cell view; the implementation clears the entire cache
    * on any write, so a cached entry is only ever returned when no write has
-   * intervened.
+   * intervened. A transaction that is no longer ready, whose CFC state is
+   * prepared, that is marked for a UI-input blind write, or that is reading at
+   * an earlier epoch neither returns nor stores an entry at the time it is
+   * asked, so such a read takes the full pipeline. A read made while CFC is
+   * prepared invalidates that preparation, so its result is then stored.
    *
    * Optional: transactions that must not cache (e.g. the non-reactive `sample()`
    * wrapper) leave these undefined and callers fall back to recomputing.
@@ -4062,6 +4129,13 @@ export interface ISpaceReplica extends ISpace {
    * entry's floor witnesses arrival only when derived-class). Undefined
    * — an OFF-arm or pre-predicate frame, or a fake in tests — reads as
    * "class unknown", which never witnesses arrival at the floor.
+   *
+   * `envelopeDocuments` is the `cid:` ids of the documents the confirmed
+   * version's CFC envelope names: its schema document and, on a version-2
+   * envelope, its label documents. An entry that wrote a `cid:` document the
+   * store has not served is held while an arrived document it wrote names
+   * that document (speculation.md §4). Undefined — a fake in tests — reads
+   * as "names unknown", which holds the entry as a name would.
    */
   speculationRetirementView?(
     id: URI,
@@ -4070,6 +4144,7 @@ export interface ISpaceReplica extends ISpace {
     confirmedSeq: number;
     coverClass?: CommitClass;
     pendingLocalSeqs: number[];
+    envelopeDocuments?: readonly URI[];
   };
 
   /**
@@ -4158,7 +4233,9 @@ export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
 /**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
- * sealed commit's pending writes promote to confirmed at that seq.
+ * sealed commit's pending writes promote to confirmed at that seq — and,
+ * when the wave commit carried only part of the sealed commit, the writes
+ * it left out, which roll back while the rest promote.
  * `withdrawn` rolls the sealed commit's pending writes back: its ops were
  * dropped (superseded pure derivation), requeued (raced non-re-derivable
  * consequence), or the wave never committed (lease lost, abandon). The
@@ -4174,7 +4251,7 @@ export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
  * it) and the sealed commit settles `ok`, not error.
  */
 export type SealedCommitVerdict =
-  | { committed: { seq: number } }
+  | { committed: { seq: number; dropped?: DroppedSealedWrites } }
   | {
     withdrawn: {
       message: string;
@@ -4184,6 +4261,19 @@ export type SealedCommitVerdict =
       cause?: WaveWithdrawalCause;
     };
   };
+
+/**
+ * The writes of a sealed commit that a wave commit left out
+ * (serving-loop.md §3d's superseded writes), keyed by the index of their
+ * operation in the sealed commit's operations: the whole operation, or the
+ * indexes of the patches it left out of a patch operation. The replica reads
+ * only the indexes of document operations, which come first in a commit; a
+ * collaborative-field edit is shown inside the patch layer of its document.
+ */
+export type DroppedSealedWrites = ReadonlyMap<
+  number,
+  "operation" | ReadonlySet<number>
+>;
 
 /** A replica's handle for one sealed native commit. */
 export interface SealedNativeCommit {

@@ -165,21 +165,18 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
           ...(alias.schema !== undefined && { schema: alias.schema }),
         },
       } satisfies AliasBinding;
-    } else if (!("cell" in alias) || typeof (alias.cell) === "string") {
-      // If we encounter an existing alias and it isn't an absolute reference
-      // with a cell id, then increase the nesting level. (Named-cell aliases
-      // carry no scope; only partialCause aliases do.)
-      return {
-        $alias: {
-          cell: alias.cell,
-          defer: (alias.defer ?? 0) + 1,
-          path: alias.path,
-          ...(alias.schema !== undefined && { schema: alias.schema }),
-        },
-      } satisfies AliasBinding;
-    } else {
-      throw new Error(`Invalid alias cell`);
     }
+    // Otherwise `isAliasBinding()` admits only an alias to the argument or
+    // the result cell, whose nesting level rises the same way. (Named-cell
+    // aliases carry no scope; only partialCause aliases do.)
+    return {
+      $alias: {
+        cell: alias.cell,
+        defer: (alias.defer ?? 0) + 1,
+        path: alias.path,
+        ...(alias.schema !== undefined && { schema: alias.schema }),
+      },
+    } satisfies AliasBinding;
   }
 
   // If this is an INERT array, process each element recursively. A non-inert
@@ -322,8 +319,7 @@ function bindGraphOnce(graph: object, walk: BindingWalk): FabricExecValue {
   if (known !== undefined) return known;
   const within = { ...walk, reusesClosedGraphs: false, reachedOutside: false };
   const bound = bindValue(graph, within);
-  if (within.reachedOutside) walk.reachedOutside = true;
-  else closedGraphBindings.set(graph, bound);
+  if (!within.reachedOutside) closedGraphBindings.set(graph, bound);
   return bound;
 }
 

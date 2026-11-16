@@ -2070,6 +2070,86 @@ describe("piece schema compatibility", () => {
       .not.toThrow();
   });
 
+  describe("union reference metadata", () => {
+    for (const referenced of [false, true]) {
+      const spelling = referenced ? "a referenced" : "an inline";
+      const argumentWithEntry = (entry: JSONSchema): JSONSchema => {
+        const outcome: JSONSchema = {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                status: { type: "string", enum: ["done"] },
+                entry: { $ref: "#/$defs/Entry" },
+              },
+              required: ["status"],
+            },
+            {
+              type: "object",
+              properties: { status: { type: "string", enum: ["pending"] } },
+              required: ["status"],
+            },
+          ],
+        };
+        return {
+          type: "object",
+          properties: {
+            outcome: referenced ? { $ref: "#/$defs/Outcome" } : outcome,
+          },
+          $defs: { Outcome: outcome, Entry: entry },
+        };
+      };
+
+      it(`accepts an optional cell in ${spelling} union`, () => {
+        const previous = argumentWithEntry({
+          type: "object",
+          properties: { id: { type: "string" } },
+          required: ["id"],
+        });
+        const candidate = argumentWithEntry({
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            metadata: {
+              type: "object",
+              asCell: ["cell"],
+              properties: { title: { type: "string" } },
+            },
+          },
+          required: ["id"],
+        });
+
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(previous, true),
+            pattern(candidate, true),
+          )
+        ).not.toThrow();
+        expect(() => assertSchemaSubset(previous, candidate)).toThrow();
+      });
+
+      it(`refuses a changed field in ${spelling} union`, () => {
+        const previous = argumentWithEntry({
+          type: "object",
+          properties: { id: { type: "string" } },
+          required: ["id"],
+        });
+        const candidate = argumentWithEntry({
+          type: "object",
+          properties: { id: { type: "number" } },
+          required: ["id"],
+        });
+
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(previous, true),
+            pattern(candidate, true),
+          )
+        ).toThrow(/argument.outcome:/);
+      });
+    }
+  });
+
   const argumentWithNestedValue = (
     value: JSONSchema,
     rootDefinitions?: Record<string, JSONSchema>,

@@ -4,7 +4,6 @@ import { Identity } from "@commonfabric/identity";
 import {
   FabricBytes,
   FabricEpochNsec,
-  FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -29,7 +28,6 @@ type ActionValues = {
   negativeZero: unknown;
   symbol: unknown;
   date: unknown;
-  regexp: unknown;
   error?: unknown;
 };
 
@@ -51,7 +49,6 @@ const ACTION_VALUES_PROGRAM: RuntimeProgram = {
       "      bytes,",
       "      nativeBytes: new Uint8Array([9, 8, 7]),",
       '      date: new Date("2026-07-21T12:34:56.789Z"),',
-      "      regexp: /fabric-values/gi,",
       '      error: new TypeError("action result round trip"),',
       "      bigint: 9_007_199_254_740_993n,",
       "      nan: NaN,",
@@ -87,7 +84,6 @@ const REEMIT_PROGRAM: RuntimeProgram = {
       "      negativeZero: value.negativeZero,",
       "      symbol: value.symbol,",
       "      date: value.date,",
-      "      regexp: value.regexp,",
       "    }) as any);",
       "    return { values };",
       "  },",
@@ -129,9 +125,6 @@ function expectActionValues(value: ActionValues, expectError = true): void {
   expect((value.date as FabricEpochNsec).value).toBe(
     1_784_637_296_789_000_000n,
   );
-  expect(value.regexp).toBeInstanceOf(FabricRegExp);
-  expect((value.regexp as FabricRegExp).source).toBe("fabric-values");
-  expect((value.regexp as FabricRegExp).flags).toBe("gi");
   if (expectError) {
     const error = value.error as {
       constructor: { name: string };

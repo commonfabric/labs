@@ -3,10 +3,12 @@
 /**
  * TEST PATTERN: $checked on computed results
  *
- * Claim: $checked binding only works on direct Cell<T[]> maps,
- * not on computed results (which use read-only data URIs).
- *
- * Expected: ReadOnlyAddressError when using $checked on computed().map()
+ * Section A binds $checked on rows mapped from the `items` input, so checking
+ * a box writes the item in `items`. Section B binds it on rows mapped from a
+ * computed filter of `items`. Checking a box there raises no error, but the
+ * write lands in the computed result's own row rather than in `items`, so the
+ * matching box in section A does not change. A later change to `items` reruns
+ * the filter and replaces the row.
  */
 import { computed, Default, NAME, pattern, UI } from "commonfabric";
 
@@ -55,7 +57,7 @@ export default pattern<Input>(({ items }) => {
           Active: {activeCount} / Total: {totalCount}
         </div>
 
-        {/* TEST A: Direct Cell map - should work */}
+        {/* Section A: rows mapped from the input write through to it */}
         <div
           style={{
             border: "2px solid green",
@@ -64,7 +66,7 @@ export default pattern<Input>(({ items }) => {
             borderRadius: "8px",
           }}
         >
-          <h3 style={{ color: "green" }}>A: Direct Cell Map (should work)</h3>
+          <h3 style={{ color: "green" }}>A: Direct Cell Map</h3>
           <p style={{ fontSize: "0.8rem", color: "#666" }}>
             $checked on items.map() - direct Cell access
           </p>
@@ -77,7 +79,7 @@ export default pattern<Input>(({ items }) => {
           ))}
         </div>
 
-        {/* TEST B: Computed map - claimed to fail */}
+        {/* Section B: rows mapped from a computed result write to that result */}
         <div
           style={{
             border: "2px solid orange",
@@ -86,10 +88,10 @@ export default pattern<Input>(({ items }) => {
             borderRadius: "8px",
           }}
         >
-          <h3 style={{ color: "orange" }}>B: Computed Map (claimed to fail)</h3>
+          <h3 style={{ color: "orange" }}>B: Computed Map</h3>
           <p style={{ fontSize: "0.8rem", color: "#666" }}>
-            $checked on activeItems.map() - computed result. Superstition says
-            this should cause ReadOnlyAddressError.
+            $checked on activeItems.map() - computed result. Checking a box here
+            does not change items.
           </p>
           {activeItems.map((item) => (
             <div style={{ marginBottom: "0.25rem" }}>
@@ -111,9 +113,8 @@ export default pattern<Input>(({ items }) => {
         >
           <h3>Expected Results</h3>
           <pre style={{ fontSize: "0.75rem" }}>
-{`Section A: Checkboxes should toggle (direct Cell)
-Section B: Should FAIL with ReadOnlyAddressError (if superstition is true)
-          OR work fine (if superstition is wrong)`}
+{`Section A: Checkboxes toggle and write items
+Section B: Checkboxes toggle without an error, but items does not change`}
           </pre>
         </div>
       </div>

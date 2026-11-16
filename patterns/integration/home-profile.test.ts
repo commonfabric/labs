@@ -1,15 +1,18 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   env,
+  type Page,
   type ProbeApi,
   waitForCondition,
 } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { beforeAll, describe, it } from "@std/testing/bdd";
+import { describe, it } from "@std/testing/bdd";
 import {
   clickCfButton,
   clickTrustedAction,
   fillCfInput,
+  readTextProbe,
   submitViaEnter,
   waitForRuntimeIdle,
   waitForText,
@@ -64,6 +67,25 @@ const defaultRowNames = async (
   }
   return row !== null && probe.deepText(row).includes(name);
 };
+
+/**
+ * Wait for `defaultRowNames` to hold for the profile named `name`. A failure
+ * reports the text of each picker row, which says which row holds the marker
+ * and whether each row shows its profile's name yet.
+ */
+async function waitForDefaultRow(page: Page, name: string) {
+  try {
+    await waitForCondition(page, defaultRowNames, { args: [name] });
+  } catch (cause) {
+    const rows = await readTextProbe(page, "#profile-picker cf-hstack")
+      .then((probe) => probe.matches, (error: unknown) => String(error));
+    throw new Error(
+      `The picker did not show one "default" marker, in the row of ` +
+        `"${name}". ` + debugStr`Picker rows: $quote,indent,long${rows}`,
+      { cause },
+    );
+  }
+}
 
 // Workaround for a flaky activeTab regression (tracked in Linear CT-1666):
 // navigating to the home view with profile data already persisted sometimes
@@ -149,11 +171,9 @@ describe("home-space profile creation", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
 
-  let identity: Identity;
-
-  beforeAll(async () => {
-    identity = await Identity.generate({ implementation: "noble" });
-  });
+  // Each test signs in as a new identity, so each has a home of its own and
+  // its picker lists only the profiles it creates.
+  const newIdentity = () => Identity.generate({ implementation: "noble" });
 
   it("creates a profile from the home Profile tab without a cross-space write error", async () => {
     const page = shell.page();
@@ -161,7 +181,7 @@ describe("home-space profile creation", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { builtin: "home" },
-      identity,
+      identity: await newIdentity(),
     });
 
     // Open the Profile tab and create a profile through the picker's inline
@@ -183,7 +203,7 @@ describe("home-space profile creation", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { builtin: "home" },
-      identity,
+      identity: await newIdentity(),
     });
 
     await clickCfButton(page, 'cf-tab[value="profile"]');
@@ -208,7 +228,7 @@ describe("home-space profile creation", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { builtin: "home" },
-      identity,
+      identity: await newIdentity(),
     });
 
     await clickCfButton(page, 'cf-tab[value="profile"]');
@@ -222,10 +242,10 @@ describe("home-space profile creation", () => {
     await waitForCondition(page, defaultMarkerShownIs, { args: [false] });
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
-    // The marker shows the "Set default" write landed. The picker writes
-    // home's default slot, whose cell is typed `TrustedDefaultProfile`, so the
-    // write is checked against the writer that type declares.
-    await waitForCondition(page, defaultMarkerShownIs, { args: [true] });
+    // The marker in Ada's row shows the "Set default" write landed. The picker
+    // writes home's default slot, whose cell is typed `TrustedDefaultProfile`,
+    // so the write is checked against the writer that type declares.
+    await waitForDefaultRow(page, "Ada Lovelace");
 
     await clickProfileLink(page, "Alan Turing");
     await waitForRuntimeIdle(page);
@@ -245,15 +265,14 @@ describe("home-space profile creation", () => {
   });
 
   it("moves the default from one profile to another", async () => {
-    // A home of its own, so the first "Set default" in the picker is the
-    // first profile this test creates.
+    // The first "Set default" in the picker is the first profile this test
+    // creates, since its home lists only the profiles it creates.
     const page = shell.page();
-    const ownIdentity = await Identity.generate({ implementation: "noble" });
 
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { builtin: "home" },
-      identity: ownIdentity,
+      identity: await newIdentity(),
     });
 
     await clickCfButton(page, 'cf-tab[value="profile"]');
@@ -263,18 +282,14 @@ describe("home-space profile creation", () => {
 
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
-    await waitForCondition(page, defaultRowNames, {
-      args: ["Katherine Johnson"],
-    });
+    await waitForDefaultRow(page, "Katherine Johnson");
 
     // Katherine's row shows the marker, so the "Set default" left is
     // Dorothy's. Choosing it re-points the default rather than writing into
     // the profile chosen first.
     await clickTrustedAction(page, "SetDefaultProfile");
     await waitForRuntimeIdle(page);
-    await waitForCondition(page, defaultRowNames, {
-      args: ["Dorothy Vaughan"],
-    });
+    await waitForDefaultRow(page, "Dorothy Vaughan");
   });
 
   it("creates a profile by pressing Enter in the field (keyboard submit)", async () => {
@@ -283,7 +298,7 @@ describe("home-space profile creation", () => {
     await shell.goto({
       frontendUrl: FRONTEND_URL,
       view: { builtin: "home" },
-      identity,
+      identity: await newIdentity(),
     });
 
     await clickCfButton(page, 'cf-tab[value="profile"]');

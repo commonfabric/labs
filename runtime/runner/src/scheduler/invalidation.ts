@@ -419,7 +419,7 @@ export function createTriggerTraceEntry(state: {
 
 export interface TriggeredActionPlan {
   decision: TriggerTraceActionRecord["decision"];
-  operation: "none" | "schedule" | "invalidate";
+  operation: "none" | "invalidate";
 }
 
 interface TriggeredActionSkipState {
@@ -499,11 +499,6 @@ export function applyPullTriggeredActionPlan(
   plan: TriggeredActionPlan,
   cause: IMemorySpaceAddress,
 ): void {
-  if (plan.operation === "schedule") {
-    state.scheduleWithDebounce(action);
-    return;
-  }
-
   if (plan.operation === "invalidate") {
     state.markInvalid(action, cause);
   }
@@ -529,7 +524,6 @@ export interface StorageNotificationState {
   readonly getActionId: (action: Action) => string;
   readonly recordCellUpdate: (change: IMemoryChange) => void;
   readonly recordTriggerTrace: (entry: TriggerTraceEntry) => void;
-  readonly scheduleWithDebounce: (action: Action) => void;
   readonly markInvalid: (
     action: Action,
     cause: IMemorySpaceAddress,

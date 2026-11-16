@@ -69,5 +69,22 @@ describe("schema-label-view", () => {
       expect(resolved.map((entry) => entry.path)).toEqual([["late"]]);
       expect(cfcSchemaEntries(reference)).toBe(resolved);
     });
+
+    it("returns no entry below a property whose reference resolves to a boolean schema", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          open: { $ref: "#/$defs/Anything" },
+          title: { $ref: "#/$defs/Labeled" },
+        },
+        $defs: {
+          Anything: true,
+          Labeled: { type: "string", ifc: { confidentiality: ["secret"] } },
+        },
+      } as const satisfies JSONSchema;
+      expect(cfcSchemaEntries(schema).map((entry) => entry.path)).toEqual([
+        ["title"],
+      ]);
+    });
   });
 });

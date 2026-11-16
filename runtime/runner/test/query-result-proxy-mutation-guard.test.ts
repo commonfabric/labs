@@ -62,6 +62,20 @@ describe("query-result proxy mutation guard", () => {
     }).toThrow("read-only");
   });
 
+  it("refuses a symbol-keyed assignment as a failed set rather than as read-only", () => {
+    const proxy = makeProxy() as Record<PropertyKey, unknown>;
+    const key = Symbol("guarded");
+    let thrown: unknown;
+    try {
+      proxy[key] = 2;
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect(String(thrown)).not.toContain("read-only");
+    expect(proxy[key]).toBeUndefined();
+  });
+
   it("refuses `push`", () => {
     const items = makeArrayProxy();
     expect(() => items.push(4)).toThrow("read-only");

@@ -351,6 +351,69 @@ describe("runHarnessJob()", () => {
     });
   });
 
+  it("sends two runs' model calls under the spec's shared cache affinity key, and each run under its own without one", async () => {
+    /** The cache key and run id of each model request one job made. */
+    const requestsOf = async (spec: HarnessJobSpec) => {
+      const requests: { cacheAffinityKey?: string; runId: string }[] = [];
+      const jobRoot = await Deno.makeTempDir({ dir: runRoot });
+      const result = await runHarnessJob(spec, {
+        runRoot: jobRoot,
+        signal: new AbortController().signal,
+        harnessDeps: {
+          env: {
+            ...SCRIPTED_ENV,
+            CF_HARNESS_RUNSC_CFC_POLICY:
+              "/nonexistent/harness-job-test/policy.json",
+          },
+          createPromptLoop: (options) =>
+            new CfHarnessPromptLoop({
+              ...options,
+              modelClient: {
+                providerId: "fixture",
+                complete: (request) => {
+                  requests.push({
+                    ...(request.cacheAffinityKey !== undefined
+                      ? { cacheAffinityKey: request.cacheAffinityKey }
+                      : {}),
+                    runId: request.runId,
+                  });
+                  return Promise.resolve({
+                    assistant: {
+                      role: "assistant",
+                      content: "",
+                      toolCalls: [{
+                        id: "submit-one",
+                        type: "function",
+                        function: {
+                          name: "submit_result",
+                          arguments: JSON.stringify({
+                            result: { answer: "Titan" },
+                          }),
+                        },
+                      }],
+                    },
+                  });
+                },
+              },
+            }),
+        },
+      });
+      expect(result.outcome).toBe("completed");
+      expect(requests.length).toBeGreaterThan(0);
+      return requests;
+    };
+    const shared = { tools: [], cacheAffinityKey: "loom-brief" };
+    const first = await requestsOf(plainSpec(shared));
+    const second = await requestsOf(plainSpec(shared));
+    expect(first[0].runId).not.toBe(second[0].runId);
+    for (const request of [...first, ...second]) {
+      expect(request.cacheAffinityKey).toBe("loom-brief");
+    }
+    for (const request of await requestsOf(plainSpec({ tools: [] }))) {
+      expect("cacheAffinityKey" in request).toBe(false);
+    }
+  });
+
   it("passes the job's command endpoint, actor, own id and relevant commands into the harness", async () => {
     const commands = {
       url: "http://127.0.0.1:8080",

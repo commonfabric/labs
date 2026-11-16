@@ -1,8 +1,18 @@
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { subscribeToDrag, subscribeToEndDrag } from "../../core/drag-state.ts";
 import type { DragState } from "../../core/drag-state.ts";
+
+/** How many released drops have yet to dispatch or fail. */
+let pendingDrops = 0;
+
+/**
+ * Settles once every drop released so far has dispatched or failed. Each
+ * waiting drop chains onto it, so that drops dispatch in release order.
+ */
+let earlierDrops: Promise<void> = Promise.resolve();
 
 /**
  * CFDropZone - Marks a region as droppable and emits events when valid drops occur
@@ -18,6 +28,20 @@ import type { DragState } from "../../core/drag-state.ts";
  * @fires cf-drag-enter - When a valid drag enters the zone
  * @fires cf-drag-leave - When a drag leaves the zone
  * @fires cf-drop - When a valid drop occurs (drag ends while over this zone)
+ *
+ * A detail's `sourceCell` is the dragged cell's link rather than its
+ * `CellHandle`. A detail crosses to the worker as a `FabricValue`, which a
+ * handle is not, and the crossing converts only a detail that is a handle
+ * outright (`toSerializableValue()` in `@commonfabric/html`'s
+ * `src/main/events.ts`). A handler that declares `sourceCell` a `Writable<T>`
+ * receives the link as that cell. `sourceCellRef` names the same cell as plain
+ * id, space and path, leaving out the main thread's display copy of its label.
+ *
+ * A drop delivers the drag's `droppedCell` where it has one, once that has
+ * resolved, so `cf-drop` can follow the release by as much as a round trip
+ * to the worker. It delivers nothing where that resolution fails, or where
+ * the zone has left the document by the time it lands. Drops dispatch in the
+ * order of their releases, across every zone, whichever resolves first.
  *
  * @slot - Default slot for wrapped content
  *
@@ -90,11 +114,11 @@ export class CFDropZone extends BaseElement {
    */
   private _handleDragStateChange(state: DragState | null): void {
     if (!state) {
-      // Drag ended - if we were in drag-over state, emit drop event
+      // The drag has ended. A drop over this zone was already handled by
+      // `_handleDragEnd()`, which clears the drag-over state. It is still set
+      // here only when the zone stopped accepting the drag while over it, and
+      // clearing it dispatches `cf-drag-leave`.
       if (this._isDragOver) {
-        // We need to get the cell from the previous state, but it's gone now
-        // The drag-source will have already cleaned up, so we can't emit drop here
-        // Instead, we need to track the last known drag state
         this._setDragOver(false);
       }
       return;
@@ -143,14 +167,12 @@ export class CFDropZone extends BaseElement {
    * Update drag-over state and emit appropriate events
    */
   private _setDragOver(isOver: boolean, dragState?: DragState): void {
-    if (isOver === this._isDragOver) return;
-
     this._isDragOver = isOver;
     this.toggleAttribute("drag-over", isOver);
 
     if (isOver && dragState) {
       this.emit("cf-drag-enter", {
-        sourceCell: dragState.cell,
+        sourceCell: dragState.cell.toSigilLink(),
         type: dragState.type,
       });
     } else {
@@ -174,19 +196,41 @@ export class CFDropZone extends BaseElement {
       const dropZoneRect = this.getBoundingClientRect();
 
       // Emit drop event with pointer coordinates and drop zone rect
-      this.emit("cf-drop", {
-        sourceCell: dragState.cell,
-        sourceCellRef: dragState.cell.ref(),
-        type: dragState.type,
-        pointerX: dragState.pointerX,
-        pointerY: dragState.pointerY,
-        dropZoneRect: {
-          left: dropZoneRect.left,
-          top: dropZoneRect.top,
-          width: dropZoneRect.width,
-          height: dropZoneRect.height,
-        },
-      });
+      const drop = (cell: CellHandle) => {
+        const { id, space, path } = cell.ref();
+        this.emit("cf-drop", {
+          sourceCell: cell.toSigilLink(),
+          sourceCellRef: { id, space, path },
+          type: dragState.type,
+          pointerX: dragState.pointerX,
+          pointerY: dragState.pointerY,
+          dropZoneRect: {
+            left: dropZoneRect.left,
+            top: dropZoneRect.top,
+            width: dropZoneRect.width,
+            height: dropZoneRect.height,
+          },
+        });
+      };
+      const { cell, droppedCell } = dragState;
+      if (!droppedCell && pendingDrops === 0) {
+        drop(cell);
+        return;
+      }
+      pendingDrops++;
+      earlierDrops = earlierDrops
+        .then(() => droppedCell ?? cell)
+        .then(
+          (resolved) => {
+            if (this.isConnected) drop(resolved);
+          },
+          (error) => {
+            console.error("Failed to resolve the dropped cell:", error);
+          },
+        )
+        .finally(() => {
+          pendingDrops--;
+        });
     }
   }
 

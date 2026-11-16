@@ -50,7 +50,6 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
   ConsoleMethod,
-  parseLink,
   PatternCoverageCollector,
   patternCoverageOutputPath,
   type PatternInstantiationObserver,
@@ -113,6 +112,7 @@ import {
   makeMockFetch,
   readFetchMocks,
 } from "./fetch-mock.ts";
+import { installLlmMocks, readLlmMocks } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import {
   multiUserDescriptorMeta,
@@ -125,7 +125,13 @@ import {
   runtimeErrorExpectation,
   unmetRuntimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
-import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
+import { TEST_DEFAULT_PATTERN_PROGRAM } from "./test-default-pattern.ts";
+import {
+  collectServedErrors,
+  servedCfcRefusalWarnings,
+  servedRuntimeErrors,
+  servedThrows,
+} from "./served-errors.ts";
 import {
   servedConsequences,
   type ServedQuiescence,
@@ -491,10 +497,24 @@ export interface TestRunnerOptions {
    * A multi-user test refuses this option: its participants instantiate and
    * write in workers of their own, against a storage server the multi-user
    * runner starts, so neither the store nor the observer below would see them.
+   *
+   * A run on the server-execution arm refuses it too, since the store is the
+   * caller's and the runner has no memory server to host a serving loop
+   * beside. `serverExecution: false` below selects the OFF arm for the run.
    */
   storageHost?: {
     identity: Identity;
     storageManager: RuntimeOptions["storageManager"];
+
+    /**
+     * `false` runs this file on the OFF arm whatever
+     * `EXPERIMENTAL_SERVER_EXECUTION` and the first-party default select,
+     * without changing the process's environment. Unset, the run resolves
+     * its posture as any `cf test` run does, and a run that resolves ON
+     * refuses the store. A caller sets it when what it checks does not
+     * depend on the posture, or holds only on the OFF arm.
+     */
+    serverExecution?: false;
 
     /** Waits for host-owned work, such as an external agent, before test steps run. */
     beforeAssertions?: (
@@ -1133,6 +1153,20 @@ function printActionStatsTable(runtime: Runtime): void {
 }
 
 /**
+ * Wraps `observe` so it is not told of the default pattern the runner gives
+ * the test's space: that one is the harness's, not the test's, and its
+ * program is no file a caller could map it to.
+ */
+function harnessPatternsLeftOut(
+  observe: PatternInstantiationObserver,
+): PatternInstantiationObserver {
+  return (instantiation) => {
+    if (instantiation.main === TEST_DEFAULT_PATTERN_PROGRAM.main) return;
+    observe(instantiation);
+  };
+}
+
+/**
  * Run a single test pattern file.
  */
 export async function runTestPattern(
@@ -1140,7 +1174,10 @@ export async function runTestPattern(
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
   // Resolved before anything is opened, so a refusal leaves nothing to close.
-  const experimental = patternTestExperimentalOptions(Deno.env.get);
+  const resolved = patternTestExperimentalOptions(Deno.env.get);
+  const experimental = options.storageHost?.serverExecution === false
+    ? { ...resolved, serverExecution: false }
+    : resolved;
   if (experimental.serverExecution && options.storageHost !== undefined) {
     throw new Error(
       `\`cf test\` refuses a caller-supplied \`storageHost\` on the ` +
@@ -1148,6 +1185,18 @@ export async function runTestPattern(
         `no memory server to host a serving loop beside, and the events its ` +
         `runtime commits would go unserved. See "The ON topology in one ` +
         `process" in \`docs/development/TESTING.md\`.`,
+    );
+  }
+  if (
+    experimental.serverExecution && options.cfcEnforcementMode === "disabled"
+  ) {
+    throw new Error(
+      `\`cf test\` refuses \`--cfc-enforcement-mode disabled\` on the ` +
+        `server-execution arm: a runtime with CFC disabled writes no program ` +
+        `closure, so the serving loop cannot load the program it is to ` +
+        `serve, and served handlers run under the serving runtime's CFC ` +
+        `posture rather than the test's. Select the OFF arm with ` +
+        `\`EXPERIMENTAL_SERVER_EXECUTION=false\` to run with CFC disabled.`,
     );
   }
 
@@ -1222,6 +1271,13 @@ export async function runTestPattern(
   const realFetch = globalThis.fetch.bind(globalThis);
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
+
+  // Language-model mocking: a test opts in by exporting a module-scope
+  // `llmMocks` array, read after compile as `fetchMocks` is. The mocks live in
+  // the language-model client, which the whole process shares, so they are
+  // removed when this function returns, after the runtime and the serving loop
+  // that may have asked for them are gone.
+  using llmMockScope = new DisposableStack();
 
   // On the server-execution arm the memory server has a serving loop beside
   // it, whose runtimes run the handlers this test's events fire. They fetch
@@ -1313,7 +1369,11 @@ export async function runTestPattern(
           ? { cfcFlowLabels: options.cfcFlowLabels }
           : {}),
         ...(options.storageHost?.onPatternInstantiated !== undefined
-          ? { onPatternInstantiated: options.storageHost.onPatternInstantiated }
+          ? {
+            onPatternInstantiated: harnessPatternsLeftOut(
+              options.storageHost.onPatternInstantiated,
+            ),
+          }
           : {}),
         errorHandlers: [(error: ErrorWithContext) => runtimeErrors.push(error)],
         navigateCallback: (target) => {
@@ -1479,14 +1539,20 @@ export async function runTestPattern(
     // so the entries must be in place before `runtime.run(...)` below. `main` is the
     // module namespace, so a named `fetchMocks` export is reachable.
     fetchMockEntries = readFetchMocks(main);
+    const llmMocks = readLlmMocks(main);
     readBudgets = parseReadBudgets(main.readBudgets);
 
     // A compile-only run ends here: the program's modules are in the byte
     // cache, which is all it was asked for. Nothing ran, so there is no
     // coverage to write, and a multi-user descriptor's participants are not
-    // started, since they compile this same program from that cache.
+    // started, since they compile this same program from that cache. The
+    // default pattern a run gives the test's space is compiled into the cache
+    // too, since the run takes it from there as well.
     if (options.compileOnly) {
       writeLocalPatternCoverage = false;
+      await runtime.patternManager.compileAndRegisterModules(
+        TEST_DEFAULT_PATTERN_PROGRAM,
+      );
       return {
         path: testPath,
         results: [],
@@ -1508,6 +1574,9 @@ export async function runTestPattern(
       if (readBudgets !== undefined) {
         throw new Error("Read budgets are not supported in multi-user tests");
       }
+      if (llmMocks !== undefined) {
+        throw new Error("`llmMocks` is not supported in multi-user tests");
+      }
       writeLocalPatternCoverage = false;
       return await withPhase(
         ["runTestPattern", "multiUser"],
@@ -1521,6 +1590,8 @@ export async function runTestPattern(
           }),
       );
     }
+
+    if (llmMocks !== undefined) llmMockScope.use(installLlmMocks(llmMocks));
 
     const testPatternFactory = main.default as Pattern;
 
@@ -1549,6 +1620,16 @@ export async function runTestPattern(
         await home.sync();
         if (home.get()?.defaultPattern !== undefined) return;
       }
+      // Compiled as the test's own program is, and written into the test's
+      // space as that is, so a serving runtime can start its handler.
+      const { main: defaultModule } = await runtime.patternManager
+        .compileAndRegisterModules(TEST_DEFAULT_PATTERN_PROGRAM, undefined, {
+          space,
+        });
+      const defaultPattern = defaultModule?.default;
+      if (typeof defaultPattern !== "function") {
+        throw new Error("The test default pattern exports no pattern");
+      }
       const setupTx = runtime.edit();
       const spaceCell = runtime.getCell(space, space, undefined, setupTx);
       const defaultPatternCell = runtime.getCell(
@@ -1557,31 +1638,7 @@ export async function runTestPattern(
         undefined,
         setupTx,
       );
-      const pieceRegistry = (defaultPatternCell as any).key("pieceRegistry");
-      pieceRegistry.set([]);
-      const addPiece = runtime.getCell<unknown>(
-        space,
-        "test-default-add-piece",
-        { asCell: ["stream"] },
-        setupTx,
-      );
-      (defaultPatternCell as any).key("addPiece").set(addPiece);
-      const testPieceRegistrationCount = (defaultPatternCell as any).key(
-        "testPieceRegistrationCount",
-      );
-      testPieceRegistrationCount.set(0);
-      runtime.scheduler.addEventHandler(
-        (handlerTx, event) => {
-          const piece = event?.piece;
-          if (!piece) return;
-          pieceRegistry.withTx(handlerTx).addUnique(piece);
-          testPieceRegistrationCount.withTx(handlerTx).increment();
-        },
-        parseLink(addPiece),
-      );
-      (defaultPatternCell as any).key("backlinksIndex").set({
-        mentionable: [],
-      });
+      runtime.run(setupTx, defaultPattern, {}, defaultPatternCell);
       (spaceCell as any).key("defaultPattern").set(defaultPatternCell);
       runtime.prepareTxForCommit?.(setupTx);
       await setupTx.commit().settled;
@@ -2355,10 +2412,13 @@ export async function runTestPattern(
     );
     const servedWarnings: string[] = [];
     servedLoggerCounts?.appendMessages(consoleErrors, servedWarnings);
+    for (const warning of servedCfcRefusalWarnings(servedErrors)) {
+      consoleWarnings.push(warning);
+    }
 
     const errorMessages = [
       ...runtimeErrors.map((e) => String(e)),
-      ...servedRuntimeErrors(servedErrors, runtimeErrors),
+      ...servedRuntimeErrors(servedThrows(servedErrors), runtimeErrors),
       ...continuousUiErrors.map((e) => `[continuous $UI] ${String(e)}`),
     ];
     return {
@@ -2415,10 +2475,13 @@ export async function runTestPattern(
       errorMessage +=
         "\n    Hint: If the test imports from sibling directories (e.g., ../shared/), use --root to specify a common ancestor.";
     }
+    for (const warning of servedCfcRefusalWarnings(servedErrors)) {
+      consoleWarnings.push(warning);
+    }
 
     const errorMessages = [
       ...runtimeErrors.map((e) => String(e)),
-      ...servedRuntimeErrors(servedErrors, runtimeErrors),
+      ...servedRuntimeErrors(servedThrows(servedErrors), runtimeErrors),
       ...continuousUiErrors.map((e) => `[continuous $UI] ${String(e)}`),
     ];
     return {

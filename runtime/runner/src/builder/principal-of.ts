@@ -148,13 +148,7 @@ export function principalsOf(
 export function writtenPrincipalOf(target: unknown): DID | undefined {
   const name = "writtenPrincipalOf(target)";
   const { frame, runtime, tx } = readingFrame(name);
-  if (
-    labelMetadataFieldIsProtected({ kind: "represents-principal" }, "subject")
-  ) {
-    throw new Error(
-      `\`${name}\` cannot carry a label for the subject of a \`represents-principal\` claim, which is not classified public.`,
-    );
-  }
+  requirePublicClaimSubject(name, "represents-principal");
   if (target === undefined) return undefined;
   return writtenPrincipalAt(
     tx,
@@ -193,6 +187,25 @@ function readingFrame(name: string) {
 }
 
 /**
+ * Throws unless `isProtected`, the label-metadata classification, makes the
+ * `subject` of a `kind` claim public, since the principal readers return that
+ * subject with no label of its own. `name` is the caller, as the error names
+ * it.
+ */
+export function requirePublicClaimSubject(
+  name: string,
+  kind: PrincipalClaimKind,
+  isProtected: (atom: unknown, field: string) => boolean =
+    labelMetadataFieldIsProtected,
+): void {
+  if (isProtected({ kind }, "subject")) {
+    throw new Error(
+      debugStr`\`${name}\` cannot carry a label for the subject of a $quote${kind} claim, which is not classified public.`,
+    );
+  }
+}
+
+/**
  * Helper for `principalOf()` and `principalsOf()`, which checks the calling
  * frame and `kind`, then reads the claims of `kind` on `target`'s label as
  * `exactPrincipalAttestations()` reads them. `name` is the caller, as its
@@ -211,11 +224,7 @@ function attestedPrincipals(
     );
   }
   const claimKind = kind as PrincipalClaimKind;
-  if (labelMetadataFieldIsProtected({ kind: claimKind }, "subject")) {
-    throw new Error(
-      debugStr`\`${name}\` cannot carry a label for the subject of a $quote${claimKind} claim, which is not classified public.`,
-    );
-  }
+  requirePublicClaimSubject(name, claimKind);
   let label: "written" | "resolved" = "resolved";
   if (options !== undefined) {
     const given = isObjectNotArray(options) ? options.label : undefined;

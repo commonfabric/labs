@@ -1,6 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  assertStoredValuePath,
+  isNormalizedLink,
   linkPathSegmentToCellPathSegment,
   parseLinkPrimitive,
   parseScopedIdSegment,
@@ -8,6 +10,44 @@ import {
 } from "../src/link-types.ts";
 
 describe("link-types", () => {
+  describe("isNormalizedLink()", () => {
+    it("returns `true` for a record with a path and well-formed members", () => {
+      expect(isNormalizedLink({ path: [] })).toBe(true);
+      expect(
+        isNormalizedLink({
+          path: ["a"],
+          id: "of:x",
+          space: "did:key:z",
+          scope: "user",
+        }),
+      ).toBe(true);
+    });
+
+    it("returns `false` for anything else", () => {
+      expect(isNormalizedLink("of:x")).toBe(false);
+      expect(isNormalizedLink([])).toBe(false);
+      expect(isNormalizedLink({ id: "of:x" })).toBe(false);
+      expect(isNormalizedLink({ path: [], scope: "elsewhere" })).toBe(false);
+      expect(isNormalizedLink({ path: [], id: 7 })).toBe(false);
+    });
+  });
+
+  describe("assertStoredValuePath()", () => {
+    it("does not throw for a path that starts with the `value` segment", () => {
+      expect(() => assertStoredValuePath(["value", "items", "0"])).not
+        .toThrow();
+    });
+
+    it("throws for a path that does not start with the `value` segment", () => {
+      expect(() => assertStoredValuePath(["items", "0"])).toThrow(
+        /Not a stored value path/,
+      );
+      expect(() => assertStoredValuePath([])).toThrow(
+        /Not a stored value path/,
+      );
+    });
+  });
+
   describe("linkPathSegmentToCellPathSegment()", () => {
     it("returns a number for a canonical index token", () => {
       expect(linkPathSegmentToCellPathSegment("0")).toBe(0);

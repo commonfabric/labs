@@ -155,8 +155,10 @@ describe("document-readiness", () => {
       const action = (() => {}) as Action;
       readiness.onActionRegistered(action);
       const rearmed = defer<unknown>();
+      let rearms = 0;
       runtime.scheduler.invalidateAction = (target, options) => {
         expect(target).toBe(action);
+        rearms++;
         rearmed.resolve(options);
       };
       const work = defer<void>();
@@ -170,7 +172,9 @@ describe("document-readiness", () => {
         work,
         start,
         rearmed: rearmed.promise,
+        rearms: () => rearms,
         starts: () => starts,
+        cancel: () => cancels.forEach((cancel) => cancel()),
         dispose: async () => {
           cancels.forEach((cancel) => cancel());
           await runtime.dispose();
@@ -210,6 +214,23 @@ describe("document-readiness", () => {
         expect(() => fixture.readiness.requireSettled("k", fixture.start))
           .toThrow("the work failed");
         expect(fixture.starts()).toBe(1);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("re-arms nothing for work that settles once the readiness is cancelled", async () => {
+      const fixture = settledFixture();
+      try {
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .toThrow(DocumentPending);
+        fixture.cancel();
+
+        // The readiness's own reaction to the work was registered first, so
+        // it has run once this wait ends.
+        fixture.work.resolve();
+        await fixture.work.promise;
+        expect(fixture.rearms()).toBe(0);
       } finally {
         await fixture.dispose();
       }

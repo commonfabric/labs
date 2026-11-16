@@ -644,7 +644,6 @@ async function selectObservation(id: string | null): Promise<void> {
 }
 
 async function setTimeCursor(value: number): Promise<void> {
-  if (!Number.isFinite(value)) throw new Error("Time cursor must be a number.");
   await outputWrite.key("timeCursor").set(
     clampTimeCursor(
       Math.round(value),

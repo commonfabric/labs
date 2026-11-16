@@ -110,10 +110,21 @@ class EmulatedSessionFactory implements SessionFactory {
    */
   #instanceNames = namesInstancesByDefault();
 
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
+
+  /** Whether this factory's sessions are demand (`Options.demand`). */
+  readonly #demand: boolean;
+
   constructor(
     getServer: () => MemoryV2Server.Server,
+    demand = true,
   ) {
     this.#getServer = getServer;
+    this.#demand = demand;
   }
 
   async create(
@@ -127,6 +138,8 @@ class EmulatedSessionFactory implements SessionFactory {
     const client = await MemoryV2Client.connect({
       transport,
       instanceNames: this.#instanceNames,
+      syncCidReferences: this.#syncCidReferences,
+      demand: this.#demand,
     });
     const session = await client.mount(
       space,
@@ -139,6 +152,11 @@ class EmulatedSessionFactory implements SessionFactory {
   /** @inheritDoc */
   setInstanceNames(enabled: boolean): void {
     this.#instanceNames = enabled;
+  }
+
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
   }
 
   /** @inheritDoc */
@@ -242,7 +260,7 @@ export class EmulatedStorageManager extends StorageManager {
     };
     super(
       options,
-      new EmulatedSessionFactory(() => serverHolder.get()),
+      new EmulatedSessionFactory(() => serverHolder.get(), options.demand),
     );
     this.#serverFactory = serverFactory;
     serverHolder.get = () => this.server();

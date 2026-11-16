@@ -160,11 +160,12 @@ function makeRepublisher(opts: {
   runtime: Runtime;
   contribute?: ElementContribution;
   rearmReconcile?: () => void;
+  isActive?: () => boolean;
 }) {
   return createResumeRepublisher({
     runtime: opts.runtime,
     logger,
-    isActive: () => true,
+    isActive: opts.isActive ?? (() => true),
     getResult: () => opts.result as unknown as Cell<any[]> | undefined,
     inputsCell: new FakeInputsCell(opts.inputsList) as unknown as Cell<any>,
     inputSchema: SCHEMA,
@@ -346,6 +347,38 @@ describe("resume-republish unit", () => {
     // elements.
     expect(result.setValues.length).toBe(1);
     expect(result.setValues[0]).toEqual(inputs);
+  });
+
+  it("waits on nothing and writes nothing once the coordinator is torn down", () => {
+    const inputs = [new FakeCell("e0", null)];
+    let syncs = 0;
+    const r0 = new FakeCell("r0", undefined, () => {
+      syncs++;
+      return Promise.resolve();
+    });
+    const result = new FakeCell("container", [0]);
+    const { runtime, tracked } = makeRuntime();
+    let active = true;
+    const rr = makeRepublisher({
+      result,
+      inputsList: inputs,
+      elementRuns: runsFor(inputs, [r0]),
+      runtime,
+      isActive: () => active,
+    });
+
+    active = false;
+    rr.awaitPendingThenRepublish([r0] as unknown as Cell<any>[]);
+
+    expect(syncs).toBe(0);
+    expect(tracked).toEqual([]);
+    expect(rr.awaitingResult(r0 as unknown as Cell<any>)).toBe(false);
+
+    // The same call on a live coordinator does wait on the element.
+    active = true;
+    rr.awaitPendingThenRepublish([r0] as unknown as Cell<any>[]);
+    expect(syncs).toBe(1);
+    expect(tracked.length).toBe(1);
   });
 
   it("returns early when the result container is unbound", async () => {

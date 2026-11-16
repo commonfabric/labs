@@ -5,6 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { reactive } from "../src/builder/reactive.ts";
 import { isReactive } from "../src/builder/types.ts";
 
@@ -36,5 +37,15 @@ describe("reactive function", () => {
     // Use type assertion since .get() is no longer on Reactive type
     // but we want to verify runtime still throws
     expect(() => (c as any).get()).toThrow();
+  });
+
+  it("throws under a frame that holds no runtime", () => {
+    const frame = pushFrame({ runtime: undefined });
+    try {
+      expect(() => reactive<number>()).toThrow("no runtime context available");
+    } finally {
+      popFrame(frame);
+    }
+    expect(isReactive(reactive<number>())).toBe(true);
   });
 });

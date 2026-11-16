@@ -15,10 +15,12 @@ import { maxOf } from "@commonfabric/collections/math";
 import { type Cell, sendEvent } from "../src/cell.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { ArrivalLog, awaitEach } from "./support/serving-waits.ts";
 import { waitUntil } from "./support/wait-until.ts";
 
 const spaceSigner = await Identity.fromPassphrase("served compile space");
@@ -111,6 +113,13 @@ export default pattern<{ count: Writable<number> }, { answer: number; bump: Stre
 `;
 }
 
+/** The source of a program's first file, which names it in these tests. */
+function sourceOf(program: string | RuntimeProgram): string {
+  return typeof program === "string"
+    ? program
+    : program.files[0]?.contents ?? "";
+}
+
 /** Public result of one compile request. */
 type CompiledView = {
   /** Whether compilation or child setup is in progress. */
@@ -132,6 +141,7 @@ describe("executor-compile-and-run", () => {
   let clientManager: EmulatedStorageManager;
   let client: Runtime;
   let servingCompiles: string[];
+  let servingRequests: ArrivalLog<string>;
   let clientCompiles: string[];
   let created: Cell<unknown>[];
   let servingErrors: unknown[];
@@ -146,11 +156,7 @@ describe("executor-compile-and-run", () => {
     const manager = runtime.patternManager;
     const compile = manager.compilePattern.bind(manager);
     manager.compilePattern = (program, options) => {
-      into.push(
-        typeof program === "string"
-          ? program
-          : program.files[0]?.contents ?? "",
-      );
+      into.push(sourceOf(program));
       const gate = runtime.servingPosture && compileGates.get(into.at(-1)!);
       if (gate) {
         compileGates.delete(into.at(-1)!);
@@ -161,9 +167,23 @@ describe("executor-compile-and-run", () => {
     };
   }
 
+  /**
+   * Records every program a serving runtime asks for, including requests that
+   * join a compile already in progress and so never reach the compiler.
+   */
+  function recordRequests(runtime: Runtime): void {
+    const manager = runtime.patternManager;
+    const request = manager.compileOrGetPattern.bind(manager);
+    manager.compileOrGetPattern = (program, space) => {
+      servingRequests.record(sourceOf(program));
+      return request(program, space);
+    };
+  }
+
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     servingCompiles = [];
+    servingRequests = new ArrivalLog();
     clientCompiles = [];
     created = [];
     servingErrors = [];
@@ -186,6 +206,7 @@ describe("executor-compile-and-run", () => {
         });
         servingRuntimes.push(runtime);
         countCompiles(runtime, servingCompiles);
+        recordRequests(runtime);
         runtime.scheduler.onError((error) => servingErrors.push(error));
         return {
           runtime,
@@ -648,25 +669,16 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       bobArgument.withTx(tx).key("code").set(a);
       expect((await tx.commit().settled).error).toBeUndefined();
       cancelBob = bobResult.sink(() => {});
-      await waitUntil(
-        () => host.stats().outbox.queued === 2,
-        "both user compile requests",
+      // Bob's identical request arrives while Alice's compile is held, so it
+      // joins hers rather than compiling again.
+      await awaitEach(
+        servingRequests,
+        () => servingRequests.count((code) => code === a) >= 2,
       );
+      expect(servingCompiles.filter((code) => code === a)).toHaveLength(1);
       gate.release.resolve();
-      await waitUntil(
-        () =>
-          piece.result.key("compiled").get()?.result?.answer === 21 &&
-          bobResult.key("compiled").get()?.result?.answer === 21,
-        () =>
-          `both user children: ${
-            JSON.stringify({
-              alice: piece.result.key("compiled").get()?.result?.answer,
-              bob: bobResult.key("compiled").get()?.result?.answer,
-              errors: servingErrors.map(String),
-              stats: host.stats().outbox,
-            })
-          }`,
-      );
+      await childValue(piece.result, 21);
+      await childValue(bobResult, 21, bob);
       expect(servingCompiles.filter((code) => code === a)).toHaveLength(1);
       const childId = piece.result.key("compiled").key("result")
         .resolveAsCell().getAsNormalizedFullLink().id;
@@ -684,34 +696,13 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       const updateInput = client.edit();
       count.withTx(updateInput).key("count").set(3);
       expect((await updateInput.commit().settled).error).toBeUndefined();
-      await waitUntil(
-        () => piece.result.key("compiled").get()?.result?.answer === 24,
-        () =>
-          `Alice's live child: ${
-            JSON.stringify({
-              alice: piece.result.key("compiled").get()?.result?.answer,
-              bob: bobResult.key("compiled").get()?.result?.answer,
-              errors: servingErrors.map(String),
-            })
-          }`,
-      );
+      await childValue(piece.result, 24);
       expect(bobResult.key("compiled").get()?.result?.answer).toBe(21);
 
       const change = bob.edit();
       bobArgument.withTx(change).key("code").set(reactiveChildProgram(22));
       expect((await change.commit().settled).error).toBeUndefined();
-      await waitUntil(
-        () => bobResult.key("compiled").get()?.result?.answer === 22,
-        () =>
-          `Bob's replacement: ${
-            JSON.stringify({
-              alice: piece.result.key("compiled").get()?.result?.answer,
-              bob: bobResult.key("compiled").get()?.result?.answer,
-              errors: servingErrors.map(String),
-              stats: host.stats().outbox,
-            })
-          }`,
-      );
+      await childValue(bobResult, 22, bob);
       expect(piece.result.key("compiled").get()?.result?.answer).toBe(24);
       await variantsFor(childId, 2);
 

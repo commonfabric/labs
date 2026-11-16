@@ -263,6 +263,25 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       }
     });
 
+    it("hands the ceiling with no `onExceed` when the client names none", async () => {
+      let declared: SessionReadCeiling | undefined;
+      storageManager.setSessionReadCeiling = (ceiling) => {
+        declared = ceiling;
+      };
+      const runtime = construct({
+        experimental: { serverExecution: true },
+        cfcReadMaxConfidentiality: ["did:key:owner"],
+      });
+      try {
+        expect(declared).toStrictEqual({
+          maxConfidentiality: ["did:key:owner"],
+        });
+        expect(Object.keys(declared!)).toEqual(["maxConfidentiality"]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
     it("declares no ceiling to the sessions of a client off server execution", async () => {
       // The OFF arm executes its own queries under the runtime's option; a
       // declared ceiling would be a wire delta on an arm whose wire is
