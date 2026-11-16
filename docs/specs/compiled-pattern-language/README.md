@@ -1162,10 +1162,13 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   equal elements of the first source. Whether a binding that a `lift`
   or a `computed` written in an element body makes has a stream per
   occurrence: assumed not, in all three cases, as a binding made in a
-  function body is named by what it holds. Which key an element that
-  a `flatMap` contributes has: assumed the key of its source element
-  together with its position in that element's segment, whether the
-  segment holds references or plain values. And what it means that
+  function body is named by what it holds. Which key an element of a
+  `flatMap` segment has where the segment is itself the result of
+  another per-element construct: assumed the key the member has in
+  that result. By ruling a member of any other segment is keyed by
+  the member itself, a reference by its cell identity and a plain
+  value by its value, with its count in the segment and the key of
+  its source element. And what it means that
   the causes of what an element body holds are computed as they were
   in the runtime of today: assumed the same inputs and structure of
   derivation, not equal identifiers. And whether an output that is

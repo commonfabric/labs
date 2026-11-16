@@ -511,8 +511,14 @@ be recomputed, and that its state moves with it.
   an element of a `map` result the key of the source element the
   callback was evaluated for. A change of one upstream element then
   evaluates that element's nodes through a chain of such constructs,
-  and no other element's. For a `flatMap` the key is assumed
-  (`plan-and-label-templates.md` §8, question 101).
+  and no other element's.
+- An element that a `flatMap` contributes is keyed by the member
+  itself, by the rule for any array, together with the key of the
+  source element: the cell identity for a member that is a reference
+  and the value for a member that is a plain value, with the count of
+  earlier equal members of that source element's segment. Two members
+  of one segment that change places then evaluate nothing, as for
+  `map` (`plan-and-label-templates.md` §1.3).
 - An output that passes the result of a per-element construct on
   unchanged, as a `computed` that returns the result of a `filter`
   does, is the same collection for keying, and the plan marks the

@@ -1928,7 +1928,9 @@ about. This document names them as follows.
 - **The result of another per-element construct:** the output of a
   `map`, a `filter` or a `flatMap` of the plan. An element has the key
   of the upstream element it came from, whatever the result holds at
-  its position.
+  its position. An element of a `flatMap` result has that key together
+  with a part formed from the member itself ("The key of an element
+  that a `flatMap` contributes", below).
 
 One stored array can hold a link at one position and a plain value at
 another, and the first two cases then apply position by position. A
@@ -2397,16 +2399,50 @@ Consequences, which later sections rely on:
   constructs: an element of a `map` over a `filter` over a `map` has
   the key of the element of the first source. So a change of one
   upstream element makes stale the cone instances of that key in each
-  body of the chain, and no cone instance of another key. A `flatMap`
-  yields a segment per source element. *Assumed* (section 8, question
-  101): an element of its result has the key of the source element
-  together with its position in that element's segment. A collection
-  that no per-element construct produced is keyed by the rule of this
-  section's start: a stored array, and an array that a `lift` or a
-  `computed` returns whole. For the second an implementation may
-  evaluate the body for the whole collection again on each change, in
-  place of keeping results per key, where the observable result is the
-  same: the stored values and labels, and what the state cells,
+  body of the chain, and no cone instance of another key.
+- **The key of an element that a `flatMap` contributes.** A `flatMap`
+  yields a segment per source element, so one source key cannot stand
+  for the several elements of a segment. By ruling the key of such an
+  element is formed from the member itself, by the same rule as for
+  any array, together with the key of the source element. The member
+  part is the identity of the cell where the member is a reference,
+  which is the address the link resolves to, and the salted hash of
+  the value where the member is a plain value. It holds the occurrence
+  count as well, and the count is among the members of that source
+  element's segment: the number of earlier members of the same
+  segment with the same identity or value. The position in the
+  segment is not in the key. Four things follow.
+  - Two members of one segment that change places change no key, and
+    nothing is evaluated for them in a body over the result, except
+    the nodes that read the index, as for a `map`.
+  - A state cell, a stream, an effect and a child of a body over the
+    result stay with the member and not with a position of the
+    segment.
+  - A member that is a plain value and whose value changes is another
+    key, as a plain value edited in place is. That holds for a member
+    the callback computes: where the callback of a `map` computes a
+    value the element keeps the source key, and where the callback of
+    a `flatMap` computes the members of a segment each is keyed by its
+    value under the source key.
+  - Equal members of two segments have two keys, because the source
+    keys differ, and the count of one segment does not depend on
+    another.
+
+  The rule covers a segment whose members are references and one whose
+  members are plain values, over a source of any of the three cases. A
+  segment of one member, which a callback that returns a scalar
+  yields, has the key of the source element with the part of that
+  member and the count 0. *Assumed* (section 8, question 101): where
+  the callback returns the result of another per-element construct as
+  the segment, as `xs.flatMap((x) => x.items.map(f))` does, the member
+  part is the key the member has in that result, by the rule of the
+  item above for a derived collection.
+- **A collection that no per-element construct produced** is keyed by
+  the rule of this section's start: a stored array, and an array that
+  a `lift` or a `computed` returns whole. For the second an
+  implementation may evaluate the body for the whole collection again
+  on each change, in place of keeping results per key, where the
+  observable result is the same: the stored values and labels, and what the state cells,
   streams, effects and children of each key hold. Aggregates and
   collection indexes hold one contribution per key (sections 3.8 and
   3.17). `reduce` is the exception: its steps are ordered and are not
@@ -10491,8 +10527,8 @@ this document made.
     upstream element, so its state depends on the equal elements before
     that one in the first source of the chain, and not on equal values
     or references in the result; an element that a `flatMap`
-    contributes depends in addition on its place in its segment
-    (question 101).
+    contributes depends in addition on the equal members before it in
+    its segment (section 1.3).
 37. **Which instantiations put the position in the key.** Not open: none
     does. A child of an element body, and an instance that a `lift` or a
     `computed` written in the body makes, is named through the element
@@ -11502,27 +11538,33 @@ this document made.
      per-element construct is keyed by the key of the upstream element
      it came from. A `flatMap` can yield several elements for one
      source element, and one key cannot stand at several positions.
-     *Assumed:* an element of a `flatMap` result has the key of the
-     source element together with its position in the segment that
-     element contributed (section 1.3). An element that moves inside
-     its segment is then another element for a body applied to the
-     result: two members of one segment that change places are two keys
-     whose values changed, and both are evaluated again, where a moved
-     element of a `map` keeps its results. A state cell declared in a
-     body over the result stays with the position in the segment and
-     not with the member. The prototype keys this way. In its fixture a
+     Not open, by ruling: the key is formed from the member itself, by
+     the same rule as for any array, together with the source
+     element's key. The member part is the identity of the cell for a
+     member that is a reference and the value for a member that is a
+     plain value, with the count of earlier occurrences among the
+     members of that source element's segment (section 1.3). Two
+     members of one segment that change places then evaluate nothing,
+     as for a `map`, and a state cell declared in a body over the
+     result stays with the member. The prototype keys by the position
+     in the segment in the place of the member part: in its fixture a
      segment behind a reference that grows evaluates the new position
-     alone, a move of the source elements evaluates nothing, and a
-     plain value that enters the source evaluates its own segment. The
-     alternative keys an element of a segment by its own
-     identity or value and its count in the segment, under the source
-     element's key. The case is the result of another per-element
-     construct, the `flatMap`, over a source of any of the three cases.
-     The assumption does not look at what a segment holds: an element
-     of a segment that is a reference and one that is a plain value in
-     place are both keyed by the position in the segment. The
-     alternative keys the first by the address its link resolves to and
-     the second by its value.
+     alone, a move of the source elements evaluates nothing, a plain
+     value that enters the source evaluates its own segment, and two
+     members of one segment that change places are both evaluated
+     again, which the ruling does not have. The case is the result of
+     another per-element construct, the `flatMap`, over a source of
+     any of the three cases, with a segment of references and with a
+     segment of plain values. Open: a segment that is itself the
+     result of another per-element construct, as
+     `xs.flatMap((x) => x.items.map(f))` yields. *Assumed:* the member
+     part is the key the member has in that result, which is the key
+     of the element of `x.items` it came from, and not a key formed
+     from what the position holds. The alternative forms it from what
+     the position holds. The case of that question is a segment that
+     is the result of another per-element construct, over upstream
+     references and upstream plain values alike. The entry keeps its
+     number.
 102. **A default of the caller's place and one of the callee, for one
      path.** Not open. By ruling the default read at a position is the
      one declared nearest the end of the chain of places the read

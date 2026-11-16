@@ -712,8 +712,10 @@ which it covers.
   segment behind a reference that grows evaluates the new position
   alone, a move of the source elements evaluates nothing in either case,
   and a plain value that enters evaluates its own segment. Two members
-  of one segment that change places are both evaluated again (question
-  147).
+  of one segment that change places are both evaluated again. By
+  ruling the key has the member in the place of the position
+  (question 147), and under it such a change of places evaluates
+  nothing.
 - **`keyed`.** The record of a key of a list, which is a list of
   references (question 166).
 - **`reduce`.** A fold over an array of references, one over an array of
@@ -1589,6 +1591,15 @@ is relitigated.
   computation produces as a whole array, an implementation may evaluate
   the whole collection again on each change in place of keeping results
   per element, and the observable result is the same.
+- The key of an element that a `flatMap` contributes is formed from
+  the member itself, by the same rule as for any array, together with
+  the source element's key: the cell identity for a member that is a
+  reference, and the value with the occurrence count for a member that
+  is a plain value. The occurrence count is among the members of that
+  source element's segment. Two members of one segment that change
+  places then evaluate nothing, as for `map`. The rule covers a
+  segment of references and a segment of plain values, over a source
+  of any of the three cases.
 - An output that passes a derived collection on unchanged is the same
   collection for keying, and the plan marks that output as such
   (`Output.passesCollection`). The case is the result of another
@@ -2322,22 +2333,23 @@ as an assumption, which is what the prototype does.
      read from a value). No number is set for "very large": no count of
      static targets makes a cone a materializer.
 147. **The key of an element that a `flatMap` contributes** (PL question
-     101). By ruling an element of the result of a per-element
-     construct is keyed by the key of the upstream element it came
-     from, and a `flatMap` can yield several elements for one upstream
-     element. *Assumed:* the key is the upstream key together with the
-     count of earlier elements that the same upstream element
-     contributed. This is the case of the result of another per-element
-     construct. The assumption is the same whether a segment holds
-     references or plain values in place; the alternative keys a
-     reference by the address it resolves to and a plain value by its
-     value, under the upstream key. The prototype keys as assumed, and
-     its fixture has both kinds of segment. One consequence differs from
-     the ruling on a moved element: two members of one segment that
-     change places are two keys whose values changed, and both are
-     evaluated again; and a state cell declared in a body over the
-     result stays with the position in the segment and not with the
-     member.
+     101). Settled by ruling: the key is formed from the member itself,
+     by the rule for any array, together with the source element's
+     key. A member that is a reference has its cell identity and a
+     member that is a plain value its value, each with the count of
+     earlier occurrences among the members of that source element's
+     segment. Two members of one segment that change places evaluate
+     nothing, and a state cell declared in a body over the result
+     stays with the member. The prototype keys by the position in the
+     segment in the place of the member part, and its fixture has both
+     kinds of segment. Open: a segment that is itself the result of
+     another per-element construct, as
+     `xs.flatMap((x) => x.items.map(f))` yields. *Assumed:* the member
+     part is the key the member has in that result. The alternative
+     forms it from what the position holds. That case is the result of
+     another per-element construct as the segment, over upstream
+     references and upstream plain values alike. The entry keeps its
+     number.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
 149. **A property default of a place, in a read of an object whole** (PL

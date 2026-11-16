@@ -1682,7 +1682,9 @@ The runtime evaluates a `map` over the collection as follows.
    and that of a position that holds a plain value is the salted hash
    of the value (section 5.3). A position of the result of another
    per-element construct has the key of the upstream element it came
-   from ("A chain of per-element constructs", section 2.6;
+   from, and a position of a `flatMap` result has that key together
+   with a part formed from the member the position holds ("A chain of
+   per-element constructs", section 2.6;
    `plan-and-label-templates.md` §1.3 names the three cases). The key
    holds the element part and the number of earlier positions with the
    same element part. The position is not in
@@ -1934,12 +1936,21 @@ applied to the result of a `map` or a `filter` therefore has the keys
 of the source of that construct, for the positions the result holds. A
 change of one upstream element makes stale the cone instances of that
 key in each body of the chain, by the first row of the table, and no
-cone instance of another key. For a `flatMap` the key is assumed there
-(its §8, question 101): the key of the source element with the
-position in the segment that element contributed, whether the segment
-holds references or plain values in place. Under the assumption a move
-of the source elements evaluates nothing, and two members of one
-segment that change places are both evaluated again.
+cone instance of another key. For a `flatMap` the key is ruled as
+well (its §1.3): the key of the source element together with a part
+formed from the member itself, by the rule for any array. The part is
+the address a member that is a reference resolves to, or the salted
+hash of a member that is a plain value, with the count of earlier
+equal members of the same segment. So the element table of a body over
+a `flatMap` result is computed from the segments, when the runtime
+assembles the result and records the length of each source element's
+segment (section 2.5). A move of the source elements evaluates
+nothing, and two members of one segment that change places evaluate
+nothing either, except the cone instances that list the slot of root
+`index`. The state cells, streams, operation state and children of a
+body over the result stay with the member. That is the same for a
+segment of references and for a segment of plain values, over a source
+of any of the three cases.
 
 The dependency is by key, and it is no edge of `Plan.edges`: a cone
 instance of the downstream body depends on the results of the upstream
