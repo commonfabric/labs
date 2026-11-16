@@ -930,6 +930,37 @@ cell's contents. The cache is designed around this:
   which CFC leaves out of the flow join on both sides, so what a stamp can
   reach is the compiler's bookkeeping beside them. `cfc-enforcement-matrix.md`
   §4 carries the reasoning, including where this stops short of spec §18.6.2.
+- **Repairing a stamped record.** A runtime that staged a source update's
+  delegations in the update's own transaction left the piece data's label on
+  the successor's records, and every later setup that reads one consumes the
+  label and is refused as a writer-fit misfit. The load ahead of a setup
+  repairs them: `PatternManager.prepareSourceClosureVerification()` runs
+  `repairCompileCacheStamps()` for each closure it prepares, and the setup
+  then reads the records unlabeled.
+  - It verifies the closure in a transaction of its own and aborts it. The
+    repair's transaction reads each record it writes whole, refuses to write
+    over one that changed since, reads and writes nothing else, and commits
+    with no explicit preparation.
+  - A stamped compiled record is erased, value and label together, and the
+    next load compiles it again. It is left, and the closure refused, where
+    its delegation list names an identity the source record's attested list
+    does not.
+  - A stamped source record is rewritten to the value the compile-cache
+    writer stores for its identity, computed from the verified closure: its
+    code, filename, the authored edges a scan of its code yields in scan
+    order, its source-root and data-file edges ordered by specifier and
+    identity, a cache-root edge per other module of the closure it linked,
+    and its delegation list where its own label attests it. Its new label is
+    that attestation alone; every `derived` and `structure` entry goes,
+    existence entries included.
+  - Each member is read at the document its own identity keys, an edge that
+    lands anywhere else refuses the closure, the list is taken only from the
+    record's own document, and no attestation is added. A record holding
+    annotations, a field the cache writer does not write, code its identity
+    does not hash unchanged, or a clause outside a stamp entry is refused.
+  - The write takes the `compile-cache-repair` builtin identity
+    (`writeRepairedCompileCacheRecord()`). A session that may not write the
+    space is refused at the commit, and its setup is refused as before.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier
