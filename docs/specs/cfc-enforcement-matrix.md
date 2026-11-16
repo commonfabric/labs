@@ -484,8 +484,9 @@ The strict-only delta is:
   would be. A `write()` or `writeBatch()` made on the storage transaction
   beneath the extended one without its write chokepoint's mark carries no
   identity, and is recorded the same way whatever the transaction's identity is
-  when it is made (`reportUnmarkedWrites()`); it also retires a standing
-  preparation, as any write does. A later builtin write to the same path does
+  when it is made (`reportUnmarkedWrites()`); it also invalidates a standing
+  preparation, as any write does, which refuses the commit of a transaction
+  CFC already counts as relevant. A later builtin write to the same path does
   not lift that: a builtin can read the transaction's view and write it back,
   so its write is no evidence that the value is its own, and the rule cannot
   rely on every builtin guarding what it carries. The cache writer does guard
