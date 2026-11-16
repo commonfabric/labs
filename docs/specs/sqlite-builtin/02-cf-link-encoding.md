@@ -66,19 +66,28 @@ The runtime already produces this shape. `Cell.getAsLink()` returns a `SigilLink
 so `id`, `space`, and `scope` are always present:
 
 ```jsonc
-// JSON.stringify of the SigilLink, stored as TEXT in the _cf_link column:
+// The SigilLink as text, stored as TEXT in the _cf_link column:
 {
   "/": {
     "link@1": {
+      "path":  ["author", "name"],                 // value-relative path, `[]` for the root
       "id":    "of:fid1:abc…",                    // entity id, always present
       "space": "did:key:z6Mk…",                   // owning space DID, always present
       "scope": "space",                            // resolved scope, always present
-      "path":  ["author", "name"]                  // optional value-relative path
+      "overwrite": "redirect"                      // only on a write-redirect link
       // NOTE: `schema` and any asCell flags are stripped before storage.
     }
   }
 }
 ```
+
+The members are written in that order, `path`, `id`, `space`, `scope`,
+`overwrite` (`LINK_TEXT_MEMBER_ORDER` in
+[`runtime/runner/src/link-utils.ts`](../../../runtime/runner/src/link-utils.ts),
+through `inLinkTextOrder()`), whatever order the link's payload holds them in.
+SQL compares the column as text (`= ?`, `GROUP BY`), so a row matches a cell
+bound later only when the two strings agree byte for byte, member order
+included.
 
 Rationale for absolute links:
 
@@ -102,7 +111,9 @@ Executed during `db.exec`, before the `sqlite` op is recorded onto the commit
    - If the value is not a cell reference (or `toCell`-bearing) → **throw**.
    - Resolve it to a `NormalizedFullLink`, build an absolute `SigilLink` via
      `createSigilLinkFromParsedLink(link, { includeSchema: false })` (no base),
-     and `JSON.stringify` it.
+     and write it as text with its members in the fixed order `path`, `id`,
+     `space`, `scope`, `overwrite` (`LINK_TEXT_MEMBER_ORDER`), because SQL
+     compares the column as text.
 3. For each non-link parameter: if the value is a cell reference → **throw**;
    otherwise pass through as a SQLite scalar.
 
