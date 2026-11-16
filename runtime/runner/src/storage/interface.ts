@@ -3076,7 +3076,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * This transaction alone, with no enrollment beside it: the measurement runs
    * over documents the asking transaction wrote, so a marker recorded beside
    * the write always covers the question. A value write on the document made
-   * under any identity but a builtin's (`CfcTxState.unattestedWrites`) is
+   * under any identity but a builtin's (`CfcTxState.nonBuiltinWrites`) is
    * not the runtime's to vouch for, whatever a builtin writes there after
    * it, so this then returns `false`.
    *

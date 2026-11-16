@@ -479,7 +479,7 @@ The strict-only delta is:
 
   The marker also stands only for what a builtin wrote. The transaction records
   every value write made under an identity other than a builtin's, an
-  unattributed or a verified one alike (`CfcTxState.unattestedWrites`), and a
+  unattributed or a verified one alike (`CfcTxState.nonBuiltinWrites`), and a
   document such a write reached is measured, marker or not, as any writer's
   would be. A write made on the storage transaction beneath the extended one
   passes none of its write chokepoint, so it carries no identity, and is

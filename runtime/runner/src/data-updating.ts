@@ -35,7 +35,10 @@ import {
   recordWriteDestinationPolicyInput,
 } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
-import { canonicalizeLogicalPath } from "./cfc/canonical.ts";
+import {
+  canonicalizeLogicalPath,
+  concretePathsOverlap,
+} from "./cfc/canonical.ts";
 import {
   type CfcLabelView,
   cloneCfcLabelView,
@@ -142,18 +145,6 @@ const cfcAddressFromLink = (link: NormalizedFullLink): CfcAddress => ({
   scope: link.scope,
   path: [...link.path],
 });
-
-const isPrefix = (
-  prefix: readonly string[],
-  path: readonly string[],
-): boolean =>
-  prefix.length <= path.length &&
-  prefix.every((segment, index) => segment === path[index]);
-
-const pathsOverlap = (
-  left: readonly string[],
-  right: readonly string[],
-): boolean => isPrefix(left, right) || isPrefix(right, left);
 
 const pathSegmentMatches = (left: string, right: string): boolean =>
   left === right || left === "*" || right === "*";
@@ -360,7 +351,10 @@ const hasPendingSchemaPolicyInput = (
 ): boolean => {
   const targetPath = canonicalizeLogicalPath(target.path);
   return tx.getCfcSchemaPolicyInputs(target.space, target.id).some((input) =>
-    pathsOverlap(canonicalizeLogicalPath(input.target.path), targetPath) &&
+    concretePathsOverlap(
+      canonicalizeLogicalPath(input.target.path),
+      targetPath,
+    ) &&
     schemaIfcOverlapsPath(
       input.schema,
       canonicalizeLogicalPath(input.target.path),

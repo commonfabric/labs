@@ -12,6 +12,7 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
+import { concretePathsOverlap } from "../cfc/canonical.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import {
@@ -1205,6 +1206,7 @@ export function writeSourceDocs(
       // over as stored: an annotation is typically a link to another document,
       // and the raw write below has to keep it a link rather than a copy of
       // what it reads through to.
+      //
       // Annotations carry no evidence this write could vouch for, and nothing
       // reads them as authority, so one another identity wrote in this
       // transaction gains nothing from the carry: its write leaves the record
@@ -1725,10 +1727,8 @@ function storedBuilderSourceSites(
 
 /**
  * Whether a value write made under an identity other than a builtin's in
- * `tx` (`CfcTxState.unattestedWrites`) reached `cell`'s document at a path
- * that is `path`, holds it, or lies within it. Both are concrete payload
- * paths, so each segment is compared as written: a `*` is a key here, not
- * the wildcard a schema path can hold.
+ * `tx` (`CfcTxState.nonBuiltinWrites`) reached `cell`'s document at a path
+ * that is `path`, holds it, or lies within it.
  */
 function writtenByAnotherIdentity(
   tx: IExtendedStorageTransaction,
@@ -1737,12 +1737,9 @@ function writtenByAnotherIdentity(
 ): boolean {
   const link = cell.getAsNormalizedFullLink();
   const scope = normalizeCellScope(link.scope);
-  return tx.getCfcState().unattestedWrites.some((write) =>
+  return tx.getCfcState().nonBuiltinWrites.some((write) =>
     write.space === link.space && write.id === link.id &&
-    write.scope === scope &&
-    (write.path.length <= path.length
-      ? write.path.every((segment, index) => path[index] === segment)
-      : path.every((segment, index) => write.path[index] === segment))
+    write.scope === scope && concretePathsOverlap(write.path, path)
   );
 }
 

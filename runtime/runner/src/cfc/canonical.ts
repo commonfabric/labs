@@ -72,6 +72,21 @@ export const canonicalizeDocumentPath = (
     : undefined;
 
 /**
+ * Whether two concrete payload paths lie on one line of descent: equal, or
+ * one a prefix of the other. Each segment is compared as written, so a `*` is
+ * a key here, not the wildcard a schema path can hold.
+ */
+export const concretePathsOverlap = (
+  left: readonly string[],
+  right: readonly string[],
+): boolean => {
+  const [shorter, longer] = left.length <= right.length
+    ? [left, right]
+    : [right, left];
+  return shorter.every((segment, index) => longer[index] === segment);
+};
+
+/**
  * The path a transaction record binds for `path`, which is rooted at the
  * stored document: `{ path }` with the payload path
  * {@link canonicalizeDocumentPath} returns, or, for one of the document's own
@@ -683,11 +698,11 @@ export const canonicalizePreparedDigestInput = (
     : {}),
   // A set, like the containers: what preparation decides from it depends on
   // which paths were written outside a builtin, not on the order.
-  ...(input.unattestedWrites !== undefined &&
-      input.unattestedWrites.length > 0
+  ...(input.nonBuiltinWrites !== undefined &&
+      input.nonBuiltinWrites.length > 0
     ? {
-      unattestedWrites: dedupeSorted(
-        [...input.unattestedWrites].map(canonicalizeAttemptedWrite).sort(
+      nonBuiltinWrites: dedupeSorted(
+        [...input.nonBuiltinWrites].map(canonicalizeAttemptedWrite).sort(
           compareAddress,
         ),
         compareAddress,

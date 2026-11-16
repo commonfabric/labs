@@ -751,7 +751,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
-    unattestedWrites: [],
+    nonBuiltinWrites: [],
     attributedInitialization: false,
     attributedPieces: [],
     pieceCreators: [],
@@ -880,8 +880,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #markedUndeclarableStores = new Set<string>();
 
-  /** The addresses `CfcTxState.unattestedWrites` holds, so each is held once. */
-  #unattestedWriteKeys = new Set<string>();
+  /** The addresses `CfcTxState.nonBuiltinWrites` holds, so each is held once. */
+  #nonBuiltinWriteKeys = new Set<string>();
 
   /**
    * The stores the runtime owns that outlive the transaction that minted them,
@@ -1935,7 +1935,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * keeping the summary stable across prepare, invalidate, and re-prepare.
    *
    * A value write `address` names, made under any identity but a builtin's,
-   * is also recorded on its own (`CfcTxState.unattestedWrites`): the
+   * is also recorded on its own (`CfcTxState.nonBuiltinWrites`): the
    * runtime-minted evidence a builtin's write stamps, and the runtime's claim
    * that no schema declares a policy on a document, stand for what the
    * builtin wrote, and preparation withholds both where such a write reached.
@@ -1964,9 +1964,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       const key = path === undefined
         ? undefined
         : stringTupleKey([address.space, address.id, scope, ...path]);
-      if (key !== undefined && !this.#unattestedWriteKeys.has(key)) {
-        this.#unattestedWriteKeys.add(key);
-        this.#cfcState.unattestedWrites.push(deepFreeze({
+      if (key !== undefined && !this.#nonBuiltinWriteKeys.has(key)) {
+        this.#nonBuiltinWriteKeys.add(key);
+        this.#cfcState.nonBuiltinWrites.push(deepFreeze({
           space: address.space,
           id: address.id,
           scope,
@@ -2683,7 +2683,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return this.#markedUndeclarableStores.has(
       runtimeOwnedStoreKey(space, id),
     ) &&
-      !this.#cfcState.unattestedWrites.some((write) =>
+      !this.#cfcState.nonBuiltinWrites.some((write) =>
         write.space === space && write.id === id
       );
   }
@@ -3314,8 +3314,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         ...(this.#cfcState.structureContainers.length > 0
           ? { structureContainers: [...this.#cfcState.structureContainers] }
           : {}),
-        ...(this.#cfcState.unattestedWrites.length > 0
-          ? { unattestedWrites: [...this.#cfcState.unattestedWrites] }
+        ...(this.#cfcState.nonBuiltinWrites.length > 0
+          ? { nonBuiltinWrites: [...this.#cfcState.nonBuiltinWrites] }
           : {}),
         implementationIdentity: this.#cfcState.implementationIdentity,
         trustSnapshot: this.#cfcState.trustSnapshot,
@@ -4524,8 +4524,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     state.dereferenceTraces = [];
     state.structureContainers = [];
     state.assertedValueRoots = [];
-    state.unattestedWrites = [];
-    this.#unattestedWriteKeys.clear();
+    state.nonBuiltinWrites = [];
+    this.#nonBuiltinWriteKeys.clear();
     state.triggerReads = [];
     state.writePolicyInputs = [];
     state.writePolicyInputIdentities = new Map();

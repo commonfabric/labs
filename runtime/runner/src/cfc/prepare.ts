@@ -3096,13 +3096,13 @@ const identityForSchemaPath = (
 
 /**
  * The payload paths the transaction wrote under an identity other than a
- * builtin's (`CfcTxState.unattestedWrites`), by target. Runtime-minted
+ * builtin's (`CfcTxState.nonBuiltinWrites`), by target. Runtime-minted
  * evidence a builtin's schema names at a path one of them overlaps could
  * stand for a value that identity chose, even where a builtin wrote the path
  * after it, so `gateRuntimeMintedIntegrity` treats it as an unattributed
  * write's.
  */
-const unattestedWritePathsByTarget = (
+const nonBuiltinWritePathsByTarget = (
   writes: readonly CfcAddress[],
 ): Map<string, (readonly string[])[]> => {
   const result = new Map<string, (readonly string[])[]>();
@@ -12589,7 +12589,7 @@ export function* prepareBoundaryCommitSteps(
     state.writePolicyInputs,
     identityForInput,
   );
-  const unattestedWrites = unattestedWritePathsByTarget(state.unattestedWrites);
+  const nonBuiltinWrites = nonBuiltinWritePathsByTarget(state.nonBuiltinWrites);
   const linkWrites = linkWritesByTarget(state.writePolicyInputs);
   const currentLinkWrites = yield* currentLinkWritesByTarget(tx, linkWrites);
   // S16 flow labels: the per-tx conservative join. In `persist` mode every
@@ -13068,12 +13068,12 @@ export function* prepareBoundaryCommitSteps(
 
     // The identity a schema's runtime-minted evidence is gated by at a path:
     // the schema input's, unless a write another identity made overlaps the
-    // path (`unattestedWritePathsByTarget()`), where it is none.
-    const unattested = unattestedWrites.get(key) ?? [];
+    // path (`nonBuiltinWritePathsByTarget()`), where it is none.
+    const nonBuiltin = nonBuiltinWrites.get(key) ?? [];
     const mintingIdentityForPath = (
       path: readonly string[],
     ): ImplementationIdentity | undefined =>
-      unattested.some((written) => pathsOverlap(written, path))
+      nonBuiltin.some((written) => pathsOverlap(written, path))
         ? undefined
         : identityForSchemaPath(writeAuthorIdentities.get(key), path);
 
