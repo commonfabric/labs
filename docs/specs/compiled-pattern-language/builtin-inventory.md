@@ -513,6 +513,12 @@ be recomputed, and that its state moves with it.
   evaluates that element's nodes through a chain of such constructs,
   and no other element's. For a `flatMap` the key is assumed
   (`plan-and-label-templates.md` §8, question 101).
+- An output that passes the result of a per-element construct on
+  unchanged, as a `computed` that returns the result of a `filter`
+  does, is the same collection for keying, and the plan marks the
+  output (`Output.passesCollection`). A construct applied to it has
+  the keys of that collection, over an upstream array of references
+  and over an upstream array of plain values in place alike.
 - When an element moves, the runtime moves what its key holds, its
   stored results included, to the new position, and evaluates nothing
   for it except the nodes that read the index. Evaluating again is

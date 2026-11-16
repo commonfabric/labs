@@ -801,6 +801,15 @@ export interface Output {
    * the scan's template (section 3.13).
    */
   readonly collection?: Index;
+  /**
+   * The value of the output is, on every evaluation, the assembled
+   * result of this element construct (`Plan.collections`), passed on
+   * unchanged from the output that has it as `collection`. By ruling
+   * the output is the same collection for keying: a record whose
+   * `source` names this output has the element keys of that collection
+   * and the places its elements came from (section 1.3).
+   */
+  readonly passesCollection?: Index;
   readonly template: Template;
   /** Whether the path is reachable from the result cell. */
   readonly kept: boolean;
@@ -2126,21 +2135,33 @@ Consequences, which later sections rely on:
   as a promoted `computed` does whose value is the result of a
   `filter`, and a `map` can be applied to that output. The record of
   that `map` has a `source` of kind `output`, an array the instance
-  computed, which the start of this section keys by what its positions
-  hold. Over an upstream array of references the positions hold the
-  links, and the keys are those of the upstream elements either way.
-  Over an upstream array of plain values in place the positions hold
-  values (`execution-and-storage.md` §2.6), so the elements would have
-  the right key and no place: a handler of the body that passes its
-  element to `remove` on the source finds nothing to remove.
-  *Assumed* (section 8, question 107): an output whose value is the
-  assembled result of a collection of the plan, unchanged, carries the
-  keys of its elements and the places they came from, and a construct
-  applied to the output has the element table of that collection. No
-  record of the plan says so: the runtime recognizes the array that a
-  cone returns as the one it assembled. The alternative records it, as
-  a `source` of kind `collection` on the downstream record or as a
-  member of the `Output`.
+  computed. By ruling an output that passes a derived collection on
+  unchanged is the same collection for keying, and the plan marks that
+  output as such. The mark is `Output.passesCollection`, which names
+  the record of the collection (section 1.1). A construct whose
+  `source` names a marked output has the element table of that
+  collection: its elements have the keys of the collection's elements,
+  which are those of the upstream elements by the consequence above,
+  and each is the element the collection holds at that key, with the
+  place it came from. The dependency is per key, as for a `source` of
+  kind `collection`. The case is the result of another per-element
+  construct. The rule is the same over an upstream array of
+  references, where the positions hold links and the keys would be
+  those of the upstream elements either way, and over an upstream
+  array of plain values in place, where a key formed from what the
+  output's positions hold would lose the occurrence counts of the
+  source whenever a `filter` dropped an equal element. An output that
+  passes a marked output on unchanged is marked with the same
+  collection. For a sandboxed body the compiler marks the output of a
+  use whose record says that the result at that path always passes on
+  the input that is the collection's assembled output
+  (`BodyOutput.reference` with `passes`, section 3.9). The runtime
+  checks the mark as it checks `passes`: by the identity of the array
+  the cone returned with the one it assembled. *Assumed* (section 8,
+  question 111): an output that is the assembled result on some
+  evaluations only, as one that selects between it and another array,
+  is not marked, and a construct applied to it keys its elements by
+  what the positions hold, by the rule of this section's start.
 
 **Identifiers of things a function body creates.** A site in a body
 (`BodyCall`) can run any number of times. Each occurrence is identified as
@@ -11210,21 +11231,16 @@ this document made.
      question 102 records, which is the value the runtime of today
      shows (section 1.1). The same inside an element body in each of
      the three cases. The entry keeps its number.
-107. **An output that passes a derived collection on unchanged** (for
-     the project owner). The case is the result of another per-element
-     construct that a cone returns as it is, and a per-element
-     construct applied to that output; it matters where the upstream
-     source is an array of plain values in place, because the result
-     then holds values and no links, and nothing is open where the
-     upstream source is an array of references. *Assumed:* such an
-     output carries the keys of its elements and the places they came
-     from, and the construct applied to it has the element table of
-     the collection the cone returned; no record says so, and the
-     runtime recognizes the array it assembled (section 1.3). The
-     alternative records it: a `source` of kind `collection` on the
-     downstream record, or a member of the `Output`. In the
-     prototype's corpus run, `patterns/examples/todo-list/todo-list.tsx`
-     differed in 6 values without it.
+107. **An output that passes a derived collection on unchanged.** Not
+     open. By ruling such an output is the same collection for keying,
+     and the plan marks it: `Output.passesCollection` names the record
+     of the collection, and a construct applied to the output has that
+     collection's element table (sections 1.1 and 1.3). The case is
+     the result of another per-element construct that a cone returns
+     as it is, over an upstream array of references and over an
+     upstream array of plain values in place alike. In the prototype's
+     corpus run, `patterns/examples/todo-list/todo-list.tsx` differed
+     in 6 values without it. The entry keeps its number.
 108. **The name a pattern binds to `[SELF]`.** No record of the plan
      holds it. *Assumed:* a reference to the result cell of the
      instance, which the runtime supplies to value code and which adds
@@ -11261,3 +11277,18 @@ this document made.
      inside an element body over an array of references, over an array
      of plain values in place, and over the result of another
      per-element construct.
+111. **An output that is a derived collection on some evaluations
+     only** (for the project owner). By ruling an output that passes a
+     derived collection on unchanged is the same collection for
+     keying, and the plan marks it (question 107). *Assumed:* the mark
+     is static and says "on every evaluation". An output that is the
+     assembled result under one selection and another array under the
+     other, or a result path of a sandboxed body recorded with `oneOf`,
+     is not marked, and a construct applied to it keys an element by
+     what the position holds (section 1.3). The alternative has the
+     runtime decide per evaluation, by the identity of the array, and
+     switch the element table when the selection changes. The case is
+     the result of another per-element construct. The two answers give
+     the same keys where the positions of the result hold references
+     to cells, and differ where the upstream source is an array of
+     plain values in place or the upstream body computes its values.

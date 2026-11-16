@@ -463,7 +463,9 @@ which element keys what they hold is kept
   `map` or a `filter`, is keyed by the key of the upstream element it
   came from, so a change of one upstream element evaluates that
   element's nodes through a chain of such constructs and no other
-  element's. Where the source is plain values that one computation
+  element's. An output that passes such a result on unchanged is the
+  same collection for keying, and the plan marks it. Where the source
+  is plain values that one computation
   produces as a whole array, an implementation may evaluate the whole
   collection again on each change, with the same observable result
   ([execution and storage](execution-and-storage.md), §2.6).

@@ -1765,9 +1765,14 @@ instance stale as an edge does. When the source of the chain is
 reordered, each collection of the chain is assembled again, and no
 cone instance of an element body is evaluated unless it reads the
 index. This holds whether the source of the chain is an array of
-references or an array of plain values in place. An output that passes
-the result of a per-element construct on unchanged is assumed to carry
-the keys of its elements (its §8, question 107).
+references or an array of plain values in place. By ruling an output
+that passes the result of a per-element construct on unchanged is the
+same collection for keying, and the plan marks it
+(`Output.passesCollection`, its §1.1 and §1.3). A construct whose
+source is a marked output uses the element table of the collection the
+mark names: the runtime builds no table from what the positions of the
+output hold. Where the mark is absent the table is built from the
+positions (its §8, question 111).
 
 **A whole array of plain values from one computation.** Where the
 source of a collection is plain values that one `lift` or `computed`

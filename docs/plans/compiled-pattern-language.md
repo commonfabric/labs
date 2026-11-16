@@ -520,7 +520,8 @@ from a test written first. One is the copy of a container read under a
 schema, which had no address, so that `equals` and `remove` did not
 find a member a handler had read through a typed handle; a test of the
 store was written after the fix. The other hands on the keys of a
-derived collection that a cone returns unchanged (question 156), and
+derived collection that a cone returns unchanged (question 156, since
+ruled), and
 has no test. The counts of bodies, state
 cells, and constants that notes 308 to 310 give are over all 382
 corpus patterns, the ones with an unsupported construct included. The
@@ -1345,6 +1346,13 @@ is relitigated.
   computation produces as a whole array, an implementation may evaluate
   the whole collection again on each change in place of keeping results
   per element, and the observable result is the same.
+- An output that passes a derived collection on unchanged is the same
+  collection for keying, and the plan marks that output as such
+  (`Output.passesCollection`). The case is the result of another
+  per-element construct that a `computed` or a `lift` returns as it
+  is, with a per-element construct applied to that output. The rule is
+  the same where the upstream source is an array of references and
+  where it is an array of plain values in place.
 - Every rule, assumption, and question about a per-element construct
   says which case it is about: an array of references, an array of
   plain values in place, or the result of another per-element
@@ -2135,14 +2143,14 @@ unless the entry says otherwise.
      a value as well, and a member of handle type is stored as the
      link its type declares. The entry keeps its number.
 156. **An output that passes a derived collection on unchanged** (PL
-     question 107). The case is the result of another per-element
-     construct that a cone returns as it is, with a per-element
-     construct applied to that output. It matters where the upstream
-     source is an array of plain values in place, and nothing is open
-     where it is an array of references. *Assumed:* the output carries
-     the keys of its elements and the places they came from, and no
-     record of the plan says so. The alternative records it in the
-     plan.
+     question 107). Settled by ruling: such an output is the same
+     collection for keying, and the plan marks it
+     (`Output.passesCollection`). The case is the result of another
+     per-element construct that a cone returns as it is, with a
+     per-element construct applied to that output, over an upstream
+     array of references and over an upstream array of plain values in
+     place alike. Question 159 has what the ruling leaves open. The
+     entry keeps its number.
 157. **The name a pattern binds to `[SELF]`** (PL question 108). No
      record of the plan holds it. *Assumed:* a reference to the result
      cell of the instance, which adds no label where it is passed on.
@@ -2164,6 +2172,21 @@ assumption.
      one at a path of the result. The same inside an element body over
      an array of references, over an array of plain values in place,
      and over the result of another per-element construct.
+
+159. **An output that is a derived collection on some evaluations
+     only** (PL question 111). By ruling an output that passes a
+     derived collection on unchanged is the same collection for
+     keying, and the plan marks it. *Assumed:* the compiler marks an
+     output where every evaluation yields the assembled result of the
+     one collection, a chain of such outputs included, and for a
+     sandboxed body where its record says the result always passes
+     that input on. An output that is the collection under one
+     selection and another array under the other is not marked, and
+     its elements are keyed by what its positions hold. The case is
+     the result of another per-element construct; the keys differ
+     from the marked case where the upstream source is an array of
+     plain values in place or the upstream body computes values, and
+     not where the positions hold references to cells.
 
 Two questions above are restated by the same notes. Question 145 has
 the four consequences and the two alternatives. For the assumption of
