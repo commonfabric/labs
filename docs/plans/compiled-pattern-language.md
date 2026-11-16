@@ -278,7 +278,7 @@ is relitigated.
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
   rule for a default that is read and not stored, and needs this one.
-  The read has less integrity than today, so it is the fourth
+  The read has less integrity than today, so it is the third
   deliberate exception to "equal to or tighter".
 - Integrity is anchored in an object as a whole. A read of a stored
   object whole carries the object's integrity, also where a default
@@ -418,12 +418,13 @@ is relitigated.
 
 **Labels**
 
-- Template labels are equal to or tighter than today's, with two
+- Template labels are equal to or tighter than today's, with three
   deliberate exceptions. One is the collection index, where the keys of
   absent elements join a bucket's membership label. The second is a read
   through a handle that is static because every run that returns normally
   makes it: a run that throws before the read carries the read's label
-  all the same. Nothing is stored once for several positions of a
+  all the same. The third is the integrity of a default that is read
+  and not stored. Nothing is stored once for several positions of a
   collection, so no stored label joins the labels of two positions.
 - A read through a handle at a static place that is conditional stays
   dynamic.
@@ -681,26 +682,10 @@ assumption.
 **From the rulings of 2026-11-13.** Each is written into the documents
 as an assumption.
 
-72. **A state cell beside a child in a per-element body over plain
-    values** (PL §8 question 34; LS question 21). *Assumed:* accepted,
-    because the key holds the position.
-73. **Which instantiations put the position in the key** (PL question
-    37; FA question 3). *Assumed:* a factory value called in the body's
-    reactive tier, and a pattern a `lift` or `computed` in the body
-    instantiates; not a handler's instance and not a statically resolved
-    pattern; under nested bodies, at every enclosing level over plain
-    values.
-74. **A cell a computation creates under the element key over plain
-    values** (FA question 4). *Assumed:* the compile error covers it
-    where the body does not use the index.
-75. **The element slots of a handler whose stream several positions
-    share** (PL question 35). *Assumed:* they resolve to the join over
-    the positions.
-76. **The child of a plain element that moved** (PL question 36; ES
-    question 67). A child does not move with its value: a reorder tears
-    down the child of each key that left and sets up a new one, and an
-    insertion at the head of n distinct plain values replaces n children.
-    *Assumed:* accepted, with the advice to make the elements cells.
+76. **The state of an occurrence among equal elements** (PL question
+    36). Which state an occurrence has depends on the equal elements
+    before it in the collection, which the label of its own position
+    does not hold. *Assumed:* accepted as a residual.
 77. **The argument of a `.for(tag)` instance on a later event** (PL
     question 39). *Assumed:* not written again. The alternative writes it
     on every event, as a computation does.
@@ -945,6 +930,26 @@ as an assumption.
     is not compared, and in the compiled path the evaluation that
     reads the slot fails as a body that throws does.
 
+135. **How far the index reaches in a body that uses it** (PL
+    question 89). One ruling has the index join the element key when
+    the callback uses it. Another has labels flow per value, so a node
+    that does not read the index takes nothing of the collection's
+    order. The labels agree with both. With the position in the key, a
+    move evaluates the whole body of the moved element again and gives
+    it new state, also for nodes that do not read the index.
+    *Assumed:* the position joins the key of the whole body. The
+    alternative keeps the position out of the key and gives the index
+    to the nodes that read it, so a move evaluates those nodes alone
+    and state stays with its element.
+136. **A binding that a computation in an element body makes** (PL
+    question 90). A binding made in a function body is named by what
+    it holds and by no place, and everything an element body holds is
+    per element key. *Assumed:* the first governs, so two occurrences
+    that bind equal state from a `computed` or a `lift` have one
+    stream.
+137. **The key of an element of a `filter` result** (PL question 91).
+    *Assumed:* it keeps the key it has in the source, count included.
+
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12): which output or argument
@@ -967,9 +972,6 @@ as an assumption.
   the record". A probe showed that a `lift` that returns an input record
   whole keeps the record's full declared type in its argument schema, so
   the sentence may be wrong about the current runtime.
-- **A container bound by reference from an inline plain element that two
-  positions share** has two addresses and one shared evaluation. No
-  document examines it.
 - **Three corrections to the pattern corpus** that the type checker's
   first slice found: `MentionablePiece` in
   `patterns/system/backlinks-index/backlinks-index.tsx` declares an
@@ -1023,9 +1025,8 @@ The open questions each document ends with stay where they are.
   mark each figure that needs types or that the measurement did not
   reproduce. The tables of `footprint-analysis.md` §11.3 to §11.5 come
   from that document's own script and cover 1,962 of the 1,966 bodies.
-  How often footprint analysis widens (83 of those 1,962 bodies, 4.2%),
-  and which per-element callbacks run over plain values, need the type
-  checker.
+  How often footprint analysis widens (83 of those 1,962 bodies, 4.2%)
+  needs the type checker.
 - **Factory values depend on pending work.** On this branch a factory can
   be stored but not read back as something callable. Pull request #4687 in
   this repository implements
