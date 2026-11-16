@@ -7,10 +7,11 @@
  * It prints one JSON report as its last line. The first argument names the
  * scenario:
  *
- * - `growth`: interns `PHASE` distinct addresses and holds them, releases
- *   them, collects, then interns and holds `PHASE` more. It reports the
- *   largest `size` seen after any call, the most addresses held at once, and
- *   `size` at the end of each phase.
+ * - `growth`: on a new table, interns 4,095 addresses nobody holds, collects,
+ *   and interns one more. On another, interns and holds `HELD` addresses,
+ *   sweeps, interns `HELD - 1` that nobody holds, collects, and interns one
+ *   more. It reports the slot count after each step, so a test can see each
+ *   sweep run at the threshold the class states and drop what nobody holds.
  * - `release`: interns one address, drops it, collects and sweeps, then
  *   interns it again. It reports whether the first address was collected,
  *   and `size` and the count of path nodes after the sweep and after the
@@ -24,8 +25,8 @@ import type {
   URI,
 } from "../../src/storage/interface.ts";
 
-/** Addresses each phase of the `growth` scenario interns. */
-const PHASE = 10_000;
+/** Addresses the `growth` scenario holds across its second sweep. */
+const HELD = 5_000;
 
 const scenario = Deno.args[0];
 if (scenario !== "growth" && scenario !== "release") {
@@ -50,38 +51,46 @@ async function collect(): Promise<void> {
 }
 
 if (scenario === "growth") {
-  let largestSize = 0;
-  let held: IMemorySpaceAddress[] = [];
-  let mostHeld = 0;
-
-  const internPhase = (phase: number) => {
-    for (let i = 0; i < PHASE; i++) {
-      held.push(
-        interner.address(
-          space,
-          "space",
-          `of:doc-${phase}-${i}` as URI,
-          undefined,
-          ["value", `${i % 100}`],
-        ),
+  const size = (of: AddressInterner) => of.accessForTestingOnly.size();
+  const internFresh = (into: AddressInterner, label: string, count: number) => {
+    const made: IMemorySpaceAddress[] = [];
+    for (let i = 0; i < count; i++) {
+      made.push(
+        into.address(space, "space", `of:${label}-${i}` as URI, undefined, [
+          "value",
+          `${i % 100}`,
+        ]),
       );
-      mostHeld = Math.max(mostHeld, held.length);
-      largestSize = Math.max(largestSize, interner.size);
     }
+    return made;
   };
 
-  internPhase(1);
-  const sizeAfterFirst = interner.size;
-  held = [];
+  // Floor: a table that has never swept sweeps at 4,096 slots.
+  const fresh = new AddressInterner();
+  internFresh(fresh, "floor", 4095);
+  const floorBefore = size(fresh);
   await collect();
-  internPhase(2);
+  internFresh(fresh, "floor-last", 1);
+  const floorAfter = size(fresh);
+
+  // Doubling: after a sweep that finds `HELD` live addresses, the next sweep
+  // runs when the slots reach twice that.
+  const held = internFresh(interner, "held", HELD);
+  interner.accessForTestingOnly.sweep();
+  const sizeAfterSweep = size(interner);
+  internFresh(interner, "dropped", HELD - 1);
+  const sizeBelowThreshold = size(interner);
+  await collect();
+  internFresh(interner, "dropped-last", 1);
+  const sizeAtThreshold = size(interner);
 
   console.log(JSON.stringify({
-    largestSize,
-    mostHeld,
-    sizeAfterFirst,
-    sizeAfterSecond: interner.size,
-    heldAfterSecond: held.length,
+    floorBefore,
+    floorAfter,
+    sizeAfterSweep,
+    sizeBelowThreshold,
+    sizeAtThreshold,
+    stillHeld: held.length,
   }));
 } else {
   const intern = () =>
@@ -97,7 +106,7 @@ if (scenario === "growth") {
   await collect();
   interner.accessForTestingOnly.sweep();
   const collected = firstRef.deref() === undefined;
-  const sizeAfterSweep = interner.size;
+  const sizeAfterSweep = interner.accessForTestingOnly.size();
   const nodesAfterSweep = interner.accessForTestingOnly.pathNodeCount();
 
   const second = intern();
@@ -105,7 +114,7 @@ if (scenario === "growth") {
     collected,
     sizeAfterSweep,
     nodesAfterSweep,
-    sizeAfterSecond: interner.size,
+    sizeAfterSecond: interner.accessForTestingOnly.size(),
     nodesAfterSecond: interner.accessForTestingOnly.pathNodeCount(),
     secondPath: second.path,
   }));

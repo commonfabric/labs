@@ -19,13 +19,19 @@ type Held = WeakRef<IMemorySpaceAddress> | WeakRef<IMemorySpaceAddress>[];
 
 /** One node of the trie over path components. */
 type PathNode = {
-  /** The frozen path this node stands for, shared by its addresses. */
-  readonly path: readonly MemoryAddressPathComponent[];
+  /**
+   * The frozen path this node stands for, shared by its addresses; made when
+   * the first address is interned here, so a node only passed through on the
+   * way to a longer path holds none.
+   */
+  path: readonly MemoryAddressPathComponent[] | undefined;
 
   /** The node one component shorter; absent at the root. */
   readonly parent: PathNode | undefined;
 
-  /** The last component of `path`; absent at the root. */
+  /**
+   * The last component of the path this node stands for; absent at the root.
+   */
   readonly component: MemoryAddressPathComponent | undefined;
 
   /** The nodes one component longer, by that component. */
@@ -70,7 +76,7 @@ function sameDocument(
  * the next lookup of the same address.
  *
  * It never freezes, keeps or returns an array a caller passed in: each path
- * node holds a frozen copy of its own.
+ * node an address is interned at holds a frozen copy of its own.
  */
 export class AddressInterner {
   #root: PathNode = {
@@ -86,22 +92,20 @@ export class AddressInterner {
   #sweepAt = MIN_SWEEP_AT;
 
   /**
-   * The sweep, and the count of path nodes the trie holds besides its root,
-   * which a test drives and reads directly.
+   * The sweep, the slots the table holds live or dead, and the count of path
+   * nodes the trie holds besides its root, which a test drives and reads
+   * directly.
    */
   get accessForTestingOnly(): {
     sweep(): void;
+    size(): number;
     pathNodeCount(): number;
   } {
     return {
       sweep: () => this.#sweep(),
+      size: () => this.#slots,
       pathNodeCount: () => this.#pathNodeCount(),
     };
-  }
-
-  /** Slots the table holds, live or dead. */
-  get size(): number {
-    return this.#slots;
   }
 
   /**
@@ -139,13 +143,14 @@ export class AddressInterner {
       }
     }
 
-    const address: IMemorySpaceAddress = Object.freeze({
-      space,
-      scope,
-      id,
-      ...(scopeKey !== undefined ? { scopeKey } : {}),
-      path: node.path,
-    });
+    const nodePath = node.path ??= Object.freeze(path.slice());
+    // Each arm is a whole literal: a spread in an object literal copies its
+    // source member by member, and every new address passes through here.
+    const address: IMemorySpaceAddress = Object.freeze(
+      scopeKey === undefined
+        ? { space, scope, id, path: nodePath }
+        : { space, scope, id, scopeKey, path: nodePath },
+    );
     const ref = new WeakRef(address);
     if (node.addresses === undefined) {
       node.addresses = new Map();
@@ -182,7 +187,7 @@ export class AddressInterner {
       let child = node.children?.get(component);
       if (child === undefined) {
         child = {
-          path: Object.freeze(path.slice(0, depth + 1)),
+          path: undefined,
           parent: node,
           component,
           children: undefined,

@@ -59,7 +59,7 @@ describe("AddressInterner", () => {
 
         expect(second).toBe(first);
         expect(second.path).toBe(first.path);
-        expect(interner.size).toBe(1);
+        expect(interner.accessForTestingOnly.size()).toBe(1);
       });
 
       it("returns one path array for one path under different documents", () => {
@@ -110,7 +110,7 @@ describe("AddressInterner", () => {
         const addresses = variants.map((fields) => interner.address(...fields));
 
         expect(new Set(addresses).size).toBe(variants.length);
-        expect(interner.size).toBe(variants.length);
+        expect(interner.accessForTestingOnly.size()).toBe(variants.length);
         for (const [index, address] of addresses.entries()) {
           const [inSpace, scope, ofId, scopeKey, path] = variants[index];
           expect(address).toEqual({
@@ -197,26 +197,22 @@ describe("AddressInterner", () => {
         );
         expect(interner.address(space, "space", id, undefined, ["value"]))
           .toBe(shared);
-        expect(interner.size).toBe(3);
+        expect(interner.accessForTestingOnly.size()).toBe(3);
       });
     });
 
-    describe("size", () => {
-      it("stays within twice the most addresses held at once, plus 4,096, and drops what nobody holds once it grows", async () => {
+    describe("what the table holds", () => {
+      it("sweeps once its slots reach 4,096, or twice the live addresses at the last sweep, keeping only what someone holds", async () => {
         const report = await runHelper("growth");
 
-        expect(report.mostHeld).toBe(10_000);
-        expect(report.sizeAfterFirst).toBe(10_000);
-        expect(report.largestSize as number).toBeLessThanOrEqual(
-          2 * (report.mostHeld as number) + 4096,
-        );
-        expect(report.heldAfterSecond).toBe(10_000);
-        expect(
-          report.sizeAfterSecond,
-          `the first phase's addresses outlived their holders: ${
-            JSON.stringify(report)
-          }`,
-        ).toBe(10_000);
+        expect(report).toEqual({
+          floorBefore: 4095,
+          floorAfter: 1,
+          sizeAfterSweep: 5000,
+          sizeBelowThreshold: 9999,
+          sizeAtThreshold: 5001,
+          stillHeld: 5000,
+        });
       });
 
       it("returns 0 once the only address is collected and swept, with its path nodes gone", async () => {

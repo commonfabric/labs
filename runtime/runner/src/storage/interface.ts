@@ -1950,9 +1950,9 @@ export interface IStorageTransaction {
    * Optional lightweight dependency summary.
    *
    * V2 transactions can provide this directly instead of requiring callers to
-   * reconstruct it from journal activity. Its entries are frozen and shared
-   * with every other log naming the same address, so a consumer that wants to
-   * change one copies it first.
+   * reconstruct it from journal activity. What `TransactionReactivityLog`
+   * says of its entries applies: a V2 transaction's are frozen and shared, so
+   * a consumer that wants to change one copies it first.
    */
   getReactivityLog?(): TransactionReactivityLog;
 
@@ -4409,11 +4409,13 @@ export interface ITransactionJournal {
 
 /**
  * The addresses a transaction read and wrote, as the scheduler keys an
- * action's dependencies and triggers by them. The lists belong to the one log,
- * and a log a V2 transaction built holds entries that are frozen, `path`
- * included, and that are the same object in every log of the same storage
- * manager naming the same address. A consumer that wants to change an entry
- * copies it first.
+ * action's dependencies and triggers by them. The lists belong to the one log.
+ * A log a V2 transaction built holds entries that are frozen, `path` included,
+ * and that are the same object in every live log naming the same address whose
+ * transaction took its entries from the same interner: the storage manager's
+ * `addressInterner`, or the transaction's own when the manager has none. A log
+ * `reactivityLogFromActivities()` built from journal activity holds fresh,
+ * unfrozen entries. A consumer that wants to change an entry copies it first.
  */
 export interface TransactionReactivityLog {
   reads: IMemorySpaceAddress[];
