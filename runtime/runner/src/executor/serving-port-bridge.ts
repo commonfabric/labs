@@ -190,7 +190,7 @@ export class ServingPortBridge {
    */
   async init(
     init: ServingWorkerInit,
-  ): Promise<{ lifetimeLock: string | undefined }> {
+  ): Promise<{ lifetimeLock: string | undefined; heapSizeLimit: number }> {
     await this.#workerReady.promise;
     return await this.#endpoint.request("worker.init", init);
   }

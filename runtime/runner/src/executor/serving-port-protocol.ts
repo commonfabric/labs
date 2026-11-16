@@ -344,7 +344,17 @@ export type BridgeRequests = {
   /** The worker entry's first request, answered once its host serves. */
   "worker.init": {
     params: ServingWorkerInit;
-    result: { lifetimeLock: string | undefined };
+    result: {
+      lifetimeLock: string | undefined;
+
+      /**
+       * V8's limit on the worker's heap as the worker reads it
+       * (`heap_size_limit`), in bytes: the limit it was started with plus the
+       * young generation, unless a process-wide `--max-old-space-size`
+       * replaced it.
+       */
+      heapSizeLimit: number;
+    };
   };
 
   "host.stats": { params: null; result: ServingLoopStats };
