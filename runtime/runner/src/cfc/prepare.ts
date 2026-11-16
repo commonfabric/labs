@@ -9842,6 +9842,7 @@ const linkedSourceEvidence = (
         : mergeCfcSchemaEnvelopes(
           loadSchemaDocument(tx, input.source.space, sourceMetadata.schemaHash),
           pendingSourceSchema,
+          { storedSide: "existing" },
         ),
       targetKey(input.source),
     );
@@ -11090,7 +11091,10 @@ const mergeStoredCfcEnvelope = (
     // the idempotence check below does not skip the write. One already in
     // canonical form hashes the same and is kept as it is.
     ? canonicalizeCfcSchemaDocument(stored)
-    : mergeCfcSchemaEnvelopes(stored, candidate, options);
+    : mergeCfcSchemaEnvelopes(stored, candidate, {
+      ...options,
+      storedSide: "existing",
+    });
 
 /**
  * The reason the persist loop records when a candidate changes or weakens an
@@ -11147,7 +11151,10 @@ export const storedCfcEnvelopeMergeIssue = (
 ): CfcSchemaMergeIssue | undefined =>
   storedEnvelopeUnchangedByCandidate(stored, candidate)
     ? undefined
-    : cfcSchemaMergeIssue(stored, candidate, options);
+    : cfcSchemaMergeIssue(stored, candidate, {
+      ...options,
+      storedSide: "existing",
+    });
 
 /**
  * The decomposed spelling of an envelope schema: its root document, ready
@@ -13012,7 +13019,10 @@ export function* prepareBoundaryCommitSteps(
       : mergeCfcSchemaEnvelopes(
         schema,
         linkClaims,
-        { generatedOutputPaths: generatedOutputPaths.get(key) },
+        {
+          generatedOutputPaths: generatedOutputPaths.get(key),
+          storedSide: "candidate",
+        },
       );
     // A value write's candidate is the writer's own schema whenever that
     // schema declares a label, so it can omit a requirement the document
@@ -13022,11 +13032,16 @@ export function* prepareBoundaryCommitSteps(
     // and the envelope taken at each path the write went through. The stored
     // envelope is read as stored rather than through the merge, so no defect
     // in how the two combine can remove a stored requirement from the check.
+    // A write that puts links answers to the overlay above, whose write
+    // policies are the stored ones, with their stored stamps; it answers to
+    // the writer's own schema beside it, so that its writer is held to the
+    // alternatives and stamps the writer's schema lists, as a value write is.
     // Each schema can add requirements; none removes another's.
     const verificationSchemas: readonly JSONSchema[] =
       storedSchema !== undefined && !undefinedCandidate
         ? [
           verificationSchema,
+          ...(verificationSchema === schema ? [] : [schema]),
           storedSchema,
           ...storedEnvelopesAtWrittenPaths(
             storedSchema,
