@@ -449,7 +449,11 @@ export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
 
-  /** Author DID, which the index must verify against the CF1 signer. */
+  /**
+   * Author DID, which an older deployment verifies against the CF1 signer.
+   * A deployment that attributes events to the signer's member drops it, so
+   * the client keeps sending it to work with both.
+   */
   did: string;
 
   /** @deprecated Newer deployments store no free text on events. */
@@ -571,6 +575,13 @@ export interface PatternIndexGardenerPromptResponse {
 
   prompt: string;
   outputSchema: JSONSchema;
+
+  /**
+   * The format of the input the prompt describes (`pattern-json-1`); a
+   * client renders that input itself, so one it does not know is one it
+   * cannot ask faithfully. Absent on deployments that predate it.
+   */
+  inputFormat?: string;
 }
 
 /** An admin mints a single-use invite. */
@@ -918,9 +929,12 @@ export class PatternIndexClient {
   }
 
   /**
-   * The calling identity's OWN events, newest first. The index answers each
-   * signer with their own stream and nobody else's, so this is what a run made
-   * of the index rather than what everyone made of it.
+   * The calling identity's OWN events, newest first, from a deployment that
+   * still keeps a per-author stream.
+   *
+   * @deprecated A deployment that keeps none answers HTTP 410 (see "Index
+   *   service contract for authors" in the cf-harness console README), and
+   *   nothing in this checkout calls it.
    */
   listEvents(
     request: PatternIndexListEventsRequest = {},
