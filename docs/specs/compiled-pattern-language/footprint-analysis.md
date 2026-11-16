@@ -107,7 +107,10 @@ called or bound, so its result is the same for every use of the body.
 Where the body is used, each formal input is bound to one of two things. An
 input bound to a slot root, such as the event, the state of a binding, the
 argument, or an element, gives entries of `Body.reads`: each entry is a slot
-at the entry's path. An input bound to a value the instance computed, the
+at the entry's path, together with the path in the body's argument at
+which the slot's value is placed, which is the formal input followed by
+the entry's path (`plan-and-label-templates.md` §1.1, `ReadInput`). An
+input bound to a value the instance computed, the
 result of another body or of expression code, gives entries of
 `Body.computed`: each holds the entry's path and class and the template of
 the producing expression at that path
@@ -1410,6 +1413,18 @@ analysis decides the tier.
 | Only its return value | Primary output | Nothing beyond the body |
 | Side-writes whose targets are all static | Static side-write targets | One `WriteEdge` per target on the body. Each is one more output edge of the cone that runs the body. Where the target is a state cell or names its handle by a slot, the plan lists a `ConeEdge` from that cone to each cone with a slot that reads the target |
 | At least one side-write whose target is dynamic or too broad | Materializer | An `Operation` of kind `materializer` implemented by the body. Its declared write envelope is the body's `writes` and `envelopes` |
+
+By ruling the two kinds of body with side-writes are scheduled in two
+ways. A body whose writes go to a small, fixed set of targets that the
+compiler names is evaluated as part of an ordinary cone, and its write
+targets count as outputs of that cone for demand. A body whose write
+set is dynamic or very large is evaluated eagerly whenever one of its
+inputs changes (`scheduler-and-serving-loop.md` §4.3 and §7). The
+second and third rows of the table are those two kinds. *Assumed*
+(`execution-and-storage.md` §11, question 80): the table decides the
+kind, so "too broad" means a write whose narrowest static path is a
+proper prefix of what is written (§6.2), and no number of static
+targets makes a body a materializer.
 
 The classification is per body. A body with one write that is not static is
 a materializer for all of its writes, as a node with a declared envelope is

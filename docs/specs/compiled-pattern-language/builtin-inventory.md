@@ -485,6 +485,22 @@ be recomputed, and that its state moves with it.
 - The position is never in the key, also where the callback takes the
   index and uses it. The index is given to the nodes of the body that
   read it.
+- An element of a collection that is the result of a per-element
+  construct is keyed by the key of the upstream element it came from.
+  An element of a `filter` result has the key it has in the source, and
+  an element of a `map` result the key of the source element the
+  callback was evaluated for. A change of one upstream element then
+  evaluates that element's nodes through a chain of such constructs,
+  and no other element's. For a `flatMap` the key is assumed
+  (`plan-and-label-templates.md` §8, question 101).
+- When an element moves, the runtime moves what its key holds, its
+  stored results included, to the new position, and evaluates nothing
+  for it except the nodes that read the index. Evaluating again is
+  permitted, and moving is preferred.
+- Where the source is plain values that one computation produces as a
+  whole array, an implementation may evaluate the whole collection
+  again on each change in place of keeping results per element. The
+  observable result is the same.
 
 For a linked slot this is the key of today. For a plain value it differs:
 the value takes the place of the position.
@@ -2000,7 +2016,15 @@ export it and the pattern corpus does not call it.
   already set unless the second argument is true, which the transformer
   always passes.
 - **New design:** class C. A cell declaration in the reactive tier is a state
-  cell of the plan with the identifier the overview specifies. Creating a
+  cell of the plan with the identifier the overview specifies. By ruling,
+  a first value that is a constant is the default of the cell's schema,
+  as it is today: nothing is written when the cell is created, a read
+  of a cell that holds nothing reads the default, with the empty
+  integrity of a default, and the cell has no document until something
+  writes it. A first value that is not a constant is computed by a cone
+  and written once, when the cell is first created, through a write
+  edge with target `state`, under that edge's template
+  (`plan-and-label-templates.md` §1.3). Creating a
   cell in a function body is one of the calls that remain legal, and the two
   regimes stay:
   - A handler invocation is a new frame for each event. A cell it creates

@@ -1044,8 +1044,19 @@ to the handle's cell: reads its value, writes it, or neither.
 | `X.equals(a, b)`, `X.equalLinks(a, b)` | The constructor | R, F | Neither. Compares identity |
 | `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
 
-Twelve notes on the table.
+Thirteen notes on the table.
 
+- **The first value of a state cell.** In tier R, `new X(value)` and
+  `X.of(value)` declare a state cell and give it a first value. By
+  ruling, a first value that is a constant, which is a static
+  initializer as [§8.8](#88-defaults-and-scopes) defines it, is the
+  default of the cell's schema: nothing is written when the cell is
+  created, and a read of a cell that nothing has written gives the
+  value. A first value that is not a constant, such as `cell(index)` in
+  the body of a collection callback or a value read from an input, is
+  computed once and written when the cell is first created, and a later
+  change of what it was computed from does not write it again
+  (`plan-and-label-templates.md` §1.3).
 - **`for` on an instantiation.** The form is legal in every kind of
   function body. Its argument is the explicit cause of the instance, which
   `plan-and-label-templates.md` calls the tag. In a `lift` or a `computed`
@@ -2226,6 +2237,14 @@ Eight points complete the table.
   not its own type declares a default
   ([§7.6.1](#761-optional-properties-of-an-input);
   `plan-and-label-templates.md`, §2.5, "A default belongs to the place").
+  For a pattern compiled into its caller two more cases are ruled. A
+  path that the call leaves out, where the callee declares a default
+  for it, reads that default. And a path that the call binds to a place
+  at which nothing is stored also reads the callee's default, as it
+  does today. *Assumed,* with `plan-and-label-templates.md` (§1.1; its
+  §8, question 102): where that place declares a default of its own,
+  the place's default is read, and the callee's applies where the place
+  declares none.
 - **Writability.** The second row does not ask whether the place the
   argument denotes can be written, whatever the kind of the declared
   handle. The type of a reactive value does not say whether it is an

@@ -441,6 +441,17 @@ and, inside the body of an element construct, one element key.
   is salted with a secret of the space before it enters a document
   identifier, so that an identifier does not reveal the value
   ([plan format and label templates](plan-and-label-templates.md), §1.3).
+- When an element moves, the runtime moves what its key holds, its
+  stored results included, to the new position, and evaluates nothing
+  for it except the nodes that read the index. An element of a
+  collection that is the result of a per-element construct, such as a
+  `map` or a `filter`, is keyed by the key of the upstream element it
+  came from, so a change of one upstream element evaluates that
+  element's nodes through a chain of such constructs and no other
+  element's. Where the source is plain values that one computation
+  produces as a whole array, an implementation may evaluate the whole
+  collection again on each change, with the same observable result
+  ([execution and storage](execution-and-storage.md), §2.6).
 - Everything an element body holds is per element key, and so per
   occurrence: its state cells, its streams, its effects, and its
   children. Equal elements share nothing, and each has the label of the
@@ -480,11 +491,19 @@ A computation may write through a cell passed to it, and the write tiers of
   write-side checks apply to it: the write floor, the fit with the target's
   declared confidentiality, and the writer policy
   ([plan format and label templates](plan-and-label-templates.md), §3.11).
+  The cone is an ordinary node, and its write targets count as its
+  outputs for demand: a demanded reader of a written cell demands the
+  cone first, a reader that passes the cell on by reference included
+  ([scheduler and serving loop](scheduler-and-serving-loop.md), §4.3).
 - **Materializers**, whose write targets are dynamic or too broad to predict,
-  are scheduled outside the compiled instance with their own transactions and
-  the rules they have today: standing demand, idle priority, and promotion
-  when a reader touches the declared envelope. Where a materializer cannot
-  be promoted for a handler that reads inside its envelope, the event waits:
+  are scheduled outside the compiled instance with their own transactions.
+  A materializer is evaluated eagerly whenever one of its inputs
+  changes, as a rule after the rest of the wave has been evaluated, and
+  its writes make their readers stale, which a further wave evaluates.
+  Those are the rules it has today: standing demand, idle priority, and
+  promotion when a reader touches the declared envelope. Where a
+  materializer cannot be promoted for a handler that reads inside its
+  envelope, the event waits:
   it holds its place in the queue and is handled after the derivation
   transaction and the materializer have run
   ([scheduler and serving loop](scheduler-and-serving-loop.md), §7.2).
@@ -541,7 +560,13 @@ the cause of their creation, not from their content: the parent instance, the
 compiled-in calls and element bodies that enclose the declaration, and the
 cell's name. Two independent executions arrive at the same identifier even
 when they start from slightly different data. Such a document is written when
-it is first assigned. It carries no pattern reference and no manifest, and it
+the cell is first written. A first value that is a constant is the
+default of the cell's schema: nothing is written when the cell is
+created, and a read of a cell that holds nothing reads the default. A
+first value that is not a constant is computed by a cone and written
+once, when the cell is first created
+([plan format and label templates](plan-and-label-templates.md), §1.3).
+A state cell document carries no pattern reference and no manifest, and it
 keeps the back-link to its result, which `resultOwnerOf` reads
 ([plan format and label templates](plan-and-label-templates.md), §3.16).
 
@@ -1071,13 +1096,14 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   ([language subset](language-subset.md), §13, question 26).
 - **Element bodies and equal elements.** The rulings leave three things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 36, 90, and 91). Which state an occurrence has
+  §8, questions 36, 90, and 101). Which state an occurrence has
   depends on which equal elements stand before it, and a reader of the
   row can see that: assumed accepted. Whether a binding that a `lift`
   or a `computed` written in an element body makes has a stream per
   occurrence: assumed not, as a binding made in a function body is
-  named by what it holds. And whether an element of a `filter` result
-  keeps the key it has in the source: assumed.
+  named by what it holds. And which key an element that a `flatMap`
+  contributes has: assumed the key of its source element together with
+  its position in that element's segment.
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not
