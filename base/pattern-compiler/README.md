@@ -301,6 +301,18 @@ the index: the entries of a key stay with the key. `Instance.counts` has the
 evaluations of cone instances of an element body (`elementEvaluations`) and the
 assemblies of a collection (`assemblies`) apart.
 
+When a key leaves its collection, the executor drops the cone instances of the
+key and deletes nothing that is stored under it (ruling Z18): a state cell the
+body declares keeps its document, and an element that returns under the same key
+has new cone instances, which read what the cell held. The key returns when a
+link to the same cell stands in an array of references again, when the same
+value with the same occurrence count stands in an array of plain values in place
+again, and when the upstream key enters the result of another per-element
+construct again, as an element that a `filter` dropped and keeps again does
+(`compare/fixtures/key-returns.tsx`, with a body over the result of a `filter`
+of references and one over the result of a `filter` of plain values in place).
+The executor has no state of an operation to keep, and no child of a body.
+
 An element that is a plain value in place is named by its collection and its key
 (ruling Z12). The executor holds such a reference as a path whose segment at the
 array is the key and not a position (`keySegment` in `exec/store.ts`), and a

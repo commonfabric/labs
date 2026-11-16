@@ -88,6 +88,21 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 1, event: { id: "a" } },
     ],
   }],
+  // Ruling Z18: the last element of each collection gets a note, leaves
+  // the result of the `filter`, and returns.
+  "key-returns": [{
+    argument: { words: ["x", "y"] },
+    events: [
+      { binding: 2, event: { title: "a" } },
+      { binding: 2, event: { title: "b" } },
+      { binding: 0, event: { text: "row" } },
+      { binding: 1, event: { text: "label" } },
+      { binding: 3, event: { title: "b" } },
+      { binding: 3, event: { title: "" } },
+      { binding: 3, event: { title: "y" } },
+      { binding: 3, event: { title: "" } },
+    ],
+  }],
   "list-records": [{
     argument: { note: "n" },
     events: [

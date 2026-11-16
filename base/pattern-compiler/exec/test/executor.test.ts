@@ -2209,3 +2209,174 @@ describe("a value read under a schema", () => {
     ]);
   });
 });
+
+// Ruling Z18 on `fixtures/key-returns.tsx`: the removal of an element
+// deletes nothing that is stored under its key. The cone instances of the
+// key are dropped, its state cells stay stored, and an element that
+// returns under the same key reads what its state cells held. `memo` is
+// a state cell of the body of the `map` over the result of a `filter`.
+describe("a key that left its collection", () => {
+  type Returned = {
+    rows: { title: string; memo: string }[];
+    labels: { word: string; memo: string }[];
+  };
+  const NOTE_ROW = 0;
+  const NOTE_LABEL = 1;
+  const ADD = 2;
+  const HIDE = 3;
+  const start = async () => {
+    const artifact = await artifactOf("key-returns");
+    const instance = new Instance(artifact, { words: ["x", "y"] });
+    // The records a handler pushes are cells: `items` is an array of
+    // references.
+    instance.send(ADD, { title: "a" });
+    instance.send(ADD, { title: "b" });
+    const cone = (entry: string, nth: number) =>
+      artifact.plan.cones.flatMap((record, index) =>
+        record.entry === entry ? [index] : []
+      )[nth];
+    return { instance, rowsCone: cone("map", 0), labelsCone: cone("map", 1) };
+  };
+  const result = (instance: Instance) => instance.result() as Returned;
+  const memos = (instance: Instance) =>
+    instance.stateCells().filter(({ name }) => name === "memo").map((
+      { keys, value },
+    ) => [keys[0], value]);
+  const stored = (instance: Instance) =>
+    (instance.store.docs.get("state:0:[]")?.value ?? []) as unknown[];
+
+  it("keeps the state cell of a reference that leaves the source and returns", async () => {
+    const { instance, rowsCone } = await start();
+    instance.send(NOTE_ROW, { text: "kept" }, [1]);
+    expect(result(instance).rows).toEqual([
+      { title: "a", memo: "", note: { $stream: true } },
+      { title: "b", memo: "kept", note: { $stream: true } },
+    ]);
+    const [a, b] = stored(instance);
+    const documents = instance.documents();
+    const [, keyOfB] = instance.coneInstances(rowsCone);
+
+    // The link to the cell of `b` leaves the array of references.
+    instance.writeState("items", [], [a]);
+
+    expect(result(instance).rows.map(({ title }) => title)).toEqual(["a"]);
+    // The cone instances of the key are dropped, and nothing stored
+    // under the key is deleted: the cell of the key holds its value.
+    expect(instance.coneInstances(rowsCone)).not.toContainEqual(keyOfB);
+    expect(instance.documents()).toEqual(documents);
+    expect(memos(instance)).toContainEqual([keyOfB[0], "kept"]);
+
+    // The same link stands in the array again: the key returns, new
+    // cone instances are evaluated, and they read what the cell held.
+    const before = instance.counts.elementEvaluations;
+    instance.writeState("items", [], [a, b]);
+
+    expect(result(instance).rows.map(({ title, memo }) => [title, memo]))
+      .toEqual([["a", ""], ["b", "kept"]]);
+    expect(instance.coneInstances(rowsCone)).toContainEqual(keyOfB);
+    // The predicate and the body, for the key that returned.
+    expect(instance.counts.elementEvaluations - before).toBe(2);
+    expect(instance.documents()).toEqual(documents);
+  });
+
+  it("keeps the state cell of a plain value that leaves the source and returns", async () => {
+    const { instance, labelsCone } = await start();
+    instance.send(NOTE_LABEL, { text: "kept" }, [1]);
+    const documents = instance.documents();
+    const keyOfY = ['value:"y"#0'];
+    expect(instance.coneInstances(labelsCone)).toContainEqual(keyOfY);
+
+    // The value leaves the array of plain values in place.
+    instance.writeArgument(["words"], ["x"]);
+
+    expect(result(instance).labels.map(({ word }) => word)).toEqual(["x"]);
+    expect(instance.coneInstances(labelsCone)).not.toContainEqual(keyOfY);
+    expect(instance.documents()).toEqual(documents);
+    expect(memos(instance)).toContainEqual([keyOfY[0], "kept"]);
+
+    // The same value with the same occurrence count stands in the array
+    // again, at another position.
+    instance.writeArgument(["words"], ["y", "x"]);
+
+    expect(result(instance).labels.map(({ word, memo }) => [word, memo]))
+      .toEqual([["y", "kept"], ["x", ""]]);
+    expect(instance.documents()).toEqual(documents);
+  });
+
+  it("keeps the state cell of the last occurrence of two equal plain values", async () => {
+    const { instance } = await start();
+    instance.writeArgument(["words"], ["x", "x"]);
+    instance.send(NOTE_LABEL, { text: "first" }, [0]);
+    instance.send(NOTE_LABEL, { text: "second" }, [1]);
+
+    // The key that leaves is that of the last occurrence, whichever of
+    // the two positions is removed (PL §1.3).
+    instance.writeArgument(["words"], ["x"]);
+
+    expect(result(instance).labels.map(({ memo }) => memo)).toEqual(["first"]);
+    expect(memos(instance)).toContainEqual(['value:"x"#1', "second"]);
+
+    instance.writeArgument(["words"], ["x", "x"]);
+
+    expect(result(instance).labels.map(({ memo }) => memo)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("keeps the state cell of an upstream key that leaves the result of a `filter` and returns, over references", async () => {
+    const { instance, rowsCone } = await start();
+    instance.send(NOTE_ROW, { text: "kept" }, [1]);
+    const documents = instance.documents();
+    const [, keyOfB] = instance.coneInstances(rowsCone);
+
+    // The element stays in the source and leaves the result of the
+    // `filter`, which is the collection of the body that declares `memo`.
+    instance.send(HIDE, { title: "b" });
+
+    expect(result(instance).rows.map(({ title }) => title)).toEqual(["a"]);
+    expect(instance.coneInstances(rowsCone)).not.toContainEqual(keyOfB);
+    expect(memos(instance)).toContainEqual([keyOfB[0], "kept"]);
+
+    instance.send(HIDE, { title: "" });
+
+    expect(result(instance).rows.map(({ title, memo }) => [title, memo]))
+      .toEqual([["a", ""], ["b", "kept"]]);
+    // `hidden` got its document with the first `hide`, and nothing else
+    // was made or deleted.
+    expect(instance.documents()).toEqual({
+      ...documents,
+      "state cell": documents["state cell"] + 1,
+    });
+  });
+
+  it("keeps the state cell of an upstream key that leaves the result of a `filter` and returns, over plain values", async () => {
+    const { instance, labelsCone } = await start();
+    instance.send(NOTE_LABEL, { text: "kept" }, [1]);
+    const keyOfY = ['value:"y"#0'];
+
+    instance.send(HIDE, { title: "y" });
+
+    expect(result(instance).labels.map(({ word }) => word)).toEqual(["x"]);
+    expect(instance.coneInstances(labelsCone)).not.toContainEqual(keyOfY);
+    expect(memos(instance)).toContainEqual([keyOfY[0], "kept"]);
+
+    instance.send(HIDE, { title: "" });
+
+    expect(result(instance).labels.map(({ word, memo }) => [word, memo]))
+      .toEqual([["x", ""], ["y", "kept"]]);
+  });
+
+  it("refuses an event for the stream of a key that left", async () => {
+    const { instance } = await start();
+
+    instance.send(HIDE, { title: "b" });
+
+    // The binding of the key is named from the key and has the stream it
+    // had (ES §2.6), and the executor finds an element for a stream in
+    // its element tables alone: no position holds the key now.
+    expect(instance.send(NOTE_ROW, { text: "late" }, [1]).committed).toBe(
+      false,
+    );
+  });
+});
