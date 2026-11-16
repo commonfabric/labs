@@ -11,9 +11,9 @@ import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.
 
 import { type Artifact, Instance, Unsupported } from "../exec/executor.ts";
 import {
+  type EventOutcome,
   type Plan,
   type Probe,
-  type Run,
   runScenario,
   type Scenario,
 } from "./harness.ts";
@@ -27,6 +27,8 @@ export type Snapshot = {
 
 /** The values of one run: after it settled, and after each event. */
 export type Values = {
+  /** The space the run was made in. */
+  space?: string;
   settled?: Snapshot;
   /** One entry per event sent, in order. `undefined` for one not sent. */
   events: (Snapshot | undefined)[];
@@ -161,6 +163,7 @@ export const readingValues = (
   const values: Values = { events: [] };
   const probe: Probe = {
     at: (point, { runtime, space }) => {
+      values.space = space;
       if (point !== "settled" && point !== "after event") return;
       const read = runtime.edit();
       try {
@@ -228,7 +231,7 @@ export const compareValues = (
   artifact: Artifact,
   argument: Record<string, unknown>,
   events: { binding: number; event: unknown }[],
-  run: Run,
+  outcomes: Pick<EventOutcome, "outcome" | "elements">[],
   runtime: Values,
 ): ValueComparison => {
   const comparison: ValueComparison = {
@@ -294,7 +297,7 @@ export const compareValues = (
   });
   let instance: Instance;
   try {
-    instance = new Instance(artifact, argument);
+    instance = new Instance(artifact, argument, { space: runtime.space });
     compare("settled", runtime.settled, snapshot(instance));
   } catch (error) {
     comparison.notExecuted = categoryOf(error);
@@ -304,7 +307,7 @@ export const compareValues = (
   // each one the harness sent, and none for one it did not send.
   let sent = 0;
   events.forEach(({ binding, event }, index) => {
-    const outcome = run.events[index];
+    const outcome = outcomes[index];
     if (outcome === undefined || outcome.outcome === "not sent") return;
     const theirs = runtime.events[sent];
     sent += 1;
@@ -350,5 +353,11 @@ export const compareScenarioValues = async (
       ) => [name, input.value]),
     ),
   };
-  return compareValues(artifact, argument, scenario.events ?? [], run, values);
+  return compareValues(
+    artifact,
+    argument,
+    scenario.events ?? [],
+    run.events,
+    values,
+  );
 };

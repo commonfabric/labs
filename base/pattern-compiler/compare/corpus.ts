@@ -19,6 +19,7 @@ import { fromFileUrl } from "@std/path";
 import { generateEvent, generateInputs, type Schemas } from "./generate.ts";
 import {
   type Plan,
+  type Probe,
   type Row,
   type Run,
   runScenario,
@@ -38,7 +39,7 @@ type CorpusPlan = Plan & {
   operations?: { kind?: string; name?: string }[];
 };
 
-type CorpusModule = {
+export type CorpusModule = {
   module: string;
   patterns: {
     name: string;
@@ -254,13 +255,14 @@ export const eventOrder = (plan: Plan, order: EventOrder): number[] => {
   return groups.flat().map(({ index }) => index);
 };
 
-/** Runs one module of the corpus with a generated scenario. */
-export const runModule = async (
-  module: CorpusModule,
-  order: EventOrder = "outside first",
-): Promise<ModuleResult> => {
-  // The pattern the module exports as its default, written in place or
-  // by name, and otherwise the first one it exports by name.
+/**
+ * The pattern of a module that a run of the corpus runs: the one the
+ * module exports as its default, written in place or by name, and
+ * otherwise the first one it exports by name.
+ */
+export const mainPattern = async <P extends { name: string }>(
+  module: { module: string; patterns: P[] },
+): Promise<{ pattern: P; isDefault: boolean } | undefined> => {
   const source = await Deno.readTextFile(`${patterns}${module.module}`);
   const byName = source.match(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;/)
     ?.[1];
@@ -271,9 +273,25 @@ export const runModule = async (
     new RegExp(`export\\s+const\\s+${pattern.name}\\b`).test(source)
   );
   const pattern = main ?? named;
-  if (pattern === undefined) {
+  return pattern === undefined
+    ? undefined
+    : { pattern, isDefault: pattern === main };
+};
+
+/**
+ * Runs one module of the corpus with a generated scenario. `probe` is
+ * called at each point of the run (`Scenario.probe`).
+ */
+export const runModule = async (
+  module: CorpusModule,
+  order: EventOrder = "outside first",
+  probe?: Probe,
+): Promise<ModuleResult> => {
+  const chosen = await mainPattern(module);
+  if (chosen === undefined) {
     return { module: module.module, skipped: "exports no pattern" };
   }
+  const { pattern, isDefault } = chosen;
   const { plan, schemas, name } = pattern;
   const base = { module: module.module, pattern: name };
   for (const operation of plan.operations ?? []) {
@@ -321,12 +339,13 @@ export const runModule = async (
       program: {
         main: `${patterns}${module.module}`,
         root: repository,
-        ...(pattern === main ? {} : { export: name }),
+        ...(isDefault ? {} : { export: name }),
       },
       plan,
       argument: {},
       inputs: generateInputs(plan, schemas, await scenarioAudience()),
       events,
+      ...(probe === undefined ? {} : { probe }),
     });
   } catch (error) {
     // With `COMPARE_TRACE` set, where the run failed.

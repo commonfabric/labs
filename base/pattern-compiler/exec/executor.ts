@@ -17,8 +17,11 @@ import {
   isStream,
   type Position,
   Ref,
+  type Schema,
+  schemaBelow,
   Store,
   StreamRef,
+  withDefaults,
 } from "./store.ts";
 
 type Root = {
@@ -27,18 +30,6 @@ type Root = {
   collection?: number;
   handler?: number;
   operation?: number;
-};
-
-type Schema = boolean | {
-  type?: string | string[];
-  default?: unknown;
-  properties?: Record<string, Schema>;
-  items?: Schema;
-  asCell?: unknown;
-  asStream?: unknown;
-  $ref?: string;
-  $defs?: Record<string, Schema>;
-  anyOf?: Schema[];
 };
 
 /** The members of a plan the executor reads (PL §1.1). */
@@ -147,12 +138,17 @@ type Element = {
 
 type Context = ReadonlyMap<number, Element>;
 
+/** An entry an evaluation used, and when that entry had last changed. */
+type Dependency = { changedAt: () => number; seen: number };
+
 type Entry = {
   value: unknown;
   stored: string;
   reads: Position[];
-  dependencies: { changedAt: () => number }[];
+  dependencies: Dependency[];
   indexes: Map<number, number>;
+  /** The address each element slot it read was bound to. */
+  bound: Map<number, string>;
   evaluatedAt: number;
   changedAt: number;
 };
@@ -187,6 +183,8 @@ const canonical = (value: unknown): string =>
         Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
       )
       : member) ?? "undefined";
+
+const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
 
 const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
   pattern.length <= path.length &&
@@ -230,16 +228,21 @@ export class Handle {
     );
   }
 
-  set(value: unknown): void {
-    if (this.target instanceof StreamRef) return this.send(value);
+  set(value: unknown): Handle {
+    if (this.target instanceof StreamRef) {
+      this.send(value);
+      return this;
+    }
     this.instance.written(this);
     this.instance.store.write(this.target, this.instance.stored(value));
+    return this;
   }
 
-  update(members: Record<string, unknown>): void {
+  update(members: Record<string, unknown>): Handle {
     for (const [name, member] of Object.entries(members)) {
       this.key(name).set(member);
     }
+    return this;
   }
 
   push(...members: unknown[]): void {
@@ -309,8 +312,9 @@ export class Handle {
  */
 export class Host {
   readonly reads: Position[] = [];
-  readonly dependencies: { changedAt: () => number }[] = [];
+  readonly dependencies: Dependency[] = [];
   readonly indexes = new Map<number, number>();
+  readonly bound = new Map<number, string>();
 
   constructor(
     readonly instance: Instance,
@@ -333,15 +337,13 @@ export class Host {
       instance.rootOf(slot.root, this),
       [...slot.path, ...rest],
     );
-    const fallback = instance.defaultOf(index, rest);
+    // Where nothing is stored, a slot reads as the default of the place
+    // (ES §2.2): the default its schema declares.
+    const schema = rest.reduce(schemaBelow, instance.schemaOf(slot.schema));
     if (slot.observes === "identity") {
-      return found instanceof Ref ? found.withFallback(fallback) : found;
+      return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    const value = this.v(found);
-    return value === undefined ? fallback : instance.withDefaults(
-      value,
-      rest.length === 0 ? instance.schemaOf(slot.schema) : undefined,
-    );
+    return withDefaults(this.v(found), schema);
   }
 
   /** A read of a place that the value code names no slot for. */
@@ -379,8 +381,12 @@ export class Host {
   }
 
   depend(entry: () => Entry): unknown {
-    this.dependencies.push({ changedAt: () => entry().changedAt });
-    return entry().value;
+    const used = entry();
+    this.dependencies.push({
+      changedAt: () => entry().changedAt,
+      seen: used.changedAt,
+    });
+    return used.value;
   }
 
   /** The stream of a binding, for the element keys of this evaluation. */
@@ -434,6 +440,20 @@ export class Host {
       throw new Unsupported("a body that has no function");
     }
     let argument = this.pass(computed);
+    // An `identity` entry of `Body.computed` is a handle to the reference
+    // the cone computed there (ES §2.4, "A handle or a reference from a
+    // computed input").
+    for (const { at, observes } of instance.plan.bodies[body].computed) {
+      if (observes !== "identity" || at.includes("*")) continue;
+      const reference = this.at(computed, at);
+      if (reference instanceof Ref || reference instanceof StreamRef) {
+        argument = instance.placed(
+          argument,
+          at,
+          instance.handleOf(reference, this),
+        );
+      }
+    }
     const layout = [...(instance.code.layouts[`${body}`] ?? [])].sort((a, b) =>
       a.at.length - b.at.length
     );
@@ -528,7 +548,12 @@ export class Instance {
   /** The body whose writes are being counted, while a handler runs. */
   #handling: number | undefined;
 
-  constructor(readonly artifact: Artifact, argument: unknown) {
+  constructor(
+    readonly artifact: Artifact,
+    argument: unknown,
+    /** `space`: the space the instance is in, which `spaceOf` gives. */
+    readonly options: { space?: string } = {},
+  ) {
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
@@ -601,7 +626,7 @@ export class Instance {
     };
   }
 
-  #runtimeObject: ReturnType<Instance["#runtime"]> | undefined;
+  #runtimeObject: { nohost: Host } | undefined;
 
   /** Whether the modules of the value code are being evaluated. */
   loading = false;
@@ -649,40 +674,6 @@ export class Instance {
     return id === undefined ? undefined : this.#schemas.get(id);
   }
 
-  /**
-   * The default of a slot's place (ES §2.2, "Where nothing is stored, a
-   * slot reads as the default of the place"): the default the slot's
-   * schema declares, at `rest` below it.
-   */
-  defaultOf(slot: number, rest: readonly string[]): unknown {
-    let schema = this.schemaOf(this.plan.slots[slot].schema);
-    for (const segment of rest) {
-      if (typeof schema !== "object") return undefined;
-      schema = /^\d+$/.test(segment) || segment === "*"
-        ? schema.items
-        : schema.properties?.[segment];
-    }
-    return typeof schema === "object" ? schema.default : undefined;
-  }
-
-  /** A value with the defaults its schema declares for absent members. */
-  withDefaults(value: unknown, schema: Schema | undefined): unknown {
-    if (typeof schema !== "object") return value;
-    if (value === undefined) return schema.default;
-    if (isRecord(value) && schema.properties !== undefined) {
-      const filled: Record<string, unknown> = { ...value };
-      for (const [name, member] of Object.entries(schema.properties)) {
-        const given = this.withDefaults(filled[name], member);
-        if (given !== undefined) filled[name] = given;
-      }
-      return filled;
-    }
-    if (Array.isArray(value) && schema.items !== undefined) {
-      return value.map((member) => this.withDefaults(member, schema.items));
-    }
-    return value;
-  }
-
   // ----- places -----
 
   /** The element keys of the `element` steps of a `within`. */
@@ -709,9 +700,11 @@ export class Instance {
         if (element === undefined) {
           throw new Unsupported("an element slot read outside its collection");
         }
-        return element.source instanceof Ref
-          ? element.source
-          : element.source.value;
+        if (element.source instanceof Ref) {
+          host.bound.set(root.collection ?? -1, addressOf(element.source));
+          return element.source;
+        }
+        return element.source.value;
       }
       case "index": {
         const element = host.context.get(root.collection ?? -1);
@@ -764,7 +757,7 @@ export class Instance {
         $link: {
           doc: value.doc,
           path: [...value.path],
-          ...(value.fallback === undefined ? {} : { fallback: value.fallback }),
+          ...(value.schema === undefined ? {} : { schema: value.schema }),
         },
       };
     }
@@ -867,6 +860,7 @@ export class Instance {
         reads: [],
         dependencies: [],
         indexes: new Map(),
+        bound: new Map(),
         evaluatedAt: this.store.clock,
         changedAt: this.store.clock,
       };
@@ -890,6 +884,7 @@ export class Instance {
       reads: host.reads,
       dependencies: host.dependencies,
       indexes: host.indexes,
+      bound: host.bound,
       evaluatedAt,
       changedAt: changed ? this.store.clock : held.changedAt,
     };
@@ -901,9 +896,17 @@ export class Instance {
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
+    // A key that moved is bound to another address, and what passes the
+    // element on by reference holds that address.
+    for (const [collection, address] of entry.bound) {
+      const source = context.get(collection)?.source;
+      if (!(source instanceof Ref) || addressOf(source) !== address) {
+        return false;
+      }
+    }
     if (this.store.changedSince(entry.evaluatedAt, entry.reads)) return false;
     return entry.dependencies.every((dependency) =>
-      dependency.changedAt() <= entry.evaluatedAt
+      dependency.changedAt() === dependency.seen
     );
   }
 
@@ -1096,6 +1099,15 @@ export class Instance {
     this.store.write(new Ref("result", []), this.stored(entry.value));
   }
 
+  /**
+   * Writes a path of the argument document, as a writer outside the
+   * instance does, and evaluates what read it.
+   */
+  writeArgument(path: string[], value: unknown): void {
+    this.store.write(new Ref("argument", path), this.stored(value));
+    this.settle();
+  }
+
   /** The result, with every link in it followed. */
   result(): unknown {
     return this.store.read(new Ref("result", []));
@@ -1247,7 +1259,9 @@ export class Instance {
         const bound = this.plan.slots[place.slot];
         found = host.at(this.rootOf(bound.root, host), [...bound.path, ...rest]);
         if (found instanceof Ref) {
-          found = found.withFallback(this.defaultOf(place.slot, rest));
+          found = found.withSchema(
+            rest.reduce(schemaBelow, this.schemaOf(bound.schema)),
+          );
         }
       } else if (place.output !== undefined) {
         found = host.at(host.output(place.output), rest);
@@ -1375,6 +1389,13 @@ const commonfabric = (instance: Instance): unknown => {
     str: (strings: TemplateStringsArray, ...values: unknown[]) =>
       String.raw({ raw: strings }, ...values),
     toSchema: () => ({}),
+    // Every cell of an executed instance is in the instance's space.
+    spaceOf: () => {
+      if (instance.options.space === undefined) {
+        throw new Unsupported("`spaceOf` with no space given");
+      }
+      return instance.options.space;
+    },
     UiAction: uiHelper("ct-button", [["action", "data-ui-action"]], [
       "as",
       "action",

@@ -7,25 +7,80 @@
  * a slot's path ("A slot's path is resolved through links").
  */
 
+/** The members of a JSON schema the executor reads. */
+export type Schema = boolean | {
+  type?: string | string[];
+  default?: unknown;
+  properties?: Record<string, Schema>;
+  items?: Schema;
+  asCell?: unknown;
+};
+
+/** The schema of a member of what a schema describes. */
+export const schemaBelow = (
+  schema: Schema | undefined,
+  segment: string,
+): Schema | undefined => {
+  if (typeof schema !== "object") return undefined;
+  return /^\d+$/.test(segment) || segment === "*"
+    ? schema.items
+    : schema.properties?.[segment];
+};
+
+/** A value with the defaults its schema declares for what it lacks. */
+export const withDefaults = (
+  value: unknown,
+  schema: Schema | undefined,
+): unknown => {
+  if (typeof schema !== "object") return value;
+  if (value === undefined) {
+    return schema.default === undefined
+      ? undefined
+      : structuredClone(schema.default);
+  }
+  if (isRecord(value) && schema.properties !== undefined) {
+    const filled: Record<string, unknown> = { ...value };
+    for (const [name, member] of Object.entries(schema.properties)) {
+      const given = withDefaults(filled[name], member);
+      if (given !== undefined) filled[name] = given;
+    }
+    return filled;
+  }
+  if (Array.isArray(value) && schema.items !== undefined) {
+    return value.map((member) => withDefaults(member, schema.items));
+  }
+  return value;
+};
+
 /** A reference to a position of a document. */
 export class Ref {
   constructor(
     readonly doc: string,
     readonly path: readonly string[],
-    /** The value a read gives where nothing is stored at the position. */
-    readonly fallback?: unknown,
+    /**
+     * The schema a read through the reference is made under: its defaults
+     * are what the read gives where nothing is stored
+     * (`execution-and-storage.md` §2.2).
+     */
+    readonly schema?: Schema,
   ) {}
 
   key(...segments: string[]): Ref {
-    return segments.length === 0
-      ? this
-      : new Ref(this.doc, [...this.path, ...segments]);
+    return segments.reduce(
+      (ref: Ref, segment) =>
+        new Ref(
+          ref.doc,
+          [...ref.path, segment],
+          schemaBelow(ref.schema, segment),
+        ),
+      this,
+    );
   }
 
-  withFallback(fallback: unknown): Ref {
-    return fallback === undefined
+  withSchema(schema: Schema | undefined): Ref {
+    return schema === undefined || this.schema !== undefined
       ? this
-      : new Ref(this.doc, this.path, fallback);
+      : new Ref(this.doc, this.path, schema);
   }
 }
 
@@ -37,7 +92,7 @@ export class StreamRef {
 /** A position that a read observed: the document and the path. */
 export type Position = { doc: string; path: readonly string[] };
 
-type StoredLink = { $link: { doc: string; path: string[]; fallback?: unknown } };
+type StoredLink = { $link: { doc: string; path: string[]; schema?: Schema } };
 type StoredStream = { $stream: { binding: number; keys: string[] } };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -104,7 +159,7 @@ export class Store {
     let doc = ref.doc;
     let value = this.docs.get(doc)?.value;
     let at: string[] = [];
-    let fallback = ref.fallback;
+    let schema = ref.schema;
     let rest = [...ref.path];
     let links = 0;
     for (;;) {
@@ -112,9 +167,9 @@ export class Store {
         links += 1;
         if (links > MAX_LINKS) return { ref: new Ref(doc, at), value: undefined };
         reads?.push({ doc, path: at });
-        if (rest.length === 0 && value.$link.fallback !== undefined) {
-          fallback ??= value.$link.fallback;
-        }
+        // The schema of the link nearest the position read, where the
+        // reference has none of its own.
+        schema ??= rest.reduce(schemaBelow, value.$link.schema);
         doc = value.$link.doc;
         rest = [...value.$link.path, ...rest];
         at = [];
@@ -126,7 +181,7 @@ export class Store {
       at = [...at, segment];
     }
     reads?.push({ doc, path: at });
-    return { ref: new Ref(doc, at, fallback), value };
+    return { ref: new Ref(doc, at, schema), value };
   }
 
   /**
@@ -145,7 +200,7 @@ export class Store {
     open.add(id);
     const value = this.#copy(located.value, reads, open);
     open.delete(id);
-    return value === undefined ? located.ref.fallback : value;
+    return withDefaults(value, located.ref.schema);
   }
 
   #copy(
@@ -154,8 +209,8 @@ export class Store {
     open: Set<string>,
   ): unknown {
     if (isLink(value)) {
-      const { doc, path, fallback } = value.$link;
-      return this.#deep(new Ref(doc, path, fallback), reads, open);
+      const { doc, path, schema } = value.$link;
+      return this.#deep(new Ref(doc, path, schema), reads, open);
     }
     if (isStream(value)) return { $stream: true };
     if (Array.isArray(value)) {
