@@ -136,6 +136,16 @@ const READ_AS: Record<CfcPostureProvenance, string> = {
   resolved: "resolved posture",
 };
 
+/** Every source a policy snapshot can record its enforcement mode came from. */
+const ENFORCEMENT_MODE_SOURCES: readonly HarnessCfcEnforcementModeSource[] = [
+  "override",
+  "explicit-config",
+  "inherited",
+  "fabric-session",
+  "run-manifest",
+  "default",
+];
+
 /** How a finding names the record it read. */
 const readAs = (record: CfcPostureReport): string => READ_AS[record.provenance];
 
@@ -330,9 +340,10 @@ const defaultModeDrift: AuditCheck = {
       };
     }
     // A snapshot written before the field existed lacks it, although the type
-    // written today requires it.
-    const source: HarnessCfcEnforcementModeSource | undefined =
-      snapshot.cfc.enforcementModeSource;
+    // written today requires it, and the artifact is read unchecked; a value
+    // that names no known source records none.
+    const recorded: unknown = snapshot.cfc.enforcementModeSource;
+    const source = ENFORCEMENT_MODE_SOURCES.find((name) => name === recorded);
     if (source !== undefined && source !== "default") {
       return {
         verdict: "not-applicable",

@@ -212,6 +212,27 @@ describe("posture", () => {
         expect(outcome.message).not.toContain("undefined");
       });
 
+      it("reads a source that names no known one as unrecorded", () => {
+        // The artifact is read unchecked, so a malformed one can hold
+        // anything where the source belongs.
+        for (const recorded of [null, 7, "made-up"]) {
+          const root = structuredClone(family.root);
+          stateOf(root).fabricSessionCfc = recordedPosture({});
+          const { cfc } = snapshotOf(root);
+          Reflect.set(cfc, "enforcementModeSource", recorded);
+          cfc.enforcementMode = "observe";
+          const outcome = auditRunFamily({ root, children: [] }, POSTURE_CHECKS)
+            .find((result) => result.checkId === "AUD-15")!;
+
+          expect(outcome.verdict).toBe("inconclusive");
+          expect(outcome.evidence).toEqual([{
+            artifact: "policy-snapshot.json",
+            pointer: "cfc.enforcementModeSource",
+            detail: "absent",
+          }]);
+        }
+      });
+
       it("reports a mode weaker than the session claims inconclusive, naming the source absent", () => {
         const outcome = withoutSource("observe");
         expect(outcome.verdict).toBe("inconclusive");
