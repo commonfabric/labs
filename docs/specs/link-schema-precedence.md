@@ -155,17 +155,21 @@ space that holds the link
 ([`content-addressed-schemas.md`](content-addressed-schemas.md), "Space
 boundaries"), and the entry resolves against it the same way.
 
-A handle from `resolveAsCell()` is not a read, so no entry rule applies to
-it. It is the link resolution itself, and carries what resolution carries:
-the nearest stored schema that constrains, or the caller's schema where no
-stored schema does, whatever the caller's schema declares. A read of the
-handle starts from that schema as its own. So through a link whose stored
-schema requires a field the target lacks, a shaped reader's keyed `get()`
-reads the target, and a `get()` of the same slot's `resolveAsCell()` reads
-`undefined`. A caller that wants its own projection of the target reads the
-slot by key, or re-types the handle with `asSchema()`; one that wants a
-handle typed by its own schema reads the slot under that schema wrapped in
-`asCell`.
+A handle from `resolveAsCell()` is not a read of the target, so the entry
+rule does not apply to it. It is the link resolution itself: where a link
+the resolution crosses stores a schema that constrains, the handle carries
+the nearest such schema, whatever the caller's schema declares (a
+`default` crosses as "Defaults inherit from the last declaration" below
+says), and a read of the handle starts from it as its own. So through a
+link whose stored schema requires a field the target lacks, a keyed
+`get()` under a shaped reader's schema reads the target, and a `get()` of
+the handle the same slot's `resolveAsCell()` returns reads `undefined`. A
+reader typed `unknown` is the exception, since it adopts the stored schema
+at the entry too. A `false` reader, whose keyed `get()` selects nothing,
+still gets a handle typed by the stored schema, and a read of that handle
+returns whatever the stored schema accepts. A caller that wants its own
+projection of the target reads the slot by key, or re-types the handle
+with `asSchema()`.
 
 The strict pseudo-intersection (`combineSchema`) remains in use for one
 job: merging a compound schema's base keywords with its own

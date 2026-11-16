@@ -14,8 +14,8 @@
  * `unknown`, and the strict rollback keep the stored schema at the read's
  * entry. A link into another space carries its stored schema across
  * recomposed, and the entry resolves against it the same way. A handle from
- * `resolveAsCell()` is the resolution's rather than a read's, and carries the
- * stored schema whatever the reader declared.
+ * `resolveAsCell()` comes from link resolution rather than from a read, and
+ * carries the stored schema whatever the reader declared.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -36,12 +36,12 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "../src/reader-schema-precedence-config.ts";
 import { Runtime } from "../src/runtime.ts";
-import { recomposeSchemaRefs } from "../src/schema-decompose.ts";
-import { lookupSchemaDocument } from "../src/schema-registry.ts";
 import { rendererVDOMSchema } from "../src/schemas.ts";
 import { UI } from "../src/shared.ts";
 import type { CellLinkRefPayload } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+
+import { resolvedSchema } from "./schema-ref-helpers.ts";
 
 const signer = await Identity.fromPassphrase("stored link schema precedence");
 const space = signer.did();
@@ -448,20 +448,21 @@ describe("stored-link-schema-precedence", () => {
     });
 
     describe("a handle from `resolveAsCell()`", () => {
-      // A handle from `resolveAsCell()` is the link resolution's, not a read's:
-      // it carries the nearest stored schema that constrains, whatever the
-      // caller's schema declares, and a read of it starts from that schema. The
-      // row each case reaches lacks a field only the stored schema requires.
+      // A handle from `resolveAsCell()` comes from link resolution rather than
+      // from a read of the target: it carries the nearest stored schema that
+      // constrains, whatever the caller's schema declares, and a read of it
+      // starts from that schema. Unless a case says otherwise, the row it
+      // reaches lacks a field only the stored schema requires.
 
-      /** The element slot of a one-row holder over a row lacking `glaze`. */
-      const narrowRowSlot = (): Cell<Row> => {
+      /** The element slot of a one-row holder over a row holding `value`. */
+      const rowSlot = (value: Record<string, string>): Cell<Row> => {
         const row = runtime.getCell(
           space,
           `row-${seq}-resolved`,
           undefined,
           tx,
         );
-        row.setRaw({ title: "cruller" });
+        row.setRaw(value);
         const holder = runtime.getCell<Holder>(
           space,
           `holder-${seq}-resolved`,
@@ -472,18 +473,11 @@ describe("stored-link-schema-precedence", () => {
         return holder.key("rows").key(0);
       };
 
-      /** The schema `cell` carries, its `cid:` references recomposed. */
-      const schemaOf = (cell: Cell<unknown>) => {
-        const { schema } = cell.getAsNormalizedFullLink();
-        return schema === undefined
-          ? undefined
-          : recomposeSchemaRefs(schema, lookupSchemaDocument);
-      };
+      const narrowRowSlot = () => rowSlot({ title: "cruller" });
 
-      it("carries the stored schema for a shaped reader", () => {
-        expect(schemaOf(narrowRowSlot().resolveAsCell()))
-          .toEqual(wideStoredSchema);
-      });
+      /** The schema `cell` carries, its `cid:` references resolved. */
+      const schemaOf = (cell: Cell<unknown>) =>
+        resolvedSchema(cell.getAsNormalizedFullLink().schema);
 
       it("reads `undefined` for a shaped reader where a keyed read returns the row", () => {
         const slot = narrowRowSlot();
@@ -492,7 +486,7 @@ describe("stored-link-schema-precedence", () => {
         expect(slot.resolveAsCell().get()).toBeUndefined();
       });
 
-      it("carries the stored schema where an `asCell` read of the same slot keeps the reader's", () => {
+      it("carries the stored schema for a shaped reader where an `asCell` read of the same slot keeps the reader's", () => {
         const slot = narrowRowSlot();
         const minted = slot.asSchema({ ...rowSchema, asCell: ["cell"] })
           .get() as unknown as Cell<Row>;
@@ -519,15 +513,58 @@ describe("stored-link-schema-precedence", () => {
         expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
       });
 
+      it("carries the stored schema for a reader that is only an `asCell` wrapper", () => {
+        const slot = narrowRowSlot().asSchema({ asCell: ["cell"] });
+
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+      });
+
       it("carries the stored schema for a reader typed `unknown`", () => {
         const slot = narrowRowSlot().asSchema({ type: "unknown" });
 
         expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
       });
 
-      it("carries the stored schema for a cell typed by `asSchemaFromLinks()`", () => {
-        const slot = narrowRowSlot().asSchemaFromLinks();
+      it("carries the stored schema for a `false` reader, and reads the whole row through it", () => {
+        // A reader that selects nothing reads nothing by key, and its handle
+        // reads everything the stored schema accepts.
 
+        const slot = rowSlot({ title: "cruller", glaze: "maple" })
+          .asSchema(false);
+
+        expect(slot.get()).toBeUndefined();
+        expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
+        expect(projectionOf(slot.resolveAsCell().get())).toEqual({
+          title: "cruller",
+          glaze: "maple",
+        });
+      });
+
+      it("carries the stored schema for a row-typed cell reached through `asSchemaFromLinks()`", () => {
+        // The holder is reached through a link whose stored schema types its
+        // rows by the reader's row schema, so `asSchemaFromLinks()` types the
+        // holder by it, and the element's caller schema is the row schema
+        // rather than the element link's own.
+
+        const row = runtime.getCell(space, `row-${seq}-chained`, undefined, tx);
+        row.setRaw({ title: "cruller" });
+        const holder = runtime.getCell(
+          space,
+          `holder-${seq}-chained`,
+          undefined,
+          tx,
+        );
+        holder.setRaw({ rows: [linkCarrying(row, wideStoredSchema)] } as never);
+        const outer = runtime.getCell(
+          space,
+          `outer-${seq}-chained`,
+          undefined,
+          tx,
+        );
+        outer.setRaw({ holder: linkCarrying(holder, holderSchema) } as never);
+        const slot = outer.key("holder").asSchemaFromLinks().key("rows").key(0);
+
+        expect(schemaOf(slot)).toEqual(rowSchema);
         expect(schemaOf(slot.resolveAsCell())).toEqual(wideStoredSchema);
       });
     });

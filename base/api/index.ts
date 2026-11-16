@@ -1010,6 +1010,13 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  * Note: Schema-typed overload available via "commonfabric/schema"
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
+  /**
+   * The cell this one's links lead to, typed by the schema the link it
+   * reaches stores where that schema constrains, whatever this cell's own
+   * schema declares. A read of it can return `undefined` where a read of this
+   * cell returns the target; read by key, or re-type it with `asSchema()`, for
+   * this cell's own projection.
+   */
   resolveAsCell(): C;
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
