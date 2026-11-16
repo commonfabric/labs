@@ -72,6 +72,9 @@ export class BrowserController extends EventTarget {
         extractAstralConfig(config, this.#manifest.profileDir),
       );
       this.#page = await this.#process.newPage(testUrl);
+      if ((config.product ?? "chrome") === "chrome") {
+        await this.#keepFocused(this.#page);
+      }
       await this.#serveCommands(this.#page);
       this.#page.addEventListener("console", (e) => {
         // Not sure why this event needs reconstructed in order
@@ -105,6 +108,21 @@ export class BrowserController extends EventTarget {
     return (await this.#page.evaluate<{ ok: TestResult | null }, []>(
       `globalThis.__denoWebTest.runAt(${index})`,
     )).ok;
+  }
+
+  /**
+   * Helper for `load`, which makes `page` behave as the focused page for the
+   * rest of the run: `document.hasFocus()` is true, and focusing an element
+   * fires its focus events and makes it the one keys reach. Without this,
+   * Chrome stops treating the page as focused after it has loaded a few test
+   * files, so a test that focuses an element would pass or fail by where the
+   * shuffle puts its file. The setting holds for every document the page
+   * loads, so it is made once, with the page. It is Chrome's, so `load` asks
+   * for it only when the run's browser is Chrome.
+   */
+  async #keepFocused(page: Page) {
+    await page.unsafelyGetCelestialBindings().Emulation
+      .setFocusEmulationEnabled({ enabled: true });
   }
 
   /**

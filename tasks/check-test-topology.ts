@@ -122,6 +122,11 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
     reason: "a project the harness runs to prove a test can press trusted keys",
   },
   {
+    path: "runtime/deno-web-test/test/focus-project/",
+    reason: "a project the harness runs to prove its page keeps focus for " +
+      "every file of a run",
+  },
+  {
     path: "runtime/deno-web-test/test/late-registration-project/late.test.ts",
     reason: "a project the harness runs to prove a run with a test it never " +
       "ran claims nothing",

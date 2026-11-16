@@ -2,6 +2,9 @@
 
 import { assert, assertEquals } from "@std/assert";
 
+import { StateEffect } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+
 import { CFCodeEditor } from "./index.ts";
 
 const MARKDOWN = [
@@ -59,12 +62,20 @@ Deno.test("prose table aligns columns and reveals source for editing", async () 
     }
     assertEquals(columns[0], columns[1]);
     const view = editor.editorView!;
+    // CodeMirror reports focus in an update a timer sets off after the focus
+    // event, and the table's source decorations follow in that update, so
+    // the test waits for it rather than for any length of time.
+    const focused = Promise.withResolvers<void>();
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.updateListener.of((update) => {
+          if (update.focusChanged && update.view.hasFocus) focused.resolve();
+        }),
+      ),
+    });
     view.dispatch({ selection: { anchor: MARKDOWN.indexOf("Place") } });
     view.focus();
-    // Focus changes the table's source decorations on the editor's frame.
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve())
-    );
+    await focused.promise;
     assertEquals(
       editor.shadowRoot!.querySelectorAll(".cm-prose-table-row").length,
       0,
