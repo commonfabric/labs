@@ -1278,7 +1278,7 @@ A write target is classified by what the analysis knows of its address.
   as in `counts.key(flavor).set(n)`, where the analysis can name `counts`
   and the write changes one child of it, or a write through
   `elementById`, where it can name the list and the write changes the
-  record of one key, which is a cell of its own (§7.1). It
+  record of one key, which is a cell of its own (§7.5). It
   is also the case when the analysis lost track of the handle, because it
   was passed to an unresolved call (W4) or reached through an analysis
   limit (W7), so that the write can be bounded only by the handles the body
