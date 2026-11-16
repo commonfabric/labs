@@ -39,6 +39,9 @@ const WRITTEN: Record<string, Written[]> = {
   "defaulted": [true, false].map((given) => ({
     argument: { profile: { name: "ada", ...(given ? { nick: "a" } : {}) } },
   })),
+  "callee-default": [true, false].map((given) => ({
+    argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
+  })),
   "passed": [{ argument: { secret: "s3cret", items: ["a", "b"] } }],
   "state-declared": [{ argument: { note: "n" } }],
   "created": [{ argument: { note: "n" } }],

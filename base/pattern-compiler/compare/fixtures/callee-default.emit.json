@@ -1,0 +1,544 @@
+[
+  {
+    "module": "compare/fixtures/callee-default.tsx",
+    "patterns": [
+      {
+        "code": {
+          "coneWithin": [
+            [],
+            []
+          ],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/callee-default.tsx",
+              "source": "const { \"computed\": computed, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst spell = lift((x) => x.symbol.split(\"\").join(\"-\"));\nconst Price = pattern(undefined);\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((x) => x.symbol.split(\"\").join(\"-\"))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\n$rt.value(2, ($h) => ($h.invoke(0, ({ symbol: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ shown: $h.output(0), spelled: $h.output(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 15,
+        "name": "Price",
+        "noResultPath": [],
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "slot": 0
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 564
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 615
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "shown"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "spelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#Price"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "symbol"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "symbol": {
+                  "default": "$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "symbol"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "default": "$",
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "coneWithin": [
+            [],
+            [],
+            [],
+            []
+          ],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/callee-default.tsx",
+              "source": "const { \"computed\": computed, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst spell = lift((x) => x.symbol.split(\"\").join(\"-\"));\nconst Price = pattern(undefined);\n\nconst $default = (pattern(undefined));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((x) => x.symbol.split(\"\").join(\"-\"))($a));\n$rt.setup(1, function ($arg, $h) {\nconst symbol = $rt.or($rt.at($arg, [\"symbol\"], $h), () => (\"$\"));\n$rt.value(1, ($h) => (((symbol) + $h.v($h.slot(0)))));\n$rt.value(2, ($h) => ($h.invoke(0, ({ symbol: (symbol) }))));\nreturn $rt.thunk(($h) => (({ shown: $h.output(0), spelled: $h.output(1) })));\n});\n$rt.body(1, ($a) => ((x) => x.symbol.split(\"\").join(\"-\"))($a));\n$rt.setup(2, function ($arg, $h) {\n$rt.value(4, ($h) => (($rt.or($h.v($h.slot(1)), () => (\"$\")) + $h.v($h.slot(0)))));\n$rt.value(5, ($h) => ($h.invoke(1, ({ symbol: $h.slot(1) }), [[[\"symbol\"],\"$\"]])));\nreturn $rt.thunk(($h) => (({ shown: $h.output(2), spelled: $h.output(3) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\nconst omitted = $rt.thunk(($h) => ($rt.force($s1, $h)));\nconst $s2 = $rt.setups[2]({  }, $h);\nconst bound = $rt.thunk(($h) => ($rt.force($s2, $h)));\nreturn $rt.thunk(($h) => (({ omitted: $h.output(0), omittedSpelled: $h.output(1), bound: $h.output(2), boundSpelled: $h.output(3) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 26,
+        "name": "default",
+        "noResultPath": [],
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [],
+              "widenings": [],
+              "within": [
+                {
+                  "site": "omitted"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "spell",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "symbol"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [
+                {
+                  "site": "bound"
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 564
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 615
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 564
+              },
+              "bodies": [],
+              "entry": "shown",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/callee-default.tsx",
+                "start": 615
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "spelled",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "omitted"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "omittedSpelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "bound"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "boundSpelled"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#default",
+            "unhashed:pattern/compare/fixtures/callee-default.tsx#Price"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "amount"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "sign"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "sign": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "sign"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

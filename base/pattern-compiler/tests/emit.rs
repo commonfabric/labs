@@ -426,3 +426,63 @@ export const P = pattern<{ flag: boolean; note: string }>(({ flag, note }) => {
         "{text}"
     );
 }
+
+#[test]
+fn a_path_the_call_leaves_out_is_a_constant_of_the_plan_with_the_default() {
+    // Ruling Z4: the path is bound as if the call had written, as a
+    // constant, the default the callee's argument type declares. The one
+    // record that holds a constant of a compiled-in argument is the state
+    // of a binding (PL §1.1, `Binding.state.place`).
+    let (plan, _) = emitted(
+        r#"import { type Default, pattern, UI, Writable } from "commonfabric";
+const Row = pattern<{ label: string; step: Default<number, 5> }>(({ label, step }) => {
+  const count = Writable.of(0);
+  return { [UI]: <button onClick={() => count.set(count.get() + step)}>{label}</button> };
+});
+export const P = pattern<{ title: string }>(({ title }) => {
+  return { [UI]: <div><Row label={title} /></div> };
+});
+"#,
+        "P",
+    );
+    let state = plan["bindings"][0]["state"].as_array().expect("state");
+    let step = state
+        .iter()
+        .find(|entry| entry["path"] == json!(["step"]))
+        .expect("the entry of `step`");
+    assert_eq!(step["place"], json!({ "constant": 5 }));
+}
+
+#[test]
+fn a_path_bound_to_a_slot_of_the_caller_reads_the_default_of_the_callee() {
+    // Ruling Z4: where nothing is stored at the caller's slot, the cones
+    // of the callee that read the path take the callee's default.
+    let (plan, code) = emitted(
+        r#"import { computed, type Default, lift, pattern, UI } from "commonfabric";
+const spell = lift((x: { symbol: string }) => x.symbol.split("").join("-"));
+const Price = pattern<{ amount: number; symbol: Default<string, "$"> }>(({ amount, symbol }) => {
+  const shown = computed(() => symbol + amount);
+  const spelled = spell({ symbol });
+  return { [UI]: <span>{shown}{spelled}</span> };
+});
+export const P = pattern<{ amount: number; sign?: string }>(({ amount, sign }) => {
+  return { [UI]: <div><Price amount={amount} symbol={sign} /></div> };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let sign = slot(&plan, "argument", &["sign"], "value");
+    // Expression code reads the slot, and the default where it is empty.
+    assert!(
+        text.contains(&format!("$rt.or($h.v($h.slot({sign})), () => (\"$\"))")),
+        "{text}"
+    );
+    // A body is handed the default at the place of the slot.
+    assert!(
+        text.contains(&format!(
+            "$h.invoke(0, ({{ symbol: $h.slot({sign}) }}), [[[\"symbol\"],\"$\"]])"
+        )),
+        "{text}"
+    );
+}

@@ -194,6 +194,14 @@ An entry of `Body.reads` of the plan holds the slot and the path in the body's
 argument at which the slot's value is placed (PL §1.1, `ReadInput`), and the
 executor builds the slot part of the argument from those entries.
 
+A path of the argument of a pattern compiled in that the call leaves out is
+bound to the default the callee's argument type declares for it, as a constant:
+the setup function holds it, and the state of a binding that captures it has it
+as `place.constant`. A path the call binds to a slot of the caller reads that
+default where nothing is stored at the slot: expression code reads the slot
+through `$rt.or`, and a use of a body passes `$h.invoke` the default with its
+place in the body's argument.
+
 A module's text registers a setup function for the pattern (`$rt.setup`) and for
 each pattern compiled into it, and each setup function registers a value
 function per value (`$rt.value`), the function of the body of each element

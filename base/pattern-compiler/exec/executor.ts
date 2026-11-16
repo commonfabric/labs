@@ -544,8 +544,17 @@ export class Host {
     return found;
   }
 
-  /** Runs a sandboxed body of the cone (ES §2.4). */
-  invoke(body: number, computed: unknown): unknown {
+  /**
+   * Runs a sandboxed body of the cone (ES §2.4). `defaults` holds, for a
+   * body of a pattern compiled in, the default the callee declares for a
+   * place of the argument: the body is handed it where the slot placed
+   * there holds nothing (ruling Z4).
+   */
+  invoke(
+    body: number,
+    computed: unknown,
+    defaults: [string[], unknown][] = [],
+  ): unknown {
     const { instance } = this;
     const run = instance.bodies.get(body);
     if (run === undefined) {
@@ -582,6 +591,10 @@ export class Host {
         : this.slot(slot);
       if (instance.gives(observes, argument, at)) continue;
       argument = instance.placed(argument, at, given);
+    }
+    for (const [at, declared] of defaults) {
+      if (this.at(argument, at) !== undefined) continue;
+      argument = instance.placed(argument, at, structuredClone(declared));
     }
     return instance.returned(run(argument));
   }

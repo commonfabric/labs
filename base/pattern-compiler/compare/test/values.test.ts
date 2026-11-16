@@ -77,4 +77,17 @@ describe("the values of a fixture", () => {
     // Every position that holds a stream is one `Binding.result` lists.
     expect(comparison.streams?.atNoListedPath).toBe(0);
   });
+
+  it("are equal where a pattern compiled in declares a default for a path", async () => {
+    // Ruling Z4: with the caller's slot given, and with nothing stored
+    // there, where both runs read the callee's default.
+    const rows = await compareFixtures("callee-default");
+
+    expect(rows.length).toBe(2);
+    for (const { comparison } of rows) {
+      expect(comparison.notExecuted).toBeUndefined();
+      expect(comparison.differences).toEqual([]);
+      expect(comparison.compared).toBe(4);
+    }
+  });
 });

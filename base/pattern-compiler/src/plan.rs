@@ -199,7 +199,7 @@ pub(crate) enum Root {
 }
 
 /// What a name or an expression of the reactive tier denotes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Place {
     /// A path of an input.
     Slot(Root, Vec<String>),
@@ -398,6 +398,11 @@ struct Emitter<'r, 'm, 'a> {
     /// parameter binds: `value` for `Counter({ value: 5 })`. A property
     /// the call leaves out is not among them.
     given_constants: HashSet<String>,
+    /// The names of the parameter of the pattern being compiled in whose
+    /// path the call leaves out, each with the default the callee's
+    /// argument type declares for the path: the name is bound to that
+    /// constant (ruling Z4).
+    callee_defaults: HashMap<String, Value>,
     /// The properties the call of the pattern about to be compiled in
     /// writes as a literal.
     literal_keys: HashSet<String>,
@@ -1830,7 +1835,38 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.inline_at.push(at);
         let literal_keys = std::mem::take(&mut self.literal_keys);
         let mut given: HashSet<String> = HashSet::new();
+        let mut defaults: HashMap<String, Value> = HashMap::new();
         if let Some(parameter) = function.params().items.first() {
+            // The schema of the callee's declared argument: its defaults
+            // are what a path the call leaves out is bound to, as a
+            // constant, and what a path bound to an empty slot of the
+            // caller reads (ruling Z4).
+            let schema = self
+                .resolver
+                .formal_parameter_type(home, parameter)
+                .ok()
+                .map(|ty| self.resolver.schema_of(ty));
+            if let (BindingPattern::ObjectPattern(object), Place::Record(fields), Some(schema)) =
+                (&parameter.pattern, &argument, &schema)
+            {
+                for property in &object.properties {
+                    let key = static_key_name(&property.key).filter(|_| !property.computed);
+                    let bound = match &property.value {
+                        BindingPattern::AssignmentPattern(assignment) => &assignment.left,
+                        other => other,
+                    };
+                    if let (Some(key), BindingPattern::BindingIdentifier(identifier)) = (key, bound)
+                    {
+                        let declared = schema
+                            .get("properties")
+                            .and_then(|properties| properties.get(key))
+                            .and_then(|member| member.get("default"));
+                        if let (None, Some(declared)) = (fields.get(key), declared) {
+                            defaults.insert(identifier.name.to_string(), declared.clone());
+                        }
+                    }
+                }
+            }
             // A property of the argument that is written at the call as a
             // literal or a constant (PL §3.15; LS §10.2).
             if let (BindingPattern::ObjectPattern(object), Place::Record(fields)) =
@@ -1852,14 +1888,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
             }
-            // The schema of the callee's declared argument: its defaults
-            // are what a path the call leaves out reads as.
-            if let Ok(ty) = self.resolver.formal_parameter_type(home, parameter) {
-                self.facts.argument_schema(self.resolver.schema_of(ty));
+            if let Some(schema) = schema {
+                self.facts.argument_schema(schema);
             }
             self.bind_pattern(&parameter.pattern, argument);
         }
         let saved_given = std::mem::replace(&mut self.given_constants, given);
+        let saved_defaults = std::mem::replace(&mut self.callee_defaults, defaults);
         let result = match function.expression_body() {
             Some(expression) => Some(self.eval(expression, name)),
             None => function
@@ -1867,6 +1902,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .and_then(|statements| self.statements(statements)),
         };
         self.given_constants = saved_given;
+        self.callee_defaults = saved_defaults;
         self.facts.leave(saved_context, result.clone());
         self.inline_at.pop();
         WRITTEN_IN.set(saved_pattern);
@@ -5164,12 +5200,21 @@ impl<'a> Emitter<'_, '_, 'a> {
                     return;
                 }
                 // A literal, or the value of a module-scope constant
-                // with a static initializer.
+                // with a static initializer, or the default of a path of
+                // the argument that the call of the pattern compiled in
+                // leaves out (ruling Z4).
+                let name = match written.map(|written| unwrap(written)) {
+                    Some(Expression::Identifier(identifier)) => Some(identifier.name.as_str()),
+                    Some(_) => None,
+                    None if path.len() == 1 => Some(path[0].as_str()),
+                    None => None,
+                };
                 let constant = written
                     .and_then(|written| {
                         constant_of(written)
                             .or_else(|| self.resolver.constant_value(self.module, written, 0))
                     })
+                    .or_else(|| name.and_then(|name| self.callee_defaults.get(name).cloned()))
                     .unwrap_or(Value::Null);
                 entry.insert("place".to_string(), json!({ "constant": constant }));
                 entry.insert("template".to_string(), json!({ "op": "const" }));
@@ -7307,6 +7352,7 @@ pub fn emit_module<'a>(
             patterns: vec![(module, *start)],
             inline_at: Vec::new(),
             given_constants: HashSet::new(),
+            callee_defaults: HashMap::new(),
             literal_keys: HashSet::new(),
             formal_names: Vec::new(),
             tags: Vec::new(),

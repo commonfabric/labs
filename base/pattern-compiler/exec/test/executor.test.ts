@@ -234,3 +234,38 @@ describe("an element construct", () => {
     expect((instance.result() as { chosen: number }).chosen).toBe(1);
   });
 });
+
+describe("a pattern compiled in", () => {
+  it("binds a path the call leaves out to the callee's default", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+      sign: "€",
+    });
+
+    const result = instance.result() as Record<string, string>;
+    expect(result.omitted).toBe("$420");
+    expect(result.omittedSpelled).toBe("$");
+    expect(result.bound).toBe("€420");
+  });
+
+  it("reads the callee's default where the caller's slot holds nothing", async () => {
+    const instance = new Instance(await artifactOf("callee-default"), {
+      amount: 420,
+    });
+
+    // Expression code and a sandboxed body both read the default.
+    expect(instance.result()).toEqual({
+      omitted: "$420",
+      omittedSpelled: "$",
+      bound: "$420",
+      boundSpelled: "$",
+    });
+
+    // A value stored at the slot later is read in place of the default.
+    instance.writeArgument(["sign"], "kr");
+
+    expect((instance.result() as { bound: string }).bound).toBe("kr420");
+    expect((instance.result() as { boundSpelled: string }).boundSpelled)
+      .toBe("k-r");
+  });
+});
