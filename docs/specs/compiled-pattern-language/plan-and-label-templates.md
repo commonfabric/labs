@@ -2138,7 +2138,22 @@ arises over an array of references.
   *Assumed* as well: a write through a reference whose key no position
   holds is refused, as a write through a handle to a value the
   instance computes is, so in a handler it rejects the event's
-  transaction.
+  transaction. The prototype's executor does as assumed, and a
+  fixture of it shows what follows for a row over an array of plain
+  values in place. A handler that writes one member, as
+  `stop.key("done").set(true)` does, commits: the position has
+  another key, the row is evaluated for it, and a state cell of the
+  row is that of the new key and reads its first value, where the row
+  had written it. The cell of the old key stays stored and nothing
+  reads it, and a cell elsewhere that held the element reads as
+  nothing. A handler that writes two members one after the other
+  through the same reference is refused at the second write, and the
+  event is rejected with both writes. A handler that writes both
+  members with one `update` commits. *Assumed* with the same
+  question: an `update` is one write, for which the key is resolved
+  once. Over an array of references none of this arises: the same
+  writes commit and the row keeps its state, because the key does not
+  depend on the value.
 - **An equal value added again.** *Assumed* (section 8, question 113):
   a reference whose key left resolves again when a position comes to
   hold the same key, because the reference holds the collection, the
@@ -2175,6 +2190,28 @@ because the ruling names the element and not the reader. A handle that
 names a position by its path, as `items.key(2)` does, names the
 position and no element: it reads whatever the position holds, and it
 is not equal to a reference by key, also while the key stands there.
+
+Each of the two assumptions has a consequence that the prototype's
+corpus run shows, over an array of plain values in place. Neither
+arises over an array of references, where both a member read through
+a handle and a handle that names a position resolve to the cell.
+
+- **A body that moves values between two arrays.** A handler that
+  reads two arrays, exchanges members, and sets both, as the shuffle
+  of `patterns/showcase/card-piles/main.tsx` does, writes into the
+  first array references by key into the second, and then replaces
+  the second. No position holds those keys afterward, and the members
+  that changed arrays read as nothing. The runtime of today stores
+  copies there. The assumption of `execution-and-storage.md` §2.4 on
+  a reference into what a write replaces (its question 84) covers one
+  array and not two.
+- **A position compared with an element.** A handler of a row that
+  finds its element with `items.key(i).equals(item)`, as
+  `patterns/dev/gideon-tests/test-handler-capture-key-equals.tsx`
+  does, compares a handle that names a position with a reference by
+  key. The two are not equal, and the handler removes nothing. The
+  runtime of today finds the element, because there both name the
+  position.
 
 A link to a plain value is keyed by the cell it links to, so two cells that
 hold equal values have two element parts. A position that holds a
@@ -11790,7 +11827,20 @@ this document made.
      a write made through it, so that it names the element at its new
      key, for the rest of the run or for every holder of the
      reference; it needs a record of which key continued which. The
-     case is an array of plain values in place. Over the result of
+     prototype does as assumed, and shows these consequences. One
+     write through the reference commits, and the row then has a new
+     key: its state cells are those of the new key and read their
+     first values, the cells of the old key stay stored and unread,
+     and a cell elsewhere that held the element reads as nothing. A
+     second write through the same reference in one run is refused,
+     and the event is rejected with both writes. A write of both
+     members with one `update` commits; *assumed:* an `update` is one
+     write, with the key resolved once. No event of the prototype's
+     corpus run is refused for a missing key. Open, then: whether a
+     row is to lose its state on every write to its element, and
+     whether a handler that writes two members in turn is to be
+     rejected. The case is an array of plain values in place. Over
+     the result of
      another per-element construct whose upstream position holds a
      value, a write lands only where the upstream collection is
      stored. Nothing is open over an array of references, where the
@@ -11848,9 +11898,23 @@ this document made.
      resolve a key to compare the two. *Assumed* as well: a handle
      that names a position by its path, as `items.key(2)` does, names
      the position, and is not equal to a reference by key while the
-     key stands there. The case is an array of plain values in place.
-     Over an array of references both are references to the cell, and
-     nothing is open.
+     key stands there. The prototype does both as assumed, and its
+     corpus run shows a consequence of each (section 1.3). Under the
+     first, a handler that exchanges members between two arrays and
+     sets both leaves references by key that no position holds, and
+     the members that changed arrays read as nothing, where today's
+     runtime stores copies (`patterns/showcase/card-piles/main.tsx`;
+     0, 6 or 9 of its 28 compared values differ, by what
+     `Math.random` draws). Under the second, a handler that finds
+     its element with `items.key(i).equals(item)` finds nothing,
+     where today both name the position
+     (`patterns/dev/gideon-tests/test-handler-capture-key-equals.tsx`,
+     2 values). Open, then: whether a function body that reads a
+     plain value in place and writes it elsewhere stores a reference
+     by key or a copy, and whether `items.key(i)` is equal to the
+     reference by key of the element that stands at `i`. The case is
+     an array of plain values in place. Over an array of references
+     both are references to the cell, and nothing is open.
 116. **A stream that a function body returns into the result** (for the
      project owner). Not open, by ruling. By an earlier ruling
      `Binding.result` lists every position of the result at which value

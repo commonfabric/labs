@@ -1377,7 +1377,11 @@ the position that holds the key at each read and each write, so it
 stays right when the element moves, and it reads as nothing once no
 position holds the key. That such a reference reaches a function body
 that read the array through a handle is assumed (its §8, question
-115). One write does not follow the rule of this paragraph: the edge
+115). Under that assumption a body that exchanges members between
+two arrays of plain values in place and sets both leaves references
+whose keys no position holds, and the members read as nothing; the
+assumption of question 84, below, covers one array and not that
+case. One write does not follow the rule of this paragraph: the edge
 of a first value of a state cell always stores a value (section 4.1).
 
 The rule does not decide a write whose value holds a reference into what
@@ -5878,4 +5882,11 @@ From the prototype's executor, for this document to decide:
     position, where the element is held there in place, is stored as
     its value. The case is an array of plain values in place; a
     member that is a reference to a cell is stored as a link. It
-    extends question 10 of the continuation plan.
+    extends question 10 of the continuation plan. The assumption
+    covers one array. Where a body exchanges members between two
+    stored arrays of plain values in place and sets both, a member
+    written into the first is a reference by key into the second,
+    which the second write replaces, and the member then reads as
+    nothing, where the runtime of today stores copies. Whether such
+    a body stores a reference by key or a copy is open
+    (`plan-and-label-templates.md` §8, question 115).
