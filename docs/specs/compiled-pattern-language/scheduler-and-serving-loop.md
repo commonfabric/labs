@@ -1704,10 +1704,19 @@ in the place of the walk.
    *Assumed,* as `plan-and-label-templates.md` §2.6 assumes it (its open
    question 35): the ruling covers these slots as well, although it
    lists what is stored, and a slot resolved when an event arrives is
-   not stored. By ruling, positions that hold equal plain values
-   in a body that binds a handler, declares no state cell, does not use
-   the index and instantiates no child share one stream, so this step is
-   what an event on such a stream runs through.
+   not stored. A second ruling has labels flow per value through the
+   callback of a per-element construct, so that a handler that closes
+   over the element alone writes under the event and the element and
+   under nothing of another element or of the collection's length or
+   order (`plan-and-label-templates.md` §3.6 and §3.12). The join here
+   is over the positions that hold the handler's own key and over no
+   other element. Whether it stands beside that ruling where those
+   positions resolve to different labels is question 86 there, and this
+   document keeps the join as that question assumes. By ruling,
+   positions that hold equal plain values in a body that binds a
+   handler, declares no state cell, does not use the index and
+   instantiates no child share one stream, so this step is what an event
+   on such a stream runs through.
 
 An event that cannot be routed is treated as today.
 

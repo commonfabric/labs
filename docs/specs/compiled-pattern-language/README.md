@@ -244,7 +244,21 @@ observation class (value, shape, enumeration, identity, or label metadata).
   subtree, and a key it could not name is the slots at every child.
 - **Arrays:** the body of a `map` is compiled once against an element slot,
   so there is one template per body, not per element. Membership of the
-  collection is its own slot.
+  collection is its own slot. By ruling, the callback of a per-element
+  construct is a pattern, and labels flow through it per value. The
+  element has the label of its own slot of the collection and of what
+  that slot holds, the index and the whole collection have theirs only
+  where the callback declares them, and each captured value has its own.
+  A node of the body takes the labels of what it reads and closes over,
+  and nothing of what another node of the same body reads. So a handler
+  that closes over the element alone writes under the event and the
+  element, also where another node of the body reads the index. Nothing
+  of another element, and nothing of the collection's length or order,
+  reaches a node that reads neither the index nor the collection. This is
+  tighter than the runtime of today, which stores one join of the `map`
+  coordinator's transaction on every path of an element's argument
+  document ([plan format and label templates](plan-and-label-templates.md),
+  §3.6).
 - **Conditionals:** the template of a conditional is the condition's slots
   plus the slots of the branch that was selected. A template depends on a
   value in three places: the branch a conditional selected, the prefix at

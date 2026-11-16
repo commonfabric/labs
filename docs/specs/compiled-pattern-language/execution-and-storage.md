@@ -1143,6 +1143,22 @@ holds no position (section 5.3). Where the body uses the index, or
 instantiates a child, each such position has a key of its own, nothing is
 stored once for two positions, and no join is formed.
 
+**Labels per value.** By ruling, the callback of a per-element construct
+is a pattern, and labels flow through it per value
+(`plan-and-label-templates.md` §3.6). The runtime forms no label for an
+element body as a whole and stores none per element: the element table
+holds label identifiers per position and per slot, and the label of what a
+cone instance or a handler writes is instantiated from the slots that one
+node reads. A node that reads neither the index nor the collection takes
+nothing of another position and nothing of the collection's membership.
+The compiled path has no argument document per element, so nothing
+carries a join of the evaluation that set an element up, as the argument
+document of an element's instance does in the runtime of today. The join
+over the positions that hold one key, above, is the one place where the
+labels of two positions meet. Whether it stands beside this ruling is an
+open question (`plan-and-label-templates.md` §8, question 86), and this
+document keeps it as assumed there.
+
 **State, handlers and children over plain values.** Three rules decide
 what an element body may hold where a position can hold a plain value.
 `language-subset.md` §4.4.1 has the diagnostic of the first,
@@ -2420,7 +2436,10 @@ facts about the current layout.
   cell per element key under the map's container
   (`listElementResultCell` in
   `runtime/runner/src/builtins/list-coordinator-plan.ts`) and runs the
-  callback's pattern into it. The container is a further document.
+  callback's pattern into it. The container is a further document. Each
+  element's instance has an argument document, which the coordinator's
+  transaction writes and which carries that transaction's join on every
+  path (`plan-and-label-templates.md` §3.6).
 - **A document per record written into an array through a cell.** A plain
   object that `set()`, `push()` or `addUnique()` puts into an array becomes
   a document of its own, and the array holds a link to it

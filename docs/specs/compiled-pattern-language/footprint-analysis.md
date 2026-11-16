@@ -139,7 +139,13 @@ entry of `Body.computed`. An entry at the literal itself is an entry of
 
 Three kinds of function are not bodies. The callback of a reactive
 collection method in the reactive tier is compiled against an element slot
-and has label rules of its own. A callback passed to a standard-library method
+and has label rules of its own. By ruling it is a pattern, and labels flow
+through it per value (`plan-and-label-templates.md` §3.6): each body of the
+table that is written in the callback, a handler or a `computed` among
+them, has a footprint of its own over the element slots and the captures
+it reads, and the callback as a whole has none. An observation one body of
+a callback makes, of the index for example, is in no other body's
+footprint. A callback passed to a standard-library method
 inside a body is part of that body. A pattern callback is the reactive tier.
 
 A function written inside a body is part of that body where it is a
@@ -994,7 +1000,12 @@ body returns and writes is `derive` over the whole footprint
 - **It equals today's label.** Today a body is one transaction, and every
   path the transaction writes carries the join of everything it read
   (`plan-and-label-templates.md` §3.1). A per-body label loses nothing
-  against that.
+  against that. For a handler bound in the callback of a per-element
+  construct it is tighter: the handler's transaction today also consumes
+  the join that the `map` coordinator stored on the element's argument
+  document, which no observation of the body accounts for, and by ruling
+  the template has none of it (`plan-and-label-templates.md` §3.6 and
+  §3.12).
 - **Anything finer would rest on the compiler.** A label per result path, or
   per write, needs a dependency analysis of full JavaScript: branches,
   `throw`, loops, closures, and aliasing through mutable locals. A `throw`

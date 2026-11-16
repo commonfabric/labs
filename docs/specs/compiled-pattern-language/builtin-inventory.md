@@ -320,6 +320,15 @@ These facts hold for every registered built-in and are not repeated per entry.
   pattern run in its own transactions that read only that element
   (`builtins/list-result-schema.ts`). The coordinator's transaction joins
   the per-slot references and not element content. No integrity is minted.
+  The coordinator's transaction also writes the argument document of each
+  element it sets up, and `prepareBoundaryCommit` in `cfc/prepare.ts`
+  stores that transaction's one join on every path of the document. The
+  join holds the labels of the list's own document: its declared label,
+  and, where elements are stored in place in that document, the labels of
+  every element. A handler of the element body is given its handles from
+  that document and stores its writes under that join
+  (`plan-and-label-templates.md` §3.6, "Today, the argument document of an
+  element").
   The container also holds, as an entry of origin `declared`, the
   confidentiality that the schema of the list and of its elements
   declares (`applyInputIfcToOutput` in `builder/node-utils.ts`). By ruling
@@ -336,12 +345,21 @@ These facts hold for every registered built-in and are not repeated per entry.
   result cell. No container document and no per-element documents exist
   unless something outside the instance reaches them.
 - **Label rule:**
-  - Element `i` of the output depends on element `i` of the input at the
-    paths the body's footprint names, on the captures the body reads, and on
-    the membership of the input. It depends on the index only when the body
-    uses the index. A callback has no array parameter (`language-subset.md`
-    §4.4.1), so a body that reads the whole input captures it by name, and it
-    counts among the captures.
+  - By ruling, the callback is a pattern, and labels flow through it per
+    value (`plan-and-label-templates.md` §3.6). Element `i` of the output
+    depends on element `i` of the input at the paths the body's footprint
+    names, on the element's own slot of the input, and on the captures the
+    body reads, each capture under its own label. It depends on the length
+    and the order of the input only through the index, and only at a node
+    of the body that reads the index. A callback has no array parameter
+    (`language-subset.md` §4.4.1), so a body that reads the whole input
+    captures it by name, and it counts among the captures.
+  - A node of the body takes the labels of what it reads and closes over,
+    and nothing of what another node of the same body reads. A handler
+    bound in the body that closes over the element alone writes under the
+    event and the element, also where another node of the body reads the
+    index. This is tighter than today, where a handler's writes carry the
+    join stored on the element's argument document.
   - Membership of the output equals membership of the input (enumeration and
     slot identity). Holes are preserved.
   - Element cones are keyed as [Element keys](#element-keys) specifies.
@@ -380,6 +398,11 @@ These facts hold for every registered built-in and are not repeated per entry.
   - Each output element is the input element itself (identity). Its content
     slots are those of the input element; the predicate's slots are not added
     to the element's content, only to membership.
+  - Labels flow per value through the predicate, as through the callback of
+    `map`: the predicate's result for element `i` depends on what the
+    predicate reads of element `i` and of its captures, and on the index
+    only where the predicate reads it. The membership of the output is
+    what joins the predicates of all elements.
   - Order follows input order. The output is dense.
 
 ### `flatMap`
@@ -406,7 +429,10 @@ These facts hold for every registered built-in and are not repeated per entry.
     whether it is an array, a scalar, or undefined, and its length.
   - An output element that came from input element `i` depends on the body's
     slots for element `i` only. This is tighter than the label the runtime
-    computes today, which the staging rule of the overview permits.
+    computes today, which the staging rule of the overview permits. Labels
+    flow per value through the body, as through the callback of `map`: a
+    node of the body takes nothing of what another node reads, and nothing
+    of the input's length or order unless it reads the index.
   - The mapping from an output position to the input element it came from
     is data. The coordinators compute it today. In the compiled design the
     runtime computes it and the value code reports nothing

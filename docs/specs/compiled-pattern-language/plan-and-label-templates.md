@@ -2340,23 +2340,52 @@ follows the handle. The definition above gives that rule, read as follows.
   handle names, and under what label that was decided.
 - **The position of a slot of root `element`.** A handler of an element
   body that is given the handle of its element has that state path bound
-  to a slot of root `element`. In a run of today the position that holds
-  the reference is not the element's position in the source collection.
-  Each run of an element callback is an instance with an argument
-  document of its own, which holds the element at `element` as a link to
-  the position in the source (`createRunInput` in
+  to a slot of root `element`. By ruling, the callback of a per-element
+  construct is a pattern, and labels flow through it per value (section
+  3.6, "Labels flow per value"): the element has the label of its own
+  slot of the collection and of what that slot holds. So the position
+  that holds the reference is the element's position in the source
+  collection. The slot's label is what a `followRef` read consumes
+  there and at each link crossed below it. It holds nothing of what
+  another position of the collection holds, and nothing of the
+  collection's length or order.
+
+  The runtime of today reads the slot at another position. Each run of
+  an element callback is an instance with an argument document of its
+  own, which holds the element at `element` as a link to the position
+  in the source (`createRunInput` in
   `runtime/runner/src/builtins/map.ts`). The handler is given the handle
-  from there, so the slot is read at `element` of the argument document
+  from there, so the runtime reads at `element` of the argument document
   of the element's instance, and the link to the source position and
-  each link below it are links crossed from there. The `link` entry at
-  `element` holds what the reference to the source position declares,
-  which in the case observed below is the clause the cell of the source
-  list declares. The compiled path has no argument document per element.
-  *Assumed* (section 8, question 85): the slot's label in the compiled
-  path holds what those positions hold in a run of today, with the
-  label that the declaration of the source collection gives the element
-  in the place of that `link` entry, under the rules for a `link` entry
-  below.
+  each link below it are links crossed from there. The entries of class
+  `followRef` at that position hold the join of the coordinator's
+  transaction that set the element up (section 3.6, "Today, the
+  argument document of an element"). The compiled path has no argument
+  document per element, and the slot holds none of that join. The
+  template is **tighter** there, deliberately (section 3.1, "The
+  coordinator's join on an element's argument document").
+
+  The `link` entry at `element` holds what the reference to the source
+  position declares, which in the case observed below is the clause the
+  cell of the source list declares. *Assumed* (section 8, question 85):
+  where the slot is `resolved`, or the body reads or writes through the
+  handle, the slot's label holds, in the place of that `link` entry, the
+  label that the declaration of the source collection gives the
+  element, under the rules for a `link` entry below.
+- **The position of a handle an element body closes over.** A handle
+  that the callback of a per-element construct captures is a slot or an
+  output of the enclosing instance, as every captured outer value is
+  (section 3.6). By the same ruling each captured value has its own
+  label, and the slot is read at the captured place: the path of the
+  enclosing instance's argument document, or the state cell, that holds
+  the reference. Its label is the same for every element and holds
+  nothing of the collection. The runtime of today gives a handler of an
+  element body each captured handle from `params` of the element's
+  argument document, which holds one link per captured cell to the path
+  of the enclosing pattern's argument that holds it. The entries of
+  class `followRef` at `params/*` hold the coordinator's join, and a
+  handler that writes through a captured handle consumes them (section
+  3.6). The slot of the compiled path holds none of that join.
 - **The `link` entry of a handle that is only passed on is not in it.**
   The runtime stores, at the position of a link, an entry of origin `link`
   that holds what the reference declares (`prepareBoundaryCommitSteps` in
@@ -3032,6 +3061,24 @@ everything else an element cone stores once per key.
   the same ruling, which lists what is stored and not this slot (section
   8, question 35).
 
+  Two rulings meet at these positions. The ruling of this bullet has
+  what is stored once per key carry the join over the positions that
+  hold the key. The ruling that labels flow per value through the
+  callback of a per-element construct (section 3.6) has the element
+  carry the label of its own slot of the collection, and has nothing of
+  another element reach a node that reads neither the index nor the
+  collection. Where one position holds the key the two agree. Where two
+  positions hold one key and resolve to different labels, the first
+  gives what a node stores once the labels of both positions, and the
+  second, read with each position as an element, gives it the label of
+  one. The rulings do not say which holds there. *Assumed* (section 8,
+  question 86): the join stands for what is stored once per key and for
+  the element slots of a handler on a per-key stream, as the third
+  exception of section 3.1, and the per-value rule holds for everything
+  else: the join is over the positions that hold that one key and over
+  no other element, and it holds nothing of the collection's length or
+  order.
+
 **A stored link that becomes a value.** When an instance stored by the
 current runtime is first written in the compiled layout, a result path that
 held a link to a node's document comes to hold the value
@@ -3142,7 +3189,7 @@ that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Twelve more rules fix what a row of the comparison is.
+expected. Thirteen more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -3306,10 +3353,14 @@ expected. Twelve more rules fix what a row of the comparison is.
     the stored links lead through from the result to the row's
     position: the path of the stream for a write edge, and the path of
     the output for an output.
-  - **Where a slot of root `element` is read.** An `identity` slot that
-    is the handle of the handler's element is read at `element` of the
-    argument document of the element's instance, and not at the
-    element's position in the source collection (section 2.2).
+  - **Where a slot of root `element` is read.** The template's side
+    reads an `identity` slot that is the handle of the handler's
+    element at the element's position in the source collection, and
+    the slot of a handle the element body closes over at the captured
+    place (section 2.2). The runtime's transaction reads both in the
+    argument document of the element's instance, at `element` and
+    below `params`. The rule "The coordinator's join on an element's
+    argument document", below, says what a row then differs by.
 
   A write edge whose target is the stream of another binding, as a
   handler that sends to a stream of its state has, stores nothing at
@@ -3337,6 +3388,28 @@ expected. Twelve more rules fix what a row of the comparison is.
   (section 2.3, "A path that a write edge targets"), so a reader of the
   path consumes the clause in both. The same holds for a row of an
   output.
+- **The coordinator's join on an element's argument document.** This is
+  a deliberate difference from the runtime of today, by the ruling that
+  labels flow per value through the callback of a per-element construct
+  (section 3.6). Today the argument document of an element's instance
+  carries, on every path, the one join of the coordinator's transaction
+  that set the element up, and a handler of the element body is given
+  every handle from that document. Its transaction consumes that join:
+  with the element's handle the entries at `*` and the `link` entry at
+  `element`, and with a captured handle the `followRef` entry at
+  `params/*` (section 3.6, "Today, the argument document of an
+  element"). The template has none of it. So the write row of a handler
+  bound in an element body is **tighter** by each clause of that join
+  that the handler's own slots do not hold: the clauses of the list's
+  own document, and, where the elements are stored in place in that
+  document, the clauses of the other elements. A row is of this kind
+  where every clause that the template lacks is held by an entry of
+  origin `structure` or `link` of the argument document of the
+  element's instance that the event's transaction consumed. It is
+  expected, it is counted as tighter, and it is reported apart, as a
+  row of the rule above is. Unlike that rule it is a narrowing by the
+  rule of the template: a reader of the written path consumes the
+  clause today and does not in the compiled path.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -4045,12 +4118,36 @@ template and the same atom, where the runtime mints none: **tighter**.
 - **Membership template.** For a `map` over an input collection, the
   `enumeration` slot of that collection. `map` preserves the domain, so the
   result's membership is its source's.
-- **Index.** A body that uses the index adds the collection's `enumeration`
-  to its element template, because an element's index depends on the order
-  of the others. A callback has no parameter for the whole array
-  (`language-subset.md` §4.4.1). A body that needs the collection captures
-  it by name, and the capture is an ordinary slot, like any other captured
-  outer value.
+- **Index.** A node of the body that reads the index has the collection's
+  `enumeration` in its template, because an element's index depends on the
+  order of the others. A node of the same body that does not read the
+  index has none of it, and a callback that declares the index and does
+  not use it adds it to no template. A callback has no parameter for the
+  whole array (`language-subset.md` §4.4.1). A body that needs the
+  collection captures it by name, and the capture is an ordinary slot,
+  like any other captured outer value.
+- **Labels flow per value.** By ruling, the callback of a per-element
+  construct is a pattern, and labels flow through it per value. Each
+  thing the body is given has its own label. The element has the label
+  of its own slot of the collection and of what that slot holds: the
+  element's root slots and the slots below them, bound to position `i`.
+  The index has the collection's `enumeration`, and the whole collection
+  the label of its capture, each only where the callback declares it.
+  Each captured value has the label of its own slot or output of the
+  enclosing instance. A node of the body takes the labels of what it
+  reads and closes over, and nothing of what another node of the same
+  body reads. A node is anything of the body that has a template: an
+  output path, a `computed`, a `lift`, a handler, the argument of a
+  child, the request of an operation. So a handler that closes over the
+  element alone writes under the event and the element (section 3.12),
+  also where another node of the body reads the index. Nothing of
+  another element, and nothing of the collection's length or order,
+  reaches a node that reads neither the index nor the collection. No
+  label is formed for the callback as a whole, and none is stored for an
+  element that a node of its body did not read. Section 2.2 says where
+  the handle of the element and a captured handle are read. Section 2.6
+  has the one place where the labels of two positions join: positions
+  that hold one element key.
 - **A child.** A body that instantiates a child puts the position in the
   key of a plain element (section 1.3). That adds nothing to the element
   template: the body is not given the position and computes nothing from
@@ -4113,6 +4210,69 @@ reads only its element." The template arrives at the same labels without the
 transactions. Within one element's body, a `computed` that returns several paths
 is **tighter** as in section 3.4.
 
+**Today, the argument document of an element.** What an element's body is
+given is stored in the argument document of the element's instance, and the
+coordinator writes it. `reconcile` in `createMapInstance`
+(`runtime/runner/src/builtins/map.ts`) runs in a transaction of its own and
+sets up each element that has no run in that transaction
+(`Runner.runInTransaction`), which writes the element's argument document.
+`prepareBoundaryCommit` (`runtime/runner/src/cfc/prepare.ts`) computes one
+join for the transaction (`deriveFlowJoin`) and stores it on every path the
+transaction wrote. The prototype measured the result with the runner alone,
+for a callback that declares neither the index nor the array and captures
+two cells:
+
+- **One join on every path.** The argument document
+  `{ element, params: { center, zoom } }` has ten entries of origin
+  `structure`: class `enumerate` and class `shape` at the root and at
+  `params`, and class `followRef`, `shape` and `value` at `*` and at
+  `params/*`. All ten hold the same clauses, the join of the coordinator's
+  transaction. The link at `element` has one entry of origin `link` beside
+  them, with the clause of the schema that the stored link carries
+  (`linkSlotLabel`).
+- **What the join holds.** The coordinator reads the whole raw array of the
+  list once (`listMembershipRead` in
+  `runtime/runner/src/builtins/list-coordinator-plan.ts`). The entries of
+  class `shape` and `enumerate` at the list's own path go to the membership
+  stamp of the result container and stay out of the join. Everything else
+  that read consumes is joined: an entry with no class at the root, which
+  is what a declared clause is, the entries at `*`, the entries at each
+  slot, and the entries of everything stored in place below a slot. Where
+  the slots hold links to a cell per element, the join has the list's
+  declared label and no clause of an element's cell, and the `link` entry
+  at `element` has the element's own. Where the elements are stored in
+  place in the list's document, the join has the labels of every element.
+  A reconcile that a change of the list started also reads the list as a
+  trigger read (`addCfcTriggerReads`, called from `runSchedulerAction` in
+  `runtime/runner/src/scheduler/run.ts`), and its join then has the list's
+  own `shape` and `enumerate` entries as well.
+- **What it does not hold.** `params` holds one link for each captured
+  cell, and the coordinator reads no value of a captured cell, so no
+  label of a captured cell is on an argument document. An element set up
+  by a later reconcile gets the join of that reconcile, and the argument
+  documents of the earlier elements are not written and keep theirs.
+- **What a handler consumes.** A handler `zoom.set(14)` in an element body
+  reads `params/zoom` of its element's argument document and nothing of
+  the element, of another element, or of the list. It consumes the
+  `followRef` entry at `params/*` and so stores the write under the
+  coordinator's join. A handler that passes on a field of its element
+  reads `element` and the field, and consumes the three entries at `*`
+  and the `link` entry at `element` as well. A handler that does both in
+  one body has one join for both writes.
+- **With the index declared.** The argument document also holds `index`,
+  with two entries of origin `derived` under the same join. Removing an
+  earlier element writes `index` of the later elements again and no other
+  path of their argument documents.
+
+The template has none of the coordinator's join, by the ruling that labels
+flow per value. It is **tighter** than today in two ways, both deliberate:
+a handle the body was given carries no join of the coordinator, and no
+label of one element reaches another where the elements are stored in
+place. Section 3.1 has the comparison rule. Not measured: what the
+argument document of an element of `filter` or of `flatMap` holds, what
+changes when the callback declares the array, and the integrity of these
+entries.
+
 ### 3.7 `filter` and `flatMap`
 
 `xs.filter((x) => pred)` creates a derived `Collection`.
@@ -4149,6 +4309,17 @@ binds the element slots of later templates through it. Nothing is reported by
 emitted code and nothing needs
 verifying, and element locality of these operations is a structural fact
 (section 7.3).
+
+**Labels flow per value** through the predicate of a `filter` and the
+body of a `flatMap` as through the callback of a `map` (section 3.6): a
+node of the callback takes the labels of what it reads and closes over,
+the element has the label of its own slot of the source and of what that
+slot holds, and the index has the source's `enumeration` only for a node
+that reads it. The same holds for the callback of every other per-element
+construct: the predicates of section 3.13 and the selector callbacks of
+the aggregates and the indexes. What joins the labels of several elements
+is the structural step, in the membership template above and in the rule
+of each operation, and never the callback.
 
 These follow §8.5.4.2, which separates membership, order and multiplicity
 confidentiality from item content and notes that the two helpers "usually
@@ -4463,6 +4634,18 @@ ruling: the link itself carries the label of at least the event.
   (section 2.2). **Equal.**
   **Tighter** for a re-evaluated body and for expression code, where the
   runtime stamps the join of the whole run.
+
+**A handle an element body was given.** A body written in the callback of
+a per-element construct is given the element, and each value the callback
+closes over, under that value's own label (section 3.6, "Labels flow per
+value"). The `identity` slot of the element's handle is read at the
+element's position in the source collection, and the slot of a captured
+handle at the captured place (section 2.2). Neither holds a join over the
+callback or over the collection. So a link such a body writes when it
+passes one of those handles on carries the label of that one link, and in
+a handler the body's template beside it, by the table above. It carries
+nothing of another element and nothing of the collection's length or
+order, unless the body itself reads the index or the collection.
 
 **A reference from a computed input.** A handle or a container that
 reached the body in a value the instance computed has no slot. `passes`,
@@ -5058,6 +5241,24 @@ its own label, and the handle's `identity` slot adds none of it to the
 template (section 2.2). The schema's
 declared integrity for the written path, such as an authorship atom for the
 acting principal, is a declared entry and is added as it is today.
+
+**A handler of an element body.** By ruling, the callback of a
+per-element construct is a pattern, and a handler bound in it is a node
+of that pattern with a template of its own (section 3.6, "Labels flow per
+value"). Its state slots are the values it closes over, each with its own
+label: a slot of root `element` for the element or a part of it, and a
+slot or an output of the enclosing instance for a captured outer value. A
+handler that closes over the element alone writes under the event and
+the element. It does so also where another node of the body reads the
+index: the two are independent flows. A handler that closes over a
+captured cell alone, as `zoom.set(14)` does, writes under the event and
+the label of the link to that cell, and under nothing of the element or
+of the collection. A handler is one body with one template (section
+3.9), so a handler with two writes, `center.set(stop.position)` and then
+`zoom.set(14)`, writes both under the join of what it closes over, the
+element included. The runtime of today stores every write of such a
+handler under the coordinator's join as well (section 3.6, "Today, the
+argument document of an element"), and the template is **tighter** by it.
 
 **Today.** The handler's transaction join over the event payload and the
 state it read lands on every written path. The state's schema is narrowed to
@@ -8731,7 +8932,12 @@ target, and an argument a function body gives to a pattern it instantiates is
 the initial value of the child's stored argument (3.11, 3.15); a handle that a
 body passes on without reading through it adds nothing of the label of its
 cell to what the body writes, and the link the body writes carries the label
-of at least the event (2.2, 3.9, 3.10).
+of at least the event (2.2, 3.9, 3.10); the callback of a per-element
+construct is a pattern, labels flow through it per value, and a node of the
+body takes nothing of what another node reads, of another element, or of the
+collection's length or order unless it reads the index or the collection,
+which is tighter than the join the runtime stores on an element's argument
+document today (2.2, 3.1, 3.6, 3.7, 3.12).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -9815,25 +10021,50 @@ this document made.
     a reader tries each position. `execution-and-storage.md` and
     `scheduler-and-serving-loop.md` have to agree, as for question 78.
     The corpus has 208 such bindings, all in that directory.
-85. **The label of the handle of an element in the compiled path** (for
-    the project owner and the specification change). Section 2.2 defines
-    the label of an `identity` slot by what a journaled read consumes
-    today at the position that holds the reference. For a slot of root
-    `element` that position is, in a run of today, `element` of the
-    argument document of the element's instance, which holds a link to
-    the position in the source collection, with a `link` entry that
-    holds what that reference declares. The compiled path has no
-    argument document per element, and an element slot is bound to the
-    position in the source. *Assumed:* the label of the slot in the
-    compiled path is the `followRef` entries at the position in the
-    source and at each link resolution follows, joined, where the slot
-    is `resolved` or the body reads or writes through the handle, with
-    the label that the declaration of the source collection gives the
-    element, which is what the `link` entry at `element` holds today.
-    That is equal to today for `askToRetire` of
+85. **The declared label of an element's handle in the compiled path**
+    (for the project owner and the specification change). By ruling the
+    label of a slot of root `element` is read at the element's position
+    in the source collection: the label of its own slot and of what that
+    slot holds, with nothing of the join that the runtime of today
+    stores on the argument document of the element's instance (sections
+    2.2 and 3.6). That settles where the slot is read and that the
+    coordinator's join is not in it. One part of the label is not
+    settled. In a run of today `element` of the argument document holds
+    a link to the position in the source, with a `link` entry that
+    holds what that reference declares, and a handler that resolves the
+    handle, or reads or writes through it, consumes that entry.
+    *Assumed:* where the slot is `resolved` or the body reads or writes
+    through the handle, the slot's label is the `followRef` entries at
+    the position in the source and at each link resolution follows,
+    joined with the label that the declaration of the source collection
+    gives the element, which is what the `link` entry at `element`
+    holds today. That is equal to today for `askToRetire` of
     `patterns/system/profile-picker/profile-picker.tsx`. Without that
     part the template of that handler's write has no clause of the input
     list and mints no atom, which is tighter in confidentiality and
-    looser in integrity. Not stated by any document: which record of the
-    plan holds that declared label, since question 55 assumes no
+    looser in integrity. Whether "the label of its own slot" includes
+    that declared label is for the owner. Not stated by any document:
+    which record of the plan holds it, since question 55 assumes no
     `Slot.declared` on an `identity` slot.
+86. **Per-value flow and the join over the positions that hold one
+    key** (for the project owner). Two rulings give different labels in
+    one case. By the first, what an element body stores once per element
+    key carries the join over the positions that hold the key, and this
+    document assumes the same for the element slots of a handler on a
+    per-key stream (section 2.6, question 35). By the second, the
+    element has the label of its own slot of the collection, and
+    nothing of another element reaches a node that reads neither the
+    index nor the collection (section 3.6). Two positions hold one key
+    where they hold equal plain values and the key has no position, or
+    where they link to one cell. Where their slots resolve to different
+    labels, the first ruling gives a handler that closes over the
+    element alone the labels of both positions, and the second, read
+    with each position as an element, gives it the label of the
+    position the event came from, which a per-key stream does not
+    record. *Assumed:* the first ruling stands at these positions, as
+    the third exception of section 3.1, and the second holds everywhere
+    else. The alternatives: read "element" in the second ruling as the
+    element key, so that the rulings agree as written; or take the
+    second ruling to end the exception, which needs a stream, and
+    everything else stored once, per position, as the "to be revisited"
+    of the first ruling already considers.

@@ -569,6 +569,21 @@ and they share one stream, which handles an event from either row as two
 streams would. A binding made in a function body is one stream on the same
 argument ([§5.2](#52-runtime-calls)).
 
+**Labels in a callback.** By ruling, the callback of a per-element
+construct is a pattern for the label rules, and labels flow through it per
+value. The element has the label of its own slot of the collection and of
+what that slot holds. The index has a label only where the callback
+declares the index parameter, and the whole collection only where the
+body captures it by name. Each captured value has its own label. A node
+of the body, such as a `computed`, a handler, or the argument of a child,
+takes the labels of what it reads and closes over, and nothing of what
+another node of the same body reads. So an inline handler that closes
+over the element alone writes under the event and the element, also where
+the same callback shows `index + 1` in another place. An author does not
+have to move a handler out of a callback to keep the label of the list's
+order off what the handler writes (`plan-and-label-templates.md`, §3.6
+and §3.12).
+
 For these rules the checker decides "plain value" statically, from the
 element type and from where the collection comes from.
 
