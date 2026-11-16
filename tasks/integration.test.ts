@@ -5,7 +5,6 @@ import ports from "@commonfabric/ports" with { type: "json" };
 import {
   preloadArgument,
   RECORD_SCHEMA_VERSION,
-  recordsDir,
 } from "@commonfabric/test-support/records";
 import { shuffledPaths } from "@commonfabric/test-support/shuffle";
 import {
@@ -410,9 +409,6 @@ function fakeHost(options: {
       get: (name) => env.get(name),
       set: (name, value) => {
         env.set(name, value);
-      },
-      delete: (name) => {
-        env.delete(name);
       },
     },
     run: async (cmd, runOptions = {}) => {
@@ -1555,53 +1551,13 @@ Deno.test("runIntegration points its children at the spool of a recording it own
   const spool = await Deno.makeTempDir();
   try {
     const recording = ownedRecording(spool);
-    const seen: (string | undefined)[] = [];
-    const fake = fakeHost({
-      cwd: rootDir,
-      recording,
-      run: () => {
-        seen.push(fake.env.get("CF_TEST_RECORDS_DIR"));
-        return undefined;
-      },
-    });
+    const fake = fakeHost({ cwd: rootDir, recording });
     await capturing(() => runIntegration(["generated-patterns"], fake.host));
-    expect(seen).toEqual([spool]);
+    expect(fake.env.get("CF_TEST_RECORDS_DIR")).toBe(spool);
     expect(fake.finished).toEqual([recording]);
-    expect(fake.env.has("CF_TEST_RECORDS_DIR")).toBe(false);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
     await Deno.remove(spool, { recursive: true });
-  }
-});
-
-Deno.test("runIntegration starts a recording of its own on a host whose earlier run owned one", async () => {
-  const rootDir = await makeRoot(["generated-patterns"]);
-  try {
-    // The host joins a spool its environment names and owns a new one
-    // otherwise, as the process's own recording does.
-    const fake = fakeHost({ cwd: rootDir });
-    let owned = 0;
-    const host: IntegrationHost = {
-      ...fake.host,
-      startRecording: (env) => {
-        const joined = recordsDir(env);
-        return Promise.resolve(
-          joined === undefined
-            ? ownedRecording(`/spool-${++owned}`)
-            : { mode: "join", dir: joined },
-        );
-      },
-    };
-    for (let run = 0; run < 2; run++) {
-      await capturing(() => runIntegration(["generated-patterns"], host));
-    }
-    expect(fake.finished.map((recording) => recording.mode)).toEqual([
-      "own",
-      "own",
-    ]);
-    expect(owned).toBe(2);
-  } finally {
-    await Deno.remove(rootDir, { recursive: true });
   }
 });
 

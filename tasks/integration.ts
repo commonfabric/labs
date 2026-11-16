@@ -140,7 +140,7 @@ export interface IntegrationHost {
   cwd: () => string;
 
   /** The process's environment, which every command it runs inherits. */
-  env: Pick<Deno.Env, "get" | "set" | "delete">;
+  env: Pick<Deno.Env, "get" | "set">;
 
   run: typeof runCommand;
 
@@ -1020,18 +1020,16 @@ async function integrate(
   // through the environment.
   const env = hostEnvironment(host);
   const recording = await host.startRecording(env);
-  const owned = recording.mode === "own" && recordsDir(env) === undefined;
-  if (owned) host.env.set(RECORDS_DIR_VARIABLE, recording.spool.dir);
+  if (recording.mode === "own" && recordsDir(env) === undefined) {
+    host.env.set(RECORDS_DIR_VARIABLE, recording.spool.dir);
+  }
   // Shipped however the run returns or throws, a failing run's records being
   // the interesting ones; a run that gets as far as its summary prints that
-  // first. A signal ends the process without shipping them. Once shipped,
-  // the spool is named nowhere, so a later run starts a recording of its own
-  // rather than joining this one.
+  // first. A signal ends the process without shipping them.
   try {
     return await runRecorded(args, seed, host, env);
   } finally {
     await host.finishRecording(recording);
-    if (owned) host.env.delete(RECORDS_DIR_VARIABLE);
   }
 }
 

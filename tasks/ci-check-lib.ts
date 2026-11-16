@@ -18,15 +18,7 @@ import { packageDirOf } from "./package-layout.ts";
 //
 
 export const REPO = Deno.env.get("GITHUB_REPOSITORY") ?? "commonfabric/labs";
-
-/**
- * The GitHub token every request carries, read from `GITHUB_TOKEN` when it
- * is asked for, so a command checking for it and the requests it then makes
- * read the same value.
- */
-export function githubToken(): string | undefined {
-  return Deno.env.get("GITHUB_TOKEN");
-}
+export const TOKEN = Deno.env.get("GITHUB_TOKEN");
 export const WORKFLOW_FILE = "deno.yml";
 
 const COVERAGE_METRIC_PREFIX = "coverage-debt:";
@@ -134,7 +126,7 @@ export interface IssueComment {
 function apiHeaders(): Record<string, string> {
   return {
     Accept: "application/vnd.github+json",
-    Authorization: `Bearer ${githubToken()}`,
+    Authorization: `Bearer ${TOKEN}`,
     "X-GitHub-Api-Version": "2022-11-28",
   };
 }

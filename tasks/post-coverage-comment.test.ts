@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import * as path from "@std/path";
 import { COVERAGE_SUGGESTION_MARKER } from "./ci-check-lib.ts";
 import { gateComment } from "./coverage-gate.ts";
-import { main, postCoverageComment } from "./post-coverage-comment.ts";
+import { postCoverageComment } from "./post-coverage-comment.ts";
 
 /** The head commit the run that wrote a payload tested. */
 const TESTED = "a".repeat(40);
@@ -21,12 +21,6 @@ interface Run {
   logged: string[];
   errors: string[];
   warnings: string[];
-
-  /** The `Authorization` header of each request the run made, in order. */
-  authorizations: (string | null)[];
-
-  /** What the run's entry point returned. */
-  returned: number | void;
 }
 
 /** How GitHub and the environment answer one run of the poster. */
@@ -43,14 +37,8 @@ interface RunOptions {
   /** `HEAD_SHA`, or `null` to leave it unset. */
   tested?: string | null;
 
-  /** `GITHUB_TOKEN`, or `null` to leave it unset. */
-  token?: string | null;
-
   /** Where the run records its writes, for a caller reading a run that throws. */
   writes?: Write[];
-
-  /** The entry point the run goes through. */
-  act?: () => Promise<number | void>;
 }
 
 /** Runs the poster against a payload file holding `contents`. */
@@ -61,9 +49,7 @@ async function run(
     listingStatus = 200,
     head = TESTED,
     tested = TESTED,
-    token = "a token",
     writes = [],
-    act = postCoverageComment,
   }: RunOptions = {},
 ): Promise<Run> {
   const dir = await Deno.makeTempDir({ prefix: "coverage-comment-test-" });
@@ -75,8 +61,6 @@ async function run(
     logged: [],
     errors: [],
     warnings: [],
-    authorizations: [],
-    returned: undefined,
   };
   const originals = {
     fetch: globalThis.fetch,
@@ -91,7 +75,6 @@ async function run(
   globalThis.fetch = (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ?? "GET";
-    result.authorizations.push(new Headers(init?.headers).get("authorization"));
     if (method !== "GET") {
       result.writes.push({
         method,
@@ -117,11 +100,8 @@ async function run(
   Deno.env.set("COVERAGE_COMMENT_FILE", file);
   if (tested === null) Deno.env.delete("HEAD_SHA");
   else Deno.env.set("HEAD_SHA", tested);
-  const tokenBefore = Deno.env.get("GITHUB_TOKEN");
-  if (token === null) Deno.env.delete("GITHUB_TOKEN");
-  else Deno.env.set("GITHUB_TOKEN", token);
   try {
-    result.returned = await act();
+    await postCoverageComment();
   } finally {
     globalThis.fetch = originals.fetch;
     console.log = originals.log;
@@ -129,8 +109,6 @@ async function run(
     console.warn = originals.warn;
     Deno.env.delete("COVERAGE_COMMENT_FILE");
     Deno.env.delete("HEAD_SHA");
-    if (tokenBefore === undefined) Deno.env.delete("GITHUB_TOKEN");
-    else Deno.env.set("GITHUB_TOKEN", tokenBefore);
     await Deno.remove(dir, { recursive: true });
   }
   return result;
@@ -288,34 +266,4 @@ describe("postCoverageComment()", () => {
       expect(writes).toHaveLength(1);
     });
   });
-});
-
-describe("main()", () => {
-  it("posts the comment and returns zero where `GITHUB_TOKEN` is set", async () => {
-    // Every request carries the token the check read.
-
-    const { writes, authorizations, returned } = await run(
-      JSON.stringify(regressed),
-      { token: "the token", act: main },
-    );
-    expect(returned).toBe(0);
-    expect(authorizations.length).toBeGreaterThan(0);
-    expect(new Set(authorizations)).toEqual(new Set(["Bearer the token"]));
-    expect(writes).toEqual([
-      { method: "POST", url: COMMENTS_URL, body: regressed.body },
-    ]);
-  });
-
-  for (const [what, token] of [["unset", null], ["empty", ""]] as const) {
-    it(`returns one, reading and posting nothing, where \`GITHUB_TOKEN\` is ${what}`, async () => {
-      const { writes, errors, logged, returned } = await run("not a payload", {
-        token,
-        act: main,
-      });
-      expect(returned).toBe(1);
-      expect(errors).toEqual(["GITHUB_TOKEN is required."]);
-      expect(logged).toEqual([]);
-      expect(writes).toEqual([]);
-    });
-  }
 });
