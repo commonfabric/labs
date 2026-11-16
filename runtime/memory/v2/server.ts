@@ -11,6 +11,7 @@ import {
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
+import { LRUCache } from "@commonfabric/collections/cache";
 import { StagedMap } from "@commonfabric/collections/staged-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { metrics, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -919,20 +920,14 @@ const isSpaceKeyAclGenesis = (
 /** Extract the table name from a SQLite "no such table: <name>" error, or
  *  undefined if the error is not that shape. SQLite reports the *unquoted* name,
  *  which may itself contain spaces or dots (e.g. `CREATE TABLE "my notes"`), so
- *  we take the whole remainder of the message. Only a real `main.`/`temp.`
- *  schema prefix is stripped — a bare table literally named `a.b` is preserved,
- *  so the result matches a declared-table key exactly. */
+ *  we take the whole remainder of the message. A dotted name is the table's
+ *  whole name, never a schema and a table: the statement guard refuses a
+ *  schema-qualified reference before the read, so `main.notes` here names a
+ *  table literally called `main.notes`, and the result matches a
+ *  declared-table key exactly. */
 function missingTableName(error: unknown): string | undefined {
-  const message = describeFailure(error);
-  const match = /no such table:\s*(.+)$/i.exec(message);
-  if (match === null) return undefined;
-  const ref = match[1].trim();
-  const dot = ref.indexOf(".");
-  if (dot !== -1) {
-    const schema = ref.slice(0, dot).toLowerCase();
-    if (schema === "main" || schema === "temp") return ref.slice(dot + 1);
-  }
-  return ref;
+  const match = /no such table:\s*(.+)$/i.exec(describeFailure(error));
+  return match === null ? undefined : match[1].trim();
 }
 
 /** Whether `name` matches a declared table key, using the SAME case-folding
@@ -1071,7 +1066,6 @@ type PublishFrame<M> = (message: M) => void;
 
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
-  postCommit?: () => Promise<void>;
 
   /** Whether the engine decided the commit, and so reported it to the
    * server's commit observer; false for one refused before reaching it. */
@@ -2041,10 +2035,7 @@ class Connection {
   }
 
   consumeSessionOpenChallenge(challenge: SessionOpenChallenge): void {
-    if (this.#sessionOpenChallenge === null) {
-      return;
-    }
-    if (this.#sessionOpenChallenge.value === challenge.value) {
+    if (this.#sessionOpenChallenge?.value === challenge.value) {
       this.#sessionOpenChallenge.consumed = true;
     }
   }
@@ -2113,10 +2104,6 @@ class Connection {
         this.#receiveIdle = null;
       }
     }
-  }
-
-  hasPendingReceives(): boolean {
-    return this.#pendingReceives > 0;
   }
 
   /** Resolves once every frame handed over so far has been handled. */
@@ -2401,9 +2388,8 @@ class Connection {
     for (const [value, state] of this.#challenges) {
       if (state.expiresAt <= now) this.#challenges.delete(value);
     }
-    while (this.#challenges.size >= MAX_CONNECTION_CHALLENGES) {
-      const oldest = this.#challenges.keys().next().value;
-      if (oldest === undefined) break;
+    for (const oldest of this.#challenges.keys()) {
+      if (this.#challenges.size < MAX_CONNECTION_CHALLENGES) break;
       this.#challenges.delete(oldest);
     }
     this.#challenges.set(challenge.value, {
@@ -3010,6 +2996,14 @@ class Connection {
         // a routed host returns the request's credit to the router once this
         // handling returns. The answer goes out when the verb settles.
         const { space, sessionId, requestId } = parsed;
+        // Declared apart from the call, so its lines are its own rather than
+        // shared with the end of the answer's callback.
+        const reportFailure = (error: unknown) => {
+          console.error(
+            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
+            error,
+          );
+        };
         void this.#server.runPatternLifecycle(parsed).then((response) => {
           // A connection that closed while the verb ran has no one to tell.
           if (this.#closed) return;
@@ -3036,12 +3030,7 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
-        }).catch((error: unknown) => {
-          console.error(
-            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
-            error,
-          );
-        });
+        }).catch(reportFailure);
         return;
       }
       case "served": {
@@ -3071,6 +3060,12 @@ class Connection {
         // not awaited, as a lifecycle verb is not: the frames behind it go
         // ahead, and the answer goes out when the crossing settles.
         const { space, sessionId, requestId } = parsed;
+        const reportFailure = (error: unknown) => {
+          console.error(
+            `memory v2: answering a \`served\` ${parsed.kind} failed`,
+            error,
+          );
+        };
         void this.#server.runServedRequest(parsed).then((response) => {
           if (this.#closed) return;
           try {
@@ -3092,12 +3087,7 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
-        }).catch((error: unknown) => {
-          console.error(
-            `memory v2: answering a \`served\` ${parsed.kind} failed`,
-            error,
-          );
-        });
+        }).catch(reportFailure);
         return;
       }
       case "space.invite": {
@@ -3148,9 +3138,6 @@ class Connection {
     let processed = 0;
     for (const handle of this.#sessions.values()) {
       const { space: sessionSpace, sessionId } = handle;
-      if (this.#closed) {
-        return processed;
-      }
       // A session under a lease that has run out is sent nothing until the
       // lease is renewed, which evaluates it again in full.
       if (this.#leaseExpired(handle)) {
@@ -3215,7 +3202,7 @@ class Connection {
           );
         }
       };
-      let effect: SessionEffectMessage | null;
+      let effect: SessionEffectMessage | null = null;
       try {
         effect = await this.#server.syncSessionForConnection(
           space,
@@ -3241,9 +3228,10 @@ class Connection {
           error,
         );
         this.#server.markSessionForFullResync(space, sessionId);
-        continue;
       }
       if (effect !== null && !delivered) deliver(effect);
+      // Only the evaluation above yields, so this is the one point at which
+      // the connection can have closed since the loop began.
       if (this.#closed) return processed;
     }
     return processed;
@@ -3673,9 +3661,7 @@ export class Server {
    * changed declaration re-ensures (additive migration) with no hash-collision
    * risk.
    */
-  #ensuredSchemas = new Map<string, true>();
-
-  #ensuredSchemasMax = 4096;
+  #ensuredSchemas = new LRUCache<string, true>({ capacity: 4096 });
 
   /** The presence rooms this server relays; in memory only. */
   #presence = new PresenceRooms();
@@ -4451,22 +4437,16 @@ export class Server {
     );
   }
 
-  async #authorizeMessage(
-    space: string,
-    principal: string | undefined,
-    requirement: Capability,
-  ): Promise<V2Error | null> {
-    // Keep off mode's historical async shape: callers await this immediate
-    // return, then independently await their read engine/evaluation. Some
-    // legacy runtime ordering depends on those two yield points.
-    if (this.#aclMode() === "off") return null;
-    const engine = await this.#openEngine(space);
-    return this.#authorizeMessageWithEngine(
-      engine,
-      space,
-      principal,
-      requirement,
-    );
+  /**
+   * The authorization of a message in `off` mode, which admits every one. The
+   * request handlers call it in that mode alone, and authorize through
+   * {@link #authorizeCurrentSessionWithEngine} in every other. It keeps off
+   * mode's historical asynchronous shape: callers await this immediate
+   * return, then independently await their read engine/evaluation. Some
+   * legacy runtime ordering depends on those two yield points.
+   */
+  #offModeAuthorization(): Promise<null> {
+    return Promise.resolve(null);
   }
 
   #assertRoutedAuthority(session: SessionState): void {
@@ -4617,20 +4597,18 @@ export class Server {
     if (this.#aclMode() === "off") return null;
 
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
-    // Ordinary writes to established spaces need no genesis shape check.
-    // Their current ACL and ownership are enforced by message authorization.
-    if (!aclTouched && Engine.serverSeq(engine) !== 0) return null;
-    const state = this.#aclState(engine, space);
-
     if (!aclTouched) {
-      if (state.kind === "missing" && Engine.serverSeq(engine) === 0) {
-        return toError(
-          "AuthorizationError",
-          `Space ${space} requires an ACL genesis commit before ordinary writes`,
-        );
-      }
-      return null;
+      // Ordinary writes to established spaces need no genesis shape check.
+      // Their current ACL and ownership are enforced by message
+      // authorization.
+      if (Engine.serverSeq(engine) !== 0) return null;
+      // A space with no history has no ACL yet, so its genesis comes first.
+      return toError(
+        "AuthorizationError",
+        `Space ${space} requires an ACL genesis commit before ordinary writes`,
+      );
     }
+    const state = this.#aclState(engine, space);
 
     const shape = aclCommitShapeRefusal(space, commit);
     if (shape !== null) return shape;
@@ -5656,11 +5634,12 @@ export class Server {
       // lets a symlinked store dir produce a `..`-prefixed relative path for a
       // file that actually lives in the store — defeating the jail. With both
       // sides canonical, containment also covers the `<space>.sqlite` store
-      // files (not just `cell-*`).
-      let storeDir = Path.dirname(Path.fromFileUrl(engine.url));
-      try {
-        storeDir = await Deno.realPath(storeDir);
-      } catch { /* dir may not exist yet; fall back to the raw path */ }
+      // files (not just `cell-*`). The directory exists, since opening the
+      // engine created it, and a failure to resolve it refuses the source
+      // rather than comparing against a path that may not be canonical.
+      const storeDir = await Deno.realPath(
+        Path.dirname(Path.fromFileUrl(engine.url)),
+      );
       const rel = Path.relative(storeDir, canonical);
       const insideStore = rel === "" ||
         (!rel.startsWith("..") && !Path.isAbsolute(rel));
@@ -5865,7 +5844,7 @@ export class Server {
               tables as Record<string, TableSchema>,
               alias,
             );
-            this.#recordSchemaEnsured(key);
+            this.#ensuredSchemas.put(key, true);
           }
         }
       }
@@ -6301,11 +6280,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -6475,11 +6450,7 @@ export class Server {
     {
       // Maps a server filesystem path into the space — operator surface.
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "OWNER",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -7139,8 +7110,8 @@ export class Server {
    * Decides a transaction under its space's publication lock.
    *
    * `publishVerdict`, when provided by a live connection, runs while the lock
-   * is held and before any post-commit bookkeeping. Fan-out for the space
-   * begins only after both steps finish and the lock is released.
+   * is held. Fan-out for the space begins only after it returns and the lock
+   * is released.
    */
   async transact(
     message: TransactRequest,
@@ -7156,26 +7127,7 @@ export class Server {
         const decision = await this.#decideTransaction(message, originating);
         engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
-        let verdictError: { value: unknown } | undefined;
-        try {
-          publishVerdict?.(decision.response);
-        } catch (error) {
-          verdictError = { value: error };
-        }
-        try {
-          await decision.postCommit?.();
-        } catch (postCommitError) {
-          if (verdictError !== undefined) {
-            throw new AggregateError(
-              [verdictError.value, postCommitError],
-              "Verdict publication and post-commit bookkeeping both failed",
-            );
-          }
-          throw postCommitError;
-        }
-        if (verdictError !== undefined) {
-          throw verdictError.value;
-        }
+        publishVerdict?.(decision.response);
         return decision.response;
       } finally {
         // The elapsed span deliberately starts at the REQUEST, not at lock
@@ -7791,7 +7743,6 @@ export class Server {
     message: TransactRequest,
     originating: SessionState | null,
   ): Promise<TransactDecision> {
-    let postCommit: (() => Promise<void>) | undefined;
     let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
@@ -8238,7 +8189,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit, engineDecided };
+    return { response, engineDecided };
   }
 
   async graphQuery(
@@ -8256,11 +8207,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -8966,11 +8913,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -9048,12 +8991,8 @@ export class Server {
         if (group.length === 0) {
           for (const docKey of existing.entities.keys()) retract(docKey);
           for (const [key] of existing.missed) {
-            try {
-              const { id, scopeKey } = fromDocKey(key as QueryDocKey);
-              changedInterests.add(toDirtyKey(id, scopeKey));
-            } catch {
-              continue;
-            }
+            const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+            changedInterests.add(toDirtyKey(id, scopeKey));
           }
           graphs.delete(branch);
           continue;
@@ -9263,11 +9202,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -9643,11 +9578,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -10197,19 +10128,15 @@ export class Server {
           rootKeys.add(toDirtyKey(root.id, root.entityScopeKey));
           continue;
         }
-        try {
-          rootKeys.add(
-            toDirtyKey(
-              root.id,
-              resolveScopeKey(scope, {
-                principal: session.principal,
-                sessionId: session.id,
-              }),
-            ),
-          );
-        } catch {
-          // unresolvable scope: not demand for that instance
-        }
+        rootKeys.add(
+          toDirtyKey(
+            root.id,
+            resolveScopeKey(scope, {
+              principal: session.principal,
+              sessionId: session.id,
+            }),
+          ),
+        );
       }
     }
     // Operation watches share session dirtiness tracking so their updates
@@ -10233,12 +10160,7 @@ export class Server {
         if (root) existing.root = true;
         return;
       }
-      let parsed: { id: string; scopeKey: ScopeKey; scope: CellScope };
-      try {
-        parsed = fromDirtyKey(dirtyKey);
-      } catch {
-        return;
-      }
+      const parsed = fromDirtyKey(dirtyKey);
       const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
@@ -10498,13 +10420,8 @@ export class Server {
   ): void {
     for (const graph of graphs) {
       for (const [key] of graph.missed) {
-        let parsed: { id: string; scopeKey: ScopeKey };
-        try {
-          parsed = fromDocKey(key as QueryDocKey);
-        } catch {
-          continue;
-        }
-        trackedIds.add(toDirtyKey(parsed.id, parsed.scopeKey));
+        const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+        trackedIds.add(toDirtyKey(id, scopeKey));
       }
     }
   }
@@ -10885,33 +10802,24 @@ export class Server {
               }
 
               const diffStartedAt = performance.now();
-              const filteredKeys: string[] = [];
               const upserts: SessionCacheEntry[] = [];
               try {
-                // Foreign instances reach a session only through the
-                // admission judged above (protocol.md §2's read row), the
-                // session's for its life.
+                // protocol.md §3's applicable-set filter, as
+                // defense-in-depth: a session's graph evaluates under its
+                // own identity, so an inapplicable instance here is
+                // structurally unreachable — unless the session was admitted
+                // explicit-instance reads (protocol.md §2's read row), the
+                // session's for its life, which is exempt by design (it
+                // legitimately receives every instance it named). A dropped
+                // entry is never cached as delivered: a later re-admission
+                // must still see the client's cache as NOT holding it, or
+                // the withheld update is elided forever.
+                if (!deliversForeignInstances) {
+                  deleteInapplicableEntries(updates, identity);
+                }
                 for (const [key, entry] of updates) {
                   const previous = session.entities.get(key);
                   if (!sameSnapshot(previous, entry)) {
-                    // protocol.md §3's applicable-set filter, as
-                    // defense-in-depth: a session's graph evaluates under
-                    // its own identity, so an inapplicable instance here is
-                    // structurally unreachable — unless the session was
-                    // admitted explicit-instance reads (protocol.md §2's
-                    // read row), which is exempt by design (it legitimately
-                    // receives every instance it named).
-                    if (
-                      !deliversForeignInstances &&
-                      !scopeKeyApplicableTo(entry.scopeKey, identity)
-                    ) {
-                      // Never cache a filtered entry as delivered: a later
-                      // re-admission must still see the client's cache as
-                      // NOT holding it, or the withheld update is elided
-                      // forever.
-                      filteredKeys.push(key);
-                      continue;
-                    }
                     const dirtyKey = toDirtyKey(entry.id, entry.scopeKey);
                     const origin = dirtyOrigins?.get(dirtyKey);
                     // Include the doc unless the writer provably holds it
@@ -10933,9 +10841,6 @@ export class Server {
                       upserts.push(entry);
                     }
                   }
-                }
-                for (const key of filteredKeys) {
-                  updates.delete(key);
                 }
               } finally {
                 timing.time(
@@ -11161,12 +11066,10 @@ export class Server {
           // vocabulary), so the client retracts exactly that instance and
           // its own instance survives.
           if (!deliversForeignInstances) {
-            const identity = this.#sessionScopeIdentity(session);
-            for (const [key, entry] of [...entities]) {
-              if (!scopeKeyApplicableTo(entry.scopeKey, identity)) {
-                entities.delete(key);
-              }
-            }
+            deleteInapplicableEntries(
+              entities,
+              this.#sessionScopeIdentity(session),
+            );
           }
           const delivered = {
             upserts: [] as SessionCacheEntry[],
@@ -11519,8 +11422,8 @@ export class Server {
      * session for that user; two users are two). Absent only for an
      * anonymous session's space-scoped root (it names the root — the
      * structure still loads for it — but owns no instance). A session
-     * that cannot resolve a scoped root's instance (no principal on a
-     * user-scoped root) is not demand for that root. */
+     * never holds a scoped root it cannot resolve (no principal on a
+     * user-scoped root): the watch set that names one is refused. */
     identity?: { principal?: string; sessionId?: string };
   }> {
     const roots = new Map<string, {
@@ -11565,17 +11468,10 @@ export class Server {
               : { principal: session.principal }),
             sessionId: session.id,
           };
-          let instanceKey: string;
-          try {
-            instanceKey = resolveScopeKey(scope, {
-              principal: session.principal,
-              sessionId: session.id,
-            });
-          } catch {
-            // A session that cannot resolve the scope (no principal on a
-            // user-scoped root) is not demand for that instance.
-            continue;
-          }
+          const instanceKey = resolveScopeKey(scope, {
+            principal: session.principal,
+            sessionId: session.id,
+          });
           const key = `${instanceKey}\0${root.id}\0${session.id}`;
           if (!roots.has(key)) {
             roots.set(key, {
@@ -11614,11 +11510,11 @@ export class Server {
    * identity, `root: true` on the rows that are watch ROOTS. The service
    * principal's sessions are excluded (their watches are the serving
    * graph's own reads). Anonymous sessions contribute keys but no
-   * demander (identity without principal); a session that cannot resolve
-   * a scoped root's instance is not demand for it (the tracker never
-   * keyed one for it). Roots are UNIONED in from the watch specs so a
-   * root the tracker has not (yet) keyed still carries what
-   * `watchedRootsForSpace` carried — parity with today's structure load.
+   * demander (identity without principal); a watch naming a scoped root
+   * its session cannot resolve is refused, so no session holds one. Roots
+   * are UNIONED in from the watch specs so a root the tracker has not (yet)
+   * keyed still carries what `watchedRootsForSpace` carried — parity with
+   * today's structure load.
    *
    * The flat form of `demandForSpace()`, holding the same rows in session
    * order as copies a caller may keep. It costs a pass over every row, where
@@ -11972,7 +11868,10 @@ export class Server {
    * in this process: a sibling process's session carries the same
    * principal over a connection that is not in process. Everyone else
    * naming a key is REJECTED; a read naming none resolves from the session
-   * as today.
+   * as today, and never reaches this method: each caller first checks
+   * `#namesExplicitInstance()` synchronously, so the unnamed path adds no
+   * microtask boundary between the request's authorization and its
+   * evaluation (the ACL revocation-race invariant).
    *
    * The one unnamed-read refusal is the serving session's foreign scoped
    * read (`#denyForeignServingScopedRead`): a session under the serving
@@ -11990,10 +11889,6 @@ export class Server {
     }>,
   ): Promise<V2Error | undefined> {
     this.#assertRoutedAuthority(session);
-    // Synchronous fast path first: a read naming NO instance adds no
-    // microtask boundary — the request's authorization and evaluation
-    // keep sharing one engine turn (the ACL revocation-race invariant).
-    let named = false;
     // The wire collapse guard, for the sessions the row refuses
     // (server-execution v2 stage A, OW17's wire leg): such a session's
     // frames and query results carry scope NAMES, so two instances of one
@@ -12015,15 +11910,14 @@ export class Server {
     let collapse: V2Error | undefined;
     const rows = [...entries];
     for (const { branch, root } of rows) {
-      if (root.entityScopeKey !== undefined) {
-        named = true;
-        if (!isScopeKey(root.entityScopeKey)) {
-          return toError(
-            "ProtocolError",
-            `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
-              `root ${root.id}`,
-          );
-        }
+      if (
+        root.entityScopeKey !== undefined && !isScopeKey(root.entityScopeKey)
+      ) {
+        return toError(
+          "ProtocolError",
+          `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
+            `root ${root.id}`,
+        );
       }
       if (collapse !== undefined) continue;
       const scopeName = root.scope ?? "space";
@@ -12049,7 +11943,6 @@ export class Server {
         );
       }
     }
-    if (!named) return collapse;
     if (!getServerExecutionConfig()) {
       return toError(
         "ProtocolError",
@@ -12255,13 +12148,15 @@ export class Server {
       }
     };
 
-    const queued = this.#refreshing?.then(run, run) ?? run();
-    this.#refreshing = queued.finally(() => {
-      if (this.#refreshing === queued) {
-        this.#refreshing = null;
-      }
-    });
-    await this.#refreshing;
+    const refreshing = (this.#refreshing?.then(run, run) ?? run()).finally(
+      () => {
+        if (this.#refreshing === refreshing) {
+          this.#refreshing = null;
+        }
+      },
+    );
+    this.#refreshing = refreshing;
+    await refreshing;
   }
 
   #scheduleRefresh(): void {
@@ -12306,28 +12201,11 @@ export class Server {
     maxWaitMs: number,
   ): Promise<void> {
     const deadlineMs = Date.now() + maxWaitMs;
-    while (true) {
-      const pending = [...this.#connections.values()].filter((connection) =>
-        connection.hasPendingReceives()
-      );
-      if (pending.length === 0) {
-        return;
-      }
-      if (Date.now() >= deadlineMs) {
-        return;
-      }
-      const drained = await Promise.all(
-        pending.map((connection) =>
-          connection.waitForReceiveQueueToDrain(deadlineMs)
-        ),
-      );
-      if (drained.every(Boolean)) {
-        return;
-      }
-      if (Date.now() >= deadlineMs) {
-        return;
-      }
-    }
+    await Promise.all(
+      [...this.#connections.values()].map((connection) =>
+        connection.waitForReceiveQueueToDrain(deadlineMs)
+      ),
+    );
   }
 
   #cancelScheduledRefresh(): void {
@@ -12588,25 +12466,6 @@ export class Server {
         return;
       }
     }
-  }
-
-  respond(payload: string): Promise<string | null> {
-    const parsed = parseClientMessage(payload);
-    if (parsed?.type === "hello") {
-      const response = respondToHello(parsed, this.memoryProtocolFlags());
-      if (response.type !== "hello.ok") {
-        return Promise.resolve(encodeMemoryBoundary(response));
-      }
-      return Promise.resolve(encodeMemoryBoundary({
-        type: "response",
-        requestId: "handshake",
-        error: toError(
-          "ProtocolError",
-          "memory Server.respond cannot issue session.open authentication metadata",
-        ),
-      }));
-    }
-    return Promise.resolve(null);
   }
 
   /**
@@ -12937,20 +12796,6 @@ export class Server {
     this.#engines.set(space, opened);
     return opened;
   }
-
-  /**
-   * Records `key` in `#ensuredSchemas`, evicting the oldest entry once the
-   * map exceeds `#ensuredSchemasMax`.
-   */
-  #recordSchemaEnsured(key: string): void {
-    this.#ensuredSchemas.set(key, true);
-    if (this.#ensuredSchemas.size > this.#ensuredSchemasMax) {
-      const oldest = this.#ensuredSchemas.keys().next().value as
-        | string
-        | undefined;
-      if (oldest !== undefined) this.#ensuredSchemas.delete(oldest);
-    }
-  }
 }
 
 /**
@@ -13009,6 +12854,20 @@ function isSqliteNamedParamEntries(
 export type RejectedClientMessage = {
   type: "oversized" | "invalid";
   requestId: string;
+};
+
+/**
+ * Deletes from `entries` every entry whose instance is outside the
+ * applicable set of `identity` (protocol.md §3): the push filter a session's
+ * frames pass through unless it was admitted explicit-instance reads.
+ */
+export const deleteInapplicableEntries = (
+  entries: Map<string, { readonly scopeKey: string }>,
+  identity: ScopeKeyIdentity,
+): void => {
+  for (const [key, entry] of entries) {
+    if (!scopeKeyApplicableTo(entry.scopeKey, identity)) entries.delete(key);
+  }
 };
 
 /**
