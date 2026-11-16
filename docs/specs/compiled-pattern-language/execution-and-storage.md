@@ -970,10 +970,15 @@ Six rules hold for an invocation.
   compiled into another, a path of the callee's argument that the call
   leaves out is a constant, the callee's declared default, and a path
   that the call binds to a slot at which nothing is stored reads the
-  callee's default too; where the place of that slot declares a default
-  of its own, that one is read, which is an assumption of
-  `plan-and-label-templates.md` §1.1 (its §8, question 102). A read of a
-  default carries no
+  callee's default too. By ruling the default read is the one declared
+  nearest the end of the chain of places the read resolves through, and
+  the reader's own, a callee's included, only where no place declares
+  one: where the place of that slot declares a default of its own, that
+  one is read (`plan-and-label-templates.md` §1.1 and §2.5). Two things
+  are assumed there (its §8, questions 103 and 104): the order holds at
+  every path of a read of an object whole, and a stored `undefined`
+  reads as absent does, with no default written into an argument
+  document when an instance is set up. A read of a default carries no
   integrity: where a slot reads as a default, the runtime gives it the
   empty integrity when it instantiates the label, and the
   confidentiality the read consumed. Integrity is anchored in a stored

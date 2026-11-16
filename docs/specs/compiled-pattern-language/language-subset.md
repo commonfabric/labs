@@ -2241,10 +2241,16 @@ Eight points complete the table.
   path that the call leaves out, where the callee declares a default
   for it, reads that default. And a path that the call binds to a place
   at which nothing is stored also reads the callee's default, as it
-  does today. *Assumed,* with `plan-and-label-templates.md` (§1.1; its
-  §8, question 102): where that place declares a default of its own,
-  the place's default is read, and the callee's applies where the place
-  declares none.
+  does today. Which default is read where several are declared is
+  ruled: the one declared nearest the end of the chain of places the
+  read resolves through, the stored place last, and the reader's own,
+  a callee's included, only where no place along the chain declares
+  one. So where the place the call binds declares a default of its own,
+  the place's default is read (`plan-and-label-templates.md` §1.1 and
+  §2.5). Two things are assumed there (its §8, questions 103 and 104):
+  that an absent property reads the same default in a read of an object
+  whole as in a selection of it, and that a stored `undefined` reads as
+  an absent value does.
 - **Writability.** The second row does not ask whether the place the
   argument denotes can be written, whatever the kind of the declared
   handle. The type of a reactive value does not say whether it is an

@@ -1264,10 +1264,13 @@ compiler emits for that call. The read carries the label of the slot,
 with the empty integrity that a read of a default has (section 2.5).
 Where the place the slot resolves to declares a default of its own, the
 rule of section 2.5 ("A default belongs to the place") gives the read
-that default, and the two rulings name two defaults for one read.
-*Assumed* (section 8, question 102): the default of the place governs
-there, as it does for a read through a link, and the callee's default
-applies where the place declares none.
+that default. By ruling the default of the place governs there: the
+default read at a position is the one declared nearest the end of the
+chain of places the read resolves through, and the callee's default is
+read only where no place along the chain declares one. So a caller's
+argument at which nothing is stored, or a cell the caller bound, that
+declares a default wins over the callee's default, as it does in the
+runtime of today (section 2.5).
 
 **Where a slot of `Body.reads` sits in the body's argument.** By ruling
 each entry of `Body.reads` holds the path in the body's argument at
@@ -3056,6 +3059,23 @@ the slot's schema alone. So where nothing is stored at the bound address,
 the slot reads as the default of the place's declaration, for every
 reader, a reader whose own schema declares no default included.
 
+By ruling that order is the rule: the default read at a position is the
+one declared nearest the end of the chain of places the read resolves
+through, the stored place last, and the reader's own default, a
+callee's included, is read only where no place along the chain declares
+one. The runtime of today reads the same for a read addressed at a
+position. While it follows the chain it keeps the top-level `default` of
+the last link schema that declares one (`resolveLink` in
+`runtime/runner/src/link-resolution.ts`, with its helpers
+`declaredDefault` and `withDefault`), and where it combines the reader's
+schema with a link's, the link's default replaces the reader's
+(`combineSchemaForLink` in `runtime/runner/src/traverse.ts`). A schema
+on the handle through which the final document was written counts for
+nothing in either, because it is not stored. For patterns that gives:
+a caller's argument at which nothing is stored, or a bound cell, whose
+declaration has a default wins over the callee's default, and the
+callee's default is read where no place along the chain declares one.
+
 - **A path that resolves without a stored link.** A path of the state of
   a binding of the reactive tier resolves to a slot of the instance
   (section 3.14), and a slot of a pattern compiled into another is an
@@ -3065,8 +3085,42 @@ reader, a reader whose own schema declares no default included.
   (`Slot.schema`), which is the place's declaration. For a pattern
   compiled into another, by ruling, a path that the call binds to a
   slot at which nothing is stored also reads the default the callee
-  declares for the path; section 1.1 says which of two defaults governs
-  ("A constant of the argument, and a path the call leaves out").
+  declares for the path, and only where the place of the slot declares
+  none, by the order above (section 1.1, "A constant of the argument,
+  and a path the call leaves out").
+- **A property default, in a read of an object whole.** The ruling
+  speaks of the default read at a position. A slot that reads a stored
+  object whole also reads the properties below its position, and a
+  schema along the chain can declare a default for one of them. For
+  such a read the runtime of today takes the top-level default of a
+  link's schema alone: a default that the link's object schema declares
+  for a property is dropped, and the reader's own default for the
+  property is read. A selection of the same property, which is
+  addressed at the property's position, reads the link's default.
+  *Assumed* (section 8, question 103): the order above holds at every
+  path of what a slot reads. A property that is absent reads the default
+  that the place nearest the end of the chain declares for it, and the
+  default of the slot's own schema where no place declares one, in a
+  whole read as in a selection. That differs from today for the whole
+  read, in the value alone: the integrity is that of the stored object
+  either way ("The integrity", below).
+- **A stored `undefined`, and a default written at setup.** In the
+  runtime of today a stored `undefined` reads as an absent value does,
+  so the default is read. A pattern of today also writes the defaults
+  of its own argument schema into its argument document at setup, for
+  each key that is absent (`#applySetupState` in
+  `runtime/runner/src/runner.ts`), and such a default is from then on a
+  stored value for whatever reads through the document. A key that
+  holds a stored `undefined` is present, so nothing is written for it,
+  and a read of it still gives the callee's default. *Assumed* (section
+  8, question 104): in the compiled path a stored `undefined` reads as
+  absent does, and the default the order above names is read. And no
+  default is written into an argument document: a pattern compiled into
+  another has no argument document, and for a `Child` the write edges
+  of its argument write what the caller gave and nothing for a path the
+  caller left out. A default is then always read and never stored, so
+  it has the integrity of a default, and a default of a place nearer
+  the end of the chain is not hidden by a stored copy of the callee's.
 - **A state cell.** A first value that is a constant is the default of
   the cell's schema (section 1.3). A slot of root `state` that finds
   nothing stored reads it, by this rule, with the integrity below.
@@ -10640,8 +10694,9 @@ this document made.
      open. The compiler writes the callee's declared default into the
      plan as a constant for that path, and a path that the call binds
      to a slot of the caller at which nothing is stored also reads the
-     callee's default (section 1.1). Question 102 covers a place that
-     declares a default of its own. The entry keeps its number.
+     callee's default (section 1.1). Where the place declares a
+     default of its own, that one is read, by the ruling question 102
+     records. The entry keeps its number.
 101. **The key of an element that a `flatMap` contributes** (for the
      project owner). By ruling an element of the result of a
      per-element construct is keyed by the key of the upstream element
@@ -10655,17 +10710,38 @@ this document made.
      identity or value and its count in the segment, under the source
      element's key.
 102. **A default of the caller's place and one of the callee, for one
-     path** (for the project owner). By the ruling that a default
-     belongs to the stored place, a reader bound to a place reads the
-     default the place declares, whether or not the reader declares
-     one. By the ruling on a call of a pattern compiled in, a path
-     bound to a slot of the caller at which nothing is stored reads the
-     callee's default. Where the place and the callee both declare a
-     default for the path, the two name different values. *Assumed:*
-     the default of the place governs, and the callee's applies where
-     the place declares none (section 1.1). That is the order section
-     2.5 gives a slot whose path crosses a link: the default of the
-     chain first, and then that of the slot's own schema. The
-     alternative applies the callee's default wherever the callee
-     declares one. Not verified against source: which of the two the
-     runtime of today reads.
+     path.** Not open. By ruling the default read at a position is the
+     one declared nearest the end of the chain of places the read
+     resolves through, the stored place last, and the reader's own
+     default, a callee's included, is read only where no place along
+     the chain declares one (sections 1.1 and 2.5). The runtime of today
+     reads the same for a read addressed at a position (`resolveLink` in
+     `runtime/runner/src/link-resolution.ts`; `combineSchemaForLink` in
+     `runtime/runner/src/traverse.ts`). The entry keeps its number.
+103. **A property default of a place, in a read of an object whole**
+     (for the project owner). The ruling of question 102 names the
+     default read at a position. For a read of an object whole, the
+     runtime of today takes only the top-level default of a link's
+     schema, drops a default that the link's object schema declares for
+     a property, and reads the reader's own default for that property.
+     *Assumed:* the order of the ruling holds at every path of what a
+     slot reads, so an absent property reads the same default in a
+     whole read as in a selection of it (section 2.5). The value of a
+     whole read then differs from today where a link's schema and the
+     reader's declare different defaults for a property. The
+     alternative keeps today's two answers, and a body that reads an
+     object whole and one that selects the property read two values.
+104. **A stored `undefined`, and a default written at setup** (for the
+     project owner). Today a stored `undefined` reads as an absent
+     value does, and a pattern writes its own argument defaults into
+     its argument document at setup for each absent key
+     (`#applySetupState` in `runtime/runner/src/runner.ts`), which
+     makes each a stored value with the label of that write. *Assumed:*
+     a stored `undefined` reads as absent does, and the compiled path
+     writes no default into an argument document, so a default is
+     always read, with the empty integrity (section 2.5). The
+     alternative writes the callee's defaults when a `Child` is set up,
+     as today. A default then has the integrity of the setup run, and a
+     reader further along a chain through the argument document finds a
+     stored value where the order of the ruling would give it the
+     default of another place.

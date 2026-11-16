@@ -859,6 +859,17 @@ is relitigated.
   callee's declared default into the plan as a constant for that path.
   A path that the call binds to a slot of the caller at which nothing
   is stored also reads the callee's default, as it does today.
+- The default read at a position is the one declared nearest the end
+  of the chain of places the read resolves through, the stored place
+  last. The reader's own default, a callee's included, is read only
+  where no place along the chain declares one. So a caller's argument
+  at which nothing is stored, or a bound cell, that declares a default
+  wins over the callee's default. The runtime of today reads the same
+  for a read addressed at a position: the top-level default of the last
+  link schema along the chain that declares one (`resolveLink` in
+  `runtime/runner/src/link-resolution.ts`, `combineSchemaForLink` in
+  `runtime/runner/src/traverse.ts`). A schema on the handle that wrote
+  the final document counts for nothing, because it is not stored.
 - A read of a default carries no integrity. Where a stored object has
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
@@ -1634,15 +1645,29 @@ as an assumption, which is what the prototype does.
      element. *Assumed:* the key is the upstream key together with the
      count of earlier elements that the same upstream element
      contributed.
-148. **A default of the caller's place and one of the callee, for one
-     path** (PL question 102). By one ruling a default belongs to the
-     stored place, and by another a path bound to a slot of the caller
-     at which nothing is stored reads the callee's default. *Assumed:*
-     where the place the path resolves to declares a default, the read
-     gives that one, as a read through a link does, and the callee's
-     default applies where the place declares none. The alternative
-     gives the callee's default wherever the callee declares one. Not
-     verified: which of the two today's runtime gives.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
+149. **A property default of a place, in a read of an object whole** (PL
+     question 103). By ruling the default nearest the end of the chain
+     is read. For a read of an object whole, the runtime of today takes
+     only the top-level default of a link's schema: a default that the
+     link's schema declares for a property is dropped, and the reader's
+     own default for the property is read. *Assumed:* the ruling holds
+     at every path of what a slot reads, so a property that is absent
+     reads the same default in a whole read as in a selection of it,
+     which differs from today for the whole read. The alternative keeps
+     today's two answers.
+150. **A stored `undefined`, and a default written at setup** (PL
+     question 104). Today a stored `undefined` reads as an absent value
+     does, and a pattern writes its own argument defaults into its
+     argument document at setup where a key is absent, which makes each
+     a stored value for whatever reads through the document. *Assumed:*
+     a stored `undefined` reads as absent, so the default the ruling
+     names is read; and the compiled path writes no default into an
+     argument document, so a default is always read and has the
+     integrity of a default. The alternative writes the callee's
+     defaults at setup, as today, which gives them the integrity of
+     that run.
 
 ## Open, and not needing the owner
 
