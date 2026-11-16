@@ -1297,7 +1297,14 @@ export class Instance {
       if (first !== undefined) {
         const reader = new Host(this, host.context, record.first?.cone);
         this.counts.evaluations += 1;
-        this.store.write(new Ref(id, []), this.stored(first(reader)));
+        // The edge of a first value always stores the value the cone
+        // computed, and never a reference: a reference the value
+        // function returns is stored as what it resolves to now, so a
+        // write to the cell never lands in the input (ruling Z15).
+        this.store.write(
+          new Ref(id, []),
+          this.stored(reader.v(first(reader))),
+        );
       }
     }
     return new Ref(id, []);

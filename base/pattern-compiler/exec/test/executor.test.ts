@@ -88,6 +88,8 @@ describe("an instance", () => {
     const instance = new Instance(await artifactOf("state-first"), {
       start: 3,
       items: [],
+      seed: { name: "s", tags: [] },
+      stops: [],
     });
     const draft = () =>
       instance.stateCells().find(({ name }) => name === "draft")?.value;
@@ -103,14 +105,16 @@ describe("an instance", () => {
     const instance = new Instance(await artifactOf("state-first"), {
       start: 3,
       items: ["a", "b"],
+      seed: { name: "s", tags: [] },
+      stops: [],
     });
 
-    // `count` and the `at` of each element have a document, and `label`
-    // and `draft`, whose first value is a constant, have none.
+    // `count`, `kept` and the `at` of each element have a document, and
+    // `label` and `draft`, whose first value is a constant, have none.
     expect(instance.documents()).toEqual({
       "argument": 1,
       "result": 1,
-      "state cell": 3,
+      "state cell": 4,
     });
     const result = () =>
       instance.result() as {
@@ -124,7 +128,10 @@ describe("an instance", () => {
 
     // The cell holds the value and no reference to the input: a write of
     // the cell leaves the input, and a change of the input the cell.
-    instance.send(0, {});
+    instance.send(
+      instance.plan.bindings.findIndex((binding) => binding.name === "bump"),
+      {},
+    );
     expect(result().count).toBe(4);
     instance.writeArgument(["start"], 9);
     expect(result().count).toBe(4);
@@ -132,6 +139,215 @@ describe("an instance", () => {
     // A move changes the index, and the cell of a key keeps its value.
     instance.writeArgument(["items"], ["b", "a"]);
     expect(result().rows).toEqual([{ item: "b", at: 1 }, { item: "a", at: 0 }]);
+  });
+
+  // Ruling Z14: a write below the root of an empty state cell creates
+  // the document from the default with the write applied.
+  // `fixtures/state-below.tsx` has such a cell in the pattern's body and
+  // in three element bodies.
+  describe("a write below the root of a state cell that has no document", () => {
+    const link = (name: string) => ({
+      $link: { doc: "argument", path: ["pool", name] },
+    });
+    const start = async () =>
+      new Instance(await artifactOf("state-below"), {
+        pool: { a: { title: "a" }, b: { title: "b" } },
+        // References to cells.
+        items: [link("a"), link("b")],
+        // Plain values in place.
+        words: ["x", "skip", "y"],
+      });
+    // The bindings named `retitle`, in the order of the plan: of the
+    // three element bodies, and then of the pattern's body.
+    const retitles = (instance: Instance) =>
+      instance.plan.bindings.flatMap((binding, index) =>
+        binding.name === "retitle" ? [index] : []
+      );
+    type Memo = { memo: unknown };
+    type Result = {
+      draft: unknown;
+      marks: unknown;
+      rows: Memo[];
+      labels: Memo[];
+      kept: Memo[];
+    };
+
+    it("starts the document from the default, for a member of a record", async () => {
+      const instance = await start();
+      expect(instance.documents()["state cell"]).toBe(undefined);
+      const own = retitles(instance).find((index) =>
+        instance.plan.bindings[index].within.length === 0
+      )!;
+
+      instance.send(own, { text: "hello" });
+
+      expect(instance.documents()["state cell"]).toBe(1);
+      expect((instance.result() as Result).draft).toEqual({
+        text: "hello",
+        tags: ["new"],
+      });
+    });
+
+    it("starts the document from the default, for a `push` onto an array that is not empty", async () => {
+      const instance = await start();
+      const add = instance.plan.bindings.findIndex((binding) =>
+        binding.name === "add"
+      );
+
+      instance.send(add, { tag: "second" });
+
+      expect((instance.result() as Result).marks).toEqual(["first", "second"]);
+    });
+
+    it("does the same for a cell of an element body, over references", async () => {
+      const instance = await start();
+
+      instance.send(retitles(instance)[0], { text: "t" }, [1]);
+
+      expect((instance.result() as Result).rows.map((row) => row.memo))
+        .toEqual([{ text: "", tags: ["row"] }, { text: "t", tags: ["row"] }]);
+      // The cell of the other key has no document still.
+      expect(instance.documents()["state cell"]).toBe(1);
+    });
+
+    it("does the same for a cell of an element body, over plain values in place", async () => {
+      const instance = await start();
+
+      instance.send(retitles(instance)[1], { text: "t" }, [0]);
+
+      expect((instance.result() as Result).labels.map((row) => row.memo))
+        .toEqual([
+          { text: "t", tags: ["label"] },
+          { text: "", tags: ["label"] },
+          { text: "", tags: ["label"] },
+        ]);
+    });
+
+    it("does the same for a cell of an element body, over the result of a `filter`", async () => {
+      const instance = await start();
+
+      instance.send(retitles(instance)[2], { text: "t" }, [1]);
+
+      expect((instance.result() as Result).kept.map((row) => row.memo))
+        .toEqual([{ text: "", tags: ["kept"] }, { text: "t", tags: ["kept"] }]);
+    });
+  });
+
+  // Ruling Z15: a computed first value is stored as a value, never as a
+  // reference, so a write to the cell never lands in the input.
+  describe("a first value that is an input whole", () => {
+    const stop = (title: string) => ({ title, done: false });
+    const link = (name: string) => ({
+      $link: { doc: "argument", path: ["pool", name] },
+    });
+    const start = async (stops: unknown[], pool = {}) =>
+      new Instance(await artifactOf("state-first"), {
+        start: 3,
+        items: [],
+        seed: { name: "s", tags: ["t"] },
+        stops,
+        pool,
+      });
+    const cells = (instance: Instance, name: string) =>
+      [...instance.store.docs].filter(([id]) =>
+        id.startsWith(
+          `state:${
+            instance.plan.stateCells.findIndex((cell) => cell.name === name)
+          }:`,
+        )
+      ).map(([, document]) => document.value);
+    const bindingOf = (instance: Instance, name: string) =>
+      instance.plan.bindings.findIndex((binding) => binding.name === name);
+
+    it("is stored as the value, and a write below the root of the cell leaves the input", async () => {
+      const instance = await start([]);
+
+      expect(cells(instance, "kept")).toEqual([{ name: "s", tags: ["t"] }]);
+
+      instance.send(bindingOf(instance, "rename_seed"), { to: "renamed" });
+
+      expect(cells(instance, "kept")).toEqual([
+        { name: "renamed", tags: ["t"] },
+      ]);
+      expect(
+        (instance.store.docs.get("argument")?.value as { seed: unknown }).seed,
+      ).toEqual({ name: "s", tags: ["t"] });
+    });
+
+    it("is the element's value for a cell of an element body, over references", async () => {
+      const instance = await start([link("a"), link("b")], {
+        a: stop("a"),
+        b: stop("b"),
+      });
+
+      // The value behind each link, and no link.
+      expect(cells(instance, "mine")).toEqual([stop("a"), stop("b")]);
+
+      instance.send(bindingOf(instance, "finish"), {}, [0]);
+
+      expect(cells(instance, "mine")).toEqual([
+        { ...stop("a"), done: true },
+        stop("b"),
+      ]);
+      expect(
+        (instance.store.docs.get("argument")?.value as {
+          pool: Record<string, unknown>;
+        }).pool.a,
+      ).toEqual(stop("a"));
+    });
+
+    it("is the element's value for a cell of an element body, over plain values in place", async () => {
+      const instance = await start([stop("a"), stop("b")]);
+
+      // The value, and no reference by key to the element.
+      expect(cells(instance, "mine")).toEqual([stop("a"), stop("b")]);
+
+      instance.send(bindingOf(instance, "finish"), {}, [0]);
+
+      expect(cells(instance, "mine")).toEqual([
+        { ...stop("a"), done: true },
+        stop("b"),
+      ]);
+      expect(
+        (instance.store.docs.get("argument")?.value as { stops: unknown[] })
+          .stops,
+      ).toEqual([stop("a"), stop("b")]);
+    });
+
+    it("is stored as the value where the value function returns the reference", async () => {
+      const artifact = structuredClone(await artifactOf("state-first"));
+      // The value code of `kept` with the read of the slot's value left
+      // out: the function returns the reference the slot yields.
+      const main = artifact.code.modules[0];
+      const kept = artifact.plan.stateCells.findIndex((cell) =>
+        cell.name === "kept"
+      );
+      const pattern = new RegExp(
+        `\\$rt\\.state\\(${kept}, \\(\\$h\\) => \\(\\$h\\.v\\((\\$h\\.slot\\(\\d+\\))\\)\\)\\)`,
+      );
+      expect(pattern.test(main.source)).toBe(true);
+      main.source = main.source.replace(
+        pattern,
+        `$rt.state(${kept}, ($h) => ($1))`,
+      );
+      // The slot is read as a reference.
+      const slot = Number(
+        /slot\((\d+)\)/.exec(
+          pattern.exec(
+            (await artifactOf("state-first")).code.modules[0].source,
+          )![1],
+        )![1],
+      );
+      artifact.plan.slots[slot].observes = "identity";
+      const instance = new Instance(artifact, {
+        start: 3,
+        items: [],
+        seed: { name: "s", tags: ["t"] },
+        stops: [],
+      });
+
+      expect(cells(instance, "kept")).toEqual([{ name: "s", tags: ["t"] }]);
+    });
   });
 
   it("reads the default of a slot's schema where nothing is stored", async () => {

@@ -226,6 +226,15 @@ over the result of a `map`).
 A first value of a state cell that is a constant is the default of
 `StateCell.schema`, and no code gives it. Any other first value is computed by a
 cone that has a write edge with target `state`, which `StateCell.first` names.
+The executor always stores such a value as a value: a reference the value
+function returns is stored as what it resolves to then, so a write to the cell
+never lands in the input (ruling Z15). A cell of an element body whose first
+value is the element holds the element's value, over an array of references,
+over an array of plain values in place, and over the result of another
+per-element construct. A write below the root of a cell that has no document
+creates the document from the default with the write applied (ruling Z14;
+`compare/fixtures/state-below.tsx`, with a cell in each of the three kinds of
+element body).
 
 `exec/executor.ts` runs an artifact on an argument, with Deno: it loads the
 module texts, makes the argument document and the result document in memory,

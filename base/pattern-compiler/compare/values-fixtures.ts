@@ -128,6 +128,19 @@ const WRITTEN: Record<string, Written[]> = {
       tags: ["x", "x", "y"],
     },
   }],
+  "state-below": [{
+    argument: {
+      items: [{ title: "a" }, { title: "b" }],
+      words: ["x", "skip", "y"],
+    },
+    events: [
+      { binding: 3, event: { text: "hello" } },
+      { binding: 4, event: { tag: "second" } },
+      { binding: 0, event: { text: "row" } },
+      { binding: 1, event: { text: "label" } },
+      { binding: 2, event: { text: "kept" } },
+    ],
+  }],
   "reduce": [{
     argument: {
       items: [{ title: "a", amount: 3 }, { title: "b", amount: 4 }],
