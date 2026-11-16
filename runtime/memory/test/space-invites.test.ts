@@ -344,6 +344,9 @@ describe("space-invites", () => {
           `${INVITE_LINK_SCHEME}://setup?n=abc123`,
           // A space link grants nothing and is never an invitation.
           `${INVITE_LINK_SCHEME}://space?host=https://service.example&space=${space}`,
+          // Nor is an action this reader does not know, such as a later one.
+          `${INVITE_LINK_SCHEME}://other${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}://other${query}`,
           // The setup action is never an invitation, whatever it carries.
           `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
           `https://links.example/setup${query}${link.hash}`,
@@ -378,7 +381,6 @@ describe("space-invites", () => {
           code: invite.code,
         }],
         // Any other URL on the scheme.
-        [`${INVITE_LINK_SCHEME}://other${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:join${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:/join${query}${link.hash}`, {}],

@@ -270,7 +270,7 @@ export function isInviteId(value: unknown): value is string {
  * Whether a space or inviter has the DID key encoding accepted by invite
  * routes. The check is syntactic only.
  */
-function isInviteDIDKey(value: unknown): value is DIDKey {
+export function isInviteDIDKey(value: unknown): value is DIDKey {
   return isDIDKey(value) &&
     /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
 }
@@ -324,11 +324,13 @@ export function inviteCodeVerifier(link: InviteLink): string {
  *   and {@link parseInviteLink} returns undefined for it.
  *
  * - `fbrc://space?host&space` is a link to a space, which grants nothing
- *   (`parseSpaceLink` in `@commonfabric/runner/space-links`). It is never an
- *   invitation, and {@link parseInviteLink} returns undefined for it.
+ *   (`parseSpaceLink` in `./space-links.ts`).
  *
- * Any other URL on the scheme is malformed: the scheme belongs to this link
- * format, so {@link parseInviteLink} refuses it rather than passing it on.
+ * Each action's parser returns undefined for every other action, including
+ * ones added later, so that a newer link reaches an older reader as one it
+ * does not know rather than as a malformed one. Each refuses a malformed URL
+ * of its own action, and {@link parseInviteLink} also refuses a scheme URL
+ * that names no action (`fbrc:join?…`).
  */
 export const INVITE_LINK_SCHEME = "fbrc";
 
@@ -381,10 +383,11 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
  *
  * A URL that is not an invitation returns undefined: another scheme's URL on
  * any path but `/join` or `/open`, a `/join` or `/open` URL whose query names
- * none of `host`, `space`, and `invite`, the setup reply, `fbrc://setup?…`,
- * and a space link, `fbrc://space?…`. Anything else throws a secret-free
- * {@link SpaceInviteError}: `invalid-link` for a malformed invitation or any
- * other {@link INVITE_LINK_SCHEME} URL, such as `fbrc://JOIN?…` or
+ * none of `host`, `space`, and `invite`, and any {@link INVITE_LINK_SCHEME}
+ * action but `join`, such as the setup reply, `fbrc://setup?…`, or a space
+ * link, `fbrc://space?…`. Anything else throws a secret-free
+ * {@link SpaceInviteError}: `invalid-link` for a malformed invitation or a
+ * scheme URL naming no action, such as `fbrc://JOIN?…`, `fbrc://join/?…` or
  * `fbrc:join?…`; `invalid-link` too for a code given both in a fragment and in
  * `options.code`, or in `options.code` beside a `/join` or `/open` invitation.
  * A URL that is not an invitation returns undefined whatever `options.code`
@@ -402,7 +405,12 @@ export function parseInviteLink(
     throw new SpaceInviteError("invalid-link");
   }
   if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
-    if (url.hostname === "setup" || url.hostname === "space") return undefined;
+    // Another action, such as the setup reply or a space link, or one added
+    // later, is not an invitation: an older reader then sees a link it does
+    // not know rather than a malformed one.
+    if (url.host !== "" && url.hostname.toLowerCase() !== "join") {
+      return undefined;
+    }
     if (url.host !== "join" || url.pathname !== "") {
       throw new SpaceInviteError("invalid-link");
     }

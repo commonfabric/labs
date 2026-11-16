@@ -1,18 +1,20 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { DIDKey } from "@commonfabric/identity/did";
 import {
   buildInviteLink,
   createInviteCredentials,
   INVITE_LINK_SCHEME,
   parseInviteLink,
-} from "../src/space-invites.ts";
+} from "../space-invites.ts";
 import {
   buildSpaceLink,
   parseSpaceLink,
   SpaceLinkError,
-} from "../src/space-links.ts";
+} from "../space-links.ts";
 
-const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
+const space: DIDKey =
+  "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
 const loom = { host: "https://service.example", space };
 const link = buildSpaceLink("https://links.example", loom);
 const scheme = `${INVITE_LINK_SCHEME}://space${link.search}`;
@@ -45,14 +47,10 @@ describe("space links", () => {
     expect(link.searchParams.get("space")).toBe(space);
     expect(link.hash).toBe("");
   });
-  it("returns the same space for the `/space` and `fbrc://space` forms, on any origin", () => {
+  it("returns the same space for the `/space` and `fbrc://space` forms", () => {
     expect(parseSpaceLink(link)).toEqual(loom);
     expect(parseSpaceLink(scheme)).toEqual(loom);
     expect(parseSpaceLink(`http://127.0.0.1:5173/space${link.search}`))
-      .toEqual(loom);
-    // The link's own origin is only where it was served; `host` names the
-    // service, so a plain-HTTP page still names a secure one.
-    expect(parseSpaceLink(`http://links.example/space${link.search}`))
       .toEqual(loom);
     expect(
       parseSpaceLink(
@@ -95,11 +93,9 @@ describe("space links", () => {
       const other of [
         `${INVITE_LINK_SCHEME}://setup?n=abc123`,
         `${INVITE_LINK_SCHEME}://other${link.search}`,
-        `${INVITE_LINK_SCHEME}://SPACE${link.search}`,
         `${INVITE_LINK_SCHEME}:space${link.search}`,
         `https://links.example/space/${link.search}`,
         `https://links.example/piece${link.search}`,
-        `ftp://links.example/space${link.search}`,
         // Another site's `/space`, naming neither field.
         "https://rooms.example/space?id=abc",
         "https://links.example/space",
@@ -116,6 +112,14 @@ describe("space links", () => {
         withField("space", null),
         withField("space", ""),
         withField("space", "not-a-did"),
+        // A space is a well-formed `did:key`, as an invitation's is, so a
+        // link cannot carry a spelling no invitation could.
+        withField("space", "did:"),
+        withField("space", "did:key:x"),
+        withField("space", "did:web:evil.example"),
+        withField("space", "did:key:abc def"),
+        withField("space", `${space} `),
+        `${INVITE_LINK_SCHEME}://SPACE${link.search}`,
         `${link.href}&host=https://other.example`,
         `${link.href}&space=${space}`,
         `${INVITE_LINK_SCHEME}://space/${link.search}`,
@@ -149,13 +153,20 @@ describe("space links", () => {
     expect(
       refusal(() => buildSpaceLink("http://links.example", loom)),
     ).toBe("invalid-host");
+    // The link's own origin is held to the same rule, as an invitation's is.
+    for (
+      const origin of ["http://links.example", "ftp://links.example"]
+    ) {
+      expect(refusal(() => parseSpaceLink(`${origin}/space${link.search}`)))
+        .toBe("invalid-host");
+    }
   });
   it("refuses to build a link to a malformed space", () => {
     expect(
       refusal(() =>
         buildSpaceLink("https://links.example", {
           host: loom.host,
-          space: "not-a-did",
+          space: "did:key:short",
         })
       ),
     ).toBe("invalid-link");
