@@ -23,7 +23,11 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 
 import {
   type AbandonedRequest,
@@ -135,6 +139,25 @@ describe("settleAbandonedRequest", () => {
     expect(detail).toEqual({ rejection: REFUSAL.message });
   });
 
+  it("reports a refused writeback through the supplied reporter without logging an error", async () => {
+    const commits = refuseCommits();
+    let rejection: Error | undefined;
+    await settleAbandonedRequest(runtime, {
+      builtinId: "fetchJson",
+      effectKey: "fetchJson:custom-report",
+      identity: undefined,
+      scope: "space",
+      attributeToBuiltin: true,
+      reportRejection: (error) => {
+        rejection = error;
+      },
+    }, () => {});
+
+    expect(commits()).toBe(1);
+    expect(rejection).toEqual(REFUSAL);
+    expect(reported).toEqual([]);
+  });
+
   for (const attributeToBuiltin of [true, false]) {
     it(`${attributeToBuiltin ? "attributes" : "does not attribute"} the ending's transaction to the builtin when asked ${attributeToBuiltin ? "to" : "not to"}`, async () => {
       let ending: IExtendedStorageTransaction | undefined;
@@ -194,6 +217,73 @@ describe("settleAbandonedRequest", () => {
     } finally {
       await serving.dispose({ closeStorage: false });
       await servingManager.close();
+    }
+  });
+
+  it("keeps a client's ending over speculative state in its overlay without changing the stored result", async () => {
+    const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    const clientManager = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const observerManager = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const client = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const observer = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: observerManager,
+    });
+    try {
+      const seed = client.edit();
+      const result = client.getCell<{ pending: boolean; error?: string }>(
+        space,
+        "speculative-abandoned-request",
+        undefined,
+        seed,
+      );
+      result.set({ pending: false });
+      expect((await seed.commit().settled).error).toBeUndefined();
+      const stored = observer.getCellFromLink(result.getAsNormalizedFullLink());
+      await stored.sync();
+
+      const staging = client.edit();
+      client.stampServerRun(staging, {
+        actionId: "refused-request",
+        kind: "derivation",
+      });
+      result.withTx(staging).key("pending").set(true);
+      expect((await staging.commit().settled).error).toBeUndefined();
+      expect(result.withTx().get()).toEqual({ pending: true });
+
+      await settleAbandonedRequest(client, {
+        builtinId: "fetchJson",
+        effectKey: "fetchJson:speculative",
+        identity: undefined,
+        scope: "space",
+        attributeToBuiltin: true,
+      }, (tx) => {
+        expect(result.withTx(tx).key("pending").get()).toBe(true);
+        result.withTx(tx).set({ pending: false, error: "refused" });
+      });
+
+      expect(reported).toEqual([]);
+      expect(result.withTx().get()).toEqual({
+        pending: false,
+        error: "refused",
+      });
+      await client.storageManager.synced();
+      await stored.sync();
+      expect(stored.withTx().get()).toEqual({ pending: false });
+    } finally {
+      await client.dispose({ closeStorage: false });
+      await observer.dispose({ closeStorage: false });
+      await clientManager.close();
+      await observerManager.close();
+      await server.close();
     }
   });
 
