@@ -613,6 +613,8 @@ export interface HomeStandInOutput {
 /**
  * Stands in for a Home whose profiles may point at inboxes before the host
  * first ensures its own. `label` keeps each stand-in's state its own.
+ * {@link HandOffHomeStandIn} copies its body, so a change here belongs there
+ * too.
  */
 const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
   ({ label }) => {
@@ -720,7 +722,11 @@ export type HandOffHomeStandInOutput = Omit<
  * Stands in for a Home without the `createOwnPrivateInbox` stream, as one of a
  * vintage before it. The host has it create no inbox before the ensure, so the
  * ensure hands its event on to the creating step itself, in a run that has
- * read Home's holder. Otherwise as {@link HomeStandIn}.
+ * read Home's holder. Otherwise as {@link HomeStandIn}, whose body this copies
+ * in full but for that stream, so a change to one belongs in the other. They
+ * share no helper: the transformer refuses a builder call in a standalone
+ * function. They share no inner pattern either: its fields would reach the
+ * host as links into another pattern's result, which a Home's are not.
  */
 const HandOffHomeStandIn = pattern<
   { label: string },
