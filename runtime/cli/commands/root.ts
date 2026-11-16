@@ -92,6 +92,12 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
     load: async () => (await import("./deps.ts")).deps,
   },
   {
+    name: "index",
+    description:
+      "Join the pattern index, where patterns are published and found.",
+    load: async () => (await import("./pattern-index.ts")).index,
+  },
+  {
     name: "inspect",
     description:
       "Offline autopsy of local memory v2 space DBs (state, history, " +

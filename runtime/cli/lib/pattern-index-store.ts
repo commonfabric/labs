@@ -153,11 +153,14 @@ export class PatternIndexStore {
   /** Records the membership a join answered, keeping any chains held. */
   async recordMembership(record: IndexMembershipRecord): Promise<void> {
     const file = await this.#readMembership();
-    await this.#writeJson(MEMBERSHIP, {
-      format: MEMBERSHIP_FORMAT,
-      ...record,
-      chains: file?.chains ?? {},
-    } satisfies MembershipFile);
+    await this.#writeJson(
+      MEMBERSHIP,
+      {
+        format: MEMBERSHIP_FORMAT,
+        ...record,
+        chains: file?.chains ?? {},
+      } satisfies MembershipFile,
+    );
   }
 
   /** The chain `signer` presents, root first, or `undefined` for none. */
@@ -180,10 +183,13 @@ export class PatternIndexStore {
     if (file === undefined) {
       throw new Error("No index membership is recorded to hold a chain for");
     }
-    await this.#writeJson(MEMBERSHIP, {
-      ...file,
-      chains: { ...file.chains, [signer]: chain.map(toUnpaddedBase64url) },
-    } satisfies MembershipFile);
+    await this.#writeJson(
+      MEMBERSHIP,
+      {
+        ...file,
+        chains: { ...file.chains, [signer]: chain.map(toUnpaddedBase64url) },
+      } satisfies MembershipFile,
+    );
   }
 
   /** The id `entryPath` last published as, or `undefined`. */
@@ -253,7 +259,9 @@ export class PatternIndexStore {
       !isObjectNotArray(parsed.chains)
     ) {
       throw new Error(
-        `${join(this.#dir, MEMBERSHIP)} is not a pattern index membership record`,
+        `${
+          join(this.#dir, MEMBERSHIP)
+        } is not a pattern index membership record`,
       );
     }
     return parsed as unknown as MembershipFile;

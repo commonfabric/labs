@@ -133,7 +133,10 @@ export class FakePatternIndex {
     }
     if (this.#members.has(root)) return json(409, { error: "already" });
     this.#invites.delete(String(body.inviteId));
-    const member = { handle: `p-${this.#members.size + 1}`, role: "user" as const };
+    const member = {
+      handle: `p-${this.#members.size + 1}`,
+      role: "user" as const,
+    };
     this.#members.set(root, member);
     return json(200, member);
   }
@@ -142,7 +145,11 @@ export class FakePatternIndex {
     const patternId = String(body.patternId);
     const existing = this.publications.get(patternId);
     if (existing !== undefined) {
-      return json(200, { patternId, created: false, listing: existing.listing });
+      return json(200, {
+        patternId,
+        created: false,
+        listing: existing.listing,
+      });
     }
     this.publications.set(patternId, {
       patternId,

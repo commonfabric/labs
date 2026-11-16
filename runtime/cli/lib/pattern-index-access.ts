@@ -11,8 +11,8 @@
 import { type DIDKey, type Identity } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
-  type PatternIndexMember,
   PatternIndexClient,
+  type PatternIndexMember,
 } from "@commonfabric/pattern-index/client";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import {
@@ -216,7 +216,11 @@ export async function joinPatternIndex(
     });
     joined = true;
   }
-  const client = await openPatternIndexClient({ ...options, store, nowSeconds });
+  const client = await openPatternIndexClient({
+    ...options,
+    store,
+    nowSeconds,
+  });
   const member = await client.whoami();
   const recorded = (await store.membership())!;
   if (member.handle !== recorded.handle) {
