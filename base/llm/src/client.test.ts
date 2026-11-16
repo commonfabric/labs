@@ -15,7 +15,9 @@ import {
   parseLLMReply,
   readLLMResponse,
   readLLMStream,
+  requestMismatch,
   resetMockMode,
+  setLLMResponder,
   setMockResponseGate,
 } from "./client.ts";
 import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "./types.ts";
@@ -806,5 +808,136 @@ describe("failureHint", () => {
       expect(hint).not.toContain("again later");
       expect(hint).not.toContain("was not the problem");
     }
+  });
+});
+
+describe("setLLMResponder()", () => {
+  const client = new LLMClient();
+  const request = {
+    messages: [{ role: "user" as const, content: "hello" }],
+    model: "test-model",
+    stream: true,
+  };
+  const objectRequest = {
+    messages: [{ role: "user" as const, content: "hello" }],
+    schema: { type: "object" as const },
+  };
+
+  it("hands every request, its callback, and its signal to the responder", async () => {
+    const seen: unknown[] = [];
+    const signal = new AbortController().signal;
+    const partials: string[] = [];
+    setLLMResponder({
+      sendRequest(request, callback, abortSignal) {
+        seen.push(request, abortSignal);
+        callback?.("so far");
+        return Promise.resolve({ role: "assistant", content: "hi", id: "r" });
+      },
+      generateObject(request, abortSignal) {
+        seen.push(request, abortSignal);
+        return Promise.resolve({ object: { answered: true } });
+      },
+    });
+    try {
+      const reply = await client.sendRequest(
+        request,
+        (text) => partials.push(text),
+        signal,
+      );
+      const object = await client.generateObject(objectRequest, signal);
+      expect(reply.content).toBe("hi");
+      expect(object.object).toEqual({ answered: true });
+      expect(partials).toEqual(["so far"]);
+      expect(seen).toEqual([request, signal, objectRequest, signal]);
+    } finally {
+      setLLMResponder(undefined);
+    }
+  });
+
+  it("sends requests to the service again once removed", async () => {
+    setLLMResponder({
+      sendRequest: () => Promise.reject(new Error("responder")),
+      generateObject: () => Promise.reject(new Error("responder")),
+    });
+    setLLMResponder(undefined);
+
+    await expect(client.sendRequest({ ...request, stream: false })).rejects
+      .toThrow(GUARD_MESSAGE);
+  });
+
+  it("is replaced by the mock catalog when mock mode is enabled", async () => {
+    setLLMResponder({
+      sendRequest: () => Promise.reject(new Error("responder")),
+      generateObject: () => Promise.reject(new Error("responder")),
+    });
+    enableMockMode();
+    addMockResponse(() => true, {
+      role: "assistant",
+      content: "catalog",
+      id: "c",
+    });
+    try {
+      const reply = await client.sendRequest({ ...request, stream: false });
+      expect(reply.content).toBe("catalog");
+    } finally {
+      resetMockMode();
+    }
+  });
+
+  it("leaves another responder installed when mock mode is disabled", async () => {
+    setLLMResponder({
+      sendRequest: () => Promise.reject(new Error("responder")),
+      generateObject: () => Promise.reject(new Error("responder")),
+    });
+    disableMockMode();
+    try {
+      await expect(client.sendRequest({ ...request, stream: false })).rejects
+        .toThrow("responder");
+    } finally {
+      setLLMResponder(undefined);
+    }
+  });
+});
+
+describe("requestMismatch()", () => {
+  const request = {
+    messages: [
+      { role: "user" as const, content: "first question" },
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "second question" }],
+      },
+    ],
+    model: "test-model",
+    system: "Be brief.",
+    tools: { search: { description: "Search", inputSchema: {} } },
+  };
+
+  it("returns undefined for a request that meets every condition", () => {
+    expect(requestMismatch({
+      messageCount: 2,
+      messagesContain: ["first", "second"],
+      lastMessageContains: "second",
+      hasTools: ["search"],
+      systemContains: "brief",
+    }, request)).toBeUndefined();
+  });
+
+  it("describes the first condition the request fails", () => {
+    expect(requestMismatch({ messageCount: 1 }, request)).toBe(
+      "expected 1 messages, got 2",
+    );
+    expect(requestMismatch({ messagesContain: ["third"] }, request)).toBe(
+      'expected some message to contain "third"',
+    );
+    expect(requestMismatch({ lastMessageContains: "first" }, request)).toBe(
+      'expected last message to contain "first", got "second question"',
+    );
+    expect(requestMismatch({ hasTools: ["fetch"] }, request)).toBe(
+      'expected tool "fetch" in request, got [search]',
+    );
+    expect(requestMismatch({ systemContains: "long" }, request)).toBe(
+      'expected system prompt to contain "long"',
+    );
   });
 });

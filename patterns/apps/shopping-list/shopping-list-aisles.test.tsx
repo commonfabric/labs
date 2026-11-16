@@ -4,8 +4,8 @@
  * Switches a two-item list with a connected store layout to the sorted view
  * and corrects an item's aisle from the locations that layout names.
  *
- * No language model answers in a pattern test, so each item's aisle
- * categorization fails, logging a warning, and the view falls back to "Other".
+ * The test states that the model fails each item's aisle categorization,
+ * which logs a warning, and the view falls back to "Other".
  *
  * Run: deno task cf test patterns/apps/shopping-list/shopping-list-aisles.test.tsx --verbose
  */
@@ -21,6 +21,18 @@ import {
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import ShoppingList from "./shopping-list.tsx";
+
+// The model fails each item's aisle categorization.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "Item: Bread" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "Item: Tea" },
+    error: "The model is unavailable.",
+  },
+];
 
 const STORE_LAYOUT = `# Aisle 1
 Dairy

@@ -8,8 +8,8 @@
  * name, and its view. The neighbor and search queries are checked on edges the
  * test writes.
  *
- * The agent's annotations need a model, which a pattern test has none of, so
- * the functions that turn annotations into edges and groups are checked on
+ * The test states that the model fails the agent's analysis, so the
+ * functions that turn annotations into edges and groups are checked on
  * annotations the test writes itself.
  */
 import {
@@ -42,6 +42,18 @@ import KnowledgeGraph, {
   searchGraphPattern,
   type SummaryEntry,
 } from "./knowledge-graph.tsx";
+
+// The model fails the agent's analysis each time it is asked for.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "Analyze the knowledge graph" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "Analyze the knowledge graph" },
+    error: "The model is unavailable.",
+  },
+];
 
 const piece = (name: string) =>
   new Writable<MentionablePiece>({ [NAME]: name, mentioned: [] });

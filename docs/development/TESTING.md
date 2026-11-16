@@ -710,7 +710,8 @@ failing.
 `EXPERIMENTAL_SERVER_EXECUTION` and else `SERVER_EXECUTION_DEFAULT_ENABLED`,
 and on the ON arm hosts the loop with the pair below: a single-user test
 connects to `startServingMemoryServer()`, whose serving runtimes fetch through
-the test's `fetchMocks`, and a multi-user test's participants to
+the test's `fetchMocks` and have their model requests answered from its
+`llmMocks`, and a multi-user test's participants to
 `listenServingMemoryServer()`, with no access list, as on the OFF arm. Each
 settle also waits until every event the runtime fired has its consequence
 back at the runtime, which `runtime.idle()` and `storageManager.synced()` do

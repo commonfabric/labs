@@ -40,6 +40,7 @@ import {
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity/did";
+import { setLLMResponder } from "@commonfabric/llm";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -70,6 +71,7 @@ import {
   type LoggerErrorWarnSnapshot,
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
+import { type LLMForwardedAnswer, LLMForwardingResponder } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
 import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
@@ -230,6 +232,17 @@ let servedQuiescence: ServedQuiescence | undefined;
 /** The orchestrator's answers still awaited, by request id. */
 const quiescenceAnswers = new Map<number, Deferred<number>>();
 let nextQuiescenceRequest = 0;
+
+/**
+ * Sends every language-model request this worker's runtime makes to the
+ * orchestrator, which answers it from the test's `llmMocks`.
+ */
+const llmForwarding = new LLMForwardingResponder((message) =>
+  (self as unknown as Worker).postMessage(
+    message,
+  )
+);
+setLLMResponder(llmForwarding);
 
 /** Helper for {@link servedQuiescence}, which makes one request. */
 function requestServedQuiescence(): Promise<number> {
@@ -707,11 +720,19 @@ const handlers: Record<
   /** Evaluate an assertion step, reporting what a false value held. */
   async assertion({ index }) {
     const stepCell = stepCells[index as number];
-    const value = await (stepCell.key("assertion" as never) as Cell<unknown>)
-      .pull();
-    // An `assert(...)` assertion carries the operands recorded while the
-    // condition ran, so a failure names them and their values.
-    return assertionOutcome(value);
+    const assertionCell = stepCell.key("assertion" as never) as Cell<unknown>;
+    // Demanding the assertion is what starts an asynchronous built-in it
+    // reads, such as a fetch or a model call. Hold that demand while waiting
+    // for the work it set going, as the single-user runner does.
+    const releaseDemand = assertionCell.sink(() => {});
+    try {
+      await rt().settled();
+      // An `assert(...)` assertion carries the operands recorded while the
+      // condition ran, so a failure names them and their values.
+      return assertionOutcome(await assertionCell.pull());
+    } finally {
+      releaseDemand();
+    }
   },
 
   /** Materialize one VDOM target, then remove its renderer demand. */
@@ -730,6 +751,10 @@ const handlers: Record<
    * next, so this is a demand for full settlement at a point the author names.
    */
   async settleStep() {
+    await settleServed(rt(), async () => {
+      await rt().settled();
+      await servedConsequences(rt());
+    }, servedQuiescence);
     await settle();
     return {};
   },
@@ -832,8 +857,14 @@ const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
 );
 
 self.onmessage = async (
-  event: MessageEvent<WorkerRequest | WorkerQuiescenceAnswer>,
+  event: MessageEvent<
+    WorkerRequest | WorkerQuiescenceAnswer | LLMForwardedAnswer
+  >,
 ) => {
+  if ("llmAnswer" in event.data) {
+    llmForwarding.receive(event.data);
+    return;
+  }
   if ("quiescenceAnswer" in event.data) {
     const answer = event.data;
     const waiting = quiescenceAnswers.get(answer.quiescenceAnswer);
