@@ -409,9 +409,10 @@ A derivation past a limit runs on a helper worker that holds no lease. The
 helper opens the space's store on a connection of its own, reads every
 document as of one sequence number S (`Engine.readState` takes a `seq`), and
 runs the action's body against that snapshot under limits far longer than the
-serving thread's. It commits nothing. Its result, the writes it would make, the reads
-it made and S, crosses to the space's serving worker as data. That worker,
-which holds the lease, commits it the way it commits an effect's completion
+serving thread's. It commits nothing. Its result, the writes it would make,
+the reads it made and S, crosses to the space's serving worker as data. That
+worker, which holds the lease, commits it the way it commits an effect's
+completion
 (`serving-loop.md` §4, `markEffectCompletion`): a derived-class commit of its
 own, marked for what it completes, serialized behind the seals, and never
 part of a wave. The serving thread never runs the slow body, so events and
