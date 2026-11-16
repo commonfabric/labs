@@ -128,14 +128,15 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
    *   minted within the `data-model`.
    */
   static isInstance(value: unknown): value is BaseFabricPrimitive {
-    if ((value === null) || (typeof value !== "object")) {
+    // A genuine instance, every prototype between it and
+    // `FabricPrimitive.prototype`, and `FabricPrimitive` itself are frozen, so
+    // a genuine instance is always an `instanceof FabricPrimitive`.
+    if ((typeof value !== "object") || !(value instanceof FabricPrimitive)) {
       return false;
     } else if (#instanceBlessed in value) {
       return true;
-    } else if (value instanceof FabricPrimitive) {
-      throw new Error("Detected counterfeit `FabricPrimitive`.");
     } else {
-      return false;
+      throw new Error("Detected counterfeit `FabricPrimitive`.");
     }
   }
 }

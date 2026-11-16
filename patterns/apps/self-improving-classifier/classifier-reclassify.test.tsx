@@ -4,7 +4,7 @@
  * Reclassifies an example, which sends it back to the model and holds the
  * classifier, ignoring further submissions, until the item is dismissed.
  *
- * The model is unreachable here, so the classification fails, which the card
+ * The test states that the model fails the classification, which the card
  * shows until the item is dismissed. What the classifier does with the
  * model's answer is covered by `classifier-logic.test.ts`.
  *
@@ -28,6 +28,14 @@ import {
   sortedIds,
 } from "./classifier-test-fixture.ts";
 import SelfImprovingClassifier from "./self-improving-classifier.tsx";
+
+// The model fails the reclassification.
+export const llmMocks = [
+  {
+    when: { systemContains: "precise classifier" },
+    error: "The model is unavailable.",
+  },
+];
 
 export default pattern(() => {
   const subject = SelfImprovingClassifier({
@@ -95,8 +103,8 @@ export default pattern(() => {
       { assertion: assert_freed_by_dismiss },
     ],
     subject,
-    // The model has no endpoint in a pattern test, so the llm builtin warns,
-    // and the classifier warns about the submissions it ignores.
+    // The llm builtin warns that the classification failed, and the
+    // classifier warns about the submissions it ignores.
     allowConsoleWarnings: true,
   };
 });

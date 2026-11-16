@@ -23,9 +23,13 @@ operation-selection guidance live in
 
 ## Expected improvements and limits
 
-The board's `crossrefTable` materializes narrow mention lists once, then scans
-source lists for each destination. Each topic's `backlinksOf` scans the
-resulting table to find its own row. Topic rendering separately derives active
+The board's `crossrefTable` materializes narrow mention lists once, resolves
+each topic and each mention to its `equalsKey()`, and files each source under
+the topics it mentions. One run is written to grow with the topics plus the
+mentions, where comparing every pair with `equals()` grew with their product.
+It still rebuilds the whole table on every change to the board or to any
+topic's mentions. Each topic's `backlinksOf` scans the resulting table to find
+its own row. Topic rendering separately derives active
 comments, active links, presence booleans, and link-resolution inputs.
 A topic's comment count and last activity are stored values its verbs keep in
 the write that changes them.
@@ -38,7 +42,7 @@ latency predictions or unconditional complexity guarantees.
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Shared keyed backlink-row lookup                            | Remove each demanding topic's repeated search through N cross-reference rows. With N consumers, eliminate a potential N-by-N lookup stage. | The pivot producer remains. Index maintenance and consumer demand can add graph work; putting an index inside every topic would duplicate maintenance. |
 | Reuse active counts/views                                   | Avoid duplicate C- and L-sized filtering for presence and link resolution.                                                                 | Likely a modest constant-factor benefit; sharing a broader view can increase demand.                                                                   |
-| Maintain source-to-destination edges grouped by destination | On a local mention edit, update affected edges and destination buckets instead of rescanning all source lists for every destination.       | Building all edges afresh retains producer cost. Ordering, duplicate occurrences, membership reconciliation, and large buckets require work.           |
+| Maintain source-to-destination edges grouped by destination | On a local mention edit, update affected edges and destination buckets instead of rebuilding every row from every source list.            | Building all edges afresh retains producer cost. Ordering, duplicate occurrences, membership reconciliation, and large buckets require work.           |
 | Maintained comment count                                    | Adopted as a stored input (`commentCount`) the topic's verbs keep; T4 closed on it.                                                        | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
 | Maintained activity maxima                                  | Adopted as a stored input (`lastActivityAt`) the topic's verbs keep, counting stamped removals; T4 closed on it.                           | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
 

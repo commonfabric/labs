@@ -12,6 +12,7 @@ import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   acquireServerExecutionEnabler,
   encodeMemoryBoundary,
@@ -437,6 +438,89 @@ describe("serving-worker-recovery", () => {
       [...started.accessForTestingOnly.placements].flatMap(([placed, on]) =>
         on.worker.port === worker ? [placed] : []
       );
+
+    /** How many times the pool has warned that a worker's limit was replaced. */
+    const overriddenWarnings = (): number => {
+      const breakdown = getLoggerCountsBreakdown() as Record<
+        string,
+        Record<string, { warn?: number } | number | undefined> | undefined
+      >;
+      const entry = breakdown["serving-worker-host"]?.["heap-limit-overridden"];
+      return typeof entry === "object" ? entry.warn ?? 0 : 0;
+    };
+
+    it("warns when V8 limits a worker's heap to far more than it was started with, as a process-wide flag does", async () => {
+      fakes[Symbol.dispose]();
+      // The 16 GB a `--max-old-space-size=16384` gives every isolate.
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const before = overriddenWarnings();
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(overriddenWarnings()).toBe(before + 1);
+    });
+
+    it("does not warn for the young generation V8 adds to the limit a worker was started with", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(196 * MB));
+      const before = overriddenWarnings();
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(overriddenWarnings()).toBe(before);
+    });
+
+    it("ends a worker whose limit a process-wide flag replaced, at two heartbeats in a row past its limit", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [grown] = workers();
+      grown.beat(150 * MB);
+      await clock.settle();
+      expect(grown.terminated).toBe(false);
+      grown.beat(150 * MB);
+      await clock.settle();
+      expect(grown.terminated).toBe(true);
+      expect(started.stats().workers).toMatchObject({
+        failed: 1,
+        heapLimited: 1,
+        heapStopped: 1,
+      });
+    });
+
+    it("does not end a worker whose limit a flag replaced for heartbeats past its limit that are not in a row", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      worker.beat(150 * MB);
+      worker.beat(50 * MB);
+      worker.beat(150 * MB);
+      await clock.settle();
+      expect(worker.terminated).toBe(false);
+      expect(started.stats().workers.heapLimited).toBe(0);
+    });
+
+    it("leaves a worker under its own V8 limit to V8, whatever its heartbeats report", async () => {
+      // V8 collects such a worker's garbage before it fails it, and the heap
+      // a heartbeat reports includes garbage.
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      worker.beat(150 * MB);
+      worker.beat(150 * MB);
+      worker.beat(150 * MB);
+      await clock.settle();
+      expect(worker.terminated).toBe(false);
+      expect(started.stats().workers.heapLimited).toBe(0);
+    });
 
     it("leaves a worker serving whose heap is larger than the limit and has not reached it", async () => {
       // The limit bounds the heap's old generation, and the heap a worker

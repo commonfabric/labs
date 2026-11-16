@@ -80,6 +80,66 @@ Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
   );
 });
 
+Deno.test("mergeLcovReports writes only Deno's lines of a file the pattern instrumentation also recorded", () => {
+  // Lines 3 to 5 are one statement, which Deno's coverage counts on lines 3
+  // and 4 and the instrumentation names on all three. The merged record is
+  // read as Deno's, so it carries no pattern-coverage test name.
+
+  const pattern = [
+    "TN:pattern-runtime",
+    "SF:patterns/a/model.ts",
+    "DA:3,0",
+    "DA:4,0",
+    "DA:5,0",
+    "end_of_record",
+  ].join("\n");
+  const deno = [
+    "SF:patterns/a/model.ts",
+    "DA:3,1",
+    "DA:4,1",
+    "end_of_record",
+  ].join("\n");
+
+  assertEquals(
+    mergeLcovReports([pattern, deno]).lcov,
+    [
+      "SF:patterns/a/model.ts",
+      "DA:3,1",
+      "DA:4,1",
+      "LF:2",
+      "LH:2",
+      "end_of_record",
+      "",
+    ].join("\n"),
+  );
+});
+
+Deno.test("mergeLcovReports writes every line and the test name of a file only the pattern instrumentation recorded", () => {
+  const pattern = [
+    "TN:pattern-runtime",
+    "SF:patterns/a/main.tsx",
+    "DA:3,1",
+    "DA:4,1",
+    "DA:5,0",
+    "end_of_record",
+  ].join("\n");
+
+  assertEquals(
+    mergeLcovReports([pattern]).lcov,
+    [
+      "TN:pattern-runtime",
+      "SF:patterns/a/main.tsx",
+      "DA:3,1",
+      "DA:4,1",
+      "DA:5,0",
+      "LF:3",
+      "LH:2",
+      "end_of_record",
+      "",
+    ].join("\n"),
+  );
+});
+
 Deno.test("combineCoverageLcov tolerates a missing input directory", async () => {
   const { lcov, fileCount } = await combineCoverageLcov(
     "/tmp/combine-lcov-does-not-exist-abc123",

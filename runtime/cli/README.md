@@ -688,18 +688,24 @@ positions, and hunk expansion remain in place.
 Press `P` to push the branch checked out in the repository the viewer runs in,
 as it stands, to the branch of the same name on `origin`. The push is forced,
 but fails rather than discard commits on `origin` that the branch has never
-included, even when they have been fetched. A dialog shows git's output as it
-arrives, with an Abort button that stops the push. Up, Down, Page Up, Page Down,
-Home, End, and the mouse wheel scroll the output, and Left and Right move the
-focus between the buttons. When the push ends, the dialog adds how it ended, and
-two buttons replace Abort. Close leaves that summary in the status line. Quit
-(`Q`) closes the viewer, first offering to save any unsaved edits. Git asks
-nothing on the terminal while the viewer holds it; a question such as a key's
-passphrase goes to the program `SSH_ASKPASS` names, and fails when it names
-none. `P` refuses to push `origin`'s default branch, and refuses when `origin`
-names no default branch (`git remote set-head origin --auto` finds it). It also
-refuses a checkout not on a branch, and refuses when git started the viewer as
-its pager for a different repository.
+included, even when they have been fetched. A dialog says which branch it pushes
+where, then shows git's output as it arrives, with an Abort button that stops
+the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
+the output, and Left and Right move the focus between the buttons. When the push
+ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
+that summary in the status line. Quit (`Q`) closes the viewer, first offering to
+save any unsaved edits. Git asks nothing on the terminal while the viewer holds
+it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
+names, and fails when it names none. `P` refuses to push `origin`'s default
+branch, and refuses when `origin` names no default branch
+(`git remote set-head origin --auto` finds it). It also refuses a checkout not
+on a branch, and refuses when git started the viewer as its pager for a
+different repository.
+
+When a push fails or is aborted, as it can when the network is unreliable, a
+Retry push button (`P`) pushes again, unless git says the push was rejected, or
+GitHub says the account has no permission to push, which pushing again cannot
+change. Each later push's output follows the earlier one's in the same dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
 buttons under "Pull requests" choose one of the four ways below. The first and
@@ -726,62 +732,85 @@ whose changes that branch already has.
   create the pull request with the token the settings name. The dialog asks, in
   brighter text, for the named security key to be touched, as "Touch the
   “carthusian” security key to create a PR.", and the server acts only once it
-  is. The server's address, its certificate, the secret its clients share, and
-  the registered security keys come from `~/.config/touch-gate`, as the touch-
-  gate project's client keeps them, and the viewer talks to the security key
-  through libfido2's `fido2-token` and `fido2-assert` tools.
+  is. As soon as the security key is touched, the dialog says so, before the
+  viewer sends the server the approval. When a security key fails, the summary
+  says what libfido2's error means, as "the security key stopped answering",
+  followed by the tool and the error's name, or else gives what the tool
+  printed. The server's address, its certificate, the secret its clients share,
+  and the registered security keys come from `~/.config/touch-gate`, as the
+  touch-gate project's client keeps them, and the viewer talks to the security
+  key through libfido2's `fido2-token` and `fido2-assert` tools.
 
 When creating the pull request with the GitHub API or touch-gate fails, or is
 aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
-again. Trying again looks for an open pull request first, in case the failed
+again, with the settings as they are then, its output following the failed
+attempt's. Trying again looks for an open pull request first, in case the failed
 attempt created one.
 
+When GitHub refuses a creation or a merge, whether the viewer asked it directly
+or through touch-gate, the summary gives GitHub's status and the message its
+reply gives, as "GitHub answered 405: Merge already in progress". The button
+that tries again is left out when the status says the request itself cannot
+succeed: 404 (not found), 405 (not allowed), 409 (in conflict), or 422 (not
+valid).
+
 Press `L` to land the checked-out branch's open pull request; `l` pans right,
-and `h` and `H` pan left. A dialog opens at once, saying what it looks for, and
-its Cancel button stops the search. The viewer looks for the pull request in
-`~/.cache/github-prs.tsv`, a list of open pull requests that another program
-keeps, one a line as its repository, branch, and number separated by tabs. The
-list does not say whose fork a branch is in, so unless it names exactly one pull
-request for the branch, the viewer asks GitHub. With the first radio button, the
-dialog closes and the status line gives the pull request's address as a link.
-With the third, the viewer opens the pull request in the browser, or, when no
-browser can be opened, gives its address in the status line as the first does.
-With the second or the fourth, the viewer asks GitHub's GraphQL API how GitHub's
-page would merge the pull request: by the method the token's account last used,
-or else by the repository's default. GitHub's merge API itself merges with a
-merge commit unless told otherwise, which a repository that allows only
-squashing or rebasing refuses. With the second radio button, the dialog then
-asks whether to merge that way, with Merge and Cancel buttons. No button is its
+and `h` and `H` pan left. A dialog like the push's opens at once, saying what it
+looks for, and its Abort button stops the search. The viewer looks for the pull
+request in `~/.cache/github-prs.tsv`, a list of open pull requests that another
+program keeps, one a line as its repository, branch, and number separated by
+tabs. The list does not say whose fork a branch is in, so unless it names
+exactly one pull request for the branch, the viewer asks GitHub. When the branch
+has no open pull request, or the viewer cannot land it, the dialog says so. With
+the first radio button, the dialog gives the pull request's address. With the
+third, the viewer opens the pull request in the browser, or, when no browser can
+be opened, gives its address as the first does. With the second or the fourth,
+the viewer asks GitHub's GraphQL API how GitHub's page would merge the pull
+request: by the method the token's account last used, or else by the
+repository's default. GitHub's merge API itself merges with a merge commit
+unless told otherwise, which a repository that allows only squashing or rebasing
+refuses. With the second radio button, the dialog then asks whether to merge
+that way, with Merge and Cancel buttons in place of Abort. No button is its
 default: Enter does nothing until Tab or an arrow key has moved the focus to a
 button, while a button's letter acts at once. With the fourth, the touch of the
 security key approves the merge, so the viewer asks nothing first. The viewer
-merges the pull request with GitHub's API or touch-gate, in a dialog like the
-push's. The merge happens only while the pull request's head is the commit the
-viewer has checked out. Asking for the merge method needs a GitHub token, from
-the same places the API uses. When a creation or a merge is aborted after its
-request was sent, it may have happened anyway, and the summary says so.
+merges the pull request with GitHub's API or touch-gate in the same dialog, its
+output following what the dialog found. The merge happens only while the pull
+request's head is the commit the viewer has checked out. Asking for the merge
+method needs a GitHub token, from the same places the API uses. When the merge
+fails or is aborted, a Merge PR button (`P`) merges the same pull request, at
+the same commit and by the same method, again, with the settings as they are
+then, without looking for it again and without asking first. When a creation or
+a merge is aborted after its request was sent, it may have happened anyway, and
+the summary says so.
 
 Press `O` to open the settings dialog. Below the radio buttons, an input line
 holds the name of the token the touch-gate server uses. Its check box, "Quit
-when the pushed branch's pull request opens", has the viewer quit as soon as it
-creates the pull request, printing its address as described below, and otherwise
-has it watch the GitHub webhook relay while the push dialog is up. The relay
-passes on each delivery of the organization's GitHub webhook as it arrives, and
-keeps none for a subscriber that was not connected;
+when the pull request opens or merges", has the viewer quit as soon as it
+creates or merges the pull request, printing its address as described below, and
+otherwise has it watch the GitHub webhook relay while the push or land dialog is
+up. The relay passes on each delivery of the organization's GitHub webhook as it
+arrives, and keeps none for a subscriber that was not connected;
 `github-webhook-relay/README.md` in the infra repository describes it. The
 dialog's last input line holds the `host:port` of the relay's subscriber
 listener. When the push succeeds and the server offers a page for creating a
-pull request, the viewer connects to the relay, and gives the page's address or
-opens the page once it has connected or failed to. While it connects, Abort, or
-an interrupt, gives up on the connection. When a delivery reports that a pull
+pull request, or `L` finds the pull request with the first or third radio
+button, the viewer connects to the relay, and gives the address or opens the
+page once it has connected or failed to. While it connects, Abort, or an
+interrupt, gives up on the connection. When a delivery reports that a pull
 request was opened from the pushed branch, at the pushed commit, in the GitHub
-repository that `origin` names, the viewer closes the push dialog and quits as
-Quit does. Once the screen is restored, it prints the pull request's address on
-the terminal. The address is printed only when the viewer quit for it, so a quit
-after cancelling the save prompt it raised prints nothing. With the check box
-on, the push dialog says under git's output whether the viewer is connecting or
-watching, or why it is not watching: no relay is set, `origin` is not on GitHub,
-or the connection failed or ended. Closing the push dialog stops the watch.
+repository that `origin` names, or that the pull request `L` found merged, the
+dialog gives the pull request's address and says it is quitting, and half a
+second later the viewer closes the dialog and quits as Quit does, unless the
+dialog was closed meanwhile. Pressing Quit in that moment quits at once, for the
+pull request all the same. Quitting once the viewer creates or merges the pull
+request works the same way. Once the screen is restored, it prints the pull
+request's address on the terminal. The address is printed only when the viewer
+quit for it, so a quit after cancelling the save prompt it raised prints
+nothing. With the check box on, the dialog says under its output whether the
+viewer is connecting or watching, or why it is not watching: no relay is set,
+`origin` is not on GitHub, or the connection failed or ended. Closing the dialog
+stops the watch.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
@@ -3311,6 +3340,99 @@ deno run --allow-run --allow-env --allow-read vendor/labs/runtime/cli/launcher.t
 Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 `--help` are passed through to `cf`.
 
+## Publishing to the pattern index
+
+The pattern index is where patterns are published and found. `cf index` holds
+the membership commands and `cf pattern` the publishing ones: `cf index join`
+once, `cf pattern publish` each time a pattern is ready to share, and
+`cf pattern ls` (also `cf pattern mine`) to see where they stand. Every call to
+the index signs with the identity (`--identity` or `CF_IDENTITY`), except the
+invite redemption in `cf index join`, which the index-only root key it creates
+signs (see "Joining"). All of them talk to the index `--pattern-index-url` or
+`CF_PATTERN_INDEX_URL` names, the deployment's by default.
+
+### Joining
+
+The index admits people by invite. `cf index join` reads the invite link from
+stdin, which keeps the secret code in its fragment out of shell history and
+transcripts, or takes it as an argument. It makes a key for the index alone,
+redeems the invite with it so it becomes the root of the person's membership,
+and has that root delegate `/index` to the `cf` identity. The person's own
+identity never becomes their index root, so nothing the index learns links to
+their spaces or profile. The root key and the chains it issued are kept under
+`$XDG_STATE_HOME/commonfabric/pattern-index/<host>/` (or `~/.local/state/…`, or
+`CF_PATTERN_INDEX_HOME`), private to the user; that directory is the person's
+standing on the index and is worth backing up. Joining again redeems nothing,
+and a join whose redemption landed without its answer arriving is completed by
+running it again.
+
+A link to a signing key holds for at most 90 days, so every index call from `cf`
+renews it from the kept root when it has under a week left. Other keys act for
+the same person through chains the root issues:
+
+- `cf delegation issue --index --to <did> --out <file>` writes the chain another
+  key presents: a Loom instance key, or a second machine, which then runs
+  `cf index join --chain <file>` instead of redeeming a second invite. A chain
+  adopted this way is not renewed where the root is not kept; the root's machine
+  issues a new one before it lapses.
+- `cf delegation issue --index-root --to <did> --out <file>` writes the
+  single-use delegation that moves the membership to a new root key, which
+  presents it with `cf index move-root <file>`. Chains from the old root stop
+  working.
+
+`cf index whoami` says which member the index sees the identity as. An admin
+admits a key without an invite with `cf index admit <did>`.
+
+### Publishing
+
+`cf pattern publish <entry file>` compiles the pattern as `cf piece new` does,
+against the same fabric (`--api-url`, `--space`), so that the id it publishes
+under is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
+`--root` package it the same way and must match how the piece was deployed. The
+description is the first paragraph of the entry's doc comment, which may follow
+`//` lines and imports, and the tags are its `@hashtags` and `@keywords` lines;
+`--description`, `--hashtags` and `--keywords` override them. An identity that
+is no member is refused before anything compiles.
+
+Before publishing, it asks the index's own privacy question locally: it fetches
+the prompt the index's privacy check runs and sends it, with the pattern, to the
+fabric toolshed's LLM. When the answer is that the pattern would reveal
+something identifying, it asks for a generalized version, with specific values
+lifted into arguments and fields renamed away from personal names, at most
+twice, recompiling and checking each. A rewrite may change only the files the
+findings name. A rewrite that passes is written over those files only when git
+tracks each one, it has no uncommitted edits, it is not a symbolic link, and it
+has not changed since it was read (`--allow-dirty` waives the git checks). The
+command then names the kinds of change and the files, never a value, and says to
+review with `git diff`. When a rewrite passes but cannot be written, nothing is
+published and the command exits 1, saying what to do. When no rewrite passes,
+the pattern is published as it is, with the findings shown. The index's own
+check then holds it unlisted until they are fixed: it is in no one else's search
+or listing, and only its author and admins see it listed, though anyone given
+its id can still open it, as with any unlisted pattern. When the LLM call fails,
+the local check is skipped with one line saying so; the index checks every
+listing request either way. `--skip-local-check` skips it on purpose.
+
+A publish names the id last published from the same entry file on this machine
+as its predecessor (`priorPatternId`), so the new version keeps the old one's
+standing. A file `cf piece getsrc` wrote from a piece that
+`cf piece new --from-index` created is published as a remix of that pattern
+(`remixedFrom`), or as a new version of it when it was the caller's own;
+`--remixed-from` names the source where `cf` has no record. Publishing then
+requests a listing. Past the index's daily limit it says when the limit resets,
+and running the same command then requests it again. The next step it prints is
+deploying the pattern with `cf piece new --from-index <id>`, or opening it in a
+loom with `/deploy index:<id>`. A listed pattern moves from Unvetted to Main
+once its author opens it in a loom.
+
+### Where patterns stand
+
+`cf pattern ls` lists the caller's patterns, one row per lineage (a pattern and
+its later versions): whether the newest version is being checked, held (with the
+findings to fix and the command that republishes it), in error waiting for an
+admin re-run, or listed, and then its bucket, its use counts, and what moves it
+on.
+
 ## JSON command contract
 
 An invocation that contains `--json` reserves stdout for JSON. Status text and
@@ -3351,7 +3473,18 @@ The supported output switches are:
   accepted, documented no-ops for callers that select JSON explicitly.
 - `cf delegation show --json` prints one row per delegation of each chain the
   file holds; `cf delegation issue --out <file> --json` reports the write as one
-  object naming the file, the space, the audience, and the chain's length.
+  object naming the file, the space, the audience, and the chain's length; with
+  `--index` or `--index-root` the object names the command and the index root
+  instead of a space, and the expiry.
+- `cf index join --json` and `cf index move-root --json` print
+  `{handle, role, root, signer, joined, storeDir, rootKeptHere}`, where
+  `rootKeptHere` says whether backing up `storeDir` keeps the root key;
+  `cf index whoami --json` prints the handle, the role and the signer.
+- `cf pattern publish --json` prints the publish report. Its `outcome` is
+  `published`, with the id, whether it was new, the listing request's outcome
+  and the next step, or `blocked`, with nothing published and the next step.
+  Both carry the local check's outcome: findings and changes by category and
+  file, never a value. `cf pattern ls --json` prints its rows.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.

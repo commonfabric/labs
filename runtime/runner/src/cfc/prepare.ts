@@ -3094,6 +3094,27 @@ const identityForSchemaPath = (
   return undefined;
 };
 
+/**
+ * The payload paths the transaction wrote under an identity other than a
+ * builtin's (`CfcTxState.nonBuiltinWrites`), by target. Runtime-minted
+ * evidence a builtin's schema names at a path one of them overlaps could
+ * stand for a value that identity chose, even where a builtin wrote the path
+ * after it, so `gateRuntimeMintedIntegrity` treats it as an unattributed
+ * write's.
+ */
+const nonBuiltinWritePathsByTarget = (
+  writes: readonly CfcAddress[],
+): Map<string, (readonly string[])[]> => {
+  const result = new Map<string, (readonly string[])[]>();
+  for (const write of writes) {
+    const key = targetKey(write);
+    let paths = result.get(key);
+    if (paths === undefined) result.set(key, paths = []);
+    paths.push(write.path);
+  }
+  return result;
+};
+
 const targetKey = (target: {
   space: MemorySpace;
   id: string;
@@ -9842,6 +9863,7 @@ const linkedSourceEvidence = (
         : mergeCfcSchemaEnvelopes(
           loadSchemaDocument(tx, input.source.space, sourceMetadata.schemaHash),
           pendingSourceSchema,
+          { storedSide: "existing" },
         ),
       targetKey(input.source),
     );
@@ -11090,7 +11112,10 @@ const mergeStoredCfcEnvelope = (
     // the idempotence check below does not skip the write. One already in
     // canonical form hashes the same and is kept as it is.
     ? canonicalizeCfcSchemaDocument(stored)
-    : mergeCfcSchemaEnvelopes(stored, candidate, options);
+    : mergeCfcSchemaEnvelopes(stored, candidate, {
+      ...options,
+      storedSide: "existing",
+    });
 
 /**
  * The reason the persist loop records when a candidate changes or weakens an
@@ -11147,7 +11172,10 @@ export const storedCfcEnvelopeMergeIssue = (
 ): CfcSchemaMergeIssue | undefined =>
   storedEnvelopeUnchangedByCandidate(stored, candidate)
     ? undefined
-    : cfcSchemaMergeIssue(stored, candidate, options);
+    : cfcSchemaMergeIssue(stored, candidate, {
+      ...options,
+      storedSide: "existing",
+    });
 
 /**
  * The decomposed spelling of an envelope schema: its root document, ready
@@ -12568,6 +12596,7 @@ export function* prepareBoundaryCommitSteps(
     state.writePolicyInputs,
     identityForInput,
   );
+  const nonBuiltinWrites = nonBuiltinWritePathsByTarget(state.nonBuiltinWrites);
   const linkWrites = linkWritesByTarget(state.writePolicyInputs);
   const currentLinkWrites = yield* currentLinkWritesByTarget(tx, linkWrites);
   // S16 flow labels: the per-tx conservative join. In `persist` mode every
@@ -13012,7 +13041,10 @@ export function* prepareBoundaryCommitSteps(
       : mergeCfcSchemaEnvelopes(
         schema,
         linkClaims,
-        { generatedOutputPaths: generatedOutputPaths.get(key) },
+        {
+          generatedOutputPaths: generatedOutputPaths.get(key),
+          storedSide: "candidate",
+        },
       );
     // A value write's candidate is the writer's own schema whenever that
     // schema declares a label, so it can omit a requirement the document
@@ -13022,11 +13054,16 @@ export function* prepareBoundaryCommitSteps(
     // and the envelope taken at each path the write went through. The stored
     // envelope is read as stored rather than through the merge, so no defect
     // in how the two combine can remove a stored requirement from the check.
+    // A write that puts links answers to the overlay above, whose write
+    // policies are the stored ones, with their stored stamps; it answers to
+    // the writer's own schema beside it, so that its writer is held to the
+    // alternatives and stamps the writer's schema lists, as a value write is.
     // Each schema can add requirements; none removes another's.
     const verificationSchemas: readonly JSONSchema[] =
       storedSchema !== undefined && !undefinedCandidate
         ? [
           verificationSchema,
+          ...(verificationSchema === schema ? [] : [schema]),
           storedSchema,
           ...storedEnvelopesAtWrittenPaths(
             storedSchema,
@@ -13043,6 +13080,17 @@ export function* prepareBoundaryCommitSteps(
       }
       return undefined;
     };
+
+    // The identity a schema's runtime-minted evidence is gated by at a path:
+    // the schema input's, unless a write another identity made overlaps the
+    // path (`nonBuiltinWritePathsByTarget()`), where it is none.
+    const nonBuiltin = nonBuiltinWrites.get(key) ?? [];
+    const mintingIdentityForPath = (
+      path: readonly string[],
+    ): ImplementationIdentity | undefined =>
+      nonBuiltin.some((written) => pathsOverlap(written, path))
+        ? undefined
+        : identityForSchemaPath(writeAuthorIdentities.get(key), path);
 
     // The stamps this transaction's own schemas name for the values it
     // writes, decided once: floor enforcement and persistence consume the
@@ -13062,7 +13110,7 @@ export function* prepareBoundaryCommitSteps(
               ),
             ],
           },
-          identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          mintingIdentityForPath(path),
         ).integrity ?? [];
         if (integrity.length === 0) continue;
         valueStamps.push({
@@ -13192,8 +13240,7 @@ export function* prepareBoundaryCommitSteps(
       let floorFailures: WriteFloorFailure[] = [];
       for (const schema of verificationSchemas) {
         const failures = yield* verifyWriteFloor(tx, schema, target, {
-          identityForPath: (path) =>
-            identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          identityForPath: mintingIdentityForPath,
           // A commit that stores none of its payload's claims stores none
           // of its stamps either, so they credit nothing.
           valueStamps: ingestVerificationFailed ? [] : valueStamps,
@@ -13368,7 +13415,7 @@ export function* prepareBoundaryCommitSteps(
               target.space,
               { ...mint, mintValueStamps: false },
             ),
-            identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
+            mintingIdentityForPath(entry.path),
           );
           const carriedClaims = mint.attributeCurrentPrincipal === false
             ? existingPrincipalClaims.get(

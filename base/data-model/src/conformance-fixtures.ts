@@ -34,8 +34,6 @@ import {
   FabricKeyPair,
   type FabricPrimitiveClassesByName,
   FabricUnavailable,
-  UNAVAILABLE_ERROR_KINDS,
-  UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
@@ -1393,14 +1391,11 @@ const INSTANCE_FIELDS: {
   FabricUnavailable: fielded(
     FabricUnavailable,
     (value) => Object.entries(value.state),
-    (_like, fields) =>
-      new FabricUnavailable(
-        keyField(fields, "reason", UNAVAILABLE_REASONS),
-        fields.has("errorKind")
-          ? keyField(fields, "errorKind", UNAVAILABLE_ERROR_KINDS)
-          : null,
-        fields.has("message") ? stringField(fields, "message") : null,
-      ),
+    // Its fields are strings, which the codec never decodes to `null`, so no
+    // patch replaces one and the instance they make is `like` itself. Making
+    // one afresh through the constructor would drop a message equal to its
+    // kind's default, which the state holds as it arrived.
+    (like) => like,
   ),
   UnknownValue: fielded(
     UnknownValue,
@@ -1439,32 +1434,6 @@ function bytesField(
     throw new Error(`Field \`${name}\` not a byte sequence`);
   }
   return held;
-}
-
-/**
- * Returns the string `fields` holds under `name`, which is one of the keys of
- * `keys`.
- *
- * @throws If it holds anything else there.
- */
-function keyField<Key extends string>(
-  fields: ReadonlyMap<string, FabricValue>,
-  name: string,
-  keys: { readonly [_ in Key]: unknown },
-): Key {
-  const held = stringField(fields, name);
-  if (!isKeyOf(keys, held)) {
-    throw new Error(`Field \`${name}\` not one of its values: ${held}`);
-  }
-  return held;
-}
-
-/** Indicates whether `key` is one of the own keys of `keys`. */
-function isKeyOf<Key extends string>(
-  keys: { readonly [_ in Key]: unknown },
-  key: string,
-): key is Key {
-  return Object.hasOwn(keys, key);
 }
 
 /**

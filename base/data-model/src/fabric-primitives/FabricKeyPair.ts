@@ -6,7 +6,7 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
-import { ProblematicValue } from "@/codec-common";
+import { hasOnlyKeys, ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -275,6 +275,22 @@ export class FabricKeyPair extends BaseFabricPrimitive {
     Object.freeze(this.prototype);
   }
 
+  /**
+   * The keys of a state holding material, in either format: the whole of what
+   * the codecs read from one.
+   */
+  static #MATERIAL_STATE_KEYS: readonly string[] = Object.freeze([
+    "algorithm",
+    "publicKey",
+    "privateKey",
+  ]);
+
+  /** The keys of a realm state holding handles. */
+  static #HANDLE_STATE_KEYS: readonly string[] = Object.freeze([
+    "publicKey",
+    "privateKey",
+  ]);
+
   static #jsonCodec = Object.freeze(
     new (class KeyPairCodec
       extends BaseNonterminalCodec<never, FabricKeyPairMaterialState> {
@@ -303,9 +319,15 @@ export class FabricKeyPair extends BaseFabricPrimitive {
         return value.state;
       }
 
-      /** @inheritDoc */
+      /**
+       * @inheritDoc
+       *
+       * A state holding any key besides the three is refused, being one this
+       * class never writes.
+       */
       canDecode(state: FabricValue): state is FabricKeyPairMaterialState {
         return isPlainObject(state) &&
+          hasOnlyKeys(state, FabricKeyPair.#MATERIAL_STATE_KEYS) &&
           Object.hasOwn(state, "algorithm") &&
           (typeof state.algorithm === "string") &&
           (["publicKey", "privateKey"] as const).every((key) =>
@@ -364,7 +386,13 @@ export class FabricKeyPair extends BaseFabricPrimitive {
         });
       }
 
-      /** @inheritDoc */
+      /**
+       * @inheritDoc
+       *
+       * A state holding any key besides those of its arm is refused, being
+       * one this class never writes; for the handles arm that includes an
+       * `algorithm`, present even holding `undefined`.
+       */
       canDecode(
         state: RealmCodecValue,
       ): state is RealmMaterialState | RealmHandleState {
@@ -386,14 +414,15 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           FabricKeyPair.#isCryptoKey(publicKey) &&
           FabricKeyPair.#isCryptoKey(privateKey)
         ) {
-          return algorithm === undefined;
+          return hasOnlyKeys(state, FabricKeyPair.#HANDLE_STATE_KEYS);
         }
 
         // Non-empty, which is the one thing the constructor refuses about an
         // algorithm name. Left to `decode()` it would arrive as a constructor
         // throw, which that method reports as a detached buffer -- the only
         // other way its construction can fail.
-        return (typeof algorithm === "string") && (algorithm !== "") &&
+        return hasOnlyKeys(state, FabricKeyPair.#MATERIAL_STATE_KEYS) &&
+          (typeof algorithm === "string") && (algorithm !== "") &&
           (publicKey instanceof ArrayBuffer) &&
           (privateKey instanceof ArrayBuffer);
       }

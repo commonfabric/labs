@@ -4255,6 +4255,15 @@ export class CellImpl<T extends FabricValue>
     }, options);
   }
 
+  /**
+   * The cell this one's links lead to. It comes from link resolution rather
+   * than from a read of the target, so it takes the nearest schema a crossed
+   * link stores that constrains, whatever this cell's own schema declares.
+   * This cell's schema stays only where it declares a stream and the stored
+   * schema declares nothing but one, and a `default` this cell declares
+   * carries over where the stored schema declares none
+   * (`docs/specs/link-schema-precedence.md`, "The read entry").
+   */
   resolveAsCell(): Cell<T> {
     return this.#resolveAsCell("value");
   }

@@ -782,9 +782,14 @@ export async function runBuildBinaries(
       // --background re-runs this binary as a detached server child, so the
       // compiled binary needs permission to spawn itself.
       "--allow-run",
-      // V8's default limit of about 4 GB is less than a serving worker can need
-      // on a busy board. The limit applies to each isolate, so a worker gets
-      // its own.
+      // The main thread's heap limit, 16 GiB, the same as the toolshed's
+      // `dev` and `production` tasks and `start-local-dev.sh` give it: under
+      // V8's default of about 4 GB, a toolshed's memory server outgrew it on
+      // Estuary (2026-11-16, toolshed 8020). V8 takes the flag over the limit
+      // each serving worker is started with, so the pool holds each worker to
+      // `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` from its heartbeats instead.
+      // A compiled binary reads no V8 flags when it starts, so this is the
+      // limit every deployment runs with.
       //
       // The other two let `perf` on the host name the JavaScript a thread
       // runs, serving workers' threads included: V8 writes the name and

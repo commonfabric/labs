@@ -2,7 +2,6 @@ import type { Source } from "@commonfabric/js-compiler";
 import { getLogger } from "@commonfabric/logger";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import { utf8Compare } from "@commonfabric/text/utf8";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   brandTrustedPattern,
@@ -42,13 +41,13 @@ import {
   type ModuleDelegationMap,
   moduleDelegationsFromDocs,
   planCompileCacheWriteChunks,
-  recordUndeclarablePolicyStore,
   ROOT_LINK_SPECIFIER,
   sourceClosureNeedsParser,
   type SourceDoc,
   sourceDocKey,
   stageModuleDelegations,
   writeSourceAndCompiledDocs,
+  writeSourceAnnotation,
   writeSourceDocs,
 } from "./compilation-cache/cell-cache.ts";
 import {
@@ -5290,21 +5289,7 @@ export class PatternManager {
         actionId: `pattern-annotate/${entryIdentity}`,
         kind: "bookkeeping",
       });
-      const cell = this.#runtime.getCell<
-        { annotations?: Record<string, unknown> }
-      >(
-        space,
-        sourceDocKey(entryIdentity),
-        undefined,
-        tx,
-      );
-      recordUndeclarablePolicyStore(tx, cell);
-      const current = cell.get();
-      const annotations = {
-        ...(isObjectOrArray(current?.annotations) ? current!.annotations : {}),
-        [key]: link,
-      };
-      cell.key("annotations").set(annotations);
+      writeSourceAnnotation(this.#runtime, space, entryIdentity, key, link, tx);
     });
   }
 

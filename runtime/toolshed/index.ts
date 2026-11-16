@@ -22,9 +22,11 @@ import {
   memoryServer,
 } from "@/routes/storage/memory.ts";
 import {
+  serverExecutionHost,
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
+import { listenForHeapProfileSignal } from "@/lib/heap-profiles.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
 import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
 import {
@@ -59,6 +61,15 @@ if (import.meta.main) {
   });
   Deno.addSignalListener("SIGINT", shutdown.handle);
   Deno.addSignalListener("SIGTERM", shutdown.handle);
+  await listenForHeapProfileSignal({
+    directory: Deno.env.get("HEAP_PROFILE_DIR") ||
+      `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
+    workerHeapProfiles: (directory) =>
+      serverExecutionHost()?.workerHeapProfiles(directory) ??
+        Promise.resolve(undefined),
+    log,
+    error,
+  });
 
   // This process's runtimes: the webhook runtime and, under
   // EXPERIMENTAL_SERVER_EXECUTION, the serving loop's host. Both address

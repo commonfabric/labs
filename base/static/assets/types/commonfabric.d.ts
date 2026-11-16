@@ -1861,7 +1861,19 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  * Note: Schema-typed overload available via "commonfabric/schema"
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
+  /**
+   * The cell this one's links lead to. The returned cell takes the nearest
+   * schema a crossed link stores that constrains, whatever this cell's own
+   * schema declares. This cell's schema stays only where it declares a stream
+   * and the stored schema declares nothing but one, and a `default` this cell
+   * declares carries over where the stored schema declares none.
+   *
+   * So a read of the returned cell can return `undefined` where a read of this
+   * cell returns the target. For this cell's own projection, read by key, or
+   * re-type the returned cell with `asSchema()`.
+   */
   resolveAsCell(): C;
+
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
 
@@ -5056,6 +5068,24 @@ export type EqualsFunction = (
 ) => boolean;
 
 /**
+ * Returns a string that two values share exactly when `equals` returns `true`
+ * for them in the same run, so that a `Set` or a `Map` keyed by it finds the
+ * distinct references in a list, or joins one list to another, in one pass
+ * where `equals` compares them in pairs. Inside a handler or a reactive
+ * computation it follows links first, as `equals` does, so an alias and the
+ * document it names share a key; elsewhere it compares links as given.
+ *
+ * Returns `undefined` for a value with no place in the graph — a fresh object
+ * literal, a primitive, `undefined` — which `equals` matches to nothing but
+ * itself. A key holds for the run that made it, as `equals` does: compare it
+ * with keys from the same run, and do not store it. Its form is not part of
+ * the contract.
+ */
+export type EqualsKeyFunction = (
+  value: AnyCell<any> | object | undefined,
+) => string | undefined;
+
+/**
  * Deep structural equality for two values, intended for `FabricValue`-shaped
  * data. Compares primitives with `Object.is` (so `NaN` equals `NaN` and `-0`
  * is distinct from `0`). Unlike `equals`, it compares values directly and does
@@ -5150,6 +5180,7 @@ export declare const multiUserTest: <T extends MultiUserTestDescriptor>(
 export declare const cell: CellTypeConstructor<AsCell>["of"];
 
 export declare const equals: EqualsFunction;
+export declare const equalsKey: EqualsKeyFunction;
 export declare const valueEqual: ValueEqualFunction;
 export declare const byRef: ByRefFunction;
 export function getPatternEnvironment(): PatternEnvironment {

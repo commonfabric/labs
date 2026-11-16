@@ -106,7 +106,7 @@ import {
   listPieces,
   listSpaceSlugs,
   MapFormat,
-  newPiece,
+  newPieceWithReceipt,
   partitionVerbListing,
   pathRequiredRefusal,
   PieceConfig,
@@ -145,6 +145,10 @@ import {
   type UnreportedRunDeps,
 } from "../lib/unreported-run.ts";
 import { absPath } from "../lib/utils.ts";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 
 // Hint system: print helpful next-step suggestions after operations. The
@@ -2543,6 +2547,10 @@ export const piece = targetOptions(
   .option(
     "--dangerously-allow-incompatible-schema",
     "Accepted for deploy-script symmetry; a new piece has no previous schema to compare.",
+  )
+  .option(
+    "--json",
+    'Output {"pieceId", "name"} as JSON; name only for --from-index, when the index has one.',
   )
   .action(newPieceFromCommand)
   /* piece set-slug */
@@ -5059,8 +5067,41 @@ export async function restoreFromCommand(
 }
 
 export interface NewPieceCommandDependencies {
-  newPiece?: typeof newPiece;
+  newPiece?: typeof newPieceWithReceipt;
+
+  /** Where the receipt goes, stdout unless the caller says otherwise. */
+  render?: typeof render;
+
+  /** Records which published pattern a piece came from; the local store by default. */
+  recordIndexedPiece?: (
+    patternIndexUrl: string,
+    pieceId: string,
+    patternId: string,
+  ) => Promise<void>;
 }
+
+/**
+ * Remembers that `pieceId` was created from `patternId`, so source saved
+ * from it with `cf piece getsrc` and published again credits the original
+ * (`remixedFrom`). A record that cannot be written costs that credit and
+ * nothing else, so it warns rather than failing a creation that succeeded.
+ */
+const recordIndexedPiece = async (
+  patternIndexUrl: string,
+  pieceId: string,
+  patternId: string,
+): Promise<void> => {
+  try {
+    await new PatternIndexStore(patternIndexStoreDir(patternIndexUrl))
+      .recordIndexedPiece(pieceId, patternId);
+  } catch (error) {
+    console.error(
+      `Could not record that ${pieceId} came from ${patternId}: ${
+        describeFailure(error)
+      }`,
+    );
+  }
+};
 
 /**
  * `cf piece new`'s action, as a function a test can call.
@@ -5148,7 +5189,7 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
-  const pieceId = await (deps.newPiece ?? newPiece)(
+  const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
     entry,
     {
@@ -5161,11 +5202,29 @@ export async function newPieceFromCommand(
         : { requestKey: options.requestKey }),
     },
   );
-  render(pieceId);
+  // `--json` is the machine surface: one object naming the piece and, for a
+  // piece from the index that has one, the pattern's display name.
+  const print = deps.render ?? render;
+  if (options.json) {
+    print(
+      { pieceId, ...(name === undefined ? {} : { name }) },
+      { json: true },
+    );
+  } else {
+    print(pieceId);
+  }
+  if ("patternId" in entry) {
+    await (deps.recordIndexedPiece ?? recordIndexedPiece)(
+      entry.patternIndexUrl,
+      pieceId,
+      entry.patternId,
+    );
+  }
   const browserPieceRef = options.slug ?? pieceId;
-  // A piece from the index has no local source to update from.
+  // A piece from the index has no local source to update from until it is
+  // saved; building on it publishes it as a remix.
   const updateCode = main === undefined
-    ? ""
+    ? `\n  → Build on it:     cf piece getsrc --cell ${pieceId} ./src, edit, then cf pattern publish ./src/<entry file>`
     : `\n  → Update code:     cf piece setsrc --cell ${pieceId} ${main} ...`;
   hint(cliText(`NEXT STEPS:
   → Open in browser: ${spaceConfig.apiUrl}/${spaceConfig.space}/${browserPieceRef}${updateCode}

@@ -3,8 +3,9 @@
  * suggestions, then one of each suggestable pattern under the topic it is
  * given.
  *
- * A pattern test has no LLM endpoint, so no suggestion or suggestable pattern
- * produces an answer here; what this reads is what each shows before one.
+ * The test states that the model fails every request the suggestable patterns
+ * make, so none produces an answer here; what this reads is what each shows
+ * before one.
  */
 
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
@@ -16,6 +17,30 @@ import {
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
 import SuggestionTest from "./suggestion-test.tsx";
+
+// The model fails every request the suggestable patterns make.
+export const llmMocks = [
+  {
+    when: { systemContains: "concise summaries" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { systemContains: "ASCII diagrams" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { systemContains: "budget breakdowns" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { systemContains: "actionable checklists" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { systemContains: "help clarify intent" },
+    error: "The model is unavailable.",
+  },
+];
 
 const TOPICS = [
   "Count items in the list and categorize",
@@ -53,8 +78,7 @@ export default pattern(() => {
       { assertion: assert_each_suggestable_under_its_topic },
     ],
     subject,
-    // The model requests the suggestable patterns open find no endpoint, and
-    // warn that they failed.
+    // The failed requests of the suggestable patterns warn that they failed.
     allowConsoleWarnings: true,
   };
 });

@@ -9,9 +9,9 @@
  * This checks the parse directly, then drives the note through its view: the
  * title editor, the model picker, Generate and Cancel, the keyboard shortcut,
  * and the editor's backlink events, which register the linked piece and, when
- * not navigating, make it mentionable. The model answers one conversation,
- * the one `llmMocks` below names, and a generation no mock answers stays open
- * until Cancel ends it.
+ * not navigating, make it mentionable. The model answers one conversation and
+ * fails another, as `llmMocks` below states, and the failed generation stays
+ * open until Cancel ends it.
  *
  * Run: deno task cf test patterns/dev/experimental/chat-note.test.tsx --root patterns
  */
@@ -257,7 +257,7 @@ export default pattern(() => {
     subject.isGenerating === false && generateDisabled(subject[UI]) === true &&
     propValue(findElement(subject[UI], "cf-code-editor"), "readonly") === false
   );
-  // No mock answers "Hi", so this generation never completes.
+  // The model fails "Hi", so this generation never completes.
   const assert_shortcut_generates_after_newline = assert(() =>
     subject.content === "Hi\n---\n## AI\n" &&
     subject.isGenerating === true && generateDisabled(subject[UI]) === true &&
@@ -339,11 +339,18 @@ export default pattern(() => {
       { action: action_follow_parent_chip },
       { assertion: assert_following_links_changes_nothing },
     ],
-    // A request no mock answers fails with a warning.
+    // The failed request warns.
     allowConsoleWarnings: true,
     subject,
   };
 });
 
-// The model's one reply: to the conversation whose last turn is "Hello".
-export const llmMocks = [{ promptIncludes: "Hello", text: "Hi there" }];
+// The model replies to the conversation whose last turn is "Hello", and fails
+// the one whose last turn is "Hi".
+export const llmMocks = [
+  { when: { lastMessageContains: "Hello" }, text: "Hi there" },
+  {
+    when: { lastMessageContains: "Hi" },
+    error: "The model is unavailable.",
+  },
+];

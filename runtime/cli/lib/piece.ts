@@ -21,10 +21,18 @@ import {
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
-import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
+import {
+  compileIndexedPattern,
+  type IndexedProgram,
+} from "@commonfabric/pattern-index/deploy";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
+import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
+import {
+  findIndexedPiece,
+  type PatternIndexStore,
+  patternIndexStoreRoot,
+} from "@commonfabric/pattern-index/store";
 import {
   ownerReleaseByIntentRequest,
   ownerReleaseByIntentSignature,
@@ -53,8 +61,10 @@ import {
   PiecesController,
   type PieceSourceActionResult,
   PieceSourceChangedError,
+  readServedInstantiateReceipt,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
+  type ServedPatternSource,
 } from "@commonfabric/piece/ops";
 import {
   declaredProperties,
@@ -579,9 +589,13 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
   getProgramFromIndex?: typeof getProgramFromIndex;
+  readServedInstantiateReceipt?: typeof readServedInstantiateReceipt;
 
   /** The transport index reads go over, in place of the global `fetch`. */
   patternIndexFetch?: PatternIndexFetch;
+
+  /** The local index membership record, in place of the user's own. */
+  patternIndexStore?: PatternIndexStore;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
   followPieceOnServer?: typeof followPieceOnServer;
@@ -926,7 +940,8 @@ async function getPinnedProgramFromFile(
 }
 
 /**
- * The program a published pattern deploys as, fetched and compiled into the
+ * The program a published pattern deploys as, and the index's display name
+ * for it, fetched and compiled into the
  * space the way cf-harness's `run_pattern` deploys one: the published patterns
  * it imports are drawn into the space first, so its `cf:pattern:` imports
  * resolve, and a failure's message never quotes the indexed source.
@@ -947,24 +962,27 @@ async function getProgramFromIndex(
   config: SpaceConfig,
   entry: IndexedPatternEntry,
   deps: PieceOperationDependencies = {},
-): Promise<RuntimeProgram> {
+): Promise<IndexedProgram> {
   const signer = await (deps.loadIdentity ?? loadIdentity)(config.identity);
-  const { program } = await compileIndexedPattern({
+  const { program, name } = await compileIndexedPattern({
     runtime: pieces.runtime,
     space: pieces.getSpace(),
     patternId: entry.patternId,
+    // Signs as the identity and presents the chain from the person's index
+    // root when this machine holds one, as every index call from `cf` does.
     getClient: () =>
-      Promise.resolve(
-        new PatternIndexClient({
-          baseUrl: entry.patternIndexUrl,
-          signer,
-          ...(deps.patternIndexFetch === undefined
-            ? {}
-            : { fetchFn: deps.patternIndexFetch }),
-        }),
-      ),
+      openPatternIndexClient({
+        baseUrl: entry.patternIndexUrl,
+        signer,
+        ...(deps.patternIndexFetch === undefined
+          ? {}
+          : { fetchFn: deps.patternIndexFetch }),
+        ...(deps.patternIndexStore === undefined
+          ? {}
+          : { store: deps.patternIndexStore }),
+      }),
   });
-  return program;
+  return { program, ...(name === undefined ? {} : { name }) };
 }
 
 // Returns an array of metadata about pieces to display.
@@ -1896,7 +1914,7 @@ function servedScope(
 async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
-  program: RuntimeProgram,
+  source: ServedPatternSource,
   repository: string | undefined,
   options: {
     input?: object;
@@ -1929,7 +1947,7 @@ async function createWithReceipt(
               {
                 ...request,
                 space: pieces.getSpace(),
-                program,
+                ...source,
                 ...(options?.start === false ? { start: false } : {}),
               },
             ),
@@ -1947,7 +1965,7 @@ async function createWithReceipt(
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
-            source: { program },
+            source,
             actingUser,
           }),
         trace,
@@ -2009,6 +2027,15 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
 }
 
 /**
+ * What creating a piece answers: the piece's id, and for a piece from the
+ * pattern index, the index's display name for the pattern when it has one.
+ */
+export interface NewPieceReceipt {
+  pieceId: string;
+  name?: string;
+}
+
+/**
  * Creates a new piece from source code, or from a published pattern, and
  * optional input.
  *
@@ -2019,7 +2046,7 @@ function noSpaceAnswers(error: SpaceNotFoundError): Error {
  * so it names the piece as well as the flag: an operator who meant to repoint
  * has an id to name, and one who did not has a piece to find.
  */
-export async function newPiece(
+export async function newPieceWithReceipt(
   config: SpaceConfig,
   entry: PieceEntry,
   options?: {
@@ -2032,7 +2059,7 @@ export async function newPiece(
     requestKey?: string;
   },
   deps: PieceOperationDependencies = {},
-): Promise<string> {
+): Promise<NewPieceReceipt> {
   const pieces = await timeCliPhase(
     "newPiece.loadPieces",
     () => (deps.loadPieces ?? loadPieces)(config),
@@ -2078,7 +2105,24 @@ export async function newPiece(
     );
   }
 
-  const program = "patternId" in entry
+  // A creation replayed by its request key from the index answers from the
+  // receipt the first attempt left, naming the piece's pattern by identity:
+  // the index need not be reachable, nor the pattern still published, for a
+  // creation that already committed.
+  const replayed = "patternId" in entry && options?.requestKey !== undefined
+    ? await timeCliPhase(
+      "newPiece.readReceipt",
+      async () =>
+        (deps.readServedInstantiateReceipt ?? readServedInstantiateReceipt)(
+          pieces,
+          options.requestKey!,
+          (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did(),
+        ),
+    )
+    : undefined;
+  const indexed = replayed !== undefined
+    ? undefined
+    : "patternId" in entry
     ? await timeCliPhase(
       "newPiece.getProgramFromIndex",
       () =>
@@ -2089,14 +2133,23 @@ export async function newPiece(
           deps,
         ),
     )
-    : await timeCliPhase(
-      "newPiece.getProgramFromFile",
-      () =>
-        (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
-          pieces,
-          entry,
-        ),
-    );
+    : {
+      program: await timeCliPhase(
+        "newPiece.getProgramFromFile",
+        () =>
+          (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
+            pieces,
+            entry,
+          ),
+      ),
+    };
+  const source: ServedPatternSource = indexed === undefined
+    ? { pattern: replayed!.pattern }
+    : { program: indexed.program };
+  // What the receipt says beside the piece id: the index's display name, for
+  // a piece from the index that has one. A replay answers from the receipt,
+  // which records no name.
+  const named = indexed?.name === undefined ? {} : { name: indexed.name };
   // A published pattern carries no repository locator of its own.
   const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
@@ -2136,7 +2189,7 @@ export async function newPiece(
         createWithReceipt(
           config,
           pieces,
-          program,
+          source,
           repository,
           options,
           deps,
@@ -2164,7 +2217,15 @@ export async function newPiece(
       throw error;
     });
     noteWroteTo(config.space);
-    return id;
+    return { pieceId: id, ...named };
+  }
+  // Only a request key replays a receipt, and a request key always takes the
+  // receipt path above, so the source here is a program.
+  const program = source.program;
+  if (program === undefined) {
+    throw new Error(
+      "a creation without a request key has no receipt to replay",
+    );
   }
   const piece = await timeCliPhase(
     "newPiece.create",
@@ -2209,7 +2270,14 @@ export async function newPiece(
     () => pieces.add([piece.getCell()], { reconcile: false }),
   );
 
-  return piece.id;
+  return { pieceId: piece.id, ...named };
+}
+
+/** {@link newPieceWithReceipt}, answering only the new piece's id. */
+export async function newPiece(
+  ...args: Parameters<typeof newPieceWithReceipt>
+): Promise<string> {
+  return (await newPieceWithReceipt(...args)).pieceId;
 }
 
 /**
@@ -2698,6 +2766,10 @@ export async function savePiecePattern(
     );
   }
   await writeSourcePackage(program, outPath);
+  await recordSavedIndexSource(
+    piece.id,
+    program.files.map((file) => join(outPath, file.name)),
+  );
   // Finding what the source declares parses it, which reaches the compiler.
   // deno-lint-ignore cf-imports/no-inline-module-import
   const { undeclaredDataFileWarning } = await import(
@@ -2705,6 +2777,28 @@ export async function savePiecePattern(
   );
   const warning = undeclaredDataFileWarning(program);
   if (warning !== undefined) console.log(warning);
+}
+
+/**
+ * Where the piece came from the pattern index (`cf piece new --from-index`),
+ * remembers that the files `written` are that pattern's source, so
+ * publishing it again credits the original as `remixedFrom`. Best effort: a
+ * missing or unreadable record costs that credit and nothing else.
+ */
+async function recordSavedIndexSource(
+  pieceId: string,
+  written: readonly string[],
+): Promise<void> {
+  try {
+    const found = await findIndexedPiece(patternIndexStoreRoot(), pieceId);
+    if (found !== undefined) {
+      await found.store.recordSource(written, found.patternId);
+    }
+  } catch (error) {
+    console.error(
+      `Could not record where this source came from: ${describeFailure(error)}`,
+    );
+  }
 }
 
 /**

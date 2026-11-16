@@ -326,6 +326,10 @@ export async function ensureSpaceRootPattern(
     isHomeSpace: boolean;
     genesisRoot?: GenesisRoot;
     stampCreationTx?: (tx: IExtendedStorageTransaction) => void;
+    /** The fetch the root's program resolve uses; `runtime.fetch` when
+     * absent. The serving seat passes one that bounds each request, so a
+     * silent pattern host cannot hold the ensure open. */
+    fetch?: RuntimeFetch;
   },
 ): Promise<EnsureSpaceRootResult> {
   const existing = await resolveSpaceRootPattern(runtime, space);
@@ -372,7 +376,7 @@ export async function ensureSpaceRootPattern(
       ...(options.stampCreationTx !== undefined
         ? { stampCreationTx: options.stampCreationTx }
         : {}),
-      fetch: runtime.fetch,
+      fetch: options.fetch ?? runtime.fetch,
     },
   );
   const root = await resolveSpaceRootPattern(runtime, space);

@@ -24,9 +24,10 @@ deployed from. cf-harness's `run_pattern` uses it when a model names a
 `patternId`, and `cf piece new --from-index <patternId>` uses it to create a
 piece. `compileIndexedPattern()` fetches the program with its source, draws
 every published pattern it imports through `cf:pattern:` into the space so those
-imports resolve, and compiles it there. `prepareIndexedProgram()` stops before
-the compile, and `composeProgram()` does only the import step, for authored
-source that composes published patterns.
+imports resolve, and compiles it there; it answers the index's display `name`
+for the pattern beside the program, when the index has one.
+`prepareIndexedProgram()` stops before the compile, and `composeProgram()` does
+only the import step, for authored source that composes published patterns.
 
 Every failure is an `IndexedPatternError` with a `stage` of `lookup`, `compose`,
 or `compile`. Its message never quotes indexed source: where it names a pattern

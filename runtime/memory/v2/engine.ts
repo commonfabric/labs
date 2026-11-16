@@ -2921,7 +2921,9 @@ WHERE branch = :branch AND id LIKE :prefix AND op != 'delete'
       scopeKey: head.scope_key,
     });
     const value = state?.document?.value as StreamEventsDocValue | undefined;
-    if (value === undefined) continue;
+    // A sidecar holding no log object (an authored creation may store
+    // `null`) holds no pending events.
+    if (!isObjectOrArray(value)) continue;
     const eventWatermark = typeof value.eventWatermark === "number"
       ? value.eventWatermark
       : 0;
@@ -2957,11 +2959,6 @@ export type RetirableEffectsInstance = {
   /** Entries surviving retirement (unacked intents persist — a reload
    * re-reads and may re-enact them, LT8). */
   remainingEntries: EffectIntentEntry[];
-
-  /** Ack marks surviving retirement: acks whose entry still stands
-   * (structurally none today — an ack retires its entry — kept exact
-   * so the write is a pure prune, never an invention). */
-  remainingAcks: Record<string, true>;
 
   /** The acked nonces this retirement consumes (diagnostics). */
   retiredNonces: string[];
@@ -3017,10 +3014,6 @@ WHERE branch = :branch AND id = :id AND op != 'delete'
       isObjectOrArray(entry) &&
       typeof entry.nonce === "string" && !ackedNonces.has(entry.nonce)
     );
-    const remainingNonces = new Set(
-      remainingEntries.map((entry) => entry.nonce),
-    );
-    const remainingAcks: Record<string, true> = {};
     const retiredNonces: string[] = [];
     let staleMarks = false;
     for (const nonce of Object.keys(acks)) {
@@ -3029,9 +3022,7 @@ WHERE branch = :branch AND id = :id AND op != 'delete'
         staleMarks = true;
         continue;
       }
-      if (remainingNonces.has(nonce)) {
-        remainingAcks[nonce] = true;
-      } else if (storedEntries.some((entry) => entry?.nonce === nonce)) {
+      if (storedEntries.some((entry) => entry?.nonce === nonce)) {
         retiredNonces.push(nonce);
       } else {
         // An ack naming no stored entry (already retired, or never
@@ -3043,7 +3034,6 @@ WHERE branch = :branch AND id = :id AND op != 'delete'
     retirable.push({
       scopeKey: head.scope_key,
       remainingEntries,
-      remainingAcks,
       retiredNonces,
     });
   }
@@ -3976,30 +3966,22 @@ const transformEffectsDocOperation = <
 
   // The stored instance's nonce set — the dedupe basis. Read per
   // instance via the annotation-supplied scope key (the same override
-  // writeOperation applies below). Defensive: a scoped op with no
-  // resolvable key skips dedupe (stamping still applies) rather than
-  // throwing here — the scoped-write admission checks own that refusal.
+  // writeOperation applies below). Derived admission has already refused
+  // a scoped write that carries no annotated key, so the key resolves.
   const storedNonces = new Set<string>();
-  try {
-    const state = readState(engine, {
-      id: operation.id,
-      branch: keys.branch,
-      scope: operation.scope,
-      scopeKey: keys.scopeKey,
-    });
-    const storedValue = state?.document?.value as
-      | SessionEffectsDocValue
-      | undefined;
-    if (isObjectOrArray(storedValue)) {
-      const entries = Array.isArray(storedValue?.entries)
-        ? storedValue.entries
-        : [];
-      for (const entry of entries) {
-        if (isEffectIntentShaped(entry)) storedNonces.add(entry.nonce);
-      }
+  const storedValue = readState(engine, {
+    id: operation.id,
+    branch: keys.branch,
+    scope: operation.scope,
+    scopeKey: keys.scopeKey,
+  })?.document?.value as SessionEffectsDocValue | undefined;
+  if (isObjectOrArray(storedValue)) {
+    const entries = Array.isArray(storedValue?.entries)
+      ? storedValue.entries
+      : [];
+    for (const entry of entries) {
+      if (isEffectIntentShaped(entry)) storedNonces.add(entry.nonce);
     }
-  } catch {
-    // no resolvable instance — dedupe is best-effort; stamping proceeds
   }
 
   const cloned = structuredClone(operation) as Op;
@@ -4682,7 +4664,7 @@ export type CommitFeedRecord = {
 // Per-engine memo of `commit.seq -> commit.class`. A commit's class is
 // immutable once admitted, so an entry never invalidates; bounded — on
 // overflow the memo clears and repopulates from live lookups.
-const COMMIT_CLASS_MEMO_MAX_ENTRIES = 65_536;
+export const COMMIT_CLASS_MEMO_MAX_ENTRIES = 65_536;
 const commitClassMemos = new WeakMap<Engine, Map<number, CommitClass>>();
 
 /**
@@ -7966,9 +7948,8 @@ const maintainStreamEventWatermarks = (
       scope: normalizeScope(revision.scope),
       scopeKey: revision.scopeKey,
     });
-    const document = state?.document;
-    const value = document?.value as StreamEventsDocValue | undefined;
-    if (value === undefined || document === null) continue;
+    const value = state?.document?.value as StreamEventsDocValue | undefined;
+    if (!isObjectOrArray(value)) continue;
     // Defensive (M1/m4, review 2026-08-11): a malformed (non-array)
     // log must not TypeError the recompute — and with it the whole
     // derived commit's apply transaction.

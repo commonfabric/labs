@@ -7,17 +7,19 @@
  * it (`fixtures/fabrichat-four-writer-room/`, whose `SOURCE.txt` says where
  * it comes from), and the room is set up from that stored source, as a
  * runtime loading such a room does. It seeds through that program's own
- * handlers, each from its reviewed gesture: two messages, a reaction, and a
- * window. Then the room opens, as a person opening it would, and follows
- * `system:system/fabrichat/room.tsx`, which this tree's patterns route serves.
+ * handlers, each from its reviewed gesture: six messages, one of them a
+ * reply, a reaction, and two windows. Then the room opens, as a person opening
+ * it would, and follows `system:system/fabrichat/room.tsx`, which this tree's
+ * patterns route serves.
  *
  * The release appends the three writers the stored policy lacks after its
  * four (`docs/specs/cfc-conformance-statement.md` §10), and the room's stored
  * result keeps its writer claim for the session's windows, which this tree's
  * room still holds. Each case checks the room after that release: what it
  * stores, that its writers send, edit and react, on messages the earlier
- * program stored as on new ones, and which acts on those earlier messages
- * are still refused.
+ * program stored as on new ones, and that it deletes, obliterates and windows
+ * those earlier messages, whose stored write policies keep writers this
+ * tree's room no longer lists.
  */
 
 import { expect } from "@std/expect";
@@ -350,6 +352,28 @@ describe("fabrichat-four-writer-room-update", () => {
         "ChatSend",
       ),
     );
+    for (const [requestId, value] of [["m4", "Root"], ["m5", "Twice"]]) {
+      await send(
+        "sendMessage",
+        trusted(
+          { requestId, target: { value } },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+    }
+    await send(
+      "sendMessage",
+      trusted(
+        {
+          requestId: "m6",
+          target: { value: "Reply" },
+          replyTo: { message: (await storedMessages())[0], shownIn: "main" },
+        },
+        "ChatSendSurface",
+        "ChatSend",
+      ),
+    );
     const [first] = await storedMessages();
     await send(
       "sendReaction",
@@ -360,11 +384,13 @@ describe("fabrichat-four-writer-room-update", () => {
       ),
     );
     await room.key("messages").key("openWindow").pull();
-    {
+    // Two windows: `main`, which a case opens again, and `old`, which a case
+    // closes.
+    for (const [requestId, windowId] of [["w1", "main"], ["o1", "old"]]) {
       const tx = runtime.edit();
       room.withTx(tx).key("messages").key("openWindow").send({
-        requestId: "w1",
-        windowId: "main",
+        requestId,
+        windowId,
         from: { before: "end" },
         count: 5,
       });
@@ -372,7 +398,14 @@ describe("fabrichat-four-writer-room-update", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
       await runtime.idle();
     }
-    expect(await bodies()).toEqual(["First", "Second", "Third"]);
+    expect(await bodies()).toEqual([
+      "First",
+      "Second",
+      "Third",
+      "Root",
+      "Twice",
+      "Reply",
+    ]);
     storedBefore = storedPolicy(
       runtime,
       room.getArgumentCell<unknown>()!,
@@ -481,7 +514,7 @@ describe("fabrichat-four-writer-room-update", () => {
     );
     const messages = await storedMessages();
     const [first] = messages;
-    const fourth = messages[3];
+    const fourth = messages.at(-1)!;
     await send(
       "editMessage",
       trusted(
@@ -510,15 +543,57 @@ describe("fabrichat-four-writer-room-update", () => {
   });
 
   describe("acts on a message stored before the release", () => {
-    // TODO(danfuzz): These pin refusals that are wrong for the room (see the
-    // `TODO` in `mergeWritePolicyAnyOf()`). Each message the earlier program
-    // stored holds, beneath `/reactions/*`, the write policy its
-    // `SentReaction` named, with `commitDelete` and `commitObliterate` among
-    // its writers, and this tree's `SentReaction` names neither. A deletion or
-    // an obliteration writes the whole message, and a window names the
-    // messages, and the merge refuses a schema that omits a stored
-    // alternative, in every write. Flip these when a ruling lets a later
-    // schema omit an alternative the merged envelope keeps.
+    // Each message the earlier program stored holds, beneath `/reactions/*`,
+    // the write policy its `SentReaction` named, with `commitDelete` and
+    // `commitObliterate` among its writers, and this tree's `SentReaction`
+    // names neither. A deletion or an obliteration writes the whole message,
+    // and a window names the messages, so each of these writes a document
+    // whose stored policy lists writers this tree's schema omits. The merge
+    // keeps them as stored.
+
+    /** The writers of the room's reactions before the release, as stored. */
+    const STORED_REACTION_WRITERS = [
+      "commitSendReaction",
+      "commitDeleteReaction",
+      "commitDelete",
+      "commitObliterate",
+    ];
+
+    /**
+     * The row of a window this tree's room opens that shows `message`: its
+     * place in the window, as the row names it. The link stored there
+     * resolves to the message under the schema the program that sent it
+     * stored it with.
+     */
+    const windowRowOf = async (message: Cell<unknown>) => {
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const tx = runtime.edit();
+      today.withTx(tx).key("messages").key("openWindow").send({
+        requestId: "w-rows",
+        windowId: "rows",
+        from: { after: "start" },
+        count: 20,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      const windows = today.key("messages").key("windows").resolveAsCell();
+      const link = windows.getAsNormalizedFullLink();
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
+      const row = (windows.getRaw() as { rows: { messages: unknown[] } }).rows
+        .messages.map((_, index) =>
+          runtime.getCellFromLink({
+            ...link,
+            path: ["rows", "messages", String(index)],
+            schema: undefined,
+          })
+        ).find((cell) => docOf(cell) === docOf(message));
+      expect(row).toBeDefined();
+      return row!;
+    };
 
     /**
      * The refusal messages logged while `act` runs, of those naming a write
@@ -530,11 +605,11 @@ describe("fabrichat-four-writer-room-update", () => {
       return logged.calls.flatMap((call) =>
         call.args.map((arg) =>
           typeof arg === "string" ? arg : Deno.inspect(arg, { depth: 4 })
-        ).filter((text) => text.includes("writePolicyAnyOf must remain stable"))
+        ).filter((text) => text.includes("writePolicyAnyOf"))
       );
     };
 
-    it("refuses deleting it, over the reactions' stored write policy", async () => {
+    it("deletes it, keeping the writers its reactions' policy stores", async () => {
       const [, second] = await storedMessages();
       const refusals = await refusalsDuring(() =>
         send(
@@ -543,14 +618,30 @@ describe("fabrichat-four-writer-room-update", () => {
         )
       );
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at /reactions/*: the candidate " +
-          "drops a stored alternative",
-      );
-      expect(await second.key("body").pull()).toBe("Second");
+      expect(refusals).toEqual([]);
+      expect(await second.key("body").pull()).toEqual({ deleted: true });
+      expect(
+        storedPolicy(runtime, second, "reactions/*").map(({ writer }) =>
+          writer
+        ),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
 
-    it("refuses obliterating it, over the reactions' stored write policy", async () => {
+    it("deletes one holding reactions", async () => {
+      const [first] = await storedMessages();
+      expect(await reactionsOn(first)).not.toEqual([]);
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: first }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+
+      expect(refusals).toEqual([]);
+      expect(await first.key("body").pull()).toEqual({ deleted: true });
+    });
+
+    it("obliterates it, keeping the writers its reactions' policy stores", async () => {
       const [, , third] = await storedMessages();
       const refusals = await refusalsDuring(() =>
         send(
@@ -563,11 +654,160 @@ describe("fabrichat-four-writer-room-update", () => {
         )
       );
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at /reactions/*: the candidate " +
-          "drops a stored alternative",
+      expect(refusals).toEqual([]);
+      expect(await third.key("body").pull()).toEqual({ deleted: true });
+      expect((third.getRaw() as { authorProfile?: unknown }).authorProfile)
+        .toBeUndefined();
+      expect(
+        storedPolicy(runtime, third, "reactions/*").map(({ writer }) => writer),
+      ).toEqual(STORED_REACTION_WRITERS);
+    });
+
+    it("reads a deleted message the earlier program stored as a tombstone, in `count`, `latest` and a window opened afterward", async () => {
+      // The handle a message's stored link resolves to keeps the earlier
+      // program's schema for it, which requires an `earlierVersions` that
+      // the tombstone this tree's room leaves does not hold. The room reads
+      // each message under its own schema, so the tombstone still counts.
+
+      const [, second] = await storedMessages();
+      await send(
+        "deleteMessage",
+        trusted({ message: second }, "ChatDeleteSurface", "ChatDelete"),
       );
-      expect(await third.key("body").pull()).toBe("Third");
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-tombstone",
+          windowId: "tombstone",
+          from: { before: "end" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+      const bodiesOf = (messages: unknown) =>
+        ((messages ?? []) as { body?: unknown }[]).map((message) =>
+          message?.body
+        );
+
+      expect(await today.key("messages").key("count").pull()).toBe(
+        (await storedMessages()).length,
+      );
+      expect(
+        bodiesOf(
+          await today.key("messages").key("latest").key("messages")
+            .pull(),
+        ),
+      ).toContainEqual({ deleted: true });
+      expect(
+        bodiesOf(
+          await today.key("messages").key("windows").key("tombstone").key(
+            "messages",
+          ).pull(),
+        ),
+      ).toContainEqual({ deleted: true });
+    });
+
+    it("opens the thread of a message the earlier program stored, once that message is deleted", async () => {
+      const root = (await storedMessages())[3];
+      await send(
+        "sendMessage",
+        trusted(
+          {
+            body: "In the thread",
+            replyTo: { thread: root, shownIn: "thread" },
+          },
+          "ChatSendSurface",
+          "ChatSend",
+        ),
+      );
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: root }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      {
+        const tx = runtime.edit();
+        today.withTx(tx).key("messages").key("openWindow").send({
+          requestId: "w-thread",
+          windowId: "thread",
+          root,
+          from: { after: "start" },
+          count: 10,
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      }
+
+      expect(refusals).toEqual([]);
+      expect(
+        ((await today.key("messages").key("windows").key("thread").key(
+          "messages",
+        ).pull()) as { body?: unknown }[] | undefined)?.map((message) =>
+          message?.body
+        ),
+      ).toEqual([{ deleted: true }, "In the thread"]);
+    });
+
+    it("obliterates a message the earlier program stored that its author deleted, named as a row of a window names it, dropping the author", async () => {
+      // A row of a window names its message by its place in the window,
+      // whose stored link resolves to it under the schema the earlier program
+      // stored it with, in a window this tree's room opens as in one the
+      // earlier program did. Its tombstone doesn't fit that schema, so the
+      // act reads the message through the link it was given.
+
+      const twice = (await storedMessages())[4];
+      const shown = await windowRowOf(twice);
+      const refusals = await refusalsDuring(async () => {
+        await send(
+          "deleteMessage",
+          trusted({ message: shown }, "ChatDeleteSurface", "ChatDelete"),
+        );
+        await send(
+          "obliterateMessage",
+          trusted(
+            { message: shown },
+            "ChatObliterateSurface",
+            "ChatObliterate",
+          ),
+        );
+      });
+
+      expect(refusals).toEqual([]);
+      expect(await twice.key("body").pull()).toEqual({ deleted: true });
+      expect((twice.getRaw() as { authorProfile?: unknown }).authorProfile)
+        .toBeUndefined();
+    });
+
+    it("deletes a reply the earlier program stored, named as a row of a window names it, keeping what it replies to", async () => {
+      const reply = (await storedMessages())[5];
+      const shown = await windowRowOf(reply);
+      const refusals = await refusalsDuring(() =>
+        send(
+          "deleteMessage",
+          trusted({ message: shown }, "ChatDeleteSurface", "ChatDelete"),
+        )
+      );
+
+      expect(refusals).toEqual([]);
+      expect(await reply.key("body").pull()).toEqual({ deleted: true });
+      const [first] = await storedMessages();
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
+      expect(
+        (reply.getRaw() as { replyTo?: { shownIn?: unknown } }).replyTo
+          ?.shownIn,
+      ).toBe("main");
+      expect(docOf(reply.key("replyTo").key("message"))).toBe(docOf(first));
     });
 
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {
@@ -588,7 +828,29 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(refusals).toEqual([]);
     });
 
-    it("refuses this tree's `openWindow` setting the window the earlier program wrote, over the messages' reactions' stored write policy", async () => {
+    it("closes a window the earlier program wrote, through this tree's `closeWindow`", async () => {
+      const windows = room.key("messages").key("windows").resolveAsCell();
+      expect(
+        Object.keys((windows.getRaw() ?? {}) as Record<string, unknown>),
+      ).toContain("old");
+      const refusals = await refusalsDuring(async () => {
+        const tx = runtime.edit();
+        room.withTx(tx).key("messages").key("closeWindow").send({
+          requestId: "c-old",
+          windowId: "old",
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      });
+
+      expect(refusals).toEqual([]);
+      expect(
+        Object.keys((windows.getRaw() ?? {}) as Record<string, unknown>),
+      ).not.toContain("old");
+    });
+
+    it("sets the window the earlier program wrote through this tree's `openWindow`, keeping the writers the window stores for its messages' reactions", async () => {
       const refusals = await refusalsDuring(async () => {
         const tx = runtime.edit();
         room.withTx(tx).key("messages").key("openWindow").send({
@@ -602,15 +864,19 @@ describe("fabrichat-four-writer-room-update", () => {
         await runtime.idle();
       });
 
-      expect(refusals.join("\n")).toContain(
-        "writePolicyAnyOf must remain stable at " +
-          "/main/messages/*/reactions/*: the candidate adds an alternative " +
-          "outside a release",
-      );
-      const windows = await room.key("messages").key("windows").pull() as
-        | Record<string, { requestId?: string }>
-        | undefined;
-      expect(windows?.main?.requestId).toBe("w1");
+      expect(refusals).toEqual([]);
+      const today = (await roomController.get(
+        room.getAsNormalizedFullLink().id,
+      )).getCell();
+      const windows = today.key("messages").key("windows");
+      expect(await windows.key("main").key("requestId").pull()).toBe("w2");
+      expect(
+        storedPolicy(
+          runtime,
+          windows.resolveAsCell(),
+          "main/messages/*/reactions/*",
+        ).map(({ writer }) => writer),
+      ).toEqual(STORED_REACTION_WRITERS);
     });
   });
   describe("with the room's own space labeling its argument", () => {

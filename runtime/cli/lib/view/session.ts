@@ -213,7 +213,6 @@ type Mode =
   | "revertPrompt"
   | "taskPrompt"
   | "settingsPrompt"
-  | "landPrompt"
   | "filePicker"
   | "jumpList";
 
@@ -256,7 +255,7 @@ const MOUSE_WHEEL_STEP = 3;
 const PUSH_ROWS = 16;
 const PUSH_COLUMNS = 80;
 
-/** How the land dialog names each merge method, as GitHub's merge button
+/** How the task dialog names each merge method, as GitHub's merge button
  * does. */
 const MERGE_VERBS: Readonly<Record<MergeMethod, string>> = {
   squash: "Squash and merge",
@@ -493,8 +492,8 @@ export class Session {
    * this. */
   landRequested = false;
 
-  /** The merge the land dialog asked for. The driver starts it, calls
-   * {@link beginTask}, and clears this. */
+  /** The merge the task dialog asked for. The driver starts it, calls
+   * {@link continueTask}, and clears this. */
   mergeRequested: MergeRequest | null = null;
 
   /** The task dialog's retry button was pressed. The driver starts the task
@@ -542,25 +541,19 @@ export class Session {
    * failing in a way that trying again can fix, or "" for none. */
   #taskRetry = "";
 
-  /** What the push dialog says, under the push's output, about watching for
-   * the pushed branch's pull request to open, or "" when it says nothing. */
+  /** What the task dialog says, under the task's output, about watching for
+   * the pull request to open or merge and quitting once it has, with
+   * a newline between its lines, or "" when it says nothing. */
   #pullRequestWatch = "";
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
 
-  /** The merge the land dialog asks about, once the pull request has been
-   * found. */
+  /** The merge the task dialog asks whether to make, while it asks. */
   #landDraft: MergeRequest | null = null;
 
-  /** What the land dialog says while the pull request is being looked for. */
-  #landLooking = "";
-
-  /** Stops looking for the pull request, while it is being looked for. */
-  #cancelLand: (() => void) | null = null;
-
-  /** The address of the pushed branch's pull request, once it has opened
-   * while the push dialog was up, until a quit that it did not ask for. */
+  /** The address of the pull request that has opened or merged while the
+   * task dialog was up, until a quit that it did not ask for. */
   #pullRequestUrl: string | null = null;
 
   //
@@ -1362,7 +1355,6 @@ export class Session {
     else if (this.#mode === "revertPrompt") dialog = this.#revertDialog();
     else if (this.#mode === "taskPrompt") dialog = this.#taskDialog();
     else if (this.#mode === "settingsPrompt") dialog = this.#settingsDialog();
-    else if (this.#mode === "landPrompt") dialog = this.#landDialog();
     if (!dialog) return null;
     // The focus runs through the fields and then the buttons. -1 means no
     // control is focused (a prompt with no default, before Tab). While a field
@@ -1435,7 +1427,7 @@ export class Session {
   #prompting(): boolean {
     return this.#mode === "savePrompt" || this.#mode === "amendPrompt" ||
       this.#mode === "revertPrompt" || this.#mode === "taskPrompt" ||
-      this.#mode === "settingsPrompt" || this.#mode === "landPrompt";
+      this.#mode === "settingsPrompt";
   }
 
   /** Whether the task dialog is up. */
@@ -1487,7 +1479,8 @@ export class Session {
     const watch =
       (this.#pullRequestWatch === ""
         ? []
-        : ["", ...wrap(this.#pullRequestWatch)]).slice(0, total - 1);
+        : ["", ...this.#pullRequestWatch.split("\n").flatMap(wrap)])
+        .slice(0, total - 1);
     return {
       output: output.flatMap(({ text, emphasized }) =>
         wrap(text).map((row) => ({ text: row, emphasized }))
@@ -1541,6 +1534,13 @@ export class Session {
       width: columns,
       buttons: this.#abortTask
         ? [{ label: "Abort", hotkey: "a", kind: "cancel" }]
+        : this.#landDraft
+        // The button's letter is not the `L` that opened the dialog, so that
+        // pressing `L` again does not merge.
+        ? [
+          { label: "Merge", hotkey: "m" },
+          { label: "Cancel", hotkey: "c", kind: "cancel" },
+        ]
         : [
           { label: "Close", hotkey: "c", kind: "cancel" },
           ...(this.#taskRetry === ""
@@ -1554,8 +1554,8 @@ export class Session {
   /**
    * The settings dialog: radio buttons that choose how the viewer handles
    * the pushed branch's pull request, the name of the token touch-gate uses,
-   * a check box that turns on quitting when the pushed branch's pull request
-   * opens, the address of the webhook relay that says when it does, and OK
+   * a check box that turns on quitting when the pull request opens or
+   * merges, the address of the webhook relay that says when it does, and OK
    * and Cancel.
    */
   #settingsDialog(): DialogState {
@@ -1577,36 +1577,6 @@ export class Session {
         { label: "OK", hotkey: "o", kind: "default" },
         { label: "Cancel", hotkey: "c", kind: "cancel" },
       ],
-    };
-  }
-
-  /**
-   * The land dialog: while the pull request is being looked for, what is
-   * looked for and Cancel; then which pull request merges, how, and at which
-   * commit, with Merge and Cancel. A merge cannot be undone, so no button is
-   * the default, and Enter does nothing until a button has the focus.
-   */
-  #landDialog(): DialogState {
-    const draft = this.#landDraft;
-    const cancel: DialogButton = {
-      label: "Cancel",
-      hotkey: "c",
-      kind: "cancel",
-    };
-    if (!draft) {
-      return { title: "Land", body: [this.#landLooking], buttons: [cancel] };
-    }
-    return {
-      title: "Land",
-      body: [
-        `${
-          MERGE_VERBS[draft.method]
-        } pull request ${draft.number} of ${draft.repository},`,
-        `if its head is still ${draft.sha.slice(0, 12)}?`,
-      ],
-      // The button's letter is not the `L` that opened the dialog, so that
-      // pressing `L` again does not merge.
-      buttons: [{ label: "Merge", hotkey: "m" }, cancel],
     };
   }
 
@@ -3853,12 +3823,27 @@ export class Session {
     this.#overlayStack = [];
     this.#mode = "taskPrompt";
     this.#taskTitle = title;
-    this.#taskTop = null;
     this.#taskLines = [""];
-    this.#taskReturned = false;
     this.#taskEmphasized = new Set();
+    this.#taskSummary = "";
+    this.continueTask(abort);
+  }
+
+  /** Start another task, which `abort` stops, in the task dialog, such as
+   * trying again what the last one failed to do. The dialog keeps its output,
+   * which goes on from how the last task ended. */
+  continueTask(abort: () => void): void {
+    const lines = this.#taskLines.at(-1) === ""
+      ? this.#taskLines.slice(0, -1)
+      : this.#taskLines;
+    this.#taskLines = this.#taskSummary === ""
+      ? [...lines, ""]
+      : [...lines, "", this.#taskSummary, ""];
+    this.#taskTop = null;
+    this.#taskReturned = false;
     this.#taskRetry = "";
     this.#taskSummary = "";
+    this.#landDraft = null;
     this.#pullRequestWatch = "";
     this.#pullRequestUrl = null;
     this.#abortTask = abort;
@@ -3893,24 +3878,38 @@ export class Session {
     this.#taskSummary = summary;
     this.#taskRetry = retry;
     if (this.#mode === "taskPrompt") this.#dialogFocus = 0;
-    if (this.#pullRequestUrl !== null) this.#quitForPullRequest();
+    if (this.#pullRequestUrl !== null) this.#announcePullRequestQuit();
   }
 
-  /** Have the push dialog say `text` about watching for the pushed branch's
-   * pull request, under the push's output. */
+  /** Have the task dialog say `text` about watching for the pull request,
+   * under the task's output. */
   setPullRequestWatch(text: string): void {
     this.#pullRequestWatch = text;
   }
 
   /**
-   * The pushed branch's pull request has opened, at `url`. While the push
-   * dialog is up, close it and quit, as its Quit button does, once the push
-   * has ended; otherwise do nothing.
+   * The pull request at `url` has opened or merged. While the task dialog
+   * is up, have it give the address and say it is quitting, once the task
+   * has ended; otherwise do nothing. {@link completePullRequestQuit} then
+   * quits.
    */
   quitForPullRequest(url: string): void {
     if (this.#mode !== "taskPrompt") return;
     this.#pullRequestUrl = url;
-    if (!this.#abortTask) this.#quitForPullRequest();
+    if (!this.#abortTask) this.#announcePullRequestQuit();
+  }
+
+  /** Whether the task dialog says it is quitting for the pull request, until
+   * {@link completePullRequestQuit} quits or a button takes the dialog down. */
+  get pullRequestQuitPending(): boolean {
+    return this.#mode === "taskPrompt" && !this.#abortTask &&
+      this.#pullRequestUrl !== null;
+  }
+
+  /** Close the task dialog and quit, as its Quit button does, when it says
+   * it is quitting for the pull request; otherwise do nothing. */
+  completePullRequestQuit(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
   }
 
   /** What the driver prints once the viewer has closed: the address of the
@@ -3942,7 +3941,7 @@ export class Session {
       },
       quitOnPullRequest: {
         kind: "checkBox",
-        label: "Quit when the pushed branch's pull request opens",
+        label: "Quit when the pull request opens or merges",
         hotkey: "q",
         checked: settings.quitOnPullRequest,
       },
@@ -3956,38 +3955,24 @@ export class Session {
     this.#dialogFocus = 0;
   }
 
-  /** Open the land dialog, saying `looking` while the pull request is looked
-   * for. Its Cancel button calls `cancel`. */
-  beginLand(looking: string, cancel: () => void): void {
-    this.#overlay = null;
-    this.#overlayStack = [];
-    this.#mode = "landPrompt";
-    this.#message = "";
-    this.#landDraft = null;
-    this.#landLooking = looking;
-    this.#cancelLand = cancel;
-    this.#focusDefaultButton();
-  }
-
-  /** Have the land dialog, while it is still looking for the pull request,
-   * ask whether to merge as `request` describes. Returns whether it did. */
-  confirmLand(request: MergeRequest): boolean {
-    if (this.#mode !== "landPrompt" || this.#landDraft) return false;
+  /**
+   * End the task the task dialog shows, which has found the pull request to
+   * land, by asking whether to merge as `request` describes, saying how and
+   * at which commit as GitHub's merge button does. A merge cannot be undone,
+   * so no button is the default, and Enter does nothing until a button has
+   * the focus. Does nothing unless the task is running.
+   */
+  confirmLand(request: MergeRequest): void {
+    if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
+    this.#abortTask = null;
     this.#landDraft = request;
-    this.#cancelLand = null;
-    this.#focusDefaultButton();
-    return true;
-  }
-
-  /** Take the land dialog down while it is still looking for the pull
-   * request, and then, unless another dialog is up, show `message` in the
-   * status line. */
-  endLand(message: string): void {
-    if (this.#mode === "landPrompt" && !this.#landDraft) {
-      this.#mode = "normal";
-      this.#cancelLand = null;
-    }
-    if (this.#mode === "normal") this.#message = message;
+    this.appendTaskOutput(
+      `${MERGE_VERBS[request.method]} pull request ${request.number} of ` +
+        `${request.repository},\nif its head is still ` +
+        `${request.sha.slice(0, 12)}?\n`,
+      true,
+    );
+    this.#dialogFocus = -1;
   }
 
   /** Have the task dialog show the end of its output, as it does until it is
@@ -4507,16 +4492,22 @@ export class Session {
 
   /**
    * An interrupt (SIGINT) arrived. During a push, abort the push and return
-   * true so the driver keeps running and shows how it ended. With unsaved edits
-   * and no prompt already up, raise the save prompt and return true so the
-   * driver keeps running and lets the user answer it. Otherwise return false:
-   * nothing to save, or a second interrupt during the prompt, so the driver
-   * should terminate.
+   * true so the driver keeps running and shows how it ended. While the task
+   * dialog says it is quitting for a pull request, quit for it as Quit does,
+   * keeping its address to print, and return whether the save prompt rose
+   * instead. With unsaved edits and no prompt already up, raise the save
+   * prompt and return true so the driver keeps running and lets the user
+   * answer it. Otherwise return false: nothing to save, or a second interrupt
+   * during the prompt, so the driver should terminate.
    */
   requestQuitFromSignal(): boolean {
     if (this.#mode === "taskPrompt" && this.#abortTask) {
       this.#abortTask();
       return true;
+    }
+    if (this.pullRequestQuitPending) {
+      this.#quitForPullRequest();
+      return !this.quit;
     }
     if (this.#mode === "savePrompt") return false;
     const willPrompt = this.#buffer?.dirty() ?? false;
@@ -4706,21 +4697,33 @@ export class Session {
     else if (this.#mode === "amendPrompt") this.#applyAmendButton(button);
     else if (this.#mode === "revertPrompt") this.#applyRevertButton(button);
     else if (this.#mode === "settingsPrompt") this.#applySettingsButton(button);
-    else if (this.#mode === "landPrompt") this.#applyLandButton(button);
     else this.#applyTaskButton(button);
   }
 
-  /** Abort stops the task, which then ends; Close takes the dialog down and
-   * leaves how the task ended in the status line; the retry button asks the
-   * driver to try the task again; Quit takes the dialog down and quits, by way
-   * of the save prompt when there are unsaved edits. */
+  /** Abort stops the task, which then ends; Merge asks the driver to merge
+   * as the dialog asked, and Cancel takes the dialog down; Close takes the
+   * dialog down and leaves how the task ended in the status line; the retry
+   * button asks the driver to try the task again; Quit takes the dialog down
+   * and quits, by way of the save prompt when there are unsaved edits,
+   * keeping the address of the pull request the dialog says it is quitting
+   * for. */
   #applyTaskButton(button: DialogButton): void {
+    const draft = this.#landDraft;
+    this.#landDraft = null;
     if (this.#abortTask) this.#abortTask();
+    else if (draft && button.kind !== "cancel") this.mergeRequested = draft;
+    else if (draft) this.#closeTaskDialog(false);
     else if (button.hotkey === "p") this.retryRequested = true;
-    else this.#closeTaskDialog(button.hotkey === "Q");
+    else if (button.hotkey === "Q") this.#quitTaskDialog();
+    else this.#closeTaskDialog(false);
   }
 
-  /** Take the push dialog down, leaving how the push ended in the status
+  #quitTaskDialog(): void {
+    if (this.pullRequestQuitPending) this.#quitForPullRequest();
+    else this.#closeTaskDialog(true);
+  }
+
+  /** Take the task dialog down, leaving how the task ended in the status
    * line, and quit when `quit` says to, by way of the save prompt when there
    * are unsaved edits. */
   #closeTaskDialog(quit: boolean): void {
@@ -4729,24 +4732,19 @@ export class Session {
     if (quit) this.#requestQuit();
   }
 
-  /** Close the push dialog and quit for the pull request that has opened,
-   * keeping its address for the driver to print once the viewer closes. */
+  /** Have the task dialog give the address of the pull request that has
+   * opened or merged, and say it is quitting. */
+  #announcePullRequestQuit(): void {
+    this.#pullRequestWatch = `Pull request: ${this.#pullRequestUrl}\nQuitting…`;
+  }
+
+  /** Close the task dialog and quit for the pull request that has opened or
+   * merged, keeping its address for the driver to print once the viewer
+   * closes. */
   #quitForPullRequest(): void {
     const url = this.#pullRequestUrl;
     this.#closeTaskDialog(true);
     this.#pullRequestUrl = url;
-  }
-
-  /** Merge takes the land dialog down and asks the driver to merge; Cancel
-   * takes it down, and stops looking for the pull request when it is still
-   * being looked for. */
-  #applyLandButton(button: DialogButton): void {
-    const draft = this.#landDraft;
-    this.#mode = "normal";
-    this.#landDraft = null;
-    this.#cancelLand?.();
-    this.#cancelLand = null;
-    if (draft && button.kind !== "cancel") this.mergeRequested = draft;
   }
 
   /** OK takes the settings dialog down and asks the driver to save what it

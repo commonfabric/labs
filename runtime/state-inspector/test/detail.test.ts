@@ -148,4 +148,79 @@ describe("detail", () => {
       expect(at.get("of:owned-2")).toBe("internal/nested/deeper/0");
     });
   });
+
+  describe("an entity carrying labels and an unrecognized shape", () => {
+    let dir: string;
+    let space: SpaceDb;
+    let details: Map<string, EntityDetail>;
+
+    beforeAll(async () => {
+      dir = await Deno.makeTempDir({ prefix: "state-inspector-detail-" });
+      const path = `${dir}/did:key:zSpaceBBBB.sqlite`;
+      const db = new Database(path, { create: true });
+      db.exec(SCHEMA);
+      db.exec(
+        `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+           VALUES (1, 'session:did:key:zSpaceBBBB:s', 1, '{}', '{}')`,
+      );
+      const rev = db.prepare(
+        `INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+         VALUES (?, 1, 0, 'set', ?, 1)`,
+      );
+      rev.run(
+        "of:labeled",
+        JSON.stringify({
+          value: { a: 1 },
+          cfc: {
+            labelMap: {
+              entries: [{
+                path: ["a"],
+                label: {
+                  confidentiality: [
+                    "plain",
+                    { type: "https://example.com/atom/Caller", name: "alice" },
+                    { type: "Room" },
+                    { subject: "bob" },
+                    7,
+                  ],
+                  integrity: [{ type: "a/b/Signed", symbol: "sig" }],
+                },
+              }],
+            },
+          },
+        }),
+      );
+      rev.run("of:odd", JSON.stringify({ unexpected: 1 }));
+      db.close();
+      space = openSpace(path);
+      details = new Map(
+        buildAllDetails(space).details.map((detail) => [detail.id, detail]),
+      );
+    });
+
+    afterAll(async () => {
+      space.close();
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    it("renders each label atom as its type's last segment and its qualifier", () => {
+      const [entry] = details.get("of:labeled")!.cfc!.entries;
+      expect(entry.path).toBe("a");
+      expect(entry.confidentiality).toEqual([
+        "plain",
+        "Caller:alice",
+        "Room",
+        "atom:bob",
+        "7",
+      ]);
+      expect(entry.integrity).toEqual(["Signed:sig"]);
+    });
+
+    it("gives an entity of no recognized kind the generic role", () => {
+      const odd = details.get("of:odd")!;
+      expect(odd.kind).toBe("unknown");
+      expect(odd.role).toBe("entity");
+      expect(details.get("of:labeled")!.role).toBe("free cell");
+    });
+  });
 });

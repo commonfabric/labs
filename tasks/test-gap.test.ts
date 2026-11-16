@@ -245,6 +245,20 @@ describe("test-gap", () => {
         await Deno.remove(root, { recursive: true });
       }
     });
+
+    it("returns both paths of a file the change moved, as a lane lists them", async () => {
+      const root = await repository({ "declared/kept.ts": "a line\n" });
+      try {
+        await git(root, "mv", "declared/kept.ts", "moved.ts");
+        await git(root, "commit", "-q", "-m", "move");
+        expect([...await localChanges(root, "base")].sort()).toEqual([
+          "declared/kept.ts",
+          "moved.ts",
+        ]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
   });
 
   describe("unitSources()", () => {

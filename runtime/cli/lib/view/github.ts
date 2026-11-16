@@ -98,6 +98,51 @@ export interface PullRequestService {
   ): Promise<string>;
 }
 
+/** The statuses with which GitHub says a request itself cannot succeed, so
+ * that making it again gets the same answer: not found, not allowed, in
+ * conflict, or not valid. */
+const FINAL_STATUSES: ReadonlySet<number> = new Set([404, 405, 409, 422]);
+
+/** GitHub's answer refusing a request: its status, and the reason its reply
+ * gives. */
+export class GitHubRefusal extends Error {
+  #status: number;
+
+  /** GitHub refused with `status`, replying `reply`, which is JSON that may
+   * give a message and a list of errors, each with a message of its own. */
+  constructor(status: number, reply: string) {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(reply);
+    } catch {
+      // A reply that is not JSON says what it says as it stands.
+    }
+    const message = !isObjectNotArray(parsed)
+      ? reply.trim()
+      : typeof parsed.message === "string"
+      ? parsed.message
+      : "";
+    const errors = isObjectNotArray(parsed) && Array.isArray(parsed.errors)
+      ? parsed.errors.flatMap((error: unknown) =>
+        isObjectNotArray(error) && typeof error.message === "string"
+          ? [error.message]
+          : []
+      )
+      : [];
+    // The parts are joined as sentences, and whoever reports the refusal
+    // ends the last of them.
+    const reason = [message, ...errors].map((m) => m.replace(/\.+$/, ""))
+      .filter((m) => m !== "").join(". ");
+    super(`GitHub answered ${status}${reason === "" ? "" : `: ${reason}`}`);
+    this.#status = status;
+  }
+
+  /** Whether making the same request again could get another answer. */
+  get retryable(): boolean {
+    return !FINAL_STATUSES.has(this.#status);
+  }
+}
+
 /** The remotes whose repository a pull request goes to, in the order they
  * are preferred. */
 const BASE_REMOTES = ["upstream", "github", "origin"];
@@ -300,31 +345,13 @@ export function githubApi(
       body,
     });
     const text = await response.text();
-    let reply: unknown = null;
+    if (!response.ok) throw new GitHubRefusal(response.status, text);
     try {
-      reply = JSON.parse(text);
+      return JSON.parse(text);
     } catch {
-      // A reply that is not JSON says nothing more than its status.
+      // A successful reply that is not JSON carries nothing to read.
+      return null;
     }
-    if (!response.ok) {
-      const message = isObjectNotArray(reply) &&
-          typeof reply.message === "string"
-        ? reply.message
-        : text.trim();
-      const errors = isObjectNotArray(reply) && Array.isArray(reply.errors)
-        ? reply.errors.flatMap((error: unknown) =>
-          isObjectNotArray(error) && typeof error.message === "string"
-            ? [error.message]
-            : []
-        )
-        : [];
-      throw new Error(
-        `GitHub answered ${response.status}: ${
-          [message, ...errors].filter((m) => m !== "").join(". ")
-        }`,
-      );
-    }
-    return reply;
   };
   return {
     find: async (target, signal) => {
