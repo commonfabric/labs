@@ -369,8 +369,11 @@ export interface Body {
     | "function"
     /** A function of an imported TypeScript module; its body is opaque. */
     | "imported";
-  /** Slots the runtime materializes into the body's argument. */
-  readonly reads: readonly Index[];
+  /**
+   * Slots the runtime materializes into the body's argument, each with
+   * its place there.
+   */
+  readonly reads: readonly ReadInput[];
   /**
    * What the body observes of values the instance computed: the result of
    * another body, or of expression code (section 3.9).
@@ -397,6 +400,21 @@ export interface Body {
   readonly calls: readonly BodyCall[];
   /** Where analysis gave up, for diagnostics (section 2.2). */
   readonly widenings: readonly Widening[];
+}
+
+/** One slot a body reads, and where its value is placed. */
+export interface ReadInput {
+  /** The slot (`Plan.slots`). */
+  readonly slot: Index;
+  /**
+   * The path in the body's argument at which the slot's value is placed,
+   * formed as `ComputedInput.at` is. For a handler the first segment is
+   * `event` for the first parameter and `binding` for the second, and
+   * the slot's path follows. For a slot that a static read through a
+   * handle reads, the path is the place of the handle followed by the
+   * path below the handle's cell (section 3.9).
+   */
+  readonly at: Path;
 }
 
 /** One path of a computed value that a body observes in one way. */
@@ -860,7 +878,20 @@ export interface StateCell {
    * 1.3).
    */
   readonly within: readonly WithinStep[];
+  /**
+   * The schema of the cell's value. Where the declaration gives the cell
+   * a first value that is a constant, the schema holds it as its default,
+   * and nothing is written when the cell is created (section 1.3).
+   */
   readonly schema: Hash;
+  /**
+   * For a cell whose declaration gives it a first value that is not a
+   * constant: the write edge that writes it, an entry of `writes` of the
+   * cone that computes the value, with target `state`. The runtime
+   * performs that edge once, when the cell is first created, and not on
+   * a later evaluation of the cone (section 1.3).
+   */
+  readonly first?: { readonly cone: Index; readonly write: Index };
 }
 
 /** An operation with durable state of its own. */
@@ -1215,35 +1246,47 @@ record. It is in the value code of the cones that read the path, which
 the compiler emits for that call. The callee can also declare a default
 for a path that the call does not write, as a callee that declares
 `symbol: Default<string, "$">` does where the call writes no `symbol`.
-The rule of section 2.5 ("A default belongs to the place") gives a path
-that resolves to a slot of the caller the default of that slot's schema.
-It gives nothing for a path the call leaves out: the path resolves to no
-slot, and no record holds the callee's argument schema, since the callee
-is no `Child`. In the prototype's comparison the runtime of today, for
-which the callee is an instance with an argument document and a schema,
-read `"$"` at such a path. *Assumed* (section 8, question 100): a path
-the call leaves out reads the default that the callee's declared
-argument type gives the path, which the compiler writes into the value
-code as a constant. A path that the call binds to a slot of the caller
-at which nothing is stored reads the default of the caller's schema, by
-the rule of section 2.5, and the callee's default is not applied.
+A path the call leaves out resolves to no slot, and no record holds the
+callee's argument schema, since the callee is no `Child`. By ruling the
+compiler writes the callee's declared default into the plan as a
+constant for that path: the path is bound as if the call had written,
+as a constant, the default that the callee's declared argument type
+gives it. It is held as a constant that the call writes is, and it has
+no label. In the prototype's comparison the runtime of today, for which
+the callee is an instance with an argument document and a schema, read
+`"$"` at such a path.
 
-**Where a slot of `Body.reads` sits in the body's argument.** An entry of
-`Body.computed` has its place in the argument, `at`. An entry of
-`Body.reads` is a slot index, and a slot has a root and a path in the
-instance. For a handler the two give the place: a slot of root `event`
-is below the first parameter and a slot of root `binding` below the
-second, at the slot's path. For a `lift`, a `computed`, or an authored
-function used in the reactive tier they do not. The slot has the root
-and the path of what the caller passed: for a body whose parameter is
-`p` and that reads `p.name`, where the caller passed the path `profile`
-of the argument, the slot has root `argument` and the path
-`["profile", "name"]`, and nothing says that it stands at `["name"]`
-below the parameter. *Assumed* (section 8, question 99): for each use of
-a body that is no handler, the compiler emits beside the plan the path
-in the argument of each slot of `reads`, formed as `ComputedInput.at` is,
-and the runtime builds the slot part of the argument from it
-(`execution-and-storage.md` §2.4).
+By the same ruling a path that the call binds to a slot of the caller at
+which nothing is stored also reads the callee's default, as it does
+today. The slot's value is absent, and the cones that read the path
+take the callee's default for it, a constant of the value code that the
+compiler emits for that call. The read carries the label of the slot,
+with the empty integrity that a read of a default has (section 2.5).
+Where the place the slot resolves to declares a default of its own, the
+rule of section 2.5 ("A default belongs to the place") gives the read
+that default, and the two rulings name two defaults for one read.
+*Assumed* (section 8, question 102): the default of the place governs
+there, as it does for a read through a link, and the callee's default
+applies where the place declares none.
+
+**Where a slot of `Body.reads` sits in the body's argument.** By ruling
+each entry of `Body.reads` holds the path in the body's argument at
+which the slot's value is placed, as an entry of `Body.computed` does.
+The entry is a `ReadInput`: the slot, and its place `at`, formed as
+`ComputedInput.at` is. A slot has a root and a path in the instance,
+and those are not its place. For a `lift`, a `computed`, or an authored
+function used in the reactive tier the slot has the root and the path
+of what the caller passed: for a body whose parameter is `p` and that
+reads `p.name`, where the caller passed the path `profile` of the
+argument, the slot has root `argument` and the path
+`["profile", "name"]`, and the entry's `at` is `["p", "name"]`. For a
+handler, a slot of root `event` is below the first parameter and a slot
+of root `binding` below the second, at the slot's path, and `at` says
+so with the first segment `event` or `binding`. The runtime builds the
+slot part of the argument from the entries
+(`execution-and-storage.md` §2.4). The place is part of the plan, and so
+of its hash. Where this document says "a slot of `Body.reads`", it means
+the slot that an entry names.
 
 **The order of `Binding.result`.** The paths are in source order: the
 order in which the positions that hold the stream are written in the
@@ -1617,16 +1660,8 @@ from the index changes as what derives from any other input does:
   holds for a cell declared with a value from the index, such as
   `cell(index)` in an element body: the value a declaration gives the
   cell is written when the cell is first created, and is not written
-  again when the index changes. A `StateCell` record has no member for
-  the value its declaration gives it (section 1.1). *Assumed* (section
-  8, question 97): where a declaration of the reactive tier gives a
-  state cell a value that is not a constant, the plan has a `WriteEdge`
-  with target `state` for it, as it has for the initial value of a
-  cell that a body creates (section 3.14), and the runtime performs
-  that write once, when the cell is first created. The cone that
-  computes the value lists the slots it reads, the index slot among
-  them, and a change of one of them after the cell exists makes no
-  write.
+  again when the index changes ("The first value of a state cell",
+  below).
 - **An identity the author derives from the index** follows the index.
   It arises in a function body written in the element body, because a
   cause written in the reactive tier is a string literal
@@ -1639,9 +1674,44 @@ from the index changes as what derives from any other input does:
   explicit cause and the rule for copied values govern here, and "stays
   with its element" holds for what is named through `within` alone.
 
-The purpose of the rule is that an element that moves keeps its cone
-instances and its state, so reordering a collection recomputes nothing
-but the cones that read the index. Elements with the same element part
+**The first value of a state cell.** A declaration of the reactive tier
+can give a state cell a first value, as `cell(0)` and `cell(index)` do.
+By ruling the plan holds it in one of two forms. The owner named both
+and left the choice to the one of lower complexity, and the choice is
+this.
+
+- **A first value that is a constant** is the default of the cell's
+  schema, `StateCell.schema` (section 1.1). Nothing is written when the
+  cell is created, and the cell has no document until something writes
+  it. A read of a cell that holds nothing reads the default, by the rule
+  for any slot whose schema declares a default (sections 2.5 and 5.2).
+  The read has the confidentiality of the slot and the empty integrity,
+  as every read of a default has. A constant is a static initializer, as
+  `language-subset.md` defines it for a default.
+- **A first value that is not a constant** is computed by a cone and
+  written once, when the cell is first created, through a `WriteEdge`
+  with target `state` among the `writes` of that cone, which
+  `StateCell.first` names. The cone lists the slots the value reads, the
+  index slot among them for `cell(index)`. The label of the stored first
+  value is the edge's template, so the value has the integrity of the
+  run that computed it. A change of what the cone read after the cell
+  exists makes no write.
+- **Writing a constant first value at creation as well is legal** and
+  is not required. A value written that way has the integrity of the
+  run that wrote it. This design does not write it, and no record of
+  the plan describes such a write.
+
+The runtime of today holds the first value in the first form: the cell
+constructor merges the value into the schema it creates the cell with,
+as the schema's default (`createWithDefault` in `cellConstructorFactory`,
+`runtime/runner/src/cell.ts`, through `schemaWithDefaultAndScope`).
+
+`execution-and-storage.md` §4.1 says in which transaction the edge of a
+first value that is not a constant is performed.
+
+The purpose of the rule for a move is that an element that moves keeps
+its cone instances and its state, so reordering a collection recomputes
+nothing but the cones that read the index. Elements with the same element part
 are told apart by their order alone. A move that changes the order of
 two of them changes no key: the first of them in the new order is
 occurrence 0 and has the state of occurrence 0. Where two equal values
@@ -1713,10 +1783,14 @@ Consequences, which later sections rely on:
   keys whose position changed, and changes their index slots. The label
   identifiers at the new addresses are normally those at the old ones,
   and then no cone that lists only element slots is evaluated and no
-  label of one is instantiated. One case is open: a cone that passes on,
-  through its `identity` slot, an element that is a plain value stored
-  in place yields a reference to the position, which a move changes
-  (`execution-and-storage.md` §2.6 and its question 79).
+  label of one is instantiated. By ruling the runtime moves what the
+  key holds, its stored results included, to the new position, and
+  evaluates nothing for the element except the cones that read the
+  index. Evaluating again is permitted, and moving is preferred. That
+  holds for a cone that passes on, through its `identity` slot, an
+  element that is a plain value stored in place: what such a cone
+  stores is in `execution-and-storage.md` §2.6, under an assumption
+  (its question 79).
 - **A body that reads the index has this property too.** No key holds
   the index. A move evaluates again the cones that list the index slot,
   for the keys whose position changed, and nothing else of the body. The
@@ -1729,14 +1803,33 @@ Consequences, which later sections rely on:
   occurrence finds: the count of an element is a function of the
   elements before it that have the same element part. Section 5.5 lists
   what a reader of a row can see of that.
-- **Derived collections carry their elements' keys.** The elements of a
-  `filter` result are the source's elements, with their keys. *Assumed*
-  (section 8, question 91): the count in such a key is the one the
-  element has in the source. The elements of a `map` or `flatMap` result
-  are new values or references and are keyed by the same rule when
-  another body is applied to them. Aggregates and collection indexes hold
-  one contribution per key (sections 3.8 and 3.17). `reduce` is the
-  exception: its steps are ordered and are not keyed (section 3.13).
+- **Derived collections carry their elements' keys.** By ruling an
+  element of a collection that is the result of a per-element construct
+  is keyed by the key of the upstream element it came from. An element
+  of a `filter` result has the key it has in the source, count
+  included, so the state of a body applied to the result does not
+  depend on which equal elements the predicate dropped. An element of
+  a `map` result has the key of the source element the callback was
+  evaluated for, whatever value or reference the callback returned for
+  it. Keys stay distinct, because each element of such a result comes
+  from one source position. The rule holds through a chain of
+  constructs: an element of a `map` over a `filter` over a `map` has
+  the key of the element of the first source. So a change of one
+  upstream element makes stale the cone instances of that key in each
+  body of the chain, and no cone instance of another key. A `flatMap`
+  yields a segment per source element. *Assumed* (section 8, question
+  101): an element of its result has the key of the source element
+  together with its position in that element's segment. A collection
+  that no per-element construct produced is keyed by the rule of this
+  section's start: a stored array, and an array that a `lift` or a
+  `computed` returns whole. For the second an implementation may
+  evaluate the body for the whole collection again on each change, in
+  place of keeping results per key, where the observable result is the
+  same: the stored values and labels, and what the state cells,
+  streams, effects and children of each key hold. Aggregates and
+  collection indexes hold one contribution per key (sections 3.8 and
+  3.17). `reduce` is the exception: its steps are ordered and are not
+  keyed (section 3.13).
 
 **Identifiers of things a function body creates.** A site in a body
 (`BodyCall`) can run any number of times. Each occurrence is identified as
@@ -2044,7 +2137,7 @@ The type each member is the schema of:
 | Member | The type |
 | --- | --- |
 | `Plan.argumentSchema`, `Plan.resultSchema` | The argument type and the result type the pattern declares, or the checker infers |
-| `StateCell.schema`, and `schema` of a `createCell` site | The value type of the cell constructor |
+| `StateCell.schema`, and `schema` of a `createCell` site | The value type of the cell constructor. For a `StateCell` whose declaration gives it a first value that is a constant, with that value as the default of the schema (section 1.3) |
 | `Child.argumentSchema`, `Child.resultSchema` | The types the callee's type declares: for a compiled callee, its `Plan.argumentSchema` and `Plan.resultSchema` |
 | `Binding.eventSchema`, `Binding.stateSchema` | The event type and the state type of the handler, or of the factory's type. The event type of a `handler(...)` is its first type argument or the annotation of its event parameter. That of an `action` is its first type argument or the annotation of its parameter, as in `action<{ index: number }>(...)`. That of an inline event handler is the type the checker gives its parameter: its annotation, or without one the type that the attribute's position expects (`language-subset.md` §7.6), which exists where the attribute is a path of the argument of a pattern that declares a stream there. An `on*` attribute of a host element declares no event type. *Assumed* (section 8, question 82): an inline handler written there without an annotation, or without a parameter, has the event type `unknown` |
 | `Slot.schema` | The type under which the slot's reader observes the path (below) |
@@ -2964,7 +3057,14 @@ reader, a reader whose own schema declares no default included.
   entry of the enclosing plan (section 1.1). No link is stored for
   either. The rule is the same: the read is made under the reader's
   schema with the default of the schema of the slot it resolves to
-  (`Slot.schema`), which is the place's declaration.
+  (`Slot.schema`), which is the place's declaration. For a pattern
+  compiled into another, by ruling, a path that the call binds to a
+  slot at which nothing is stored also reads the default the callee
+  declares for the path; section 1.1 says which of two defaults governs
+  ("A constant of the argument, and a path the call leaves out").
+- **A state cell.** A first value that is a constant is the default of
+  the cell's schema (section 1.3). A slot of root `state` that finds
+  nothing stored reads it, by this rule, with the integrity below.
 - **Which plan holds the default.** The reader's plan does not hold it.
   A handler is one `Body` however many bindings name it, and its
   `binding` slots have the schema its own state type declares. The
@@ -3756,7 +3856,9 @@ integrity atoms. Each rule that is tighter says what the narrowing rests on.
   exception is by ruling: no principal wrote the value of a default at the
   place, so no claim stored for the place describes it. A slot that reads a
   stored object whole keeps the object's integrity and is not part of the
-  exception.
+  exception. A state cell whose first value is a constant and that
+  nothing has written reads as the default of its schema, and is a case
+  of this exception (section 1.3).
 
 The stage 3 comparison expects these four differences in that direction
 (section 7.5). A promoted `computed` is not a fifth. By ruling it mints no
@@ -4703,7 +4805,7 @@ writes:
 
 ```text
 derive(by: body) over
-  slot r             for each r in Body.reads
+  slot r.slot        for each r in Body.reads
   c.template         for each c in Body.computed
   dynamic h          for each h in Body.handles
   dynamic link       for each journaled resolution of the body
@@ -5216,6 +5318,28 @@ slot at the root, which observes whether the cell holds anything, and an
 `identity` slot at a path below the root, which observes a reference the
 write can replace.
 
+**The two kinds of cone with side-writes, and demand.** By ruling a cone
+with side-writes is of one of two kinds. A cone whose writes go to a
+small, fixed set of targets that the compiler names is an ordinary node:
+its targets are the `WriteEdge` records of this section, and they count
+as its outputs for demand. A demanded reader of a written cell demands
+the cone first. That includes a reader that passes the cell on by
+reference and reads nothing of it: the `identity` slot at the root of a
+state cell, and the one at a handle's own position, are excepted above
+from the slots that read what an edge writes, because no write changes
+what they observe, and that exception is about which reader a write
+makes stale. For demand the two slots count: where something demanded
+holds one of them, as a kept path that passes the cell on does, the
+cones with a write edge to the cell are demanded, and are evaluated
+before the path is stored. No `ConeEdge` is listed for it, and the
+runtime finds the writer from the bound address
+(`scheduler-and-serving-loop.md` §4.3). A cone whose write set is
+dynamic or very large is the second kind, a materializer ("Writes with
+no static target", below). *Assumed*
+(`execution-and-storage.md` §11, question 80): which kind a cone is
+follows from the footprint alone, by `footprint-analysis.md` §6.3, and
+no number of static targets makes a cone a materializer.
+
 The type the second case asks for is the slot's own: `Slot.schema` is
 the type under which the slot's reader observes the path (section 1.5),
 and the case holds where that type has a data type at the handle's
@@ -5454,7 +5578,11 @@ an envelope of the body covers.
   its writes. It keeps a transaction per run and today's label rule: every
   path it writes carries the join over everything the run read, trigger
   reads included. A computed input of a materializer joins that label with
-  its instantiated template.
+  its instantiated template. By ruling a materializer is evaluated
+  eagerly whenever one of its inputs changes, as a rule after the rest
+  of the wave has been evaluated, and its writes make their readers
+  stale, which a further wave evaluates
+  (`scheduler-and-serving-loop.md` §7).
 
 The declared write envelope of a materializer is the `writes` and the
 `envelopes` of its body.
@@ -10401,16 +10529,14 @@ this document made.
     them two. *Assumed:* the first governs (section 3.14). The
     alternative adds the element keys of the enclosing element bodies to
     the identity of such a stream.
-91. **The key of an element of a `filter` result.** The elements of a
-    `filter` result are the source's elements. The ruling counts earlier
-    occurrences "in the collection", and does not say which collection
-    that is for a body applied to a derived collection whose elements
-    are those of its source. *Assumed:* an element of a `filter` result
-    keeps the key it has in the source, count included, so that the
-    state of a body applied to the result does not depend on which
-    equal elements the predicate dropped (section 1.3). Keys stay
-    distinct, because the result holds a subset of the source's
-    positions. The alternative counts again in the result.
+91. **The key of an element of a `filter` result.** Not open. By
+    ruling an element of a collection that is the result of a
+    per-element construct is keyed by the key of the upstream element
+    it came from. An element of a `filter` result keeps the key it has
+    in the source, count included, and an element of a `map` result has
+    the key of the source element the callback was evaluated for
+    (section 1.3). Question 101 covers a `flatMap`. The entry keeps its
+    number.
 92. **State and identity that derive from the index.** Not open. A
     state cell declared with a value that derives from the index, such
     as `cell(index)` in an element body, keeps what it holds when its
@@ -10468,42 +10594,19 @@ this document made.
     `askToRetire` of
     `patterns/system/profile-picker/profile-picker.tsx` is one.
 97. **The value a declaration of the reactive tier gives a state cell.**
-    By ruling a state cell declared with a value from the index keeps
-    what it holds when its element moves, because the declared value is
-    written when the cell is first created and not again (section 1.3).
-    No record of section 1.1 holds that value: `StateCell` has a name,
-    a scope, a `within` and a schema. The prototype emits nothing for
-    it, so in its plans no cone lists the index slot on account of
-    `new Writable(index)` in an element body, and no template gives the
-    label of the stored first value. *Assumed:* a declared value that is
-    not a constant is a `WriteEdge` with target `state`, from the cone
-    that computes it, performed once when the cell is first created, as
-    section 3.14 has it for the initial value of a cell that a body
-    creates. Its template is the label of the stored first value, and a
-    later change of what the cone read writes nothing. A constant has
-    no edge and no label. `execution-and-storage.md` §4.5 writes a
-    state cell's document when the cell is first assigned, so it has to
-    say at which evaluation a cell with such a declared value is
-    created: the first of the instance, or the first for the element
-    key. The alternative refuses, in the reactive tier, a declared
-    value that is not a static initializer, which `language-subset.md`
-    would have to state.
-
-    A declared value that is a constant has no record either. The
-    prototype's emitter writes one function per state cell into the
-    value code, which the executor calls when it makes the cell's
-    document. Of the 1,399 such functions of its corpus, 1,377 are a
-    literal, 19 are another expression that reads no slot, and 3 read a
-    slot. *Assumed:* a declared value that reads no slot is in the value
-    code in that form, and has no label. A function that reads a slot
-    reads it through no cone, so no record of the plan lists the read
-    and no template has its label; for those three the write edge
-    assumed above is what gives the record and the label, and the
-    prototype does not emit it. So the question for the owner has two
-    parts: where the plan holds the first value of a state cell, and
-    what the label of a first value computed from an input is.
-    `execution-and-storage.md` §4.1 assumes when the document is
-    written (its question 83).
+    Not open. A first value that is a constant is the default of the
+    cell's schema: nothing is written when the cell is created, and a
+    read of a cell that holds nothing reads the default, with the empty
+    integrity of a default. A first value that is not a constant is
+    computed by a cone and written once, when the cell is first
+    created, through a `WriteEdge` with target `state` that
+    `StateCell.first` names, and its label is that edge's template.
+    Writing a constant first value at creation as well is legal and not
+    required (sections 1.1 and 1.3). The owner named both forms and
+    left the choice to the one of lower complexity. Open beside it: in
+    which transaction the edge is performed, which
+    `execution-and-storage.md` §4.1 assumes (its question 83). The
+    entry keeps its number.
 98. **The `within` of a cone** (for the project owner). Section 1.4
     refers to the `within` of a cone, and the runtime needs to know for
     which element keys an instance of a cone exists before it evaluates
@@ -10516,28 +10619,42 @@ this document made.
     determined by this document: whether the member holds the `site`
     steps as well, as assumed here, or the collections alone; and
     whether `Cone.entry` is unique without it.
-99. **Where a slot of `Body.reads` sits in the body's argument** (for
-    the project owner). For a handler the root and the path of a slot
-    give its place. For another body they are those of what the caller
-    passed, and only an entry of `Body.computed` has an `at` (section
-    1.1). *Assumed,* as the prototype has it: the compiler emits beside
-    the plan, for each use of a body that is no handler, the path in the
-    argument of each slot of `reads`. The alternative makes an entry of
-    `Body.reads` a record of the slot and its `at`, which puts the place
-    into the plan and its hash. The prototype's corpus plans have 355
-    uses of a body that is no handler, with 1,093 slots placed this way.
-100. **A path that the call of a pattern compiled in leaves out** (for
-     the project owner). Where the callee declares a default for a path
-     and the call does not write the path, no slot and no schema of the
-     plan gives the read a value (section 1.1). *Assumed,* as the
-     prototype has it: the read gives the default of the callee's
-     declared argument type, held as a constant in the value code; and
-     a path that the call binds to a slot of the caller at which
-     nothing is stored reads the default of the caller's schema, and
-     not the callee's. The second part follows the ruling that a
-     default belongs to the stored place, and leaves a callee that
-     declares a default without it where the caller's place declares
-     none. The alternative for that part applies the callee's default
-     where the chain gives none. Without the first part the prototype's
-     executor computed `"undefined420.00"` where the runtime of today
-     shows `"$420.00"`.
+99. **Where a slot of `Body.reads` sits in the body's argument.** Not
+    open. Each entry of `Body.reads` is a `ReadInput`: the slot, and
+    the path `at` in the body's argument at which the slot's value is
+    placed, as an entry of `Body.computed` has it (section 1.1). The
+    place is part of the plan and of its hash. The entry keeps its
+    number.
+100. **A path that the call of a pattern compiled in leaves out.** Not
+     open. The compiler writes the callee's declared default into the
+     plan as a constant for that path, and a path that the call binds
+     to a slot of the caller at which nothing is stored also reads the
+     callee's default (section 1.1). Question 102 covers a place that
+     declares a default of its own. The entry keeps its number.
+101. **The key of an element that a `flatMap` contributes** (for the
+     project owner). By ruling an element of the result of a
+     per-element construct is keyed by the key of the upstream element
+     it came from. A `flatMap` can yield several elements for one
+     source element, and one key cannot stand at several positions.
+     *Assumed:* an element of a `flatMap` result has the key of the
+     source element together with its position in the segment that
+     element contributed (section 1.3). An element that moves inside
+     its segment is then another element for a body applied to the
+     result. The alternative keys an element of a segment by its own
+     identity or value and its count in the segment, under the source
+     element's key.
+102. **A default of the caller's place and one of the callee, for one
+     path** (for the project owner). By the ruling that a default
+     belongs to the stored place, a reader bound to a place reads the
+     default the place declares, whether or not the reader declares
+     one. By the ruling on a call of a pattern compiled in, a path
+     bound to a slot of the caller at which nothing is stored reads the
+     callee's default. Where the place and the callee both declare a
+     default for the path, the two name different values. *Assumed:*
+     the default of the place governs, and the callee's applies where
+     the place declares none (section 1.1). That is the order section
+     2.5 gives a slot whose path crosses a link: the default of the
+     chain first, and then that of the slot's own schema. The
+     alternative applies the callee's default wherever the callee
+     declares one. Not verified against source: which of the two the
+     runtime of today reads.
