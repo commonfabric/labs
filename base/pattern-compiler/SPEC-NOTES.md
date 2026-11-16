@@ -3692,3 +3692,344 @@ or a result.
      document, and the instances document. So it is a lower bound on the
      compiled path's documents for these scenarios, and the derived counts of
      note 277 are the ones to compare with today's.
+
+## Rulings Z2, Z3, Z4, Z6 and Z7 in the emitter and the executor
+
+Notes 307 to 324 are about the owner's rulings of 2026-11-16 on what the
+executor needed beside the plan (notes 285, 286, 288, 294 and 296). Each note
+says what the crate and the executor do for a ruling, which statement of an
+earlier note it replaces, and what the ruling leaves undetermined for an emitter
+or an executor. A note that ends with **Needs a ruling** names something the
+owner has to decide. Notes 284 (`Cone.within`) and 290 (who places a stream) are
+not ruled and stand as they are: the artifact still holds `code.coneWithin`, and
+value code still calls `host.stream`. FA is `footprint-analysis.md`.
+
+307. **Z2: an entry of `Body.reads` holds the place of its slot** (replaces the
+     request of note 285). An entry is `{ slot, at }`, the `ReadInput` of PL
+     §1.1, and `code.layouts` is gone: the executor builds the slot part of a
+     body's argument from the plan (`Host.invoke` in `exec/executor.ts`). For a
+     handler `at` is `event` or `binding` and then the slot's path. For another
+     body it is formed as `ComputedInput.at` is: the name of the parameter or of
+     the captured variable first, and for a `lift` the path below its one
+     parameter (`body_record` in `src/plan.rs`). The corpus plans have 6,179
+     entries, 1,314 of them in the 602 uses of a body that is no handler. Two
+     things follow that the ruling does not speak of, and neither needs the
+     owner. One slot can be placed twice, where two inputs of a use are bound to
+     one place: the list then has two entries with one slot, and the body's
+     template names the slot once. An entry whose `at` has a `*` stands for each
+     element, and the executor places nothing for it: the container is given
+     whole by the entry at the container's own path, where the body lists one.
+     What the argument holds where the body lists no such entry is not in ES
+     §2.4.
+308. **Z4, a path the call leaves out** (replaces the first request of note 288
+     and narrows the third item of note 287). The plan emitter binds the name of
+     the callee's parameter to the default that the callee's argument type
+     declares for the path, as a constant (`inline_argument` in `src/plan.rs`).
+     PL §1.1 gives a constant of a compiled-in argument no record, so the
+     default shows in one record alone, the state of a binding that captures the
+     name: `Binding.state.place` is `{ constant: 5 }` for a callee that declares
+     `step: Default<number, 5>` (`tests/emit.rs`,
+     `a_path_the_call_leaves_out_is_a_constant_of_the_plan_with_the_default`).
+     Of the 410 state entries of the corpus plans that hold a constant, 144 hold
+     `null`, where note 287 counted 200. Elsewhere the constant is in the value
+     code: the setup function of the call declares the name with the default.
+     The corpus has 72 names declared with a default of the callee, for a path
+     the call leaves out or writes a constant at. Two limits are the
+     prototype's. The crate applies the default to a name the parameter
+     destructures, and a callee that reads `props.symbol` of a parameter it does
+     not destructure reads nothing. It applies it where the call writes its
+     argument as a record, and not where the call passes one value for the whole
+     argument.
+309. **Z4, a path bound to a slot of the caller that holds nothing** (replaces
+     the second request of note 288). Expression code of the callee reads the
+     slot as `$rt.or($h.v($h.slot(i)), () => default)`, at 49 reads of the
+     corpus. A sandboxed body of the callee is handed the default at the place
+     of the slot: the value code passes `$h.invoke` a third argument, a list of
+     places with their defaults, in 27 uses of a body (`Rewriter::compute` in
+     `src/emit.rs`, `Host.invoke`). `fixtures/callee-default.tsx` has both
+     halves, and today's runtime reads `"$"` in each: 8 of 8 values are equal.
+     The slot's own schema is applied first, so a default of the place governs,
+     as PL assumes (section 8, question 102). Three things are undetermined.
+     - `ConeHost.invoke` of ES §2.2 takes a body and its computed inputs, and
+       the runtime builds the slot part of the argument from `Body.reads`. An
+       entry of `Body.reads` has no default, so a runtime that follows ES cannot
+       hand a body the callee's default. Either `ReadInput` holds it, or value
+       code passes it as the prototype does. **Needs a ruling**: which.
+     - A callee that passes the path on by reference reads nothing. Its row
+       holds a link to the caller's empty slot, and a reader of the row gets the
+       default of the place or nothing, where today's runtime shows the callee's
+       default. The crate applies the default to a read alone. **Needs a
+       ruling**: what such a path of the callee's result holds.
+     - "Nothing is stored" is read as `undefined`. A stored `null` is a value,
+       and the default is not applied to it.
+310. **Z3, a first value that is a constant** (replaces the request of note 286;
+     changes notes 295 and 306). `StateCell.schema` names the schema of the
+     cell's value with the first value as its `default`, and no code gives the
+     value: the emitter writes no `$rt.state` for the cell
+     (`Emitter::first_value` in `src/plan.rs`). A constant is what
+     `Resolver::constant_value` (`src/types.rs`) evaluates: a literal, a negated
+     number, an array or a record of constants, and a module-scope `const` with
+     such an initializer. Of the 1,496 state cells of the corpus plans, 1,473
+     have a constant first value, 15 have none, and 8 have another one (note
+     312). The schema is the type argument of the constructor where the
+     declaration writes one, and `{ "default": ... }` alone otherwise, which is
+     a limit of the crate. The executor writes nothing when it creates such a
+     cell (`Instance.stateCell`): the store holds the default for the cell's
+     identifier (`Store.declare` in `exec/store.ts`), a read at any path of the
+     cell reads the default while the cell has no document, and the first write
+     makes the document. Over the executed corpus modules the state cells with a
+     document are 98, where note 306 counted 898. So the question of when the
+     document of a state cell is made (note 295; ES §8, question 83) has the
+     answer "with the first write" for these cells. `compare/cost-model.ts`
+     still counts one document per state cell, which is now an upper bound, and
+     the derived figures of note 277 are not computed again.
+311. **Z3, a write below the root of a cell that holds nothing.** The default
+     stands for the whole value of a cell with no document. A write at a path
+     below the root, as `draft.key("text").set("x")` on a cell whose default is
+     `{ text: "", tags: ["new"] }`, has to start from something. Where the
+     document is made from the written path alone, `tags` reads as nothing
+     afterwards. The executor starts the document from the default and applies
+     the write (`Store.write`; `exec/test/executor.test.ts`, "starts a write
+     below the root of an empty cell from the default"), so the members the
+     write did not name are stored from then on, with whatever label a stored
+     default has. A `push` onto a cell whose default is an array that is not
+     empty is the same case. A write of the whole value makes the document also
+     where the value equals the default, which the ruling permits. **Needs a
+     ruling**: what a write below the root of a cell that holds nothing stores,
+     and the label of the members it takes from the default.
+312. **Z3, a first value that is not a constant.** A cone computes it, the cone
+     has a write edge with target `state` among its `writes`, and
+     `StateCell.first` names the cone and the edge. The cone has no entry of
+     `Plan.outputs`. The emitter registers the cone's function as
+     `$rt.state(cell, ...)`, and the executor calls it once, when it creates the
+     cell: for a cell of an element body when the key enters the element table,
+     with that element bound, so `cell(index)` has the index of that moment
+     (`fixtures/state-first.tsx`; `exec/test/executor.test.ts`, "writes a first
+     value that is not a constant once, at creation"). A later change of what
+     the cone read writes nothing. The 8 such cells of the corpus read no slot
+     and no output of another cone: their value is a call, a record written in
+     the pattern body, or a member of a module constant, which the crate does
+     not evaluate. Two things are undetermined.
+     - The cone lists what the value is computed from by its `value`, and the
+       cell stores the value. For a declaration that gives the cell an input
+       whole, as `Writable.of(start)`, the other reading stores a reference to
+       the input, and a write of the cell then lands in the input. **Needs a
+       ruling**: that the first value is stored as a value, never as a
+       reference.
+     - Today's runtime refuses a reactive value in a cell constructor
+       (`validateStaticData` in `runtime/runner/src/cell.ts`), so no corpus
+       module and no run of today's runtime has a first value computed from an
+       input, and the fixture is not compared with today's runtime.
+313. **Z6, a moved element** (replaces the request of note 294). The executor
+     evaluates nothing for an element on a move but what read the index. The
+     entry of a cone instance no longer records the address its element slot was
+     bound to, and a cone reads an element that is a plain value stored in place
+     as the value its key is formed from, held in the element table, so the
+     evaluation reads no position (`Instance.rootOf`). What passes such an
+     element on stores the value. In `fixtures/index-nodes.tsx` a move of two of
+     three elements evaluates the function that reads the index for the two
+     moved keys, 2 evaluations of a cone instance of an element body, where the
+     executor before evaluated 4, and the row of each key shows its own title.
+     `Instance.counts` has `elementEvaluations` and `assemblies` apart: the
+     assembly of a collection is the runtime's step and runs again on a move.
+     Where a body is permitted to evaluate the whole collection again, for an
+     array one computation produces, the executor keeps results per key all the
+     same.
+314. **Z6, the keys of a derived collection** (adds to note 293). An element of
+     the assembled result of a `map`, a `filter` or a `flatMap` has the key of
+     the element it came from, and for a `flatMap` that key with the position in
+     the element's segment, as PL assumes (section 8, question 101), which no
+     fixture exercises. A cone instance of a body applied to such a result
+     depends on the result of the upstream body for the same key, at the path it
+     reads (`Instance.assembled`, `Host.depend`). `fixtures/chain.tsx` is a
+     `map` over a `filter` over a `map`, once over records and once over plain
+     values, and `exec/test/executor.test.ts` ("a chain of element constructs")
+     runs it with the records given as references to cells. It counts the
+     evaluations of cone instances of an element body:
+
+     | Step                                                        | Evaluations |
+     | ----------------------------------------------------------- | ----------: |
+     | The instance is created: 3 records and 3 plain values       |          16 |
+     | The title behind one reference changes                      |           2 |
+     | `done` behind one reference changes, and the element leaves |           1 |
+     | One plain value is replaced in place                        |           3 |
+     | Both arrays are reversed                                    |           0 |
+
+     The 2 are the first `map` and the last for that key: the predicate of the
+     `filter` read `done`, which did not change. The 3 are one cone instance in
+     each body for the key that entered. On the move the six collections are
+     assembled again, once each. `Plan.edges` has no edge between the cones of
+     the chain: `Collection.source` names the upstream collection, and that is
+     what the executor takes the dependency from. The documents should say that
+     a `source` of kind `collection` makes the cone instances of a key stale as
+     an edge does.
+315. **Z6, a derived collection that a cone passes on unchanged.** In
+     `patterns/examples/todo-list/todo-list.tsx` a `computed` returns the result
+     of a `filter`, and a `map` is applied to the `computed`. The plan has that
+     `map` over an output, "an array the instance computed", which PL §1.3 keys
+     by the rule for a stored array. Under ruling Z6 the result of a `filter`
+     over plain values holds values, so the elements of the `map` have no place:
+     a handler of its body that passes its element to `items.remove` removed
+     nothing, and 6 values differed. The executor hands the elements of an
+     assembled result on with their keys and their places where a cone returns
+     the same array (`Instance.#table`), and the 6 values are equal. No test of
+     the crate covers it. **Needs a ruling**: whether an output that passes a
+     derived collection on unchanged carries the keys of its elements, and which
+     record says so.
+316. **Z6, what an element that is a plain value is to its readers** (keeps ES
+     §8, question 79, open). The assumption that a cone which passes such an
+     element on stores the value is what the executor implements, and the values
+     of the corpus agree with it but for one. Four consequences show in the
+     prototype.
+     - Identity. A cone that compares the element with a reference, as
+       `equals(selected, item)` in
+       `patterns/dev/gideon-tests/test-cell-equals.tsx`, holds a value with no
+       address, and the executor compares an addressed value and one without as
+       two. Today's runtime, where the element is a cell, finds them equal. One
+       value of the corpus differs for it.
+     - A handler bound in the body is given the element as its position, which
+       it writes through. The executor keeps the position beside the key for
+       this alone.
+     - A row that binds a member of the element both ways, as
+       `$checked={item.done}`, holds a value, and a write from the tree has no
+       target. The comparison reads values and does not show it.
+     - A handler that writes a member of the element to a cell, as
+       `center.set(stop.position)` in `patterns/examples/map-demo/map-demo.tsx`,
+       stores a reference to a position below the array (ES §2.4, note 300).
+       After the element is removed the reference leads nowhere, and the cell
+       reads as nothing, where today's run keeps the value. Four values of the
+       corpus differ for it.
+
+     **Needs a ruling**: whether a plain value stored in place has an identity
+     that `equals` and a stored reference can name, as the key and the
+     collection, or whether a reader of one always holds a copy.
+317. **Z7, the kind of a cone with side-writes in the plan** (adds to note 296).
+     `Cone.sideWrites` is `static` or `materializer`, and absent for a cone with
+     no side-write of a body. It is the tier FA §6.3 gives the cone's bodies,
+     which the crate had (`Record.tier`, set where the analysis of a body ends
+     in `src/footprint.rs`): a cone is a materializer where one of its bodies is
+     one (`finish` in `src/plan.rs`). PL has no such member, and the kind can
+     also be read from `Plan.operations`, where a materializer has an
+     `Operation` that names its body. The documents author decides whether the
+     member stays. `plan --corpus` counts the kinds over the 3,717 cones of the
+     382 corpus patterns:
+
+     | Kind           | Cones | What their bodies write                                  |
+     | -------------- | ----: | -------------------------------------------------------- |
+     | `static`       |    14 | 13 a state cell, 1 the cell of a handle at a slot        |
+     | `materializer` |    33 | A cell the body creates under a cause computed from data |
+
+     The 187 executed modules have 6 and 19 of them. No computation of the
+     corpus writes through a `*`, a computed path, or a handle read from a
+     value: every materializer of the corpus is a `lift` that creates a cell and
+     gives it a value. The writes that expression code makes, a stored request
+     and a first value, are in `Cone.writes`, name their target, and are not
+     counted.
+318. **Z7, a cone of kind `static` in the executor** (replaces the first request
+     of note 296). The executor no longer evaluates every cone with a side-write
+     before the outputs. Where an evaluation reads a slot, or the element table
+     of a collection over a slot, at a place a write edge of a `static` cone
+     names, the cone is evaluated first (`Host.demand`, `Instance.writersOf`).
+     The class of the slot does not matter, so the `result` cone, which passes a
+     state cell on by its `identity` slot, demands the cone that writes the
+     cell: the case of `accumulator.tsx`. The entry of the reader keeps the
+     cones it demanded and brings them up to date before it is taken as current,
+     since a reader that passes a cell on reads nothing and is never stale by
+     itself. A cone that nothing demands this way is not evaluated
+     (`fixtures/side-write-undemanded.tsx`), where today's runtime evaluates it:
+     a design difference the ruling makes. No value of the corpus changed with
+     it. Three limits are the prototype's, and none needs the owner. A handler's
+     read of a write target demands nothing in the executor. A write edge that
+     names its handle by `computed`, and one with target `created` or
+     `argument`, has no root and path, and the executor finds no reader for it.
+     A cone of an element body whose reader is outside the body is evaluated for
+     every key of the table.
+319. **Z7, a materializer in the executor.** After the kept outputs and the
+     result of a wave, the executor evaluates each materializer whose input
+     changed, and a write it makes starts a further wave (`Instance.settle`). A
+     reader of the materializer's own value in the wave reads what it returned
+     last, and nothing before its first run. In `fixtures/side-writes.tsx` the
+     cone that counts the keys the materializer wrote is evaluated twice when
+     the instance is created, before the materializer and after it, and the
+     values equal today's, 20 of 20. FA §6.3 has the result of a materializer
+     read through a slot of root `operation`, and the crate's plan has the body
+     in a cone and its value as an output of that cone, which is a defect of the
+     crate. The ruling's "often after the rest of the wave" is "always" in the
+     executor.
+320. **Three defects of the prototype found on the way.** A name the pattern
+     binds to `[SELF]` had no declaration in value code and resolved to a global
+     of the host; it is a reference to the result now. The executor copied every
+     container it read under a schema that describes its members, and the copy
+     had no address, so a member a handler read through a typed handle was not
+     found again by `equals` or `remove` (`withDefaults` in `exec/store.ts`).
+     And note 315.
+321. **The fixtures again.**
+     `deno run -A --no-check
+     base/pattern-compiler/compare/values-fixtures.ts`
+     runs 22 of the 25 fixtures, 27 runs in all, and 152 of 152 compared values
+     are equal, where note 303 had 23 runs and 122 values. The added runs are
+     two of `callee-default` with 8 values, one of `chain` with 2, and one of
+     `side-writes` with 20. Three fixtures are not compared with today's
+     runtime: `link-cycle` as before, `state-first` (note 312), and
+     `side-write-undemanded` (note 318).
+322. **The corpus again.** The values of today's runtime are those of the run of
+     note 304: `values-corpus.ts again` runs the executor alone on the crate's
+     current output against them. The crate now emits a plan with no unsupported
+     construct for 272 modules, two more, because a first value that is not a
+     constant is no longer unsupported, and `values-corpus.ts run` ran today's
+     runtime on those two.
+
+     |                                               | Note 304 to 306 |   Now | Now, 272 modules |
+     | --------------------------------------------- | --------------: | ----: | ---------------: |
+     | Modules run by today's runtime                |             213 |   213 |              215 |
+     | Executed                                      |             186 |   187 |              189 |
+     | Every value equal and every event handled     |             159 |   161 |              161 |
+     | Values compared                               |           4,537 | 4,539 |            4,607 |
+     | Values equal                                  |           4,472 | 4,485 |            4,527 |
+     | Values that differ                            |              65 |    54 |               80 |
+     | Modules with a difference                     |              24 |    22 |               23 |
+     | Committed events the executor does not handle |       15 of 269 |    15 |        20 of 278 |
+     | Documents the executor stored                 |           1,302 |   504 |              509 |
+     | Of them state cells                           |             898 |    98 |               99 |
+
+     Two values that were equal differ now, both in
+     `examples/map-demo/map-demo.tsx` after its last event: the handler of that
+     event removes an area, which it did not find before the fix of note 320,
+     and a cell that an earlier event had set to the area's center then reads as
+     nothing (note 316). The two values of the module that differed after that
+     event are equal now, so the module has 4 values that differ as before. No
+     other value that was equal differs. `todo-list.tsx` (6 values, notes 313
+     and 315), `card-piles/main.tsx` (2) and `contacts/contact-book.tsx` (4,
+     both note 320) are equal throughout. `dev/test/input-self/subjects.tsx`
+     executes now and has one value that differs of two: the result holds a
+     reference to itself, which the executor's read gives as nothing at the
+     second level and today's read follows. Of the two added modules,
+     `battleship/pass-and-play/main.tsx` has 32 of 32 values equal, and
+     `apps/base/contacts.tsx` 10 of 36: two of its handlers construct a cell
+     with `new` in a function body, which the executor does not do. The result
+     holds a stream at 425 positions a listed path names, where note 290 had
+     431, and still at 18 that none names. The difference is not examined.
+323. **The differences note 305 left without a cause.** Of its 23 values in 8
+     modules, 6 are equal now (`todo-list.tsx`) and 2 more (`card-piles`). The
+     other 15 values, by class:
+
+     | Module                              | Values | Class                          | Cause                                                                                     |
+     | ----------------------------------- | -----: | ------------------------------ | ----------------------------------------------------------------------------------------- |
+     | `examples/map-demo`                 |      4 | Design gap                     | A stored reference to a member of a plain-value element, which is then removed (note 316) |
+     | `dev/gideon-tests/test-cell-equals` |      1 | Design gap                     | `equals` of a reference with a plain-value element (note 316)                             |
+     | `showcase/wordsearch`               |      3 | Neither                        | The pattern draws its seed from `Math.random`, and the two runs draw two numbers          |
+     | `system/agent-run`                  |      4 | Today's runtime, not verified  | The scenario's argument holds `run.state`, and today's run reads nothing at `run`         |
+     | `dev/catalog/catalog`               |      2 | Prototype defect, not verified | A child that is `null` in today's run holds nothing in the executor's                     |
+     | `examples/cfc-spec-gallery`         |      1 | Prototype defect, not verified | A `$cell` attribute holds a pattern's result; today's read gives no `$NAME` below it      |
+
+     The two rows classed as a design gap are the first differences of the
+     comparison with that class. Both come from elements that are plain values
+     stored in place, which today's runtime does not have: it stores an element
+     that is a record as a cell of its own.
+324. **Rules of the task not kept, and what is not verified.** The tests of
+     rulings Z2, Z3, Z4, Z6 and Z7 were written before the code. The two fixes
+     of note 320 in the executor were made from a corpus difference, with a test
+     of the store written after the first and none for note 315. The counts of
+     notes 308 to 310 are over all 382 corpus patterns, the ones with an
+     unsupported construct included. The rows of note 323 marked "not verified"
+     are a reading of the source and of the two values.
