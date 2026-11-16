@@ -2474,8 +2474,9 @@ key all the same.
 **The `within` of a cone.** The runtime has to know, before it evaluates
 a cone, for which element keys an instance of the cone exists. The slots
 of a cone do not say it, because a cone of an element body can list no
-slot of root `element` or `index`: of the 446 cones of an element body in
-the prototype's corpus plans, 38 list none. An output path does not say
+slot of root `element` or `index`: of the 3,717 cones of the prototype's
+382 corpus patterns, 576 have an `element` step, and 60 of those list
+none. An output path does not say
 it either: a `*` stands for a collection and does not name it, and an
 interim output has no `*`. By ruling the record of a cone says it:
 `Cone.within` lists the collections of the element bodies the cone is
@@ -2506,14 +2507,19 @@ section 1.3 alike: an `element` step names a collection, and the rule
 does not look at whether the collection's source is an array of
 references, an array of plain values in place, or the result of another
 per-element construct. What differs among the three is how a key is
-computed, which section 1.3 has.
+computed, which section 1.3 has. The plan does not say whether the
+elements of a source are references or plain values. A cone of a body
+over the result of another per-element construct names its own
+collection in the step, and not the upstream one.
 
 The ruling is on the collections. *Assumed* (section 8, question 98):
 the member holds the steps of where the cone's code is written, as the
 `within` of a declaration does (section 1.3), so it also has a `site`
 step for each pattern compiled in that the code is written in. A `site`
 step names no collection and adds no key, so it changes neither of the
-two uses above. A cone written in the pattern body, outside every
+two uses above. The prototype's plans hold both kinds of step: 1,336 of
+the 3,717 cones have a `site` step. A cone written in the pattern body,
+outside every
 element body and every pattern compiled in, has the empty list.
 
 **An interim value of an element body.** A value that a declaration
@@ -11350,8 +11356,8 @@ this document made.
     keys the outputs, state cells, streams, effects and children of an
     instance are kept. A cone of an element body that reads neither the
     element nor the index has an instance per key all the same (section
-    1.4). Open: the ruling is on the collections, and the prototype
-    holds for each cone the collections alone. *Assumed:* the member
+    1.4). Open: the ruling is on the collections. The prototype's plans
+    hold the `site` steps as well, as assumed. *Assumed:* the member
     holds the steps of where the cone's code is written, so it has the
     `site` steps as well, as the `within` of a declaration has. The
     alternative holds the collections alone. Not determined by this

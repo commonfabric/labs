@@ -1652,7 +1652,10 @@ The runtime evaluates a `map` over the collection as follows.
    instances and its memo entries, and tear down the instances their
    evaluations made (section 2.8) and the children the body has under the
    key. State cells and operation state declared under the key are not
-   deleted by this step (section 9.6).
+   deleted by this step (section 9.6), in each of the three cases of a
+   source. A key that returns has new cone instances, which are evaluated,
+   and *assumed* (section 11, question 33) it reads what its state cells
+   held before.
 6. Assemble the result: position `i` receives the outputs of the cone
    instances of the key at position `i`. A hole stays a hole.
 
@@ -5076,8 +5079,20 @@ computation makes:
     new instance finds the state cells and operation state stored under
     that identity where they were not deleted yet, as an element whose key
     returns does, and an author who needs otherwise writes `.for(cause)`.
-    The alternative deletes a torn-down instance's documents in the
-    transaction that tears it down, which needs them to be listed. A second
+    The same is assumed for a state cell and for operation state that an
+    element body declares: step 5 of section 2.5 drops the cone instances
+    of a key that left and deletes nothing stored under it, so a key that
+    returns reads what its state cell held, until section 9.6 deletes the
+    document. Over an array of plain values in place that is a value that
+    is removed and written again, over an array of references a cell that
+    leaves the list and enters it again, and over the result of another
+    per-element construct an upstream key that returns, as where an element
+    leaves the result of a `filter` and enters it again. The prototype's
+    executor does this in the three cases.
+    The alternative deletes a torn-down instance's documents, and what is
+    stored under an element key, in the transaction that tears the instance
+    down or in which the key leaves its collection, which needs them to be
+    listed. A second
     consequence of the ruling is stated here so that it is accepted
     knowingly: a link to a torn-down instance that another document holds
     reads the values last stored, and nothing marks them as such for a
