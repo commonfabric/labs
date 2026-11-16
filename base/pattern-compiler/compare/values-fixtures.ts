@@ -138,7 +138,10 @@ export const compareFixtures = async (
     }
     const events = (plan.bindings ?? []).flatMap((binding, index) =>
       binding.handler?.body !== undefined && binding.result !== undefined
-        ? [{ binding: index, event: generateEvent(plan, artifact.schemas, index) }]
+        ? [{
+          binding: index,
+          event: generateEvent(plan, artifact.schemas, index),
+        }]
         : []
     );
     rows.push({
@@ -194,7 +197,9 @@ if (import.meta.main) {
       );
     }
   }
-  const executed = rows.filter((row) => row.comparison.notExecuted === undefined);
+  const executed = rows.filter((row) =>
+    row.comparison.notExecuted === undefined
+  );
   console.log(
     `${executed.length} of ${rows.length} runs executed, ` +
       `${equal} of ${compared} values equal`,

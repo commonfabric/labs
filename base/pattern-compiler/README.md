@@ -31,10 +31,15 @@ job builds or tests it. It is not a Deno workspace member.
   of each diagnostic, the number of bodies of each kind, and the count of each
   removed form.
 
+- **Value code.** For each plan, the JavaScript an executor calls to compute
+  what the plan describes (`src/emit.rs`), and a minimal executor of the two
+  (`exec/`). "Value code and the executor" below says what they cover.
+
 ## What it does not cover
 
-It has no code emission. Its footprint analysis (`src/footprint.rs`) fills in
-the `Body` record of
+It emits no label code: a label is instantiated from the plan's templates, and
+the value code computes values alone. Its footprint analysis
+(`src/footprint.rs`) fills in the `Body` record of
 [`footprint-analysis.md`](../../docs/specs/compiled-pattern-language/footprint-analysis.md),
 and `src/plan.rs` emits a first slice of the plan of
 [`plan-and-label-templates.md`](../../docs/specs/compiled-pattern-language/plan-and-label-templates.md)
@@ -157,6 +162,76 @@ type checker or to footprint analysis, or lists it as retired.
 `tests/catalog.rs` compares that table with the identifiers in the
 specification, so the two cannot differ without a failing test.
 
+## Value code and the executor
+
+`emit path/to/module.tsx` prints, for each pattern of the module, one artifact:
+the plan, its schema documents, and under `code` the value code with what an
+executor needs beside the plan. `src/emit.rs` writes the value code from the
+same walk that fills in the plan: `src/plan.rs` records what each name and each
+expression of the reactive tier denotes, and the emitter rewrites the source
+with those records. A name that denotes a slot becomes `$h.slot(i)` for a slot
+its cone lists, a value of another cone becomes `$h.output(i)`, a use of a
+sandboxed body becomes `$h.invoke(body, computed)`, a type annotation is
+removed, and a JSX element becomes a call that builds a view node. `$h` is the
+host object of `execution-and-storage.md` §2.2.
+
+The artifact's `code` has these members.
+
+| Member                | Holds                                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `modules`             | One JavaScript text per module: the module's own code of module scope, then a registration for each function the plan needs of it |
+| `values`              | For each value a cone computes: its cone, its entry of `Plan.outputs`, and whether it has a value function                        |
+| `outputsBelow`        | The interim outputs at a path below a value                                                                                       |
+| `coneWithin`          | For each cone: the collections whose element bodies it is written in                                                              |
+| `layouts`             | For each use of a body: where each slot of `Body.reads` sits in the body's argument                                               |
+| `handlers`            | For each handler body: whether its state is its second parameter or what it captures                                              |
+| `unlistedReads`       | The reads the value code makes of a place that no slot of its cone names                                                          |
+| `valuesWithoutOutput` | The values the code refers to that have no entry of `Plan.outputs`                                                                |
+| `unsupported`         | The constructs the emitter writes no code for                                                                                     |
+
+A module's text registers a setup function for the pattern (`$rt.setup`) and for
+each pattern compiled into it, and each setup function registers a value
+function per value (`$rt.value`), the function of the body of each element
+construct (`$rt.element`), the function that gives a state cell its first value
+(`$rt.state`), and the function of a handler written in place (`$rt.handler`).
+The function of a sandboxed body is registered in the module it is written in
+(`$rt.body`).
+
+`exec/executor.ts` runs an artifact on an argument, with Deno: it loads the
+module texts, makes the argument document, the result document and one document
+per state cell in memory, evaluates the kept outputs and the result, evaluates
+the body of an element construct once per element key, and handles an event by
+running the handler's body and evaluating again what read a position the body
+wrote. It instantiates no label, checks no constraint, persists nothing, and
+answers every effect as pending. It does not narrow a slot to its observation
+class, does not instantiate a pattern or bind a handler in a function body, and
+does not evaluate `reduce`, `elementById` or the debug strings. From the
+repository root:
+
+```sh
+base/pattern-compiler/target/release/pattern-compiler emit path/to/module.tsx > artifact.json
+deno run -A base/pattern-compiler/exec/run.ts artifact.json argument.json
+deno test -A base/pattern-compiler/exec/test/
+```
+
+`compare/values.ts` compares the values the executor computes with those of
+today's runtime: the members of the result and the state cells of the pattern's
+own body, after the instance settled and after each event.
+`compare/values-fixtures.ts` runs the fixtures, and `compare/values-corpus.ts`
+the corpus:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/values-fixtures.ts
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts run values.jsonl
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts report values.jsonl
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts again values.jsonl again.jsonl
+```
+
+`run` keeps what today's runtime computed in the results file, and `again` runs
+the executor alone on the crate's current output against it. Notes 281 on of
+`SPEC-NOTES.md` list what the executor needed that the plan and the documents do
+not give, and what the comparison found.
+
 ## The parser
 
 The crate parses with the [`oxc`](https://oxc.rs) crates and does not tokenize
@@ -184,6 +259,7 @@ release that builds with the Rust 1.93 toolchain.
 | `typed`                  | The other catalog rules that read the type of an expression: property reads, casts, pattern results, generic calls                  |
 | `footprint`              | What a function body reads and writes of its inputs (`footprint-analysis.md` §2 to §7), and where the analysis widens               |
 | `plan`                   | The plan of a pattern as JSON: slots, bodies for each use, bindings, cones, outputs, and edges (`plan-and-label-templates.md` §1.1) |
+| `emit`                   | The value code of a plan: the JavaScript of each module, and what an executor needs beside the plan                                 |
 | `program`                | A set of modules, the resolution of imports between them, and the rules that follow a call into another function                    |
 | `catalog`, `diagnostics` | The diagnostics catalog and the diagnostic record                                                                                   |
 | `corpus`, `report`       | Which files are the corpus, and the report over them                                                                                |
@@ -239,6 +315,8 @@ cargo run --release -- corpus ../../patterns --sites
 cargo run --release -- plan path/to/module.tsx
 cargo run --release -- plan --corpus ../../patterns
 cargo run --release -- plan --corpus ../../patterns --json
+cargo run --release -- emit path/to/module.tsx
+cargo run --release -- emit --corpus ../../patterns
 ```
 
 `check` takes the modules of one program: an import between two of them is

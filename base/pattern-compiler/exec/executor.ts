@@ -200,6 +200,11 @@ const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
  */
 const MAX_PASSES = 10;
 
+/** Whether a schema declares the position it describes as a stream. */
+const isStreamSchema = (schema: Schema | undefined): boolean =>
+  typeof schema === "object" && Array.isArray(schema.asCell) &&
+  schema.asCell.includes("stream");
+
 /** Whether a schema declares a handle at a position below its own. */
 const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
   if (typeof schema !== "object" || depth > 6) return false;
@@ -215,9 +220,7 @@ const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
 
 const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
   pattern.length <= path.length &&
-  pattern.every((segment, index) =>
-    segment === "*" || segment === path[index]
-  );
+  pattern.every((segment, index) => segment === "*" || segment === path[index]);
 
 /**
  * A cell handle given to a sandboxed body (ES §2.4, "Handles"): reads and
@@ -305,7 +308,10 @@ export class Handle {
     this.instance.written(this);
     this.instance.store.write(
       this.target,
-      this.instance.detached(this.target, this.instance.stored(value)),
+      this.instance.detached(
+        this.target,
+        this.instance.stored(this.instance.returned(value)),
+      ),
     );
     return this;
   }
@@ -334,7 +340,9 @@ export class Handle {
     this.instance.written(this.key("*"));
     this.instance.store.write(this.target, [
       ...held,
-      ...members.map((member) => this.instance.stored(member)),
+      ...members.map((member) =>
+        this.instance.stored(this.instance.returned(member))
+      ),
     ]);
   }
 
@@ -429,6 +437,14 @@ export class Host {
       ? rest.reduce(schemaBelow, instance.schemaOf(slot.schema))
       : undefined;
     if (slot.observes === "identity") {
+      // An input declared as a stream that the argument gives nothing for
+      // reads as a stream that takes no event.
+      if (
+        found instanceof Ref && isStreamSchema(schema) &&
+        instance.store.locate(found, true).value === undefined
+      ) {
+        return new StreamRef(-1, []);
+      }
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
     return withDefaults(this.v(found), schema);
@@ -493,7 +509,9 @@ export class Host {
 
   /** A value with every reference in it replaced by what it refers to. */
   v(value: unknown): unknown {
-    if (value instanceof Ref) return this.instance.store.read(value, this.reads);
+    if (value instanceof Ref) {
+      return this.instance.store.read(value, this.reads);
+    }
     if (value instanceof StreamRef) return { $stream: true };
     if (value instanceof Handle) return value.get();
     if (Array.isArray(value)) return value.map((member) => this.v(member));
@@ -711,7 +729,10 @@ export class Instance {
           });
         }
       },
-      setup: (context: number, run: (given: unknown, host: Host) => unknown) => {
+      setup: (
+        context: number,
+        run: (given: unknown, host: Host) => unknown,
+      ) => {
         this.#setups[context] = run;
       },
       value: (value: number, run: (host: Host) => unknown) => {
@@ -906,10 +927,21 @@ export class Instance {
     return value;
   }
 
-  /** What a body returned: a handle in it as the reference it holds. */
+  /**
+   * What a body returned or wrote: a handle in it as the reference it
+   * holds, and a container that carries the address it was read from as
+   * a reference to that address (ES §2.4, "A value passed on unchanged is
+   * stored as a reference").
+   */
   returned(value: unknown): unknown {
     if (value instanceof Handle) return value.target;
-    if (Array.isArray(value)) return value.map((member) => this.returned(member));
+    if (typeof value === "object" && value !== null) {
+      const read = this.store.addresses.get(value);
+      if (read !== undefined) return new Ref(read.doc, read.path);
+    }
+    if (Array.isArray(value)) {
+      return value.map((member) => this.returned(member));
+    }
     if (isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map((
@@ -1040,9 +1072,8 @@ export class Instance {
   // ----- evaluation -----
 
   #contextKey(collections: readonly number[], context: Context): string {
-    return collections.map((collection) =>
-      context.get(collection)?.key ?? "?"
-    ).join("\u0001");
+    return collections.map((collection) => context.get(collection)?.key ?? "?")
+      .join("\u0001");
   }
 
   /**
@@ -1164,7 +1195,9 @@ export class Instance {
           this.#declare(inner);
           const entry = () =>
             this.#ensure(
-              `e${collection}|${this.#contextKey(outer, context)}|${element.key}`,
+              `e${collection}|${
+                this.#contextKey(outer, context)
+              }|${element.key}`,
               inner,
               cone,
               run,
@@ -1455,11 +1488,12 @@ export class Instance {
       target.slot === handle.slot &&
       (matchesPath(target.path ?? [], handle.below) ||
         matchesPath(handle.below, target.path ?? []));
-    const covered = body.writes.some(({ target }) =>
-      target.kind === "handle" && covers(target)
-    ) || body.envelopes.some((envelope) =>
-      envelope.kind === "handle" && covers(envelope)
-    );
+    const covered =
+      body.writes.some(({ target }) =>
+        target.kind === "handle" && covers(target)
+      ) || body.envelopes.some((envelope) =>
+        envelope.kind === "handle" && covers(envelope)
+      );
     if (covered) this.counts.writesCovered += 1;
     else this.counts.writesNotCovered += 1;
   }
@@ -1520,7 +1554,9 @@ export class Instance {
   #contextOf(stream: StreamRef): Context {
     const context = new Map<number, Element>();
     let step = 0;
-    for (const { element } of this.plan.bindings[stream.binding]?.within ?? []) {
+    for (
+      const { element } of this.plan.bindings[stream.binding]?.within ?? []
+    ) {
       if (element === undefined) continue;
       const key = stream.keys[step];
       step += 1;
@@ -1570,7 +1606,10 @@ export class Instance {
       let found: unknown;
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
-        found = host.at(this.rootOf(bound.root, host), [...bound.path, ...rest]);
+        found = host.at(this.rootOf(bound.root, host), [
+          ...bound.path,
+          ...rest,
+        ]);
         if (found instanceof Ref) {
           found = found.withSchema(
             rest.reduce(schemaBelow, this.schemaOf(bound.schema)),

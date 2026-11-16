@@ -1812,7 +1812,9 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.unsupported("a call of a pattern nested too deep to compile in", at);
             return Place::Unknown;
         };
-        let saved_context = self.facts.enter(at, home, start, argument.clone(), self.cone);
+        let saved_context = self
+            .facts
+            .enter(at, home, start, argument.clone(), self.cone);
         let saved_env = std::mem::take(&mut self.env);
         let saved_module = std::mem::replace(&mut self.module, home);
         self.within.push(json!({ "site": name }));
@@ -1909,7 +1911,8 @@ impl<'a> Emitter<'_, '_, 'a> {
         struct Names(Vec<(u32, u32, String)>);
         impl<'a> oxc_ast_visit::Visit<'a> for Names {
             fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
-                self.0.push((it.span.start, it.span.end, it.name.to_string()));
+                self.0
+                    .push((it.span.start, it.span.end, it.name.to_string()));
             }
         }
         let mut names = Names(Vec::new());

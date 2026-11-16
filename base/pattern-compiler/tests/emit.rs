@@ -68,7 +68,9 @@ export const P = pattern<{ secret: string; note: string }>(({ secret, note }) =>
     let secret = slot(&plan, "argument", &["secret"], "value");
     let note = slot(&plan, "argument", &["note"], "value");
     assert!(
-        text.contains(&format!("($h.v($h.slot({secret})) + $h.v($h.slot({note})))")),
+        text.contains(&format!(
+            "($h.v($h.slot({secret})) + $h.v($h.slot({note})))"
+        )),
         "{text}"
     );
     // A path the result passes on is read by its `identity` slot.
@@ -123,7 +125,10 @@ export const P = pattern<{ tag: Tag }>(({ tag }) => {
     assert!(!text.contains("interface"), "{text}");
     assert!(!text.contains("Entry"), "{text}");
     assert!(text.contains("const LIMIT = 3;"), "{text}");
-    assert!(text.contains("const entry = { text: event.text };"), "{text}");
+    assert!(
+        text.contains("const entry = { text: event.text };"),
+        "{text}"
+    );
     assert!(text.contains("log.push(entry);"), "{text}");
     assert!(text.contains("pattern(undefined)"), "{text}");
     // The handler's body is one function, called with the event and the
@@ -270,4 +275,108 @@ export const P = pattern<{ title: string; items: string[] }>(({ title, items }) 
         .as_array()
         .expect("reads")
         .contains(&json!(title)));
+}
+
+#[test]
+fn a_handler_written_in_place_is_registered_where_it_is_written() {
+    let (_, code) = emitted(
+        r#"import { pattern, UI, Writable } from "commonfabric";
+const Row = pattern<{ step: number }>(({ step }) => {
+  const count = Writable.of(0);
+  return { [UI]: <button onClick={() => count.set(count.get() + step)}>add</button> };
+});
+export const P = pattern<{ title: string }>(({ title }) => {
+  return { [UI]: <div>{title}<Row step={2} /></div> };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The constant `step` is a name of the setup function the handler is
+    // registered in, and the cell is taken from the handler's state.
+    let setup = text
+        .split("$rt.setup(1,")
+        .nth(1)
+        .expect("the setup function of the pattern compiled in");
+    assert!(
+        setup.contains("const step = $rt.at($arg, [\"step\"], $h);"),
+        "{text}"
+    );
+    assert!(
+        setup.contains(
+            "$rt.handler(0, ($e, $s) => { const { count } = $s; return (() => count.set(count.get() + step))($e); });"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_path_the_call_leaves_out_reads_as_the_default_of_the_callee() {
+    let (_, code) = emitted(
+        r#"import { computed, type Default, pattern, UI } from "commonfabric";
+const Price = pattern<{ amount: number; symbol: Default<string, "$"> }>(({ amount, symbol }) => {
+  const shown = computed(() => symbol + amount);
+  return { [UI]: <span>{shown}</span> };
+});
+export const P = pattern<{ amount: number }>(({ amount }) => {
+  return { [UI]: <div><Price amount={amount} /></div> };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    assert!(
+        text.contains("const symbol = $rt.or($rt.at($arg, [\"symbol\"], $h), () => (\"$\"));"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_children_of_a_tag_that_names_a_pattern_are_a_value_of_their_own() {
+    let (_, code) = emitted(
+        r#"import { pattern, UI } from "commonfabric";
+const Card = pattern<{ children: unknown }>(({ children }) => {
+  return { [UI]: <section>{children}</section> };
+});
+export const P = pattern<{ title: string }>(({ title }) => {
+  return { [UI]: <Card><b>{title}</b></Card> };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The callee reads the children as the output of the value the
+    // caller's code computes.
+    assert!(
+        text.contains("($h) => ([$rt.h(\"b\", {  }, [$h.slot("),
+        "{text}"
+    );
+    assert_eq!(code["valuesWithoutOutput"], json!([]));
+}
+
+#[test]
+fn a_body_is_handed_a_name_it_captures_and_reads_nothing_of() {
+    let (plan, code) = emitted(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ flag: boolean; note: string }>(({ flag, note }) => {
+  const seen = computed(() => {
+    void flag;
+    for (const letter of note) {
+      if (letter === "x") return true;
+    }
+    return false;
+  });
+  return { seen };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The record of the body has no entry for `flag`, and its code names
+    // it.
+    assert_eq!(plan["bodies"][0]["kind"], json!("computed"));
+    assert!(
+        text.contains("$rt.body(0, ($a) => { const { flag, note } = $a;"),
+        "{text}"
+    );
 }

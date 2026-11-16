@@ -18,7 +18,7 @@
 //! (notes 281 on) lists what the documents do not say about these.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use oxc_ast::ast::*;
 use oxc_ast::AstKind;
@@ -327,7 +327,7 @@ struct Generator<'r, 'm, 'a> {
     /// last.
     buffers: Vec<Vec<String>>,
     /// The setup function of each context that has one.
-    setups: HashMap<usize, ()>,
+    setups: HashSet<usize>,
     functions: HashMap<usize, HashMap<u32, FunctionLike<'a, 'a>>>,
     unsupported: Vec<(String, usize, u32)>,
     /// The reads the code makes of a place no slot of its cone names:
@@ -358,7 +358,9 @@ struct Rewriter<'g, 'r, 'm, 'a> {
 
 impl<'r, 'm, 'a> Generator<'r, 'm, 'a> {
     fn source(&self, module: usize) -> &'a str {
-        self.resolver.parsed(module).map_or("", |parsed| parsed.source)
+        self.resolver
+            .parsed(module)
+            .map_or("", |parsed| parsed.source)
     }
 
     fn unsupported(&mut self, kind: impl Into<String>, module: usize, at: u32) {
@@ -393,7 +395,10 @@ impl<'r, 'm, 'a> Generator<'r, 'm, 'a> {
     }
 
     fn register(&mut self, module: usize, statement: String) {
-        self.registrations.entry(module).or_default().push(statement);
+        self.registrations
+            .entry(module)
+            .or_default()
+            .push(statement);
     }
 
     fn fresh(&mut self, prefix: &str) -> String {
@@ -614,7 +619,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 rewriter.edit(element.span.start, element.span.end, code);
             }
             Expression::JSXFragment(fragment) => {
-                let code = rewriter.jsx_node("\"cf-fragment\"".to_string(), None, &fragment.children);
+                let code =
+                    rewriter.jsx_node("\"cf-fragment\"".to_string(), None, &fragment.children);
                 rewriter.edit(fragment.span.start, fragment.span.end, code);
             }
             _ => walk::walk_expression(rewriter, inner),
@@ -884,7 +890,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         let mut returned: Option<String> = None;
         match function.expression_body() {
             Some(expression) => {
-                returned = Some(self.in_cone(cone, |rewriter| rewriter.render(expression, Want::Pass)));
+                returned =
+                    Some(self.in_cone(cone, |rewriter| rewriter.render(expression, Want::Pass)));
             }
             None => {
                 for statement in function.block_body().unwrap_or(&[]) {
@@ -984,9 +991,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 };
                 Some(Self::wanted(want, format!("({left} {operator} {right})")))
             }
-            Expression::StaticMemberExpression(member) => {
-                self.member(&member.object, json!(member.property.name.as_str()).to_string(), want)
-            }
+            Expression::StaticMemberExpression(member) => self.member(
+                &member.object,
+                json!(member.property.name.as_str()).to_string(),
+                want,
+            ),
             Expression::ComputedMemberExpression(member) => {
                 let key = self.render(&member.expression, Want::Use);
                 self.member(&member.object, key, want)
@@ -1091,7 +1100,9 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         let api = self.generator.resolver.api_callee(self.module, call);
         match api.as_deref() {
             Some("computed") => {
-                let function = arguments.first().and_then(|first| FunctionLike::of(first))?;
+                let function = arguments
+                    .first()
+                    .and_then(|first| FunctionLike::of(first))?;
                 match function.expression_body() {
                     Some(expression) => Some(self.render(expression, want)),
                     None => {
@@ -1170,8 +1181,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 Some(_) => {}
             }
         }
-        if !self.generator.setups.contains_key(&context) {
-            self.generator.setups.insert(context, ());
+        if self.generator.setups.insert(context) {
             self.setup(context, if within { self.cone } else { None });
         }
         let argument = format!("{{ {} }}", given.join(", "));
@@ -1194,8 +1204,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     fn setup(&mut self, context: usize, cone: Option<usize>) {
         let info = self.generator.finished.facts.contexts[context].clone();
         let Some(function) = self.generator.function_at(info.module, info.start) else {
-            self.generator
-                .unsupported("a pattern whose function was not found", info.module, info.start);
+            self.generator.unsupported(
+                "a pattern whose function was not found",
+                info.module,
+                info.start,
+            );
             return;
         };
         self.generator.buffers.push(Vec::new());
@@ -1342,7 +1355,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 };
                 let read = match default {
                     Some(default) => {
-                        let default = self.in_cone(None, |rewriter| rewriter.render(default, Want::Pass));
+                        let default =
+                            self.in_cone(None, |rewriter| rewriter.render(default, Want::Pass));
                         format!("$rt.or({read}, () => ({default}))")
                     }
                     None => read,
@@ -1400,8 +1414,11 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     /// argument the runtime builds.
     fn body_function(&mut self, used: &UseFact) {
         let Some(function) = self.generator.function_at(used.home, used.start) else {
-            self.generator
-                .unsupported("a body whose function was not found", used.home, used.start);
+            self.generator.unsupported(
+                "a body whose function was not found",
+                used.home,
+                used.start,
+            );
             return;
         };
         let source = self.plain_function(used.home, function);
@@ -1488,7 +1505,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     /// in, its `[UI]` at a child position (PL §1.1).
     fn jsx_element(&mut self, element: &JSXElement<'a>, child: bool) -> String {
         let opening = &element.opening_element;
-        if let (Some(context), JSXElementName::IdentifierReference(_)) = (self.context, &opening.name)
+        if let (Some(context), JSXElementName::IdentifierReference(_)) =
+            (self.context, &opening.name)
         {
             let inline = self
                 .generator
@@ -1729,7 +1747,12 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
         // The function of a pattern is no code of the function tier: the
         // setup function of its context replaces it.
         if self.context.is_none()
-            && self.generator.resolver.api_callee(self.module, it).as_deref() == Some("pattern")
+            && self
+                .generator
+                .resolver
+                .api_callee(self.module, it)
+                .as_deref()
+                == Some("pattern")
         {
             for argument in &it.arguments {
                 if let Some(function) = FunctionLike::of_argument(argument) {
@@ -1771,12 +1794,17 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
     fn visit_tagged_template_expression(&mut self, it: &TaggedTemplateExpression<'a>) {
         // `str` gives the text of its template.
         let api = match &it.tag {
-            Expression::Identifier(_) => self.generator.resolver.parsed(self.module).and_then(|parsed| {
+            Expression::Identifier(_) => {
                 self.generator
                     .resolver
-                    .model(self.module)?
-                    .api_ref_of_callee(parsed.semantic.scoping(), &it.tag)
-            }),
+                    .parsed(self.module)
+                    .and_then(|parsed| {
+                        self.generator
+                            .resolver
+                            .model(self.module)?
+                            .api_ref_of_callee(parsed.semantic.scoping(), &it.tag)
+                    })
+            }
             _ => None,
         };
         if api.is_some_and(|api| api.name == "str") {
@@ -2077,14 +2105,13 @@ pub(crate) fn generate(
     plan: &Value,
     finished: &Finished,
 ) -> Value {
-    let _ = start;
     let mut generator = Generator {
         resolver,
         plan,
         finished,
         registrations: BTreeMap::new(),
         buffers: Vec::new(),
-        setups: HashMap::new(),
+        setups: HashSet::new(),
         functions: HashMap::new(),
         unsupported: Vec::new(),
         unlisted: Vec::new(),
@@ -2101,8 +2128,21 @@ pub(crate) fn generate(
         cone: None,
         edits: Vec::new(),
     };
-    rewriter.generator.setups.insert(0, ());
+    rewriter.generator.setups.insert(0);
     rewriter.setup(0, None);
+    // The step of a `reduce` is a cone the runtime runs once per element
+    // with the accumulator as a slot of root `operation` (PL §3.13). The
+    // emitter writes no function for it.
+    let reduces = plan["operations"].as_array().is_some_and(|operations| {
+        operations
+            .iter()
+            .any(|operation| operation["kind"] == json!("reduce"))
+    });
+    if reduces {
+        rewriter
+            .generator
+            .unsupported("a `reduce` in the reactive tier", module, start);
+    }
     // The handler bodies: one function per body, however many bindings
     // name it.
     let mut handlers: Vec<(usize, HandlerFact)> = finished
@@ -2137,7 +2177,13 @@ pub(crate) fn generate(
     // The text of each module the plan's code is written in or reads.
     let mut modules: Vec<usize> = Vec::new();
     reachable(resolver, module, &mut modules);
-    for other in rewriter.generator.registrations.keys().copied().collect::<Vec<_>>() {
+    for other in rewriter
+        .generator
+        .registrations
+        .keys()
+        .copied()
+        .collect::<Vec<_>>()
+    {
         reachable(resolver, other, &mut modules);
     }
     let mut texts: Vec<Value> = Vec::new();
@@ -2149,7 +2195,9 @@ pub(crate) fn generate(
             .get(&other)
             .cloned()
             .unwrap_or_default();
-        let path = resolver.parsed(other).map_or("", |parsed| parsed.path.as_str());
+        let path = resolver
+            .parsed(other)
+            .map_or("", |parsed| parsed.path.as_str());
         texts.push(json!({
             "module": other,
             "path": path,
@@ -2216,7 +2264,9 @@ pub(crate) fn generate(
         .unsupported
         .iter()
         .map(|(kind, module, at)| {
-            let path = resolver.parsed(*module).map_or("", |parsed| parsed.path.as_str());
+            let path = resolver
+                .parsed(*module)
+                .map_or("", |parsed| parsed.path.as_str());
             json!({ "kind": kind, "file": path, "start": at })
         })
         .collect();

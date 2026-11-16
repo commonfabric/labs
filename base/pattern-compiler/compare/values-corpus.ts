@@ -378,7 +378,9 @@ if (import.meta.main) {
   const [command, file, option] = Deno.args;
   if (command === "run" && file !== undefined) {
     await run(file, option);
-  } else if (command === "again" && file !== undefined && option !== undefined) {
+  } else if (
+    command === "again" && file !== undefined && option !== undefined
+  ) {
     await again(file, option);
   } else if (command === "report" && file !== undefined) {
     await report(file, option === "--verbose");

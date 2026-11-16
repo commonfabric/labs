@@ -120,7 +120,7 @@ export const normalize = (value: unknown): unknown => {
     return value.replace(
       /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g,
       "<time>",
-    ).replace(/\b\d\d:\d\d:\d\d\b/g, "<time>");
+    ).replace(/\b\d{1,2}:\d\d:\d\d\b( [AP]M)?/g, "<time>");
   }
   if (!isRecord(value)) return value;
   const members: Record<string, unknown> = {};
@@ -137,9 +137,10 @@ export const normalize = (value: unknown): unknown => {
     // the tree.
     members.children = (members.children as unknown[]).flat(Infinity).map((
       child,
-    ) => isRecord(child) && child.type !== "vnode" && "$UI" in child
-      ? child.$UI
-      : child
+    ) =>
+      isRecord(child) && child.type !== "vnode" && "$UI" in child
+        ? child.$UI
+        : child
     );
   }
   return members;
@@ -273,14 +274,19 @@ export const readingValues = (
 };
 
 /** How an error of the executor is counted. */
-export const categoryOf = (error: unknown): { category: string; detail: string } => {
+export const categoryOf = (
+  error: unknown,
+): { category: string; detail: string } => {
   const detail = `${(error as Error)?.message ?? error}`.split("\n")[0]
     .slice(0, 160);
   if (error instanceof Unsupported) {
     return { category: `the executor does not do: ${error.kind}`, detail };
   }
   if (error instanceof ReferenceError) {
-    return { category: "the value code names something it does not bind", detail };
+    return {
+      category: "the value code names something it does not bind",
+      detail,
+    };
   }
   if (error instanceof SyntaxError) {
     return { category: "the value code does not parse", detail };

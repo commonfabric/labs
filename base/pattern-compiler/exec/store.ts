@@ -171,7 +171,9 @@ export class Store {
     for (;;) {
       while (isLink(value) && (rest.length > 0 || through)) {
         links += 1;
-        if (links > MAX_LINKS) return { ref: new Ref(doc, at), value: undefined };
+        if (links > MAX_LINKS) {
+          return { ref: new Ref(doc, at), value: undefined };
+        }
         reads?.push({ doc, path: at });
         // The schema of the link nearest the position read, where the
         // reference has none of its own.
@@ -205,7 +207,7 @@ export class Store {
     if (open.has(id)) return undefined;
     open.add(id);
     const value = withDefaults(
-      this.#copy(located.value, reads, open),
+      this.#copy(located.value, reads, open, located.ref),
       located.ref.schema,
     );
     open.delete(id);
@@ -219,21 +221,29 @@ export class Store {
     value: unknown,
     reads: Position[] | undefined,
     open: Set<string>,
+    at: Ref,
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
       return this.#deep(new Ref(doc, path, schema), reads, open);
     }
     if (isStream(value)) return { $stream: true };
+    const here = new Ref(at.doc, at.path);
     if (Array.isArray(value)) {
-      return value.map((member) => this.#copy(member, reads, open));
+      const copy = value.map((member, index) =>
+        this.#copy(member, reads, open, here.key(`${index}`))
+      );
+      this.addresses.set(copy, here);
+      return copy;
     }
     if (isRecord(value)) {
-      return Object.fromEntries(
+      const copy = Object.fromEntries(
         Object.entries(value).map((
           [name, member],
-        ) => [name, this.#copy(member, reads, open)]),
+        ) => [name, this.#copy(member, reads, open, here.key(name))]),
       );
+      this.addresses.set(copy, here);
+      return copy;
     }
     return value;
   }
