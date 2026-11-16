@@ -4480,12 +4480,9 @@ async function startRequest(
     );
     const stamped = runtime.cfcEnforcementMode !== "disabled";
     if (stamped) {
-      // Attribute the writes to the builtin: `LlmDerived` is a runtime-minted
-      // evidence family, so the persist-time gate
-      // (`gateRuntimeMintedIntegrity`, audit S4) admits it only from builtin
-      // authors — the same gating that stops pattern code from forging the
-      // stamp. A write made before the identity is set is another identity's,
-      // which the gate keeps no evidence over.
+      // Attribute the writes to the builtin, before they are made: a write
+      // made before the identity is set is another identity's, which the gate
+      // keeps no evidence over.
       setCfcImplementationIdentity(tx, {
         kind: "builtin",
         builtinId: "llmDialog",

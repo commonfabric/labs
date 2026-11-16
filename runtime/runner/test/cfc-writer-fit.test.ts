@@ -2909,9 +2909,11 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
           tx,
         );
         markUndeclarable(tx, target);
+        setCfcImplementationIdentity(tx, CACHE_WRITER);
         target.set({
           delegatedModuleIdentities: [`predecessor/${raw.secret}`],
         });
+        setCfcImplementationIdentity(tx, undefined);
         const targetId = target.getAsNormalizedFullLink().id;
         tx.prepareCfc();
 

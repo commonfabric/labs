@@ -917,9 +917,8 @@ cell's contents. The cache is designed around this:
   `runtime.undeclarable-store` marker naming its document
   (`recordUndeclarablePolicyStore`), and the check skips the ceiling there.
   The marker covers only what a builtin wrote: a write of the record under
-  any other identity in the same transaction, unless a later builtin write
-  replaced it, is measured as any writer's is (`cfc-enforcement-matrix.md`
-  §4).
+  any other identity in the same transaction is measured as any writer's is,
+  whatever the cache writes after it (`cfc-enforcement-matrix.md` §4).
   The skip is scoped to a join the target's own space produced: where a clause
   reached the join from another space, the cache write is measured like any
   other, so a compile cannot carry a foreign space's labeled value into a
@@ -948,8 +947,8 @@ cell's contents. The cache is designed around this:
   permanent miss and made their write-backs collide on the label merge). Minting
   is gated — prepare strips `cf-compiled-by:` atoms from any write not authored
   by a trusted builtin, and at any path a write by another identity in the same
-  transaction reached and no later builtin write replaced — so pattern code
-  cannot stamp a forged doc, nor keep the stamp over a value it chose. While
+  transaction reached — so pattern code cannot stamp a forged doc, nor keep
+  the stamp over a value it chose, before or after the cache writer's write. While
   compilation is still client-side, the label remains client-asserted at the
   raw-storage level, so within a space it amounts to self-poisoning (acceptable,
   and contained by the per-space scope). The end state moves **compilation to the

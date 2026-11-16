@@ -34,6 +34,7 @@ import {
   writeSourceAndCompiledDocs,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { compileCachePersistenceSlotKey } from "../src/pattern-manager.ts";
 import type { URI } from "../src/sigil-types.ts";
@@ -3236,9 +3237,9 @@ describe("cell-cache", () => {
       expect(await compiledEntryLoads()).toBe(true);
     });
 
-    it("leaves a compiled record a load accepts when the cache writer rewrites what another identity wrote before it", async () => {
-      // The cache writer writes the record whole, which replaces the value
-      // the other identity's earlier write put at a field.
+    it("leaves a compiled record that no load accepts when another identity wrote a field of it before the cache writer rewrote it whole", async () => {
+      // The cache writer reads the transaction's view and writes it back, so
+      // its later write is no evidence that the value is its own.
 
       expect(
         await commitWith(false, () => {}, (tx) => {
@@ -3246,15 +3247,62 @@ describe("cell-cache", () => {
         }),
       ).toBeUndefined();
 
-      expect(await compiledEntryLoads()).toBe(true);
+      expect(await compiledEntryLoads()).toBe(false);
+    });
+
+    it("keeps no attestation on a delegation list another identity wrote raw before the cache writer carried it forward", async () => {
+      // A raw write records no schema input, so the record of the writes
+      // another identity made is all that holds the cache writer's union of
+      // the list it reads back.
+
+      expect(await commitWith(false, () => {})).toBeUndefined();
       const tx = runtime.edit();
-      try {
-        expect(record("compiled", tx).getRaw()?.exportNames).not.toEqual([
-          "hush",
-        ]);
-      } finally {
-        tx.abort();
+      for (const set of ["source", "compiled"] as const) {
+        tx.writeValueOrThrow(
+          record(set, tx).key("delegatedModuleIdentities")
+            .getAsNormalizedFullLink(),
+          ["chosen-identity"],
+        );
       }
+      writeSourceAndCompiledDocs(
+        runtime,
+        space,
+        modules,
+        entryIdentity,
+        {
+          runtimeVersion: RTVER,
+          moduleDelegations: new Map([[
+            entryIdentity,
+            new Set(["predecessor-identity"]),
+          ]]),
+        },
+        tx,
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(false);
+      const rtx = runtime.edit();
+      try {
+        const link = record("source", rtx).getAsNormalizedFullLink();
+        expect(
+          (readStoredCfcMetadata(rtx, { space, id: link.id })?.labelMap
+            .entries ?? []).filter((entry) => entry.origin === "minted"),
+        ).toEqual([]);
+      } finally {
+        rtx.abort();
+      }
+    });
+
+    it("returns a writer-fit misfit from the commit when another identity wrote annotations raw before the cache writer carried them forward after a labeled read", async () => {
+      const error = await commitWith(true, () => {}, (tx) => {
+        tx.writeValueOrThrow(
+          record("source", tx).key("annotations").getAsNormalizedFullLink(),
+          { leak: "hush" },
+        );
+      });
+
+      expect(error?.message).toContain("writer-fit confidentiality misfit");
     });
 
     it("leaves a compiled record that no load accepts when another identity rewrote it before the cache writer staged only its list", async () => {

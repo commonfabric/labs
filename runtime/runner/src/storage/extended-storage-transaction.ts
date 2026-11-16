@@ -32,6 +32,7 @@ import {
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
@@ -878,6 +879,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * runs over documents the asking transaction wrote.
    */
   #markedUndeclarableStores = new Set<string>();
+
+  /** The addresses `CfcTxState.unattestedWrites` holds, so each is held once. */
+  #unattestedWriteKeys = new Set<string>();
 
   /**
    * The stores the runtime owns that outlive the transaction that minted them,
@@ -1929,31 +1933,29 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * runtime-minted evidence a builtin's write stamps, and the runtime's claim
    * that no schema declares a policy on a document, stand for what the
    * builtin wrote, and preparation withholds both where such a write reached.
-   * A builtin's write replaces the value at its path, so it retires the
-   * records of the writes it overwrites: those at its path or beneath it, on
-   * the same document. A record of a write at a shorter path stays, since
-   * the builtin's write leaves the rest of that value as it was.
+   * A later builtin write at the same path does not lift that: a builtin can
+   * read the transaction's view and write it back, as the compilation cache
+   * carries a record's delegation list and annotations forward, so its write
+   * is no evidence that the value is its own choice. Each distinct address
+   * is recorded once.
    */
   #noteWriteIdentity(address: IMemorySpaceAddress): void {
     if (this.#privilegedSystemWriteDepth > 0) return;
     const current = this.#cfcState.implementationIdentity;
-    const path = canonicalizeDocumentPath(toDocumentPath(address.path));
-    if (path !== undefined) {
+    if (current?.kind !== "builtin") {
+      const path = canonicalizeDocumentPath(toDocumentPath(address.path));
       const scope = normalizeCellScope(address.scope);
-      if (current?.kind !== "builtin") {
+      const key = path === undefined
+        ? undefined
+        : stringTupleKey([address.space, address.id, scope, ...path]);
+      if (key !== undefined && !this.#unattestedWriteKeys.has(key)) {
+        this.#unattestedWriteKeys.add(key);
         this.#cfcState.unattestedWrites.push(deepFreeze({
           space: address.space,
           id: address.id,
           scope,
-          path,
+          path: path!,
         }));
-      } else if (this.#cfcState.unattestedWrites.length > 0) {
-        this.#cfcState.unattestedWrites = this.#cfcState.unattestedWrites
-          .filter((write) =>
-            write.space !== address.space || write.id !== address.id ||
-            write.scope !== scope || write.path.length < path.length ||
-            !path.every((segment, index) => write.path[index] === segment)
-          );
       }
     }
     const summary = this.#cfcState.writeIdentity;
@@ -4485,11 +4487,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Drops the records this transaction accumulated for preparation: the
    * write-policy inputs and the identities that recorded them, the
    * dereference traces, trigger reads, structure containers, asserted value
-   * roots, the writes made under a non-builtin identity, consulted grants and
-   * manifests, the observations, and the
-   * preparation that verified them, whose input holds the same records. A
-   * preparation that was invalidated holds its reasons and no input, and
-   * stays for whoever reads why a commit was refused. A transaction that has
+   * roots, the writes made under a non-builtin identity, consulted grants
+   * and manifests, the observations, and the preparation that verified
+   * them, whose input holds the same records. A preparation that was
+   * invalidated holds its reasons and no input, and stays for whoever reads
+   * why a commit was refused. A transaction that has
    * settled runs no further gate over the records, so a reference to it that
    * outlives it, from the piece its start ran in for one, keeps none of them.
    * The one reader after settlement is a post-commit effect's release check,
@@ -4506,6 +4508,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     state.structureContainers = [];
     state.assertedValueRoots = [];
     state.unattestedWrites = [];
+    this.#unattestedWriteKeys.clear();
     state.triggerReads = [];
     state.writePolicyInputs = [];
     state.writePolicyInputIdentities = new Map();

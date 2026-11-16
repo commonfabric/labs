@@ -341,9 +341,9 @@ describe("CFC integrity mint gate", () => {
       expect(paths).toEqual([]);
     });
 
-    it("persists the evidence when the builtin then writes the whole record another identity wrote", async () => {
-      // The builtin's write at the root replaces the value the other write
-      // put there, so what the record holds is the builtin's.
+    it("drops the evidence when another identity wrote the record before the builtin rewrote it whole", async () => {
+      // A builtin can read the transaction's view and write it back, so its
+      // later write at the root is no evidence that the value is its own.
 
       const paths = await evidenceAfter("mint-gate-overwritten", () => {}, {
         before: (tx, runtime) => {
@@ -353,7 +353,7 @@ describe("CFC integrity mint gate", () => {
         whole: true,
       });
 
-      expect(paths).toEqual(expect.arrayContaining([[], ["tag"]]));
+      expect(paths).toEqual([]);
     });
 
     it("makes the prepared digest differ between the same write under the builtin and under another identity", async () => {
