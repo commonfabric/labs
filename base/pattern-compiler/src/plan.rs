@@ -70,6 +70,9 @@ pub struct PatternPlan {
     /// schema, so the identifier is a placeholder, `unhashed:schema/`
     /// and the position of the document in this list.
     pub schemas: Vec<(String, Value)>,
+    /// The value code of the plan and what the executor needs beside the
+    /// plan (`crate::emit`), where the emitter was asked for it.
+    pub code: Option<Value>,
 }
 
 /// Moves the schema documents of a plan beside it: `Slot.schema`,
@@ -181,7 +184,7 @@ fn combine(found: impl IntoIterator<Item = Option<Declared>>) -> Option<Declared
 
 /// Where the data of a slot lives (`SlotRoot`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Root {
+pub(crate) enum Root {
     Argument,
     State(usize),
     Event(usize),
@@ -197,7 +200,7 @@ enum Root {
 
 /// What a name or an expression of the reactive tier denotes.
 #[derive(Debug, Clone)]
-enum Place {
+pub(crate) enum Place {
     /// A path of an input.
     Slot(Root, Vec<String>),
     /// A read of a path of an input under one class, whatever the reader
@@ -289,7 +292,7 @@ struct ConeOut {
     views: BTreeMap<usize, Vec<Option<TypeId>>>,
 }
 
-type SlotKey = (Root, Vec<String>, &'static str, bool, bool);
+pub(crate) type SlotKey = (Root, Vec<String>, &'static str, bool, bool);
 
 /// The entries of a constructed value: the path below the value, and
 /// the template there, where it has one.
@@ -436,6 +439,8 @@ struct Emitter<'r, 'm, 'a> {
     /// The entries of the constructed value the expression code being
     /// built computes, for the value `build` makes.
     pending_entries: Option<Entries>,
+    /// What the value-code emitter reads of this walk (`crate::emit`).
+    facts: crate::emit::Facts,
 }
 
 /// What a host element of the rendered tree says of its surface (PL
@@ -893,6 +898,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                     views: BTreeMap::new(),
                 });
                 let cone = self.cones.len() - 1;
+                self.facts.cone_within.push(
+                    self.within
+                        .iter()
+                        .filter_map(|step| step.get("element").and_then(Value::as_u64))
+                        .map(|collection| collection as usize)
+                        .collect(),
+                );
                 self.cone = Some(cone);
                 (cone, true)
             }
@@ -1536,6 +1548,7 @@ impl<'a> Emitter<'_, '_, 'a> {
     fn bind_pattern(&mut self, pattern: &BindingPattern<'a>, place: Place) {
         match pattern {
             BindingPattern::BindingIdentifier(identifier) => {
+                self.facts.bound(identifier.span.start, place.clone());
                 self.env.insert(identifier.name.to_string(), place);
             }
             BindingPattern::ObjectPattern(object) => {
@@ -1799,6 +1812,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.unsupported("a call of a pattern nested too deep to compile in", at);
             return Place::Unknown;
         };
+        let saved_context = self.facts.enter(at, home, start, argument.clone(), self.cone);
         let saved_env = std::mem::take(&mut self.env);
         let saved_module = std::mem::replace(&mut self.module, home);
         self.within.push(json!({ "site": name }));
@@ -1846,6 +1860,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 .and_then(|statements| self.statements(statements)),
         };
         self.given_constants = saved_given;
+        self.facts.leave(saved_context, result.clone());
         self.inline_at.pop();
         WRITTEN_IN.set(saved_pattern);
         self.within.pop();
@@ -1865,7 +1880,48 @@ impl<'a> Emitter<'_, '_, 'a> {
         Place::Value(self.value(hint, cone), Vec::new())
     }
 
+    /// Evaluates an expression, and records for the value-code emitter
+    /// what it denotes and which records its evaluation made.
     fn eval(&mut self, expression: &Expression<'a>, hint: &str) -> Place {
+        let span = unwrap(expression).span();
+        let before = (self.values.len(), self.state_cells.len());
+        let place = self.eval_inner(expression, hint);
+        self.facts.expression(
+            (span.start, span.end),
+            crate::emit::ExprFact {
+                place: place.clone(),
+                values: (before.0, self.values.len()),
+                states: (before.1, self.state_cells.len()),
+            },
+        );
+        place
+    }
+
+    /// Records what each name of an expression the emitter does not
+    /// evaluate is bound to: the initial value of a state cell, which no
+    /// record of the plan holds.
+    fn note_names(&mut self, expression: &Expression<'a>) {
+        struct Names(Vec<(u32, u32, String)>);
+        impl<'a> oxc_ast_visit::Visit<'a> for Names {
+            fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+                self.0.push((it.span.start, it.span.end, it.name.to_string()));
+            }
+        }
+        let mut names = Names(Vec::new());
+        oxc_ast_visit::Visit::visit_expression(&mut names, expression);
+        for (start, end, name) in names.0 {
+            if let Some(place) = self.env.get(&name) {
+                let fact = crate::emit::ExprFact {
+                    place: place.clone(),
+                    values: (self.values.len(), self.values.len()),
+                    states: (self.state_cells.len(), self.state_cells.len()),
+                };
+                self.facts.expression((start, end), fact);
+            }
+        }
+    }
+
+    fn eval_inner(&mut self, expression: &Expression<'a>, hint: &str) -> Place {
         let expression = unwrap(expression);
         let at = expression.span().start;
         match expression {
@@ -2655,6 +2711,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                         };
                         let place = self.state_cell(scope, &cause);
                         self.state_type(call.type_arguments.as_deref());
+                        if name == "of" {
+                            for argument in &arguments {
+                                self.note_names(argument);
+                            }
+                        }
                         return place;
                     }
                 }
@@ -4306,6 +4367,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                         reads.push(slot);
                     }
                     placed.push((entry.clone(), Ok(slot)));
+                    {
+                        let mut at_path: Vec<String> = Vec::new();
+                        if prefix {
+                            at_path.push(entry.input.clone());
+                        }
+                        at_path.extend(slot_path(&[], &entry.path));
+                        self.facts.layout(index, slot, at_path);
+                    }
                     if let (Class::Value, true, Some(cone)) = (entry.class, computation, self.cone)
                     {
                         let view = self
@@ -4840,6 +4909,22 @@ impl<'a> Emitter<'_, '_, 'a> {
             self.cone = None;
         }
         let value = self.value(&hint, cone);
+        self.facts.uses.insert(
+            value,
+            crate::emit::UseFact {
+                body,
+                home,
+                start,
+                kind: plan_kind,
+                formals: parameter_names(kind, function),
+                inputs: {
+                    let mut listed: Vec<(String, Place)> =
+                        inputs.iter().map(|(name, place)| (name.clone(), place.clone())).collect();
+                    listed.sort_by(|a, b| a.0.cmp(&b.0));
+                    listed
+                },
+            },
+        );
         self.values[value].template = self.body_template(body);
         // What the body returns, by the form of its returns. The caller of
         // a `computed` decides with the names it captures.
@@ -4926,6 +5011,23 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_within = std::mem::take(&mut self.within);
         let saved_cone = self.cone.take();
         self.body_record(kind, name, &record, &inputs, false, start, false);
+        self.facts.handlers.insert(
+            index,
+            crate::emit::HandlerFact {
+                home,
+                start,
+                named: body_kind == BodyKind::Handler,
+                captures: {
+                    let mut names: Vec<String> = inputs
+                        .keys()
+                        .filter(|name| *name != "event" && *name != "state")
+                        .cloned()
+                        .collect();
+                    names.sort();
+                    names
+                },
+            },
+        );
         self.within = saved_within;
         self.cone = saved_cone;
         self.handlers.insert((home, start), index);
@@ -5508,6 +5610,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             "name": hint,
             "within": self.within_json(),
         }));
+        self.facts.inline_binding(start, self.bindings.len() - 1);
         Place::Stream(self.bindings.len() - 1)
     }
 
@@ -5652,6 +5755,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         Vec<(String, u32)>,
         Vec<(u32, Vec<String>)>,
         Vec<(&'static str, u32, String)>,
+        crate::emit::Finished,
     ) {
         let result_cone = self.cones.iter().rposition(|cone| cone.entry == "result");
         // The edges, over the cones as they were made.
@@ -6145,7 +6249,18 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
         }
-        (plan, self.unsupported, cycles, flows)
+        let finished = crate::emit::Finished {
+            facts: std::mem::take(&mut self.facts),
+            position,
+            output_of,
+            values: self
+                .values
+                .iter()
+                .map(|value| (value.cone, value.collection, value.scan))
+                .collect(),
+            slots: self.slots.clone(),
+        };
+        (plan, self.unsupported, cycles, flows, finished)
     }
 
     /// The annotations on the way from a slot root to a path below a
@@ -7150,6 +7265,7 @@ pub fn emit_module<'a>(
             ui_chain: Vec::new(),
             ui_bound: Vec::new(),
             pending_entries: None,
+            facts: crate::emit::Facts::new(module, *start),
         };
         // The type the pattern declares for its result: the second type
         // argument of the call that defines it.
@@ -7199,8 +7315,10 @@ pub fn emit_module<'a>(
             .get(&Root::Argument)
             .map(|ty| resolver.schema_of(*ty));
         let result_schema = emitter.result_type.map(|ty| resolver.schema_of(ty));
-        let (mut plan, unsupported, cycles, flows) = emitter.finish(&parsed.path);
+        let (mut plan, unsupported, cycles, flows, finished) = emitter.finish(&parsed.path);
         let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
+        let code = crate::emit::requested()
+            .then(|| crate::emit::generate(resolver, module, *start, &plan, &finished));
         // The bindings of an element body that have no result path.
         let element_bindings = plan["bindings"]
             .as_array()
@@ -7236,6 +7354,7 @@ pub fn emit_module<'a>(
             argument_schema,
             result_schema,
             schemas,
+            code,
         });
     }
     // "The chain ... continues through a pattern written as a tag" (PL

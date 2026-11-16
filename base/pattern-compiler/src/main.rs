@@ -28,6 +28,12 @@ commands:
       constructs the emitter does not translate. With --corpus and a
       patterns directory, print for how many accepted modules a plan is
       emitted with no unsupported construct, and those constructs by kind.
+  emit <file>...
+      Print, for each pattern of the given modules, the plan together with
+      its value code as one JSON artifact: the plan, the JavaScript of each
+      module the plan's code is written in, and what an executor needs
+      beside the plan. With --corpus and a patterns directory, print one
+      line of JSON per accepted module.
   bodies <file>...
       Print the bodies of the given modules as JSON.
   time <patterns directory> <manifest> [--iterations=<n>] [--plans]
@@ -61,6 +67,7 @@ fn main() -> ExitCode {
         Some("bodies") if !operands.is_empty() => bodies(&operands),
         Some("footprint") if !operands.is_empty() => footprint(&operands),
         Some("plan") if !operands.is_empty() => plan(&operands, &flags),
+        Some("emit") if !operands.is_empty() => emit(&operands, &flags),
         Some("types") if !operands.is_empty() => types(&operands, &flags),
         Some("time") if operands.len() == 2 => time(operands[0], operands[1], &flags),
         Some("corpus") if operands.len() == 1 => corpus_report(operands[0], &flags),
@@ -218,6 +225,33 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
     Ok(parsed(&analysis))
 }
 
+/// Prints the plan and the value code of each pattern of the given
+/// modules, as one artifact per pattern (`pattern_compiler::emit`).
+fn emit(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
+    let corpus = flags.contains(&"--corpus");
+    let files = if corpus {
+        let all = corpus::read_tree(Path::new(paths[0]), "")?;
+        corpus::select(all, "")
+    } else {
+        read(paths)?
+    };
+    pattern_compiler::emit::request(true);
+    let analysis = analyze(&files);
+    pattern_compiler::emit::request(false);
+    let modules = plans_json(&analysis, corpus);
+    if corpus {
+        for module in &modules {
+            println!("{}", serde_json::to_string(module).unwrap_or_default());
+        }
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&modules).unwrap_or_default()
+        );
+    }
+    Ok(parsed(&analysis))
+}
+
 /// The plans of an analysis as the `plan` command prints them: one record
 /// per module, and with `accepted_only` per accepted module.
 fn plans_json(analysis: &ProgramAnalysis, accepted_only: bool) -> Vec<serde_json::Value> {
@@ -238,7 +272,7 @@ fn plans_json(analysis: &ProgramAnalysis, accepted_only: bool) -> Vec<serde_json
                                 |(kind, start)| serde_json::json!({ "kind": kind, "start": start }),
                             )
                             .collect();
-                        serde_json::json!({
+                        let mut record = serde_json::json!({
                             "name": plan.name,
                             "line": plan.line,
                             "plan": plan.plan,
@@ -253,7 +287,11 @@ fn plans_json(analysis: &ProgramAnalysis, accepted_only: bool) -> Vec<serde_json
                                 .iter()
                                 .map(|(binding, reason)| serde_json::json!({ "binding": binding, "reason": reason }))
                                 .collect::<Vec<_>>(),
-                        })
+                        });
+                        if let Some(code) = &plan.code {
+                            record["code"] = code.clone();
+                        }
+                        record
                     })
                     .collect();
                 serde_json::json!({ "module": module.path, "patterns": patterns })
