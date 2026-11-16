@@ -14,9 +14,6 @@
           "closures": [],
           "collections": [
             {
-              "bodyUses": {
-                "index": false
-              },
               "construct": "map",
               "membership": {
                 "op": "slot",
@@ -29,9 +26,6 @@
               "within": []
             },
             {
-              "bodyUses": {
-                "index": false
-              },
               "construct": "map",
               "membership": {
                 "op": "slot",

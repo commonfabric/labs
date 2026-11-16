@@ -186,6 +186,10 @@ enum Root {
     State(usize),
     Event(usize),
     Element(usize),
+    /// "The position of the current element in the order a collection
+    /// iterates" (PL §1.1): a slot with the empty path that observes
+    /// `value`.
+    Index(usize),
     Operation(usize),
     Binding(usize),
     Cause,
@@ -207,8 +211,6 @@ enum Place {
     Record(BTreeMap<String, Place>),
     /// The stream of a binding.
     Stream(usize),
-    /// The index of the element of a collection.
-    Index(usize),
     /// The accumulator of a `reduce`, or a path of it: the step cone
     /// receives it through a slot with root `operation`, and it is
     /// `const` in the step's template (PL §3.13).
@@ -520,6 +522,7 @@ fn root_json(root: &Root) -> Value {
         Root::State(cell) => json!({ "kind": "state", "cell": cell }),
         Root::Event(handler) => json!({ "kind": "event", "handler": handler }),
         Root::Element(collection) => json!({ "kind": "element", "collection": collection }),
+        Root::Index(collection) => json!({ "kind": "index", "collection": collection }),
         Root::Operation(operation) => json!({ "kind": "operation", "operation": operation }),
         Root::Binding(handler) => json!({ "kind": "binding", "handler": handler }),
         Root::Cause => json!({ "kind": "cause" }),
@@ -638,7 +641,12 @@ impl<'a> Emitter<'_, '_, 'a> {
         resolved: bool,
         in_place: bool,
     ) -> usize {
-        let key = (root.clone(), path.to_vec(), class, resolved, in_place);
+        // "A slot with this root has the empty path and observes
+        // `value`" (PL §1.1, `SlotRoot`).
+        let key = match root {
+            Root::Index(_) => (root.clone(), Vec::new(), "value", false, false),
+            _ => (root.clone(), path.to_vec(), class, resolved, in_place),
+        };
         match self.slots.iter().position(|other| *other == key) {
             Some(index) => index,
             None => {
@@ -1258,10 +1266,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             Place::Const | Place::Stream(_) | Place::Accumulator(..) => {
                 Some(json!({ "op": "const" }))
             }
-            // "A body that uses the index adds the collection's
-            // `enumeration` to its element template" (PL §3.6): the
-            // membership of what the construct iterates.
-            Place::Index(collection) => self.iterated.get(*collection).cloned().flatten(),
             _ => None,
         }
     }
@@ -1458,8 +1462,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                     self.cones[cone].slots.insert(slot);
                 }
             }
-            Place::Stream(_) | Place::Index(_) | Place::Const | Place::Unknown => {}
+            Place::Stream(_) | Place::Const | Place::Unknown => {}
         }
+    }
+
+    /// The index of the current element of a collection: the slot of
+    /// root `index` that names it, read as a `value` whatever the reader
+    /// does with it (PL §1.3, "The index is a slot").
+    fn index_of(collection: usize) -> Place {
+        Place::Read(Root::Index(collection), Vec::new(), "value")
     }
 
     fn extend(place: &Place, key: &str) -> Place {
@@ -2817,7 +2828,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             "within": self.within_json(),
             "construct": "operation",
             "source": source,
-            "bodyUses": { "index": parameters.len() > 2 },
         });
         if let Some(membership) = &iterated {
             record["membership"] = membership.clone();
@@ -2866,7 +2876,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             );
         }
         if let Some(index) = parameters.get(2) {
-            self.bind_pattern(&index.pattern, Place::Index(collection));
+            // "A step that uses the index lists the slot of root `index`
+            // that names it" (PL §3.13).
+            self.root_type(self.module, Root::Index(collection), index);
+            self.bind_pattern(&index.pattern, Self::index_of(collection));
         }
         let name = base_name(hint, "reduce").to_string();
         let (cone, _) = self.computing(&name, function.span().start);
@@ -3000,13 +3013,11 @@ impl<'a> Emitter<'_, '_, 'a> {
         let scan = matches!(via, "some" | "every" | "findIndex" | "find");
         let (source, iterated) = self.source_of(receiver, via, scan, name, at);
         let collection = self.collections.len();
-        let uses_index = function.params().items.len() > 1;
         self.collections.push(json!({
             "name": name,
             "within": self.within_json(),
             "construct": via,
             "source": source,
-            "bodyUses": { "index": uses_index },
         }));
         self.iterated.push(iterated.clone());
         // The body: one cone, evaluated once per element key.
@@ -3016,7 +3027,6 @@ impl<'a> Emitter<'_, '_, 'a> {
             std::mem::take(&mut self.operands),
             std::mem::replace(&mut self.opaque, false),
         );
-        let bodies_before = self.plan_bodies.len();
         self.within.push(json!({ "element": collection }));
         let parameters = &function.params().items;
         if let Some(element) = parameters.first() {
@@ -3027,7 +3037,13 @@ impl<'a> Emitter<'_, '_, 'a> {
             );
         }
         if let Some(index) = parameters.get(1) {
-            self.bind_pattern(&index.pattern, Place::Index(collection));
+            // "A node of the body that reads the index reads a slot of
+            // root `index` that names the collection" (PL §1.3). The
+            // name is bound to the slot, and each node that reads the
+            // name lists it; a callback that declares the index and does
+            // not use it adds it to no template (§3.6).
+            self.root_type(self.module, Root::Index(collection), index);
+            self.bind_pattern(&index.pattern, Self::index_of(collection));
         }
         // The cones of an element body (PL §1.4): each declaration of
         // the callback that computes is a cone of its own, as in a
@@ -3142,16 +3158,6 @@ impl<'a> Emitter<'_, '_, 'a> {
         };
         if let Some(membership) = &membership {
             self.collections[collection]["membership"] = membership.clone();
-        }
-        // "`child`: the body instantiates a child" (PL §1.1,
-        // `Collection.bodyUses`).
-        let instantiates = self.plan_bodies[bodies_before..].iter().any(|body| {
-            body["calls"]
-                .as_array()
-                .is_some_and(|calls| calls.iter().any(|call| call["kind"] == "instantiate"))
-        });
-        if instantiates {
-            self.collections[collection]["bodyUses"]["child"] = json!(true);
         }
         self.within.pop();
         self.cone = saved_cone;
@@ -4278,6 +4284,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             };
             let resolved = entry.class == Class::Resolved;
             let key = (entry.input.clone(), entry.path.clone(), resolved);
+            // "A sandboxed body lists it in `Body.reads`" (PL §1.3).
+            let place = match place {
+                Place::Read(root @ Root::Index(_), path, _) => Place::Slot(root, path),
+                place => place,
+            };
             match place {
                 Place::Slot(root, path) => {
                     // A `shape` entry at the position of a handle or of a
@@ -4309,7 +4320,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                         value_names.insert(key, json!(slot));
                     }
                 }
-                Place::Const | Place::Index(_) | Place::Stream(_) => {}
+                Place::Const | Place::Stream(_) => {}
                 place => {
                     // A value of the same cone is no output on account
                     // of the use (PL §1.4): "the result of a body used
@@ -4972,14 +4983,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 return;
             }
-            // "The index of the element in the collection of an
-            // enclosing element body", whose label is "the membership
-            // that collection iterates" (PL §1.1).
-            Place::Index(collection) => {
-                entry.insert("place".to_string(), json!({ "index": collection }));
-                if let Some(template) = self.template_of(place, "value") {
-                    entry.insert("template".to_string(), template);
-                }
+            // "A slot of the instance, which for the index of the
+            // element in the collection of an enclosing element body is
+            // the slot of root `index` that names that collection" (PL
+            // §1.1, `Binding.state`).
+            Place::Read(root @ Root::Index(_), at, class) => {
+                let slot = self.slot(root, at, class);
+                entry.insert("place".to_string(), json!({ "slot": slot }));
+                entry.insert("template".to_string(), json!({ "op": "slot", "slot": slot }));
             }
             Place::Accumulator(..) | Place::Read(..) => {
                 if let Some(template) = self.template_of(place, "value") {
@@ -5538,7 +5549,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
             Place::Stream(binding) => self.stream_at(*binding, path),
-            Place::Index(_) | Place::Accumulator(..) | Place::Const | Place::Unknown => {}
+            Place::Accumulator(..) | Place::Const | Place::Unknown => {}
         }
     }
 

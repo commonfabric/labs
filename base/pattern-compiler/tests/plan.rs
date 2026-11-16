@@ -254,7 +254,8 @@ fn an_element_construct_is_a_collection_and_its_body_reads_element_slots() {
     // root "The current element of a collection".
     let plan = plan_of(&program(LIST), "List");
     let collection = &plan["collections"][0];
-    assert_eq!(collection["bodyUses"], json!({ "index": false }));
+    // "The record holds nothing about element keys".
+    assert!(collection.get("bodyUses").is_none());
     assert_eq!(
         slot_line(&plan, &collection["source"]["slot"]),
         "argument items : enumeration"
@@ -1098,8 +1099,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
             );
         }
     }
-    // "c1 = collection source: output facts.main, bodyUses: { index:
-    // false }". The output is interim, at the path `main` below `facts`.
+    // "c1 = collection source: output facts.main". The output is interim, at the path `main` below `facts`.
     let main = plan["outputs"]
         .as_array()
         .expect("outputs")
@@ -1113,7 +1113,7 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
         .iter()
         .find(|collection| collection["source"] == json!({ "output": main }))
         .expect("c1");
-    assert_eq!(c1["bodyUses"], json!({ "index": false }));
+    assert!(c1.get("bodyUses").is_none());
     assert_eq!(c1["within"], json!([]));
 }
 
@@ -1876,12 +1876,101 @@ fn the_membership_of_a_map_a_filter_and_a_flat_map_are_the_templates_of_pl_secti
         template_line(&plan, &at(json!(["open", "*"]))["template"]),
         "[element  : identity]"
     );
-    // §3.6: "A body that uses the index adds the collection's
-    // `enumeration` to its element template".
+    // §3.6, "Index": "A node of the body that reads the index reads the
+    // slot of root `index` that names the collection, and has the `slot`
+    // node of that slot in its template."
+    let numbered = at(json!(["numbered", "*"]));
     assert_eq!(
-        template_line(&plan, &at(json!(["numbered", "*"]))["template"]),
-        format!("derive(expression) {{ {enumeration} const }}")
+        template_line(&plan, &numbered["template"]),
+        "derive(expression) { [index  : value] const }"
     );
+    let slot = numbered["template"]["inputs"][0]["slot"].clone();
+    let collections = plan["collections"].as_array().expect("collections");
+    let own = collections
+        .iter()
+        .position(|collection| collection["name"] == "numbered")
+        .expect("the collection");
+    assert_eq!(
+        plan["slots"][slot.as_u64().unwrap() as usize]["root"],
+        json!({ "kind": "index", "collection": own })
+    );
+    // §1.3: "A cone that reads the index lists the slot in `Cone.slots`
+    // ... A node that lists no such slot is not given the index."
+    let cone = |output: &Value| &plan["cones"][output["cone"].as_u64().unwrap() as usize];
+    assert!(cone(numbered)["slots"]
+        .as_array()
+        .unwrap()
+        .contains(&slot));
+    assert!(!cone(at(json!(["titles", "*"])))["slots"]
+        .as_array()
+        .unwrap()
+        .contains(&slot));
+    // "No record says of a whole body that it uses the index."
+    assert!(collections
+        .iter()
+        .all(|collection| collection.get("bodyUses").is_none()));
+}
+
+const INDEX_NODES: &str = r#"import { Cell, handler, lift, pattern, UI } from "commonfabric";
+const pickRow = handler<unknown, { row: string; chosen: Cell<string> }>((_, state) => { state.chosen.set(state.row); });
+const label = lift((n: number) => "n" + n);
+export const P = pattern<{ rows: string[]; chosen: Cell<string> }>(({ rows, chosen }) => {
+  return {
+    [UI]: <ul>{rows.map((row, index) => <li onClick={pickRow({ row, chosen })}>{label(index)}{row}</li>)}</ul>,
+  };
+});
+"#;
+
+#[test]
+fn a_node_of_an_element_body_that_does_not_read_the_index_has_no_index_slot() {
+    // PL §3.6, "Labels flow per value": "A node of the body takes the
+    // labels of what it reads and closes over, and nothing of what
+    // another node of the same body reads ... a handler that closes over
+    // the element alone writes under the event and the element, also
+    // where another node of the body reads the index."
+    let plan = plan_of(&program(INDEX_NODES), "P");
+    let slots = plan["slots"].as_array().expect("slots");
+    let index = slots
+        .iter()
+        .position(|slot| slot["root"]["kind"] == "index")
+        .expect("a slot of root index");
+    assert_eq!(
+        slots[index],
+        json!({
+            "root": { "kind": "index", "collection": 0 },
+            "path": [],
+            "observes": "value",
+            "schema": slots[index]["schema"],
+        })
+    );
+    // The use of the sandboxed body reads the index: its template has
+    // the slot, and the cone lists it (§1.3).
+    let outputs = plan["outputs"].as_array().expect("outputs");
+    let labeled = outputs
+        .iter()
+        .find(|output| output["path"] == json!(["*", "children", "0"]))
+        .expect("the output of the use");
+    assert_eq!(
+        template_line(&plan, &labeled["template"]),
+        "derive(by label) { [index  : value] }"
+    );
+    let cone = &plan["cones"][labeled["cone"].as_u64().unwrap() as usize];
+    assert!(cone["slots"].as_array().unwrap().contains(&json!(index)));
+    // The other output of the same body reads the element alone.
+    let row = outputs
+        .iter()
+        .find(|output| output["path"] == json!(["*", "children", "1"]))
+        .expect("the output of the element");
+    assert_eq!(template_line(&plan, &row["template"]), "[element  : identity]");
+    // The handler binding closes over the element and a captured cell.
+    let binding = &plan["bindings"][0];
+    let lines: Vec<String> = binding["state"]
+        .as_array()
+        .expect("state")
+        .iter()
+        .map(|entry| template_line(&plan, &entry["template"]))
+        .collect();
+    assert_eq!(lines, ["[argument chosen : identity]", "[element  : identity]"]);
 }
 
 #[test]
@@ -2243,7 +2332,7 @@ fn a_reduce_is_an_operation_whose_step_is_a_cone_over_a_collection_of_its_own() 
         slot_line(&plan, &collection["source"]["slot"]),
         "argument rows : enumeration"
     );
-    assert_eq!(collection["bodyUses"], json!({ "index": false }));
+    assert!(collection.get("bodyUses").is_none());
     // "The step is emitted as one cone, and `Operation.implementation`
     // is `{ cone }` with that cone."
     let cone = &plan["cones"][operation["implementation"]["cone"]
@@ -2574,11 +2663,11 @@ fn a_tag_that_names_a_factory_value_is_a_child() {
 #[test]
 fn a_collection_names_its_construct_and_a_bound_index_names_the_collection() {
     // PL §1.1: `Collection.construct` "says what the runtime does with
-    // the per-element results", and `Binding.state.place` is "the index
-    // of the element in the collection of an enclosing element body",
-    // with "for an index the membership that collection iterates" as
-    // its template. "A path bound to `undefined` has no entry of
-    // `state`."
+    // the per-element results", and `Binding.state.place` is "A slot of
+    // the instance, which for the index of the element in the collection
+    // of an enclosing element body is the slot of root `index` that
+    // names that collection", with the `slot` node as its template. "A
+    // path bound to `undefined` has no entry of `state`."
     let analysis = program(
         r#"import { Cell, handler, pattern, UI } from "commonfabric";
 const pickRow = handler<unknown, { at: number; chosen: Cell<number>; note?: string }>((_, state) => { state.chosen.set(state.at); });
@@ -2604,8 +2693,14 @@ export const P = pattern<{ rows: string[]; chosen: Cell<number> }>(({ rows, chos
     let state = plan["bindings"][0]["state"].as_array().expect("state");
     let paths: Vec<&Value> = state.iter().map(|entry| &entry["path"]).collect();
     assert_eq!(paths, [&json!(["at"]), &json!(["chosen"])]);
-    assert_eq!(state[0]["place"], json!({ "index": 3 }));
-    assert_eq!(state[0]["template"], plan["collections"][3]["membership"]);
+    let slot = state[0]["place"]["slot"].as_u64().expect("a slot") as usize;
+    assert_eq!(state[0]["place"], json!({ "slot": slot }));
+    assert_eq!(
+        plan["slots"][slot]["root"],
+        json!({ "kind": "index", "collection": 3 })
+    );
+    assert_eq!(plan["slots"][slot]["observes"], "value");
+    assert_eq!(state[0]["template"], json!({ "op": "slot", "slot": slot }));
 }
 
 #[test]
