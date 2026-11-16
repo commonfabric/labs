@@ -69,6 +69,8 @@ describe("space links", () => {
         `${link.href}#`,
         `${link.href}#anything`,
         `${scheme}&later=1#x`,
+        // A code on a space link is never read, so it is never handed on.
+        `${link.href}&invite=abc#code=secret`,
       ]
     ) {
       expect(parseSpaceLink(tolerated), tolerated).toEqual(loom);
@@ -93,7 +95,6 @@ describe("space links", () => {
       const other of [
         `${INVITE_LINK_SCHEME}://setup?n=abc123`,
         `${INVITE_LINK_SCHEME}://other${link.search}`,
-        `${INVITE_LINK_SCHEME}:space${link.search}`,
         `https://links.example/space/${link.search}`,
         `https://links.example/piece${link.search}`,
         // Another site's `/space`, naming neither field.
@@ -120,6 +121,9 @@ describe("space links", () => {
         withField("space", "did:key:abc def"),
         withField("space", `${space} `),
         `${INVITE_LINK_SCHEME}://SPACE${link.search}`,
+        // A scheme URL naming no action is malformed, as for an invitation.
+        `${INVITE_LINK_SCHEME}:space${link.search}`,
+        `${INVITE_LINK_SCHEME}:///space${link.search}`,
         `${link.href}&host=https://other.example`,
         `${link.href}&space=${space}`,
         `${INVITE_LINK_SCHEME}://space/${link.search}`,

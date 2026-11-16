@@ -335,6 +335,23 @@ export function inviteCodeVerifier(link: InviteLink): string {
 export const INVITE_LINK_SCHEME = "fbrc";
 
 /**
+ * Whether `url`, a URL on {@link INVITE_LINK_SCHEME}, names `action`: false
+ * for another action, so that each action's parser passes over the others,
+ * including ones added later. Throws `invalid-link` for a URL that names no
+ * action (`fbrc:join?…`, `fbrc:///join?…`) or names `action` malformed (in
+ * another case, with a port, credentials or a path), as every parser of the
+ * scheme must.
+ */
+export function isSchemeAction(url: URL, action: string): boolean {
+  if (url.host === "") throw new SpaceInviteError("invalid-link");
+  if (url.hostname.toLowerCase() !== action) return false;
+  if (
+    url.host !== action || url.pathname !== "" || url.username || url.password
+  ) throw new SpaceInviteError("invalid-link");
+  return true;
+}
+
+/**
  * The query keys that make a `/join` or `/open` URL an invitation, so that one
  * carrying none of them, such as another site's `/open?id=…`, is not one.
  */
@@ -408,12 +425,7 @@ export function parseInviteLink(
     // Another action, such as the setup reply or a space link, or one added
     // later, is not an invitation: an older reader then sees a link it does
     // not know rather than a malformed one.
-    if (url.host !== "" && url.hostname.toLowerCase() !== "join") {
-      return undefined;
-    }
-    if (url.host !== "join" || url.pathname !== "") {
-      throw new SpaceInviteError("invalid-link");
-    }
+    if (!isSchemeAction(url, "join")) return undefined;
   } else {
     if (
       (url.pathname !== "/join" && url.pathname !== "/open") ||

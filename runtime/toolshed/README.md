@@ -331,13 +331,13 @@ has access, and anyone else is told they don't.
 `parseSpaceLink` reads that and the scheme form `fbrc://space?host&space`. The
 service and the space follow the invitation's rules: an HTTPS (or loopback)
 origin, and a `did:key`. Each link names exactly one `host` and one `space`;
-other query fields and any fragment are ignored. The format has no version
-number: a new field may only add what a reader can safely ignore, and anything
-that would change what an existing link means takes a new path or scheme action.
-`parseSpaceLink` returns `undefined` for anything that is not a space link,
-including other scheme actions, and throws a `SpaceLinkError`: `invalid-link`
-for a malformed space link, and `invalid-host` for a link or service that is not
-a secure origin.
+unlike an invitation's, whose fields its code binds, other query fields and any
+fragment are ignored. The format has no version number: a new field may only add
+what a reader can safely ignore, and anything that would change what an existing
+link means takes a new path or scheme action. `parseSpaceLink` returns
+`undefined` for anything that is not a space link, including other scheme
+actions, and throws a `SpaceLinkError`: `invalid-link` for a malformed space
+link, and `invalid-host` for a link or service that is not a secure origin.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends

@@ -380,7 +380,7 @@ describe("space-invites", () => {
         [link.href.replace(link.hash, "").replace("/join?", "/open?"), {
           code: invite.code,
         }],
-        // Any other URL on the scheme.
+        // A malformed `join`, or a scheme URL naming no action.
         [`${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:join${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:/join${query}${link.hash}`, {}],

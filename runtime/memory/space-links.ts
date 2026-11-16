@@ -24,6 +24,7 @@ import type { DIDKey } from "@commonfabric/identity/did";
 import {
   INVITE_LINK_SCHEME,
   isInviteDIDKey,
+  isSchemeAction,
   normalizeInviteHost,
   SpaceInviteError,
 } from "./space-invites.ts";
@@ -94,8 +95,9 @@ export function buildSpaceLink(shell: string, link: SpaceLink): URL {
  * scheme, so that a link kind added later reaches this reader as one it does
  * not know rather than as a malformed one. Anything else throws a
  * {@link SpaceLinkError}: `invalid-link` for a malformed space link, such as
- * `fbrc://SPACE?…` or `fbrc://space/?…`, and `invalid-host` for a link or
- * service that is not a secure origin.
+ * `fbrc://SPACE?…` or `fbrc://space/?…`, or a scheme URL naming no action
+ * (`fbrc:space?…`), as `isSchemeAction` judges for every action; and
+ * `invalid-host` for a link or service that is not a secure origin.
  */
 export function parseSpaceLink(link: string | URL): SpaceLink | undefined {
   let url: URL;
@@ -105,10 +107,13 @@ export function parseSpaceLink(link: string | URL): SpaceLink | undefined {
     throw new SpaceLinkError("invalid-link");
   }
   if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
-    if (url.hostname.toLowerCase() !== "space") return undefined;
-    if (url.host !== "space" || url.pathname !== "") {
+    let named: boolean;
+    try {
+      named = isSchemeAction(url, "space");
+    } catch {
       throw new SpaceLinkError("invalid-link");
     }
+    if (!named) return undefined;
   } else {
     if (
       url.pathname !== "/space" ||
