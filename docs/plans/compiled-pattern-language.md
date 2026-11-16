@@ -1228,6 +1228,13 @@ is relitigated.
   the same in an element body over an array of references, over an
   array of plain values in place, and over the result of another
   per-element construct.
+- Where a marker stands at a position that no listed path covers, the
+  evaluation that fails is the one that stores the value, and not the
+  one that called `host.stream`. The output that holds the position
+  keeps the value that was stored before, and other outputs are not
+  affected. The same in an element body over an array of references,
+  over an array of plain values in place, and over the result of
+  another per-element construct.
 - A handling is identified by the receipt, which leaves the acting
   principal out.
 - An event is routed to an instance that is not loaded through a stream
@@ -2257,8 +2264,8 @@ as an assumption, which is what the prototype does.
      test of it stores a marker outside the result. The three are the
      same in an element body over an array of references, over an
      array of plain values in place, and over the result of another
-     per-element construct. Questions 164 and 165 have two more things
-     the ruling leaves open.
+     per-element construct. Question 164 has which evaluation fails,
+     and question 165 a stream that a function body returns.
 145. **What a cone stores that passes on an element that is a plain
      value** (ES question 79). Settled by ruling: an element that is a
      plain value in place is named by its collection and its key, a
@@ -2458,16 +2465,16 @@ notes 325 to 341 found undetermined, written into the documents as an
 assumption, which is the prototype's choice.
 
 164. **Which cone instance fails the check of a stream's position** (ES
-     question 88). A marker can be placed by one cone instance, passed
-     through an interim output, and stored by another. *Assumed:* the
-     cone instance whose output holds the position when the value is
-     stored fails, and its outputs take the error state, also at the
-     positions the failure does not concern. The alternative fails the
-     cone instance that called `host.stream`. Open with it: whether
-     those other positions hold the error state or what was stored
-     before. The same in an element body over an array of references,
-     over an array of plain values in place, and over the result of
-     another per-element construct.
+     question 88). Settled by ruling: the evaluation that stores the
+     value fails, also where another cone instance placed the marker
+     and passed it through an interim output. The output that holds
+     the position keeps the value stored before, and other outputs are
+     not affected: no output takes the error state. The same in an
+     element body over an array of references, over an array of plain
+     values in place, and over the result of another per-element
+     construct. *Assumed* beside it: the output is dropped as a derived
+     write that failed a constraint is, for the memo and for a cone
+     instance that read the staged value. The entry keeps its number.
 
 165. **A stream that a function body returns into the result** (PL
      question 116). A `lift` or a `computed` can return a value that

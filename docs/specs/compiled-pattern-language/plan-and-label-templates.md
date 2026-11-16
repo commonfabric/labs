@@ -1554,10 +1554,12 @@ of the binding's `within`, and it checks that the position is one that
 `Binding.result` lists for that binding. A `*` of a listed path matches
 any element of the collection at that position. A path below a
 conditional matches under either selection. A marker at a position that
-no listed path of its binding covers fails the evaluation, and the cone
-instance takes the error state (section 5.2). Which cone instance that
-is, where one placed the marker and another stores it, is assumed in
-`execution-and-storage.md` (its question 88). `Binding.result` is
+no listed path of its binding covers fails the evaluation. By ruling
+the evaluation that fails is the one that stores the value, also where
+another cone instance placed the marker, and the output that holds the
+position keeps the value and the label that were stored before. Other
+outputs are not affected, and none takes the error state of section 5.2
+(`execution-and-storage.md` §2.2, "What fails"). `Binding.result` is
 therefore what the label analysis and a reader of the plan rely on for
 where a stream of the instance is stored (section 3.1, "A binding with
 a `within` step"), and the compiler owes the following.

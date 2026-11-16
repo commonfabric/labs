@@ -3783,7 +3783,9 @@ holds, before the server's result arrives.
   value code places the marker of `host.stream` where the server's run
   does, and the client's runtime puts the link to the stream it derived
   in the marker's place, with the same check against `Binding.result`
-  (`execution-and-storage.md` §2.2).
+  (`execution-and-storage.md` §2.2). Where the check fails, the output
+  that holds the position keeps what it held, on a client as on the
+  server.
 - A binding made in a function body whose paths are all links, to cells or
   to containers bound by reference, is named by the identities of those
   cells and the addresses of those containers. A client derives it.

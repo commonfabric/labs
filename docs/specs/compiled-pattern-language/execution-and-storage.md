@@ -935,12 +935,23 @@ value function places the stream, and the runtime checks where.
   `plan-and-label-templates.md` §1.1 has it ("From a path to a
   position"). A path below a conditional matches under either
   selection. A marker at a position that no listed path of its binding
-  covers fails the evaluation: the cone instance takes the error state
-  (section 1.7), and no link is stored. A marker can be placed by one
-  cone instance, passed through an interim output, and stored by
-  another. *Assumed* (question 88 of section 11): the cone instance
-  that fails is the one whose output holds the position when the value
-  is stored, and not the one that called `host.stream`.
+  covers fails the evaluation, and no link is stored.
+- **What fails.** A marker can be placed by one cone instance, passed
+  through an interim output, and stored by another, as where a
+  declaration cone computes a tree and the `result` cone stores it. By
+  ruling the evaluation that fails is the one that stores the value:
+  that of the cone instance whose output holds the position when the
+  value is stored, and not that of the cone instance that called
+  `host.stream`. The output that holds the position is not written. It
+  keeps the value, the label and the provenance record that are
+  stored, and where nothing is stored it holds nothing. Other outputs
+  are not affected: the other outputs of the same cone instance are
+  stored, and every other cone instance evaluated for the cause
+  commits. No output takes the error state. That is the outcome of a
+  derived write that is dropped, and not that of a failed cone
+  (section 1.7). *Assumed:* the memo, and a cone instance that read
+  the staged value, are treated as that item of section 1.7 treats
+  them for a derived write that failed a constraint (section 3.3).
 - **What the list is for.** `Binding.result` stays the statement that
   the label analysis and a reader of the plan rely on for where a
   stream of the instance is stored, and it has to be complete.
@@ -964,7 +975,9 @@ of a per-element source: an array of references, an array of plain
 values in place, and the result of another per-element construct. The
 marker is replaced by the link to the stream of the instance's key in
 each, and the three differ only in how the key is computed (section
-2.5).
+2.5). The output that keeps its stored value where the check fails is
+that of the cone instance of the key whose output holds the position,
+and the outputs of the other keys are stored.
 
 The prototype's executor implements the marker, the replacement and the
 check. Its marker is a frozen object with no member, and the binding and
@@ -5300,7 +5313,8 @@ Added by the ruling that the scheduler is switched per space (section 9):
     ruling the value function places a stream, with the marker that
     `ConeHost.stream` returns, and the runtime writes the link in the
     marker's place when it stores the value and fails the evaluation
-    where the position is one that no path of `Binding.result` covers.
+    where the position is one that no path of `Binding.result` covers
+    (question 88 has which evaluation, and what its output holds).
     Open are three things the ruling does not determine. *Assumed:* a
     marker stored outside the result, in a side-write or a computed
     path of a child's argument, is replaced by the link and not
@@ -5376,25 +5390,23 @@ Added by the ruling that the scheduler is switched per space (section 9):
     the element itself the cell holds the element's value, and over an
     array of plain values in place no reference to the element.
 88. **Which cone instance fails the check of a stream's position**
-    (section 2.2). By ruling a marker at a position that no listed path
-    of its binding covers fails the evaluation. A marker can be placed
-    by one cone instance, passed through an interim output, and stored
-    by another, as where a declaration cone computes a tree and the
-    `result` cone stores it. *Assumed:* the cone instance whose output
-    holds the position when the value is stored fails, by the rule for a
-    failed cone (section 1.7): its outputs take the error state at their
-    paths, also the positions of them that hold no marker, and every
-    other cone instance evaluated for the cause commits. The prototype's
-    executor makes the check where it stores the result document and
-    does not store the result. The alternative fails the cone instance
-    that called `host.stream`, whose value may be right at every other
-    position it is used at. Open with it: what the positions of the
-    stored output that the failure does not concern hold afterwards, the
-    error state as assumed or what was stored before. The same for a
-    cone of an element body over an array of references, over an array
-    of plain values in place, and over the result of another per-element
-    construct: the instance that fails is the one of the key whose
-    output holds the position.
+    (section 2.2). Not open, by ruling: the evaluation that stores the
+    value fails, which is that of the cone instance whose output holds
+    the position when the value is stored, also where another cone
+    instance called `host.stream` and passed the marker through an
+    interim output. That output keeps the value stored before, and
+    other outputs are not affected, those of the same cone instance
+    included. No output takes the error state. The same for a cone of
+    an element body over an array of references, over an array of
+    plain values in place, and over the result of another per-element
+    construct: the output that keeps its value is that of the key
+    whose output holds the position. The prototype's executor makes
+    the check where it stores the result document, and on a failure it
+    stores nothing of the result, where the ruling has the other
+    outputs stored. *Assumed* beside the ruling: the memo, and a cone
+    instance that read the staged value, are treated as for a derived
+    write that failed a constraint (sections 1.7 and 3.3). The entry
+    keeps its number.
 89. **Where the record of a key of a list is stored** (`elementById`;
     section 2.4). `footprint-analysis.md` §7 has the handle at `*` below
     the list and not anchored, and no document says where the record is.
