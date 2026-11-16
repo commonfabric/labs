@@ -124,6 +124,29 @@ describe("deploy", () => {
       });
     });
 
+    it("answers the index's display name with the program, when it has one", async () => {
+      const named = await compileIndexedPattern(
+        deployOptions(
+          clientAnswering((id) =>
+            Promise.resolve({
+              ...recordFor(id, DOUBLING_SOURCE),
+              name: "Doubler",
+            })
+          ),
+        ),
+      );
+      const unnamed = await compileIndexedPattern(
+        deployOptions(
+          clientAnswering((id) =>
+            Promise.resolve(recordFor(id, DOUBLING_SOURCE))
+          ),
+        ),
+      );
+
+      expect(named.name).toBe("Doubler");
+      expect(unnamed).not.toHaveProperty("name");
+    });
+
     it("compiles the published patterns the program imports into the space first", async () => {
       await ensureCompilerStack();
       const doublerId = await computeEntryIdentity("/main.tsx", [
