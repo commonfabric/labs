@@ -8,7 +8,7 @@
  * it comes from), and the room is set up from that stored source, as a
  * runtime loading such a room does. It seeds through that program's own
  * handlers, each from its reviewed gesture: six messages, one of them a
- * reply, a reaction, and a window. Then the room opens, as a person opening
+ * reply, a reaction, and two windows. Then the room opens, as a person opening
  * it would, and follows `system:system/fabrichat/room.tsx`, which this tree's
  * patterns route serves.
  *
@@ -384,11 +384,13 @@ describe("fabrichat-four-writer-room-update", () => {
       ),
     );
     await room.key("messages").key("openWindow").pull();
-    {
+    // Two windows: `main`, which a case opens again, and `old`, which a case
+    // closes.
+    for (const [requestId, windowId] of [["w1", "main"], ["o1", "old"]]) {
       const tx = runtime.edit();
       room.withTx(tx).key("messages").key("openWindow").send({
-        requestId: "w1",
-        windowId: "main",
+        requestId,
+        windowId,
         from: { before: "end" },
         count: 5,
       });
@@ -824,6 +826,28 @@ describe("fabrichat-four-writer-room-update", () => {
       });
 
       expect(refusals).toEqual([]);
+    });
+
+    it("closes a window the earlier program wrote, through this tree's `closeWindow`", async () => {
+      const windows = room.key("messages").key("windows").resolveAsCell();
+      expect(
+        Object.keys((windows.getRaw() ?? {}) as Record<string, unknown>),
+      ).toContain("old");
+      const refusals = await refusalsDuring(async () => {
+        const tx = runtime.edit();
+        room.withTx(tx).key("messages").key("closeWindow").send({
+          requestId: "c-old",
+          windowId: "old",
+        });
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+      });
+
+      expect(refusals).toEqual([]);
+      expect(
+        Object.keys((windows.getRaw() ?? {}) as Record<string, unknown>),
+      ).not.toContain("old");
     });
 
     it("sets the window the earlier program wrote through this tree's `openWindow`, keeping the writers the window stores for its messages' reactions", async () => {
