@@ -157,10 +157,11 @@ export function tableNames(db: Database): string[] {
 }
 
 /**
- * The scheduler basis index (serving-loop.md §3b) is the only durable
- * scheduler state besides the watermark machinery. It exists on every
- * migrated store but may be absent on a pre-migration snapshot, so the
- * autopsy core degrades gracefully.
+ * Whether the store has a `scheduler_basis` table (serving-loop.md §3b).
+ * It exists, empty, on every store the engine has opened, and holds rows
+ * only in a store an earlier build wrote and the engine has not opened
+ * since; a pre-migration snapshot may lack it, so the autopsy core
+ * degrades gracefully.
  */
 export function hasSchedulerBasisTable(db: Database): boolean {
   return tableNames(db).includes("scheduler_basis");

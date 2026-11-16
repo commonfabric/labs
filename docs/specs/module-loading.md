@@ -64,9 +64,9 @@ collisions.
 
 The consumer that motivates the stable identity is the scheduler's durable
 action identity: the implementation fingerprint must survive a reload from a
-different entry point, and server-execution v2 keys its basis index by the
-same restart-stable identity
-([serving-loop.md §3b](server-side-execution/serving-loop.md)).
+different entry point, and server-execution v2 names a run by the same
+restart-stable identity in its wave
+([serving-loop.md §3d](server-side-execution/serving-loop.md)).
 
 The iframe sandbox path (`base/iframe-sandbox`) is entirely independent of
 this work and is out of scope.

@@ -230,8 +230,8 @@ narrow together (a user-level fact reaches all of that user's
 sessions). Instance sets are therefore clean products over principals
 at the top hop and MAY be ragged below it; a per-node scope level
 cannot represent that — instance addresses carry the FULL
-(scope-kind, principal) address, which is what the serving replica,
-the wire, and the basis index key by (fan-out stage A, OW17), and
+(scope-kind, principal) address, which is what the serving replica
+and the wire key by (fan-out stage A, OW17), and
 "the node's known scope only narrows" is a POLICY over such
 addresses (stage B's run supply), never a structural fact below the
 top hop.
@@ -474,7 +474,7 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   evaluates under its own identity).
 - **M5 — Retention assumes instances are cheap to re-derive per
   owner.** No bound exists on the execution contexts an action
-  accumulates (`scheduler_basis` specifies none), and session DATA
+  accumulates, and session DATA
   rows are never GC'd — nothing retires session data today. → v2: §3's
   durable-with-retirement needs an actual GC design (§8 item 2),
   and a server owning ALL instances cannot have its working set
@@ -484,8 +484,8 @@ Ruled with the batch-4 closures (owner-accepted derivation,
 2026-08-02): `scheduler_context_floor` DELETES with the observation
 machinery in the Phase-1 reduction (runtime-mapping.md N59–N61;
 plan Phase 1 stage C). Its only job was gating SHARED observation
-snapshots across principals; the v2 basis index is per-instance and
-shares nothing across principals, so nothing is left to floor.
+snapshots across principals; the store keeps no scheduler state at
+all, so nothing is left to floor.
 Nothing of the floor survives as per-instance keying evidence.
 
 ## 8. Open — the one design the Phase 0 review still owes
@@ -508,21 +508,12 @@ protocol.md §2) — and run identity for
 non-handler runs (§5). Still open (numbering stable — external
 citations use it):
 
-1. **Basis-index DDL authoring — CLOSED.** serving-loop.md §3b now
-   carries the authored engine-v3 DDL, keyed per INSTANCE
-   (id + scope_key), overwritten in place per (action, instance),
-   exactly as the §7 closures assumed. The slot stays so item 2's
-   citations elsewhere keep resolving.
+1. **Basis-index DDL authoring — CLOSED.** The store keeps no basis
+   index (serving-loop.md §3b). The slot stays so item 2's citations
+   elsewhere keep resolving.
 2. **Session-data GC (M5).** The mechanism that actually retires a
    retired session's scoped instances — none exists today, so §3's
-   ONE retirement rule needs it designed, not assumed. It MUST also
-   cover NON-SESSION keys (S8): narrowing strands basis rows at
-   `space` and `user:<p>` keys that no session retirement ever
-   touches, and `scheduler_basis` specifies no per-action bound of
-   its own. The
-   deletion rule in serving-loop.md §3b keeps the stranding from
-   growing without bound in the narrowing case; a retirement design
-   still owes the general one.
+   ONE retirement rule needs it designed, not assumed.
 
 ## 9. Tripwires
 

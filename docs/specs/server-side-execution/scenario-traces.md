@@ -210,7 +210,8 @@ user-scoped state and discovers user narrowing. Later U2's client
 demands the node. S1, S2 subscribe throughout.
 Hops: (1) U1's run discovers narrowing. (2) The discovering wave's
 writes. (3) Push after that wave. (4) U2's demand arrives. (5)
-U2's instance run + wave. (6) Basis-index effects.
+U2's instance run + wave. (6) What the store records of the
+discovering run's reads.
 
 - T6.Q1 — Hop 1 run identity, and what supplied it.
 - T6.Q2 — Hop 2: enumerate EVERY write the discovering wave makes
@@ -223,9 +224,8 @@ U2's instance run + wave. (6) Basis-index effects.
   instance rows?
 - T6.Q5 — Hop 4/5: what identity does U2's instance run assume;
   does W wait for it before U2 demands it?
-- T6.Q6 — Hop 6: the basis rows for the discovering run — keyed
-  how, and what happens to rows recorded under the OLD (broader)
-  instance key?
+- T6.Q6 — Hop 6: what does the store record of the discovering
+  run's reads?
 - T6.Q7 — A later broader-scoped run writes to the narrowed slot:
   what happens to the redirect?
 
@@ -309,7 +309,7 @@ before the wave commit). A deploy brings up a new host.
 - T10.Q5 — Undelivered events at boot: detected how, reprocessed
   under what idempotency rule?
 - T10.Q6 — What per-run state is FORBIDDEN to persist for
-  recovery, and what test distinguishes the basis index from it?
+  recovery?
 
 ### T11 — `.inSpace` provisioning: the second sanctioned crossing
 
@@ -472,7 +472,7 @@ these.
   `consequenceOf: [eventId]`. [protocol §1, §4, §7; serving-loop §2, §3]
 - Q7: S2 receives the space-keyed rows (both writes here); any row
   keyed to another principal's instance would be ABSENT (not
-  redacted); basis rows never push to anyone. [protocol §3]
+  redacted). [protocol §3]
 - Q8: settled when `W ≥ seq(the hop-1 append)`. [protocol §4]
 
 ### T2 (FLAGS(1) — resolved by LT8; Q6 carries the resolution)
@@ -614,9 +614,8 @@ these.
 - Q5: U2's run identity = U2 from its own demand; W never waits on
   the UNDEMANDED sibling, and waits on it once demanded, under the
   budget rule. [scopes §2; protocol §4; serving-loop §3]
-- Q6: basis rows keyed with `action_scope_key = user:U1`, overwritten
-  per (action, instance); the stranded `space`-key rows are DELETED
-  in the same wave tx. [serving-loop §3b]
+- Q6: nothing — read sets live in memory only, and the store keeps
+  no record of what a run read. [serving-loop §3b]
 - Q7: the redirect is permanent; later broader runs write THROUGH it;
   widen-back is closed NO. [scopes §2]
 
@@ -705,9 +704,8 @@ these.
 - Q5: stream head past `eventWatermark` at boot ⇒ reprocess; at-or-
   below skips as `skippedIdempotent`. [serving-loop §1, §6; events §4]
 - Q6: the evidence log (payloads, per-run history, certificates,
-  replay) is FORBIDDEN; the test: payloads/history ⇒ evidence,
-  ids+seqs overwritten per (action, instance) ⇒ basis.
-  [serving-loop §3b, §6, §8]
+  replay) is FORBIDDEN, and nothing else of a run is persisted
+  either. [serving-loop §3b, §6, §8]
 
 ### T11 (FLAGS(1) CONTRADICTIONS(2) → both fixed)
 - Q1: `authored`, under the event's acting identity, metadata =

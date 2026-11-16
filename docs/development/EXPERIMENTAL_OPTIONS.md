@@ -3030,9 +3030,9 @@ another's committed action runs. Added by Bernhard Seefeld in #3646
 server-execution v2 Phase 1 stage C (2026-08-04): the flag, its ambient
 control point, the hello negotiation, the `scheduler.snapshot.list` RPC, the
 commit-carried observation payload, and the seven observation tables all
-left the tree, and the persisted form was REPLACED by the `scheduler_basis`
-index ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
-§3b) — ids + seqs only, written by the serving loop when it lands. A store
+left the tree, and the persisted form was dropped
+([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §3b:
+the store keeps no scheduler state besides W and `eventWatermark`). A store
 that had opted in lost warm start once at the migration, by design; old
 clients take the hello-degrade path (a server advertising nothing to
 negotiate reads as "state absent, run fresh"). The archived specs:

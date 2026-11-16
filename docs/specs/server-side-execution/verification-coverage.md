@@ -4148,7 +4148,7 @@ Delta 2026-11-01 — stage L (the lease in memory,
   from another worker's by the holder component its connection names, is
   `runtime/memory/test/v2-explicit-read.test.ts`.
 
-Delta 2026-11-16 — activation stops scanning `scheduler_basis`:
+Delta 2026-11-16 — `scheduler_basis` is neither scanned nor written:
 
 - serving-loop §6 step 2's activation: COVERED, superseding the PARTIAL
   entry under "Delta 2026-08-05 — stage F lands". Activation subscribes
@@ -4167,6 +4167,26 @@ Delta 2026-11-16 — activation stops scanning `scheduler_basis`:
   stage B's "the basis index at activation" no longer holds: the loop
   runs the demanded writers not current for a demanding pair by B7's
   clean bit alone.
+- The wave writes no `scheduler_basis` rows and the engine keeps the
+  table empty, deleting any rows a store holds when it opens it
+  (serving-loop.md §3b). Entries above that cite basis rows as an
+  observable are superseded as follows. Q1's "a survivor whose writes
+  were dropped per-doc still lands its basis rows" is now "keeps its
+  logged reads": `runtime/runner/test/scheduler-wave-withdrawal.test.ts`
+  runs a derivation whose write the wave dropped as superseded again
+  when an input it read changes, and commits that run's write. M3's
+  basis-row half is now the sealed commit's read set: the
+  derivation-emitter test in `executor-wave.test.ts` checks that the
+  sealed reads hold the seed and not the stream sidecar. The S4
+  narrowing rule and its pins (the S4 test in
+  `executor-instance-keyed-replica.test.ts`, "S4 clearance in BOTH
+  directions" in `executor-wave.test.ts`) are retired with the rows;
+  the P2-F end-to-end pin in `executor-serving-loop.test.ts` checks the
+  acting annotations alone. `runtime/memory/test/v2-engine-revision.test.ts`
+  pins the delete at open and that an open over a store with no rows
+  commits nothing another connection sees, and
+  `runtime/state-inspector/test/compaction.test.ts` that compaction's
+  verifier accepts a result whose `scheduler_basis` the open emptied.
 
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):

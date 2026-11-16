@@ -257,8 +257,7 @@ measurement after compaction.
 Each is something a reader relies on today, with the code that relies on it.
 
 - **I1 — every head keeps its `(seq, op_index)`.** Clients hold entity seqs in
-  their holdings and confirm reads against them; the scheduler basis index
-  records input seqs and decides dirtiness by comparing them with heads; the
+  their holdings and confirm reads against them; the
   commit-class annotation of a frame resolves through the head's seq. Moving
   a head to a new seq would make every one of those stale at once and hand the
   serving loop a full re-derivation on activation — a storm to end a storm.

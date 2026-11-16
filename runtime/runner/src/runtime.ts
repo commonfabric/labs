@@ -582,10 +582,9 @@ export type PatternInstantiationObserver = (
 /**
  * What the scheduler knows about a run when it mints the run's
  * transaction (server-execution v2 stage F): the durable action identity
- * (restart-stable — `implementationHash:instanceKey`, the basis index's
- * `action` column) and the run's kind. The serving loop's stamper
- * enriches this with per-run identity (M1) and attaches the wave run
- * context (serving-loop.md §3d).
+ * (restart-stable — `implementationHash:instanceKey`) and the run's
+ * kind. The serving loop's stamper enriches this with per-run identity
+ * (M1) and attaches the wave run context (serving-loop.md §3d).
  */
 export type ServerRunInfo = {
   actionId: string;

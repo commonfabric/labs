@@ -361,9 +361,8 @@ the ruled flows subscribes to setup docs before activation.
 runtime so that its setup stages into the wave, and each pattern it starts
 registers its nodes there. Nothing demands those nodes, so once the handler's
 transaction commits the result is released (`#releaseServedHandlerResult` in
-`runner.ts`), and what remains is what the store holds, with the basis rows of
-any of its actions that ran. A demand for one of its values, or an event to one
-of its streams, starts the piece as either starts a piece on a fresh runtime.
+`runner.ts`), and what remains is what the store holds. A demand for one of
+its values, or an event to one of its streams, starts the piece as either starts a piece on a fresh runtime.
 A session demands one of its values when it is sent a document the piece's
 setup wrote, other than its argument, which holds inputs current without it. A
 read that stops at a link to the piece is sent only its result document, and
@@ -451,12 +450,12 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   commit path — each wave's one derived commit (final values,
   watermark doc — §3) and the outbox's AUTHORED commits
   (cross-space event appends, `.inSpace` provisioning —
-  protocol.md §2b) all enter the store here. Basis-index rows (§3b)
-  travel on this plane too, but as part of the store TRANSACTION —
-  never as part of the commit REPRESENTATION: they are engine table
-  rows, they are not pushed to any subscriber (protocol.md §3), and
-  admission never reads them (protocol.md §7). "On the storage
-  protocol" must not be read as "on the wire".
+  protocol.md §2b) all enter the store here. The outbox's durable
+  rows (§5) travel on this plane too, but as part of the store
+  TRANSACTION — never as part of the commit REPRESENTATION: they are
+  engine table rows, they are not pushed to any subscriber
+  (protocol.md §3), and admission never reads them (protocol.md §7).
+  "On the storage protocol" must not be read as "on the wire".
   READS take this plane too by default: the serving runtime's home
   session watches its roots under their selectors, and the memory
   server's schema walk delivers the closure. Under the store
@@ -1079,122 +1078,21 @@ executing:
   waves draining under sustained multi-user input (an exhausted wave
   holds W; a pinned W stalls the client's coverage-of-basis
   retirement).
-- Read sets are authoritative IN MEMORY. Two persisted forms are
-  distinguished, and confusing them is how v1 died:
-  1. **The basis index**: compact rows `(action, entity, seq)` —
-     "output current iff these inputs unchanged since these seqs" —
-     written INSIDE the wave's derived transaction (never own commits;
-     amplification untouched). In-wave reads share the wave's own
-     commit seq. No code reads the rows: recovery starts every
-     computation a fresh runtime materializes as not yet run (§6). What
-     keeps the index on the right side of the no-payload lesson is its
-     shape:
-     ids + seqs only, overwritten in place per (action, instance) —
-     never payloads,
-     never per-run history — and admission never reads it. It is NOT
-     the evidence log (§8's exception says the same). Prior art being
-     REDUCED, not a kept shape: main's `persistentSchedulerState`
-     persisted form (`scheduler_observation` full-JSON payloads with
-     replay/snapshot/context-floor machinery, OFF by default on main)
-     fails this section's own test; the v2 index is a NEW schema of
-     standalone `(action, entity, seq)` rows replacing those payload
-     tables (deletion + reduction tracked in plan Phase 1; pre-arc
-     #3646 is the scope precedent).
-  2. **The evidence log (FORBIDDEN — tripwires §8)**: per-run link
-     payloads, certificates, replay records — 130 KB per map run in v1.
-     The test between the two: payloads or per-run history ⇒ evidence;
-     ids + seqs, overwritten in place per (action, instance) ⇒ basis
-     index.
-  W and `eventWatermark` are the persisted forms recovery reads;
-  commit REPLAY bears nothing — recovery never replays (§6). Client
-  reload needs none of this: every derived value is committed, so
-  client reload is read-and-render.
+- Read sets live in memory only. The store keeps no record of what a
+  run read. The evidence log — per-run link payloads, certificates,
+  replay records, 130 KB per map run in v1 — stays FORBIDDEN
+  (tripwires §8). W and `eventWatermark` are the persisted forms
+  recovery reads; commit REPLAY bears nothing — recovery never replays
+  (§6). Client reload needs none of this: every derived value is
+  committed, so client reload is read-and-render.
 
-The index's DDL, authored (closes scopes.md §8 item 1). This is the
-engine-v3 migration Phase 1 stage C reduces the observation tables
-to. The NORMATIVE content is the columns, the keys, and the drops;
-SQL types and secondary indexes (e.g. an entity-keyed lookup mirror
-of today's `idx_scheduler_read_index_lookup`) are implementation
-detail:
+**`scheduler_basis`.** The engine schema keeps an empty
+`scheduler_basis` table and its entity index. No serving or recovery
+code reads them and nothing adds rows to them; opening a store deletes
+any rows the table holds.
 
-```sql
--- One standalone table. No FOREIGN KEY clauses anywhere: v1's
--- satellites all hung off scheduler_observation; the v2 index
--- references nothing and nothing references it.
-CREATE TABLE scheduler_basis (
-  branch           TEXT,    -- engine-v3 branch, as on every table
-  action           TEXT,    -- durable action identity/fingerprint;
-                            --   restart-stable (a per-process
-                            --   component would empty the index
-                            --   exactly when recovery reads it)
-  action_scope_key TEXT,    -- the INSTANCE that ran (scopes.md §7
-                            --   M2 re-keying; scope_key vocabulary
-                            --   is the shared `resolveScopeKey` in
-                            --   the wire-shape module —
-                            --   runtime/memory/v2.ts — per
-                            --   LD3, key-vocabulary.md §3)
-  entity_space     TEXT,    -- the input doc's space: foreign reads
-                            --   are logged reads too (cross-space
-                            --   bullet above)
-  entity           TEXT,    -- the input doc id
-  entity_scope_key TEXT,    -- the input INSTANCE read
-  seq              INTEGER, -- the input's seq at read time, in the
-                            --   entity's own space's sequence;
-                            --   in-wave reads share the wave's
-                            --   commit seq
-  PRIMARY KEY (branch, action, action_scope_key,
-               entity_space, entity, entity_scope_key)
-);
-```
-
-Rules the shape carries, binding:
-
-- **Overwrite in place, per (action, instance)**: a run of
-  (`action`, `action_scope_key`) — scopes.md §8's overwrite unit —
-  REPLACES that instance's rows as a set. Never append beside a
-  previous run's rows: per-run history is the evidence log's
-  signature (§8).
-- **Doc-granular, ids + seqs ONLY**: no path column, no payloads.
-  Path precision stays in-memory in the reactivity log; a JSON path
-  column is the first step back toward evidence.
-- **Carriage**: rows are written INSIDE the wave's derived store
-  TRANSACTION (above — never own commits). protocol.md §3 and §7
-  carry the matching sanctions, so the closed metadata list stays
-  closed: basis rows are engine table rows on the loopback store
-  transaction, never commit metadata, never pushed, never read at
-  admission.
-- **Narrowing DELETES the rows it stranded** (S4, binding; AMENDED
-  2026-08-16 with scopes.md §2's ragged ruling — fan-out stage A): a
-  run's rows are recorded under its FULL instance address — its
-  DISCOVERED scope resolved against its identity (`space`,
-  `user:<p>`, `session:<p>:<s>`), the instance it actually served —
-  never under the demand's stamp alone; and every key the run's
-  address STRANDS — the stamp when it differs (a user-scoped watch's
-  `user:<p>` on a node that discovered `space`; a session-scoped
-  watch's `session:<p>:<s>` on a node that discovered `user`, the
-  ragged case) and every strictly-broader key on the run's own chain
-  (`space`; `user:<p>` under a session address) — MUST be cleared for
-  that action in the SAME wave transaction, in both directions
-  (narrower-than-stamp and broader-than-stamp), a real row set already
-  recorded in the wave under a key never being overwritten by a
-  clearance. Without this the stranded key's rows survive forever — a
-  `space`-key zombie has no runnable identity, so no run ever
-  overwrites its rows; a departed session's over-keyed rows have none
-  either. Sound by monotonicity at the top hop and within one
-  principal (scopes.md §2 as amended), and for the same reason
-  overwriting is: the rows are a basis cache, not history.
-- **Interim retention is UNBOUNDED, and that is accepted** (S8).
-  Rows at `space` and `user:<p>` keys are touched by no session
-  retirement, and no execution-context bound exists —
-  `scheduler_basis` specifies none. The
-  narrowing rule above removes the one case that would grow without
-  a run to overwrite it; everything else is bounded in practice by
-  overwrite-in-place per (action, instance). A real bound is the
-  session-data GC design's job — OPEN, and it must cover
-  non-session keys too (scopes.md §8 item 2).
-
-Dropped WHOLE in the same migration — the payload/history tables,
-the two the new schema replaces, and the write index:
+Dropped WHOLE when a store opens — the payload/history tables, the
+read and action-state indexes, and the write index:
 
 ```sql
 DROP TABLE scheduler_observation;         -- payload evidence (§8)
@@ -1203,45 +1101,26 @@ DROP TABLE scheduler_observation_replay;  -- replay FORBIDDEN (§6)
 DROP TABLE scheduler_context_floor;       -- nothing left to floor:
                                           --   it gated SHARED
                                           --   snapshots across
-                                          --   principals; the v2
-                                          --   index shares nothing
+                                          --   principals
                                           --   (scopes.md §7, ruled)
-DROP TABLE scheduler_read_index;          -- REPLACED (below)
-DROP TABLE scheduler_action_state;        -- REPLACED (below)
+DROP TABLE scheduler_read_index;          -- read sets live in memory
+DROP TABLE scheduler_action_state;        -- per-process history
 DROP TABLE scheduler_write_index;         -- write links are
-                                          --   evidence, not basis:
-                                          --   staleness is decided
-                                          --   by READS alone
+                                          --   evidence: staleness is
+                                          --   decided by READS alone
 ```
 
-`scheduler_read_index` and `scheduler_action_state` are REPLACED,
-not reshaped — this section's NEW-schema ruling above. Both FK into
-`scheduler_observation` (dropped, so the spine is gone) and both
-key by `process_generation`, which accumulates per-process history
-where v2 overwrites in place; reshaping would rewrite every column
-and both keys — a replacement wearing an ALTER costume. The plan's
-stage-C criterion is the backstop: after this migration the basis
-index is the ONLY persisted scheduler state besides W and
+With them gone, no persisted scheduler state remains besides W and
 `eventWatermark`.
 
 **WARNING — the drop list is SEVEN tables, and an enumeration of the
 observation tables yields SIX** (D6). `scheduler_context_floor` is
 the one such an enumeration misses: it hangs off no observation
 spine. A migration driven off the six-table enumeration leaves the
-floor table behind and fails the plan's stage-C criterion for a
-reason that reads like a mystery.
+floor table behind, for a reason that reads like a mystery.
 `migrateSchedulerObservationTablesToBasis` in
 `runtime/memory/v2/engine.ts` drives the drop from the seven-table
 list above; anything that re-derives that list must too.
-
-**NO BACKFILL** (D10). `scheduler_read_index` and
-`scheduler_action_state` rows are NOT migrated into
-`scheduler_basis`. The new table starts empty, which costs nothing:
-no code reads the index, and a fresh runtime starts every
-computation it materializes as not yet run (§6). A migration that
-reads old rows would have to reinterpret `process_generation`
-history as overwrite-in-place state, which is the reshaping this
-section already rejected.
 
 **Old client / new server compat is already answered** (D11): a
 migrated server advertises no `persistentSchedulerState` capability
@@ -1374,7 +1253,7 @@ isolation) hangs off it. v2 KEEPS that object and interface — `action(tx)`
 is unchanged — and changes only the destination: server-side, an action
 tx SEALS into the wave accumulator instead of committing to the store.
 Sealing fires everything commit fires today: the read log feeds the graph
-and basis rows (§3b), CFC evaluates against this action's reads (§3c),
+(§3b), CFC evaluates against this action's reads (§3c),
 and the action's passed writes join the wave — carrying the run's
 identity annotations with them: the acting identity and, on scoped
 writes, the explicit `scope_key` (protocol.md §1's transaction
@@ -1604,7 +1483,7 @@ first does so for free. The classes:
   so committing that write would be the blind derived write this section
   forbids — even where the head sits at or below the wave's basis.
   Recovery is the same as for any other drop: a derivation that read the
-  doc carries it in its basis rows, so the arrival of the commit it
+  doc keeps it among its logged reads, so the arrival of the commit it
   missed re-runs it. A derivation that only writes the doc depends on it
   the same way when its replica held no instance of the doc: such a
   write records a read at the document's root, not recursive, so the
@@ -1776,9 +1655,9 @@ concurrency check.
 
 **Recomputation after a drop arrives by DEPENDENCY ONLY (Q1, RULED
 2026-08-05).** A dropped superseded write has no recompute trigger of
-its own: basis rows are reads-only, so an intrusion on a producer's
-OUTPUT doc that the producer never read re-arms nothing — and the
-ruling keeps it that way, with the one exception ruled below. In the
+its own: a run's logged reads are its only triggers, so an intrusion
+on a producer's OUTPUT doc that the producer never read re-arms nothing —
+and the ruling keeps it that way, with the one exception ruled below. In the
 owner's words:
 
 > if it's truly a derived doc, there can't be other writers anyway.
@@ -1791,15 +1670,13 @@ Unpacked for implementers: (i) a genuinely derived doc has no
 authored writers, so the superseding race does not arise for it;
 (ii) shared state that derivations also update either uses
 non-conflicting operations or is read-modify-write — and a
-read-first derivation carries that doc in its READ LIST, hence in
-its basis rows, hence the authored intrusion re-runs it through the
-normal affected-graph path; (iii) a dropped superseded write is
-therefore NOT re-armed by the drop itself — if a blind-writing
+read-first derivation carries that doc in its READ LIST, hence the
+authored intrusion re-runs it through the normal affected-graph path;
+(iii) a dropped superseded write is therefore NOT re-armed by the drop itself — if a blind-writing
 derivation races an authored writer on shared state, the derived
 output waits for the next input change (accepted). The corollary is
-deliberate: a survivor whose writes were dropped per-doc still lands
-its BASIS ROWS — its reads are true, and no recompute-owed mark
-exists.
+deliberate: a survivor whose writes were dropped per-doc keeps its
+logged reads — they are true, and no recompute-owed mark exists.
 
 **A drop that leaves the document with no value re-arms its run**
 (RULED 2026-11-03). The reasoning above takes the
@@ -2315,8 +2192,8 @@ On activate after crash or deploy:
    here — those re-miss from memo keys in step 3, by design.
 
 There is NO replay log, NO persisted run observations, NO snapshot of
-scheduler state beyond W, `eventWatermark`, and the basis index's
-ids + seqs rows (§3b — payloads stay FORBIDDEN). If recovery seems to
+scheduler state beyond W and `eventWatermark` (§3b — payloads stay
+FORBIDDEN). If recovery seems to
 need more than these, the design is wrong somewhere else — stop and
 escalate.
 
@@ -2691,9 +2568,8 @@ only the first let inventories undercount it — was deleted from main
 by plan Phase 1 stage C, so a reappearing identifier is a revival, not
 a leftover.
 
-The intentional exception: the basis index tables (§3b — a NEW reduced
-schema of ids + seqs only, overwritten in place, never payloads, so NOT
-the evidence log).
+`scheduler_basis` (§3b) is the one scheduler table name left: an empty
+table nothing reads or writes, so NOT the evidence log.
 
 One tripwire is positive rather than lexical (labs #5569): scheduler
 liveness is maintained incrementally, and NO global rebuild runs on

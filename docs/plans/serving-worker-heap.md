@@ -6,9 +6,8 @@ A serving worker's heap grows with every piece a handler creates, and a worker
 that reaches V8's limit takes its whole process down. The goal is that a create
 leaves the worker holding what bounded caches hold and nothing per piece, so
 that a busy board runs without a restart. A piece nothing demands should exist as
-what the store holds: its documents, and the `scheduler_basis` rows saying what
-its actions read. Only something that needs a value the piece derives should
-bring it back.
+what the store holds: its documents. Only something that needs a value the piece
+derives should bring it back.
 
 ## What is known
 
@@ -134,10 +133,11 @@ describe.
   gets no watch of its own), and the trigger index grows by about 50 KB per
   create. That is the
   cost of a demanded board whose computations stay registered after they ran.
-  Letting a computation that has run keep only its basis rows, loading its
-  inputs again when a change dirties it, is the design in the introduction
-  applied to a demanded piece's computations; it is the largest item left and
-  a change to what the scheduler keeps, not to storage.
+  Letting a computation that has run keep only a record of what it read,
+  loading its inputs again when a change dirties it, is the design in the
+  introduction applied to a demanded piece's computations; it is the largest
+  item left. The store keeps no such record, so the step defines its own, in
+  memory or in a durable index.
 - One settled transaction per create, 21 KB now that it releases its
   preparation records (under "Landed"): its journal and the rest of its own
   fields. It is the transaction of the start of a map element, which the

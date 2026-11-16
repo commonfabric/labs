@@ -466,8 +466,8 @@ describe("stage G outbox + sqlite discharge", () => {
     // Contribution 1: writes x and stages an append. Its x write will be
     // SUPERSEDED per-doc — and per §3d (RULED 2026-08-05) the drop
     // re-arms nothing, so nothing would ever re-run this producer to
-    // re-emit: like its basis rows ("its reads are true"), its append
-    // MUST still ride the wave.
+    // re-emit: its reads are true, so its append MUST still ride the
+    // wave.
     const tx1 = runtime.edit();
     stampWaveRunContext(tx1, { actionId: "derive-x", kind: "derivation" });
     x.withTx(tx1).set({ value: 10 });
@@ -524,7 +524,7 @@ describe("stage G outbox + sqlite discharge", () => {
     expect(outcome.aborted).toBeUndefined();
     // Contribution 1: per-doc superseded (its only doc — disposition
     // "dropped" via the all-dropped path) yet still a structural
-    // survivor: basis rows and appends ride. Contribution 2:
+    // survivor: its appends ride. Contribution 2:
     // dependency-dropped whole — excluded.
     expect(outcome.supersededWrites).toBe(1);
     expect(outcome.dependencyDroppedWrites).toBe(1);

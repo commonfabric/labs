@@ -842,9 +842,8 @@ ordered gates (Phase 7 task 1), which no longer gate landing.
   the serving loop marks the WRITERS of demanded instances as demand
   roots (a new `isDemandRoot` disjunct, bracketed per serving-loop.md
   §8) and runs the ones NOT CURRENT for a demanding pair (B7's
-  per-instance clean bit; the basis index is the same predicate at
-  activation); those runs' own reads pull upstream and dirty downstream
-  — the client-side scheduler's model; structure changes ride the
+  per-instance clean bit); those runs' own reads pull upstream and dirty
+  downstream — the client-side scheduler's model; structure changes ride the
   tracker's push-time re-traversal and a run's own read of a newly
   linked doc; NO structural-versus-value distinction anywhere. The
   former (d) — the STRUCTURAL WALK (one walk node per (scope-name, root
@@ -1301,11 +1300,9 @@ Tasks:
       batch-4 fan-out closure was CORRECTED: the discovering wave
       writes the redirect AND its own run's instance, and W waits on
       demanded siblings (scopes.md §2). The residual open that
-      remains is session-data GC — the basis-index DDL is authored
-      in serving-loop.md §3b — and that GC must cover non-session
-      keys too. **Owner modeling ruling 2026-08-03 — the transaction
-      identity model (protocol.md §1) — closed the two remaining
-      ledger items:** LD5 (the read row is RATIFIED as the read half
+      remains is session-data GC. **Owner modeling ruling 2026-08-03 —
+      the transaction identity model (protocol.md §1) — closed the two
+      remaining ledger items:** LD5 (the read row is RATIFIED as the read half
       of the server-driven commit variant — a protocol change, and
       the intended one) and LD3 (the `scope_key` format is PROTOCOL
       vocabulary, defined once in the wire-shape module
@@ -1709,7 +1706,7 @@ after this phase's, the way stage C's train was cut):**
       consumes the SpaceServer's demanded-identity registry through
       the widened seam and runs a demanded action once per instance,
       each run stamped with its instance's identity and ACTING pair —
-      instances live in keys/basis rows/stamps, never as extra graph
+      instances live in keys/stamps, never as extra graph
       nodes, C11b), the LT6 acting inheritance at the event-dispatch
       choke point, and the F1 piece-start surfacing (§3d's
       piece-start site, RULED 2026-08-13). The demand-cycle terminal
@@ -1723,8 +1720,8 @@ after this phase's, the way stage C's train was cut):**
       LOCAL read-set/dirtiness precision remain owed together —
       they are one leg (a scoped doc's local state still collapses
       per scope name at cardinality > 1), tracked as the narrowed
-      OW17 residue; engine-side instancing (keys, basis rows,
-      annotations, carriages) is exact at any cardinality.
+      OW17 residue; engine-side instancing (keys, annotations,
+      carriages) is exact at any cardinality.
 
 Success criteria (the old Phase-1 ON gates land here, merged):
 

@@ -22,9 +22,8 @@ piece:
   cell-flip wakes by instance and to tell pattern readers from internal
   machinery (plan B; `runner.ts schedulerObservationIdentity`).
 
-Server-execution v2 keys the basis index's per-instance rows by the same
-durable action identity
-([serving-loop.md §3b](../server-side-execution/serving-loop.md)), so the
+Server-execution v2 names each run by the same durable action identity
+([serving-loop.md §3d](../server-side-execution/serving-loop.md)), so the
 invariant stays load-bearing after the persisted-observation form's
 deletion.
 

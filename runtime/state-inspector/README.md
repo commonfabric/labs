@@ -267,10 +267,13 @@ A standalone `cli.ts` entry exists for use outside the `cf` CLI (local only;
 
 ## Known characteristics
 
-- **The scheduler basis index is the only durable scheduler state** besides the
-  watermark machinery (serving-loop.md §3b). The summary surface reports its
-  presence and row count; a pre-migration snapshot without the table degrades
-  gracefully — absence is a store from before the migration, not a broken DB.
+- **The store keeps no scheduler state** besides the watermark machinery
+  (serving-loop.md §3b). The `scheduler_basis` table is an empty table, and
+  opening a store through the engine clears it; the summary surface reports its
+  presence and row count, which is nonzero only for a store an earlier build
+  wrote that the engine has not opened since. A pre-migration snapshot without
+  the table degrades gracefully — absence is a store from before the migration,
+  not a broken DB.
 - **Space-wide scans are capped** at `--limit` (5,000 by default) for cost, and
   every one of them says so: `entities`, `graph`, and `html` note a capped
   result on stderr in both human and `--json` mode, `graph --json` also carries

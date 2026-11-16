@@ -733,7 +733,7 @@ executing code. What the design guarantees instead:
 This section originally leaned on the persistent-scheduler-state work,
 which server-execution v2 Phase 1 stage C deleted (the archived account is
 [persistent-scheduler-state.md](../history/specs/persistent-scheduler-state.md);
-the durable successor is the basis index,
+the serving loop keeps no scheduler state in the store,
 [serving-loop.md §3b](server-side-execution/serving-loop.md)). What that
 changes here:
 
@@ -749,8 +749,9 @@ changes here:
   correctness cliff — is exactly what makes computed-kind entities safe for
   the serving loop's drop-on-stale wave commits (serving-loop.md §3d).
 - The knowledge layer for the server-side action runner is now the
-  server-execution v2 arc: the basis index supplies staleness, computed-kind
-  ids supply the set of entities the server is licensed to regenerate;
+  server-execution v2 arc: a fresh serving runtime recomputes what demand
+  reaches, computed-kind ids supply the set of entities the server is
+  licensed to regenerate;
   `ClientCommit.codeCID`
   supplies code identity. Execution remains the missing (and out-of-scope)
   half.

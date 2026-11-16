@@ -140,7 +140,7 @@ that nothing on it is ever a commit.
 The row would be maintained by the SpaceServer, which already sees every
 accepted commit for its space. When a wave commits a piece result carrying
 `[SCHEDULE]`, the schedule row is updated inside the same store transaction —
-the pattern the basis index already follows, where index rows travel in the
+the pattern the durable outbox rows already follow, where rows travel in the
 transaction without becoming part of the commit representation.
 
 Host boot discovery gains a third arm. Today it asks per space whether the

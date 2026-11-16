@@ -706,7 +706,7 @@ read. Under (d′) liveness must come from demand DIRECTLY:
 - **The vocabulary is already shared.** The registry key
   (`keyOf`), the dirty key (`toDirtyKey`), the query doc key's middle
   segment (`QueryDocKey`, `query.ts:48`), the notification address's
-  `scopeKey`, the basis rows' `entity_scope_key`, and the fan-out
+  `scopeKey`, and the fan-out
   instance keys (`fanOutInstances`) all speak scope-INSTANCE keys
   (key-vocabulary.md §2; scopes.md §7 M2/M4). Nothing translates.
 - **The fan-out B semantics stand.** `instances(ratchet, demanders)`,
@@ -2399,7 +2399,6 @@ acceptance changed no code.)*
 | `scheduler/fan-out.ts` `FanOutNodeState` (`instances`, `clean`, `dirtyGen`); `fanOutInstances`; `keyAtRatchet`; `keysOnChain` / `dirtyFanOutForCause`; `fanOutInstancesToRun`; `pruneFanOutInstances` | :55; :109; :187; :200 / :220; :250; :262 |
 | `scheduler/scheduling-writes.ts` `writersByEntity` (name-keyed); `forEachOverlappingWriter`; `scheduler/keys.ts` `entityNameKey` | :58; :218; :59 |
 | `scheduler/work-oracle.ts` `isInvalidOrNeverRan`; `isRunnableSchedulingSeed` | :80; :93 |
-| `memory/v2/scheduler-basis.ts` `replaceSchedulerBasisRows` | :68 |
 | `runtime.ts` `serverRunDemandersFor` → `#serverRunDemanderResolver` | :2032–2035 |
 
 ## Appendix B — evidence
