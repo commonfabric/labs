@@ -354,7 +354,7 @@ export class EngineWaveCommitSink implements WaveCommitSink {
   /**
    * Replay keying — the stage-F choice, made and enforced here: the
    * engine dedupes commits by UNIQUE (session_id, local_seq), returning
-   * the STORED result for a byte-identical replay and throwing "commit
+   * the STORED result for an identical replay and throwing "commit
    * replay mismatch" for a different one. Every sink in the process
    * shares ONE long-lived counter — `localSeqRef`, owned by the
    * ExecutorHost, starting at 0 — and uses the DR1 HOLDER identity

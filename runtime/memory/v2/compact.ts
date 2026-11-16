@@ -254,14 +254,19 @@ const BYTES_OF = (column: string): string => `length(CAST(${column} AS BLOB))`;
 /**
  * What a hollowed commit's `original` holds in place of its payload (I6): a
  * hash of the bytes it held and their length, under the run that hollowed it.
- * A client commit always carries `localSeq`, `reads` and `operations`, so
- * nothing a client writes can resemble this, and a reader of the log can
- * tell a hollowed commit from an elided write. Stage 8 of the plan answers a
- * resubmission whose bytes hash to `hash` as a replay.
+ * A stored payload is otherwise a client commit, which carries `localSeq`,
+ * `reads` and `operations`, or a digested derived commit, which still
+ * carries `localSeq` and `reads`, so neither can resemble this, and a reader
+ * of the log can tell a hollowed commit from one whose operations wrote no
+ * revision. Stage 8 of the plan answers a resubmission whose stored form
+ * hashes to `hash` as a replay.
  */
 export type HollowedPayload = {
   hollowed: {
-    /** `hashStringOf` of the original payload text. */
+    /**
+     * `hashStringOf` of the stored payload text, in whichever form it was
+     * stored.
+     */
     hash: string;
     /** The original payload's stored length in bytes. */
     bytes: number;

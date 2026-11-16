@@ -30,6 +30,7 @@ import {
   ConflictError,
   type Engine,
   open,
+  payloadDigest,
   ProtocolError,
   read,
   selectDocHead,
@@ -1083,10 +1084,16 @@ Deno.test("delegated carriage: a sessionless delegated batch carrying a session-
 });
 
 Deno.test("wave replay does not re-insert durable outbox rows: the stored result returns with replayed=true and FP1 carriage is skipped (stage-G round-2 thread 5)", async () => {
-  const { engine } = await createEngine();
+  const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
     const holder = withLiveLease(engine);
+    // An authored commit takes seq 1, so the wave lands where a derived
+    // commit is stored digested and its replay matches by digest.
+    applyCommit(engine, {
+      sessionId: "session:replay-author",
+      commit: setCommit(1, [{ id: "of:replay-author" }]),
+    });
     const options = {
       sessionId: holder,
       space: SPACE,
@@ -1107,8 +1114,13 @@ Deno.test("wave replay does not re-insert durable outbox rows: the stored result
       }],
     };
     const applied = applyWaveCommit(engine, options);
-    assertEquals(applied.seq, 1);
+    assertEquals(applied.seq, 2);
     assertEquals(applied.replayed, undefined);
+    const db = new Database(path, { readonly: true });
+    const stored = db.prepare(`SELECT original FROM "commit" WHERE seq = 2`)
+      .get<{ original: string }>()!.original;
+    db.close();
+    expect(payloadDigest(decodeMemoryBoundary(stored))?.operations).toBe(1);
     assertEquals(
       selectPendingExecutionOutboxRows(engine, { branch: "" }).length,
       1,
@@ -1136,7 +1148,7 @@ Deno.test("wave replay does not re-insert durable outbox rows: the stored result
       ...options,
       waveBasis: { basisSeq: applied.seq, rebasedHeads: [] },
     });
-    assertEquals(replayed.seq, 1);
+    assertEquals(replayed.seq, 2);
     assertEquals(replayed.replayed, true);
     assertEquals(
       selectPendingExecutionOutboxRows(engine, { branch: "" }).length,

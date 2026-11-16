@@ -1,21 +1,32 @@
+import { ChangeSet } from "@codemirror/state";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { sha256 } from "@commonfabric/content-hash";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 
 import {
   applyCommit,
   applyWaveCommit,
   close,
+  ConflictError,
   type Engine,
   open,
+  payloadDigest,
   serverSeq,
 } from "../v2/engine.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
+import { CODEMIRROR_CHANGESET_CODEC } from "../v2/operation-codec.ts";
 import {
   type ClientCommit,
+  decodeTrustedMemoryBoundary,
+  encodeMemoryBoundary,
+  operationBaselineHash,
   resetServerExecutionConfig,
   setServerExecutionConfig,
   toDocumentPath,
+  toValuePath,
 } from "../v2.ts";
 
 const SPACE = "did:key:z6Mk-derived-payload-space";
@@ -67,6 +78,18 @@ describe("derived commit payload", () => {
     close(engine);
     resetServerExecutionConfig();
   });
+
+  /** The stored payload and class of the commit at `seq`. */
+  const storedRow = (seq: number): { original: string; class: string } =>
+    engine.database.prepare(
+      `SELECT original, class FROM "commit" WHERE seq = ?`,
+    ).get<{ original: string; class: string }>(seq)!;
+
+  /** Rewrites the stored payload of the commit at `seq`. */
+  const rewritePayload = (seq: number, original: string): void => {
+    engine.database.prepare(`UPDATE "commit" SET original = ? WHERE seq = ?`)
+      .run(original, seq);
+  };
 
   const wave = (
     commit: ClientCommit,
@@ -151,6 +174,164 @@ describe("derived commit payload", () => {
       expect(() => wave(mixedCommit(2), { holder: `${holder}:other` }))
         .toThrow("stored class/holder differ");
     });
+
+    it("replays an exact resubmission against a derived row that holds the whole encoding, and refuses a changed one", () => {
+      // A row the engine stored whole, as it stores a derived commit that
+      // predates the digested form.
+      seedDerived();
+      const commit = mixedCommit(2);
+      const applied = wave(commit);
+      expect(payloadDigest(
+        decodeTrustedMemoryBoundary(storedRow(applied.seq).original),
+      )).toBeDefined();
+      rewritePayload(applied.seq, encodeMemoryBoundary(commit));
+
+      const replayed = wave(mixedCommit(2));
+
+      expect(replayed.replayed).toBe(true);
+      expect(replayed.seq).toBe(applied.seq);
+      expect(() => wave(mixedCommit(2, "second"))).toThrow(
+        "commit replay mismatch",
+      );
+    });
+  });
+
+  describe("stored form", () => {
+    it("stores a derived commit of `set`, `patch` and `delete` past seq 1 as its digested payload", () => {
+      seedDerived();
+      const commit: ClientCommit = {
+        ...mixedCommit(2),
+        preconditions: [{ kind: "entity-absent", id: "of:never" }],
+      };
+      const encoded = new TextEncoder().encode(encodeMemoryBoundary(commit));
+
+      const { seq } = wave(commit);
+
+      const row = storedRow(seq);
+      const { operations: _operations, ...kept } = commit;
+      expect(row.class).toBe("derived");
+      expect(decodeTrustedMemoryBoundary(row.original)).toEqual({
+        ...kept,
+        digest: {
+          sha256: toUnpaddedBase64url(sha256(encoded)),
+          bytes: encoded.length,
+          operations: 4,
+        },
+      });
+      expect(kept.reads.confirmed).toHaveLength(1);
+    });
+
+    it("writes each revision of a digested commit as the operation it carried", () => {
+      seedDerived();
+      const commit = mixedCommit(2);
+
+      const { seq } = wave(commit);
+
+      const revisions = engine.database.prepare(
+        `SELECT op_index, op, data FROM revision WHERE commit_seq = ?
+         ORDER BY op_index`,
+      ).all<{ op_index: number; op: string; data: string | null }>(seq);
+      expect(revisions.map((row) => ({
+        opIndex: row.op_index,
+        op: row.op,
+        data: row.data === null ? null : decodeTrustedMemoryBoundary(row.data),
+      }))).toEqual([
+        { opIndex: 0, op: "set", data: { value: { title: "first" } } },
+        {
+          opIndex: 1,
+          op: "patch",
+          data: [{ op: "replace", path: "/value/n", value: 2 }],
+        },
+        { opIndex: 2, op: "delete", data: null },
+      ]);
+    });
+
+    it("stores a derived commit at seq 1 whole", async () => {
+      const fresh = await open({
+        url: new URL(`memory://derived-payload-${crypto.randomUUID()}`),
+      });
+      try {
+        const freshHolder = executionLeaseHolder(`${SERVICE}:fresh`);
+        expect(fresh.executionLeases.acquire(SPACE, freshHolder)).toBe(true);
+        const commit = mixedCommit(1);
+
+        const { seq } = applyWaveCommit(fresh, {
+          sessionId: freshHolder,
+          space: SPACE,
+          commit: { ...commit, operations: commit.operations.slice(0, 1) },
+          commitClass: "derived",
+          holder: freshHolder,
+          waveBasis: { basisSeq: 0, rebasedHeads: [] },
+        });
+
+        expect(seq).toBe(1);
+        expect(
+          fresh.database.prepare(`SELECT original FROM "commit" WHERE seq = 1`)
+            .get<{ original: string }>()!.original,
+        ).toBe(
+          encodeMemoryBoundary({
+            ...commit,
+            operations: commit.operations.slice(0, 1),
+          }),
+        );
+      } finally {
+        close(fresh);
+      }
+    });
+
+    it("stores an authored commit past seq 1 whole", () => {
+      const commit = mixedCommit(2);
+
+      const { seq } = applyCommit(engine, {
+        sessionId: "session:author",
+        commit: { ...commit, operations: commit.operations.slice(0, 2) },
+      });
+
+      expect(storedRow(seq).original).toBe(
+        encodeMemoryBoundary({
+          ...commit,
+          operations: commit.operations.slice(0, 2),
+        }),
+      );
+    });
+
+    it("stores a derived commit carrying an `apply-op` whole", () => {
+      wave({
+        localSeq: 1,
+        reads: noReads(),
+        operations: [{
+          op: "set",
+          id: "of:collaborative",
+          value: { value: { body: "ac" } },
+        }],
+      });
+      const commit: ClientCommit = {
+        localSeq: 2,
+        reads: noReads(),
+        operations: [
+          { op: "set", id: "of:derived", value: { value: { n: 1 } } },
+          {
+            op: "apply-op",
+            id: "of:collaborative",
+            path: toValuePath(["body"]),
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            submissionId: "service:1",
+            base: null,
+            baselineHash: operationBaselineHash("ac"),
+            payload: {
+              updates: [{
+                clientId: "service",
+                changes: ChangeSet.of({ from: 1, insert: "b" }, 2).toJSON(),
+              }],
+            },
+          },
+        ],
+      };
+
+      const { seq } = wave(commit);
+
+      expect(storedRow(seq).original).toBe(encodeMemoryBoundary(commit));
+    });
   });
 
   describe("reserved wire schema references", () => {
@@ -176,6 +357,67 @@ describe("derived commit payload", () => {
           }],
         })
       ).toThrow("reserved wire schema reference");
+    });
+  });
+
+  describe("a pending read naming a digested layer", () => {
+    // The holder's own commit at localSeq 1 writes `of:p` and is stored
+    // digested. A later commit of the same session reads `of:p` through that
+    // layer from the basis before it, so the layer's stored payload is what
+    // the engine would replay the read's view from.
+
+    /** Applies the layer and returns the seq the read declares as its basis. */
+    const layer = (): number => {
+      const basisSeq = serverSeq(engine);
+      const { seq } = wave({
+        localSeq: 1,
+        reads: noReads(),
+        operations: [{ op: "set", id: "of:p", value: { value: { n: 1 } } }],
+      });
+      expect(
+        payloadDigest(decodeTrustedMemoryBoundary(storedRow(seq).original)),
+      )
+        .toBeDefined();
+      return basisSeq;
+    };
+
+    const reader = (basisSeq: number): ClientCommit => ({
+      localSeq: 2,
+      reads: {
+        confirmed: [],
+        pending: [{
+          id: "of:p",
+          path: toDocumentPath([]),
+          localSeq: [1],
+          basisSeq,
+        }],
+      },
+      operations: [{ op: "set", id: "of:q", value: { value: { n: 2 } } }],
+    });
+
+    it("is accepted when nothing was written to the document after the layer", () => {
+      const basisSeq = layer();
+
+      const applied = wave(reader(basisSeq));
+
+      expect(applied.replayed).toBeUndefined();
+      expect(applied.revisions.map((revision) => revision.id)).toEqual([
+        "of:q",
+      ]);
+    });
+
+    it("throws `ConflictError` when a foreign write lies after the declared basis", () => {
+      const basisSeq = layer();
+      applyCommit(engine, {
+        sessionId: "session:author",
+        commit: {
+          localSeq: 2,
+          reads: noReads(),
+          operations: [{ op: "set", id: "of:p", value: { value: { n: 9 } } }],
+        },
+      });
+
+      expect(() => wave(reader(basisSeq))).toThrow(ConflictError);
     });
   });
 });

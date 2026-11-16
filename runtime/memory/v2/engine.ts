@@ -37,6 +37,12 @@ import {
 import { broaderCellScopes } from "./cfc-scoped-instance-labels.ts";
 import { isCfcLabelDocumentContent } from "./cfc-stored-envelope.ts";
 import {
+  digestedPayloadOf,
+  isDigestEligible,
+  payloadDigest,
+  storedPayloadMatches,
+} from "./commit-payload.ts";
+import {
   admitsDroppedDeclaredPaths,
   droppedDeclaredPaths,
 } from "./envelope-admission.ts";
@@ -47,6 +53,7 @@ import {
   RowLabelCommitError,
 } from "./sqlite/commit-eval.ts";
 export { RowLabelCommitError } from "./sqlite/commit-eval.ts";
+export { payloadDigest } from "./commit-payload.ts";
 import {
   applyPatchToDocument,
   emptyEntityDocument,
@@ -6408,16 +6415,19 @@ const applyCommitTransaction = (
   // NEW derived commits, and a network retry of an already-ACCEPTED one must
   // keep its stored answer after the producing lease was released or
   // succeeded by a new holder. The stored
-  // identity spans the payload bytes (sameStoredOriginal) AND the admission
-  // envelope (class; for derived, the producing holder): a same-key
-  // resubmission differing in either is a DIFFERENT submission and is
-  // refused, never answered.
+  // identity spans the payload (storedPayloadMatches, which compares a
+  // digested derived payload by its digest) AND the admission envelope
+  // (class; for derived, the producing holder): a same-key resubmission
+  // differing in either is a DIFFERENT submission and is refused, never
+  // answered.
   const existing = engine.statement("selectExistingCommit").get({
     session_id: sessionKey,
     local_seq: commit.localSeq,
   }) as CommitRow | undefined;
   if (existing) {
-    if (!sameStoredOriginal(existing.original, commit)) {
+    if (
+      !storedPayloadMatches(existing, commit, encodeMemoryBoundary(commit))
+    ) {
       throw new ProtocolError(
         `commit replay mismatch for session ${sessionId} localSeq ${commit.localSeq}`,
       );
@@ -7444,7 +7454,13 @@ const applyCommitTransaction = (
         if (row === undefined || (row.branch || DEFAULT_BRANCH) !== branch) {
           return { known: false };
         }
-        const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
+        const stored = decodeTrustedMemoryBoundary(row.original);
+        // A digested layer keeps no operations to replay, which leaves its
+        // view of the document as unknown as a missing layer does.
+        if (row.class === "derived" && payloadDigest(stored) !== undefined) {
+          return { known: false };
+        }
+        const layer = stored as ClientCommit;
         for (const operation of layer.operations) {
           if (operation.op === "sqlite" || !sameDocument(operation)) continue;
           // An op-field operation on the document is not replayable here.
@@ -7694,7 +7710,10 @@ const applyCommitTransaction = (
   const authorizationRef = engine.legacyCommitMetadataRefsRequired
     ? LEGACY_EMPTY_AUTHORIZATION_REF
     : null;
-  const original = encodeMemoryBoundary(commit);
+  const encoded = encodeMemoryBoundary(commit);
+  const original = isDigestEligible(commit, commitClass, seq)
+    ? digestedPayloadOf(commit, encoded)
+    : encoded;
   const resolution = encodeMemoryBoundary(
     resolvedPendingReads.length > 0 ? { seq, resolvedPendingReads } : { seq },
   );
@@ -7823,8 +7842,8 @@ const applyCommitTransaction = (
     // stream `seq` (this commit's) and admission-resolved `firedAt`
     // written into a CLONE of the op — the caller's operation objects are
     // shared with replica overlays and stay pristine; `original` (encoded
-    // above, pre-stamp) records the as-received payload so replay
-    // comparison stays stable.
+    // above, pre-stamp) records the as-received payload, or its digest, so
+    // replay comparison stays stable.
     const stamps = eventAppendPlan.get(opIndex);
     const appendStamped = stamps === undefined
       ? operation
@@ -7876,7 +7895,9 @@ const applyCommitTransaction = (
     });
   }
 
-  validateStoredSyncSchemaRefs(engine, branch, revisions, original);
+  // The whole encoding, never a digested payload: the guard reads every
+  // string the operations carry out of it.
+  validateStoredSyncSchemaRefs(engine, branch, revisions, encoded);
 
   // Per-stream `eventWatermark` maintenance (Phase 3; events.md §4): a
   // DERIVED commit that touched a stream sidecar has its watermark
@@ -8642,7 +8663,12 @@ const identityLayerBasis = (
     }) as CommitRow | undefined;
     if (row === undefined || row.seq <= identityBasis) continue;
     if ((row.branch || DEFAULT_BRANCH) !== branch) continue;
-    const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
+    const stored = decodeTrustedMemoryBoundary(row.original);
+    // A digested layer keeps no operations to prove an identity from.
+    if (row.class === "derived" && payloadDigest(stored) !== undefined) {
+      continue;
+    }
+    const layer = stored as ClientCommit;
     const opIndexes: number[] = [];
     let replayable = true;
     for (const [opIndex, operation] of layer.operations.entries()) {
@@ -10023,13 +10049,6 @@ const decodeStoredDocument = (data: string | null): EntityDocument =>
 
 const decodeStoredPatchList = (data: string | null): PatchOp[] =>
   decodeStoredPatchListPayload(decodeTrustedMemoryBoundary, data);
-
-const sameStoredOriginal = (
-  stored: string,
-  incoming: ClientCommit,
-): boolean => {
-  return stored === encodeMemoryBoundary(incoming);
-};
 
 const revisionKey = (
   branch: BranchName,
