@@ -89,6 +89,7 @@ import type {
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcMetadata,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -3190,6 +3191,22 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * @throws On any of the requirements above, on an unreadable envelope, and
    *   on everything `planConfidentialityRelease()` refuses.
    */
+  /**
+   * The repair of a compile-cache record a flow stamp labeled: writes
+   * `replacement`'s value and label envelope over the document `target` names,
+   * or deletes the document when `replacement` is absent, inside the
+   * privileged system-write scope. Requires the transaction's current
+   * implementation identity to be the `compile-cache-repair` builtin. The
+   * caller, `repairCompileCacheStamps()`, computes the replacement from the
+   * verified closure; this method trusts it.
+   *
+   * @throws When the identity is not the repair's.
+   */
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; id: URI; scope?: CellScope },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void;
+
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease;

@@ -41,6 +41,7 @@ import {
   type ModuleDelegationMap,
   moduleDelegationsFromDocs,
   planCompileCacheWriteChunks,
+  repairCompileCacheStamps,
   ROOT_LINK_SPECIFIER,
   sourceClosureNeedsParser,
   type SourceDoc,
@@ -2741,6 +2742,53 @@ export class PatternManager {
       if (parserNeeded) await ensureCompilerStack();
     } finally {
       tx.abort("source closure verification prepared");
+    }
+    for (const identity of new Set(identities)) {
+      if (PatternManager.isKeylessPatternIdentity(identity)) continue;
+      await this.#repairCompileCacheStamps(space, identity);
+    }
+  }
+
+  /**
+   * Helper for `prepareSourceClosureVerification()`, which repairs the
+   * compile-cache records of `identity`'s closure in `space` that a flow stamp
+   * labeled (`repairCompileCacheStamps()`), so that the verification and setup
+   * that follow read them unlabeled. A repair this session may not commit, as
+   * in a read-only session, is logged and leaves the records as they were.
+   */
+  async #repairCompileCacheStamps(
+    space: MemorySpace,
+    identity: string,
+  ): Promise<void> {
+    try {
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      const outcome = await repairCompileCacheStamps(
+        this.#runtime,
+        space,
+        identity,
+        runtimeVersion,
+        (tx) =>
+          this.#runtime.stampServerRun(tx, {
+            actionId: `compile-cache/stamp-repair/${identity}`,
+            kind: "bookkeeping",
+            directCommit: true,
+          }),
+      );
+      if (outcome !== "clean" && outcome !== "unverified") {
+        logger.debug("compile-cache-stamp-repair", () => [
+          `entry=${identity}`,
+          `space=${space}`,
+          outcome,
+        ]);
+      }
+    } catch (error) {
+      logger.warn("compile-cache-stamp-repair-failed", () => [
+        `entry=${identity}`,
+        `space=${space}`,
+        error,
+      ]);
     }
   }
 

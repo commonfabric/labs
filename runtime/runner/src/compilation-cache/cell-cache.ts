@@ -11,7 +11,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
-import type { JSONSchema } from "../builder/types.ts";
+import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
 import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
@@ -19,11 +19,16 @@ import {
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   runtimeWritePolicyAuthorization,
 } from "../cfc/types.ts";
+import type { CfcMetadata, LabelMapEntry } from "../cfc/types.ts";
 import {
   compilerStackLoaded,
   ensureCompilerStack,
 } from "../harness/deferred-compiler-stack.ts";
-import { computeModuleHashes } from "../harness/module-identity.ts";
+import {
+  computeModuleHashes,
+  normalizeSource,
+  resolveModuleImports,
+} from "../harness/module-identity.ts";
 import type { CacheableModule } from "../harness/types.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
 import { formerPatternKey } from "../pattern-key-moves.ts";
@@ -40,13 +45,22 @@ import {
   deriveModuleRecordFields,
   SOURCE_ROOT_SPECIFIER,
 } from "../sandbox/module-record-compiler.ts";
-import type { SigilLink } from "../sigil-types.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
+import type { SigilLink, URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { isInternalVerifierRead } from "../storage/reactivity-log.ts";
+import {
+  getTransactionReadActivities,
+  getTransactionWriteAttempts,
+} from "../storage/transaction-inspection.ts";
 import {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
-import { COMPILE_CACHE_WRITER } from "./writer-identity.ts";
+import {
+  COMPILE_CACHE_REPAIR_WRITER,
+  COMPILE_CACHE_WRITER,
+} from "./writer-identity.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 
 const logger = getLogger("cell-cache");
@@ -1854,10 +1868,9 @@ function effectiveModuleDelegationsForWrite(
  * transition has committed, so that `tx` reads nothing but cache records:
  * whatever else it read would label the records it writes.
  *
- * TODO: Records a source transition stamped while it staged this on its own
- * transaction keep that stamp, which this write leaves as it is, and a setup
- * that reads them is refused (`compile-cache-record-labels.test.ts`). A
- * repair that drops those stamps is to follow.
+ * A record a source transition stamped while it staged this on its own
+ * transaction keeps that stamp through this write; the load ahead of the next
+ * setup repairs it (`repairCompileCacheStamps()`).
  */
 export function stageModuleDelegations(
   runtime: Runtime,
@@ -2453,4 +2466,520 @@ function sourceImportAttestationsFromDocs(
     if (doc.sourceImports !== undefined) out.set(identity, doc.sourceImports);
   }
   return out;
+}
+
+/** What {@link repairCompileCacheStamps} did for a closure. */
+export type CompileCacheStampRepair =
+  /** No record of the closure holds a flow stamp. */
+  | "clean"
+  /** Every stamped record was rewritten or erased. */
+  | "repaired"
+  /** The closure is absent, or did not verify. */
+  | "unverified"
+  /** A record holds something the repair does not make canonical. */
+  | "refused"
+  /** A record changed after verification, or the commit failed. */
+  | "conflicted";
+
+/** The label-entry origins a flow stamp is left in. */
+const STAMP_ORIGINS: ReadonlySet<string> = new Set(["derived", "structure"]);
+
+/** The fields the compile-cache writer writes on a source record. */
+const SOURCE_RECORD_FIELDS: ReadonlySet<string> = new Set([
+  "kind",
+  "identity",
+  "code",
+  "filename",
+  "imports",
+  "delegatedModuleIdentities",
+]);
+
+/** Whether `entry` holds a confidentiality clause. */
+const holdsConfidentiality = (entry: LabelMapEntry): boolean =>
+  Array.isArray(entry.label.confidentiality) &&
+  entry.label.confidentiality.length > 0;
+
+/** Whether `entry` is the compiler's attestation at `path`, of any origin. */
+const attestsAt = (
+  entry: LabelMapEntry,
+  path: readonly string[],
+): boolean =>
+  entry.path.length === path.length &&
+  entry.path.every((segment, index) => segment === path[index]) &&
+  Array.isArray(entry.label.integrity) &&
+  entry.label.integrity.some((atom) => atom === COMPILED_INTEGRITY_ATOM);
+
+/** Whether `metadata` holds a flow stamp: a clause in a stamp entry. */
+const holdsStamp = (metadata: CfcMetadata | undefined): boolean =>
+  metadata?.labelMap.entries.some((entry) =>
+    STAMP_ORIGINS.has(entry.origin ?? "") && holdsConfidentiality(entry)
+  ) ?? false;
+
+/** The document id a stored import's sigil link names, if it is one. */
+const linkTargetId = (link: unknown): string | undefined => {
+  const parsed = isObjectOrArray(link)
+    ? (link as Record<string, Record<string, { id?: unknown }>>)["/"]
+      ?.["link@1"]
+    : undefined;
+  return typeof parsed?.id === "string" ? parsed.id : undefined;
+};
+
+/** One record the repair writes, and what it read there when it verified. */
+interface StampRepairTarget {
+  readonly space: MemorySpace;
+  readonly id: URI;
+  readonly scope: CellScope;
+
+  /** The whole stored document the verification read. */
+  readonly expectedHash: string;
+
+  /** The canonical source record, or nothing for an erase. */
+  readonly source?: {
+    readonly value: Omit<StoredSourceDoc, "code">;
+    readonly code: string;
+    readonly cfc: CfcMetadata;
+  };
+}
+
+/**
+ * Repairs the compile-cache records of the closure of `entryIdentity` in
+ * `space` that a flow stamp labeled: erases each stamped compiled record of
+ * `runtimeVersion`, and rewrites each stamped source record to the value the
+ * compile-cache writer stores for its identity, computed from the verified
+ * closure. The rules are `docs/specs/module-loading.md`'s "Repairing a stamped
+ * record".
+ *
+ * Verification runs in a transaction of its own, which is aborted. The
+ * repair's transaction then reads each record it writes whole, refuses to
+ * write over one that changed since, writes nothing else, and commits without
+ * an explicit preparation. `stamp` stamps that transaction for a serving
+ * runtime, as a cache write-back is stamped.
+ */
+export async function repairCompileCacheStamps(
+  runtime: Runtime,
+  space: MemorySpace,
+  entryIdentity: string,
+  runtimeVersion: string | undefined,
+  stamp: (tx: IExtendedStorageTransaction) => void = () => {},
+): Promise<CompileCacheStampRepair> {
+  const verify = runtime.edit();
+  let plan: StampRepairTarget[] | CompileCacheStampRepair;
+  try {
+    plan = await planStampRepair(
+      runtime,
+      space,
+      entryIdentity,
+      runtimeVersion,
+      verify,
+    );
+  } finally {
+    verify.abort("compile-cache stamp repair verified");
+  }
+  if (typeof plan === "string") return plan;
+
+  const tx = runtime.edit();
+  try {
+    stamp(tx);
+    setCfcImplementationIdentity(tx, {
+      kind: "builtin",
+      builtinId: COMPILE_CACHE_REPAIR_WRITER,
+    });
+    for (const target of plan) {
+      const current = tx.readOrThrow({
+        space: target.space,
+        id: target.id,
+        scope: target.scope,
+        type: "application/json",
+        path: [],
+      });
+      if (taggedHashStringOf(current as FabricValue) !== target.expectedHash) {
+        tx.abort("compile-cache stamp repair: a record changed");
+        return "conflicted";
+      }
+    }
+    for (const target of plan) {
+      tx.writeRepairedCompileCacheRecord(
+        target,
+        target.source === undefined ? undefined : {
+          value: {
+            ...target.source.value,
+            code: codeLink(space, target.source.code, tx),
+          } as unknown as FabricValue,
+          cfc: target.source.cfc,
+        },
+      );
+    }
+    if (!readsOnlyWhatItWrites(tx, plan)) {
+      tx.abort("compile-cache stamp repair: read beyond its records");
+      return "refused";
+    }
+    runtime.prepareTxForCommit(tx);
+    const { error } = await tx.commit().settled;
+    if (error !== undefined) {
+      logger.debug("compile-cache-stamp-repair-refused", () => [
+        `entry=${entryIdentity}`,
+        error,
+      ]);
+      return "conflicted";
+    }
+    return "repaired";
+  } catch (error) {
+    if (tx.status().status === "ready") {
+      tx.abort("compile-cache stamp repair failed");
+    }
+    throw error;
+  }
+}
+
+/**
+ * Helper for {@link repairCompileCacheStamps}, which returns whether every
+ * document `tx` read, and every document it wrote, is one of `targets`, its
+ * verifier reads and content-addressed documents aside.
+ */
+function readsOnlyWhatItWrites(
+  tx: IExtendedStorageTransaction,
+  targets: readonly StampRepairTarget[],
+): boolean {
+  const keyOf = (space: string, id: string, scope: unknown) =>
+    `${space}\0${normalizeCellScope(scope as CellScope)}\0${id}`;
+  const expected = new Set(
+    targets.map((target) => keyOf(target.space, target.id, target.scope)),
+  );
+  const read = new Set<string>();
+  for (const activity of getTransactionReadActivities(tx)) {
+    if (isInternalVerifierRead(activity.meta)) continue;
+    if (activity.id.startsWith("cid:")) continue;
+    read.add(keyOf(activity.space, activity.id, activity.scope));
+  }
+  const written = new Set<string>();
+  for (const attempt of getTransactionWriteAttempts(tx) ?? []) {
+    if (attempt.id.startsWith("cid:")) continue;
+    written.add(
+      keyOf(attempt.space, attempt.id, attempt.scope),
+    );
+  }
+  const same = (set: ReadonlySet<string>) =>
+    set.size === expected.size && [...set].every((key) => expected.has(key));
+  return same(read) && same(written);
+}
+
+/**
+ * Helper for {@link repairCompileCacheStamps}, which verifies the closure of
+ * `entryIdentity` in `tx` and returns the records to write, or why there are
+ * none.
+ */
+async function planStampRepair(
+  runtime: Runtime,
+  space: MemorySpace,
+  entryIdentity: string,
+  runtimeVersion: string | undefined,
+  tx: IExtendedStorageTransaction,
+): Promise<StampRepairTarget[] | CompileCacheStampRepair> {
+  const closure = await loadVerifiedSourceClosure(
+    runtime,
+    space,
+    entryIdentity,
+    tx,
+  );
+  if (closure === undefined) return "unverified";
+  const ownKey = (key: string) =>
+    runtime.getCell(space, key, undefined, tx).getAsNormalizedFullLink();
+  const readWhole = (link: { id: URI; scope?: CellScope }) =>
+    tx.readOrThrow({
+      space,
+      id: link.id,
+      scope: link.scope,
+      type: "application/json",
+      path: [],
+    }) as { value?: unknown } | undefined;
+
+  // Each member is read at the document its own identity keys, and every
+  // stored edge must land on the document its target's identity keys: a
+  // closure the loader assembled from documents off their keys is not one
+  // the repair may vouch for.
+  const sources = new Map<string, {
+    link: NormalizedFullLink;
+    whole: { value?: unknown } | undefined;
+    value: Record<string, unknown>;
+    metadata: CfcMetadata | undefined;
+  }>();
+  for (const [identity, doc] of closure) {
+    const link = ownKey(sourceDocKey(identity));
+    const whole = readWhole(link);
+    const value = whole?.value;
+    if (!isObjectOrArray(value) || Array.isArray(value)) return "refused";
+    const stored = value as Record<string, unknown>;
+    if (stored.identity !== identity) return "refused";
+    const storedImports = stored.imports;
+    if (
+      !Array.isArray(storedImports) ||
+      storedImports.length !== doc.imports.length
+    ) {
+      return "refused";
+    }
+    for (const [index, imp] of doc.imports.entries()) {
+      const storedImport = storedImports[index] as Record<string, unknown>;
+      if (
+        storedImport?.specifier !== imp.specifier ||
+        linkTargetId(storedImport?.link) !==
+          ownKey(sourceDocKey(imp.identity)).id
+      ) {
+        return "refused";
+      }
+    }
+    sources.set(identity, {
+      link,
+      whole,
+      value: stored,
+      metadata: readStoredCfcMetadata(tx, link),
+    });
+  }
+
+  const compiled = new Map<string, {
+    link: NormalizedFullLink;
+    whole: { value?: unknown } | undefined;
+    metadata: CfcMetadata | undefined;
+  }>();
+  if (runtimeVersion !== undefined) {
+    for (const identity of closure.keys()) {
+      const link = ownKey(compiledDocKey(runtimeVersion, identity));
+      const metadata = readStoredCfcMetadata(tx, link);
+      if (holdsStamp(metadata)) {
+        compiled.set(identity, { link, whole: readWhole(link), metadata });
+      }
+    }
+  }
+  const stampedSources = [...sources].filter(([, record]) =>
+    holdsStamp(record.metadata)
+  );
+  if (stampedSources.length === 0 && compiled.size === 0) return "clean";
+  if (stampedSources.length > 0) await ensureCompilerStack();
+
+  const dataIdentities = dataDocIdentities(closure);
+  const plan: StampRepairTarget[] = [];
+  const repairedLists = new Map<string, readonly string[]>();
+  const repairedClosure = new Map(closure);
+  for (const [identity, record] of stampedSources) {
+    const doc = closure.get(identity)!;
+    if (
+      Object.keys(record.value).some((key) => !SOURCE_RECORD_FIELDS.has(key))
+    ) {
+      return "refused";
+    }
+    if (record.value.kind !== "source") return "refused";
+    if (
+      !dataIdentities.has(identity) && normalizeSource(doc.code) !== doc.code
+    ) {
+      return "refused";
+    }
+    const metadata = record.metadata!;
+    const list = record.value.delegatedModuleIdentities;
+    const listAttested = metadata.labelMap.entries.some((entry) =>
+      attestsAt(entry, SOURCE_DELEGATION_PATH) && !holdsConfidentiality(entry)
+    );
+    const keepList = listAttested && Array.isArray(list) && list.length > 0 &&
+      list.every((entry) => typeof entry === "string");
+    const kept: LabelMapEntry[] = [];
+    for (const entry of metadata.labelMap.entries) {
+      if (STAMP_ORIGINS.has(entry.origin ?? "")) continue;
+      if (holdsConfidentiality(entry)) return "refused";
+      if (keepList && attestsAt(entry, SOURCE_DELEGATION_PATH)) {
+        kept.push(entry);
+        continue;
+      }
+      return "refused";
+    }
+    const imports = canonicalSourceImports(
+      runtime,
+      space,
+      closure,
+      identity,
+      dataIdentities,
+    );
+    if (imports === undefined) return "refused";
+    repairedClosure.set(identity, { ...doc, imports });
+    if (keepList) repairedLists.set(identity, list as string[]);
+    plan.push({
+      space,
+      id: record.link.id,
+      scope: normalizeCellScope(record.link.scope),
+      expectedHash: taggedHashStringOf(record.whole as FabricValue),
+      source: {
+        value: {
+          kind: "source",
+          identity,
+          filename: doc.filename,
+          imports: imports.map((imp) => ({
+            specifier: imp.specifier,
+            link: runtime.getCell(
+              space,
+              sourceDocKey(imp.identity),
+              undefined,
+              tx,
+            )
+              .getAsLink(),
+          })),
+          ...(keepList
+            ? { delegatedModuleIdentities: [...(list as string[])] }
+            : {}),
+        },
+        code: doc.code,
+        cfc: {
+          version: metadata.version,
+          schemaHash: metadata.schemaHash,
+          labelMap: { version: metadata.labelMap.version, entries: kept },
+        },
+      },
+    });
+  }
+  if (
+    stampedSources.length > 0 &&
+    !verifySourceDocs(
+      entryIdentity,
+      repairedClosure,
+      "",
+      (identity) => runtime.attestedSourceImports(space, identity),
+    ).ok
+  ) {
+    return "refused";
+  }
+
+  for (const [identity, record] of compiled) {
+    const metadata = record.metadata!;
+    if (
+      metadata.labelMap.entries.some((entry) =>
+        holdsConfidentiality(entry) && !STAMP_ORIGINS.has(entry.origin ?? "")
+      )
+    ) {
+      return "refused";
+    }
+    // A compiled list is authority where the record's root carries the
+    // compiler's attestation, so it is erased only where the source record
+    // still grants every identity it names.
+    const live = metadata.labelMap.entries.some((entry) => attestsAt(entry, []))
+      ? (record.whole?.value as { delegatedModuleIdentities?: unknown })
+        ?.delegatedModuleIdentities
+      : undefined;
+    if (Array.isArray(live) && live.length > 0) {
+      const source = sources.get(identity);
+      const granted = repairedLists.get(identity) ??
+        (source?.metadata?.labelMap.entries.some((entry) =>
+            attestsAt(entry, SOURCE_DELEGATION_PATH)
+          )
+          ? source.value.delegatedModuleIdentities as unknown[]
+          : undefined) ??
+        [];
+      if (!live.every((entry) => granted.includes(entry))) return "refused";
+    }
+    plan.push({
+      space,
+      id: record.link.id,
+      scope: normalizeCellScope(record.link.scope),
+      expectedHash: taggedHashStringOf(record.whole as FabricValue),
+    });
+  }
+  return plan;
+}
+
+/**
+ * Helper for {@link planStampRepair}, which returns the import edges the
+ * compile-cache writer stores on the source record of `identity`, computed
+ * from the verified `closure`: the authored edges a scan of its code yields,
+ * in scan order, then its source-root and data-file edges ordered by
+ * specifier and identity, then one cache-root edge per other module of the
+ * closure it links, ordered by identity. Returns `undefined` when its own
+ * view does not resolve.
+ */
+function canonicalSourceImports(
+  runtime: Runtime,
+  space: MemorySpace,
+  closure: ReadonlyMap<string, SourceDoc>,
+  identity: string,
+  dataIdentities: ReadonlySet<string>,
+): ModuleImportRef[] | undefined {
+  const doc = closure.get(identity)!;
+  const isPackageEdge = (imp: ModuleImportRef) =>
+    imp.specifier.startsWith(SOURCE_ROOT_SPECIFIER) ||
+    imp.specifier.startsWith(DATA_FILE_SPECIFIER);
+  const isRootEdge = (imp: ModuleImportRef) =>
+    imp.specifier.startsWith(ROOT_LINK_SPECIFIER);
+
+  // The record's own view, as verification builds it.
+  const viewIds: string[] = [];
+  const seen = new Set<string>();
+  const queue = [identity];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const member = closure.get(id);
+    if (member === undefined) return undefined;
+    viewIds.push(id);
+    for (const imp of member.imports) {
+      if (!isRootEdge(imp)) queue.push(imp.identity);
+    }
+  }
+  const identityByFilename = new Map<string, string>();
+  for (const id of viewIds) {
+    const filename = closure.get(id)!.filename;
+    if (identityByFilename.has(filename)) return undefined;
+    identityByFilename.set(filename, id);
+  }
+
+  const authored: ModuleImportRef[] = [];
+  if (!dataIdentities.has(identity)) {
+    const declarations = new Map<string, { imports: readonly string[] }>();
+    for (const id of viewIds) {
+      const imports = runtime.attestedSourceImports(space, id);
+      if (imports !== undefined) {
+        declarations.set(closure.get(id)!.filename, { imports });
+      }
+    }
+    const edges = resolveModuleImports(
+      {
+        main: doc.filename,
+        files: viewIds.map((id) => ({
+          name: closure.get(id)!.filename,
+          contents: closure.get(id)!.code,
+        })),
+      },
+      {
+        dataFiles: new Set(
+          viewIds.filter((id) => dataIdentities.has(id)).map((id) =>
+            closure.get(id)!.filename
+          ),
+        ),
+        ...(declarations.size === 0 ? {} : { declarations }),
+      },
+    );
+    const own = edges.get(doc.filename);
+    if (own === undefined) return undefined;
+    for (const dep of own.internalDeps) {
+      const target = identityByFilename.get(dep.target);
+      if (target === undefined) return undefined;
+      authored.push({ specifier: dep.specifier, identity: target });
+    }
+  }
+  const byKey = (a: ModuleImportRef, b: ModuleImportRef) =>
+    a.specifier < b.specifier
+      ? -1
+      : a.specifier > b.specifier
+      ? 1
+      : a.identity < b.identity
+      ? -1
+      : a.identity > b.identity
+      ? 1
+      : 0;
+  const packages = doc.imports.filter(isPackageEdge).sort(byKey);
+  const roots = [
+    ...new Set(
+      doc.imports.filter(isRootEdge).map((imp) => imp.identity).filter((id) =>
+        id !== identity && closure.has(id)
+      ),
+    ),
+  ].sort().map((id) => ({
+    specifier: `${ROOT_LINK_SPECIFIER}${id}`,
+    identity: id,
+  }));
+  return [...authored, ...packages, ...roots];
 }

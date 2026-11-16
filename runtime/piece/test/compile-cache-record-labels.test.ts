@@ -287,12 +287,23 @@ describe("compile-cache-record-labels", () => {
     ];
 
     /**
+     * The root pair alone, as measured on the source records of a real space
+     * whose records a write-back left stamped: {@link writeBackStamp} without
+     * the existence entries at the delegation list.
+     */
+    const rootPairStamp = (atom: unknown): FabricValue[] =>
+      writeBackStamp(atom).filter((entry) =>
+        (entry as { path: unknown[] }).path.length === 0
+      );
+
+    /**
      * Updates a piece onto `confidentialArgumentProgram("v2")` and plants
-     * `entries` on the successor's source and compiled records, and returns
-     * their keys.
+     * `entries` on the successor's source record and, unless `sourceOnly`,
+     * its compiled record, and returns the keys of both.
      */
     const stampedSuccessor = async (
       entries: FabricValue[],
+      sourceOnly = false,
     ): Promise<string[]> => {
       const first = strictRuntime();
       const firstPieces = await controllerOn(first);
@@ -315,7 +326,7 @@ describe("compile-cache-record-labels", () => {
         sourceDocKey(successor),
         compiledDocKey(version!, successor),
       ];
-      for (const key of keys) {
+      for (const key of sourceOnly ? keys.slice(0, 1) : keys) {
         await plantEntries(
           first,
           recordConfidentiality(first, key).id,
@@ -326,13 +337,18 @@ describe("compile-cache-record-labels", () => {
     };
 
     for (
-      const [left, entries] of [
-        ["a source update", updateStamp(UNDECLARED_ATOM)],
-        ["a write-back", writeBackStamp(UNDECLARED_ATOM)],
+      const [left, entries, sourceOnly] of [
+        ["a source update", updateStamp(UNDECLARED_ATOM), false],
+        ["a write-back", writeBackStamp(UNDECLARED_ATOM), false],
+        [
+          "a write-back at the source record's root",
+          rootPairStamp(UNDECLARED_ATOM),
+          true,
+        ],
       ] as const
     ) {
       it(`commits a fresh setup of the successor over the label ${left} left, and leaves no label stored`, async () => {
-        const keys = await stampedSuccessor(entries);
+        const keys = await stampedSuccessor(entries, sourceOnly);
         const second = strictRuntime();
         const secondPieces = await controllerOn(second);
         const fresh = await secondPieces.create(
