@@ -783,6 +783,8 @@ export class Instance {
   readonly #checking = new Set<string>();
   /** The element table of each collection, by the keys around it. */
   readonly #tables = new Map<string, Element[]>();
+  /** The elements of an assembled result, with their keys, by the array. */
+  readonly #membersOf = new WeakMap<object, Element[]>();
   /** The state cells that exist, by the identifier of their document. */
   readonly #cells = new Map<string, { cell: number; keys: string[] }>();
   readonly #queue: { stream: StreamRef; event: unknown }[] = [];
@@ -1387,6 +1389,9 @@ export class Instance {
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
     if (kind === "assembly") this.counts.assemblies += 1;
+    if (host.members !== undefined && Array.isArray(value)) {
+      this.#membersOf.set(value, host.members);
+    }
     if (kind === "value") {
       this.trace.push(
         cone === undefined ? "result" : this.plan.cones[cone].entry,
@@ -1646,6 +1651,14 @@ export class Instance {
       const held = source.output !== undefined
         ? host.output(source.output)
         : undefined;
+      // A cone that passes the assembled result of a construct on
+      // unchanged passes its elements on with their keys.
+      const passed = typeof held === "object" && held !== null
+        ? this.#membersOf.get(held)
+        : undefined;
+      if (passed !== undefined) {
+        return passed.map((member, index) => ({ ...member, index }));
+      }
       const array = held instanceof Ref
         ? this.#positions(held, host)
         : Array.isArray(held)

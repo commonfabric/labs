@@ -525,3 +525,32 @@ describe("a cone with side-writes", () => {
     expect(instance.documents()).toEqual({ "argument": 1, "result": 1 });
   });
 });
+
+describe("a value read under a schema", () => {
+  it("keeps the address of a member, so a handler finds it again", async () => {
+    // The handler of `fixtures/element-resolved.tsx` and the like read a
+    // list through a handle whose schema describes the members. A member
+    // read that way is the stored one: `equals` and `remove` find it.
+    const { Ref, Store } = await import("../store.ts");
+    const store = new Store();
+    store.create("d", "argument", { items: [{ title: "a" }, { title: "b" }] });
+    const schema = {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          done: { type: "boolean", default: false },
+        },
+      },
+    };
+
+    const read = store.read(new Ref("d", ["items"], schema)) as object[];
+
+    expect(read).toEqual([{ title: "a", done: false }, {
+      title: "b",
+      done: false,
+    }]);
+    expect(store.addresses.get(read[1])?.path).toEqual(["items", "1"]);
+  });
+});

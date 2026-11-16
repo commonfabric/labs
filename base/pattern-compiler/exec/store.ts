@@ -27,10 +27,15 @@ export const schemaBelow = (
     : schema.properties?.[segment];
 };
 
-/** A value with the defaults its schema declares for what it lacks. */
+/**
+ * A value with the defaults its schema declares for what it lacks. A
+ * container no default is filled in below is returned as it is. Where
+ * one is, the container is copied, and `copied` is told of the copy.
+ */
 export const withDefaults = (
   value: unknown,
   schema: Schema | undefined,
+  copied?: (from: object, to: object) => void,
 ): unknown => {
   if (typeof schema !== "object") return value;
   if (value === undefined) {
@@ -39,15 +44,24 @@ export const withDefaults = (
       : structuredClone(schema.default);
   }
   if (isRecord(value) && schema.properties !== undefined) {
-    const filled: Record<string, unknown> = { ...value };
+    let filled: Record<string, unknown> | undefined;
     for (const [name, member] of Object.entries(schema.properties)) {
-      const given = withDefaults(filled[name], member);
-      if (given !== undefined) filled[name] = given;
+      const given = withDefaults(value[name], member, copied);
+      if (given === value[name]) continue;
+      filled ??= { ...value };
+      filled[name] = given;
     }
+    if (filled === undefined) return value;
+    copied?.(value, filled);
     return filled;
   }
   if (Array.isArray(value) && schema.items !== undefined) {
-    return value.map((member) => withDefaults(member, schema.items));
+    const filled = value.map((member) =>
+      withDefaults(member, schema.items, copied)
+    );
+    if (filled.every((member, index) => member === value[index])) return value;
+    copied?.(value, filled);
+    return filled;
   }
   return value;
 };
@@ -222,9 +236,15 @@ export class Store {
     const id = `${located.ref.doc}\u0000${located.ref.path.join("\u0000")}`;
     if (open.has(id)) return undefined;
     open.add(id);
+    // A container that is copied to fill in a default keeps the address
+    // it was read from.
     const value = withDefaults(
       this.#copy(located.value, reads, open, located.ref),
       located.ref.schema,
+      (from, to) => {
+        const address = this.addresses.get(from);
+        if (address !== undefined) this.addresses.set(to, address);
+      },
     );
     open.delete(id);
     if (typeof value === "object" && value !== null) {
