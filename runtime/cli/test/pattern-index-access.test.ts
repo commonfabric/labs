@@ -200,6 +200,29 @@ describe("pattern-index-access", () => {
       expect(await store.rootKey()).toBeUndefined();
     });
 
+    it("throws for a chain rooted elsewhere than the membership already recorded", async () => {
+      const mine = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: mine.did(),
+      });
+      const other = await Identity.fromPassphrase("pattern-index access root");
+      const chain = await issueIndexChain({
+        issuer: other,
+        to: secondMachine.did(),
+        held: [],
+      });
+      await expect(adoptIndexChain({
+        baseUrl: BASE,
+        signer: secondMachine,
+        store,
+        fetchFn: new FakePatternIndex().fetchFn,
+        chain,
+      })).rejects.toThrow("already holds a membership");
+      expect((await store.membership())!.root).toBe(mine.did());
+    });
+
     it("throws for a chain whose command is not exactly /index, keeping nothing", async () => {
       const root = await Identity.fromPassphrase("pattern-index access root");
       const broad = await issueDelegation(root, {
