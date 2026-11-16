@@ -1,34 +1,20 @@
 /**
- * Joining the pattern index from `cf`: redeeming an invite with a key made
- * for the index alone, or adopting a chain the person's root issued on
- * another machine.
+ * Joining the pattern index: redeeming an invite with a key made for the
+ * index alone, or adopting a chain the person's root issued on another
+ * machine. `cf index join` and Loom's helper (`cli.ts`) both join this way,
+ * into the same local store, so one person ends with one root whichever
+ * they ran first.
  */
 
 import type { DIDKey } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import {
-  PatternIndexClient,
-  type PatternIndexMember,
-} from "@commonfabric/pattern-index/client";
+import { PatternIndexClient, type PatternIndexMember } from "./client.ts";
 import {
   openPatternIndexClient,
   type PatternIndexAccessOptions,
-} from "@commonfabric/pattern-index/access";
-import {
-  checkIndexChain,
-  indexProofs,
-} from "@commonfabric/pattern-index/membership";
-import {
-  PatternIndexStore,
-  patternIndexStoreDir,
-} from "@commonfabric/pattern-index/store";
-
-export {
-  chainForSigner,
-  DEFAULT_PATTERN_INDEX_URL,
-  openPatternIndexClient,
-  resolvePatternIndexUrl,
-} from "@commonfabric/pattern-index/access";
+} from "./access.ts";
+import { checkIndexChain, indexProofs } from "./membership.ts";
+import { PatternIndexStore, patternIndexStoreDir } from "./store.ts";
 
 /** An invite as its link carries it. */
 export interface IndexInvite {
@@ -37,20 +23,39 @@ export interface IndexInvite {
 }
 
 /**
+ * A join refused, with the HTTP-style status a caller answering in the
+ * helper's shape reports: 400 for a link or chain that is not one, 409 for a
+ * membership that conflicts with the one already kept here, and the index's
+ * own status for a redemption it refused. The message never quotes the
+ * invite code.
+ */
+export class JoinError extends Error {
+  override name = "JoinError";
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
  * The invite in `link`: `invite=` in its query and `code=` in its fragment,
  * as `createInvite` writes it.
  *
- * @throws Error that never quotes the link, since it carries the code.
+ * @throws JoinError (400) that never quotes the link, since it carries the
+ *   code.
  */
 export const parseInviteLink = (link: string): IndexInvite => {
   const url = URL.parse(link.trim());
   if (url === null) {
-    throw new Error("The invite is not a link");
+    throw new JoinError(400, "The invite is not a link");
   }
   const inviteId = url.searchParams.get("invite");
   const code = new URLSearchParams(url.hash.replace(/^#/, "")).get("code");
   if (!inviteId || !code) {
-    throw new Error(
+    throw new JoinError(
+      400,
       "The invite link carries no invite id or no code; copy the whole link, including the part after #",
     );
   }
@@ -109,7 +114,10 @@ export async function joinPatternIndex(
     try {
       member = await asRoot.redeemInvite(options.invite);
     } catch (error) {
-      throw new Error(`The index refused the invite: ${redeemRefusal(error)}`);
+      throw new JoinError(
+        redeemStatus(error),
+        `The index refused the invite: ${redeemRefusal(error)}`,
+      );
     }
     await store.recordMembership({
       handle: member.handle,
@@ -126,7 +134,8 @@ export async function joinPatternIndex(
   const member = await client.whoami();
   const recorded = (await store.membership())!;
   if (member.handle !== recorded.handle) {
-    throw new Error(
+    throw new JoinError(
+      409,
       `The index sees ${options.signer.did()} as ${member.handle}, not as the member ${recorded.handle} this machine joined as`,
     );
   }
@@ -139,6 +148,14 @@ export async function joinPatternIndex(
     storeDir: store.dir,
   };
 }
+
+/** The status a refused redemption reports: the index's own, or 502. */
+const redeemStatus = (error: unknown): number => {
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && status >= 400 && status < 500
+    ? status
+    : 502;
+};
 
 /** Why a redemption failed, in the index's terms, never the request's. */
 const redeemRefusal = (error: unknown): string => {
@@ -175,14 +192,25 @@ export async function adoptIndexChain(
   const store = options.store ??
     new PatternIndexStore(patternIndexStoreDir(options.baseUrl));
   const nowSeconds = options.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const checked = await checkIndexChain(
-    options.chain,
-    options.signer.did(),
-    nowSeconds,
-  );
+  let checked;
+  try {
+    checked = await checkIndexChain(
+      options.chain,
+      options.signer.did(),
+      nowSeconds,
+    );
+  } catch (error) {
+    throw new JoinError(
+      400,
+      `The chain is not one the index accepts from ${options.signer.did()}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const recorded = await store.membership();
   if (recorded !== undefined && recorded.root !== checked.root) {
-    throw new Error(
+    throw new JoinError(
+      409,
       `This machine already holds a membership rooted at ${recorded.root}; the chain is rooted at ${checked.root}`,
     );
   }

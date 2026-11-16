@@ -12,7 +12,7 @@ import { loadIdentity } from "../lib/identity.ts";
 import {
   openPatternIndexClient,
   resolvePatternIndexUrl,
-} from "../lib/pattern-index-access.ts";
+} from "@commonfabric/pattern-index/access";
 import {
   PatternIndexStore,
   patternIndexStoreDir,

@@ -27,7 +27,7 @@ import { setLLMUrl } from "@commonfabric/llm";
 import {
   openPatternIndexClient,
   resolvePatternIndexUrl,
-} from "./pattern-index-access.ts";
+} from "@commonfabric/pattern-index/access";
 import {
   PatternIndexStore,
   patternIndexStoreDir,

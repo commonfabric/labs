@@ -13,7 +13,7 @@ import {
   publishReportLines,
 } from "../lib/pattern-publish.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
-import { FakePatternIndex } from "./fake-pattern-index.ts";
+import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
 
 const ADDRESS = "742 Evergreen Terrace";
 const signer = await Identity.fromPassphrase("pattern publish test");

@@ -14,7 +14,7 @@ import {
   type IndexDelegationKind,
   issueIndexDelegation,
 } from "../lib/index-delegation.ts";
-import { resolvePatternIndexUrl } from "../lib/pattern-index-access.ts";
+import { resolvePatternIndexUrl } from "@commonfabric/pattern-index/access";
 import { loadPieces } from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import {

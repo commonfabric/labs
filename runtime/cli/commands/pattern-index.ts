@@ -5,13 +5,15 @@ import { isDIDKey } from "@commonfabric/identity/did";
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
 import {
+  openPatternIndexClient,
+  resolvePatternIndexUrl,
+} from "@commonfabric/pattern-index/access";
+import {
   adoptIndexChain,
   joinPatternIndex,
   type JoinResult,
-  openPatternIndexClient,
   parseInviteLink,
-  resolvePatternIndexUrl,
-} from "../lib/pattern-index-access.ts";
+} from "@commonfabric/pattern-index/join";
 import { render } from "../lib/render.ts";
 
 /** What every `cf index` subcommand takes. */

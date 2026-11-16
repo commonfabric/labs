@@ -9,15 +9,14 @@ import {
   checkIndexChain,
   issueIndexChain,
   MAX_SIGNER_LINK_SECONDS,
-} from "@commonfabric/pattern-index/membership";
+} from "../src/membership.ts";
+import { chainForSigner, resolvePatternIndexUrl } from "../src/access.ts";
 import {
   adoptIndexChain,
-  chainForSigner,
   joinPatternIndex,
   parseInviteLink,
-  resolvePatternIndexUrl,
-} from "../lib/pattern-index-access.ts";
-import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+} from "../src/join.ts";
+import { PatternIndexStore } from "../src/store.ts";
 import { FakePatternIndex } from "./fake-pattern-index.ts";
 
 const BASE = "https://index.test";
@@ -29,7 +28,7 @@ const secondMachine = await Identity.fromPassphrase(
 const LINK =
   "https://fbrc.social/index-join?invite=inv1&inviter=p-admin#code=secret-code";
 
-describe("pattern-index-access", () => {
+describe("access", () => {
   let dir: string;
   let store: PatternIndexStore;
 

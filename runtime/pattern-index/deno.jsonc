@@ -11,7 +11,8 @@
     "./privacy": "./src/privacy.ts",
     "./publish": "./src/publish.ts",
     "./store": "./src/store.ts",
-    "./access": "./src/access.ts"
+    "./access": "./src/access.ts",
+    "./join": "./src/join.ts"
   },
   "tasks": {
     "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",

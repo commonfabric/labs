@@ -1,6 +1,6 @@
 /**
- * An in-memory pattern index behind a fetch function, for tests of `cf`'s
- * index commands. It verifies each call's CF1 signature and, when the body
+ * An in-memory pattern index behind a fetch function, for tests of the index's
+ * clients: `cf`'s commands and Loom's helper. It verifies each call's CF1 signature and, when the body
  * carries `proofs`, holds the chain to the index's rules through the same
  * `checkIndexChain` the client uses, so a call the real index would refuse
  * is refused here too. It answers only the functions `cf` calls.
@@ -12,9 +12,9 @@ import type {
   PatternIndexListedPattern,
   PatternIndexListing,
   PatternIndexPublishRequest,
-} from "@commonfabric/pattern-index/client";
-import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
-import { checkIndexChain } from "@commonfabric/pattern-index/membership";
+} from "../src/client.ts";
+import type { PatternIndexFetch } from "../src/http-fetch.ts";
+import { checkIndexChain } from "../src/membership.ts";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
 /** One stored publication, with the member who published it. */

@@ -179,9 +179,9 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search or feedback",
+          "op must be search, feedback, whoami, admit or join",
         ],
-        [null, "op must be search or feedback"],
+        [null, "op must be search, feedback, whoami, admit or join"],
         ["{", "request body is not JSON"],
       ]
     ) {
@@ -299,6 +299,93 @@ describe("cli", () => {
     );
     expect(checked.root).toBe(root.did());
     expect(await store.chainFor(did as `did:key:${string}`)).toHaveLength(1);
+  });
+
+  it("answers whoami with the member and the signing key", async () => {
+    reply = () => Response.json({ handle: "p-1", role: "user" });
+
+    const output = await callHelper(directory, baseUrl, { op: "whoami" });
+
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: true,
+      value: { handle: "p-1", role: "user", signer: did },
+    });
+  });
+
+  it("returns 400 for admit without a did:key, calling nothing", async () => {
+    const output = await callHelper(directory, baseUrl, {
+      op: "admit",
+      did: "not-a-did",
+    });
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
+  });
+
+  it("joins with an invite link into the store, redeeming with a new index-only root", async () => {
+    const stores = `${directory}/stores`;
+    reply = (call) =>
+      Response.json(
+        call.fn === "redeemInvite"
+          ? { handle: "p-7", role: "user" }
+          : { handle: "p-7", role: "user" },
+      );
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      {
+        op: "join",
+        link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+      },
+      `${directory}/identity.key`,
+      stores,
+    );
+
+    const answer = JSON.parse(output.stdout);
+    expect(answer).toMatchObject({
+      ok: true,
+      value: { handle: "p-7", signer: did, joined: true },
+    });
+    const store = new PatternIndexStore(join(stores, new URL(baseUrl).host));
+    const root = (await store.rootKey())!;
+    expect(answer.value.root).toBe(root.did());
+    expect(calls[0]).toMatchObject({
+      fn: "redeemInvite",
+      did: root.did(),
+      body: { inviteId: "inv1", code: "the-code" },
+    });
+    expect(calls[1].did).toBe(did);
+    expect(calls[1].body.proofs).toHaveLength(1);
+  });
+
+  it("returns the index's status for a refused invite, never the code", async () => {
+    reply = () => Response.json({ error: "used" }, { status: 409 });
+
+    const output = await callHelper(
+      directory,
+      baseUrl,
+      {
+        op: "join",
+        link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+      },
+      `${directory}/identity.key`,
+      `${directory}/stores`,
+    );
+
+    expect(output.code).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 409 });
+    expect(output.stdout + output.stderr).not.toContain("the-code");
+  });
+
+  it("returns 400 for a join without a membership store, calling nothing", async () => {
+    const output = await callHelper(directory, baseUrl, {
+      op: "join",
+      link: "https://fbrc.social/index-join?invite=inv1#code=the-code",
+    });
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ ok: false, status: 400 });
+    expect(calls).toEqual([]);
   });
 
   it("presents no chain without a membership store", async () => {

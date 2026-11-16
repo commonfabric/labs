@@ -21,7 +21,7 @@ import {
   PatternIndexStore,
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
-import { chainForSigner } from "./pattern-index-access.ts";
+import { chainForSigner } from "@commonfabric/pattern-index/access";
 
 /** `member`: an `/index` chain. `root-move`: a single `/index/root` link. */
 export type IndexDelegationKind = "member" | "root-move";
