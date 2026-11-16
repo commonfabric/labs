@@ -3089,7 +3089,14 @@ export const startConsoleServer = async (
       return new Response("internal error", { status: 500 });
     },
   }, (request) => answerWhenReady(ready.promise, request));
-  const config = { ...resolved, port: httpServer.addr.port };
+  const { port } = httpServer.addr;
+  const config = {
+    ...resolved,
+    port,
+    healthFacts: resolved.healthFacts.map((fact) =>
+      fact.name === "port" ? { ...fact, value: String(port) } : fact
+    ),
+  };
   let sessionStore: HarnessChatSessionStore | undefined;
   let server: ConsoleServer;
   try {

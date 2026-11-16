@@ -5272,6 +5272,12 @@ describe("console/server", () => {
         const health = await fetch(`${origin}/api/health`);
         expect(await health.json()).toMatchObject({ ok: true });
         expect(logged).toContain(`\n  cf-harness console: ${origin}`);
+        // The detailed health report names that port too.
+        const detail = await (await fetch(`${origin}/api/health/detail`))
+          .json();
+        expect(
+          detail.rows.find((row: ConsoleHealthRow) => row.id === "config.port"),
+        ).toMatchObject({ value: String(served.addr.port) });
         expect((await Deno.stat(join(base, "workspace"))).isDirectory).toBe(
           true,
         );

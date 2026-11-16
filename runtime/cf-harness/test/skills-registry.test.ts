@@ -738,6 +738,19 @@ describe("registry", () => {
       }
     });
 
+    it("throws for a scan limits object missing a limit", async () => {
+      // A caller reaching this through an untyped path, such as parsed
+      // configuration, may leave out a bound that would then bound nothing.
+
+      await writeSkill(root, "a-first", skillText("a-first"));
+      const partial = JSON.parse('{"skillDepth": 6, "resourceDepth": 8}');
+      await expect(
+        discoverHarnessSkills({ skillsRoot: root, scanLimits: partial }),
+      ).rejects.toThrow(
+        "skill scan limit skillDirectories must be a positive integer, not undefined",
+      );
+    });
+
     it("accepts a scan limit of one", async () => {
       await writeSkill(root, "a-first", skillText("a-first"));
       const registry = await discoverHarnessSkills({
@@ -813,6 +826,26 @@ describe("registry", () => {
         } finally {
           await Deno.chmod(join(root, "enter-only"), 0o700);
           await Deno.chmod(join(root, "locked"), 0o700);
+        }
+      },
+    });
+
+    it({
+      name: "finds a skill in a directory it may enter but not list",
+      ignore: readsDespiteMode(),
+      fn: async () => {
+        await writeSkill(root, "hidden", skillText("hidden"));
+        await writeSkill(root, "visible", skillText("visible"));
+        await Deno.chmod(join(root, "hidden"), 0o111);
+        try {
+          const registry = await discoverHarnessSkills({ skillsRoot: root });
+          expect(registry.skills.map((skill) => skill.name)).toEqual([
+            "hidden",
+            "visible",
+          ]);
+          expect(registry.diagnostics).toEqual([]);
+        } finally {
+          await Deno.chmod(join(root, "hidden"), 0o700);
         }
       },
     });

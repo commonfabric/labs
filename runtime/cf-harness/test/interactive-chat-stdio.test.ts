@@ -57,6 +57,7 @@ import {
 import { HarnessChatStoreHeldError } from "../src/session-store.ts";
 import {
   openSqliteHarnessChatSessionStore,
+  SqliteHarnessChatSessionStore,
   sqliteHarnessChatSessionStoreHolderPath,
 } from "../src/sqlite-session-store.ts";
 
@@ -2641,6 +2642,48 @@ describe("interactive-chat-stdio", () => {
         });
         expect(await storeIsFree(dbPath)).toBe(true);
       } finally {
+        await fabric.cleanup();
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("rejects with both failures when a Fabric runtime fails to release and the store fails to close", async () => {
+      const dir = await Deno.makeTempDir();
+      const dbPath = join(dir, "chat.sqlite");
+      const fabric = await fabricRuntimeTurn(() => {
+        throw new Error("the fabric went away");
+      });
+      // The store closes, releasing its hold, and then reports a failure.
+      const close = SqliteHarnessChatSessionStore.prototype.close;
+      const closing = stub(
+        SqliteHarnessChatSessionStore.prototype,
+        "close",
+        function (this: SqliteHarnessChatSessionStore) {
+          close.call(this);
+          throw new Error("the store would not close");
+        },
+      );
+      try {
+        const captured = captureOutputLines();
+        const failure = await runHarnessInteractiveChatStdio({
+          ...fabric.serviceOptions,
+          sessionDbPath: dbPath,
+          input: encodeInputLines([startSession, startTurn]),
+          output: captured.output,
+        }).then(() => undefined, (error: unknown) => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect(failure).toMatchObject({
+          errors: [
+            { message: "the fabric went away" },
+            { message: "the store would not close" },
+          ],
+        });
+        expect(responseCodes(captured.lines())).toEqual({
+          "req-start": "ok",
+          "req-turn": "ok",
+        });
+      } finally {
+        closing.restore();
         await fabric.cleanup();
         await Deno.remove(dir, { recursive: true });
       }

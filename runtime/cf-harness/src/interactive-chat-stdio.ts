@@ -816,13 +816,29 @@ export const runHarnessInteractiveChatStdio = async (
         // The sessions' Fabric runtimes hold sessions open with the fabric,
         // so they are released, as the console releases them, before the
         // store closes. A service the caller supplied is the caller's to
-        // release.
+        // release. The store closes whether or not the release fails, and a
+        // failure of each is reported rather than the second hiding the first.
+        const failures: unknown[] = [];
         try {
           if (options.createService === undefined) {
             await service.releaseFabricRuntimes();
           }
-        } finally {
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
           await sessionStore?.close?.();
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(
+            failures,
+            "the Fabric runtimes failed to release and the session store failed to close",
+          );
+        }
+        if (failures.length === 1) {
+          throw failures[0];
         }
       },
       writeLine: async (line) => {

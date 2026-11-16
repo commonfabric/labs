@@ -40,17 +40,22 @@ const EXCLUDED_SKILL_DIRS = new Set([
 ]);
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+const SKILL_SCAN_LIMIT_NAMES = [
+  "skillDepth",
+  "skillDirectories",
+  "resourceDepth",
+  "resourceDirectories",
+  "resourceFiles",
+] as const;
+
 /**
  * How far a skill scan goes. Past each bound the scan stops that branch, or
  * stops altogether for a count, and records a diagnostic saying so.
  */
-export interface HarnessSkillScanLimits {
-  skillDepth: number;
-  skillDirectories: number;
-  resourceDepth: number;
-  resourceDirectories: number;
-  resourceFiles: number;
-}
+export type HarnessSkillScanLimits = Record<
+  typeof SKILL_SCAN_LIMIT_NAMES[number],
+  number
+>;
 
 /** The bounds a skill scan keeps to unless it is given others. */
 export const DEFAULT_SKILL_SCAN_LIMITS: HarnessSkillScanLimits = {
@@ -62,14 +67,15 @@ export const DEFAULT_SKILL_SCAN_LIMITS: HarnessSkillScanLimits = {
 };
 
 /**
- * Returns `limits`, throwing for any that is not a positive integer: a bound
- * of `NaN` or `Infinity` would bound nothing, and one that is not a whole
- * number would read as another.
+ * Returns `limits`, throwing for any that is missing or not a positive
+ * integer: a bound that is missing, `NaN` or `Infinity` would bound nothing,
+ * and one that is not a whole number would read as another.
  */
 function checkScanLimits(
   limits: HarnessSkillScanLimits,
 ): HarnessSkillScanLimits {
-  for (const [name, value] of Object.entries(limits)) {
+  for (const name of SKILL_SCAN_LIMIT_NAMES) {
+    const value = limits[name];
     if (!Number.isSafeInteger(value) || value < 1) {
       throw new RangeError(
         `skill scan limit ${name} must be a positive integer, not ${value}`,
@@ -320,9 +326,29 @@ const collectSkillFiles = async (
       }));
       return;
     }
-    // The listing, not a stat of the file, decides whether this directory is
-    // a skill, so a directory that cannot be read is a diagnostic like any
-    // other rather than the end of the whole scan.
+    // A probe of the one name that matters, not the listing, decides whether
+    // this directory is a skill, so a directory that may be entered but not
+    // listed still yields its skill. A directory that cannot be searched or
+    // listed is a diagnostic like any other rather than the end of the whole
+    // scan.
+    const unreadable = (error: unknown) =>
+      diagnostics.push(createDiagnostic({
+        severity: "warning",
+        code: "unreadable-directory",
+        detail: describeFailure(error),
+        path: dir,
+      }));
+    const skillPath = join(dir, SKILL_FILE_NAME);
+    try {
+      await Deno.lstat(skillPath);
+      skillFiles.push(skillPath);
+      return;
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) {
+        unreadable(error);
+        return;
+      }
+    }
     let entries: Deno.DirEntry[];
     try {
       entries = [];
@@ -330,16 +356,7 @@ const collectSkillFiles = async (
         entries.push(entry);
       }
     } catch (error) {
-      diagnostics.push(createDiagnostic({
-        severity: "warning",
-        code: "unreadable-directory",
-        detail: describeFailure(error),
-        path: dir,
-      }));
-      return;
-    }
-    if (entries.some((entry) => entry.name === SKILL_FILE_NAME)) {
-      skillFiles.push(join(dir, SKILL_FILE_NAME));
+      unreadable(error);
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
