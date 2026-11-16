@@ -51,7 +51,6 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 
 import { cfcSchemaEntries } from "../../runner/src/cfc/schema-label-view.ts";
-import { parseLink } from "../../runner/src/link-utils.ts";
 import {
   compiledDocKey,
   loadVerifiedSourceClosure,
@@ -373,11 +372,13 @@ describe("fabrichat-four-writer-room-update", () => {
       ),
     );
     await room.key("messages").key("openWindow").pull();
-    {
+    // Two windows: `main`, which a case sets again through this tree's
+    // room, and `kept`, which no case touches.
+    for (const [requestId, windowId] of [["w1", "main"], ["k1", "kept"]]) {
       const tx = runtime.edit();
       room.withTx(tx).key("messages").key("openWindow").send({
-        requestId: "w1",
-        windowId: "main",
+        requestId,
+        windowId,
         from: { before: "end" },
         count: 5,
       });
@@ -398,17 +399,22 @@ describe("fabrichat-four-writer-room-update", () => {
       "messages/*",
     );
     windowsBefore = windowsDocument();
-    // The messages of the window the earlier program wrote, as a client
-    // holding that window names them: each by the link the window stores,
-    // under the schema the earlier program stored it with.
+    // The messages of the `kept` window the earlier program wrote, as a row
+    // a client shows of that window names each: by its place in the window,
+    // whose stored link resolves to it under the schema the earlier program
+    // stored it with.
     {
-      const windows = room.key("messages").key("windows").resolveAsCell();
-      const stored = windows.getRaw() as { main: { messages: unknown[] } };
-      staleWindow = stored.main.messages.map((link) => {
-        const parsed = parseLink(link, windows.getAsNormalizedFullLink());
-        expect(parsed).toBeDefined();
-        return runtime.getCellFromLink(parsed!);
-      });
+      const windows = room.key("messages").key("windows").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const stored = room.key("messages").key("windows").resolveAsCell()
+        .getRaw() as { kept: { messages: unknown[] } };
+      staleWindow = stored.kept.messages.map((_, index) =>
+        runtime.getCellFromLink({
+          ...windows,
+          path: ["kept", "messages", String(index)],
+          schema: undefined,
+        })
+      );
     }
 
     // The release: the room opens as a person opening it would, follows its
