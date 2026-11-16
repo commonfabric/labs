@@ -250,16 +250,20 @@ nothing](#a-file-that-opts-out-of-coverage-is-charged-nothing). A record that
 names none of a file's lines says nothing about which of them ran, so it counts
 as no record. A file with a record is scored against the lines that record
 names. For a file measured by Deno's V8 coverage that is every executable line;
-pattern instrumentation names only the statements it could instrument, so a
-pattern file's first record both covers real lines and drops the never-named
-lines out of the count.
+pattern instrumentation names only the statements it could instrument, so the
+first record of a file only the instrumentation records both covers real lines
+and drops the never-named lines out of the count. A file Deno's coverage also
+records is scored against Deno's lines instead, as [A file both producers
+recorded](#a-file-both-producers-recorded) describes.
 
-Gaining a record can therefore only *lower* a file's count, since the record
-names a subset of the file's lines and the rest stop being counted. A figure
-whose file gains one moves down, and a measured set's baseline settles at a
-lower — and therefore stricter — bar rather than failing anything. The
-instrumented statements are also the only lines this mechanism can speak to: a
-line the instrumentation cannot reach is not a line a pattern test could cover.
+Gaining a first record can therefore only *lower* a file's count, since the
+record names a subset of the file's lines and the rest stop being counted. A
+figure whose file gains one moves down, and a measured set's baseline settles at
+a lower — and therefore stricter — bar rather than failing anything. A second
+producer's record can raise the count, since Deno's coverage names executable
+lines the instrumentation could not reach. The instrumented statements are also
+the only lines this mechanism can speak to: a line the instrumentation cannot
+reach is not a line a pattern test could cover.
 
 ### A file both producers recorded
 
