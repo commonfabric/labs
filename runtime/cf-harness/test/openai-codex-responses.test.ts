@@ -1999,4 +1999,158 @@ describe("openai-codex-responses", () => {
       });
     });
   });
+const completedHello = (): Response =>
+  sse({
+    type: "response.completed",
+    response: {
+      id: "resp_1",
+      status: "completed",
+      output: [{
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        content: [{ type: "output_text", text: "hello" }],
+      }],
+    },
+  });
+
+const refusedToken = (status = 401): Response =>
+  new Response(
+    JSON.stringify({
+      error: {
+        code: "token_expired",
+        message: "Your authentication token has expired.",
+      },
+    }),
+    { status, headers: { "content-type": "application/json" } },
+  );
+
+const helloRequest = {
+  model: "gpt-5.4",
+  transcript: [{ role: "user" as const, content: "hi" }],
+  tools: [],
+  nativeModelToolIds: [],
+  runId: "run-rejected",
+};
+
+/** A client whose provider answers with `responses` in turn, and what it saw. */
+const rejectionHarness = (
+  responses: Response[],
+  refreshed:
+    | { credential: OpenAICodexOAuthCredential; fresh: boolean }
+    | undefined,
+  withRefresh = true,
+) => {
+  const seen = {
+    tokens: [] as (string | null)[],
+    refreshedFrom: [] as string[],
+    marked: [] as string[],
+  };
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: {
+      resolve: () => Promise.resolve(credential),
+      ...(withRefresh
+        ? {
+          refreshRejected: (rejected: OpenAICodexOAuthCredential) => {
+            seen.refreshedFrom.push(rejected.accessToken);
+            return Promise.resolve(refreshed);
+          },
+        }
+        : {}),
+      markRejected: (rejected: OpenAICodexOAuthCredential) => {
+        seen.marked.push(rejected.accessToken);
+        return Promise.resolve();
+      },
+    },
+    fetchFn: (_input, init) => {
+      seen.tokens.push(new Headers(init?.headers).get("authorization"));
+      const next = responses.shift();
+      if (next === undefined) throw new Error("unexpected request");
+      return Promise.resolve(next);
+    },
+  });
+  return { client, seen };
+};
+
+const refreshedCredential: OpenAICodexOAuthCredential = {
+  ...credential,
+  accessToken: "access-refreshed",
+};
+
+const assertAuthRequired = async (run: () => Promise<unknown>) => {
+  const error = await assertRejects(run);
+  assertEquals(error instanceof HarnessControlError, true);
+  assertEquals((error as HarnessControlError).code, "provider-auth-required");
+};
+
+Deno.test("Codex Responses issues a refused request again with a refreshed token", async () => {
+  const { client, seen } = rejectionHarness(
+    [refusedToken(), completedHello()],
+    { credential: refreshedCredential, fresh: true },
+  );
+
+  const result = await client.complete(helloRequest);
+
+  assertEquals(result.assistant.content, "hello");
+  assertEquals(seen.tokens, [
+    "Bearer access-secret",
+    "Bearer access-refreshed",
+  ]);
+  assertEquals(seen.refreshedFrom, ["access-secret"]);
+  assertEquals(seen.marked, []);
+});
+
+Deno.test("Codex Responses marks a credential whose refreshed token is refused too", async () => {
+  const { client, seen } = rejectionHarness(
+    [refusedToken(), refusedToken()],
+    { credential: refreshedCredential, fresh: true },
+  );
+
+  await assertAuthRequired(() => client.complete(helloRequest));
+
+  // one refresh and one further request, never a third
+  assertEquals(seen.tokens.length, 2);
+  assertEquals(seen.refreshedFrom, ["access-secret"]);
+  assertEquals(seen.marked, ["access-refreshed"]);
+});
+
+Deno.test("Codex Responses does not mark a refused token another process stored", async () => {
+  const { client, seen } = rejectionHarness(
+    [refusedToken(), refusedToken()],
+    { credential: refreshedCredential, fresh: false },
+  );
+
+  await assertAuthRequired(() => client.complete(helloRequest));
+
+  assertEquals(seen.tokens.length, 2);
+  assertEquals(seen.marked, []);
+});
+
+Deno.test("Codex Responses fails a refused request when no other credential is offered", async () => {
+  for (const withRefresh of [true, false]) {
+    const { client, seen } = rejectionHarness(
+      [refusedToken()],
+      undefined,
+      withRefresh,
+    );
+
+    await assertAuthRequired(() => client.complete(helloRequest));
+
+    assertEquals(seen.tokens, ["Bearer access-secret"]);
+    assertEquals(seen.marked, []);
+  }
+});
+
+Deno.test("Codex Responses refreshes on a refused token only, not on a 403", async () => {
+  const { client, seen } = rejectionHarness(
+    [refusedToken(403)],
+    { credential: refreshedCredential, fresh: true },
+  );
+
+  await assertAuthRequired(() => client.complete(helloRequest));
+
+  assertEquals(seen.tokens, ["Bearer access-secret"]);
+  assertEquals(seen.refreshedFrom, []);
+  assertEquals(seen.marked, []);
 });

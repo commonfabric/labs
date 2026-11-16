@@ -64,6 +64,23 @@ export interface OpenAICodexCredentialResolverLike {
   readonly ownerKey?: string;
   readonly credentialOwner?: HarnessCredentialOwnerRef;
   resolve(signal?: AbortSignal): Promise<OpenAICodexOAuthCredential>;
+  /**
+   * The provider refused `rejected` on a model request. Resolves to the
+   * credential to issue the request again with, and whether this call
+   * refreshed it (`fresh`) or found it already replaced; `undefined` when
+   * there is none. A resolver without it has no second credential to offer.
+   */
+  refreshRejected?(
+    rejected: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<
+    { credential: OpenAICodexOAuthCredential; fresh: boolean } | undefined
+  >;
+  /** The provider refused `rejected` straight after it was refreshed. */
+  markRejected?(
+    rejected: OpenAICodexOAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface OpenAICodexResponsesClientOptions
@@ -288,7 +305,12 @@ type CodexAttemptOutcome =
     terminal: Record<string, unknown>;
     rawPayload: { terminal: Record<string, unknown>; streamedItems: unknown[] };
   }
-  | { error: HarnessControlError; retry?: HarnessTransientFailureKind };
+  | {
+    error: HarnessControlError;
+    retry?: HarnessTransientFailureKind;
+    /** The provider answered 401: it refused the access token itself. */
+    rejected?: true;
+  };
 
 const selectedHeaders = (
   headers: Headers,
@@ -589,7 +611,14 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       parallel_tool_calls: true,
     });
     assertHarnessModelInputBound(body, request.maxInputBytes);
-    const exchange: CodexExchange = { request, credential, body, affinityKey };
+    let exchange: CodexExchange = { request, credential, body, affinityKey };
+    // A 401 refuses the access token before any work is done, whatever the
+    // stored expiry said. The request is issued once more with a refreshed
+    // token. When the provider refuses a token refreshed here, no token this
+    // credential can obtain is accepted, and it is marked as needing
+    // reconnection; a refused token that another process put there is left
+    // for the next request to refresh.
+    let reissued: { fresh: boolean } | undefined;
     // Nothing leaves this loop until an attempt reaches a completed terminal
     // response, so a tool call streamed by an attempt that failed is never
     // the one the harness dispatches.
@@ -601,6 +630,25 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           request.model,
           outcome.rawPayload,
         );
+      }
+      if (outcome.rejected) {
+        if (reissued !== undefined) {
+          if (reissued.fresh) {
+            await this.#resolver.markRejected?.(
+              exchange.credential,
+              request.signal,
+            );
+          }
+          throw outcome.error;
+        }
+        const next = await this.#resolver.refreshRejected?.(
+          exchange.credential,
+          request.signal,
+        );
+        if (next === undefined) throw outcome.error;
+        reissued = { fresh: next.fresh };
+        exchange = { ...exchange, credential: next.credential };
+        continue;
       }
       if (outcome.retry === undefined) throw outcome.error;
       await this.#retrySchedule.waitBefore(attempt + 1, request.signal);
@@ -760,7 +808,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           errorDetail = redact(signal.reason.message);
         }
       }
-      return await failed(
+      const refused = await failed(
         isTransientHttpStatus(response.status) ? "http_status" : undefined,
         {
           ...httpAttempt,
@@ -771,6 +819,9 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         },
         httpFailure(response.status, providerError),
       );
+      return response.status === 401 && "error" in refused
+        ? { ...refused, rejected: true }
+        : refused;
     }
     let reading: StreamReading;
     try {
