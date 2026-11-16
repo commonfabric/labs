@@ -257,9 +257,10 @@ function conditionsOf(entry: LLMMockEntry): ConversationFixtureAssertions {
 const PRESENT_RESULT_TOOL = "presentResult";
 
 /**
- * Whether `entry` answers `request`, a request of `kind`. An `object` also
- * answers a text request offering the tool a `generateObject` given tools
- * returns its result through.
+ * Whether `entry` answers `request`, a request of `kind`. A text request
+ * offering the tool a `generateObject` given tools returns its result through
+ * is answered by an `object`, or by `toolCalls` the model makes on the way,
+ * but not by `text` alone.
  */
 function fitsKind(
   entry: LLMMockEntry,
@@ -267,9 +268,13 @@ function fitsKind(
   request: LLMRequest | LLMGenerateObjectRequest,
 ): boolean {
   if (entry.error !== undefined) return true;
-  if (entry.object === undefined) return kind === "text";
-  return kind === "object" ||
-    ("tools" in request && request.tools?.[PRESENT_RESULT_TOOL] !== undefined);
+  const offersPresentResult = "tools" in request &&
+    request.tools?.[PRESENT_RESULT_TOOL] !== undefined;
+  if (entry.object !== undefined) {
+    return kind === "object" || offersPresentResult;
+  }
+  return kind === "text" &&
+    (entry.toolCalls !== undefined || !offersPresentResult);
 }
 
 /**

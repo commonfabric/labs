@@ -229,6 +229,35 @@ describe("llm-mock", () => {
       }]);
     });
 
+    it("answers a generateObject given tools with tool calls, but not with text alone", async () => {
+      const responder = new LLMMockResponder([
+        { text: "for a plain request" },
+        { toolCalls: [{ name: "search", input: { q: "a" } }] },
+      ]);
+      const presenting = textRequest("who?", {
+        tools: {
+          search: { description: "", inputSchema: {} },
+          presentResult: { description: "", inputSchema: {} },
+        },
+      });
+
+      const first = await responder.sendRequest(
+        presenting,
+        undefined,
+        undefined,
+      );
+      const plain = await responder.sendRequest(
+        textRequest("hi"),
+        undefined,
+        undefined,
+      );
+
+      expect(first.id).toBe("llm-mock-1");
+      expect(plain.content).toEqual([
+        { type: "text", text: "for a plain request" },
+      ]);
+    });
+
     it("fails a request of either kind with an entry's error", async () => {
       const responder = new LLMMockResponder([
         { error: "busy" },

@@ -587,7 +587,9 @@ Each entry carries one kind of answer:
   completes.
 - `object` answers a `generateObject` request. A `generateObject` given tools
   is sent as a text request offering a `presentResult` tool, and an `object`
-  entry answers it with a call to that tool carrying the object.
+  entry answers it with a call to that tool carrying the object. An entry with
+  only `text` does not answer such a request; one with `toolCalls` does, which
+  is how a test has the model call other tools before it returns the object.
 - `error` fails the request with that message, whichever kind it is. This is
   how a test reaches a pattern's handling of a failed request. A failed
   request usually logs a warning, which fails the test unless it also sets
@@ -607,7 +609,9 @@ which case it answers every request it fits. So entries without conditions
 answer requests in turn, and the conditions pick an entry out when the order of
 the requests is not fixed, as when a pattern starts two requests at once. An
 entry that repeats suits a request a pattern makes a varying number of times,
-such as one for each item of a list it keeps.
+such as one for each item of a list it keeps. An entry with `toolCalls` cannot
+repeat, since it would answer every turn of a dialog with another tool call;
+the runner refuses such an entry before the test runs.
 
 A dialog's tools run when the model calls them, so a test states every turn of
 the model's side of the conversation. After a tool call, the next request
@@ -639,9 +643,9 @@ request.
 
 The runner fails the test with a result named `llmMocks` for a request no entry
 answered, saying what the request held and why each remaining entry of its kind
-did not fit it; when the run fails for another reason, these join its error. An
-entry no request uses is not a failure, since a test can make a request with
-server execution on that it makes none of with server execution off. An export
+did not fit it; when the run fails for another reason, these join its error.
+An entry no request uses is not a failure, because a test can make some
+requests only when server execution is on. An export
 the runner cannot read, such as an entry with an unknown key or two kinds of
 answer, fails the run before anything runs.
 

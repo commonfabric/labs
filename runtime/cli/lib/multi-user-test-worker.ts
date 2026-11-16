@@ -727,13 +727,12 @@ const handlers: Record<
     const releaseDemand = assertionCell.sink(() => {});
     try {
       await rt().settled();
+      // An `assert(...)` assertion carries the operands recorded while the
+      // condition ran, so a failure names them and their values.
+      return assertionOutcome(await assertionCell.pull());
     } finally {
       releaseDemand();
     }
-    const value = await assertionCell.pull();
-    // An `assert(...)` assertion carries the operands recorded while the
-    // condition ran, so a failure names them and their values.
-    return assertionOutcome(value);
   },
 
   /** Materialize one VDOM target, then remove its renderer demand. */
