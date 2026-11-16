@@ -159,13 +159,15 @@ next.
 The prototype measured what the path of today costs and derived what
 the plans say of the compiled path, at prototype commit `4ca9fe56cb`
 (its notes 273 to 280). The figures do not show that the compiled path
-is faster at run time: nothing executes a plan, so no time of the
-compiled path exists.
+is faster at run time: no time of the compiled path is measured. The
+executor of
+[What the prototype's executor computes](#what-the-prototypes-executor-computes)
+computes values and was not timed.
 
 ### What is measured and what is derived
 
-The crate emits a plan and no value code. Three kinds of figure follow,
-and each table says which a row is.
+At that commit the crate emits a plan and no value code. Three kinds of
+figure follow, and each table says which a row is.
 
 - **Measured on both sides:** the time to compile.
 - **Measured for the path of today alone:** the time, the transactions,
@@ -449,12 +451,13 @@ argument, which the two runs do not lengthen.
 
 ### Not measured
 
-- **Any time of the compiled path.** It needs an emitter of value code
-  and an executor of plans. The smallest that gives a number emits one
-  function per cone, calls the sandboxed bodies as today, evaluates
-  the cones of a derivation transaction in the order of `Plan.cones`
-  against the store of today, and writes the kept outputs to one
-  result document, with no labels, parts, scope instances, or events.
+- **Any time of the compiled path.** The emitter and the executor of
+  the next section exist to compare values. The executor keeps its
+  documents in memory, forms no label and no transaction, and runs a
+  body with no sandbox, so a time of it would not be a time of the
+  design. A number needs an executor that evaluates the cones of a
+  derivation transaction against the store of today and writes the
+  kept outputs to one result document.
 - **Bytes of the compiled layout.** The inlined result is an estimate.
 - **Label entries of the compiled layout between the two bounds.**
   Counting the compared outputs whose evaluated template is not empty
@@ -466,6 +469,227 @@ argument, which the two runs do not lengthen.
   are of Deno on one machine.
 - **The 47 modules that need `wish` or an effect,** and the 10 whose
   run fails.
+
+## What the prototype's executor computes
+
+At prototype commit `3e518147df` the crate emits value code beside a
+plan (`src/emit.rs`, its `emit` command), and an executor written in
+TypeScript (`exec/executor.ts`) runs the two. A comparison
+(`compare/values.ts`) runs the scenario of a module on today's runtime
+and on the executor and compares the values. These are the prototype's
+notes 281 to 306. Notes 281 to 302 say what the executor needed that the
+documents did not give, and are written into the documents (the
+questions they raised are 141 to 146 below, and questions 81 to 84 of
+`execution-and-storage.md`). Notes 303 to 306 are the results here.
+Nothing was timed.
+
+### What is compared, and what is not
+
+A compared value is one member of the result, or one state cell of the
+pattern's body, after the instance settled and after each event. The
+scenario of a module is the generated one of the label comparison. A
+fixture uses the scenario its label test writes, where it writes one.
+
+- **Three things are made equal before the comparison.** The children
+  of a view node are compared as one flat list. A child that is the
+  result of a pattern is compared as its tree, because the compiled
+  path holds the callee's tree in place at a child position
+  (`plan-and-label-templates.md` §1.1, question 107 here) where today's
+  run holds the result with the tree under `$UI`. A time read from the
+  clock is compared as one token.
+- **Today's side can be a saved run.** A run saves what today's runtime
+  computed, and the executor can be run alone again on the crate's
+  current output against the saved values (`compare/values-corpus.ts`,
+  the command `again`). The notes do not say which figures come from
+  such a rerun.
+- **The executor is not the design's runtime.** It instantiates no
+  label, checks no constraint, has no transaction log, and persists
+  nothing. It runs no effect: the result of an operation reads as
+  pending, and a module with an operation of kind `effect` or `wish` is
+  not run. It hands a body the whole value at a `value`, `shape` or
+  `enumeration` slot and narrows none to its class. It runs a body as
+  plain JavaScript with no sandbox and no budget, and rolls a handler
+  that throws back by restoring its documents. It makes no part
+  document and no stream document, and has one scope instance. It does
+  not instantiate a pattern or bind a handler in a function body, does
+  not evaluate a `reduce`, and has no `elementById`, `linksOf`, or
+  debug-string built-in. It reads `spaceOf` as the space it is given
+  and has no acting principal. It does not use `Cone.writes`,
+  `ConeResult.selections`, or `ConeResult.picks`: a body's side-write
+  goes through the handle the body holds.
+- **The executor has no reader.** It evaluates every kept output and
+  then the result, where the design evaluates what is demanded.
+- **The emitter departs from the documents in three ways** that the
+  results depend on. It writes one function per value a cone computes,
+  where `execution-and-storage.md` §2.1 has one per cone. A pattern
+  compiled in at a call written inside an initializer is evaluated in
+  the caller's cone, where `plan-and-label-templates.md` §1.4 makes it
+  cones of its own. And the cone the crate makes for an array written
+  in place lists no slot of what the members hold. Each is a defect of
+  the prototype.
+
+### The fixtures
+
+19 of the 20 fixtures are run, in 23 runs. All 23 are executed, and 122
+of 122 compared values are equal. `fixtures/link-cycle.tsx` is left out:
+its handlers make two cells link to each other, and a read of the whole
+result of today's run rejects with a `LinkCycleError`. One event of
+`fixtures/handle-passed.tsx` is not handled, because its handler
+instantiates a pattern.
+
+### The corpus
+
+The comparison takes the 270 modules with a full plan. Today's runtime
+runs 213 of them, the same 213 as in the cost section. The executor
+runs 186 of the 213. In 159 of the 186 every compared value is equal
+and every event that today's runtime committed is handled.
+
+| Why a module is not executed | Modules |
+| --- | ---: |
+| The emitter writes no code for a `reduce` in the reactive tier | 7 |
+| The value code throws | 6 |
+| An output that no value function computes | 4 |
+| A handler called in a function body | 2 |
+| The built-in `toIndentedDebugString` | 2 |
+| The emitter writes no code for a spread in the argument of a pattern | 1 |
+| A value that is no plain data | 1 |
+| The built-in `linksOf` | 1 |
+| The built-in `toCompactDebugString` | 1 |
+| The value code does not parse | 1 |
+| The value code names something it does not bind | 1 |
+
+The first row is the emitter's. The rows that name a built-in, a handler
+called in a function body, and a value that is no plain data are things
+the executor does not implement. The rows "the value code throws",
+"names something it does not bind", and "does not parse" were not
+examined one by one, and each counts as a defect of the prototype until
+shown otherwise.
+
+Today's runtime committed 269 events for the executed modules. The
+executor does not handle 15 of them: 9 call `elementById`, 4 instantiate
+a pattern in the handler, one writes through a handle to a constant,
+which the documents refuse (`execution-and-storage.md` §2.4), and one
+calls `increment` on a value that is no handle.
+
+Over the executed modules 4,537 values are compared. 4,472 are equal and
+65 differ, in 24 modules.
+
+| Cause of a difference | Class | Modules | Values |
+| --- | --- | ---: | ---: |
+| `dataFile(...)` at module scope, a built-in the executor does not have | Prototype defect | 6 | 7 |
+| An event the executor did not handle, and what later values show of it | Prototype defect | 4 | 15 |
+| A handler factory as a value of the result (`plan-and-label-templates.md` §3.21), which the executor does not store | Prototype defect | 1 | 5 |
+| A check today's JSX factory makes of a `$` attribute and the executor does not | Prototype defect | 1 | 2 |
+| A branch that is not selected is not evaluated (`execution-and-storage.md` §2.2), and the pattern counts its evaluations | Design difference the documents state | 1 | 5 |
+| Today's runtime writes a cell in a template literal as `[object Object]`, and the executor writes its value | Today's runtime, not the design | 1 | 5 |
+| A read of the acting principal or of an access list, which the executor does not have. Not verified | Prototype defect, not verified | 2 | 3 |
+| Not examined | Not classed | 8 | 23 |
+
+The eight modules not examined are `examples/todo-list/todo-list.tsx`,
+`showcase/card-piles/main.tsx`, `examples/map-demo/map-demo.tsx`,
+`system/agent-run/agent-run.tsx`, `dev/catalog/catalog.tsx`,
+`examples/cfc-spec-gallery/main.tsx`,
+`dev/gideon-tests/test-cell-equals.tsx`, and
+`showcase/wordsearch/wordsearch.tsx`. So 23 of the 65 differing values
+have no cause, and the causes given for the other rows come from a
+first reading of the source and the two values and are not verified.
+
+No difference is classed as a gap of the design by itself. The gaps this
+round found are in what the executor needed in order to compute a value
+at all. Each showed as a wrong value or a failed run before the emitter
+or the executor supplied what was missing, and each is a question:
+141 to 146 below, and questions 81 to 84 of `execution-and-storage.md`.
+The one design difference in the table is by the documents: in
+`patterns/dev/gideon-tests/test-ifelse-both-branches.tsx` today's
+runtime evaluates both branches of an `ifElse` and the executor the
+selected one.
+
+### What the run conformed to
+
+The executor counted where its run kept to the plan.
+
+- **Reads of another cone's output.** Every one was over an edge of
+  `Plan.edges`.
+- **Writes of a handler.** All 291 were covered by a write edge or an
+  envelope of the handler's body.
+- **Reads of a slot the reading cone does not list.** 165, of which 141
+  are in two modules that hold an array of pattern results, and 29 reads
+  by root and path. Statically the emitter found 76 reads over the 361
+  corpus patterns that no slot of the reading cone names, 55 of them of
+  the result of an operation, which the comparison does not run. The
+  reads in the two modules are of the third departure above.
+- **Streams.** Of the positions at which a stored result holds a
+  stream, 431 are named by a path of `Binding.result` and 18 by none.
+  Of the listed paths without `*`, 315 hold the stream and 12 do not.
+  14 of the 18 are of a binding for which the crate found no path, and
+  4 hold a stream that is an input of the pattern. The 12 were not
+  examined.
+- **A cone that writes a cell it reads.** 6 evaluations wrote a
+  position they had read. The executor evaluates such a cone instance
+  once, as the prototype observed today's runtime to do. By
+  `execution-and-storage.md` §2.7 such a cone instance is stale again
+  by its own write, and one that does not settle ends in the error
+  state at the bound of ten evaluations. That is a difference from
+  today that the corpus has, and it was not run.
+- **What the plan lacked.** 38 of the 446 cones of an element body list
+  no slot of root `element` or `index` (question 141). 355 uses of a
+  body that is no handler have 1,093 slots whose place in the argument
+  the plan does not give (question 142). Of 1,399 state cells with a
+  function for their first value, 3 read a slot (question 139). 200
+  state entries of bindings hold `null` for a constant that is not a
+  literal written at the binding, which is a defect of the crate.
+
+### Documents
+
+The executor stores an argument document, a result document, and one
+document per state cell that exists, and counts a cell that a function
+body creates.
+
+| Documents after the scenario, 186 modules | total | per module |
+| --- | ---: | ---: |
+| executor, measured: all | 1,302 | 7.0 |
+| executor, measured: argument documents | 186 | 1 |
+| executor, measured: result documents | 186 | 1 |
+| executor, measured: state cells | 898 | 4.8 |
+| executor, measured: cells a function body created | 32 | 0.2 |
+| today, measured: all, from the compile on | 9,700 | 52.2 |
+
+For a fixture with no state cell the executor stores two documents, and
+one more per state cell.
+
+Today's figure includes the cells through which the scenario gives the
+instance its inputs, one per top-level input. It is not the row "today,
+measured: documents of the instance" of
+[Storage](#storage): that row is over 213 modules, after settle, and of
+the instance's own documents alone.
+
+The executor's count is a lower bound on what the compiled path stores
+for these scenarios, in this sense: it leaves out the part documents,
+the state documents of operations, the stream documents, and the
+instances document, which `execution-and-storage.md` §4.1 lists and the
+executor does not make. It is not a bound on state cells. The executor
+makes a document for every state cell when the instance is created or
+the element key enters, where `execution-and-storage.md` has none for a
+cell that is never assigned and declares no value (its §4.1, question
+83).
+
+The derived counts of [Storage](#storage) stay the figures to compare
+with today's, and the executor's count does not replace them. It bears
+on them in two ways.
+
+- **It is between the two derived bounds, on the mean.** The derived
+  count is 2.2 documents per module at the least and 8.6 at the most,
+  over 213 modules after settle. The executor has 7.0 over 186 modules
+  after the events. The module sets and the points in the scenario
+  differ, so this is no check of either bound.
+- **The "least" bound counts no state cell,** because the document of a
+  state cell is written when the cell is first assigned. A cell whose
+  declaration gives it a value has a document from its creation, if
+  question 83 of `execution-and-storage.md` is answered as assumed.
+  The least bound then rises by the number of such cells, which the
+  derivation did not count. The executor's 4.8 state cell documents
+  per module are the size of that term for these scenarios, element
+  bodies of two elements included.
 
 ## Rules of this work
 
