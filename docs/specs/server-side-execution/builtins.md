@@ -96,8 +96,11 @@ the commit.
   again. The stamp's identity puts the ending in the requesting principal's
   instance of a scoped node's cells.
 
-Off the serving posture, and on a serving runtime with server execution off,
-which runs no serving loop, an ending commits on its own, marked as a completion
+On a client with server execution on, an ending is a speculative derivation
+in that client's overlay. Its reads may name speculative layers, and its writes
+remain process-local. The serving runtime owns the durable ending.
+
+With server execution off, an ending commits on its own, marked as a completion
 of the request.
 
 What the staging run wrote under, for a served run nobody demands, differs by

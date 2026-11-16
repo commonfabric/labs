@@ -9,6 +9,7 @@ import type {
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
@@ -28,6 +29,7 @@ import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
 import { formerPatternKey } from "../pattern-key-moves.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { MemorySpace, Runtime } from "../runtime.ts";
+import { normalizeCellScope } from "../scope.ts";
 import {
   isFabricImportSpecifier,
   parseFabricRef,
@@ -1204,6 +1206,11 @@ export function writeSourceDocs(
       // over as stored: an annotation is typically a link to another document,
       // and the raw write below has to keep it a link rather than a copy of
       // what it reads through to.
+      //
+      // Annotations carry no evidence this write could vouch for, and nothing
+      // reads them as authority, so one another identity wrote in this
+      // transaction gains nothing from the carry: its write leaves the record
+      // measured by writer-fit (`isUndeclarablePolicyStore()`).
       const existingAnnotations = identity === entryIdentity
         ? baseCell.getRaw()?.annotations
         : undefined;
@@ -1244,6 +1251,36 @@ export function writeSourceDocs(
     }
   });
   return effectiveModuleDelegations;
+}
+
+/**
+ * Stores `link` under `key` in the product annotations of the source record of
+ * `entryIdentity` in `space`, keeping the annotations already there. The write
+ * is the compile-cache writer's, like every write of a cache record, so the
+ * record keeps the claim that no schema declares a policy on it.
+ */
+export function writeSourceAnnotation(
+  runtime: Runtime,
+  space: MemorySpace,
+  entryIdentity: string,
+  key: string,
+  link: unknown,
+  tx: IExtendedStorageTransaction,
+): void {
+  withCompileCacheBuiltin(tx, () => {
+    const cell = runtime.getCell<{ annotations?: Record<string, unknown> }>(
+      space,
+      sourceDocKey(entryIdentity),
+      undefined,
+      tx,
+    );
+    recordUndeclarablePolicyStore(tx, cell);
+    const current = cell.get();
+    cell.key("annotations").set({
+      ...(isObjectOrArray(current?.annotations) ? current!.annotations : {}),
+      [key]: link,
+    });
+  });
 }
 
 /**
@@ -1688,6 +1725,24 @@ function storedBuilderSourceSites(
   return isBuilderSourceSitesV1(sidecar) ? sidecar : undefined;
 }
 
+/**
+ * Whether a value write made under an identity other than a builtin's in
+ * `tx` (`CfcTxState.nonBuiltinWrites`) reached `cell`'s document at a path
+ * that is `path`, holds it, or lies within it.
+ */
+function writtenByAnotherIdentity(
+  tx: IExtendedStorageTransaction,
+  cell: Cell<unknown>,
+  path: readonly string[],
+): boolean {
+  const link = cell.getAsNormalizedFullLink();
+  const scope = normalizeCellScope(link.scope);
+  return tx.getCfcState().nonBuiltinWrites.some((write) =>
+    write.space === link.space && write.id === link.id &&
+    write.scope === scope && pathsOverlap(write.path, path)
+  );
+}
+
 /** Whether a cell's persisted CFC label carries `atom` at `path`. */
 function cellCarriesIntegrity(
   cell: Cell<unknown>,
@@ -1745,13 +1800,17 @@ function effectiveModuleDelegationsForWrite(
       const existing = sourceCell.get();
       // Mutable source metadata is authority only when the compiler attested
       // this exact field; the source code/import graph verifies separately.
+      // The attestation is read from the stored label and the list from this
+      // transaction's view, so a list another identity wrote here is not
+      // the one the attestation stands for.
       if (
         cellCarriesIntegrity(
           sourceCell,
           COMPILED_INTEGRITY_ATOM,
           tx,
           SOURCE_DELEGATION_PATH,
-        )
+        ) &&
+        !writtenByAnotherIdentity(tx, sourceCell, SOURCE_DELEGATION_PATH)
       ) {
         candidates.push(existing?.delegatedModuleIdentities);
       }
@@ -1772,7 +1831,7 @@ function effectiveModuleDelegationsForWrite(
           compiledCell,
           COMPILED_INTEGRITY_ATOM,
           tx,
-        )
+        ) && !writtenByAnotherIdentity(tx, compiledCell, [])
       ) {
         candidates.push(existing?.delegatedModuleIdentities);
       }

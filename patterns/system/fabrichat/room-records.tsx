@@ -409,8 +409,9 @@ export const TITLE_KEY = "title";
  * What a room keeps about one of its threads: written only by the handlers
  * that set a thread's title, a send that starts the thread from the send
  * surface and a retitle from `ChatRetitleSurface`, and labeled `authored-by`
- * whoever last set it. A later schema can neither add a writer to the policy
- * nor drop one, so it names every writer the record will have.
+ * whoever last set it. A stored policy keeps every writer it names, whether
+ * or not a later schema lists it, and gains one only where a release admits
+ * it.
  */
 export type StoredThreadInfo = AuthoredByCurrentUser<
   WritePolicyAnyOf<ThreadInfoRecord, [
@@ -569,10 +570,11 @@ const indexesOf = (
 /**
  * The value of `cell`, or `undefined` where it lacks a field its schema
  * requires or holds one of `fields` of a type the schema doesn't accept. A
- * field like that, read through a list holding the value or through the value
- * itself, refuses the whole computation reading it, so the value is read as
- * that of its own cell, and each of `fields` as the value of a cell of its
- * own, where it reads as `undefined` instead.
+ * field like that, read as part of the whole list holding the value or of the
+ * whole value, refuses the whole computation reading it. So the value is read
+ * as the value of `cell`, the cell for its element of the list, rather than
+ * off the list's value, and each of `fields` as the value of the cell for
+ * that field, where it reads as `undefined` instead.
  */
 const readableRecord = <T extends object>(
   cell: Cell<T>,
@@ -644,9 +646,14 @@ export const messageEntries = (
   let legacyReplies = 0;
   const entries = indexesOf(messages).flatMap(
     (index): MessageEntry[] => {
-      const cell = cellAt(messages, index).resolveAsCell();
-      const record = readableMessage(cell);
+      // The message is read at its place in the list, under the list's own
+      // element schema; the cell its link resolves to only names its
+      // document. That cell keeps the schema of the program that sent the
+      // message (see `messageInRoom()`).
+      const element = cellAt(messages, index);
+      const record = readableMessage(element);
       if (record === undefined) return [];
+      const cell = element.resolveAsCell();
       const key = entityKeyOf(cell);
       if (key === undefined) return [];
       records.set(key, record);
@@ -1300,21 +1307,33 @@ const attachmentsIn = (
   });
 };
 
+/** A message as the target of an act, and what it holds. */
+interface MessageTarget {
+  /** The message's own document, which the act writes. */
+  target: MessageCell;
+
+  /** Its value, read through the link the act was given. */
+  current: MessageRecord | undefined;
+}
+
 /**
  * The message `link` names, as the target of an act: one of the room's
- * messages, by `isInRoomOf()`.
+ * messages, by `isInRoomOf()`. Its value is read through `link`, under the
+ * act's own schema for it: the document `link` resolves to keeps the schema
+ * its stored link carries, which is that of the program that sent the
+ * message, and a message a later program rewrote, such as its tombstone, may
+ * not fit it.
  *
  * @throws If `link` names no message, or one outside the room's space.
  */
 const messageInRoom = (
   room: Cell<unknown>,
   link: MessageCell | undefined,
-): MessageCell => {
-  const target = link?.resolveAsCell();
-  if (target === undefined || !isInRoomOf(room, target)) {
-    throw new Error(NOT_IN_ROOM);
-  }
-  return target;
+): MessageTarget => {
+  if (link === undefined) throw new Error(NOT_IN_ROOM);
+  const target = link.resolveAsCell();
+  if (!isInRoomOf(room, target)) throw new Error(NOT_IN_ROOM);
+  return { target, current: link.get() };
 };
 
 /**
@@ -1334,15 +1353,18 @@ const obliterationRefusal = (
     : "Messages in this chat can't be removed.";
 
 /**
- * Leaves a tombstone of the message at `target`: its time and what it replies
- * to stay, its body becomes the deleted marker, its attachments and reactions
- * go, and so does its author unless `keepsAuthor`. The whole message is
- * written, where an edit writes its text alone, since only a write of the
- * whole drops a key: a key written `undefined` is present, and an author's
- * link so written reads as a handle to nothing rather than as no author.
+ * Leaves a tombstone of the message at `target`, which holds `current`: its
+ * time and what it replies to stay, its body becomes the deleted marker, its
+ * attachments and reactions go, and so does its author unless `keepsAuthor`.
+ * The whole message is written, where an edit writes its text alone, since
+ * only a write of the whole drops a key: a key written `undefined` is present,
+ * and an author's link so written reads as a handle to nothing rather than as
+ * no author.
  */
-const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
-  const current = target.get();
+const leaveTombstone = (
+  { target, current }: MessageTarget & { current: MessageRecord },
+  keepsAuthor: boolean,
+): void => {
   target.set({
     ...(keepsAuthor && current.authorProfile !== undefined
       ? { authorProfile: current.authorProfile }
@@ -1849,9 +1871,13 @@ export const commitEdit = handler<RoomStreamEvent, EditState>(
   (event, { myProfile, room, message, composer }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
-    const target = messageInRoom(room, event?.message ?? message);
-    const current = target.get();
-    if (isDeleted(current)) throw new Error(DELETED);
+    const { target, current } = messageInRoom(
+      room,
+      event?.message ?? message,
+    );
+    if (current === undefined || isDeleted(current)) {
+      throw new Error(DELETED);
+    }
     if (!isActorAuthor(target)) {
       throw new Error("Only its author can edit a message.");
     }
@@ -1880,14 +1906,19 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
   (event, { myProfile, room, message }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
-    const target = messageInRoom(room, event?.message ?? message);
-    const current = target.get();
+    const { target, current } = messageInRoom(
+      room,
+      event?.message ?? message,
+    );
     // Deleted already: there is nothing to delete.
-    if (isDeleted(current)) return;
+    if (current === undefined || isDeleted(current)) return;
     if (!isActorAuthor(target)) {
       throw new Error("Only its author can delete a message.");
     }
-    leaveTombstone(target, !FABRICHAT_POLICY.deletionIsObliteration);
+    leaveTombstone(
+      { target, current },
+      !FABRICHAT_POLICY.deletionIsObliteration,
+    );
   },
 );
 
@@ -1898,10 +1929,15 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
  */
 export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
   (event, { room, message, kind, ownersMayObliterate }) => {
-    const target = messageInRoom(room, event?.message ?? message);
-    const current = target.get();
+    const { target, current } = messageInRoom(
+      room,
+      event?.message ?? message,
+    );
     // Obliterated already, its author gone: there is nothing to remove.
-    if (isDeleted(current) && current?.authorProfile === undefined) return;
+    if (
+      current === undefined ||
+      (isDeleted(current) && current.authorProfile === undefined)
+    ) return;
     const rights = messageRightsOf(
       current,
       isActorAuthor(target),
@@ -1914,18 +1950,21 @@ export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
         obliterationRefusal(kind, ownersMayObliterate === true),
       );
     }
-    leaveTombstone(target, false);
+    leaveTombstone({ target, current }, false);
   },
 );
 
 /**
- * The reaction list of the message at `target`, as the cell the message
- * links, or `undefined` where the message links none. It is addressed as a
- * cell rather than read off the message's value: a client addresses a message
- * through the room's public type, where the reactions read as values.
+ * The reaction list of the message at `target`, which holds `current`, as the
+ * cell the message links, or `undefined` where the message links none. It is
+ * addressed as a cell rather than read off the message's value: a client
+ * addresses a message through the room's public type, where the reactions
+ * read as values.
  */
-const reactionsOf = (target: MessageCell): ReactionsCell | undefined =>
-  target.get()?.reactions === undefined
+const reactionsOf = (
+  { target, current }: MessageTarget,
+): ReactionsCell | undefined =>
+  current?.reactions === undefined
     ? undefined
     : target.key("reactions").resolveAsCell() as never;
 
@@ -1952,11 +1991,11 @@ export const commitSendReaction = handler<RoomStreamEvent, AddReactionState>(
     if (profile === undefined) throw new Error(NO_PROFILE);
     const emoji = emojiOf(event, bound);
     if (!isSingleEmoji(emoji)) throw new Error("A reaction is a single emoji.");
-    const target = messageInRoom(room, event?.message ?? message);
-    const list = reactionsOf(target);
+    const named = messageInRoom(room, event?.message ?? message);
+    const list = reactionsOf(named);
     // A send gives every message its reaction list, and a deletion takes it
     // away, so a message without one is a deleted one.
-    if (isDeleted(target.get()) || list === undefined) {
+    if (isDeleted(named.current) || list === undefined) {
       throw new Error(DELETED);
     }
     if (closesPicker === true) pickerOpen?.set(false);
@@ -1986,11 +2025,11 @@ export const commitDeleteReaction = handler<
   (event, { myProfile, room, message, reaction }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
-    const target = messageInRoom(room, event?.message ?? message);
-    const list = reactionsOf(target);
+    const named = messageInRoom(room, event?.message ?? message);
+    const list = reactionsOf(named);
     // A send gives every message its reaction list, and a deletion takes it
     // away, so a message without one is a deleted one.
-    if (isDeleted(target.get()) || list === undefined) {
+    if (isDeleted(named.current) || list === undefined) {
       throw new Error(DELETED);
     }
     const removed = (event?.reaction ?? reaction)?.resolveAsCell();

@@ -119,13 +119,57 @@ type ProgramClosureGrace = {
   expired: boolean;
 };
 
-/** The default bound on the tenure's awaited space-root ensure
- * (SpaceServerPolicy.rootEnsureDeadlineMs): generous — a cold compile
- * of the system root is seconds, not tens of seconds — because the
- * cost of firing early is only deferring the root to the client-era
- * creation path, while the cost of NO bound is a wedged tenure that
- * keeps its lease. */
+/** The default bound on each pattern-source fetch of the tenure's
+ * space-root ensure (SpaceServerPolicy.rootEnsureDeadlineMs). What it
+ * bounds is a host that stops answering: without it one silent fetch
+ * holds the tenure's first cycle open while the tenure keeps its lease.
+ * The compile is not bounded: it is local work that ends, and the
+ * lifecycle verbs queued behind the ensure need what it makes (a served
+ * creation registers into the root's `addPiece` stream, and under served
+ * posture no client creates the root instead). A cold compile on a
+ * loaded machine can outlast any fixed bound, and a bound on it failed
+ * creations that would have succeeded moments later. */
 const DEFAULT_ROOT_ENSURE_DEADLINE_MS = 30_000;
+
+/** `fetch`, with each request refused once it has gone `deadlineMs`
+ * without its whole answer, body included: the request is aborted and the
+ * call rejects. The response it returns has its body already read. A peer
+ * that stops answering reports nothing, so this deadline is the only end
+ * a silent host's request has. */
+function fetchWithin(fetch: RuntimeFetch, deadlineMs: number): RuntimeFetch {
+  return (input, init) => {
+    const abort = new AbortController();
+    const outer = init?.signal;
+    if (outer) {
+      if (outer.aborted) abort.abort(outer.reason);
+      else outer.addEventListener("abort", () => abort.abort(outer.reason));
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const silent = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(
+          `space-root ensure: a pattern-source fetch went ${deadlineMs}ms ` +
+            "without an answer (SpaceServerPolicy.rootEnsureDeadlineMs); " +
+            "the tenure proceeds serving without the root",
+        );
+        abort.abort(error);
+        reject(error);
+      }, deadlineMs);
+    });
+    // The deadline runs until the body is read, not just the headers: a
+    // host can answer the headers and then go silent mid-body.
+    const answered = fetch(input, { ...init, signal: abort.signal }).then(
+      async (response) =>
+        new Response(await response.arrayBuffer(), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        }),
+    );
+    answered.catch(() => {});
+    return Promise.race([answered, silent]).finally(() => clearTimeout(timer));
+  };
+}
 
 import {
   markRuntimeInjectedEventKeys,
@@ -142,7 +186,7 @@ import {
 } from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/logger";
 import { minOf } from "@commonfabric/collections/math";
-import type { Runtime, ServerRunInfo } from "../runtime.ts";
+import type { Runtime, RuntimeFetch, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
   ForeignScopedReadGrant,
@@ -319,18 +363,16 @@ export type SpaceServerPolicy = {
    * second, token bucket). Undefined = unpaced. */
   egressRatePerSecond?: number;
 
-  /** OW45 arm-B stage 1 (review F2): the bound on the tenure's
-   * awaited space-root ensure. The ensure's resolve path fetches with
-   * no timeout of its own and can point at a remote host, and only a
-   * park ends a tenure — so an UNBOUNDED await here would let one wedged
-   * fetch hold the first cycle open forever while the tenure keeps the
-   * lease (no failover, events
-   * queueing, no loop-failed park). On the deadline the ensure lands
-   * in its counted-failure arm and the tenure proceeds serving; the
-   * detached work's eventual writes stay safe — the CREATION arm
-   * converges by address (cause-derived id + the OCC re-check), the
-   * UPDATE arm by OCC refusal (the transition's stillMatches baseline
-   * refuses a moved root, so stale-over-new is impossible). */
+  /** OW45 arm-B stage 1 (review F2): the bound on each pattern-source
+   * fetch of the tenure's awaited space-root ensure. The ensure's
+   * resolve path can point at a remote host, and only a park ends a
+   * tenure — so an unbounded fetch would let one silent host hold the
+   * first cycle open forever while the tenure keeps the lease (no
+   * failover, events queueing, no loop-failed park). A fetch past it
+   * fails the ensure into its counted-failure arm and the tenure
+   * proceeds serving. The rest of the ensure — the compile and the
+   * creation — is awaited to its end, so the cycle's lifecycle verbs
+   * run against the root it made (DEFAULT_ROOT_ENSURE_DEADLINE_MS). */
   rootEnsureDeadlineMs?: number;
 
   /** serving-loop.md §1's IDLE_PARK_MS. */
@@ -1484,8 +1526,8 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * The verb whose run the code sealing now belongs to, bound around the
    * verb's run and inherited by everything it awaits. Work that started
-   * outside the run, such as a root ensure its deadline left running
-   * detached, carries none, though it seals while a verb runs.
+   * outside the run, such as an effect a previous wave left settling,
+   * carries none, though it may seal while a verb runs.
    */
   readonly #lifecycleVerbContext = servingLocalStore<RunningLifecycleVerb>();
 
@@ -6931,7 +6973,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
       const deadlineMs = this.#options.policy?.rootEnsureDeadlineMs ??
         DEFAULT_ROOT_ENSURE_DEADLINE_MS;
-      const work = ensureSpaceRootPattern(runtime, space, {
+      const result = await ensureSpaceRootPattern(runtime, space, {
         // The ACL-derived home predicate: self-owned, and declaring no
         // kind. The client's `space === runtime.userIdentityDID` is WRONG
         // here, since a serving runtime's userIdentityDID is the SERVICE
@@ -6950,40 +6992,13 @@ export class SpaceServer implements TransactionSealDestination {
           // — before the transaction's first read.
           setCfcTrustSnapshot(tx, runtime.trustSnapshotForPrincipal(owner));
         },
+        // The F2 bound, on what can go silent: each pattern-source fetch.
+        // A fetch past it fails the ensure into the counted-failure arm
+        // below and the tenure proceeds serving; the compile and the
+        // creation run to their end, so the verbs queued behind this
+        // ensure find the root it made.
+        fetch: fetchWithin(runtime.fetch, deadlineMs),
       });
-      // The F2 bound: race the ensure against its deadline. On the
-      // deadline the throw lands in the counted-failure arm below and
-      // the tenure proceeds serving; the DETACHED work keeps running —
-      // its eventual writes stay safe: the creation arm converges by
-      // address (cause-derived id + the OCC re-check every rival
-      // creator rides) — and
-      // its eventual rejection is swallowed here so it can never
-      // surface as an unhandled rejection.
-      work.catch(() => {});
-      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-      let result: Awaited<typeof work>;
-      try {
-        result = await Promise.race([
-          work,
-          new Promise<never>((_, reject) => {
-            deadlineTimer = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `space-root ensure exceeded its ${deadlineMs}ms ` +
-                      "deadline (SpaceServerPolicy.rootEnsureDeadlineMs); " +
-                      "the tenure proceeds serving; the detached " +
-                      "ensure's writes stay safe (creation converges " +
-                      "by address)",
-                  ),
-                ),
-              deadlineMs,
-            );
-          }),
-        ]);
-      } finally {
-        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
-      }
       stats.runs += 1;
       if (result.outcome === "created") stats.created += 1;
       this.#options.onRootEnsure?.(
@@ -7000,8 +7015,8 @@ export class SpaceServer implements TransactionSealDestination {
       this.#options.onRootEnsure?.("failed");
       logger.warn("space-root-ensure-failed", () => [
         `space ${space}: root ensure failed; the tenure serves without ` +
-        "it and the next activation retries (the client-era creation " +
-        "path still covers stage 1)",
+        "it, a served creation in this space reports its registration " +
+        "failed until the root exists, and the next activation retries",
         error,
       ]);
     }

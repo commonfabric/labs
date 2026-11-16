@@ -880,67 +880,101 @@ request's `SPEC-PENDING` marker.
 The specification at the pin has no write policy: nothing in it names
 `writePolicyAnyOf`, a list of alternatives at one position, each pairing a
 writer with an optional UI contract. Its rules for a schema that changes a
-stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the
-IFC contract attached to a path, and §8.15.3 has write authority stable.
+stored claim are general: §4.2.2.1 rule 4 has schema evolution preserve the IFC
+contract attached to a path, and §8.15.3 has write authority stable.
 [specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
 [specs#52](https://github.com/commonfabric/specs/pull/52), proposes the
-construct (§8.15.6.1) and a release that may append an alternative to a stored
-policy (carve-out (c) of §8.15.13, `mergeWritePolicy` and `admissible`).
+construct (§8.15.6.1, "Write-Policy Alternatives"), that a later schema may omit
+a stored alternative, which the merge keeps exactly as stored, in every write, a
+release included, and a release that may append an alternative to a stored
+policy (carve-out (c) of §8.15.13, "Release", `mergeWritePolicy` and
+`admissible`).
 
 **What the runtime does.** `mergeWritePolicyAnyOf` in `cfc/schema-merge.ts`
-matches each stored alternative to a candidate's by content: the same keys,
-the same contract, and writer claims that reconcile as two lone
-`writeAuthorizedBy` claims do (`reconcileWriterClaimStamp`). It keeps the
-stored alternatives as stored, in stored order, whatever order the candidate
-lists them in, and refuses a candidate that lacks one. It appends a
-candidate's alternative that matches none only in a release, and only where
+matches each stored alternative to a candidate's by content: the same keys, the
+same contract, and writer claims that reconcile as two lone `writeAuthorizedBy`
+claims do (`reconcileWriterClaimStamp`). It keeps the stored alternatives as
+stored, in stored order, whatever order the candidate lists them in, and keeps
+one the candidate does not list as stored too, in every write, a release
+included. Its caller says which side is stored (`storedSide`): the persist
+loop's merge of the stored envelope with the writer's schema
+(`mergeStoredCfcEnvelope`), the dry run of that merge
+(`storedCfcEnvelopeMergeIssue`), and the merge of a linked document's stored
+envelope with the schema the transaction writes it under
+(`linkedSourceEvidence`) name the stored envelope; the verification overlay,
+which merges the writer's schema with the claims the merged envelope holds where
+the write puts links, names those claims. A merge of two schemas neither of
+which is stored, such as two inputs of one transaction to the same document,
+refuses a candidate that lacks an alternative. Every write, a link write too, is
+verified against its writer's own schema as well as the stored envelope, so a
+writer the candidate omits writes only under a schema that lists it, and only
+with the stamp that schema gives it. It appends a candidate's alternative that
+matches none only in a release, and only where
 `writePolicyAlternativeAdmissible` admits it: its writer carries a module stamp
 the release installs, and one stored alternative names the same keys and the
 same contract with a writer stamped with that module or with one the space
-attests the installed module succeeds, whose claim the appended one's is but
-for the symbol it binds, a nonempty path of names, and its stamp and file
-spelling. The commit site in
-`prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by the runtime's
-`release-program` input (`transactionReleasesStore`), names the installed
-modules from it (`releaseProgramModules`), and reads succession from the
-delegations the transaction is pinned to (`moduleSucceeds`), which for a
+attests the installed module succeeds, whose claim the appended one's is but for
+the symbol it binds, a nonempty path of names, and its stamp and file spelling.
+The commit site in `prepareBoundaryCommit` (`cfc/prepare.ts`) knows a release by
+the runtime's `release-program` input (`transactionReleasesStore`), names the
+installed modules from it (`releaseProgramModules`), and reads succession from
+the delegations the transaction is pinned to (`moduleSucceeds`), which for a
 source update's setup include the ones the update proposes. `droppedStoredClaim`
 in `cfc/claim-preservation.ts` checks the merged envelope again, reading it
-independently of how the merge built it: every stored alternative kept,
-wherever it sits. It shares the merge's admission predicate,
-`writePolicyAlternativeAdmissible`, for every other alternative, so a defect
-in that predicate passes both. `piece setsrc --check` and the
-origin-following review merge in dry run through a transaction pinned to the
-delegations the update would propose
-(`PatternManager.proposedSourceUpdateDelegations`,
+independently of how the merge built it: every stored alternative kept, wherever
+it sits. It shares the merge's admission predicate,
+`writePolicyAlternativeAdmissible`, for every other alternative, so a defect in
+that predicate passes both. `piece setsrc --check` and the origin-following
+review merge in dry run through a transaction pinned to the delegations the
+update would propose (`PatternManager.proposedSourceUpdateDelegations`,
 `Runtime.readTxProposingDelegations`), derived from the same verified source
-closures as the update's own where the space holds the candidate's, so the
-check and the commit give one verdict. A candidate the space does not hold
-yet, as `--check` compiles one, is derived from the modules this session
-evaluated it with, which leave out a module the program imports only for its
-types; there the check can refuse an appended writer the commit admits.
+closures as the update's own where the space holds the candidate's, so the check
+and the commit give one verdict. A candidate the space does not hold yet, as
+`--check` compiles one, is derived from the modules this session evaluated it
+with, which leave out a module the program imports only for its types; there the
+check can refuse an appended writer the commit admits.
 
 This implements specs#96 ahead of its ruling, at strict and with no dial:
 @danfuzz ruled that it lands at the strict default with no default-off dial,
 recorded in the correspondence procedure as a nonconforming semantic gap,
-pending specs#96. Against the pin it admits more: an appended writer, and a
-candidate listing the stored alternatives in another order, which the pin's
-general stability rules refuse. So it does not satisfy the correspondence
-procedure's step 4, which asks for a default-off dial for a change admitting
-more. Its four deciding sites, the merge's matching and its append, and the
-keep rule's matching and its admission, carry its `SPEC-PENDING` marker, and the
-kernel manifest carries no row for
-`mergeWritePolicy` until a regenerated snapshot defines it.
+pending specs#96. Against the pin it admits more: an appended writer, a
+candidate listing the stored alternatives in another order, and a candidate
+omitting a stored alternative, which the pin's general stability rules refuse.
+The last follows specs#96 as amended, and @danfuzz ruled on 2026-11-15 that it
+lands the same way, at the strict default with no dial. So it does not satisfy
+the correspondence procedure's step 4, which asks for a default-off dial for a
+change admitting more. Its four deciding sites, the merge's matching and its
+append, and the keep rule's matching and its admission, carry its `SPEC-PENDING`
+marker, and the kernel manifest carries no row for `mergeWritePolicy` until a
+regenerated snapshot defines it.
 
 **Residuals.**
 
 - The merge also requires an appended alternative to hold the same keys as the
   stored one it pairs with, which the proposal does not ask: an over-taint.
-- A drop is refused in every write. A program that retires a writer at a
-  position whose stored envelopes list it can therefore write those documents
-  only through a candidate that still lists the writer's alternative, and an
-  ordinary write of a document that stores fewer alternatives than the program
-  lists is refused as an addition outside a release.
+- An unstamped stored writer claim, lone or a write policy's alternative, is
+  adopted wherever the merge runs: a write whose schema restates it stamped,
+  with a file spelling that corresponds, stamps it in that write, whichever
+  writer makes the write, in a release or outside one. The proposal lets only
+  the writer the stamp names bring the stamp over outside a release (§8.15.13,
+  "Release"), and asks of the spelling a directory as well as a file name
+  (§8.15.1, "Handler-Declared Write Capability"), so the runtime admits more
+  there. A write whose schema differs from the stored envelope only in its
+  stamps takes the persist loop's unchanged-envelope shortcut and adopts
+  nothing. A compiled pattern's claims are stamped when the compiler mints
+  them: a module compile carries each module's identity
+  (`ModuleCompileRequest.moduleIdentities` in `harness/module-compile.ts`),
+  and the schema transformer refuses to mint a claim for a module it has none
+  for (`schema-generator.ts` in `base/ts-transformers`). So an unstamped claim
+  is stored only from a schema the compiler did not mint, or from data stored
+  before claims were minted stamped.
+- A schema declaring an empty list where the document stores a policy is
+  refused by the merge ("the candidate lists no alternative"), whatever the
+  write touches, and one declaring nothing there keeps the stored policy as
+  stored, as the proposal has them. Where the document stores no policy at the
+  position, an empty list is refused as malformed only by a write that touches
+  the position; a write that leaves it untouched stores the empty list, which
+  then admits no writer there.
 
 ## 11. Writer delegations across a source update (§8.11.3)
 

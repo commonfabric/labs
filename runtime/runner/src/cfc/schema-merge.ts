@@ -227,6 +227,12 @@ const reconcileWriterClaimStamp = (
   if (!existingStamped && !candidateStamped) {
     return existing;
   }
+  // TODO(danfuzz): Outside a release, a stamped claim, lone or a write
+  // policy's alternative, adopts an unstamped one whose spelling corresponds
+  // whichever writer's write restates it, where the proposal lets only the
+  // writer the stamp names bring it over (§8.15.13, "Release"). Refuse the
+  // adoption unless `adoptsStamp` vouches for the stamp, once callers pass it
+  // for every adoption.
   return existingStamped ? existing : candidate;
 };
 
@@ -237,6 +243,7 @@ const mergeSetLikeIfcArray = (
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
   writePolicyRelease: WritePolicyRelease | undefined,
+  storedSide: StoredSide | undefined,
 ): unknown => {
   if (existing === undefined) {
     return candidate;
@@ -314,11 +321,11 @@ const mergeSetLikeIfcArray = (
           // boundary, never a rotation here). Different bindings still
           // conflict.
           if (key === "writeAuthorizedBy") {
-            const reconciled = reconcileWriterClaimStamp(
-              existing,
-              candidate,
-              adoptsStamp,
-            );
+            // The stored claim goes first, so that its stamp is the one
+            // kept, as a write policy's alternatives keep theirs.
+            const reconciled = storedSide === "candidate"
+              ? reconcileWriterClaimStamp(candidate, existing, adoptsStamp)
+              : reconcileWriterClaimStamp(existing, candidate, adoptsStamp);
             if (reconciled !== undefined) {
               return reconciled;
             }
@@ -339,13 +346,27 @@ const mergeSetLikeIfcArray = (
       return mergeArraySet(candidateArray);
     }
     case "writePolicyAnyOf":
-      return mergeWritePolicyAnyOf(
-        existing,
-        candidate,
-        path,
-        adoptsStamp,
-        writePolicyRelease,
-      );
+      // The stored list goes first. An alternative it holds and the other
+      // side omits is then kept rather than counted as added, and where the
+      // two sides stamp one alternative differently, the stored stamp is the
+      // one kept, since `reconcileWriterClaimStamp()` keeps the first side's.
+      return storedSide === "candidate"
+        ? mergeWritePolicyAnyOf(
+          candidate,
+          existing,
+          path,
+          adoptsStamp,
+          writePolicyRelease,
+          true,
+        )
+        : mergeWritePolicyAnyOf(
+          existing,
+          candidate,
+          path,
+          adoptsStamp,
+          writePolicyRelease,
+          storedSide === "existing",
+        );
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -421,12 +442,15 @@ const mergedStoredAlternative = (
 /**
  * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
  * lists, as `mergeWritePolicy` in §8.15.13 states it. The list is a set
- * (§8.15.6.1): every stored alternative is kept, matched to a candidate's
- * alternative by content rather than by its place in the list, and stays as
- * stored, in stored order. A candidate's alternative matching none of them is
- * appended after them, and only in a release, and only where
- * {@link writePolicyAlternativeAdmissible} admits it; anything else refuses
- * the whole merge.
+ * (§8.15.6.1): every alternative of `existing` is kept, matched to a
+ * candidate's alternative by content rather than by its place in the list,
+ * and stays as it was, in its order. Where `existingIsStored`, `existing` is
+ * the policy the document stores, and a stored alternative the candidate does
+ * not list is kept as stored; otherwise neither list is stored, and a
+ * candidate lacking an alternative of `existing` refuses the merge. A
+ * candidate's alternative matching none of them is appended after them, and
+ * only in a release, and only where {@link writePolicyAlternativeAdmissible}
+ * admits it; anything else refuses the whole merge.
  */
 const mergeWritePolicyAnyOf = (
   existing: unknown,
@@ -434,6 +458,7 @@ const mergeWritePolicyAnyOf = (
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
   release: WritePolicyRelease | undefined,
+  existingIsStored: boolean,
 ): unknown => {
   const unstable = (why: string) =>
     new CfcEnvelopeStabilityError(
@@ -442,26 +467,26 @@ const mergeWritePolicyAnyOf = (
   if (!Array.isArray(existing) || !Array.isArray(candidate)) {
     throw unstable("one side is not a list of alternatives");
   }
-  // TODO(danfuzz): A schema omitting a stored alternative is refused, in every
-  // write, though the merged envelope could keep it: here as a drop, and
-  // below as an addition outside a release where the stored claims are the
-  // side merged in (the verification overlay in `prepare.ts`). That refuses a
-  // FabriChat room's deleting or obliterating a message whose stored envelope
-  // lists `commitDelete` and `commitObliterate` among its reactions' writers,
-  // which the room's `SentReaction` does not list, and its `openWindow` over
-  // such messages. Keep the stored alternative instead once a ruling lets a
-  // later schema omit one.
-  //
+  // A write policy is a nonempty list, so an empty one omits nothing: it is
+  // ill-formed, wherever the write puts its values.
+  if (candidate.length === 0) {
+    throw unstable("the candidate lists no alternative");
+  }
   // Each stored alternative is matched by content, wherever the candidate
   // lists it, which accepts a candidate listing them in another order: the
-  // list is a set ("Order carries no meaning", §8.15.6.1).
+  // list is a set ("Order carries no meaning", §8.15.6.1). Where `existing` is
+  // stored, one the candidate omits is kept as stored, so that the merged
+  // policy holds every writer the document stores, as stored, and a program
+  // that retires a writer can still write the documents that list it. Between
+  // two schemas neither of which is stored, an omission refuses the merge.
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const kept = existing.map((policy) => {
     for (const other of candidate) {
       const merged = mergedStoredAlternative(policy, other, adoptsStamp);
       if (merged !== undefined) return merged;
     }
-    throw unstable("the candidate drops a stored alternative");
+    if (existingIsStored) return policy;
+    throw unstable("the candidate lacks an alternative the other schema lists");
   });
   const added = candidate.filter((other) =>
     !existing.some((policy) =>
@@ -603,6 +628,7 @@ const mergeIfc = (
   path: string,
   adoptsStamp?: (claim: unknown) => boolean,
   writePolicyRelease?: WritePolicyRelease,
+  storedSide?: StoredSide,
 ): JSONSchemaObj["ifc"] => {
   if (existing === undefined) {
     return candidate;
@@ -623,6 +649,7 @@ const mergeIfc = (
       path,
       adoptsStamp,
       writePolicyRelease,
+      storedSide,
     );
     if (value !== undefined) merged[key] = value;
   }
@@ -811,7 +838,23 @@ export interface MergeCfcSchemaEnvelopeOptions {
    * merge is no release's, and appends none.
    */
   writePolicyRelease?: WritePolicyRelease;
+
+  /**
+   * Which side of the merge is the envelope the document stores, where one of
+   * them is. A write policy that the other side lists only in part keeps the
+   * stored alternatives it omits (see `mergeWritePolicyAnyOf()`), and a writer
+   * claim the two sides stamp differently, lone or an alternative, keeps the
+   * stored side's stamp. Absent, neither side is stored, and a write policy
+   * that the candidate lists only in part refuses the merge.
+   */
+  storedSide?: StoredSide;
 }
+
+/**
+ * Which side of a merge is the envelope a document stores: `existing`, the one
+ * the merge starts from, or `candidate`, the one it merges in.
+ */
+export type StoredSide = "existing" | "candidate";
 
 const generatedOutputCovers = (
   options: MergeCfcSchemaEnvelopeOptions,
@@ -1350,6 +1393,7 @@ const mergeSchemaNode = (
       path,
       options.adoptsStamp,
       options.writePolicyRelease,
+      options.storedSide,
     );
   const required = mergeRequired(
     left.required,

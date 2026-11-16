@@ -930,6 +930,15 @@ export type PreparedDigestInput = {
    * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
    */
   readonly structureContainers?: readonly CfcAddress[];
+
+  /**
+   * The value writes made under an identity other than a builtin's
+   * (`CfcTxState.nonBuiltinWrites`). They decide where preparation keeps
+   * runtime-minted evidence and which documents writer-fit measures, so a
+   * transaction whose set changes must not keep its digest. Absent when
+   * empty, like the roots.
+   */
+  readonly nonBuiltinWrites?: readonly CfcAddress[];
 };
 
 /**
@@ -1241,6 +1250,15 @@ export type CfcTxState = {
     multiple: boolean;
     identity?: ImplementationIdentity;
   };
+  // Every value write made under an identity other than a builtin's, the
+  // unattributed and the verified alike, at the payload path it wrote, each
+  // address once, in the order first made; privileged persistence writes are
+  // not among them. A builtin's write stamps runtime-minted evidence and its
+  // documents carry the runtime's undeclarable-store claim, and both stand
+  // only for what a builtin wrote: preparation drops the evidence at a path
+  // one of these overlaps, and writer-fit measures a document one of these
+  // reached, whatever a builtin writes there after it.
+  nonBuiltinWrites: CfcAddress[];
   trustSnapshot?: TrustSnapshot;
   // Whether every value the runtime initializes in this transaction — a
   // constructed cell's seed, the reference exposing it, a new field's
