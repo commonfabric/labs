@@ -120,7 +120,7 @@ export const normalize = (value: unknown): unknown => {
     return value.replace(
       /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g,
       "<time>",
-    );
+    ).replace(/\b\d\d:\d\d:\d\d\b/g, "<time>");
   }
   if (!isRecord(value)) return value;
   const members: Record<string, unknown> = {};
@@ -186,7 +186,7 @@ export const readingValues = (
   const written = new Set<string>();
   let compiled = new Set<string>();
   const probe: Probe = {
-    at: (point, { runtime, space, storageManager }) => {
+    at: async (point, { runtime, space, storageManager }) => {
       values.space = space;
       if (point === "created") {
         storageManager.subscribe({
@@ -209,6 +209,30 @@ export const readingValues = (
         values.documents.end = stored;
       }
       if (point !== "settled" && point !== "after event") return;
+      if (point === "after event") {
+        // The harness reads the root of the result again after an event.
+        // A value below it that nothing demands is computed when it is
+        // read: each kept output is read here, as the harness reads each
+        // one after the instance settled.
+        const result = runtime.getCell(
+          space as `did:${string}:${string}`,
+          "compare",
+        ) as Cell<unknown>;
+        for (const entry of plan.outputs) {
+          if (entry.kept === false || entry.interim !== undefined) continue;
+          const star = entry.path.indexOf("*");
+          const path = star < 0 ? entry.path : entry.path.slice(0, star);
+          try {
+            await path.reduce(
+              (cell, key) => cell.key(key as never) as Cell<unknown>,
+              result,
+            ).pull();
+          } catch {
+            // A path the run does not hold has no value to compare.
+          }
+        }
+        await runtime.idle();
+      }
       const read = runtime.edit();
       try {
         const result = runtime.getCell(

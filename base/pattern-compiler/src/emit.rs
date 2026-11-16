@@ -513,6 +513,19 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             let rest = &path[slots[*slot].1.len()..];
             return format!("$h.slot({slot}, {})", path_json(rest));
         }
+        // The container of a `pick`: the cone lists the slot of the
+        // chosen child, at `*`, and "`host.slot` of such a slot returns
+        // every child of the container" (ES §2.2).
+        let children = listed.iter().find(|slot| {
+            let (other, at, ..) = &slots[**slot];
+            other == root
+                && at.len() == path.len() + 1
+                && at.starts_with(path)
+                && at.last().is_some_and(|last| last == "*")
+        });
+        if let Some(slot) = children {
+            return format!("$h.slot({slot})");
+        }
         let cone = self.cone.map(|cone| self.generator.finished.position[cone]);
         let entry = json!({ "cone": cone, "root": root_json(root), "path": path });
         if !self.generator.unlisted.contains(&entry) {

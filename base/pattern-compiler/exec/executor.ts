@@ -171,6 +171,11 @@ export type Counts = {
   writesNotCovered: number;
   /** Reads of the result of an operation, which is pending. */
   pendingOperations: number;
+  /**
+   * Evaluations that wrote a position they had read. ES §2.7 has such a
+   * cone instance stale again; the executor evaluates it once.
+   */
+  staleByOwnWrite: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -187,6 +192,13 @@ const canonical = (value: unknown): string =>
       : member) ?? "undefined";
 
 const addressOf = (ref: Ref): string => `${ref.doc}:${canonical(ref.path)}`;
+
+/**
+ * How often the cones of an instance are brought up to date before the
+ * executor stops: the bound on the evaluations of a cone instance in one
+ * transaction (ES §2.7, "The bound").
+ */
+const MAX_PASSES = 10;
 
 /** Whether a schema declares a handle at a position below its own. */
 const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
@@ -225,6 +237,8 @@ export class Handle {
      * a handle is one in what a read through the handle gives.
      */
     readonly declared?: Schema,
+    /** The handle is to a value with no stored address: a write fails. */
+    readonly fixed = false,
   ) {}
 
   get(): unknown {
@@ -274,6 +288,7 @@ export class Handle {
       this.slot,
       [...this.below, `${segment}`],
       schemaBelow(this.declared, `${segment}`),
+      this.fixed,
     );
   }
 
@@ -281,6 +296,11 @@ export class Handle {
     if (this.target instanceof StreamRef) {
       this.send(value);
       return this;
+    }
+    if (this.fixed) {
+      throw new Unsupported(
+        "a write through a handle to a value the instance holds no address for",
+      );
     }
     this.instance.written(this);
     this.instance.store.write(
@@ -304,6 +324,11 @@ export class Handle {
 
   push(...members: unknown[]): void {
     if (this.target instanceof StreamRef) return;
+    if (this.fixed) {
+      throw new Unsupported(
+        "a write through a handle to a value the instance holds no address for",
+      );
+    }
     const located = this.instance.store.locate(this.target, true);
     const held = Array.isArray(located.value) ? located.value : [];
     this.instance.written(this.key("*"));
@@ -389,13 +414,20 @@ export class Host {
       instance.counts.slotsNotListed += 1;
     }
     const slot = instance.plan.slots[index];
+    // The slot of the chosen child of a `pick`, at `*`, yields every
+    // child of the container (ES §2.2).
+    const path = slot.path[slot.path.length - 1] === "*" && rest.length === 0
+      ? slot.path.slice(0, -1)
+      : slot.path;
     const found = this.at(
       instance.rootOf(slot.root, this),
-      [...slot.path, ...rest],
+      [...path, ...rest],
     );
     // Where nothing is stored, a slot reads as the default of the place
     // (ES §2.2): the default its schema declares.
-    const schema = rest.reduce(schemaBelow, instance.schemaOf(slot.schema));
+    const schema = path === slot.path
+      ? rest.reduce(schemaBelow, instance.schemaOf(slot.schema))
+      : undefined;
     if (slot.observes === "identity") {
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
@@ -591,6 +623,7 @@ export class Instance {
     writesCovered: 0,
     writesNotCovered: 0,
     pendingOperations: 0,
+    staleByOwnWrite: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -887,13 +920,28 @@ export class Instance {
     return value;
   }
 
-  /** The handle a body is given for a reference. */
+  /**
+   * The handle a body is given for a reference. A position of handle type
+   * that is bound to a value the instance holds no address for, such as a
+   * constant written at the binding, gets a handle that reads the value
+   * and refuses a write (PL §3.11, "A write through a handle to a value
+   * the instance computes").
+   */
   handleOf(value: unknown, host: Host | undefined, slot?: number): unknown {
+    const declared = slot === undefined
+      ? undefined
+      : this.schemaOf(this.plan.slots[slot].schema);
     if (value instanceof Ref || value instanceof StreamRef) {
-      const declared = slot === undefined
-        ? undefined
-        : this.schemaOf(this.plan.slots[slot].schema);
       return new Handle(this, value, host, slot, [], declared);
+    }
+    if (
+      value !== undefined && typeof declared === "object" &&
+      declared.asCell !== undefined
+    ) {
+      this.#created += 1;
+      const id = `constant:${this.#created}`;
+      this.store.create(id, "held constant", this.stored(value));
+      return new Handle(this, new Ref(id, []), host, slot, [], declared, true);
     }
     return value;
   }
@@ -920,9 +968,9 @@ export class Instance {
     };
     const [left, right] = [address(a), address(b)];
     if (left !== undefined && right !== undefined) return left === right;
-    const plain = (value: unknown) =>
-      value instanceof Handle ? value.get() : value;
-    return canonical(plain(a)) === canonical(plain(b));
+    // A value read from a stored address and one that was not are two.
+    if (left !== undefined || right !== undefined) return false;
+    return canonical(a) === canonical(b);
   }
 
   /**
@@ -1036,6 +1084,10 @@ export class Instance {
     this.counts.evaluations += 1;
     const stored = canonical(this.stored(value));
     const changed = held === undefined || held.stored !== stored;
+    // A body that wrote a position it read is not evaluated again on
+    // account of its own write.
+    const ownWrite = this.store.changedSince(evaluatedAt, host.reads);
+    if (ownWrite) this.counts.staleByOwnWrite += 1;
     if (changed) this.store.clock += 1;
     const entry: Entry = {
       value,
@@ -1044,7 +1096,7 @@ export class Instance {
       dependencies: host.dependencies,
       indexes: host.indexes,
       bound: host.bound,
-      evaluatedAt,
+      evaluatedAt: ownWrite ? this.store.clock : evaluatedAt,
       changedAt: changed ? this.store.clock : held.changedAt,
     };
     this.#memo.set(key, entry);
@@ -1239,29 +1291,47 @@ export class Instance {
 
   /**
    * Evaluates every kept output in the order of `Plan.outputs` (ES §2.3),
-   * and then the result, and stores the result document.
+   * and then the result, and stores the result document. A cone of the
+   * pattern's own body with a side-write is evaluated first: a reader of
+   * the cell it writes, the reader of the result among them, has the
+   * writing cone evaluated before it reads (ES §2.3). The step repeats
+   * while an evaluation wrote something, at most as often as a cone
+   * instance is evaluated in one transaction (ES §2.7).
    */
   settle(): void {
     const none: Context = new Map();
-    this.plan.outputs.forEach((output, index) => {
-      if (!output.kept || output.path.includes("*")) return;
-      const value = this.valueOfOutput.get(index);
-      if (output.collection !== undefined) {
-        this.assembled(output.collection, none)();
-      } else if (value !== undefined) {
-        this.evaluated(value, none)();
-      }
-    });
     const result = this.#result;
     if (result === undefined) return;
-    const entry = this.#ensure(
-      "result",
-      none,
-      undefined,
-      (host) => result.evaluate(host),
-    );
-    this.store.write(new Ref("result", []), this.stored(entry.value));
-    this.#declare(none);
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      const before = this.store.clock;
+      this.code.values.forEach((value, index) => {
+        if (!value.function || !this.#values.has(index)) return;
+        if ((this.code.coneWithin[value.cone] ?? []).length > 0) return;
+        const writes = this.plan.cones[value.cone].bodies.some((body) =>
+          this.plan.bodies[body].writes.length > 0 ||
+          this.plan.bodies[body].envelopes.length > 0
+        );
+        if (writes) this.evaluated(index, none)();
+      });
+      this.plan.outputs.forEach((output, index) => {
+        if (!output.kept || output.path.includes("*")) return;
+        const value = this.valueOfOutput.get(index);
+        if (output.collection !== undefined) {
+          this.assembled(output.collection, none)();
+        } else if (value !== undefined && this.#values.has(value)) {
+          this.evaluated(value, none)();
+        }
+      });
+      const entry = this.#ensure(
+        "result",
+        none,
+        undefined,
+        (host) => result.evaluate(host),
+      );
+      this.store.write(new Ref("result", []), this.stored(entry.value));
+      this.#declare(none);
+      if (this.store.clock === before) break;
+    }
   }
 
   /**
@@ -1364,6 +1434,8 @@ export class Instance {
   documents(): Record<string, number> {
     const kinds: Record<string, number> = {};
     for (const { kind } of this.store.docs.values()) {
+      // A constant held for a handle is no document of the instance.
+      if (kind === "held constant") continue;
       kinds[kind] = (kinds[kind] ?? 0) + 1;
     }
     return kinds;

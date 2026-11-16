@@ -314,6 +314,7 @@ const report = async (file: string, verbose: boolean) => {
       "writesCovered",
       "writesNotCovered",
       "pendingOperations",
+      "staleByOwnWrite",
     ] as const
   ) {
     console.log(`  ${name}: ${total(name)}`);
