@@ -241,12 +241,15 @@ deno test -A base/pattern-compiler/exec/test/
 The executor keys an element of the result of a `map`, a `filter` or a `flatMap`
 by the key of the element it came from, so a change of one element evaluates
 that element's cone instances down a chain of constructs and no other element's.
-When elements move it evaluates nothing for them but what read the index: the
-entries of a key stay with the key. A cone reads an element that is a plain
-value stored in place as the value its key is formed from, and what passes such
-an element on stores the value. `Instance.counts` has the evaluations of cone
-instances of an element body (`elementEvaluations`) and the assemblies of a
-collection (`assemblies`) apart.
+An element of the result of a `flatMap` has that key with the position in the
+element's segment, so two members of one segment that change places are two keys
+whose values changed (`compare/fixtures/flat-keys.tsx`, over references and over
+plain values). When elements move it evaluates nothing for them but what read
+the index: the entries of a key stay with the key. A cone reads an element that
+is a plain value stored in place as the value its key is formed from, and what
+passes such an element on stores the value. `Instance.counts` has the
+evaluations of cone instances of an element body (`elementEvaluations`) and the
+assemblies of a collection (`assemblies`) apart.
 
 A cone with side-writes has its kind in `Cone.sideWrites`, from the tier
 footprint analysis gives its bodies: `static` where every write target is one

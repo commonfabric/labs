@@ -69,6 +69,15 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 3, event: {} },
     ],
   })),
+  "flat-keys": [{
+    argument: {
+      groups: [
+        { name: "g", members: ["a", "b"] },
+        { name: "h", members: ["c"] },
+      ],
+      words: ["x", "y"],
+    },
+  }],
   "callee-default": [true, false].map((given) => ({
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),

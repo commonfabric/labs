@@ -436,6 +436,146 @@ describe("a chain of element constructs", () => {
   });
 });
 
+// `fixtures/flat-keys.tsx`: an element of the result of a `flatMap` has
+// the key of the element its segment came from, with the position in the
+// segment (PL §1.3, assumed there under question 101).
+describe("the keys of the result of a `flatMap`", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `groups` are references to cells, and each segment is
+  // an array the element holds. Those of `words` are plain values stored
+  // in place, and each segment is an array the callback writes.
+  const argument = () => ({
+    pool: {
+      g: { name: "g", members: ["a", "b"] },
+      h: { name: "h", members: ["c"] },
+    },
+    groups: [link("g"), link("h")],
+    words: ["x", "y"],
+  });
+  type Flat = {
+    names: string[];
+    loudNames: string[];
+    halves: string[];
+    loudHalves: string[];
+  };
+  const coneOf = (artifact: Artifact, entry: string) =>
+    artifact.plan.cones.findIndex((cone) => cone.entry === entry);
+  const g = 'cell:argument:["pool","g"]#0';
+  const h = 'cell:argument:["pool","h"]#0';
+
+  it("keys an element by its source element and its position, over references", async () => {
+    const artifact = await artifactOf("flat-keys");
+    const instance = new Instance(artifact, argument());
+
+    expect((instance.result() as Flat).loudNames).toEqual(["a!", "b!", "c!"]);
+    // The cone instances of the body over the result of the `flatMap`.
+    expect(instance.coneInstances(coneOf(artifact, "loudNames"))).toEqual([
+      [`${g}/0`],
+      [`${g}/1`],
+      [`${h}/0`],
+    ]);
+  });
+
+  it("keys an element by its source element and its position, over plain values", async () => {
+    const artifact = await artifactOf("flat-keys");
+    const instance = new Instance(artifact, argument());
+
+    expect((instance.result() as Flat).loudHalves).toEqual([
+      "x1!",
+      "x2!",
+      "y1!",
+      "y2!",
+    ]);
+    expect(instance.coneInstances(coneOf(artifact, "loudHalves"))).toEqual([
+      ['value:"x"#0/0'],
+      ['value:"x"#0/1'],
+      ['value:"y"#0/0'],
+      ['value:"y"#0/1'],
+    ]);
+  });
+
+  it("evaluates the new position alone where a segment behind a reference grows", async () => {
+    const instance = new Instance(await artifactOf("flat-keys"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["pool", "h", "members", "1"], "d");
+
+    expect((instance.result() as Flat).loudNames).toEqual([
+      "a!",
+      "b!",
+      "c!",
+      "d!",
+    ]);
+    // The callback of the `flatMap` passes the element's array on and
+    // reads nothing, so the one evaluation is of the new key `h/1`.
+    expect(instance.counts.elementEvaluations - before).toBe(1);
+  });
+
+  it("evaluates nothing for an element when the source elements move, over references", async () => {
+    const instance = new Instance(await artifactOf("flat-keys"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["groups"], [link("h"), link("g")]);
+
+    expect((instance.result() as Flat).loudNames).toEqual(["c!", "a!", "b!"]);
+    expect(instance.counts.elementEvaluations - before).toBe(0);
+  });
+
+  it("evaluates nothing for an element when the source elements move, over plain values", async () => {
+    const instance = new Instance(await artifactOf("flat-keys"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["words"], ["y", "x"]);
+
+    expect((instance.result() as Flat).loudHalves).toEqual([
+      "y1!",
+      "y2!",
+      "x1!",
+      "x2!",
+    ]);
+    expect(instance.counts.elementEvaluations - before).toBe(0);
+  });
+
+  it("evaluates the segment of a plain value that entered, and no other", async () => {
+    const artifact = await artifactOf("flat-keys");
+    const instance = new Instance(artifact, argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["words"], ["x", "z"]);
+
+    expect((instance.result() as Flat).loudHalves).toEqual([
+      "x1!",
+      "x2!",
+      "z1!",
+      "z2!",
+    ]);
+    // The callback of the `flatMap` for `z`, and the two positions of its
+    // segment. The instances of the key that left are dropped.
+    expect(instance.counts.elementEvaluations - before).toBe(3);
+    expect(instance.coneInstances(coneOf(artifact, "loudHalves"))).toEqual([
+      ['value:"x"#0/0'],
+      ['value:"x"#0/1'],
+      ['value:"z"#0/0'],
+      ['value:"z"#0/1'],
+    ]);
+  });
+
+  it("evaluates both positions where two members of one segment change places", async () => {
+    const instance = new Instance(await artifactOf("flat-keys"), argument());
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["pool", "g", "members"], ["b", "a"]);
+
+    expect((instance.result() as Flat).loudNames).toEqual(["b!", "a!", "c!"]);
+    // The position in the segment is in the key, so a move inside a
+    // segment is a change of what two keys hold, and not a move of two
+    // keys: the instances of `g/0` and `g/1` are evaluated again.
+    expect(instance.counts.elementEvaluations - before).toBe(2);
+  });
+});
+
 // Ruling Z10 on `fixtures/within.tsx`: the executor takes which instances
 // of a cone exist, and where what an instance holds is kept, from the
 // `element` steps of `Cone.within`. Each callback of the fixture declares
