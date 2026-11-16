@@ -61,6 +61,13 @@ const logger = getLogger("serving-worker-host", {
   level: "warn",
 });
 
+/**
+ * How far above a worker's `heapLimitMb` V8's limit on its heap may be before
+ * the pool says that something replaced the limit: V8 adds the young
+ * generation to the limit it is given, 96 MB at the limits measured.
+ */
+const HEAP_LIMIT_SLACK_MB = 512;
+
 /** How often a worker posts a heartbeat and its watchdog checks for messages. */
 const WATCHDOG_INTERVAL_MS = 10_000;
 
@@ -1057,12 +1064,15 @@ export class ServingWorkerPool {
       compileOnHost: this.#options.moduleCompiler !== undefined,
       compileCacheDir: this.#options.compileCacheDir,
     };
-    started.ready = started.bridge.init(init).then(({ lifetimeLock }) => {
+    started.ready = started.bridge.init(init).then((
+      { lifetimeLock, heapSizeLimit },
+    ) => {
       // The worker's answer and its error event can reach this thread in one
       // turn, and the error's handler then runs ahead of this continuation:
       // a worker that failed that way counts toward the backoff, and is not
       // serving.
       if (started.gone) return;
+      this.#checkHeapLimit(heapSizeLimit);
       started.lifetimeLock = lifetimeLock;
       started.serving = true;
       this.#spareFailures = 0;
@@ -1078,6 +1088,25 @@ export class ServingWorkerPool {
     this.#workers.add(started);
     this.#counts.started += 1;
     return started;
+  }
+
+  /**
+   * Helper for `#spawn()`, which warns when V8 limits a worker's heap to
+   * well past the `heapLimitMb` it was started with. A process-wide
+   * `--max-old-space-size` does that: V8 takes the flag over the limit a
+   * `node:worker_threads` worker is given, so each worker's heap can grow to
+   * the process's limit and never reaches the one the pool counts on.
+   */
+  #checkHeapLimit(heapSizeLimit: number): void {
+    const limitMb = this.#options.heapLimitMb;
+    if (limitMb === undefined) return;
+    const actualMb = Math.round(heapSizeLimit / (1024 * 1024));
+    if (actualMb <= limitMb + HEAP_LIMIT_SLACK_MB) return;
+    logger.warn("heap-limit-overridden", () => [
+      `a serving worker's heap is limited to ${actualMb} MB, not the ` +
+      `${limitMb} MB it was started with: a process-wide ` +
+      "--max-old-space-size replaces each worker's limit, so leave it unset",
+    ]);
   }
 
   /**

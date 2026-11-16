@@ -206,12 +206,13 @@ export class FakeServingWorker implements PortLike {
 
   /**
    * Plays a host that starts: its entry reports ready and its host answers
-   * the pool's `worker.init`, which is when the pool counts it as serving.
+   * the pool's `worker.init`, which is when the pool counts it as serving,
+   * with `heapSizeLimit` as V8's limit on its heap.
    */
-  serve(): void {
+  serve(heapSizeLimit = 0): void {
     this.#host.onRequest("worker.init", (init) => {
       this.#init = init;
-      return { lifetimeLock: undefined };
+      return { lifetimeLock: undefined, heapSizeLimit };
     });
     this.#host.notify("worker.ready", null);
   }

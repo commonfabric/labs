@@ -11,6 +11,7 @@
  * shares, in place of what the entry gives.
  */
 
+import { getHeapStatistics } from "@node/v8";
 import { Identity, keyPairFromRealmValue } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
@@ -199,7 +200,10 @@ export function serveFromPort(
         }
       },
     });
-    return { lifetimeLock: await holdWorkerLifetimeLock() };
+    return {
+      lifetimeLock: await holdWorkerLifetimeLock(),
+      heapSizeLimit: getHeapStatistics().heap_size_limit,
+    };
   });
   endpoint.notify("worker.ready", null);
 }
