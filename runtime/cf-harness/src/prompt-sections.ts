@@ -115,7 +115,7 @@ export const PROMPT_SECTION_AUDIENCE: Readonly<
   "author-tools": { anyOf: ["author"] },
   "research-tools": { anyOf: ["author", "find", "pieces"] },
   "pieces-tools": { anyOf: ["pieces"] },
-  "piece-source-tools": { noneOf: ["respond"] },
+  "piece-source-tools": { anyOf: ["find", "act", "pieces", "author"] },
   "resolve-piece-tools": {
     anyOf: ["pieces"],
     noneOf: ["author"],

@@ -14,7 +14,10 @@ import {
 } from "../src/contracts/subagent.ts";
 import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import { orientContextMessages } from "../src/session-assembly.ts";
-import type { HarnessTaskTag } from "../src/task-classification.ts";
+import {
+  HARNESS_TASK_TAGS,
+  type HarnessTaskTag,
+} from "../src/task-classification.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
   COMMAND_ENFORCEMENT_GUIDANCE,
@@ -196,6 +199,17 @@ describe("tool-guidance", () => {
       expect(guidanceFor(tag), tag).toContain(PIECE_SOURCE_TOOL_GUIDANCE);
     }
     expect(guidanceFor("respond")).not.toContain(PIECE_SOURCE_TOOL_GUIDANCE);
+  });
+
+  it("keeps the rule for changing a piece's source where a respond tag sits beside a tag for work", () => {
+    // A classification that fails falls back to every tag, and a caller may
+    // name any mix, so a respond tag alone is what leaves the rule out.
+    expect(guidanceFor(...HARNESS_TASK_TAGS)).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+    expect(guidanceFor("respond", "find")).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
   });
 
   it("states the rule for changing a piece's source once, outside the handle rules", () => {
