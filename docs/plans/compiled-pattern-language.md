@@ -73,7 +73,7 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `190943404e`, under
+  computes exists at prototype commit `5847372a77`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
   no browser. It generates a scenario per module, with a distinct
@@ -91,18 +91,19 @@ next.
   commits; 15 events are refused, 6 of them by a pattern written to
   be refused or for a trusted event the harness does not send, and
   the rest by the handler on the generated values or by gaps in the
-  crate, the harness, and the generator. Of 234 write edges compared,
-  219 are equal, 15 tighter, and none looser. Of the 15 tighter, 10
+  crate, the harness, and the generator. Of 231 write edges compared,
+  219 are equal, 12 tighter, and none looser. Of the 12 tighter, 10
   have a label an earlier event of the scenario left on the shape of
-  the target. In 4, of `examples/map-demo/map-demo.tsx`, a handler of
+  the target. In 2, of `examples/map-demo/map-demo.tsx`, a handler of
   an element body writes a cell it captured, and the stored label
   holds the join of the `map` coordinator's transaction, which is on
   every path of the element's argument document and holds the labels
   of the list's own document (prototype note 261); the template has
   none of it, by the ruling that labels flow per value through the
-  callback of a per-element construct. In 1 the runtime stored a link with no
-  atom where the template mints the body's.
-  151 write edges are of a write the run did not make; a sample of 40
+  callback of a per-element construct. 3 edges for a value are not
+  compared because the run stored a link at the target, and the edge
+  with a reference for the same write is equal.
+  150 write edges are of a write the run did not make; a sample of 40
   found a write of an equal value, a branch not taken on the generated
   values, or a random choice, and no error. The comparison is partial
   in these ways. 208 bindings of patterns reached through elements of
@@ -123,7 +124,11 @@ next.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
   lists the places where it found the documents ambiguous; its notes
-  through 261 are written into the documents.
+  through 261 are written into the documents, and notes 262 to 272
+  are not. No compared row of the corpus evaluates the label of an
+  index: the 54 index slots of the corpus plans are read by outputs
+  below the elements of a collection and by handlers with no
+  compared write edge.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
