@@ -103,12 +103,14 @@ describe("the test topology", () => {
 
     // A run that read nothing satisfies the check above, and so does one
     // that stopped at the recorder instead of reaching what the recorder
-    // was handed. Every gate whose name begins `check-` runs a task of
-    // that name, so the two counts agree only where each of them was
-    // reached and read past the recorder.
+    // was handed. Every gate whose name begins `check-` runs the task its
+    // first word names, once for each part where it is split into parts,
+    // so the two counts agree only where each of them was reached and read
+    // past the recorder.
     const gates = ["repo-gates", "repo-history-gates"]
       .flatMap((id) => suiteById(suites, id)!.units)
-      .filter((unit) => unit.startsWith("check-"));
+      .filter((unit) => unit.startsWith("check-"))
+      .map((unit) => unit.split(" ")[0]!);
     expect(named.filter((task) => task.startsWith("check-")).toSorted())
       .toEqual(gates.toSorted());
   });

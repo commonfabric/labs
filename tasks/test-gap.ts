@@ -168,7 +168,16 @@ export async function localChanges(
   const git = (args: readonly string[]) =>
     gitOutput(root, args, `cannot list the changes against ${base}`);
   return new Set([
-    ...pathsOf(await git(["diff", "-z", "--name-only", "--merge-base", base])),
+    ...pathsOf(
+      await git([
+        "diff",
+        "-z",
+        "--name-only",
+        "--no-renames",
+        "--merge-base",
+        base,
+      ]),
+    ),
     ...pathsOf(await git(["ls-files", "-z", "--others", "--exclude-standard"])),
   ]);
 }

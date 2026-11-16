@@ -26,8 +26,13 @@ import { patternPath, PATTERNS_DIR } from "./pattern-files.ts";
 const BASELINES_PREFIX = `${PATTERNS_DIR}/baselines/`;
 
 async function git(...args: string[]): Promise<string> {
+  return await gitIn(Deno.cwd(), ...args);
+}
+
+async function gitIn(cwd: string, ...args: string[]): Promise<string> {
   const { code, stdout, stderr } = await new Deno.Command("git", {
     args,
+    cwd,
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -37,6 +42,28 @@ async function git(...args: string[]): Promise<string> {
     );
   }
   return new TextDecoder().decode(stdout);
+}
+
+/**
+ * The paths the repository at `root` deleted since `mergeBase`. A file it
+ * moved counts as deleted at the path it left where `moves` is `"deleted"`,
+ * as a baseline moved out of the store is as gone from it as one removed, and
+ * as kept where `moves` is `"kept"`, as a pattern moved elsewhere still
+ * exists.
+ */
+export async function deletedSince(
+  root: string,
+  mergeBase: string,
+  moves: "deleted" | "kept",
+): Promise<string[]> {
+  return (await gitIn(
+    root,
+    "diff",
+    moves === "deleted" ? "--no-renames" : "--find-renames",
+    "--diff-filter=D",
+    "--name-only",
+    `${mergeBase}...HEAD`,
+  )).split("\n").filter((line) => line.length > 0);
 }
 
 /** The pattern key a baseline path belongs to: `<key>/<file>.json`. */
@@ -51,7 +78,7 @@ export function baselineKeyOf(path: string): string | undefined {
 
 /**
  * Deleted baselines whose pattern was NOT also deleted. `deleted` and
- * `deletedPatterns` are both repo-relative paths from the same diff.
+ * `deletedPatterns` are both repo-relative paths.
  */
 export function unjustifiedDeletions(
   deleted: readonly string[],
@@ -80,15 +107,13 @@ async function main() {
     Deno.exit(2);
   }
 
-  const deleted = (await git(
-    "diff",
-    "--diff-filter=D",
-    "--name-only",
-    `${mergeBase}...HEAD`,
-  )).split("\n").filter((line) => line.length > 0);
+  const deleted = await deletedSince(Deno.cwd(), mergeBase, "deleted");
 
+  // A pattern the change moved still exists, so it retires nothing.
   const deletedPatterns = new Set(
-    deleted.filter((path) => path.endsWith(".ts") || path.endsWith(".tsx")),
+    (await deletedSince(Deno.cwd(), mergeBase, "kept")).filter((path) =>
+      path.endsWith(".ts") || path.endsWith(".tsx")
+    ),
   );
 
   const offenders = unjustifiedDeletions(deleted, deletedPatterns);
