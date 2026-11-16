@@ -664,6 +664,20 @@ describe("view-push", () => {
       )).toBe(true);
     });
 
+    it("returns true when GitHub denies the account permission to push, over HTTPS or SSH", () => {
+      expect(pushRefused(
+        "remote: Permission to octo/repo.git denied to someone.\n" +
+          "fatal: unable to access 'https://github.com/octo/repo.git/': " +
+          "The requested URL returned error: 403\n",
+      )).toBe(true);
+      expect(pushRefused(
+        "ERROR: Permission to octo/repo.git denied to someone.\n" +
+          "fatal: Could not read from remote repository.\n",
+      )).toBe(true);
+      expect(pushRefused("remote: Permission to push is checked here.\n"))
+        .toBe(false);
+    });
+
     it("returns false when git could not reach the server or finish", () => {
       for (
         const output of [

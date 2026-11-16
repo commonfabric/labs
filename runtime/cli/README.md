@@ -703,9 +703,9 @@ on a branch, and refuses when git started the viewer as its pager for a
 different repository.
 
 When a push fails or is aborted, as it can when the network is unreliable, a
-Retry push button (`P`) pushes again, unless git says the push was rejected,
-which pushing again cannot change. Each later push's output follows the earlier
-one's in the same dialog.
+Retry push button (`P`) pushes again, unless git says the push was rejected, or
+GitHub says the account has no permission to push, which pushing again cannot
+change. Each later push's output follows the earlier one's in the same dialog.
 
 Once the push succeeds, the settings say what happens next, and the radio
 buttons under "Pull requests" choose one of the four ways below. The first and

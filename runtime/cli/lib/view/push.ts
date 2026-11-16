@@ -129,9 +129,11 @@ export function openPage(io: Pick<PushIo, "open">, url: string): string {
 
 /** Whether git's output says the push was refused, as against failing to
  * reach the server or to finish, so that pushing again would be refused
- * again. */
+ * again: git rejected the update, or GitHub denied the account permission
+ * to push, which it says on a line of its own over HTTPS and over SSH. */
 export function pushRefused(output: string): boolean {
-  return /^\s*! \[(remote )?rejected\]/m.test(output);
+  return /^\s*! \[(remote )?rejected\]|^(remote: |ERROR: )Permission to \S+ denied to /m
+    .test(output);
 }
 
 /**
