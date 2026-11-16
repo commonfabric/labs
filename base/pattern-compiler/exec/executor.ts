@@ -696,6 +696,9 @@ export class Instance {
       handler: (binding: number, run: (...given: unknown[]) => unknown) => {
         this.#handlers.set(binding, run);
       },
+      // A handler a function body binds has a stream, and the executor
+      // makes no binding of a function body: the stream takes no event.
+      bound: (_run: unknown) => new StreamRef(-1, []),
       thunk: (evaluate: (host: Host) => unknown) => new Thunk(evaluate),
       force,
       at: (root: unknown, path: string[], host: Host) => {
@@ -1290,6 +1293,73 @@ export class Instance {
     return cells;
   }
 
+  /**
+   * Compares where the stored result holds a link to the stream of a
+   * binding with the paths `Binding.result` lists (PL §1.1): the
+   * positions that a listed path names, the positions no listed path
+   * names, and the listed paths without `*` at which the result holds
+   * the stream and at which it holds none.
+   */
+  streamPositions(): {
+    atListedPath: number;
+    atNoListedPath: number;
+    listedPathsHeld: number;
+    listedPathsNotHeld: number;
+  } {
+    const found: { binding: number; path: string[] }[] = [];
+    const open = new Set<string>();
+    const walk = (value: unknown, path: string[]) => {
+      if (isStream(value)) {
+        found.push({ binding: value.$stream.binding, path });
+      } else if (isLink(value)) {
+        const located = this.store.locate(
+          new Ref(value.$link.doc, value.$link.path),
+          true,
+        );
+        const id = addressOf(located.ref);
+        if (open.has(id)) return;
+        open.add(id);
+        walk(located.value, path);
+        open.delete(id);
+      } else if (Array.isArray(value)) {
+        value.forEach((member, index) => walk(member, [...path, `${index}`]));
+      } else if (isRecord(value)) {
+        for (const [name, member] of Object.entries(value)) {
+          walk(member, [...path, name]);
+        }
+      }
+    };
+    walk(this.store.docs.get("result")?.value, []);
+    const names = (listed: string[], path: string[]) =>
+      listed.length === path.length &&
+      listed.every((segment, index) =>
+        segment === path[index] ||
+        (segment === "*" && /^\d+$/.test(path[index]))
+      );
+    const counts = {
+      atListedPath: 0,
+      atNoListedPath: 0,
+      listedPathsHeld: 0,
+      listedPathsNotHeld: 0,
+    };
+    for (const { binding, path } of found) {
+      const listed = this.plan.bindings[binding]?.result ?? [];
+      if (listed.some((entry) => names(entry, path))) counts.atListedPath += 1;
+      else counts.atNoListedPath += 1;
+    }
+    this.plan.bindings.forEach((record, binding) => {
+      for (const listed of record.result ?? []) {
+        if (listed.includes("*")) continue;
+        const held = found.some((entry) =>
+          entry.binding === binding && names(listed, entry.path)
+        );
+        if (held) counts.listedPathsHeld += 1;
+        else counts.listedPathsNotHeld += 1;
+      }
+    });
+    return counts;
+  }
+
   /** The documents the instance holds, by kind (ES §4.1). */
   documents(): Record<string, number> {
     const kinds: Record<string, number> = {};
@@ -1378,7 +1448,7 @@ export class Instance {
   #contextOf(stream: StreamRef): Context {
     const context = new Map<number, Element>();
     let step = 0;
-    for (const { element } of this.plan.bindings[stream.binding].within) {
+    for (const { element } of this.plan.bindings[stream.binding]?.within ?? []) {
       if (element === undefined) continue;
       const key = stream.keys[step];
       step += 1;
@@ -1394,6 +1464,13 @@ export class Instance {
   #handle(stream: StreamRef, event: unknown, context: Context): Outcome {
     const binding = stream.binding;
     const record = this.plan.bindings[binding];
+    if (record === undefined) {
+      return {
+        binding,
+        committed: false,
+        error: "the stream of a binding made in a function body",
+      };
+    }
     const body = record.handler.body;
     const run = body === undefined
       ? undefined

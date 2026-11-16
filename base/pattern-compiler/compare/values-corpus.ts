@@ -12,7 +12,13 @@
  *
  * `run` appends one line per module to the results file and leaves out a
  * module the file already has, as `corpus.ts` does. With a third argument,
- * it runs the modules whose path contains it.
+ * it runs the modules whose path contains it. Each line holds what today's
+ * runtime computed, so that
+ *
+ * `deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts again <results.jsonl> <new.jsonl>`
+ *
+ * runs the executor alone on the crate's current output and compares it
+ * with the values the earlier run read.
  */
 import { fromFileUrl } from "@std/path";
 
@@ -25,10 +31,12 @@ import {
 } from "./corpus.ts";
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
+import type { EventOutcome } from "./harness.ts";
 import {
   compareValues,
   readingValues,
   type ValueComparison,
+  type Values,
 } from "./values.ts";
 
 const repository = fromFileUrl(new URL("../../../", import.meta.url));
@@ -58,6 +66,13 @@ export type ModuleValues = {
   comparison?: ValueComparison;
   /** The events today's runtime committed, of those sent. */
   events?: { sent: number; committed: number };
+  /** What today's runtime was given and what it computed. */
+  runtime?: {
+    argument: Record<string, unknown>;
+    events: { binding: number; event: unknown }[];
+    outcomes: Pick<EventOutcome, "outcome" | "elements">[];
+    values: Values;
+  };
 };
 
 const runOne = async (module: EmittedModule): Promise<ModuleValues> => {
@@ -84,7 +99,10 @@ const runOne = async (module: EmittedModule): Promise<ModuleValues> => {
   const argument = Object.fromEntries(
     Object.entries(inputs).map(([name, input]) => [name, input.value]),
   );
-  const outcomes = result.outcomes ?? [];
+  const outcomes = (result.outcomes ?? []).map(({ outcome, elements }) => ({
+    outcome,
+    ...(elements === undefined ? {} : { elements }),
+  }));
   return {
     module: module.module,
     pattern: artifact.name,
@@ -94,7 +112,35 @@ const runOne = async (module: EmittedModule): Promise<ModuleValues> => {
       committed: outcomes.filter(({ outcome }) => outcome === "committed")
         .length,
     },
+    runtime: { argument, events, outcomes, values },
   };
+};
+
+/**
+ * Compares the crate's current output for each module of an earlier run
+ * with the values that run read from today's runtime.
+ */
+const again = async (file: string, to: string) => {
+  const modules = new Map(
+    (await corpusArtifacts()).map((module) => [module.module, module]),
+  );
+  const lines: string[] = [];
+  for (const earlier of await readResults(file)) {
+    const module = modules.get(earlier.module);
+    const artifact = module?.patterns.find((pattern) =>
+      pattern.name === earlier.pattern
+    );
+    if (earlier.runtime === undefined || artifact === undefined) {
+      lines.push(JSON.stringify(earlier));
+      continue;
+    }
+    const { argument, events, outcomes, values } = earlier.runtime;
+    lines.push(JSON.stringify({
+      ...earlier,
+      comparison: compareValues(artifact, argument, events, outcomes, values),
+    }));
+  }
+  await Deno.writeTextFile(to, lines.map((line) => `${line}\n`).join(""));
 };
 
 const readResults = async (file: string): Promise<ModuleValues[]> => {
@@ -272,6 +318,26 @@ const report = async (file: string, verbose: boolean) => {
   ) {
     console.log(`  ${name}: ${total(name)}`);
   }
+  console.log(
+    "where the stored result holds a stream, against `Binding.result`:",
+  );
+  for (
+    const name of [
+      "atListedPath",
+      "atNoListedPath",
+      "listedPathsHeld",
+      "listedPathsNotHeld",
+    ] as const
+  ) {
+    console.log(
+      `  ${name}: ${
+        executed.reduce(
+          (sum, result) => sum + (result.comparison?.streams?.[name] ?? 0),
+          0,
+        )
+      }`,
+    );
+  }
   const documents = new Map<string, number>();
   for (const result of executed) {
     for (
@@ -282,17 +348,43 @@ const report = async (file: string, verbose: boolean) => {
   }
   console.log("documents the executor stored, over the executed modules:");
   for (const [kind, times] of documents) console.log(`  ${kind}: ${times}`);
+  const mine = [...documents.values()].reduce((sum, times) => sum + times, 0);
+  const theirs = executed.reduce(
+    (sum, result) => sum + (result.comparison?.runtimeDocuments ?? 0),
+    0,
+  );
+  console.log(`  in all: ${mine}`);
+  console.log(
+    `documents today's runtime stored for the same modules, the cells of ` +
+      `the scenario's inputs included: ${theirs}`,
+  );
+  if (verbose) {
+    for (const result of executed) {
+      const own = Object.values(result.comparison?.documents ?? {}).reduce(
+        (sum, times) => sum + times,
+        0,
+      );
+      console.log(
+        `    ${result.module}: executor ${own}, runtime ${
+          result.comparison?.runtimeDocuments ?? "?"
+        }`,
+      );
+    }
+  }
 };
 
 if (import.meta.main) {
   const [command, file, option] = Deno.args;
   if (command === "run" && file !== undefined) {
     await run(file, option);
+  } else if (command === "again" && file !== undefined && option !== undefined) {
+    await again(file, option);
   } else if (command === "report" && file !== undefined) {
     await report(file, option === "--verbose");
   } else {
     console.error(
-      "usage: values-corpus.ts run <results.jsonl> [text] | report <results.jsonl> [--verbose]",
+      "usage: values-corpus.ts run <results.jsonl> [text] | " +
+        "again <results.jsonl> <new.jsonl> | report <results.jsonl> [--verbose]",
     );
     Deno.exit(2);
   }

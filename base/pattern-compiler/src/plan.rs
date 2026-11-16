@@ -1850,6 +1850,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
             }
+            // The schema of the callee's declared argument: its defaults
+            // are what a path the call leaves out reads as.
+            if let Ok(ty) = self.resolver.formal_parameter_type(home, parameter) {
+                self.facts.argument_schema(self.resolver.schema_of(ty));
+            }
             self.bind_pattern(&parameter.pattern, argument);
         }
         let saved_given = std::mem::replace(&mut self.given_constants, given);

@@ -29,6 +29,12 @@ export type Snapshot = {
 export type Values = {
   /** The space the run was made in. */
   space?: string;
+  /**
+   * The documents today's run stored from the compile on, the cells the
+   * scenario gives its inputs through included: after the instance
+   * settled, and at the end.
+   */
+  documents?: { settled: number; end: number };
   settled?: Snapshot;
   /** One entry per event sent, in order. `undefined` for one not sent. */
   events: (Snapshot | undefined)[];
@@ -57,7 +63,11 @@ export type ValueComparison = {
   differences: Difference[];
   /** The documents the executor stored at the end, by kind. */
   documents?: Record<string, number>;
+  /** The documents today's run stored at the end (`Values.documents`). */
+  runtimeDocuments?: number;
   counts?: Instance["counts"];
+  /** The stored positions of streams against `Binding.result`. */
+  streams?: ReturnType<Instance["streamPositions"]>;
   /** The events the executor's handler did not run to its end for. */
   failedEvents: string[];
 };
@@ -172,9 +182,32 @@ export const readingValues = (
   plan: Plan,
 ): { probe: Probe; values: Values } => {
   const values: Values = { events: [] };
+  // The documents a commit wrote, and those the compile wrote.
+  const written = new Set<string>();
+  let compiled = new Set<string>();
   const probe: Probe = {
-    at: (point, { runtime, space }) => {
+    at: (point, { runtime, space, storageManager }) => {
       values.space = space;
+      if (point === "created") {
+        storageManager.subscribe({
+          // deno-lint-ignore no-explicit-any
+          next(notification: any) {
+            if (notification.type !== "commit") return undefined;
+            for (const change of notification.changes) {
+              const { id, scope } = change.address;
+              written.add(JSON.stringify([id, scope]));
+            }
+            return undefined;
+          },
+        });
+      }
+      if (point === "compiled") compiled = new Set(written);
+      const stored = [...written].filter((key) => !compiled.has(key)).length;
+      if (point === "settled") {
+        values.documents = { settled: stored, end: stored };
+      } else if (values.documents !== undefined) {
+        values.documents.end = stored;
+      }
       if (point !== "settled" && point !== "after event") return;
       const read = runtime.edit();
       try {
@@ -344,6 +377,8 @@ export const compareValues = (
       );
     }
   });
+  comparison.streams = instance.streamPositions();
+  comparison.runtimeDocuments = runtime.documents?.end;
   comparison.documents = instance.documents();
   comparison.counts = instance.counts;
   return comparison;

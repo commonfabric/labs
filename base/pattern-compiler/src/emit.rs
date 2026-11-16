@@ -88,6 +88,9 @@ pub(crate) struct Context {
     pub start: u32,
     /// The cone the call was evaluated in, where it was in one.
     pub cone: Option<usize>,
+    /// The schema of the argument the pattern declares, for a pattern
+    /// compiled in.
+    pub argument_schema: Option<Value>,
 }
 
 /// What the value-code emitter reads of the plan emitter's walk.
@@ -119,6 +122,7 @@ impl Facts {
                 module,
                 start,
                 cone: None,
+                argument_schema: None,
             }],
             ..Self::default()
         }
@@ -148,11 +152,16 @@ impl Facts {
             module,
             start,
             cone,
+            argument_schema: None,
         });
         let made = self.contexts.len() - 1;
         self.inlines.insert((saved, at), made);
         self.current = made;
         saved
+    }
+
+    pub fn argument_schema(&mut self, schema: Value) {
+        self.contexts[self.current].argument_schema = Some(schema);
     }
 
     pub fn leave(&mut self, saved: usize, _result: Option<Place>) {
@@ -718,6 +727,23 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     /// The first value of a state cell (PL §1.3: "the value a declaration
     /// gives the cell is written when the cell is first created").
     fn state_cell(&mut self, inner: &Expression<'a>, cell: usize) {
+        // The call that makes the cell is the receiver of a method such
+        // as `.for(cause)` written after it.
+        let mut inner = inner;
+        while let Expression::CallExpression(call) = inner {
+            let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+                break;
+            };
+            if member.property.name == "of" {
+                break;
+            }
+            match unwrap(&member.object) {
+                receiver @ (Expression::CallExpression(_) | Expression::NewExpression(_)) => {
+                    inner = receiver;
+                }
+                _ => break,
+            }
+        }
         let argument = match inner {
             Expression::CallExpression(call) => {
                 call.arguments.first().and_then(Argument::as_expression)
@@ -1284,6 +1310,23 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     .get(&(context, identifier.span.start))
                     .cloned();
                 let read = format!("$rt.at({root}, {}, $h)", path_json(path));
+                // A path the call leaves out reads as the default the
+                // callee's argument type declares for it.
+                let declared = (root == "$arg")
+                    .then(|| {
+                        let mut schema = self.generator.finished.facts.contexts[context]
+                            .argument_schema
+                            .as_ref()?;
+                        for segment in path.iter() {
+                            schema = schema.get("properties")?.get(segment)?;
+                        }
+                        schema.get("default").cloned()
+                    })
+                    .flatten();
+                let read = match declared {
+                    Some(declared) => format!("$rt.or({read}, () => ({declared}))"),
+                    None => read,
+                };
                 let read = match default {
                     Some(default) => {
                         let default = self.in_cone(None, |rewriter| rewriter.render(default, Want::Pass));
@@ -1571,6 +1614,13 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                                     Some(Place::Stream(binding)),
                                 );
                             }
+                        }
+                        // In a function body, a function written as an
+                        // attribute is a handler the body binds
+                        // (`BodyCall` of kind `bind`).
+                        if self.context.is_none() && FunctionLike::of(expression).is_some() {
+                            let code = self.render(expression, Want::Pass);
+                            return (format!("$rt.bound({code})"), None);
                         }
                         let place = self.place_of(expression);
                         (self.passed_on(expression, &place), place)
