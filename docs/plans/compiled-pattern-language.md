@@ -131,17 +131,21 @@ next.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
   lists the places where it found the documents ambiguous. Its notes
-  through 272 and notes 281 to 302 are written into the documents.
+  through 272, notes 281 to 302, and notes 307 to 320 are written into
+  the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
-  below, and notes 303 to 306, the results of the value comparison,
-  into
+  below, and notes 303 to 306 and 321 to 324, the results of the value
+  comparison, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `3e518147df`, at which the crate
-  also emits value code and an executor runs a plan with it: in the
-  fixtures 122 of 122 compared values equal those of today's runtime,
-  and in the corpus 4,472 of 4,537, over the 186 modules the executor
-  runs. No compared row of the corpus evaluates the label of an
+  The latest prototype commit read is `96f3b83a73`. From commit
+  `3e518147df` on the crate also emits value code and an executor runs
+  a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
+  values equal those of today's runtime, and in the corpus 4,472 of
+  4,537, over the 186 modules the executor runs. At `96f3b83a73`, with
+  the rulings on what the executor needed implemented, the figures are
+  152 of 152 in the fixtures and 4,485 of 4,539 in the corpus, over
+  187 modules. No compared row of the corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
   below the elements of a collection and by handlers with no
   compared write edge. Two fixtures of the prototype test the label of
@@ -484,20 +488,44 @@ plan (`src/emit.rs`, its `emit` command), and an executor written in
 TypeScript (`exec/executor.ts`) runs the two. A comparison
 (`compare/values.ts`) runs the scenario of a module on today's runtime
 and on the executor and compares the values. These are the prototype's
-notes 281 to 306. Notes 281 to 302 say what the executor needed that the
+notes 281 to 306. At commit `96f3b83a73` the emitter and the executor
+implement five of the rulings that followed: the place of a slot of
+`Body.reads`, a path that a call leaves out, the first value of a state
+cell, a moved element with the keys of a derived collection, and the
+two kinds of cone with side-writes. Those are notes 307 to 320, which
+are written into the documents, and notes 321 to 324, which run the
+comparison again. Each part below gives the figures of both commits,
+the earlier first.
+
+Notes 281 to 302 say what the executor needed that the
 documents did not give, and are written into the documents. Of the
 questions they raised, the place of a slot of `Body.reads`, a path that
 a call leaves out, the first value of a state cell, a moved element,
 a cone with side-writes, the collections a cone's record lists, and
 who places a stream in a computed value are ruled, and so is which
 default is read along a chain of places ([Decided](#decided)).
-Questions 141, 144 to 147, and 149 to 151 below, and questions 81 to
-84 of `execution-and-storage.md`, are open. Of question 141 the member
-is ruled, and what it holds beside the collections is open. Of
+Questions 141, 144 to 147, and 149 to 157 below, and questions 81 to
+84 of `execution-and-storage.md`, are open. Questions 152 to 157 are
+what notes 307 to 320 found the rulings to leave undetermined. Of
+question 141 the member is ruled, and what it holds beside the collections is open. Of
 question 144 the placing and the check are ruled, and what the check
-covers outside the result is open. Notes 303 to 306 are the results
-here.
+covers outside the result is open. Notes 303 to 306 and 321 to 323 are
+the results here.
 Nothing was timed.
+
+Note 324 says what the later round did not keep to and did not verify.
+The tests of the five rulings were written before the code. Two fixes
+of the executor were made from a difference in the corpus, and not
+from a test written first. One is the copy of a container read under a
+schema, which had no address, so that `equals` and `remove` did not
+find a member a handler had read through a typed handle; a test of the
+store was written after the fix. The other hands on the keys of a
+derived collection that a cone returns unchanged (question 156), and
+has no test. The counts of bodies, state
+cells, and constants that notes 308 to 310 give are over all 382
+corpus patterns, the ones with an unsupported construct included. The
+rows of the tables below that say "not verified" are a reading of the
+source and of the two values.
 
 ### What is compared, and what is not
 
@@ -516,8 +544,12 @@ fixture uses the scenario its label test writes, where it writes one.
 - **Today's side can be a saved run.** A run saves what today's runtime
   computed, and the executor can be run alone again on the crate's
   current output against the saved values (`compare/values-corpus.ts`,
-  the command `again`). The notes do not say which figures come from
-  such a rerun.
+  the command `again`). For the figures of commit `3e518147df` the
+  notes do not say which come from such a rerun. The corpus figures of
+  commit `96f3b83a73` over the 270 modules are such a rerun: the
+  executor alone, against the values that today's runtime computed in
+  the run of the earlier commit. Today's runtime was run again for the
+  two modules that the later commit adds, and for no other.
 - **The executor is not the design's runtime.** It instantiates no
   label, checks no constraint, has no transaction log, and persists
   nothing. It runs no effect: the result of an operation reads as
@@ -532,9 +564,26 @@ fixture uses the scenario its label test writes, where it writes one.
   debug-string built-in. It reads `spaceOf` as the space it is given
   and has no acting principal. It does not use `Cone.writes`,
   `ConeResult.selections`, or `ConeResult.picks`: a body's side-write
-  goes through the handle the body holds.
+  goes through the handle the body holds. At commit `96f3b83a73` it
+  reads the write edges of a cone for one thing, to find the cone that
+  a read of a written place demands.
 - **The executor has no reader.** It evaluates every kept output and
-  then the result, where the design evaluates what is demanded.
+  then the result, where the design evaluates what is demanded. At
+  commit `96f3b83a73` it evaluates a cone with a small, fixed set of
+  write targets only where an evaluation reads or passes on a place
+  that one of its write edges names, and it evaluates each materializer
+  whose input changed after the kept outputs and the result of a wave,
+  where a write starts a further wave. The ruling has a materializer
+  run after the rest of the wave "often", and the documents promote one
+  ahead of a reader inside its envelope
+  (`scheduler-and-serving-loop.md` §7.2). The executor runs it after
+  the wave always. Three cases the executor leaves out: a handler's
+  read of a write target demands nothing; a write edge that names its
+  handle by a computed value, or whose target is a created cell or a
+  child's argument, has no root and path, and no reader is found for
+  it; and a cone of an element body whose reader is outside the body
+  is evaluated for every key of the table, in each of the three cases
+  of a per-element source.
 - **The emitter departs from the documents in three ways** that the
   results depend on. It writes one function per value a cone computes,
   where `execution-and-storage.md` §2.1 has one per cone. A pattern
@@ -553,7 +602,50 @@ result of today's run rejects with a `LinkCycleError`. One event of
 `fixtures/handle-passed.tsx` is not handled, because its handler
 instantiates a pattern.
 
+At commit `96f3b83a73`, 22 of the 25 fixtures are run, in 27 runs, and
+152 of 152 compared values are equal. The added runs are two of
+`fixtures/callee-default.tsx` with 8 values, one of
+`fixtures/chain.tsx` with 2, and one of `fixtures/side-writes.tsx`
+with 20. Three fixtures are not compared with today's runtime:
+`link-cycle` as before; `state-first`, whose state cell has a first
+value computed from an input, which today's runtime refuses
+(`validateStaticData` in `runtime/runner/src/cell.ts`); and
+`side-write-undemanded`, in which a cone with a side-write is demanded
+by nothing and the executor does not evaluate it, a difference the
+ruling makes.
+
+`fixtures/chain.tsx` is a `map` over a `filter` over a `map`, once
+over records and once over plain values. A test of the executor runs
+it with the records given as references to cells, so its two chains
+are the case of an array of references and the case of an array of
+plain values in place, and the second and third construct of each are
+the case of the result of another per-element construct. It counts
+the evaluations of cone instances of an element body.
+
+| Step | Case | Evaluations |
+| --- | --- | ---: |
+| The instance is created: 3 records and 3 plain values | Both arrays | 16 |
+| The title behind one reference changes | Array of references | 2 |
+| `done` behind one reference changes, and the element leaves the `filter` result | Array of references | 1 |
+| One plain value is replaced in place | Array of plain values in place | 3 |
+| Both arrays are reversed | Both arrays | 0 |
+
+The 2 are the first `map` and the last for that key: the predicate of
+the `filter` read `done`, which did not change. The 3 are one cone
+instance in each body for the key that entered. On the reversal the six
+collections are assembled again, once each, and assembly is counted
+apart from evaluation. In `fixtures/index-nodes.tsx`, whose elements
+are plain values in place, a move of two of three elements evaluates
+the function that reads the index for the two moved keys: 2
+evaluations, where the executor of the earlier commit made 4. Where a
+body is permitted to evaluate a whole collection again, the executor
+keeps results per key all the same. The key of an element that a
+`flatMap` contributes (question 147) is exercised by no fixture.
+
 ### The corpus
+
+The figures down to the heading "The corpus at commit `96f3b83a73`"
+are of commit `3e518147df`.
 
 The comparison takes the 270 modules with a full plan. Today's runtime
 runs 213 of them, the same 213 as in the cost section. The executor
@@ -610,9 +702,9 @@ The eight modules not examined are `examples/todo-list/todo-list.tsx`,
 have no cause, and the causes given for the other rows come from a
 first reading of the source and the two values and are not verified.
 
-No difference is classed as a gap of the design by itself. The gaps this
-round found are in what the executor needed in order to compute a value
-at all. Each showed as a wrong value or a failed run before the emitter
+At this commit no difference is classed as a gap of the design by
+itself. The gaps this round found are in what the executor needed in
+order to compute a value at all. Each showed as a wrong value or a failed run before the emitter
 or the executor supplied what was missing. Eight are ruled
 ([Decided](#decided)), and the rest are questions: 141, 144 to 147,
 and 149 to 151 below, and questions 81 to 84 of
@@ -621,6 +713,78 @@ The one design difference in the table is by the documents: in
 `patterns/dev/gideon-tests/test-ifelse-both-branches.tsx` today's
 runtime evaluates both branches of an `ifElse` and the executor the
 selected one.
+
+### The corpus at commit `96f3b83a73`
+
+The crate emits a plan with no unsupported construct for 272 modules,
+two more, because a first value that is not a constant is no longer
+unsupported. The first two columns are over the same 270 modules. In
+the second the executor alone was run again, against the values that
+today's runtime computed for the first. For the third, today's runtime
+was run on the two added modules.
+
+| | `3e518147df` | `96f3b83a73` | `96f3b83a73`, 272 modules |
+| --- | ---: | ---: | ---: |
+| Modules run by today's runtime | 213 | 213 | 215 |
+| Executed | 186 | 187 | 189 |
+| Every value equal and every event handled | 159 | 161 | 161 |
+| Values compared | 4,537 | 4,539 | 4,607 |
+| Values equal | 4,472 | 4,485 | 4,527 |
+| Values that differ | 65 | 54 | 80 |
+| Modules with a difference | 24 | 22 | 23 |
+| Committed events the executor does not handle | 15 of 269 | 15 | 20 of 278 |
+| Documents the executor stored | 1,302 | 504 | 509 |
+| Of them state cells | 898 | 98 | 99 |
+
+The table "Why a module is not executed" and the table of causes above
+are not made again for the later commit. What the notes give of the
+changes:
+
+- **One module more is executed,** `dev/test/input-self/subjects.tsx`.
+  One of its two values differs: the result holds a reference to
+  itself, which the executor's read gives as nothing at the second
+  level and today's read follows (question 157).
+- **Values that differed and are equal:** 6 of
+  `examples/todo-list/todo-list.tsx`, by the moved element and by the
+  keys of a derived collection that a cone passes on unchanged
+  (question 156); 2 of `showcase/card-piles/main.tsx` and 4 of
+  `apps/contacts/contact-book.tsx`, both by the fix of the copy of a
+  container that had no address.
+- **Two values that were equal differ,** both in
+  `examples/map-demo/map-demo.tsx` after its last event. The handler of
+  that event removes an area, which it did not find before the fix of
+  the container copy. A cell that an earlier event had set to the
+  area's center then reads as nothing, because it holds a reference to
+  a position below the array (question 145). The two values of the
+  module that differed after that event are equal, so the module has 4
+  values that differ, as before. No other value that was equal differs.
+- **The two added modules.** `showcase/battleship/pass-and-play/main.tsx`
+  has 32 of 32 values equal. `apps/base/contacts.tsx` has 10 of 36: two
+  of its handlers construct a cell with `new` in a function body, which
+  the executor does not do.
+- **Rulings that changed no value.** The demand of a cone with a small,
+  fixed set of write targets changed no value of the corpus.
+
+Of the 23 values in 8 modules that the earlier commit left without a
+cause, 8 are equal (`todo-list.tsx` and `card-piles`). The other 15, by
+class:
+
+| Module | Values | Class | Cause |
+| --- | ---: | --- | --- |
+| `examples/map-demo` | 4 | Design gap | A stored reference to a member of an element that is a plain value in place, which is then removed (question 145) |
+| `dev/gideon-tests/test-cell-equals` | 1 | Design gap | `equals` of a reference with an element that is a plain value in place (question 145) |
+| `showcase/wordsearch` | 3 | Neither | The pattern draws its seed from `Math.random`, and the two runs draw two numbers |
+| `system/agent-run` | 4 | Today's runtime, not verified | The scenario's argument holds `run.state`, and today's run reads nothing at `run` |
+| `dev/catalog/catalog` | 2 | Prototype defect, not verified | A child that is `null` in today's run holds nothing in the executor's |
+| `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | A `$cell` attribute holds a pattern's result; today's read gives no `$NAME` below it |
+
+The two rows classed as a design gap are the first differences of the
+comparison with that class. Both are of the case of an array of plain
+values in place, and neither arises over an array of references. They
+come from an element that is a plain value stored in place, which
+today's runtime does not have: it stores an element that is a record as
+a cell of its own. They are two of the four consequences question 145
+lists, and the other two do not show in a comparison of values.
 
 ### What the run conformed to
 
@@ -667,6 +831,49 @@ The executor counted where its run kept to the plan.
   state entries of bindings hold `null` for a constant that is not a
   literal written at the binding, which is a defect of the crate.
 
+The plan of commit `96f3b83a73` has more of what was lacking. The
+counts are over all 382 corpus patterns, the ones with an
+unsupported construct included.
+
+- **The place of a slot.** The corpus plans have 6,179 entries of
+  `Body.reads`, each with its place, 1,314 of them in the 602 uses of a
+  body that is no handler. The executor builds the slot part of an
+  argument from the plan alone. Two inputs of a use bound to one place
+  give two entries with one slot, and an entry whose place holds `*` is
+  not placed by the executor: the container is given whole by the
+  entry at the container's own path.
+- **A path a call leaves out.** The corpus has 72 names declared with a
+  default of the callee, for a path the call leaves out or writes a
+  constant at. Of the 410 state entries of bindings that hold a
+  constant, 144 hold `null`, where the earlier commit had 200. Value
+  code of a callee reads a slot with the callee's default at 49 reads,
+  and passes a sandboxed body a list of places with their defaults in
+  27 uses of a body (question 152). The crate applies the default to a
+  name the callee's parameter destructures and where the call writes
+  its argument as a record, and in no other form; both limits are the
+  prototype's.
+- **The first value of a state cell.** Of 1,496 state cells, 1,473 have
+  a constant first value, 15 have none, and 8 have one that is not a
+  constant. None of the 8 reads a slot or an output of another cone:
+  the value is a call, a record written in the pattern body, or a
+  member of a module constant, which the crate does not evaluate.
+  Where the declaration writes no type argument, the schema the crate
+  gives the cell is the default alone, a limit of the crate.
+- **The kind of a cone with side-writes.** Of the 3,717 cones, 14 have
+  a small, fixed set of write targets, 13 of them a state cell and 1
+  the cell of a handle at a slot, and 33 are materializers, each a
+  `lift` that creates a cell under a cause computed from data and
+  gives it a value. The 187 executed modules have 6 and 19 of them.
+  The writes that expression code makes, a stored request and a first
+  value, are not counted. The crate's plan holds the kind as a member
+  of the cone and holds a materializer's body in a cone. The documents
+  have neither: the kind is read from `Cone.writes` and
+  `Plan.operations`, and a materializer is in no cone
+  (`plan-and-label-templates.md` §3.11).
+- **Streams.** The result holds a stream at 425 positions that a listed
+  path names, where the earlier commit had 431, and at 18 that none
+  names. The difference is not examined.
+
 ### Documents
 
 The executor stores an argument document, a result document, and one
@@ -685,6 +892,16 @@ body creates.
 For a fixture with no state cell the executor stores two documents, and
 one more per state cell.
 
+At commit `96f3b83a73` the executor writes nothing when it creates a
+state cell whose first value is a constant, by the ruling, and the
+first write makes the document. Over the 187 modules it then stores 504
+documents, 2.7 per module, of which 98 are state cells, 0.5 per module;
+over the 189 modules of the wider set, 509 and 99. The notes give no
+other row of the table for that commit. The prototype's cost model
+still counts one document per state cell, which is an upper bound under
+the ruling, and the derived figures of [Storage](#storage) are not
+computed again.
+
 Today's figure includes the cells through which the scenario gives the
 instance its inputs, one per top-level input. It is not the row "today,
 measured: documents of the instance" of
@@ -695,13 +912,15 @@ The executor's count is a lower bound on what the compiled path stores
 for these scenarios, in this sense: it leaves out the part documents,
 the state documents of operations, the stream documents, and the
 instances document, which `execution-and-storage.md` §4.1 lists and the
-executor does not make. It is not a bound on state cells. The executor
+executor does not make. The count of commit `3e518147df` is not a
+bound on state cells. That executor
 makes a document for every state cell when the instance is created or
 the element key enters. By ruling a state cell whose first value is a
 constant, or that is declared with no value, has no document until
 something writes it (`execution-and-storage.md` §4.1), so the design
-stores fewer state cell documents than the executor counted. No figure
-is derived for the difference.
+stores fewer state cell documents than that executor counted. The 98
+of commit `96f3b83a73` are of the rule, for the scenarios run: the
+cells that an event or a side-write wrote.
 
 The derived counts of [Storage](#storage) stay the figures to compare
 with today's, and the executor's count does not replace them. It bears
@@ -710,7 +929,8 @@ on them in two ways.
 - **It is between the two derived bounds, on the mean.** The derived
   count is 2.2 documents per module at the least and 8.6 at the most,
   over 213 modules after settle. The executor has 7.0 over 186 modules
-  after the events. The module sets and the points in the scenario
+  after the events at commit `3e518147df`, and 2.7 over 187 modules at
+  commit `96f3b83a73`. The module sets and the points in the scenario
   differ, so this is no check of either bound.
 - **The "least" bound counts no state cell,** because the document of a
   state cell is written when the cell is first written. By ruling that
@@ -719,8 +939,12 @@ on them in two ways.
   is written, and the least bound rises by the number of such cells
   whose first value has been written, which the derivation did not
   count. In the prototype's corpus 3 of 1,399 first values read a
-  slot. The executor's 4.8 state cell documents per module count
-  every state cell, so they are no measure of that term.
+  slot at commit `3e518147df`, and 8 of 1,496 state cells have a first
+  value that is not a constant at commit `96f3b83a73`. The 4.8 state
+  cell documents per module of the earlier commit count every state
+  cell, so they are no measure of that term. The 0.5 of the later
+  commit count the cells that were written, by an event or a
+  side-write as well as by a first value.
 
 ## Rules of this work
 
@@ -1767,6 +1991,35 @@ as an assumption, which is what the prototype does.
      the position of the upstream result is not stable on a move
      either, and the assumption is extended: the result holds what the
      upstream position holds, the value or the link to a cell.
+
+     The prototype implements the assumption, and its notes keep the
+     question open and widen it: what is an element that is a plain
+     value stored in place to its readers? Four consequences show,
+     each over an array of plain values in place, and over the result
+     of another per-element construct where the upstream position
+     holds a value. None arises over an array of references.
+     - Identity. A cone that compares the element with a reference,
+       as `equals(selected, item)`, holds a value with no address, and
+       the two compare as two, where today's runtime, for which the
+       element is a cell, finds them equal. One value of the corpus
+       differs for it.
+     - A handler bound in the body is handed the element at its
+       position, which it writes through. The position is kept beside
+       the key for this alone.
+     - A row that binds a member of the element both ways, as
+       `$checked={item.done}`, holds a value, and a write from the
+       tree has no target. A comparison of values does not show it.
+     - A handler that writes a member of the element to a cell, as
+       `center.set(stop.position)`, stores a reference to a position
+       below the array. After the element is removed the reference
+       leads nowhere and the cell reads as nothing, where today's run
+       keeps the value. Four values of the corpus differ for it.
+
+     The two alternatives: a plain value stored in place has an
+     identity that `equals` and a stored reference can name, formed
+     from the collection and the element's key; or a reader of such an
+     element always holds a copy, and the four consequences are the
+     behavior of the language.
 146. **Which cone with side-writes is of which kind** (ES question 80).
      By ruling a cone with a small, fixed set of write targets is an
      ordinary node and one whose write set is dynamic or very large is
@@ -1823,6 +2076,70 @@ as an assumption, which is what the prototype does.
      the upstream element's result cell. The alternative asks for
      today's identifiers over an array of references.
 
+**From the rulings as the prototype implemented them.** Each is what
+its notes 307 to 320 found a ruling to leave undetermined, written
+into the documents as an assumption, which is the prototype's choice
+unless the entry says otherwise.
+
+152. **How a sandboxed body of a compiled-in callee is handed the
+     callee's default** (ES question 85). By ruling a path bound to a
+     slot of the caller at which nothing is stored reads the callee's
+     default, and an entry of `Body.reads` holds no default.
+     *Assumed:* the value code passes `host.invoke` a list of places
+     with their defaults. The alternative gives `ReadInput` a member
+     for the default. The same inside an element body over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct.
+153. **A path of a compiled-in callee's result that passes on a path
+     the caller left empty** (PL question 106). The callee reads
+     nothing of it, and the result holds a link to the caller's empty
+     slot. *Assumed:* the callee's default is applied to a read alone,
+     so a reader of the result reads the default of the place, or
+     nothing. The alternative shows the callee's default there, as the
+     prototype observed today's runtime to do. The same in all three
+     cases.
+154. **A write below the root of a state cell that holds nothing** (ES
+     question 86, PL question 109). The default stands for the whole
+     value of a cell with no document. *Assumed:* the write makes the
+     document from the default with the write applied, so the members
+     it did not name are stored from then on; and those members carry
+     the label of the write, with the integrity of its run. The second
+     half is not the prototype's, which has no labels. The alternatives
+     store the written path alone, or store the members with the label
+     of a default. The same for a state cell of an element body in all
+     three cases.
+155. **Whether a first value is stored as a value** (ES question 87).
+     *Assumed:* a first value that is not a constant is stored as the
+     value its cone computed and never as a reference, also where the
+     declaration gives the cell an input whole, so a write of the cell
+     does not land in the input. The alternative stores a link, by the
+     rule for a value passed on unchanged. Today's runtime refuses a
+     reactive value in a cell constructor, so no run of it shows
+     either. The same in all three cases; where the first value is the
+     element itself it meets question 145 over an array of plain
+     values in place.
+156. **An output that passes a derived collection on unchanged** (PL
+     question 107). The case is the result of another per-element
+     construct that a cone returns as it is, with a per-element
+     construct applied to that output. It matters where the upstream
+     source is an array of plain values in place, and nothing is open
+     where it is an array of references. *Assumed:* the output carries
+     the keys of its elements and the places they came from, and no
+     record of the plan says so. The alternative records it in the
+     plan.
+157. **The name a pattern binds to `[SELF]`** (PL question 108). No
+     record of the plan holds it. *Assumed:* a reference to the result
+     cell of the instance, which adds no label where it is passed on.
+     Open: what a read through it is. Not about a per-element
+     construct.
+
+Two questions above are restated by the same notes. Question 145 has
+the four consequences and the two alternatives. For the assumption of
+ES question 83, in which transaction a first value that is not a
+constant is written, the prototype does the alternative: it computes
+the value when the cell is created, which for a cell of an element body
+is when the key enters the element table, in all three cases.
+
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12): which output or argument
@@ -1872,8 +2189,20 @@ as an assumption, which is what the prototype does.
   slot of what its members hold; a constant captured by a handler that
   is not a literal at the binding is held as `null`; no code is emitted
   for a `reduce` in the reactive tier or a spread in the argument of a
-  pattern; and 8 modules with 23 differing values, and 8 modules whose
-  value code fails, are not examined.
+  pattern; and 8 modules whose value code fails are not examined. Of
+  the 23 differing values that had no cause, 8 are equal at commit
+  `96f3b83a73` and 15 are classed, 7 of them by a reading that is not
+  verified. At that commit the crate also holds the kind of a cone
+  with side-writes as a member of the cone and a materializer's body
+  in a cone, where the documents have neither; applies a callee's
+  default only to a destructured name and a call written as a record;
+  gives a state cell declared without a type argument a schema that is
+  the default alone; and counts one document per state cell in its
+  cost model. Its executor finds no reader for a write edge without a
+  root and a path, lets a handler's read of a write target demand
+  nothing, constructs no cell with `new` in a function body, and has
+  no test for the keys of a derived collection passed on unchanged and
+  no fixture for a `flatMap` in a chain.
 
 The open questions each document ends with stay where they are.
 
