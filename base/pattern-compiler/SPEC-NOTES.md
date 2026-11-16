@@ -2573,3 +2573,201 @@ numbers have gaps.
      comment at the declaration in `deriveFlowJoinImpl` marks the split of the
      declared read as pending a ruling of the specification (`SPEC-PENDING`), so
      the rule itself may change.
+
+## Rulings V1, W1, X1 and Y2 in the crate and in the comparison
+
+262. **The index is a slot** (PL §1.1 `SlotRoot`, §1.3 "The index is a slot").
+     The emitter binds the index parameter of a callback to a slot of root
+     `index` that names the callback's collection, with the empty path and the
+     class `value`. A cone that reads the name lists the slot in `Cone.slots`,
+     the use of a sandboxed body lists it in `Body.reads`, and a state path of
+     a handler binding has it as `place: { slot }` with the `slot` node as its
+     template. `Collection.bodyUses` is not emitted, and `Binding.state.place`
+     has no `{ index }`. The slot has the class `value` whatever the reader
+     does with it: a callback that writes the index at a child position, or
+     passes it to a child, reads the same slot as one that computes with it. PL
+     gives the slot one class and does not say that a node that only passes the
+     index on reads it under another. The step of a `reduce` and the predicate
+     of a scan read the index the same way (PL §3.13).
+263. **An index given to a sandboxed body had no entry** (a defect of the
+     emitter, found while writing the test for note 262). In
+     `rows.map((row, index) => label(index))`, with `label` a `lift`, the use of
+     the body had `inputs: []` and `Body.reads` did not list the index, so the
+     template of that output held nothing of the collection. The emitter left a
+     place of kind index out of the entries of a use. It now places the slot.
+     The corpus comparison did not show this, because the outputs below
+     `children/*` are not compared (note 250).
+264. **The removed diagnostic and the count of LS §11.3** (ruling W1). The
+     crate no longer reports `collection:shared-element-state`, and
+     `collection:index-keyed` is `collection:index-read`, with a message that
+     does not say the elements are keyed by position. The corpus report has a
+     row named for LS §11.3 "A handler bound, without the index, in a
+     per-element body over plain values", which it counted from the removed
+     diagnostic. It now counts the same condition as a construct, `state per
+     element of plain values without the index`: the collection is plain by
+     its syntax, the callback does not use the index and instantiates no
+     child, and its body declares a state cell. That condition is about a
+     state cell and the row of LS is about a handler binding; the crate
+     counted the first under the name of the second before this change too.
+     The count "child instantiated per element of plain values" is removed
+     with the rule it served.
+265. **The label of the index in the comparison** (ruling Y2; PL §2.2 "The
+     label of a slot of root `index`"). `compare/template.ts` evaluates a slot
+     of root `index` by rule: `TemplateInputs.indexOf` names the collection,
+     and the label is `TemplateInputs.array` of that collection, evaluated
+     outside the element of it, so every element has one label. The harness
+     gives `array` as the membership the collection iterates (PL §3.2), joined
+     for a collection over a stored slot with the confidentiality of the
+     entries of class `followRef` at each slot of the array, without the
+     entries of origin `link`. PL §2.2 as merged has the membership alone; the
+     ruling adds "which link each slot holds", and the documents author is
+     writing it in. Three things neither states, and what the harness does:
+     - An entry of origin `link` at a slot holds what the reference declares,
+       which for a link to a cell repeats the label of the cell's type (PL
+       §2.2). The harness leaves it out, as "nothing of what the links point
+       to".
+     - A collection that holds plain values in place has no link at a slot,
+       and its element keys derive from the values. The harness gives the
+       index the membership alone there. The position of an element is then a
+       function of the array's length and order alone, but which state an
+       occurrence finds depends on the equal values before it (PL §5.5), and
+       no label of the index holds those values.
+     - A derived collection, such as the result of a `filter`, has the
+       membership template of its record, which folds the predicate's reads.
+       The harness evaluates that template and adds nothing.
+     The integrity of the label is the integrity of the membership. No
+     document says what integrity a position has.
+266. **Where the harness reads the handle of an element** (ruling V1; PL §2.2
+     "The position of a slot of root `element`"; replaces note 247). In a write
+     row the `identity` slot of a state path that is the element itself is read
+     at the element's position in the source collection, as every other slot of
+     root `element` is, and no longer at `element` of the argument document of
+     the element's instance. A captured handle is read at the place the plan's
+     state entry names, which it was before. Where the body resolves the handle
+     of its element or writes through it, the harness joins two things to the
+     slot (PL §8, question 85): what the entries of origin `link` at `element`
+     of that argument document hold, and the entries of origin `declared` in
+     the document that holds the element's position, at the position and above
+     it, read as a `shape` read reads them.
+267. **No `link` entry at `element` in the runs observed** (PL §2.2, §8
+     question 85; corrects note 247). PL §2.2 says of `askToRetire` of
+     `system/profile-picker/profile-picker.tsx` that what the run stores "has
+     the clause the input list declares, which the `link` entry at `element`
+     holds". In the corpus run of that module, and in
+     `compare/fixtures/element-resolved.tsx`, the argument document of the
+     element's instance has no entry of origin `link`. The clause of the list
+     is on its entries of origin `structure`, the entry of class `followRef` at
+     `*` among them, which is the coordinator's join (note 261), and on the two
+     `derived` entries at `index` where the callback declares the index. Note
+     247 took the clause for the `link` entry without reading the origins. So
+     question 85's two descriptions of one label, "the label that the
+     declaration of the source collection gives the element" and "what the
+     `link` entry at `element` holds today", differ in these runs: the first
+     has the clause and the second is empty. With the `link` entry alone the
+     template of `askToRetire` has no clause and mints no atom, and the row is
+     tighter in confidentiality by the coordinator's join and looser in
+     integrity by the atom (note 268); the first corpus run of this round
+     showed that. With the declared entries, which the harness now reads, the
+     row is equal, as PL states it. In the harness the clause of an input list
+     is declared at the root of the list's cell, with no class, so the
+     declared label of an element is the label of the list. Not determined:
+     whether a list whose schema declares a clause for its items, and none for
+     itself, gives the stored link at `element` an entry of origin `link`.
+268. **A template with no clause mints no atom, and the run mints beside the
+     coordinator's join** (PL §3.1 "The coordinator's join on an element's
+     argument document"; §3.2 "When `derive` and `fold` mint", question 66).
+     The rule counts a row as tighter where every clause the template lacks is
+     held by the argument document of the element's instance. Where those are
+     all the clauses the run's label has, the template's label is empty, and a
+     `derive` mints no atom beside an empty label. The run's join is not empty,
+     so the run stores the atom of the handler's body. Such a row is tighter
+     in confidentiality and looser in integrity by that one atom. PL §3.2 says
+     the same of a test for an absent optional field and does not say how the
+     row is counted; a kept output carries the pattern's atom all the same, and
+     a write edge has no such atom. The harness does not count the row as
+     tighter. `WriteRow.noAtomBesideCoordinatorJoin` marks it, the corpus
+     report counts it apart, and its category stays looser. The fixtures have
+     one: `clear` of `compare/fixtures/index-nodes.tsx`, which closes over a
+     state cell of the pattern alone and is bound in an element body whose
+     list has two clauses. The corpus has none (note 272). Whether such a row
+     is a row of the rule, and so counted as tighter, is for the documents.
+269. **How the harness decides that a row is of the coordinator's join.** PL
+     has "held by an entry of origin `structure` or `link` of the argument
+     document of the element's instance that the event's transaction consumed".
+     The harness cannot read what a transaction consumed. It takes the clauses
+     of every entry of those two origins, at every path, of the argument
+     document of each element instance on the way from the result to the
+     handler's stream, and it finds those instances only where the way has one
+     instance for each step of the binding's `within`.
+     `WriteRow.byCoordinatorJoin` is set where the row is tighter and every
+     clause the template lacks is among them. `WriteRow.lacking` holds the
+     clauses, and the report lists each tighter write row with them.
+270. **A written path that holds a link, for an edge with no `reference`** (PL
+     §3.1; replaces note 260 in part). The harness counts the links stored on
+     the way from the path of a write target to its value, before and after
+     each event, and keeps the fewest it saw at each target. An edge with no
+     `reference` whose target holds more than that after the event is not
+     compared, under a reason of its own. Three limits. A target that already
+     held a link when the harness first read it has that count as its fewest.
+     A path the run added below a target, such as a pushed element, is not
+     decided this way, because the runtime stores a pushed object through a
+     link of its own. And a row that needs a label the runtime fails to read
+     is counted under that reason first. The harness now also takes as written
+     a target that holds a link where it held an equal value, which note 260
+     had as not seen.
+271. **State and identity that derive from the index** (ruling Y1). The crate
+     has nothing to change for the three rules. The plan has no record of the
+     value a declaration gives a state cell (PL §1.1, `StateCell`), so no cone
+     lists the index slot on account of `Writable.of(index)` in an element
+     body, and nothing writes the declared value again on a move. An explicit
+     cause and a copied value of a binding made in a function body are computed
+     by that body, whose use lists the index slot where the body is given the
+     index.
+272. **The comparison over the corpus, after rulings V1, W1, X1 and Y2.** Both
+     orders of the events (note 258), run one after the other. "Before" is the
+     run of note 258.
+
+    | | no-step first, before | after | plan order, before | after |
+    | --- | --- | --- | --- | --- |
+    | outputs compared | 1,388, and 125 bounds | the same | 1,388, and 125 bounds | the same |
+    | with the atom: tighter, atom names the pattern | 1,267, 121 | the same | 1,267, 121 | the same |
+    | looser, incomparable | 0, 0 | 0, 0 | 0, 0 | 0, 0 |
+    | bindings of a handler: no step, `site`, `element` | 266, 314, 71 | the same | 266, 314, 71 | the same |
+    | events committed, refused, not sent | 344, 15, 18 | the same | 342, 17, 18 | the same |
+    | write edges compared | 234, and 1 bound | 231, and 1 bound | 230, and 1 bound | 228, and 1 bound |
+    | equal | 219 | 219 | 219 | 219 |
+    | tighter | 15 | 12 | 11 | 9 |
+    | of those, by an entry an earlier write left (note 238) | 10 | 10 | 8 | 8 |
+    | by the coordinator's join | not counted | 2 | not counted | 1 |
+    | looser, incomparable | 0, 0 | 0, 0 | 0, 0 | 0, 0 |
+    | a written path that holds a link, for an edge with no `reference` | not counted | 3 | not counted | 2 |
+    | a label the runtime fails to read | 0 | 0 | 2 | 2 |
+    | a write the event's run did not make | 151 | 150 | 149 | 148 |
+    | a `dynamic` node | 44 | 45 | 44 | 45 |
+
+     Every row that changed, in both orders:
+
+    | Row | Before | After | Cause |
+    | --- | --- | --- | --- |
+    | write 0 (`center.set(...)`) of bindings 6 and 9, `examples/map-demo/map-demo.tsx` | tighter | not compared | The run stored a link at the target of the edge for a value (note 270). Write 1, the edge with `reference`, is the row of the write and is equal. In the order of the plan binding 9 was not compared before either (a label the runtime fails to read, note 252) |
+    | write 0 of `setDefaultProfile`, `system/profile-picker/profile-picker.tsx` | tighter | not compared | The same. Write 1 is equal |
+    | write 2 (`zoom.set(14)`, `zoom.set(13)`) of bindings 6 and 9, `examples/map-demo/map-demo.tsx` | tighter | tighter, by the coordinator's join | The category is the same. The template lacks `areasOfInterest`, `selectedStopIndex` and `stops`, and in the order of the plan `stops` alone (binding 6; binding 9 is equal there, note 258). Every one is on an entry of origin `structure` or `link` of the argument document of the element's instance |
+    | write 2 of `startEditBody`, `product/collection-naming/item.tsx` | a write the event's run did not make | not compared, a `dynamic` node | `referencesDraft.set(references.get())` stores a link where the cell held an equal value, which the harness now takes as a write (note 270) |
+
+     No row is looser or incomparable in either order. The one row of an
+     element body that is tighter for another cause is write 0 of
+     `selectRoomRef` of
+     `examples/scoped-group-chat/main-with-writable-inputs.tsx` (notes 238 and
+     257). `askToRetire` of
+     `system/profile-picker/profile-picker.tsx` is equal, by note 267.
+
+     Two things the corpus does not show. No compared row evaluates a slot of
+     root `index`. The plans of the corpus have 54 such slots in 30 patterns:
+     52 cones list one, 12 uses of a sandboxed body read one, 18 state paths of
+     handler bindings are bound to one, and 70 kept outputs have one in their
+     template. Those outputs are below `children/*` or are the assembled
+     children, which are not compared (note 250), and the handlers have no
+     write edge that is compared: their body has none, their target is a
+     stream, their template has a slot below a child no pick chose, or their
+     run made no write. And no row of the corpus is looser by the atom of note
+     268. The two fixtures of this round are the test of both.
