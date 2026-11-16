@@ -7757,7 +7757,16 @@ key (above).
 They are the operations above and add no rule. `h.key("b")` extends the
 path, like `a.b` (section 3.3). `h.key(k)` and `h.elementById(k)` with a
 key that is not a constant are a `pick` with the template of `k` as the
-choice. `h.get()` reads the value at the handle's path: for a handle that
+choice. By ruling the record that `h.elementById(k)` leads to is a cell
+of its own, named by the address of the list and the key, and no child
+of the list: it is not a member until a reference to it is added, and
+a reader of the list's label does not cover it before that
+(`execution-and-storage.md` §2.4). *Assumed* (section 8, question
+117): the plan keeps the `pick` for it, and the runtime binds the
+chosen child to that record and to no position of the list. The label
+of the child slot is then resolved at the record, joined with the
+template of `k`, and holds nothing of the list's members or of its
+membership. `h.get()` reads the value at the handle's path: for a handle that
 is a slot, the slot's path continues through the handle's link (section
 2.5), and for a handle that stands for a value the instance computed, as
 the parameter of a pattern compiled into the instance does, it is that
@@ -11792,3 +11801,22 @@ this document made.
      references, over an array of plain values in place, and over the
      result of another per-element construct. The entry keeps its
      number.
+117. **`elementById` in the reactive tier** (for the project owner).
+     Section 3.19 has `h.elementById(k)` with a key that is not a
+     constant as a `pick` with the template of `k` as the choice, and
+     a `pick` chooses a child of its container (section 3.18). By
+     ruling the record of a key is a cell of its own, named by the
+     address of the list and the key, and no child of the list; a
+     reader of the list's label does not cover it before a reference
+     to it is a member. *Assumed:* the plan keeps the `pick`, with the
+     list as the container and `k` as the choice, and the runtime
+     binds the chosen child slot to the record. The label of that slot
+     is resolved at the record and joined with the template of `k`,
+     and nothing of the list's members or membership joins it. The
+     alternative gives the plan a slot root for the record of a key,
+     so that no `pick` stands for a cell that is no child. The list
+     holds references to its records, so for a per-element construct
+     over it the case is an array of references. The question does not
+     arise over an array of plain values in place or over the result
+     of another per-element construct, whose elements have no such
+     record.

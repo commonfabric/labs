@@ -1626,6 +1626,12 @@ is relitigated.
   arrays that per-element constructs read and write. The causes are
   computed as they were, in particular where an instance writes several
   documents.
+- The record of a key of a list, which `elementById` yields a handle
+  of, is as today: a cell of its own, named by the address of the list
+  and the key. It is not a member of the list until a reference to it
+  is added, and a reader of the list's label does not cover it before
+  that. The list holds references to its records, so a per-element
+  construct over it is the case of an array of references.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -2504,7 +2510,9 @@ assumption.
 **From the rulings on questions 141 and 144 as the prototype implemented
 them, and from the pieces added to its executor.** Each is what its
 notes 325 to 341 found undetermined, written into the documents as an
-assumption, which is the prototype's choice.
+assumption, which is the prototype's choice, unless the entry says it
+is settled by ruling. Question 167 is what the ruling on question 166
+leaves undetermined.
 
 164. **Which cone instance fails the check of a stream's position** (ES
      question 88). Settled by ruling: the evaluation that stores the
@@ -2531,19 +2539,35 @@ assumption, which is the prototype's choice.
      number.
 
 166. **Where the record of a key of a list is stored** (`elementById`;
-     ES question 89). `footprint-analysis.md` §7 has the handle at `*`
-     below the list, and no document says where the record is.
-     *Assumed,* as today's runtime does: an entity of its own, named by
-     the address of the list and the key, with no document until
-     something writes it, and no member of the list until a reference to
-     it is added; and a record that is no member is below the list for
-     the footprint and for a reader of the list's label. The
-     alternatives store it at a position of the list, or give it a label
-     of its own until it is a member. The list holds references to the
-     records, so for a per-element construct over it this is the case of
-     an array of references; it does not arise over an array of plain
-     values in place or over the result of another per-element
-     construct.
+     ES question 89). Settled by ruling: as today, the record is a
+     cell of its own, named by the address of the list and the key. It
+     is not a member of the list until a reference to it is added, and
+     a reader of the list's label does not cover it before that. Open:
+     what the footprint records for the handle. *Assumed:*
+     `footprint-analysis.md` §7 keeps the entry at `*` below the list's
+     handle, as the name of some record of the list, and a write
+     through the handle is no write at a position of the list: it
+     makes no reader of the list stale and is not labeled as a member
+     of the list. The alternative records the write as dynamic, as a
+     write to a cell made under a cause computed from data. The list
+     holds references to the records, so for a per-element construct
+     over it this is the case of an array of references; it does not
+     arise over an array of plain values in place or over the result
+     of another per-element construct.
+
+167. **`elementById` in the reactive tier** (PL question 117). PL §3.19
+     has `h.elementById(k)` with a key that is not a constant as a
+     `pick` with the template of `k` as the choice, and a `pick`
+     chooses a child of its container. By ruling the record is a cell
+     of its own and no child of the list. *Assumed:* the plan keeps the
+     `pick`, and the runtime binds the chosen child to the record that
+     the address of the list and the key name. A read through the
+     handle then has the label of the key and of the record, and
+     nothing of the list's members or of its membership. The
+     alternative gives the plan a slot root for the record of a key.
+     The list holds references to its records, so this is the case of
+     an array of references; not about an array of plain values in
+     place or the result of another per-element construct.
 
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a

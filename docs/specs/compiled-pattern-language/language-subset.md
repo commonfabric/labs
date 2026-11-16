@@ -1115,6 +1115,8 @@ Thirteen notes on the table.
   `h.key("glaze")` is a path projection, like `h.glaze`. `h.key(k)` and
   `h.elementById(k)` with a key that is not a constant are a chosen child,
   like `a[k]` (§4.4): they observe the key and the one child it selects.
+  What `elementById` selects is the record of the key, which by ruling
+  is a cell of its own and no position of the list (note below).
   `h.get()` reads the value at the handle's path.
 - **A handle may hold a handle, and `key` flattens.** `Cell<Cell<T>>` is a
   valid type, and so is any handle type inside any handle type
@@ -1183,7 +1185,12 @@ Thirteen notes on the table.
   declaration in `base/api/index.ts` today gives the result the element
   type without `undefined` (`elementById` of `IKeyable`), and it is
   published with this type when the declaration of `key` is
-  ([§8.6.1](#861-the-published-typings)).
+  ([§8.6.1](#861-the-published-typings)). By ruling the record is, as
+  today, a cell of its own, named by the address of the list and the
+  key. It is not a member of the list until a reference to it is
+  added, with `addUnique` for instance, and a reader of the list's
+  label does not cover it before that
+  (`execution-and-storage.md` §2.4).
 - **`resolveAsCell`** observes a reference and not a value. In tier R, and
   in a function body where the call is static in the sense of
   `footprint-analysis.md` §7.1, the plan records it as an `identity`

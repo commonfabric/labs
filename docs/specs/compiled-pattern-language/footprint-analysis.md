@@ -1275,8 +1275,10 @@ A write target is classified by what the analysis knows of its address.
 - **Too broad to predict.** The narrowest static path the analysis can name
   for the write is a proper prefix of what is written. That is the case
   when the path below an anchored handle has a segment that is not static,
-  as in `counts.key(flavor).set(n)` or a write through `elementById`, where
-  the analysis can name `counts` and the write changes one child of it. It
+  as in `counts.key(flavor).set(n)`, where the analysis can name `counts`
+  and the write changes one child of it, or a write through
+  `elementById`, where it can name the list and the write changes the
+  record of one key, which is a cell of its own (§7.1). It
   is also the case when the analysis lost track of the handle, because it
   was passed to an unresolved call (W4) or reached through an analysis
   limit (W7), so that the write can be bounded only by the handles the body
@@ -1654,7 +1656,7 @@ The methods are those of `language-subset.md` §4.7. For a handle `h`:
 | --- | --- | --- |
 | `h.get()`, `h.sample()` | The projection `h->`, the root of the cell `h` links to | `identity` at `h`. What is done with the result is recorded below the hop |
 | `h.key("k")` | The handle `h` with `k` added to the path below its hop. Where the path passes through a position of handle type, the result is the handle at that position (below, "A handle that holds a handle") | Nothing |
-| `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored. `h.elementById(id)` on a handle of `U[]` has the type of a handle of the same kind of `U \| undefined`, and does not flatten (`language-subset.md` §4.7) | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
+| `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored. `h.elementById(id)` on a handle of `U[]` has the type of a handle of the same kind of `U \| undefined`, and does not flatten (`language-subset.md` §4.7). By ruling the record it leads to is a cell of its own and no position of `h` (below, "The record of a key of a list") | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
 | `h.resolveAsCell()` | `h`, resolved: reads through it are reads at `h->`, and a write through it lands where the resolution ends ([§6.2](#62-targets)) | A resolution of `h` (below) |
 | `h.for(cause)` | `h` | The cause, by the reference rule of [§3.8](#38-what-leaves-the-body) |
 | `h.getArgumentCell()` | A handle that is not anchored | `identity` at `h` |
@@ -1947,6 +1949,21 @@ envelope with its annotations, and the entries a constraint can list.
   broad (§6.2).
 
 ### 7.5 Link hops through data
+
+**The record of a key of a list.** By ruling the record that
+`h.elementById(id)` leads to is, as today, a cell of its own, named by
+the address of the list and the key (`elementById` in
+`runtime/runner/src/cell.ts`). It is not a member of the list until a
+reference to it is added, and a reader of the list's label does not
+cover it before that. So the entry "the handle at `*` below `h`" does
+not say that the record is stored at a position of `h`. *Assumed*
+(`execution-and-storage.md` §11, question 89): the analysis keeps that
+entry as the name of some record of the list `h`, since it cannot name
+the key. A read through the handle is dynamic, and a write through it
+is too broad to predict, as the table has it, and neither is a read or
+a write of a member of `h`. The list holds references to its records,
+so for a per-element construct over it this is the case of an array of
+references.
 
 There are three ways a body reaches another cell.
 

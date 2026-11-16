@@ -1508,19 +1508,34 @@ list yields a handle for the record of that key (`language-subset.md`
 below the list, not anchored. In the runtime of today the record is an
 entity of its own, named from the list and the key, and it is no
 position of the list until something adds it (`elementById` in
-`runtime/runner/src/cell.ts`). No rule of the documents says where the
-compiled path stores the record. *Assumed* (section 11, question 89), as
-today and as the prototype's executor does: the record is named by the
-address of the list and the key; it has no document until something
-writes it; it is a member of the list once a reference to it is added,
-as `addUnique` adds one unless the list holds it, and `removeByValue`
-removes the members that are that reference; and a write through the
-handle is a write at `*` below the list, for the footprint and for the
-label, whether or not the record is a member. The list here is one a
-handle names, and its members are references to the records. The key is
-the one the caller passes and is no element key of a per-element
-construct, and a per-element construct over such a list is the case of
-an array of references.
+`runtime/runner/src/cell.ts`). By ruling the compiled path stores the
+record as today, and the prototype's executor does so.
+
+- **Its name.** The record is a cell of its own, named by the address
+  of the list and the key. It has no document until something writes
+  it.
+- **Membership.** It is not a member of the list until a reference to
+  it is added, as `addUnique` adds one unless the list holds it, and
+  `removeByValue` removes the members that are that reference.
+- **Its label.** A reader of the list's label does not cover the record
+  before it is a member: the label of the list does not extend to the
+  record, and a read of the list does not read it. The record has the
+  label of what is written to it and of what its own schema declares, which is the element
+  schema of the list that the handle carries (`elementSchemaFor` in
+  `runtime/runner/src/cell.ts`). A write through the handle is a write
+  to the record. It is not a write at a position of the list, it does
+  not make a reader of the list stale, and it is not labeled as a
+  member of the list. Once a reference to the record is a member, a
+  reader that follows the reference reads the record under the
+  record's label, as it reads any cell behind a reference in an array.
+
+*Assumed* (section 11, question 89): for the footprint the handle
+stays the handle at `*` below the list, as `footprint-analysis.md` §7
+records it, read as the name of some record of the list. The list here
+is one a handle names, and its members are references to the records.
+The key is the one the caller passes and is no element key of a
+per-element construct, and a per-element construct over such a list is
+the case of an array of references.
 
 ### 2.5 Element cones
 
@@ -5433,23 +5448,25 @@ Added by the ruling that the scheduler is switched per space (section 9):
     write that failed a constraint (sections 1.7 and 3.3). The entry
     keeps its number.
 89. **Where the record of a key of a list is stored** (`elementById`;
-    section 2.4). `footprint-analysis.md` §7 has the handle at `*` below
-    the list and not anchored, and no document says where the record is.
-    *Assumed,* as the runtime of today does: an entity of its own, named
-    by the address of the list and the key, with no document until
-    something writes it, and no member of the list until a reference to
-    it is added. *Assumed* with it: a record that is no member of the
-    list is below the list for the footprint and for a reader of the
-    list's label, so a write through the handle is a write at `*` below
-    the list. The alternatives store the record at a position of the
-    list, or give it a label of its own that a reader of the list does
-    not take until the record is a member. In the prototype's fixture 48
-    of 48 values equal those of the runtime of today. The question is
-    about a list whose members are references to the records. It is the
-    case of an array of references for a per-element construct over the
-    list, and does not arise over an array of plain values in place or
-    over the result of another per-element construct, whose elements
-    have no such record.
+    section 2.4). Not open, by ruling: as the runtime of today does,
+    the record is a cell of its own, named by the address of the list
+    and the key, with no document until something writes it. It is no
+    member of the list until a reference to it is added, and a reader
+    of the list's label does not cover it before that. So a write
+    through the handle is a write to the record and no write at `*`
+    below the list for the label. Open: what the footprint records.
+    `footprint-analysis.md` §7 has the handle at `*` below the list and
+    not anchored. *Assumed:* that entry stays, as the name of some
+    record of the list, with a write through it too broad to predict;
+    the runtime resolves it to the record, and the write makes no
+    reader of the list stale. The alternative records a dynamic write,
+    as for a cell made under a cause computed from data. In the
+    prototype's fixture 48 of 48 values equal those of the runtime of
+    today. The question is about a list whose members are references
+    to the records. It is the case of an array of references for a
+    per-element construct over the list, and does not arise over an
+    array of plain values in place or over the result of another
+    per-element construct, whose elements have no such record.
 
 ### 11.2 For another document or the prototype
 

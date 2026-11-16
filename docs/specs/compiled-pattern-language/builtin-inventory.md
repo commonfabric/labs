@@ -625,6 +625,14 @@ the element is keyed by the identity of that cell.
   stored and labeled, and which readers hold one are assumed
   (`plan-and-label-templates.md` §8, questions 112 to 115). Over an
   array of references none of this applies.
+- *A list of keyed records is an array of references.* The record
+  that `elementById` yields a handle of is, by ruling, a cell of its
+  own, named by the address of the list and the key, and no member of
+  the list until a reference to it is added. A per-element construct
+  over such a list keys an element by the address the reference
+  resolves to, as for any array of references, and never by the key
+  the caller passed to `elementById` (`execution-and-storage.md`
+  §2.4).
 - *A hole has no key.* It has neither a value nor an identity, gets no
   cone, and stays a hole in the output, as today. An explicit `undefined`
   is a plain value and is keyed as one.
