@@ -457,4 +457,113 @@ describe("PatternIndexClient", () => {
     expect(error).toBeInstanceOf(PatternIndexError);
     expect((error as PatternIndexError).detail).toContain("not JSON");
   });
+  it("asks for unvetted hits only when the caller does", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ results: [] }),
+      jsonResponse({ results: [] }),
+    ]);
+    await client.searchPatterns({ text: "expenses", includeUnvetted: true });
+    await client.searchPatterns({ text: "expenses" });
+    expect(JSON.parse(requests[0].body)).toEqual({
+      text: "expenses",
+      includeUnvetted: true,
+    });
+    expect(JSON.parse(requests[1].body)).toEqual({ text: "expenses" });
+  });
+
+  it("sends only the listPatterns filters the caller supplied", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patterns: [], eventTypes: {} }),
+      jsonResponse({ patterns: [], eventTypes: {} }),
+    ]);
+    await client.listPatterns({ mine: true });
+    await client.listPatterns({ featured: true });
+    expect(JSON.parse(requests[0].body)).toEqual({ mine: true });
+    expect(JSON.parse(requests[1].body)).toEqual({ featured: true });
+  });
+
+  it("publishes without task text, and credits a remix", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-3", created: true }),
+    ]);
+    await client.publishPattern({
+      patternId: "pat-3",
+      description: "Doubles a number",
+      hashtags: ["math"],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      },
+      priorPatternId: "pat-2",
+      remixedFrom: "pat-other",
+    });
+    const body = JSON.parse(requests[0].body);
+    expect(Object.hasOwn(body.meta, "directQuery")).toBe(false);
+    expect(body.priorPatternId).toBe("pat-2");
+    expect(body.remixedFrom).toBe("pat-other");
+  });
+
+  it("posts each listing, identity and curation call to its function with only its fields", async () => {
+    const calls: Array<{
+      fn: string;
+      call: (client: PatternIndexClient) => Promise<unknown>;
+      body: Record<string, unknown>;
+    }> = [
+      {
+        fn: "requestListing",
+        call: (c) => c.requestListing({ patternId: "pat-1" }),
+        body: { patternId: "pat-1" },
+      },
+      {
+        fn: "getGardenerPrompt",
+        call: (c) => c.getGardenerPrompt({ name: "privacy" }),
+        body: { name: "privacy" },
+      },
+      { fn: "createInvite", call: (c) => c.createInvite(), body: {} },
+      {
+        fn: "createInvite",
+        call: (c) => c.createInvite({ ttlSeconds: 3600 }),
+        body: { ttlSeconds: 3600 },
+      },
+      {
+        fn: "redeemInvite",
+        call: (c) => c.redeemInvite({ inviteId: "inv-1", code: "secret" }),
+        body: { inviteId: "inv-1", code: "secret" },
+      },
+      {
+        fn: "linkKey",
+        call: (c) => c.linkKey({ delegation: "chain" }),
+        body: { delegation: "chain" },
+      },
+      {
+        fn: "admitKey",
+        call: (c) => c.admitKey({ did: "did:key:z6Mk" }),
+        body: { did: "did:key:z6Mk" },
+      },
+      { fn: "whoami", call: (c) => c.whoami(), body: {} },
+      {
+        fn: "setPatternFeatured",
+        call: (c) => c.setPatternFeatured({ patternId: "pat-1", featured: true }),
+        body: { patternId: "pat-1", featured: true },
+      },
+      {
+        fn: "setPatternFeatured",
+        call: (c) =>
+          c.setPatternFeatured({
+            patternId: "pat-1",
+            featured: true,
+            rank: 2,
+            note: "good",
+          }),
+        body: { patternId: "pat-1", featured: true, rank: 2, note: "good" },
+      },
+    ];
+    for (const { fn, call, body } of calls) {
+      const { client, requests } = createClient([jsonResponse({})]);
+      await call(client);
+      expect(requests[0].url).toBe(`https://index.test/api/${fn}`);
+      expect(requests[0].method).toBe("POST");
+      expect(JSON.parse(requests[0].body)).toEqual(body);
+    }
+  });
 });
