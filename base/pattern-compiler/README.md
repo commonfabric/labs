@@ -129,6 +129,28 @@ the events for handlers bound in an element body or in a pattern compiled in,
 and notes 252 on the order of the events and the state a write row is compared
 on.
 
+`compare/cost.ts` measures what compiling and running the same modules costs
+today: the time of today's compile by phase, and for each module's generated
+scenario the wall time, the transactions, the runs of a scheduler action, and
+the documents and label entries stored. `compare/cost-model.ts` derives from a
+plan the counts the design fixes for the compiled path, which nothing runs: cone
+instances, transactions, documents, and label entries. The crate's `time`
+command times the crate on the files of each module's program. From the
+repository root:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/cost.ts closures closures.json
+base/pattern-compiler/target/release/pattern-compiler time patterns closures.json > crate-time.jsonl
+deno run -A --no-check base/pattern-compiler/compare/cost.ts compile closures.json compile.jsonl
+deno run -A --no-check base/pattern-compiler/compare/cost.ts processes closures.json processes.jsonl
+deno run -A --no-check base/pattern-compiler/compare/cost.ts run run.jsonl
+deno run -A --no-check base/pattern-compiler/compare/cost.ts scale scale.jsonl
+deno run -A --no-check base/pattern-compiler/compare/cost-report.ts .
+```
+
+Notes 273 on of `SPEC-NOTES.md` have the method, the tables, and what is a
+measurement and what is derived.
+
 The `catalog` command prints, for each entry of the diagnostics catalog, whether
 the crate implements it, implements the part syntax decides, leaves it to the
 type checker or to footprint analysis, or lists it as retired.

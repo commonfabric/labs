@@ -2771,3 +2771,523 @@ numbers have gaps.
      stream, their template has a slot below a child no pick chose, or their
      run made no write. And no row of the corpus is looser by the atom of note
      268. The two fixtures of this round are the test of both.
+
+## What compiling, running and storing cost: today measured, the plan derived
+
+273. **What is a measurement here and what is not.** The crate emits a plan and
+     no value code, and nothing executes a plan. So three kinds of number
+     follow, and each table says which a row is.
+
+     - *Measured* on both sides: the time to compile (note 274).
+     - *Measured* for today's runtime alone: the time, the transactions and
+       the runs of a scheduler action of a scenario (note 276), and what the
+       scenario leaves stored (notes 277 and 278).
+     - *Derived* for the compiled path: counts that
+       `execution-and-storage.md` (ES) fixes for a plan, computed from the
+       plan's records by `compare/cost-model.ts`. A derived count is not a
+       time, and no time of the compiled path is given anywhere below.
+
+     The set is the modules of the corpus comparison: the 270 modules the
+     crate accepts and emits a plan for with no unsupported construct
+     (note 272). Compile time is over all 270. The run and the storage are
+     over the 213 that the corpus comparison runs: 33 need `wish`, 14 request
+     an effect, and the run of 10 fails on a CFC refusal, as before. The
+     scenario of a module is the generated one of `compare/generate.ts`: every
+     top-level input has a value and a confidentiality atom of its own, an
+     array has two elements, and one event is sent to each handler whose
+     stream the result holds, the handlers bound outside an element body
+     first (note 258).
+
+     The machine is an Apple M3 Max with 16 cores and 128 GB, macOS (Darwin
+     25.4.0), Deno 2.9.8, and rustc 1.93.0 with the release profile of Cargo
+     unchanged. Nothing else was run during a measurement, and no measurement
+     was repeated on another day. `compare/cost.ts` makes the measurements,
+     `compare/cost-report.ts` prints the tables, and the crate's `time`
+     command times the crate. Times are wall time in milliseconds. A table
+     gives the total over the modules, the median, the tenth and the
+     ninetieth percentile, and the least and the most.
+
+274. **Compile time.** Both pipelines were given the same program for a
+     module: the module and the modules it imports by path, as
+     `resolveLocalProgram` in
+     `runtime/runner/src/harness/local-program.deno.ts` resolves them, without
+     the data files (7 modules have some). That is 1,004 files for the 270
+     modules, 336 of them distinct, with a median of one file and 5.9 KB of
+     source per module. The plan the crate emits for a module from its own
+     program is equal to the plan it emits for the module from the whole
+     corpus, for all 270.
+
+     *Today* is `PatternManager.compilePattern` in
+     `runtime/runner/src/pattern-manager.ts` with a space, which is what the
+     harness calls and what the piece controllers call
+     (`runtime/piece/src/ops/pieces-controller.ts`). It runs
+     `Engine.compileToRecordGraph` and `Engine.evaluateRecordGraph` of
+     `runtime/runner/src/harness/engine.ts`. The first builds a TypeScript
+     program with the declarations of `commonfabric` and of the standard
+     library, checks every file, and emits one CommonJS module per file
+     through the transformer pipeline of `base/ts-transformers`, which is
+     where the schemas are generated (`compileModulesHere` in
+     `runtime/runner/src/harness/module-compile.ts`,
+     `TypeScriptCompiler.compileToModulesInterleaved` in
+     `base/js-compiler/typescript/compiler.ts`). There is no bundling step.
+     The second evaluates the modules, which runs the builder and yields the
+     pattern. Each module was compiled three times, each time in a runtime
+     and a store of its own, and then once more in the same runtime, which
+     finds the compiled modules in the cache the first compile stored. The
+     phases are the pipeline's own timing spans (`js-compiler/phase/*`,
+     `engine/*`, `pattern-manager/compile-cache/*`), read after the last of
+     the three: `program` is `createProgram`, `check` is the semantic and the
+     declaration check, `emit` is the transformers and the emit together
+     (the pipeline does not time them apart), `evaluate` is the evaluation
+     of the modules, `cache` is the read and the write of the compile cache,
+     and `rest` is what remains, which includes the verification of the
+     emitted modules and the hashing of module identities.
+
+     *The crate* is `analyze` and the JSON text of the plans of every module
+     of the program (`time` in `src/main.rs`), 20 times in one process, from
+     source text in memory.
+
+     | In one process, 270 modules | total | median | p10 | p90 | least | most |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | crate, median of 20 | 5,104 | 0.626 | 0.0822 | 15 | 0.0387 | 1,189 |
+     | today, first compile of the module | 91,115 | 151 | 96.5 | 666 | 84.9 | 5,207 |
+     | today, median of the two later | 87,419 | 146 | 96.3 | 657 | 82.7 | 4,892 |
+     | today, again in the same runtime | 7,644 | 18.6 | 15 | 43.1 | 13.2 | 389 |
+     | today, last compile: reading the files | 549 | 0.71 | 0.336 | 4.68 | 0.235 | 35 |
+     | today, last compile: `program` | 7,794 | 28.6 | 25.1 | 32 | 20.3 | 49.5 |
+     | today, last compile: `check` | 24,933 | 47.9 | 24.7 | 187 | 13.5 | 1,142 |
+     | today, last compile: `emit` | 33,988 | 28.4 | 7.84 | 241 | 3.94 | 2,449 |
+     | today, last compile: `evaluate` | 2,130 | 2.05 | 0.827 | 10.2 | 0.513 | 355 |
+     | today, last compile: `cache` | 5,996 | 11.8 | 9.26 | 38.8 | 8.08 | 285 |
+     | today, last compile: `rest` | 11,426 | 27.5 | 23.5 | 64.8 | 21.6 | 552 |
+
+     Per module, today's later compiles take 240 times the crate's time at
+     the median (p10 41, p90 1,201). The totals differ by 17, and by 12
+     without today's `check` and `evaluate`. The two figures are far apart
+     because the crate's total is three programs: the three that hold
+     FabriChat's room (15 to 18 files, about 500 KB of source) take 1.1 to
+     1.2 s each and are 3.4 s of the 5.1 s. 172 modules take the crate under
+     a millisecond and 5 take it over 100 ms. The crate's 20 runs of a module
+     differ little: p90 less p10 is 6% of the median, at the median module.
+
+     | Largest ratio | files | crate | today | ratio |
+     | --- | --- | --- | --- | --- |
+     | `dev/catalog/stories/cf-submit-input-story.tsx` | 1 | 0.0393 | 104 | 2,643 |
+     | `examples/aside/aside.tsx` | 1 | 0.0395 | 98.7 | 2,497 |
+     | `dev/catalog/stories/cf-collapsible-story.tsx` | 1 | 0.0453 | 113 | 2,494 |
+     | `dev/catalog/stories/cf-markdown-story.tsx` | 1 | 0.0387 | 87.9 | 2,274 |
+     | `dev/catalog/stories/cf-toggle-group-story.tsx` | 1 | 0.044 | 98.4 | 2,235 |
+
+     | Smallest ratio | files | crate | today | ratio |
+     | --- | --- | --- | --- | --- |
+     | `dev/factory-outputs/lot-with-coordinator-demo/main.tsx` | 6 | 286 | 3,354 | 11.7 |
+     | `system/shared-space/shared-space-collection.tsx` | 3 | 42.5 | 320 | 7.53 |
+     | `dev/loom-chat-room-fixture/main.tsx` | 18 | 1,154 | 4,892 | 4.24 |
+     | `dev/loom-overlay-fixture/main.tsx` | 18 | 1,189 | 4,763 | 4.01 |
+     | `system/fabrichat/room-test-fixture.ts` | 15 | 1,102 | 3,715 | 3.37 |
+
+     With one process per module, each started from the same parent and timed
+     from its start to its end: the crate's `plan` command, which reads the
+     files and prints the plans, five times, and today's compile once
+     (`cost.ts compile-one`), which starts Deno, loads the runtime, and
+     compiles as above.
+
+     | One process per module, 270 | total | median | p10 | p90 | least | most |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | crate, median of 5 | 6,651 | 3.58 | 2.46 | 21.6 | 2.05 | 1,336 |
+     | today, one run | 381,950 | 1,101 | 960 | 2,014 | 869 | 6,870 |
+
+     The ratio per module has the median 310 (p10 83, p90 515). Of today's
+     1,101 ms about half is the compile itself (median 551 ms in a new
+     process, against 146 ms for a later compile in a process that has
+     compiled before), and the rest is starting Deno and loading the
+     runtime's modules. The crate in one process over the whole patterns
+     directory (426 modules read, 118,537 lines, 333 accepted) takes 3.2 to
+     3.5 s, five runs.
+
+     What makes the comparison less than even, in each direction:
+
+     - The crate emits no value code. Today's `emit` produces the JavaScript
+       that runs, with source maps. The crate's output is the plan: the
+       records, the label templates, and the schemas. An emitter of value
+       code will add time that is not in the crate's figure.
+     - The crate forms no hash. A plan names its schemas, bodies and
+       patterns `unhashed:…`. Today's figure includes the content identity
+       of every module.
+     - The crate's type checker is its own and does less than TypeScript's:
+       it does not check a generic function per instantiation, and it
+       applies assignability at four kinds of site (README, "What it does
+       not cover"). Today's `check` is the full semantic check of every
+       file against the declarations of `commonfabric` and the standard
+       library, and `program` builds that program. The crate knows the API
+       by name (`src/api.rs`) and reads no declaration file.
+     - Today's `evaluate` has no counterpart in the crate: it runs the
+       builder, which makes the graph of nodes that the plan's records take
+       the place of. It is 2% of today's total.
+     - Today's figure includes storing the source and the compiled modules
+       in the space (`cache`, 7%), and the crate's includes writing nothing.
+       The crate's in-process figure also leaves out reading the files,
+       which is under a millisecond per module for today.
+     - Today's second compile of a program in one runtime takes 19 ms at the
+       median, from the cache. The crate has no cache, and its first and
+       every later compile cost the same. Against that cache the two
+       medians differ by 30 times, and the crate is slower on the three
+       large programs.
+
+275. **The crate is slow on a large program, for a cause of the prototype.**
+     At the median the crate takes 0.12 ms per KB of source. On the three
+     programs with FabriChat's room it takes 2.3 ms per KB. A sample of the
+     process on `system/fabrichat/room-test-fixture.ts` has 70% of its top
+     frames in the allocator and in `memmove`, and the first frames of the
+     crate below them are `String::clone`, and `Resolver::shape` and
+     `Resolver::display_at` of `src/types.rs`. The reading is that the
+     type evaluator builds the shape of a type again at each use and keeps
+     none. It was read from the sample alone, and no fix was tried. It matters
+     for the comparison because the reference pattern is the one case where
+     the measured gain is 3.4 times and not hundreds.
+
+     A second finding of the same kind: given the 1.5 MB bundled
+     `guest.js` of `showcase/iframe-firebreak-commons` as a module, the
+     crate had not finished one run after 108 s. The file is a data file of
+     that program and is no module of the corpus, so no figure here
+     includes it, and `cost.ts closures` leaves data files out.
+
+276. **Run time: today measured, the plan's counts derived.** Today's side is
+     the scenario run by the harness (`runScenario` in `compare/harness.ts`)
+     with a probe at five points. "To settle" is from the compiled pattern
+     to the point where the instance was started, the result and every kept
+     output were read, the scheduler was idle and the store had confirmed.
+     "Per event" is from sending one event to the same point after it. The
+     counts are the runtime's own timing spans: a transaction committed is
+     `storage.v2.transaction/commit/commitNative`, a run of an action is
+     `scheduler/run/action`, a call of an authored body is
+     `runner/action/invokeJavaScriptImplementation`, a CFC preparation is
+     `extended-storage-transaction/prepareCfc`. The reads are the entries
+     of the read journal of each transaction whose commit was called, taken
+     by wrapping `Runtime.edit` on the one runtime of the scenario. The
+     scheduler asked for a commit after every run of an action (4,343), and
+     1,461 of those had something to write. All 213 modules ran in one
+     process one after the other, so the times are those of a process that
+     has run patterns before.
+
+     The derived side, from `settledCost` and `eventCost` of
+     `compare/cost-model.ts`:
+
+     - *Transactions to settle: 2*, whatever the plan (ES §1.1, §1.2). One
+       creates the instance and writes its argument. One is the derivation
+       transaction of the change of demand, which evaluates every demanded
+       cone instance, those of the children in the same space included.
+     - *Cone instances.* A cone is evaluated once per combination of
+       element keys of the collections around it (ES §2.1, §2.5). A cone
+       belongs to the innermost collection among those a slot of root
+       `element` or `index` of it names and those of the cones whose output
+       it reads. The number of element keys of a collection is the length
+       of the generated array where the collection iterates a path of the
+       argument, or of an element of such an array, or a collection made
+       from one. For the other collections, over a computed array, a state
+       cell or the result of an operation, the plan and the inputs give no
+       size: the first row takes them as empty and the second as two
+       elements. 54 of the 213 modules have such a collection.
+     - *Per event: 1 or 2 transactions* (ES §1.1): the event's, and one
+       derivation transaction behind the batch where a demanded cone
+       instance became stale. An event the handler sends has a transaction
+       of its own and is not counted. The cone evaluations of an event are
+       bounded by the cones that have a slot of the same root as the place
+       a written path of the handler's state is bound to, and the cones
+       behind them by `output` edges, each counted for every element key.
+
+     | To settle, 213 modules | total | median | p10 | p90 | least | most |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | today, measured: milliseconds | 21,566 | 37.8 | 9.96 | 238 | 4.73 | 2,058 |
+     | today, measured: transactions committed | 1,461 | 2 | 1 | 19.8 | 1 | 76 |
+     | today, measured: runs of an action | 4,343 | 11 | 4 | 44.8 | 2 | 187 |
+     | today, measured: calls of an authored body | 844 | 1 | 0 | 13 | 0 | 53 |
+     | today, measured: CFC preparations | 2,822 | 8 | 0 | 35 | 0 | 134 |
+     | today, measured: reads journaled | 674,328 | 819 | 160 | 7,057 | 58 | 107,490 |
+     | compiled, derived: transactions | 426 | 2 | 2 | 2 | 2 | 2 |
+     | compiled, derived: cones | 1,845 | 5 | 2 | 14.8 | 0 | 150 |
+     | compiled, derived: cone instances, other collections empty | 1,708 | 4 | 2 | 15 | 0 | 147 |
+     | compiled, derived: cone instances, other collections of 2 | 2,406 | 5 | 2 | 23 | 0 | 153 |
+     | compiled, derived: sandboxed bodies in the plan | 724 | 1 | 0 | 9 | 0 | 37 |
+     | compiled, derived: bindings in the plan | 651 | 1 | 0 | 7 | 0 | 122 |
+     | compiled, derived: effects in the plan | 0 | 0 | 0 | 0 | 0 | 0 |
+
+     The ratio of transactions, today's to the derived, is 1 at the median
+     module (p10 0.5, p90 9.9), and 3.4 over the totals. 84 modules commit
+     one transaction today, where the design has two, and 92 commit more
+     than two. The ratio of today's runs of an action to the derived cone
+     instances is 2.3 at the median (p10 1.4, p90 3.7), and 1.8 over the
+     totals.
+
+     | Largest ratio of transactions | ms today | transactions today | actions today | transactions derived | cone instances derived | ratio |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | `apps/topic-workbench/main.tsx` | 514 | 76 | 134 | 2 | 59 | 38 |
+     | `apps/person-workbench/main.tsx` | 590 | 69 | 117 | 2 | 73 | 34.5 |
+     | `dev/catalog/catalog.tsx` | 311 | 55 | 69 | 2 | 11 | 27.5 |
+     | `dev/catalog/ui/sidebar/sidebar.tsx` | 215 | 51 | 59 | 2 | 5 | 25.5 |
+     | `dev/plain-array-callback-locals/main.tsx` | 115 | 46 | 52 | 2 | 24 | 23 |
+
+     | Smallest ratio of transactions | ms today | transactions today | actions today | transactions derived | cone instances derived | ratio |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | `showcase/iframe-impossible-machine/main.tsx` | 29.5 | 1 | 8 | 2 | 3 | 0.5 |
+     | `showcase/iframe-orbital-salvage-yard/main.tsx` | 74.5 | 1 | 8 | 2 | 3 | 0.5 |
+     | `showcase/iframe-shared-tape-lab/main.tsx` | 21.5 | 1 | 8 | 2 | 3 | 0.5 |
+     | `system/fabrichat/adapter.tsx` | 65.9 | 1 | 13 | 2 | 7 | 0.5 |
+     | `system/fabrichat/room-test-fixture.ts` | 19.9 | 1 | 3 | 2 | 1 | 0.5 |
+
+     The smallest ratio is shared by the 84 modules with one transaction
+     today, and the five shown are the last of them in the order of the
+     corpus.
+
+     | Per committed event, 344 events of 104 modules | total | median | p10 | p90 | least | most |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | today, measured: milliseconds | 18,219 | 26 | 8.22 | 123 | 2.87 | 420 |
+     | today, measured: transactions committed | 1,175 | 2 | 1 | 8 | 1 | 38 |
+     | today, measured: runs of an action | 1,605 | 3 | 1 | 12 | 1 | 48 |
+     | today, measured: reads journaled | 701,101 | 979 | 199 | 4,712 | 63 | 14,451 |
+
+     Derived per event: 1 to 2 transactions, and at most 4.7 cone
+     evaluations at the mean over all events (2.7 at the median module).
+     Today's mean per committed event is 3.4 transactions and 4.7 runs of
+     an action. 15 further events were refused by the runtime and are in no
+     row.
+
+     What can be said about run time is these ratios of counts and nothing
+     more. A transaction of the design is not a transaction of today: it
+     prepares CFC once over everything a cause staged, where today each of
+     the 2,822 preparations to settle is one node's. A cone evaluation is
+     not a run of an action: it is one call of emitted code with no
+     scheduler step, no transaction and no journal of its own. Neither
+     difference has a measured cost.
+
+277. **Storage: today measured, the plan's documents derived.** Today's side
+     is what the replica of the scenario's space holds after the runs of
+     note 276, for every document a commit wrote. A document is counted in
+     one of six kinds: a *result* document holds an `argument` meta link, an
+     *argument* document is what such a link names, an *internal* document
+     holds a `result` meta link, a *computed* document has an identifier of
+     the `computed:` scheme, a *schema* document has a `cid:` identifier,
+     and *other* is the rest: the scenario's inputs, the records of their
+     arrays, and after events the receipts and the records a handler made.
+     The first four are the documents of the instance, which the design
+     replaces. Schema documents and the others exist in both layouts. The
+     documents the compile stored are counted apart. Bytes are of the JSON
+     of a document's `value`, of its meta fields, and of its `cfc`
+     envelope. The replica holds each label in place. The second envelope
+     row counts a label above 128 bytes as a reference of 63 bytes
+     (`CFC_LABEL_INLINE_LIMIT` in `runtime/runner/src/cfc/label-documents.ts`),
+     which is how the store holds it.
+
+     The derived side, from `settledCost`, is the documents of ES §4.1:
+
+     - one result document and one argument document;
+     - one operation state document per durable operation and combination
+       of element keys;
+     - none to one state cell document per state cell and combination of
+       element keys, since a cell's document is written when the cell is
+       first assigned (ES §4.5);
+     - none to two documents per child, its result and its argument (ES
+       §4.6). The documents of the child's own plan are not derived: 5 of
+       the 213 modules have a child record, and `dev/catalog/catalog.tsx`
+       and `dev/catalog/ui/story-renderer.tsx` have 64 each, of which the
+       scenario instantiates few;
+     - none to one part document per row of a kept collection (ES §4.10).
+       Whether a row is a part depends on its size in bytes against
+       `PART_SPLIT_BYTES`, which the plan does not give. The nodes of a
+       rendered tree are split points too and are not counted, so a
+       rendered tree above 1,024 bytes adds part documents that the "most"
+       row does not have;
+     - one row of the stream index per binding and combination of element
+       keys, and no stream document before an event (ES §4.7).
+
+     Label entries, by ES §4.3: one entry of the pattern's atom at the root
+     of the result document, then a `value` and a `shape` entry per kept
+     output whose template is not `const` and whose label is not empty, and
+     an `enumerate` entry per kept collection. Whether a template
+     instantiates to a label with nothing in it depends on the labels of
+     the inputs, which the derivation does not evaluate. So three rows: one
+     entry where every label is empty, and the count where none is, with
+     the entries of a path below `*` once where the rows share a label and
+     once per element key where they differ. A template is held once in the
+     plan and in no document. ES §4.9 gives an entry stored by reference as
+     about 25 bytes and a reference of 63, and that is the one size of a
+     record ES gives: the bytes of the derived envelopes are 88 per entry,
+     and no bytes of values are derived.
+
+     One more row is measured and is an estimate of the compiled side, not
+     a derivation: the bytes of the result document's value with every link
+     to a document of the instance replaced by what it names (`inlined` in
+     `compare/cost.ts`). That is the instance's result as one value, with
+     the references it passes through left as links, which is the content
+     ES §4.2 and §4.5 put in the result document and its parts. It leaves
+     out the storage links of parts, state cells and operation state.
+
+     | After settle, 213 modules | total | median | p10 | p90 | least | most |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | today, measured: result documents | 978 | 1 | 1 | 7 | 1 | 121 |
+     | today, measured: argument documents | 980 | 1 | 1 | 7 | 1 | 121 |
+     | today, measured: internal documents | 2,058 | 2 | 0 | 15 | 0 | 453 |
+     | today, measured: computed documents | 1,866 | 1 | 0 | 22 | 0 | 243 |
+     | today, measured: documents of the instance (the four above) | 5,882 | 9 | 2 | 50 | 2 | 938 |
+     | today, measured: bytes of their values | 7,990,374 | 5,900 | 1,286 | 31,799 | 283 | 1,705,696 |
+     | today, measured: bytes of their meta fields | 2,996,753 | 4,463 | 997 | 28,152 | 924 | 478,329 |
+     | today, measured: envelopes | 1,562 | 2 | 0 | 20 | 0 | 96 |
+     | today, measured: label entries | 9,735 | 3 | 0 | 130 | 0 | 825 |
+     | today, measured: envelope bytes, labels in place | 4,481,160 | 968 | 0 | 47,114 | 0 | 348,887 |
+     | today, measured: envelope bytes, labels by reference | 1,505,693 | 578 | 0 | 19,710 | 0 | 163,929 |
+     | today, measured: schema documents | 3,703 | 12 | 2 | 32.8 | 2 | 234 |
+     | today, measured: other documents | 936 | 2 | 0 | 12 | 0 | 42 |
+     | today, measured: documents the compile stored | 4,444 | 9 | 9 | 29 | 9 | 321 |
+     | today, measured: bytes the compile stored | 32,177,821 | 51,239 | 29,901 | 291,739 | 27,350 | 3,899,340 |
+     | estimate from today's run: bytes of the result, inlined | 6,112,595 | 3,205 | 786 | 13,327 | 15 | 1,705,985 |
+     | compiled, derived: documents, least | 466 | 2 | 2 | 2 | 2 | 16 |
+     | compiled, derived: documents, most | 1,834 | 3 | 2 | 8 | 2 | 335 |
+     | compiled, derived: rows of the stream index | 734 | 1 | 0 | 8.8 | 0 | 122 |
+     | compiled, derived: label entries, every label empty | 213 | 1 | 1 | 1 | 1 | 1 |
+     | compiled, derived: label entries, none empty, rows share | 3,512 | 11 | 1 | 35.6 | 1 | 143 |
+     | compiled, derived: label entries, none empty, rows differ | 3,850 | 11 | 1 | 40 | 1 | 143 |
+     | compiled, derived: envelope bytes at 88 per entry, most | 338,800 | 968 | 88 | 3,520 | 88 | 12,584 |
+
+     Documents: today's instance documents are 2.75 times the most derived
+     at the median module (p10 1, p90 8.9), 3.2 times over the totals, and
+     12.6 times the least derived. Over the 208 modules with no child the
+     median is the same and the totals differ by 3.7. Bytes: today's values
+     and meta fields together are 3.3 times the inlined result at the
+     median (p10 1.6, p90 8.8) and 1.8 times over the totals. Two modules
+     hold the bundle of an iframe guest, 1.6 and 1.7 MB, in one value, which
+     both layouts store once and which is 54% of the estimate. Without
+     them the totals differ by 2.7. Label entries: today stores 9,735, and
+     the design stores
+     between 213 and 3,850 for the same runs. That is 2.5 times fewer over
+     the totals against the most derived, and it is not fewer per module:
+     145 of the 213 modules store fewer entries today than the most
+     derived, and 68 store none today, where the design stores the one
+     entry of the pattern's atom. The gain is in the modules with many
+     entries: the p90 is 130 today and 40 derived.
+
+     | Largest ratio of documents | documents today | value bytes today | entries today | documents derived | entries derived | ratio |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | `showcase/wordsearch/play.tsx` | 148 | 70,731 | 495 | 2 to 6 | 1 to 34 | 24.7 |
+     | `dev/catalog/ui/sidebar/sidebar.tsx` | 71 | 13,314 | 198 | 2 to 4 | 1 to 10 | 17.8 |
+     | `examples/map-demo/map-demo.tsx` | 70 | 35,398 | 254 | 2 to 4 | 1 to 60 | 17.5 |
+     | `apps/topic-workbench/main.tsx` | 115 | 46,729 | 469 | 2 to 7 | 1 to 112 | 16.4 |
+     | `product/primitives/demo/atoms-demo.tsx` | 173 | 62,208 | 10 | 3 to 12 | 1 to 90 | 14.4 |
+
+     | Smallest ratio of documents | documents today | value bytes today | entries today | documents derived | entries derived | ratio |
+     | --- | --- | --- | --- | --- | --- | --- |
+     | `showcase/battleship/multiplayer/repro-minimal.tsx` | 4 | 1,501 | 2 | 2 to 6 | 1 to 1 | 0.667 |
+     | `dev/catalog/catalog.tsx` | 84 | 17,773 | 202 | 2 to 133 | 1 to 16 | 0.632 |
+     | `dev/catalog/stories/style-tokens-story.tsx` | 2 | 173,156 | 0 | 2 to 4 | 1 to 8 | 0.5 |
+     | `dev/gideon-tests/style-object-repro/main.tsx` | 2 | 5,861 | 0 | 2 to 4 | 1 to 14 | 0.5 |
+     | `dev/catalog/ui/story-renderer.tsx` | 3 | 764 | 3 | 2 to 130 | 1 to 5 | 0.0231 |
+
+     The three with a ratio below 0.7 that have a child are below 1 because
+     the "most" row counts two documents for each child record of the plan
+     and the scenario instantiates few of them. The two with 0.5 are
+     patterns of one node today, two documents, where the "most" row adds
+     a part per row of a kept collection.
+
+     After the events of the 108 modules that have one, today's instance
+     documents grew by 543 and the other documents by 526 (median 0 and 2
+     per module), and the label entries by 2,676. The design adds a stream
+     document for each stream that received an event, 359 over these
+     modules, and the same other documents: a receipt per handling and a
+     document per record a handler writes into an array.
+
+278. **Storage per element of a `map`.** 34 of the modules that run have a
+     `map` over an array of the argument. Each was run to settle at two
+     lengths of every array of its argument, 2 and 10, with no event. A
+     figure is the difference between the two runs divided by 8.
+
+     | Per element | median | p10 | p90 | least | most |
+     | --- | --- | --- | --- | --- | --- |
+     | today, measured: result documents | 1 | 0 | 3.7 | 0 | 17 |
+     | today, measured: argument documents | 1 | 0 | 3.7 | 0 | 17 |
+     | today, measured: internal documents | 1 | 0 | 5 | 0 | 14 |
+     | today, measured: computed documents | 0.5 | 0 | 13.4 | 0 | 38 |
+     | today, measured: documents of the instance | 5.5 | 0 | 19.8 | 0 | 80 |
+     | today, measured: other documents (the element's record) | 2 | 0 | 10.5 | 0 | 15 |
+     | today, measured: bytes of values | 2,290 | 16.8 | 8,739 | 0 | 18,328 |
+     | today, measured: bytes of meta fields | 3,101 | 0 | 10,093 | 0 | 44,208 |
+     | today, measured: label entries | 15 | 2.1 | 225 | 0 | 292 |
+     | today, measured: envelope bytes, labels in place | 4,208 | 547 | 77,175 | 0 | 122,736 |
+     | today, measured: envelope bytes, labels by reference | 2,270 | 333 | 32,676 | 0 | 42,752 |
+     | today, measured: milliseconds to settle | 18.8 | -1.83 | 86.9 | -9.83 | 194 |
+     | today, measured: transactions | 0.5 | 0 | 13.9 | 0 | 38 |
+     | today, measured: runs of an action | 0.5 | 0 | 15.5 | 0 | 39 |
+     | estimate from today's run: bytes of the result, inlined | 974 | 0 | 3,810 | 0 | 5,024 |
+     | compiled, derived: documents, most (a part per row) | 1 | 0 | 1 | 0 | 2 |
+     | compiled, derived: label entries, rows share | 0 | 0 | 0 | 0 | 0 |
+     | compiled, derived: label entries, rows differ | 2 | 0 | 4 | 0 | 8 |
+     | compiled, derived: cone instances | 2.5 | 0 | 7.7 | 0 | 31 |
+
+     An element of today's median module costs 5.5 documents of the
+     instance, which is a result document, an argument document, and the
+     internal and computed documents of the element's nodes, with 5.4 KB of
+     values and meta fields and 15 label entries. The design stores the
+     element in the array, or in one part document, with no entry of its
+     own where the rows share a label and 2 where they differ. The p10 of 0
+     is 5 modules. In three the `map` is over an array below the top level
+     of the argument, which the two runs do not lengthen. In the other two
+     the longer array adds no document of the instance. A negative time is
+     the noise of two runs.
+
+279. **What was not measured, and what it would take.**
+
+     - *Any time of the compiled path.* It needs an executor of plans, and
+       before that an emitter of value code. The smallest one that gives a
+       number: emit one function per cone for expression code and call the
+       sandboxed bodies as today's; evaluate the cones of a derivation
+       transaction in the order of `Plan.cones` against the store of
+       today; write the kept outputs to one result document. With no
+       labels, no parts, no scope instances and no events, that measures
+       the time to settle and the bytes of the result, on the modules with
+       no collection first.
+     - *Bytes of the compiled layout.* The inlined result of note 277 is an
+       estimate. The real size needs the executor, and the rule of ES
+       §4.10 applied to it gives the part documents.
+     - *Label entries of the compiled layout* between the two bounds. The
+       harness already evaluates the template of each compared output
+       (`evaluateTemplate` in `compare/template.ts`). Counting the kept
+       outputs whose label is not empty would give the count for a
+       scenario, for the 1,388 outputs the comparison reaches. It was not
+       done here.
+     - *The history.* The store keeps every revision of a document, and a
+       document of today's layout is rewritten by each run that changes
+       it. The bytes above are of the latest values. The revisions were
+       not counted, since the replica does not hold them.
+     - *A cold compile on the server and in the browser.* Both figures are
+       of Deno on one machine.
+     - *The modules that need `wish` or an effect* (47), and the 10 whose
+       run fails.
+
+280. **Against the expectation that all three improve significantly.**
+     Stated without softening:
+
+     - *Compile time improves by two orders of magnitude at the median, and
+       by 3.4 times on FabriChat.* The second figure is a defect of the
+       prototype's type evaluator (note 275), not of the design, and it is
+       the figure for the reference pattern until that is fixed. The crate
+       also does not yet emit code or hash, so its figure will grow.
+     - *Run time is not measured.* The counts that stand in for it improve
+       for the modules that are large today and not for the median module:
+       the median module settles in 2 transactions today and in 2 by the
+       design, and 84 modules of 213 settle in one transaction today. The
+       top tenth commits 20 or more today and would commit 2. Runs of an
+       action against cone instances is 2.3 to 1 at the median. Per event
+       it is 3.4 transactions against 1 to 2.
+     - *Storage improves in documents and in the modules with a `map`, and
+       not in label entries for a small module.* Documents fall by 3.2
+       times over the corpus against the upper bound and the bound is
+       loose in both directions (parts of a rendered tree are not in it,
+       and unassigned state cells are). A small module stores no label
+       entry today and one in the design. The bytes of values fall by an
+       estimated 1.8 times over the corpus, and 2.7 times without two
+       modules that each hold one value above 1.5 MB. Most of what falls
+       away is meta fields and links that the design does not store.
+     - *The scenario is small.* Every array has two elements. The costs
+       that grow with the data are per element, and per element the
+       measured difference is 5.5 documents against at most 1, and 15
+       label entries against 0 to 2 (note 278). On data of realistic size
+       the totals would be dominated by that row, which the corpus totals
+       above do not show.
