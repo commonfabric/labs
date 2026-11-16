@@ -16,7 +16,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/star-kinds.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst pick = handler(\n  (_, { title, chosen }) => {\n    chosen.set(title);\n  },\n);\nconst Story = pattern(undefined);\nconst $default = (pattern(\n  undefined,\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"button\", { \"onClick\": $h.stream(0) }, [$h.slot(4)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), presses: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst pick = handler(\n  (_, { title, chosen }) => {\n    chosen.set(title);\n  },\n);\nconst Story = pattern(undefined);\nconst $default = (pattern(\n  undefined,\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"a\", { \"onClick\": $h.stream(0) }, [$h.slot(4)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), presses: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -371,7 +371,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/star-kinds.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst pick = handler(\n  (_, { title, chosen }) => {\n    chosen.set(title);\n  },\n);\nconst Story = pattern(undefined);\nconst $default = (pattern(\n  undefined,\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\nconst label = $rt.at($arg, [\"label\"], $h);\n$rt.value(0, ($h) => ($rt.h(\"button\", { \"onClick\": $h.stream(2) }, [(label)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), presses: $h.slot(4) })));\n});\n$rt.setup(2, function ($arg, $h) {\nconst label = $rt.at($arg, [\"label\"], $h);\n$rt.value(1, ($h) => ($rt.h(\"button\", { \"onClick\": $h.stream(3) }, [(label)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1), presses: $h.slot(5) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({ \"label\": (\"one\") }, $h);\nconst one = $rt.thunk(($h) => ($rt.force($s1, $h)));\nconst $s2 = $rt.setups[2]({ \"label\": (\"two\") }, $h);\nconst two = $rt.thunk(($h) => ($rt.force($s2, $h)));\nconst sections = $rt.thunk(($h) => ([({ label: (\"one\"), node: $rt.force(one, $h) }), ({ label: (\"two\"), node: $rt.force(two, $h) })]));\n{\n$rt.element(0, ($h) => (({ tag: $h.slot(10), pick: $h.stream(4) })));\n}\n{\n$rt.element(1, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(12)])));\n}\n{\n$rt.element(2, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(13)])));\n}\n{\n$rt.element(3, ($h) => ($rt.h(\"b\", {  }, [$h.slot(14)])));\n}\n{\n$rt.element(4, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(5) }, [$h.slot(15)])));\n}\n{\n$rt.element(5, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(6) }, [$h.slot(16)])));\n}\n$rt.value(17, ($h) => ($rt.force(sections, $h)));\n{\n$rt.element(6, ($h) => ($rt.h(\"div\", {  }, [$h.slot(17)])));\n}\n{\n$rt.element(7, ($h) => ($rt.h(\"i\", { \"onClick\": $h.slot(18) }, [$h.slot(19)])));\n}\n$rt.value(24, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"ul\", {  }, [$h.output(5)]), $rt.h(\"ol\", {  }, [$h.output(8)]), $rt.h(\"nav\", {  }, [\"first\", $h.output(11), $rt.h(\"b\", { \"onClick\": $h.stream(1) }, [\"more\"])]), $rt.h(\"menu\", {  }, [$h.output(14), $h.output(17)]), $rt.h(\"section\", {  }, [$h.output(21)]), $rt.h(\"p\", {  }, [$h.output(24)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(28), count: $h.slot(3), chosen: $h.slot(9), first: $h.slot(4), second: $h.slot(5) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((_, { title, chosen }) => {\n    chosen.set(title);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst pick = handler(\n  (_, { title, chosen }) => {\n    chosen.set(title);\n  },\n);\nconst Story = pattern(undefined);\nconst $default = (pattern(\n  undefined,\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\nconst label = $rt.at($arg, [\"label\"], $h);\n$rt.value(0, ($h) => ($rt.h(\"a\", { \"onClick\": $h.stream(2) }, [(label)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), presses: $h.slot(4) })));\n});\n$rt.setup(2, function ($arg, $h) {\nconst label = $rt.at($arg, [\"label\"], $h);\n$rt.value(1, ($h) => ($rt.h(\"a\", { \"onClick\": $h.stream(3) }, [(label)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1), presses: $h.slot(5) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({ \"label\": (\"one\") }, $h);\nconst one = $rt.thunk(($h) => ($rt.force($s1, $h)));\nconst $s2 = $rt.setups[2]({ \"label\": (\"two\") }, $h);\nconst two = $rt.thunk(($h) => ($rt.force($s2, $h)));\nconst sections = $rt.thunk(($h) => ([({ label: (\"one\"), node: $rt.force(one, $h) }), ({ label: (\"two\"), node: $rt.force(two, $h) })]));\n{\n$rt.element(0, ($h) => (({ tag: $h.slot(10), pick: $h.stream(4) })));\n}\n{\n$rt.element(1, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(12)])));\n}\n{\n$rt.element(2, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(13)])));\n}\n{\n$rt.element(3, ($h) => ($rt.h(\"b\", {  }, [$h.slot(14)])));\n}\n{\n$rt.element(4, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(5) }, [$h.slot(15)])));\n}\n{\n$rt.element(5, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(6) }, [$h.slot(16)])));\n}\n$rt.value(17, ($h) => ($rt.force(sections, $h)));\n{\n$rt.element(6, ($h) => ($rt.h(\"div\", {  }, [$h.slot(17)])));\n}\n{\n$rt.element(7, ($h) => ($rt.h(\"i\", { \"onClick\": $h.slot(18) }, [$h.slot(19)])));\n}\n$rt.value(24, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"ul\", {  }, [$h.output(5)]), $rt.h(\"ol\", {  }, [$h.output(8)]), $rt.h(\"nav\", {  }, [\"first\", $h.output(11), $rt.h(\"b\", { \"onClick\": $h.stream(1) }, [\"more\"])]), $rt.h(\"menu\", {  }, [$h.output(14), $h.output(17)]), $rt.h(\"section\", {  }, [$h.output(21)]), $rt.h(\"p\", {  }, [$h.output(24)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(28), count: $h.slot(3), chosen: $h.slot(9), first: $h.slot(4), second: $h.slot(5) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((_, { title, chosen }) => {\n    chosen.set(title);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -1115,7 +1115,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1784
+                "start": 1774
               },
               "bodies": [],
               "entry": "rows",
@@ -1134,7 +1134,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1924
+                "start": 1914
               },
               "bodies": [],
               "entry": "map",
@@ -1153,7 +1153,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2001
+                "start": 1991
               },
               "bodies": [],
               "entry": "map",
@@ -1172,7 +1172,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2103
+                "start": 2093
               },
               "bodies": [],
               "entry": "map",
@@ -1191,7 +1191,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2231
+                "start": 2221
               },
               "bodies": [],
               "entry": "map",
@@ -1210,7 +1210,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2395
+                "start": 2385
               },
               "bodies": [],
               "entry": "map",
@@ -1229,7 +1229,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2528
+                "start": 2518
               },
               "bodies": [],
               "entry": "map",
@@ -1245,7 +1245,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2541
+                "start": 2531
               },
               "bodies": [],
               "entry": "map",
@@ -1264,7 +1264,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2611
+                "start": 2601
               },
               "bodies": [],
               "entry": "map",
@@ -1284,7 +1284,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1893
+                "start": 1883
               },
               "bodies": [],
               "entry": "$UI",

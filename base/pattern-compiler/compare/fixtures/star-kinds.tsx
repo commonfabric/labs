@@ -20,7 +20,7 @@ const pick = handler<unknown, { title: string; chosen: Writable<string> }>(
 const Story = pattern<{ label: string }>(({ label }) => {
   const presses = Writable.of(0);
   return {
-    [UI]: <button onClick={bump({ count: presses })}>{label}</button>,
+    [UI]: <a onClick={bump({ count: presses })}>{label}</a>,
     presses,
   };
 });

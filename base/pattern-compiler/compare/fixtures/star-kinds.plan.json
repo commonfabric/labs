@@ -948,7 +948,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1784
+                "start": 1774
               },
               "bodies": [],
               "entry": "rows",
@@ -967,7 +967,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1924
+                "start": 1914
               },
               "bodies": [],
               "entry": "map",
@@ -986,7 +986,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2001
+                "start": 1991
               },
               "bodies": [],
               "entry": "map",
@@ -1005,7 +1005,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2103
+                "start": 2093
               },
               "bodies": [],
               "entry": "map",
@@ -1024,7 +1024,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2231
+                "start": 2221
               },
               "bodies": [],
               "entry": "map",
@@ -1043,7 +1043,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2395
+                "start": 2385
               },
               "bodies": [],
               "entry": "map",
@@ -1062,7 +1062,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2528
+                "start": 2518
               },
               "bodies": [],
               "entry": "map",
@@ -1078,7 +1078,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2541
+                "start": 2531
               },
               "bodies": [],
               "entry": "map",
@@ -1097,7 +1097,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 2611
+                "start": 2601
               },
               "bodies": [],
               "entry": "map",
@@ -1117,7 +1117,7 @@
             {
               "at": {
                 "file": "compare/fixtures/star-kinds.tsx",
-                "start": 1893
+                "start": 1883
               },
               "bodies": [],
               "entry": "$UI",
