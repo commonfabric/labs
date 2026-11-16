@@ -919,7 +919,8 @@ commit. What the notes give of the changes:
   one stops 2 modules; the debug strings and `linksOf` stop 6 modules.
 - **Streams.** No evaluation fails the check of a stream's position. The
   3 stored positions at no listed path hold the stream of a binding that
-  a `computed` makes and returns (question 165). The 683 at a listed
+  a `computed` makes and returns, which is allowed by ruling
+  (question 165). The 683 at a listed
   path include the 208 positions of a stream inside a member of an
   element, at which the earlier executor stored a record.
 - **Documents.** The 26 documents more are 5 argument and 5 result
@@ -959,7 +960,8 @@ The executor counted where its run kept to the plan.
   have to be complete: the 13 and the 208 are positions the compiler
   owes a path for, and an evaluation that stored one of them fails.
   The 2 are no binding's stream, are passed on as any input is, and
-  are not checked. Whether the 3 are allowed is question 165.
+  are not checked. The 3 are allowed and not checked, by ruling
+  (question 165).
 - **A cone that writes a cell it reads.** 6 evaluations wrote a
   position they had read. The executor evaluates such a cone instance
   once, as the prototype observed today's runtime to do. By
@@ -1235,6 +1237,14 @@ is relitigated.
   affected. The same in an element body over an array of references,
   over an array of plain values in place, and over the result of
   another per-element construct.
+- A stream that a function body returns into the result is allowed and
+  not checked. A `lift` or a `computed` that returns a value holding
+  the stream of a binding returns a reference and no marker, and the
+  stream is treated like any reference a function body returns, so
+  reads through it are dynamic. No path of `Binding.result` names the
+  position. The same for a body used in an element body over an array
+  of references, over an array of plain values in place, and over the
+  result of another per-element construct.
 - A handling is identified by the receipt, which leaves the acting
   principal out.
 - An event is routed to an instance that is not loaded through a stream
@@ -2477,17 +2487,16 @@ assumption, which is the prototype's choice.
      instance that read the staged value. The entry keeps its number.
 
 165. **A stream that a function body returns into the result** (PL
-     question 116). A `lift` or a `computed` can return a value that
-     holds the stream of a binding its body made, or of one it was
-     handed. A body is not value code, what it returns holds a reference
-     and no marker, and the compiler does not know the path. *Assumed:*
-     it is allowed, the link is stored, no path of `Binding.result`
-     names the position, and nothing checks it. The alternatives refuse
-     it at a kept path of the result, or have the body's record state
-     the paths that can hold a stream. The corpus has 3 such positions,
-     in rows that one `computed` returns as a whole array of plain
-     values; the question is the same for a body used in an element body
-     in all three cases.
+     question 116). Settled by ruling: it is allowed and not checked.
+     A `lift` or a `computed` that returns a value holding the stream
+     of a binding its body made, or of one it was handed, returns a
+     reference and no marker. The stream is treated like any reference
+     a function body returns: the link is stored, reads through it are
+     dynamic, and no path of `Binding.result` names the position. The
+     corpus has 3 such positions, in rows that one `computed` returns
+     as a whole array of plain values; the rule is the same for a body
+     used in an element body in all three cases. The entry keeps its
+     number.
 
 166. **Where the record of a key of a list is stored** (`elementById`;
      ES question 89). `footprint-analysis.md` §7 has the handle at `*`

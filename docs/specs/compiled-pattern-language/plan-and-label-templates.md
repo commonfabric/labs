@@ -1606,13 +1606,17 @@ a `within` step"), and the compiler owes the following.
   `computed` can return a value that holds the stream of a binding its
   body made (section 3.14), or of a binding of the reactive tier that it
   was handed as a reference. A body is not value code, and what it
-  returns holds a reference and no marker. *Assumed* (section 8,
-  question 116): that is allowed. The runtime stores the link at the
-  position by the rule for a reference a body returns (section 3.9). No
+  returns holds a reference and no marker. By ruling that is allowed
+  and not checked: the stream is treated like any reference a function
+  body returns. The runtime stores the link at the position by the
+  rule for a reference a body returns (section 3.9), and a read
+  through it is dynamic, as a read through any such reference is. No
   path of `Binding.result` names the position, since the compiler does
   not know where in its result a body puts the stream, and the check
-  does not apply. In the same run 3 stored positions hold such a stream,
-  in `patterns/dev/gideon-tests/computed-array-repro.tsx`, where a
+  does not apply. The label analysis has such a stream by the template
+  of the body's output and by no listed path. In the same run 3 stored
+  positions hold such a stream, in
+  `patterns/dev/gideon-tests/computed-array-repro.tsx`, where a
   `computed` returns rows that each hold a handler written in the body.
 
 The rule and what the compiler owes are the same in the three cases of
@@ -11643,26 +11647,25 @@ this document made.
      Over an array of references both are references to the cell, and
      nothing is open.
 116. **A stream that a function body returns into the result** (for the
-     project owner). By ruling `Binding.result` lists every position of
-     the result at which value code can place the stream, and the
-     runtime checks the markers it stores against the list. A function
-     body is not value code. A `lift` or a `computed` can return a value
-     that holds the stream of a binding its body made, as a `computed`
-     that returns rows with a handler written in the body does
+     project owner). Not open, by ruling. By an earlier ruling
+     `Binding.result` lists every position of the result at which value
+     code can place the stream, and the runtime checks the markers it
+     stores against the list. A function body is not value code. A
+     `lift` or a `computed` can return a value that holds the stream of
+     a binding its body made, as a `computed` that returns rows with a
+     handler written in the body does
      (`patterns/dev/gideon-tests/computed-array-repro.tsx`, 3 stored
      positions in the prototype's run), and a body that is handed the
      stream of a binding of the reactive tier and returns it is the same
      case. What the body returns holds a reference and no marker, and
-     the compiler does not know the path. *Assumed* (section 1.1, "The
-     listed paths are complete"), as the prototype does: it is allowed,
-     the link is stored at the position, no path of `Binding.result`
-     names it, and nothing checks it. The label analysis then has such a
-     stream by the template of the body's output and by no listed path.
-     The alternatives refuse a stream in what a body returns at a kept
-     path of the result, or have the body's record state the paths of
-     its result that can hold a stream. The question does not depend on
-     a per-element construct: the rows of the corpus case are plain
-     values that one `computed` returns as a whole array, and the same
-     holds for a body used in an element body over an array of
+     the compiler does not know the path. The ruling: it is allowed and
+     not checked, and the stream is treated like any reference a
+     function body returns, so reads through it are dynamic (section
+     1.1, "The listed paths are complete"). The link is stored at the
+     position, and no path of `Binding.result` names it. The rule does
+     not depend on a per-element construct: the rows of the corpus case
+     are plain values that one `computed` returns as a whole array, and
+     the same holds for a body used in an element body over an array of
      references, over an array of plain values in place, and over the
-     result of another per-element construct.
+     result of another per-element construct. The entry keeps its
+     number.

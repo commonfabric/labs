@@ -965,10 +965,11 @@ value function places the stream, and the runtime checks where.
 - **A stream that a function body returns** is no marker either. A
   sandboxed body that returns a value with the stream of a binding it
   made, or of one it was handed, returns a reference, and the runtime
-  stores the link as for any reference a body returns (section 2.4). No
-  path of `Binding.result` names the position and the check does not
-  apply, which is *assumed* in `plan-and-label-templates.md` (its §1.1
-  and §8, question 116).
+  stores the link as for any reference a body returns (section 2.4). By
+  ruling that is allowed and not checked, and reads through the stream
+  are dynamic, as through any reference a body returns. No path of
+  `Binding.result` names the position (`plan-and-label-templates.md`
+  §1.1).
 
 The rule is the same for a cone of an element body in the three cases
 of a per-element source: an array of references, an array of plain
@@ -996,7 +997,7 @@ positions that no listed path named were these.
 | A stream inside a value that the elements of a collection hold, read as `entry.node` | 7 | 5 | The compiler owes the path, as assumed (its §8, question 84) |
 | The same, read as `example[UI]`, where that run stored a record in the place of the stream | 208 | 208 | The same |
 | A stream that is an input of the pattern | 2 | 0 | No binding's stream; not checked |
-| The stream of a binding that a function body makes and returns | 3 | 0 | Assumed allowed and not checked (its §8, question 116) |
+| The stream of a binding that a function body makes and returns | 3 | 0 | Allowed and not checked, by ruling (its §1.1) |
 
 The first two rows are 13 positions of a binding that had no path for
 the position. The third row was in no count of that run, because the
