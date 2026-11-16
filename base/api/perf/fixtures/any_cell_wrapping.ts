@@ -1,4 +1,4 @@
-import type { AnyCellWrapping, Cell } from "../index.ts";
+import type { AnyCellWrapping, Cell } from "../../index.ts";
 
 type Contacts = {
   primaryEmail: string;

@@ -265,6 +265,36 @@ describe("value-clone", () => {
       );
     });
 
+    it("returns the root unchanged for a path continuing past a leaf", () => {
+      const root = deepFreeze({ value: { leaf: 1 } });
+
+      expect(cloneWithoutValueAtPath(root, ["value", "leaf", "x", "y"])).toBe(
+        root,
+      );
+    });
+
+    it("returns a clone of the root for a path stepping through an array by a name that is no index", () => {
+      // An array carrying a record under a name that is no index is outside
+      // the `FabricValue` contract, which is what lets the path name
+      // something there for the removal to pass by.
+
+      const items: FabricValue[] = [{ x: 1 }];
+      Object.defineProperty(items, "extra", {
+        value: { x: 1 },
+        enumerable: true,
+      });
+      const root = { items };
+
+      const result = obj(
+        cloneWithoutValueAtPath(root, ["items", "extra", "x"]),
+      );
+
+      expect(result.items).toEqual([{ x: 1 }]);
+      expect(isDeepFrozen(result)).toBe(true);
+      expect(obj(cloneWithoutValueAtPath(root, ["items", "0", "x"])).items)
+        .toEqual([{}]);
+    });
+
     it("removes the whole value for an `undefined` root or an empty path", () => {
       expect(cloneWithoutValueAtPath(undefined, ["a"])).toBeUndefined();
       expect(cloneWithoutValueAtPath(deepFreeze({ a: 1 }), [])).toBeUndefined();

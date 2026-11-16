@@ -10,12 +10,11 @@ import { renderInline } from "./render.ts";
  * level deeper. Local so this module stays typescript-value-free (above).
  */
 function flattenDiagnosticMessageText(
-  diag: string | DiagnosticMessageChain | undefined,
+  diag: string | DiagnosticMessageChain,
   newLine: string,
   indent = 0,
 ): string {
   if (typeof diag === "string") return diag;
-  if (diag === undefined) return "";
   let result = "";
   if (indent) {
     result += newLine;

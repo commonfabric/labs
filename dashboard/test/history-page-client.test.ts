@@ -662,6 +662,12 @@ describe("history-page-client", () => {
         expect(history.page()).toContain(history.script);
       });
 
+      it("throws, naming what is missing, when its markup lacks an element it needs", async () => {
+        await expect(
+          run("<main></main>", history.href, history.start, () => ({ body: "" })),
+        ).rejects.toThrow("A history page needs an element #hg.");
+      });
+
       for (const serialized of [false, true]) {
         describe(serialized ? "as the page carries its script" : "as imported", () => {
           const open = (
@@ -1079,6 +1085,34 @@ describe("history-page-client", () => {
             expect(replacementOf(page)).toBeUndefined();
           });
 
+          it("puts no window in place, and asks for none, once a link has been clicked", async () => {
+            const page = await open({}, { pending: true });
+            slide(page, "7");
+            page.elements.get("days")!.dispatch("change");
+            await page.dispatch(page.document, "click", {
+              target: inside("http://dashboard.test/"),
+              button: 0,
+            });
+            await page.release();
+
+            expect(windowsOf(page)).toEqual(["7"]);
+            expect(replacementOf(page)).toBeUndefined();
+            expect(page.pushes).toEqual([]);
+
+            await choose(page, "9");
+            expect(windowsOf(page)).toEqual(["7"]);
+          });
+
+          it("takes nothing from a check that a newly chosen window arrived during", async () => {
+            const page = await open({ firstPending: true, snapshot: "newer-data" });
+            page.startCheck();
+            await choose(page, "7");
+            await page.release();
+
+            expect(windowsOf(page)).toEqual(["7"]);
+            expect(page.pushes).toEqual([windowHref("7")]);
+          });
+
           it("keeps its window slider and the control that chooses another page out of the browser's form restoration", async () => {
             const page = await open({});
 
@@ -1218,6 +1252,68 @@ describe("history-page-client", () => {
               check.status = 500;
               await page.check();
               expect(panel(page).title).toBe(closed);
+            });
+
+            it("keeps following its progress stream when a check reports the collection it follows", async () => {
+              const page = await openCollecting({
+                progress: history.progress("fetching").state,
+              });
+              await page.check();
+
+              expect(page.streams).toHaveLength(1);
+              expect(page.streams[0].closed).toBe(false);
+              expect(panel(page)).toEqual(history.progress("fetching").text);
+            });
+
+            it("ignores a progress stream it has closed", async () => {
+              const page = await open({
+                progress: history.progress("fetching").state,
+              });
+              await page.check();
+              const [stream] = page.streams;
+              await page.dispatch(stream, "progress", {
+                data: JSON.stringify(history.progress("complete").state),
+              });
+              const idle = panel(page);
+
+              await page.dispatch(stream, "progress", {
+                data: JSON.stringify(history.progress("error", "late").state),
+              });
+              await page.dispatch(stream, "error");
+
+              expect(panel(page)).toEqual(idle);
+              expect(failed(page)).toBe(false);
+            });
+
+            it("asks for no charts when a collection finishes with new data after a link was clicked", async () => {
+              const page = await openCollecting();
+              const [stream] = page.streams;
+              await page.dispatch(page.document, "click", {
+                target: inside("http://dashboard.test/"),
+                button: 0,
+              });
+              await page.dispatch(stream, "progress", {
+                data: JSON.stringify({
+                  ...history.progress("complete").state,
+                  needsReload: true,
+                }),
+              });
+
+              expect(stream.closed).toBe(true);
+              expect(page.requests).toEqual([]);
+            });
+
+            it("goes idle when a check after its progress connection closed reports no collection and leaves out why the last one stopped", async () => {
+              const page = await openCollecting({ lastRequestError: undefined });
+              await page.dispatch(page.streams[0], "error");
+              await page.check();
+
+              expect(panel(page)).toEqual({
+                title: "Idle",
+                total: "0 outstanding",
+                detail: "No requests in progress.",
+              });
+              expect(failed(page)).toBe(false);
             });
 
             it("says it could not read a progress update it cannot parse", async () => {

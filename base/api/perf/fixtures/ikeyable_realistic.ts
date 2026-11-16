@@ -4,7 +4,7 @@ import type {
   KeyResultType,
   ReadonlyCell,
   Stream,
-} from "../index.ts";
+} from "../../index.ts";
 
 type NotificationPrefs = {
   email: boolean;

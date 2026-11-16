@@ -6,6 +6,7 @@ import {
 import { defer } from "@commonfabric/async/defer";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import {
   connectFabric,
@@ -33,6 +34,25 @@ function handOffPort(): MessagePort {
     }),
   );
   return channel.port1;
+}
+
+/**
+ * Hands the guest a port whose `postMessage()` throws, as a port does given
+ * what it cannot carry. Returns the host's end, and a function that mends the
+ * guest's.
+ */
+function handOffBrokenPort(): { host: MessagePort; mend(): void } {
+  const channel = new MessageChannel();
+  const postMessage = stub(channel.port2, "postMessage", () => {
+    throw new DOMException("The port cannot carry this.", "DataCloneError");
+  });
+  globalThis.dispatchEvent(
+    new MessageEvent("message", {
+      data: GUEST_PORT_HANDOFF,
+      ports: [channel.port2],
+    }),
+  );
+  return { host: channel.port1, mend: () => postMessage.restore() };
 }
 
 function event(subscription: string, value?: FabricValue): BridgeHostMessage {
@@ -1283,6 +1303,118 @@ describe("guest", () => {
         send(host, response(request.id, 2));
         await settleAfterEvent(fabric, host);
         expect(cell.get()).toBe(1);
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    it("rejects `pushAll()` given members that are not an array, and sends nothing", async () => {
+      const fabric = connectFabric();
+      try {
+        const cell = fabric.cell<number[]>("list");
+        await expect(Reflect.apply(cell.pushAll, cell, ["members"])).rejects
+          .toThrow(new TypeError("`pushAll()` requires an array of members."));
+
+        const host = handOffPort();
+        void cell.pull();
+        expect(await receive(host)).toMatchObject({ operation: "pull" });
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    it("rejects `pushAll()` given members it cannot copy, and sends nothing", async () => {
+      const fabric = connectFabric();
+      try {
+        const cell = fabric.cell<FabricValue[]>("list");
+        const cyclic: Record<string, FabricValue> = {};
+        cyclic.self = cyclic;
+        await expect(cell.pushAll([cyclic])).rejects.toThrow(
+          "Cannot deep-clone circular reference",
+        );
+
+        const host = handOffPort();
+        void cell.pull();
+        expect(await receive(host)).toMatchObject({ operation: "pull" });
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    describe("a write it cannot encode", () => {
+      const unencodable = Object.fromEntries([["constructor", 1]]);
+
+      it("leaves a resource's cell holding an `operation-failed` error naming the resource", async () => {
+        const fabric = connectFabric();
+        try {
+          const cell = fabric.cell<FabricValue>("record");
+          await expect(cell.set(unencodable)).rejects.toThrow(
+            "Cannot encode an object with a key this runtime reserves",
+          );
+
+          expect(cell.getSnapshot()).toMatchObject({
+            status: "error",
+            error: {
+              name: "FabricBridgeError",
+              code: "operation-failed",
+              resource: "record",
+            },
+          });
+        } finally {
+          fabric.disconnect();
+        }
+      });
+
+      it("leaves a resolved cell holding an `operation-failed` error naming no resource", async () => {
+        const fabric = connectFabric();
+        try {
+          const cell = fabric.resolvedCell<FabricValue>({
+            handle: "cell-1",
+            hasValue: true,
+            operations: ["get", "pull", "set"],
+            value: 1,
+          });
+          await expect(cell.set(unencodable)).rejects.toThrow(
+            "Cannot encode an object with a key this runtime reserves",
+          );
+
+          expect(cell.getSnapshot()).toMatchObject({
+            status: "error",
+            error: { code: "operation-failed", resource: undefined },
+          });
+        } finally {
+          fabric.disconnect();
+        }
+      });
+    });
+
+    it("rejects a request with the error its port raised sending it", async () => {
+      const fabric = connectFabric();
+      const port = handOffBrokenPort();
+      try {
+        await expect(fabric.call("service", "run")).rejects.toThrow(
+          new DOMException("The port cannot carry this.", "DataCloneError"),
+        );
+      } finally {
+        port.mend();
+        fabric.disconnect();
+        port.host.close();
+      }
+    });
+
+    it("ignores a port message it cannot decode, or that is not the host's", async () => {
+      const fabric = connectFabric();
+      try {
+        const host = handOffPort();
+        const pulling = fabric.cell<number>("count").pull();
+        const request = await receive(host);
+
+        host.postMessage("not a message");
+        send(host, response(request.id + 1, 2));
+        host.postMessage(realmFromFabricValue({ hello: "world" }));
+        send(host, response(request.id, 1));
+
+        expect(await pulling).toBe(1);
       } finally {
         fabric.disconnect();
       }

@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [
-    "./schema.ts"
+    "./fixtures/schema.ts"
   ]
 }
