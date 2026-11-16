@@ -12,6 +12,7 @@ import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   acquireServerExecutionEnabler,
   encodeMemoryBoundary,
@@ -437,6 +438,39 @@ describe("serving-worker-recovery", () => {
       [...started.accessForTestingOnly.placements].flatMap(([placed, on]) =>
         on.worker.port === worker ? [placed] : []
       );
+
+    /** How many times the pool has warned that a worker's limit was replaced. */
+    const overriddenWarnings = (): number => {
+      const breakdown = getLoggerCountsBreakdown() as Record<
+        string,
+        Record<string, { warn?: number } | number | undefined> | undefined
+      >;
+      const entry = breakdown["serving-worker-host"]?.["heap-limit-overridden"];
+      return typeof entry === "object" ? entry.warn ?? 0 : 0;
+    };
+
+    it("warns when V8 limits a worker's heap to far more than it was started with, as a process-wide flag does", async () => {
+      fakes[Symbol.dispose]();
+      // The 16 GB a `--max-old-space-size=16384` gives every isolate.
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const before = overriddenWarnings();
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(overriddenWarnings()).toBe(before + 1);
+    });
+
+    it("does not warn for the young generation V8 adds to the limit a worker was started with", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(196 * MB));
+      const before = overriddenWarnings();
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(overriddenWarnings()).toBe(before);
+    });
 
     it("leaves a worker serving whose heap is larger than the limit and has not reached it", async () => {
       // The limit bounds the heap's old generation, and the heap a worker

@@ -184,14 +184,17 @@ it finds, rather than skip it, is a change in that repository.
 
 ## The toolshed's heap limit
 
-The toolshed binary is built with `--v8-flags=--max-old-space-size=16384`
-(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
-`dev` and `production` tasks run with the same flag. V8 applies the limit to each
-isolate rather than to the process, so the main thread and every serving worker
-can each reach 16 GiB. The compiled binary fixes the limit when it is built: it
-ignores `DENO_V8_FLAGS`, `NODE_OPTIONS` and `--v8-flags` given when it starts,
-so changing the limit for a deployment takes a new build. The binary is also
-built with `--perf-basic-prof-only-functions` and
+The toolshed sets no `--max-old-space-size`: not the binary
+(`tasks/build-binaries.ts`), `scripts/start-local-dev.sh`, or the package's
+`dev` and `production` tasks. V8 takes that flag over the limit each serving
+worker is started with, so under it every worker's heap could grow to the
+flag's size and never reach `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`; the pool
+logs `heap-limit-overridden` when a worker's limit is well past the one it was
+given. The main thread and the compile workers have V8's default, about 4 GB.
+The compiled binary reads no V8 flags when it starts (it ignores
+`DENO_V8_FLAGS`, `NODE_OPTIONS` and `--v8-flags`), so the only V8 flags a
+deployment runs with are the ones built in. The binary is built with
+`--perf-basic-prof-only-functions` and
 `--interpreted-frames-native-stack`: V8 writes each compiled function's name to
 `/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
 on the host name the JavaScript a thread runs, a stalled serving worker's
@@ -208,7 +211,9 @@ runtime; it closes no worker that serves a space, so it does not bound a space
 that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
 256) does: each serving worker runs as a `node:worker_threads` thread whose
 old generation that limit bounds, and the pool ends a worker whose heap
-reaches it, alone. The limit bounds each worker, not their sum, so a host that
+reaches it, alone. V8 collects a worker's garbage as its heap nears the limit,
+as it does any isolate's, so a worker reaches it only when what it still holds
+does. The limit bounds each worker, not their sum, so a host that
 runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
 memory. It is not exact. A worker that reaches it while evaluating its modules
 or in a timer reports an out-of-memory error and is ended at once. One that
@@ -251,7 +256,7 @@ Spaces that shared the worker are each moved to a worker of their own, beyond
 worker nothing else is on ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
 §1, "Workers").
 
-The main thread and the compile workers are Deno isolates under the 16 GiB
+The main thread and the compile workers are Deno isolates under V8's default
 limit, and one of those that reaches it takes its process down. Events still
 queued survive that, and the restarted process handles them.
 
