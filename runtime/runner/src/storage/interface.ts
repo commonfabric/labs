@@ -106,6 +106,7 @@ import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import type { BaseMemoryAddress } from "../traverse.ts";
+import type { AddressInterner } from "./address-intern.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 import type {
   PendingCommitContext,
@@ -341,6 +342,14 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * direction.
    */
   isContentAddressedDocPersisted?(space: MemorySpace, hash: string): boolean;
+
+  /**
+   * The interner the reactivity logs of this manager's transactions take their
+   * entries from, so that every log naming one address holds one shared,
+   * frozen object. Optional: a transaction on a manager without one interns
+   * into a table of its own.
+   */
+  readonly addressInterner?: AddressInterner;
 
   /**
    * Install a store read-through for SPACE's replica: from then on a
@@ -1941,7 +1950,9 @@ export interface IStorageTransaction {
    * Optional lightweight dependency summary.
    *
    * V2 transactions can provide this directly instead of requiring callers to
-   * reconstruct it from journal activity.
+   * reconstruct it from journal activity. Its entries are frozen and shared
+   * with every other log naming the same address, so a consumer that wants to
+   * change one copies it first.
    */
   getReactivityLog?(): TransactionReactivityLog;
 
@@ -4396,6 +4407,14 @@ export interface ITransactionJournal {
   history(space: MemorySpace): Iterable<IAttestation>;
 }
 
+/**
+ * The addresses a transaction read and wrote, as the scheduler keys an
+ * action's dependencies and triggers by them. The lists belong to the one log,
+ * and a log a V2 transaction built holds entries that are frozen, `path`
+ * included, and that are the same object in every log of the same storage
+ * manager naming the same address. A consumer that wants to change an entry
+ * copies it first.
+ */
 export interface TransactionReactivityLog {
   reads: IMemorySpaceAddress[];
   shallowReads: IMemorySpaceAddress[];

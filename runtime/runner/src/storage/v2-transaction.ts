@@ -51,6 +51,7 @@ import {
 } from "../../../memory/v2/path.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
+import { AddressInterner } from "./address-intern.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
@@ -1247,9 +1248,16 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   readonly #storage: IStorageManager;
+  readonly #addressInterner: AddressInterner;
 
+  /**
+   * Constructs an instance on `storage`, whose address interner the
+   * reactivity log takes its entries from. A manager without one gets an
+   * interner of this transaction's own.
+   */
   constructor(storage: IStorageManager) {
     this.#storage = storage;
+    this.#addressInterner = storage.addressInterner ?? new AddressInterner();
   }
 
   setReadOnly(reason = "runtime.readTx()"): void {
@@ -3671,14 +3679,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       const attempted = isReadMarkedAsAttemptedWrite(meta);
       if (ignored && !attempted) continue;
 
-      const instance = this.#instanceOf(read.scope);
-      const address = {
-        space: read.space,
-        scope: read.scope,
-        id: read.id,
-        ...(instance !== undefined ? { scopeKey: instance } : {}),
-        path: read.path,
-      };
+      const address = this.#addressInterner.address(
+        read.space,
+        read.scope,
+        read.id,
+        this.#instanceOf(read.scope),
+        read.path,
+      );
 
       if (attempted) {
         attemptedWrites ??= [];
@@ -3707,13 +3714,9 @@ export class V2StorageTransaction implements IStorageTransaction {
           doc.patchDetails.values().map((detail) => detail.address.path),
         );
         for (const path of doc.reactivityPaths) {
-          writes.push({
-            space,
-            scope,
-            id,
-            ...(instance !== undefined ? { scopeKey: instance } : {}),
-            path,
-          });
+          writes.push(
+            this.#addressInterner.address(space, scope, id, instance, path),
+          );
         }
       }
     }

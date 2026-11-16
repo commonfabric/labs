@@ -11,6 +11,7 @@ import {
 } from "../../src/storage/cache.deno.ts";
 import type {
   IMemorySpaceAddress,
+  IStorageManager,
   ITransactionSealSink,
   MemorySpace,
   URI,
@@ -329,6 +330,61 @@ describe("V2StorageTransaction", () => {
 
         expect([...tx.getReadDetails(space)].length).toBeGreaterThan(0);
         expect([...tx.getReadDetails(other)]).toEqual([]);
+      });
+    });
+
+    describe("getReactivityLog()", () => {
+      /** Reads and writes `of:logged` in a new transaction on `on`. */
+      const readAndWrite = (on: IStorageManager, title: string) => {
+        const tx = new V2StorageTransaction(on);
+        expect(tx.read(at("of:logged", ["value", "title"])).ok?.value).toBe(
+          "seeded",
+        );
+        expect(tx.write(at("of:logged", ["value", "title"]), title).error)
+          .toBeUndefined();
+        return tx.getReactivityLog();
+      };
+
+      const logged = {
+        space,
+        scope: "space",
+        id: "of:logged",
+        path: ["value", "title"],
+      };
+
+      /** Checks that every entry of `log` is frozen and equal to `logged`. */
+      const expectFrozenLogged = (
+        log: ReturnType<V2StorageTransaction["getReactivityLog"]>,
+      ) => {
+        expect(log.reads).toEqual([logged]);
+        expect(log.writes).toEqual([logged]);
+        expect(log.shallowReads).toEqual([]);
+        for (const entry of [...log.reads, ...log.writes]) {
+          expect(Object.keys(entry)).toEqual(Object.keys(logged));
+          expect(Object.isFrozen(entry)).toBe(true);
+          expect(Object.isFrozen(entry.path)).toBe(true);
+        }
+      };
+
+      it("logs interned, frozen entries that equal the fields read and written", async () => {
+        await seed("of:logged", { title: "seeded" });
+        const first = readAndWrite(storage, "first");
+        const second = readAndWrite(storage, "second");
+
+        expectFrozenLogged(first);
+        expectFrozenLogged(second);
+        expect(second.reads[0]).toBe(first.reads[0]);
+        expect(second.writes[0]).toBe(first.writes[0]);
+        expect(first.writes[0]).toBe(first.reads[0]);
+      });
+
+      it("logs frozen entries equal to the fields read and written on a manager with no interner", async () => {
+        await seed("of:logged", { title: "seeded" });
+        const withoutInterner = {
+          open: (target: MemorySpace) => storage.open(target),
+        } as Partial<IStorageManager> as IStorageManager;
+
+        expectFrozenLogged(readAndWrite(withoutInterner, "first"));
       });
     });
 
