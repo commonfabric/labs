@@ -41,6 +41,7 @@ import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts
 import { HarnessControlError } from "../src/control-errors.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
+import { PIECE_SOURCE_TOOL_GUIDANCE } from "../src/tool-guidance.ts";
 import type { HarnessModelClient } from "../src/model/client.ts";
 import {
   CfHarnessPromptLoop,
@@ -3234,6 +3235,86 @@ Deno.test("runCfHarnessCli announces well-known grants to the model and the oper
     true,
   );
   assertEquals(stderr, []);
+});
+
+describe("the rule for changing a piece's source", () => {
+  it("opens a lookup run with a fabric session only where the run may delegate to the profile that changes source", async () => {
+    // A run tagged as a lookup holds no piece at the start and can still be
+    // handed one by a command's answer, so the rule does not wait for a tag.
+    const contextOf = async (profile: string): Promise<readonly string[]> => {
+      const { io } = createIoBuffers();
+      const workspace = await Deno.makeTempDir();
+      let runPromptOptions: RunHarnessPromptOptions | undefined;
+      const exitCode = await runCfHarnessCli(
+        [
+          "--model-provider",
+          "openai-compatible-gateway",
+          "--workspace",
+          workspace,
+          "--prompt",
+          "Add a due date to each task in the tracker in this loom",
+          "--fabric-api-url",
+          "https://toolshed.example/",
+          "--fabric-identity",
+          "/keys/agent.pkcs8",
+          "--fabric-space",
+          "demo-space",
+          "--allow-tool",
+          "delegate_task",
+          "--allow-subagent-profile",
+          profile,
+        ],
+        {
+          io,
+          env: { CF_HARNESS_API_KEY: "test-key" },
+          fabricSessionFactory: () =>
+            Promise.reject(new Error("no tool here opens the session")),
+          createPromptLoop: () => ({
+            classifyTask: () =>
+              Promise.resolve({
+                type: "cf-harness.task-classification",
+                version: 1,
+                tags: ["find"],
+                path: "assumed",
+                durationMs: 0,
+              }),
+            runPrompt: (options) => {
+              runPromptOptions = options;
+              return Promise.resolve(
+                ({
+                  model: "gpt-5.4",
+                  finalAssistantText: "Done.",
+                  transcript: [],
+                  modelTurns: 1,
+                  runState: {
+                    runId: "run-source-rule",
+                    status: "completed",
+                    createdAt: "2026-04-15T22:00:00.000Z",
+                    updatedAt: "2026-04-15T22:00:01.000Z",
+                    cfcEnforcementMode: "enforce-explicit",
+                    currentDir: "/workspace",
+                    policyEvents: [],
+                    toolOutputs: [],
+                  },
+                }) satisfies HarnessPromptLoopResult,
+              );
+            },
+            runTranscript: () =>
+              Promise.reject(new Error("unexpected resume path")),
+          }),
+        },
+      );
+      expect(exitCode).toBe(0);
+      return runPromptOptions?.contextMessages ?? [];
+    };
+
+    expect(await contextOf("pattern-author")).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+    expect(await contextOf("default")).not.toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+  });
 });
 
 Deno.test("runCfHarnessCli announces operator input cells to the model and the operator", async () => {
