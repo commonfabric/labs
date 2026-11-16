@@ -16,7 +16,10 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { Runtime } from "../src/runtime.ts";
 import { runtimeOwnedStoreOwnerKey } from "../src/cfc/runtime-owned-stores.ts";
-import type { NormalizedFullLink } from "../src/link-types.ts";
+import {
+  type NormalizedFullLink,
+  toMemorySpaceAddress,
+} from "../src/link-types.ts";
 import { getDerivedInternalCellLink, parseLink } from "../src/link-utils.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
@@ -2567,8 +2570,9 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     /**
      * Read the seeded source and write what it carries onto `targetName`, at
      * the path a delegation union lands on, under `identity` (the cache's
-     * builtin unless given; `null` for none). `mark` decides whether the
-     * target is named, and how.
+     * builtin unless given; `null` for none), through the cell or through the
+     * storage transaction beneath the extended one. `mark` decides whether
+     * the target is named, and how.
      */
     const writeTaintedRecord = async (
       runtime: Runtime,
@@ -2579,6 +2583,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         doc: { getAsNormalizedFullLink(): NormalizedFullLink },
       ) => void,
       identity: ImplementationIdentity | null = CACHE_WRITER,
+      through: "the cell" | "the storage transaction" = "the cell",
     ) => {
       const tx = runtime.edit();
       const source = runtime.getCell(signer.did(), sourceName, undefined, tx);
@@ -2592,7 +2597,19 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
       );
       mark?.(tx, target);
       setCfcImplementationIdentity(tx, identity ?? undefined);
-      target.set({ delegatedModuleIdentities: [`predecessor/${raw.secret}`] });
+      const value = {
+        delegatedModuleIdentities: [`predecessor/${raw.secret}`],
+      };
+      if (through === "the storage transaction") {
+        expect(
+          tx.tx.write(
+            toMemorySpaceAddress(target.getAsNormalizedFullLink()),
+            value,
+          ).error,
+        ).toBeUndefined();
+      } else {
+        target.set(value);
+      }
       setCfcImplementationIdentity(tx, undefined);
       const targetId = target.getAsNormalizedFullLink().id;
       tx.prepareCfc();
@@ -2697,6 +2714,33 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
         }
       });
     }
+
+    it("measures a write through the storage transaction to a marked document under the cache's identity", async () => {
+      // A write made beneath the extended transaction passes none of its
+      // write chokepoint, so it carries no identity, and the transaction's
+      // identity at the time does not make it the builtin's.
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = strictRuntime(storageManager);
+      try {
+        await seedSecretSource(runtime, "wf-cache-inner-source");
+        const { targetId, result } = await writeTaintedRecord(
+          runtime,
+          "wf-cache-inner-source",
+          "wf-cache-inner-doc",
+          (tx, doc) => markUndeclarable(tx, doc),
+          CACHE_WRITER,
+          "the storage transaction",
+        );
+
+        expect(result.error?.message).toContain(
+          "writer-fit confidentiality misfit",
+        );
+        expect(result.error?.message).toContain(`for ${targetId} at /`);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
 
     it("counts a marker recorded without the runtime's mark for nothing", async () => {
       // The gate ACTS on this claim, and the recording method is on the public

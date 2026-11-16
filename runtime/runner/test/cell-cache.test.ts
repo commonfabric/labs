@@ -35,6 +35,7 @@ import {
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { compileCachePersistenceSlotKey } from "../src/pattern-manager.ts";
 import type { URI } from "../src/sigil-types.ts";
@@ -3329,26 +3330,37 @@ describe("cell-cache", () => {
     /**
      * A write another identity makes to the entry's record of `set` at
      * `field`, of the value `valueOf` returns from the record as stored in
-     * `tx`, through the cell (which records a write-policy input) or raw
-     * (which records none).
+     * `tx`: through the cell (which records a write-policy input), raw
+     * (which records none), or through the storage transaction beneath `tx`
+     * (which passes none of its write chokepoint).
      */
     const foreignWrite = (
       set: "source" | "compiled",
       field: string,
       valueOf: (stored: Record<string, unknown>) => FabricValue,
-      how: "through the cell" | "raw",
+      how: "through the cell" | "raw" | "through the storage transaction",
     ) =>
     (tx: IExtendedStorageTransaction) => {
       const cell = record(set, tx);
       const value = valueOf(cell.getRaw() as Record<string, unknown>);
+      const link = cell.key(field).getAsNormalizedFullLink();
       if (how === "raw") {
-        tx.writeValueOrThrow(cell.key(field).getAsNormalizedFullLink(), value);
+        tx.writeValueOrThrow(link, value);
+      } else if (how === "through the storage transaction") {
+        const { error } = tx.tx.write(toMemorySpaceAddress(link), value);
+        if (error) throw error;
       } else {
         cell.key(field).set(value);
       }
     };
 
-    for (const how of ["through the cell", "raw"] as const) {
+    for (
+      const how of [
+        "through the cell",
+        "raw",
+        "through the storage transaction",
+      ] as const
+    ) {
       describe(`for a write another identity makes ${how}`, () => {
         for (
           const [what, set, field, valueOf] of [

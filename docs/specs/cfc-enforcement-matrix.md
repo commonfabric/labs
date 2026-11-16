@@ -481,7 +481,10 @@ The strict-only delta is:
   every value write made under an identity other than a builtin's, an
   unattributed or a verified one alike (`CfcTxState.unattestedWrites`), and a
   document such a write reached is measured, marker or not, as any writer's
-  would be. A later builtin write to the same path does not lift that: a builtin
+  would be. A write made on the storage transaction beneath the extended one
+  passes none of its write chokepoint, so it carries no identity, and is
+  recorded the same way whatever the transaction's identity is when it is made
+  (`reportUnmarkedWrites()`). A later builtin write to the same path does not lift that: a builtin
   can read the transaction's view and write it back, so its write is no evidence
   that the value is its own, and the rule cannot rely on every builtin guarding
   what it carries. The cache writer does guard its delegation-list carry: a list

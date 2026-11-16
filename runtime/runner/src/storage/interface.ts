@@ -2316,10 +2316,25 @@ export interface IStorageTransaction {
    * unspecified. The writes it does apply are applied consistently: the
    * transaction's reads, its write details and its commit all include them. A
    * caller that must not land part of a batch aborts the transaction.
+   *
+   * `options` carries nothing but the extended transaction's write-chokepoint
+   * mark, which covers every write of the batch.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError>;
+
+  /**
+   * Optional: report each write `write()` or `writeBatch()` takes without the
+   * extended transaction's write-chokepoint mark (`write-chokepoint.ts`) to
+   * `sink`, before applying it. Such a write came from code holding this
+   * transaction directly, so nothing judged who made it. Each extended
+   * transaction wrapping this one adds a sink as it is built, and counts each
+   * such write as made under no identity. A sink stays for the life of the
+   * transaction: nothing removes one.
+   */
+  reportUnmarkedWrites?(sink: (address: IMemorySpaceAddress) => void): void;
 
   /**
    * Transaction can be cancelled which causes storage provider to stop keeping

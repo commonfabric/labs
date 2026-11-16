@@ -356,6 +356,86 @@ describe("CFC integrity mint gate", () => {
       expect(paths).toEqual([]);
     });
 
+    /**
+     * The address of the record `name`'s field `field` (its whole value when
+     * `field` is undefined), as the storage transaction beneath `tx` takes
+     * it.
+     */
+    const storageAddress = (
+      tx: IExtendedStorageTransaction,
+      runtime: Runtime,
+      name: string,
+      field?: string,
+    ) => {
+      const link = runtime.getCell(signer.did(), name, undefined, tx)
+        .getAsNormalizedFullLink();
+      return {
+        space: link.space,
+        id: link.id,
+        type: "application/json" as const,
+        path: field === undefined ? ["value"] : ["value", field],
+      };
+    };
+
+    describe("for a write through the storage transaction beneath the builtin's", () => {
+      // A write made there passes none of the extended transaction's write
+      // chokepoint, so it carries no identity, whatever the transaction's
+      // identity is when it is made.
+
+      it("drops the evidence at the field a single write reaches", async () => {
+        const paths = await evidenceAfter("mint-gate-inner", (tx, runtime) => {
+          const { error } = tx.tx.write(
+            storageAddress(tx, runtime, "mint-gate-inner", "tag"),
+            "chosen",
+          );
+          expect(error).toBeUndefined();
+        }, { identity: BUILTIN });
+
+        expect(paths).toEqual([]);
+      });
+
+      it("drops the evidence at the field a batch reaches", async () => {
+        const paths = await evidenceAfter(
+          "mint-gate-inner-batch",
+          (tx, runtime) => {
+            const { error } = tx.tx.writeBatch!([{
+              address: storageAddress(
+                tx,
+                runtime,
+                "mint-gate-inner-batch",
+                "tag",
+              ),
+              value: "chosen",
+            }]);
+            expect(error).toBeUndefined();
+          },
+          { identity: BUILTIN },
+        );
+
+        expect(paths).toEqual([]);
+      });
+
+      it("drops the evidence when it wrote the record before the builtin rewrote it whole", async () => {
+        const paths = await evidenceAfter(
+          "mint-gate-inner-overwritten",
+          () => {},
+          {
+            before: (tx, runtime) => {
+              const { error } = tx.tx.write(
+                storageAddress(tx, runtime, "mint-gate-inner-overwritten"),
+                { note: "chosen", tag: "chosen" },
+              );
+              expect(error).toBeUndefined();
+            },
+            identity: BUILTIN,
+            whole: true,
+          },
+        );
+
+        expect(paths).toEqual([]);
+      });
+    });
+
     it("makes the prepared digest differ between the same write under the builtin and under another identity", async () => {
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
@@ -363,18 +443,27 @@ describe("CFC integrity mint gate", () => {
         storageManager,
       });
       try {
-        const digestOf = (identity: ImplementationIdentity | undefined) => {
+        const digestOf = (
+          identity: ImplementationIdentity | undefined,
+          through: "extended" | "storage" = "extended",
+        ) => {
           const tx = runtime.edit();
           try {
             setCfcImplementationIdentity(tx, identity);
             // A raw write records no schema input, whose identity the digest
             // would bind on its own.
-            tx.writeOrThrow({
+            const address = {
               space: signer.did(),
               id: "of:mint-gate-digest",
               type: "application/json",
               path: ["value"],
-            }, { note: "written" });
+            } as const;
+            if (through === "storage") {
+              expect(tx.tx.write(address, { note: "written" }).error)
+                .toBeUndefined();
+            } else {
+              tx.writeOrThrow(address, { note: "written" });
+            }
             setCfcImplementationIdentity(tx, BUILTIN);
             return (tx as ExtendedStorageTransaction).accessForTestingOnly
               .preparedDigest();
@@ -385,6 +474,8 @@ describe("CFC integrity mint gate", () => {
 
         expect(digestOf(BUILTIN)).toBe(digestOf(BUILTIN));
         expect(digestOf(undefined)).not.toBe(digestOf(BUILTIN));
+        expect(digestOf(BUILTIN, "storage")).not.toBe(digestOf(BUILTIN));
+        expect(digestOf(BUILTIN, "storage")).toBe(digestOf(undefined));
       } finally {
         await runtime.dispose();
         await storageManager.close();

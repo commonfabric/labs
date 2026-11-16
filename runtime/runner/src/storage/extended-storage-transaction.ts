@@ -992,6 +992,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     bindImmutableCells(this, immutableCells);
     bindImmutableCells(tx, immutableCells);
     this.#cfcInstrumentation = cfcInstrumentation;
+    // A write made on `tx` directly passes none of the write chokepoint
+    // below, so it carries no identity, whatever this transaction's identity
+    // is when it is made.
+    tx.reportUnmarkedWrites?.((address) =>
+      this.#noteWriteIdentity(address, { unmarked: true })
+    );
   }
 
   /**
@@ -1938,10 +1944,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * evidence that the value is its own choice, and the rule cannot rely on
    * every builtin guarding what it carries. Each distinct address is
    * recorded once.
+   *
+   * A write `unmarked` reached the storage transaction beneath this one
+   * without passing its write chokepoint (`reportUnmarkedWrites()`), so it
+   * counts as made under no identity, inside the runtime's privileged
+   * persistence scope too, which writes only through the chokepoint.
    */
-  #noteWriteIdentity(address: IMemorySpaceAddress): void {
-    if (this.#privilegedSystemWriteDepth > 0) return;
-    const current = this.#cfcState.implementationIdentity;
+  #noteWriteIdentity(
+    address: IMemorySpaceAddress,
+    { unmarked = false }: { unmarked?: boolean } = {},
+  ): void {
+    if (!unmarked && this.#privilegedSystemWriteDepth > 0) return;
+    const current = unmarked
+      ? undefined
+      : this.#cfcState.implementationIdentity;
     if (current?.kind !== "builtin") {
       const path = canonicalizeDocumentPath(toDocumentPath(address.path));
       const scope = normalizeCellScope(address.scope);
@@ -4431,6 +4447,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
             yield { address, value, delete: write.delete };
           }
         })(),
+        writeChokepointMark(),
       );
       if (result.error) {
         throw toThrowable(result.error);

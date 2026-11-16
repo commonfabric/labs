@@ -1206,6 +1206,12 @@ export class V2StorageTransaction implements IStorageTransaction {
   #previousDocument?: RecentDocument;
 
   /**
+   * Where `write()` and `writeBatch()` report each write that arrives without
+   * the write chokepoint's mark: every sink `reportUnmarkedWrites()` added.
+   */
+  #unmarkedWriteSinks: ((address: IMemorySpaceAddress) => void)[] = [];
+
+  /**
    * Complete the transaction, keeping its result and releasing the state that
    * only an open transaction needs: the materialized branches, the read and
    * write activity, and the cached reactivity log. Those are consumed while
@@ -2443,6 +2449,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         address,
         options?.delete === true ? undefined : value,
       );
+      for (const sink of this.#unmarkedWriteSinks) sink(address);
     }
     return this.#writeWithinBranch(
       ready.ok,
@@ -2453,9 +2460,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
   }
 
+  /** @inheritDoc */
+  reportUnmarkedWrites(sink: (address: IMemorySpaceAddress) => void): void {
+    this.#unmarkedWriteSinks.push(sink);
+  }
+
   writeBatch(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError> {
+    const marked = passedWriteChokepoint(options);
     let run: ITransactionWriteRequest[] = [];
     let runKey: string | undefined;
 
@@ -2468,14 +2482,21 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (ready.error) {
         return { error: ready.error };
       }
-      // A batch request carries no options, so it carries no mark either. The
-      // whole run is checked before any of it is applied.
+      // A batch request carries no options, so it carries no mark, and the
+      // whole run is checked before any of it is applied. The batch's own
+      // mark says only that the chokepoint saw each write, which is what an
+      // unmarked batch's writes are reported for lacking.
       for (const write of run) {
         this.#refuseUnmarkedMemberChange(
           ready.ok,
           write.address,
           write.delete === true ? undefined : write.value,
         );
+      }
+      if (!marked) {
+        for (const sink of this.#unmarkedWriteSinks) {
+          for (const write of run) sink(write.address);
+        }
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
