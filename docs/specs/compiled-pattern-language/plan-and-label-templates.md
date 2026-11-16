@@ -124,6 +124,13 @@ export type SlotRoot =
   | { readonly kind: "event"; readonly handler: Index }
   /** The current element of a collection (`Plan.collections`). */
   | { readonly kind: "element"; readonly collection: Index }
+  /**
+   * The position of the current element in the order a collection
+   * iterates (`Plan.collections`). A slot with this root has the empty
+   * path and observes `value`. Its label is the membership the collection
+   * iterates (sections 2.2 and 3.6).
+   */
+  | { readonly kind: "index"; readonly collection: Index }
   /** The stored result of a durable operation (`Plan.operations`). */
   | { readonly kind: "operation"; readonly operation: Index }
   /** The result of a child instance (`Plan.children`). */
@@ -283,7 +290,11 @@ export interface Pick {
 /**
  * A collection the instance maps, filters, scans, or folds over. Each
  * construct with a callback has a record of its own (sections 3.6, 3.7,
- * 3.8, 3.13 and 3.17).
+ * 3.8, 3.13 and 3.17). The record holds nothing about element keys: the
+ * element part of a key and its occurrence count follow from the elements
+ * at run time, and the position is in no key (section 1.3). Which nodes
+ * of a body read the index is recorded where each node lists its slots:
+ * a slot of root `index` that names this record.
  */
 export interface Collection {
   /** The name an `element` step refers to it by (section 1.3). */
@@ -335,18 +346,6 @@ export interface Collection {
    * record iterates (section 3.7).
    */
   readonly membership: Template;
-  /**
-   * What a body applied to this collection does that makes the position
-   * part of an element's key (section 1.3). `index`: the body uses the
-   * element's index, and the position joins the key of every element.
-   * `child`: the body instantiates a child, and the position joins the key
-   * of every element that is a plain value. The element part of the key is
-   * not recorded: it follows from each element at run time.
-   */
-  readonly bodyUses: {
-    readonly index: boolean;
-    readonly child?: true;
-  };
 }
 
 /**
@@ -851,8 +850,8 @@ export interface StateCell {
   readonly scope: "space" | "user" | "session";
   /**
    * Where the cell is declared. Each `element` step adds that element's key
-   * to the cause, which is legal only where the key is a cell's identity or
-   * holds the position (section 1.3).
+   * to the cause, so the cell is one per occurrence of an element (section
+   * 1.3).
    */
   readonly within: readonly WithinStep[];
   readonly schema: Hash;
@@ -1053,24 +1052,25 @@ export interface Binding {
     readonly capture: "copy" | "link";
     /**
      * For a binding of the reactive tier: what the path resolves to. A
-     * slot of the instance; an output of the instance (`Plan.outputs`); the
-     * stream of another binding of the reactive tier (`Plan.bindings`); the
-     * index of the element in the collection of an enclosing element body
-     * (`Plan.collections`); or a constant written at the binding, which the
+     * slot of the instance, which for the index of the element in the
+     * collection of an enclosing element body is the slot of root `index`
+     * that names that collection; an output of the instance
+     * (`Plan.outputs`); the stream of another binding of the reactive tier
+     * (`Plan.bindings`); or a constant written at the binding, which the
      * plan holds and nothing stores. `template` is the label of the same
-     * place: the `slot` node, the output's template, for an index the
-     * membership that collection iterates (section 3.6), and `const` for
-     * a stream and for a constant. A constant is held as its value,
-     * whether it is written as a literal or as the name of a module-scope
-     * constant, which the compiler evaluates. A path bound to `undefined`
-     * has no entry of `state`. Absent for a binding made in a function
-     * body, whose state document holds the path (section 3.14).
+     * place: the `slot` node, which for a slot of root `index` resolves to
+     * the membership that collection iterates (section 3.6), the output's
+     * template, and `const` for a stream and for a constant. A constant
+     * is held as its value, whether it is written as a literal or as the
+     * name of a module-scope constant, which the compiler evaluates. A
+     * path bound to `undefined` has no entry of `state`. Absent for a
+     * binding made in a function body, whose state document holds the
+     * path (section 3.14).
      */
     readonly place?:
       | { readonly slot: Index }
       | { readonly output: Index }
       | { readonly stream: Index }
-      | { readonly index: Index }
       | { readonly constant: unknown };
     /**
      * For a path bound by reference in a function body: the reference the
@@ -1094,10 +1094,13 @@ export interface Binding {
   /**
    * The paths of the result at which the instance stores a link to the
    * stream, in source order. Absent where the result holds none
-   * (section 8, question 75). For a binding in an element body, a path
-   * has `*` at the position of each enclosing collection, as the path of
-   * a per-element output has (section 1.4), and stands for one position
-   * per element (below; section 8, question 78).
+   * (section 8, question 75). A path that is listed is one the stream is
+   * stored at under some selection of each conditional above it. A path
+   * has `*` at the position of each collection it passes through, as the
+   * path of a per-element output has (section 1.4). Where an `element`
+   * step of `within` names the collection, the path stands for one
+   * position per element, and otherwise every position of the
+   * collection holds the one stream (below; section 8, question 78).
    */
   readonly result?: readonly Path[];
 }
@@ -1212,47 +1215,137 @@ positions. No behavior depends on the order. It is fixed so that the
 record, and with it the hash of the plan, is a function of the source and
 not of how a compiler holds the members of a record.
 
+**A binding with a `within` step is of one of two kinds.** A binding
+whose `within` has `site` steps alone is a binding of a pattern compiled
+in at a tag or a call. It is made once per instance, as a binding with no
+step is, and it has one stream. A binding whose `within` has an `element`
+step is a binding of an element body, or of a pattern compiled into one.
+It is made once per element key, and it has a stream per key. The rules
+for a `site` step and for an `element` step below are separate, and a
+binding of a pattern compiled into an element body follows both.
+
+**The result paths of a binding of a pattern compiled in.** The paths
+are those at which the enclosing pattern places what the callee returns,
+each followed by the path of the stream in what the callee returns. What
+a `site` step adds to the path is decided by the rule for a tag above.
+
+- Where the tag, the call, or a variable that holds the result of either
+  is written at a child position of a view node, the callee's tree is in
+  place at that position. The path is the position followed by the path
+  of the stream below the callee's `$UI`, and the `site` step adds no
+  segment. A stream at a path of the callee's result outside `$UI` is
+  not stored at such a position.
+- At every other place the value is the callee's result, with the
+  callee's tree below `$UI`. The path is the path of that place followed
+  by the path of the stream in the callee's result, so a stream of the
+  callee's tree has the segment `$UI` after the place. What the callback
+  of an element construct returns is such a place: the element of the
+  assembled collection is the callee's result, whether or not the
+  collection is then spread into the children of a view node.
+
+A result held in a variable has a path for each position the variable is
+written at, by the rule for that position.
+
 **The result paths of a binding in an element body.** A binding whose
 `within` has an `element` step is made once per element key, and each of
 its streams is stored at a position inside one element of the assembled
 collection. `Binding.result` names those positions by one path, formed as
 the path of a per-element output is (section 1.4): the path of what the
-callback returns, with `*` at the position of each enclosing collection.
-The path has one `*` for each `element` step of `within` whose collection
-the path passes through, in the order of the steps, outermost first. A
-`site` step adds no segment, because the callee's tree is in place at the
-call (above). For a row rendered as
+callback returns, with `*` at the position of each collection the path
+passes through, outermost first. For a row rendered as
 `<ul>{items.map((item) => <li onClick={select({ item })} />)}</ul>` at the
 root of the tree, the path is
 `["$UI", "children", "*", "props", "onClick"]`: the assembled array is a
 spread child, and the positions from a spread on are at `children/*`
-(section 3.4).
+(section 3.4). For a callback that returns a tag,
+`<ul>{items.map((item) => <Row item={item} />)}</ul>`, a stream at
+`props/onClick` of the root of the tree of `Row` has the path
+`["$UI", "children", "*", "$UI", "props", "onClick"]`, by the second rule
+for a `site` step above.
+
+**A path through a collection the binding is not within.** A `*` of a
+path stands for a collection, and an `element` step of the binding's
+`within` names that collection or does not.
+
+- **The callback writes a stream of an outer binding.** In
+  `items.map((item) => <li onClick={inc} />)`, where `inc` is a binding
+  made outside the callback, the binding has no `element` step and one
+  stream, and what the callback returns holds that stream for every
+  element. `Binding.result` lists the paths at which the instance stores
+  a link to the stream, and the path of what a callback returns has `*`
+  at the collection (section 1.4), so the path is listed, with `*`, and
+  every position of the collection holds a link to the one stream. The
+  same holds for an inner collection of a binding of an outer element
+  body: the `*` of the outer collection selects the stream, and every
+  position of the inner one holds it.
+- **The stream is reached through a member of the element.** A stream
+  can be inside a value that the elements of a collection hold, and not
+  in what the callback constructs. The case in the corpus is an array
+  literal of the results of patterns compiled in, rendered as
+  `renderedExamples.map((example) => <div>{example[UI]}</div>)`
+  (`patterns/examples/cfc-trusted-component-examples/`). The stream of a
+  binding of one of those patterns is stored inside the one element that
+  is that pattern's result, and at no other position of the collection.
+  No rule of the documents forms a path for it: a path with `*` would
+  stand for positions that do not hold the stream. *Assumed* (section 8,
+  question 84): such a binding has no `result` path through the
+  collection. It has the paths at which the result holds the pattern's
+  result without passing through the collection, and no `result` member
+  where there are none.
+
+**A position below a conditional.** A position that holds the stream
+under one branch of a `select` is a result path of the binding.
+`Binding.result` exists because the instance has to store a link to the
+stream at those positions and no other record says where (section 8,
+question 75), and that holds for a position the instance fills on some
+evaluations as for one it fills on all. The plan
+is the same for every evaluation, so the path is listed whichever branch
+a run selects. While another branch is selected the position holds what
+that branch has there, which can be nothing or the stream of another
+binding. A reader that finds no link to the stream at one path of
+`result` reads the next.
 
 *Assumed* (section 8, question 78), since no other rule of the documents
 says how such a path is resolved to one stream:
 
-- **From a path to a position.** A reader that wants the stream of one
-  element chooses, for each `*`, a position of the collection that the
-  matching `element` step names. The stored path has the index of that
-  position in the stored array in the place of the `*`: the position in
-  the collection, plus the number of children stored before the spread
-  where the array is the children of a view node. Where two collections
-  are spread into one array, the `*` of each binding's path stands for
-  the positions of its own collection alone, which the runtime knows from
-  how it assembled the array (section 3.6).
+- **From a path to a position.** This is the rule of the compiled path,
+  for the layout it stores (`execution-and-storage.md` §4.2). Where the
+  runtime stores the same positions today is in section 3.1 ("A binding
+  with a `within` step"), and the two differ. A reader that wants the
+  stream of one element chooses, for each `*` whose collection an
+  `element` step names, a position of that collection. For a `*` whose
+  collection no `element` step names, every position of the collection
+  holds the stream, and the reader chooses any. The stored path has the
+  index of that position in the stored array in the place of the `*`:
+  the position in the collection, plus the number of children stored
+  before the spread where the array is the children of a view node. The
+  path does not hold that number, because every position from the first
+  spread on is at `*` (section 3.4). The runtime knows it from how it
+  assembled the array, and a reader that has the plan alone does not.
+- **Two collections spread into one array of children.** The path is a
+  result path of each binding all the same: the instance stores the
+  links at those positions, and section 3.4 gives each the path
+  `children/*`. The `*` of each binding's path stands for the positions
+  of its own collection alone, which the runtime knows from how it
+  assembled the array (section 3.6). The path does not say which
+  positions those are, so a reader that has the plan alone cannot
+  resolve it. The same holds for a member written after a spread, whose
+  path is `children/*` as well and whose stream is at one position.
 - **From a position to a stream.** The link stored there is to the stream
   of the binding for the element key at that position: the stream named
   by the binding's `name` and `within`, with that key at the `element`
-  step (section 1.3). Positions that hold one key hold a link to one
-  stream.
+  step (section 1.3). A key stands at one position, so no two positions
+  hold a link to one stream.
 - **An event for that stream** is handled with each slot of root `element`
-  of the handler's state bound to that key, and where several positions
-  hold the key, resolved to the join over them (section 2.6).
+  of the handler's state bound to that key, and resolved at the position
+  that holds the key (section 2.6).
 - **Where the result holds none.** A binding of an element body whose
   stream is at no path of what the callback returns, or whose collection
-  is not a kept part of the result, has no `result` path. An event
-  reaches such a stream only through a link stored elsewhere, such as a
-  child's argument.
+  is not a kept part of the result, has no `result` path. So has a
+  binding whose stream the result holds only inside a member of the
+  elements of a collection (above). An event reaches such a stream only
+  through a link stored elsewhere, such as a child's argument or the
+  state of another binding whose handler sends to it.
 
 This document defines the footprint *record* (`Body.reads`, `computed`,
 `handles`, `writes`, `envelopes`, `outputs`, `calls`, `widenings`). The
@@ -1384,21 +1477,30 @@ is a constant, or the element key, the cell is a `StateCell` whose `name`
 is formed from those (section 3.14).
 
 **Element keys.** An element of a collection is identified by a key the
-runtime computes from the element itself:
+runtime computes. A key has two parts.
 
-- the element's **value**, canonicalized and hashed, when the slot holds a
-  plain value;
-- the **identity of the cell** the slot links to, when it holds a link.
+- The **element part** is computed from the element itself. It is the
+  element's **value**, canonicalized and hashed, when the slot holds a
+  plain value, and the **identity of the cell** the slot links to, when
+  it holds a link.
+- The **occurrence count** is the number of earlier positions of the
+  collection whose element part is the same.
+
+Two positions that hold equal plain values, or links to one cell, have
+the same element part and different counts, so they have two keys. No
+two positions of a collection have one key, and a key stands at one
+position. The position is not in the key.
 
 A link to a plain value is keyed by the cell it links to, so two cells that
-hold equal values are two elements. A hole has no key, gets no cone
+hold equal values have two element parts. A hole has no key, gets no cone
 instance, and stays a hole. An explicit `undefined` is a plain value. A
 plain value edited in place is a new element.
 
-A key derived from a value is salted with a secret of the space before it
-enters a document identifier, as the row identifiers of `sqliteQuery` are
-(`builtin-inventory.md`, "Element keys"). Without the salt an identifier
-would reveal a low-entropy value to anyone who can see a link.
+An element part derived from a value is salted with a secret of the space
+before it enters a document identifier, as the row identifiers of
+`sqliteQuery` are (`builtin-inventory.md`, "Element keys"). Without the
+salt an identifier would reveal a low-entropy value to anyone who can see
+a link.
 
 A client cannot read the salt. It therefore cannot derive the identifier of
 per-element state whose key holds a value, or of a handler binding with a
@@ -1417,141 +1519,156 @@ the identifier. An observer who sees identifiers without reading a link,
 such as one who can list the documents of a space, can then test a guess
 of a low-entropy cause (section 8, question 30).
 
-The position is part of the key in two cases, and a key then is the pair of
-the element part and the position.
+The position is in no key, also where the body uses the index. A body
+that instantiates a child does not put it there either: the child is
+named through the body's `within`, whose `element` step holds the key,
+so each occurrence has a child of its own, and a factory element in
+`factories.map((F) => F({ ... }))` has a child per occurrence.
 
-- **The body uses the index** (`Collection.bodyUses.index`). The position
-  joins the key of every element.
-- **The body instantiates a child** (`Collection.bodyUses.child`), and the
-  element is a plain value. Two positions that hold equal plain values
-  then have two children, and a factory element in
-  `factories.map((F) => F({ ... }))`, which is a plain value, has a child
-  per position. An element that is a link is keyed by its cell alone, so
-  two positions that link to one cell share the child, as they share
-  state.
+**The index is a slot.** A node of the body that reads the index reads a
+slot of root `index` that names the collection (section 1.1). The slot
+has the empty path and the class `value`. Its value is the position that
+the key stands at in the order the collection iterates, and the runtime
+binds it per key, as it binds the element slots. Its label is the
+membership the collection iterates (sections 2.2 and 3.6). A cone that
+reads the index lists the slot in `Cone.slots`, a sandboxed body lists it
+in `Body.reads`, and a handler binding whose state holds the index names
+it in `place`. A node that lists no such slot is not given the index. No
+record says of a whole body that it uses the index.
 
-A body instantiates a child where a `Child` of the plan is named through
-the body's element: a factory value called in the reactive tier of the
-body, or a pattern that a `lift` or a `computed` written in the body
-instantiates, whose instances are named through that body's `within`
-(below). *Assumed* for the second kind, which the ruling does not name
-(section 8, question 37). Two things do not count.
+A move therefore changes one input of the keys whose position changed:
+the index slot. The cones that list the slot are stale for those keys
+and are evaluated again, and no other cone of the body is. Evaluation is
+per cone (section 1.4): a cone that reads the index is evaluated whole,
+and an output of it whose value did not change is not written. The cone
+instances, state cells, streams, effects and children of a moved element
+keep their key, and so their identifiers and what they hold. What derives
+from the index changes as what derives from any other input does:
 
-- An instance that only a `handler` or an `action` requests. It is
-  identified by the handling, or by an explicit tag, and by no element
-  key.
-- A statically resolved pattern called in the reactive tier of the body.
-  The call is compiled into the body: it is a `site` step of `within` and
-  no `Child`, it has no result cell, and a state cell it declares is a
-  state cell of the body for the rule on state below
-  (`language-subset.md` §4.4.1). Its own body can instantiate a child,
-  and that child counts.
-
-Where element bodies nest, the `within` of the `Child`, or of the
-instantiating body, has one `element` step per enclosing element body.
-`bodyUses.child` is set on the collection of every one of those steps,
-so the position joins the key at each level at which the element is a
-plain value. Set on the innermost collection alone, two equal plain
-elements of an outer collection would share the inner cone instances,
-and with them the child. *Assumed,* with the second kind above (section
-8, question 37).
+- **An output** of a cone that lists the slot is computed again and
+  written where it changed.
+- **A handler binding of the reactive tier** copies nothing. A state
+  path that holds the index resolves to the slot when an event is
+  dispatched, so the handler is given the position its element has at
+  that event. The stream is named by `name` and `within` and stays.
+- **An effect whose request holds the index** is an operation named by
+  `name` and `within`, so it stays with its element. A move changes its
+  request, and the effect is requested again, as any effect is whose
+  input changed (section 3.14).
+- **A child whose argument holds the index** is named through `within`
+  and stays. The argument path that holds the index is written again by
+  its write edge (section 3.15).
+- **A state cell** is per key and keeps what it holds. *Assumed*
+  (section 8, question 92): the value a declaration gives the cell is
+  written when the cell is first created, and is not written again when
+  the index changes.
+- **An identity the author derives from the index** follows the index.
+  It arises in a function body written in the element body, because a
+  cause written in the reactive tier is a string literal
+  (`language-subset.md` §4.7). A cell or a child that such a body makes
+  under an explicit cause that holds the index is named by the body's
+  `within` and that cause, and a binding the body makes that copies the
+  index is a stream named by the copied value (section 3.14). After a
+  move the cause, or the copied value, names another cell, child or
+  stream. *Assumed* (section 8, question 92): the explicit cause and the
+  rule for copied values govern here, and "stays with its element" holds
+  for what is named through `within` alone.
 
 The purpose of the rule is that an element that moves keeps its cone
-instances, so reordering a collection recomputes nothing. Keeping the
-identifiers of
-per-element state that is already stored is not a goal: today's key is the
-target's identity plus an occurrence count for a linked slot and the position
-for an inline value (`listElementKeys` in
-`runtime/runner/src/builtins/list-element-keys.ts`), and stored per-element
-documents under those keys are not found again.
+instances and its state, so reordering a collection recomputes nothing
+but the cones that read the index. Elements with the same element part
+are told apart by their order alone. A move that changes the order of
+two of them changes no key: the first of them in the new order is
+occurrence 0 and has the state of occurrence 0. Where two equal values
+stand in a collection and the first is removed, the one that remains
+becomes occurrence 0 and has the state of the first occurrence, and the
+state dropped is that of the last occurrence.
+
+Keeping the identifiers of per-element state that is already stored is
+not a goal. The runtime of today forms a key from the identity of the
+cell the slot resolves to and the count of earlier occurrences of that
+identity (`listElementKeys` in
+`runtime/runner/src/builtins/list-element-keys.ts`, with the identity
+from `cellIdentityKey` in `runtime/runner/src/builtins/scope-policy.ts`).
+For a slot that holds a link that is the rule above. For a slot that
+holds a plain value in place, the slot resolves to its own address in
+the collection's document (`listSlotResolutions` in
+`runtime/runner/src/builtins/list-coordinator-plan.ts`), so the identity
+holds the path of the position. Today such an element is keyed by its
+position alone: an element run stays at its position when the elements move,
+and a value edited in place keeps its run. Under the rule above it is
+keyed by its value and its count, so its cone instances and its state
+move with it, and a value edited in place is a new element. Stored
+per-element documents under today's keys are not found again.
+
+The runtime of today keeps the index out of the key as well.
+`createMapInstance` in `runtime/runner/src/builtins/map.ts` holds one run
+per key. Where the callback uses the index (`usesIndex`) and the index of
+a key changed, it sets the element up again on the result cell the key
+already has, with the new index in the argument. The prototype measured
+that this writes `index` in the element's argument document and no other
+path of it (section 3.6). The rule above agrees with that: the run and
+its state stay, and what reads the index is computed again.
 
 Consequences, which later sections rely on:
 
-- **Equal elements share their cone instances.** Two positions that hold
-  equal plain values, or links to the same cell, have the same key, unless
-  the position is part of the key. The
-  body's cones are evaluated once for the key and both positions receive
-  the values. That is sound because a body is a
-  function of its element, its captures, and the index only when it uses the
-  index.
-- **State needs an element with an identity.** A state cell with an
-  `element` step in `within` exists only where the element's key is a
-  cell's identity or holds the position. An element body over plain values
-  that declares a state cell without using the index is a compile error
-  (`collection:shared-element-state`):
-  two rows that show the same value would otherwise share one flag. The
-  author uses the index, or makes the elements cells, which a list of
-  records written by a handler already is. Two positions that link to the
-  same cell are the same element and do share its state.
+- **Equal elements share nothing.** Two positions that hold equal plain
+  values, or links to the same cell, have two keys. Everything an element
+  body holds is per key, and so per occurrence: its cone instances, its
+  state cells, its streams, its effects, and its children. The body's
+  cones are evaluated for each key. A body with no state of its own (no
+  handler, no state cell, no effect, no child) computes the same values
+  for two equal elements, and could reuse one outcome for both. The
+  design does not special-case it.
+- **A state cell is per occurrence.** A state cell with an `element` step
+  in `within` is legal over every collection, a collection of plain
+  values included, with or without the index. Two rows that show the
+  same value have a flag each. No element is refused, at compile time or
+  at run time, for being a plain value.
+- **A handler binding is per occurrence.** The stream of a binding of the
+  reactive tier is named by its `name` and `within`, and the `element`
+  step of `within` contributes the key, so two equal elements have two
+  streams. An event on a stream names one key, and with it the one
+  position that holds the key.
+- **A key stands at one position, and labels are read there.** A label is
+  stored at an address. The element slots of a template are bound per
+  key, to the address the element was read from, which is the position
+  that holds the key, and for a linked element additionally to the cell.
+  A key's label is instantiated from its own binding. Equal bindings give
+  equal instantiation keys, so the memo of section 4.3 makes the common
+  case one instantiation.
 
-  The compiler reports the error where the element type is a primitive, or
-  the collection is one the instance constructs inline, or one a body of
-  the instance built, whose record has no `reference` at the element's
-  path (`language-subset.md` §4.4.1). For a record-typed
-  input the compiler cannot tell a stored link from an inline record.
-  *Assumed:* such an element body compiles, and an element that arrives
-  inline at run time fails its cone instances (section 5.2), so that
-  state is never shared silently.
-
-  Where the body instantiates a child, the key of a plain element holds
-  the position without the body using the index. A state cell the body
-  declares is then per position, and the reason for the error is absent.
-  *Assumed:* such a body is accepted, by the rule that a state cell needs
-  a key that is a cell's identity or holds the position (section 8,
-  question 34).
-- **A handler does not.** An element body over plain values that binds a
-  handler and declares no state cell is accepted, with or without the
-  index. Equal elements bind equal state, and they share one stream: the
-  stream of a binding of the reactive tier is named by its `name` and
-  `within`, the `element` step of `within` contributes the key, and two
-  equal plain values have one key. An event on that stream names no
-  position. A handler that has to act on one occurrence among equal
-  elements uses the index, which puts the position in the key. Where
-  positions that share a stream resolve an element slot to different
-  labels, the handler's slot carries the join (section 2.6).
-- **Values are per key, labels are per position.** The two positions can
-  carry different labels, because a label is stored at an address and the
-  addresses differ. The element slots of a template are therefore bound per
-  position, to the address the element was read from, and for a linked
-  element additionally to the cell. A position's label is instantiated from
-  its own binding. Equal bindings give equal instantiation keys, so the memo
-  of section 4.3 makes the common case one instantiation.
-
-  Three things follow for whatever holds the state of an evaluation. A
-  binding of an element slot is held per slot and position, with the
-  element's key as a tag, and not per key. What positions with one key share
-  is the value, the selections, and the reads made through handles and
-  links, which start from the element's value and are the same for every
-  position that holds it. The label identifiers of the element slots are not
-  shared: the instantiation key of a position is formed from the labels
-  resolved at that position's addresses.
-- **A move is a membership change and nothing else.** It dirties the
-  collection's membership and rebinds the moved positions' element slots. The
-  label identifiers at the new addresses are normally those at the old ones,
-  and then no element is evaluated and no label is instantiated.
-- **An index-using body does not have this property.** Its key holds the
-  index, so a move recomputes the moved elements, and its element template
-  includes the collection's `enumeration` (section 3.6).
-- **A body that instantiates a child has it for linked elements only.** A
-  plain element that moves has a new key. Its cone instances are evaluated
-  again, and it has a new child, whose state is that of the new key. The
-  element template does not include the collection's `enumeration` on
-  that account, because the body does not observe the position (section
-  3.6). That a child's state is not the state the element had at its
-  earlier position is visible to a reader of the row, and section 5.5
-  lists it.
+  For whatever holds the state of an evaluation: a binding of an element
+  slot is held per slot and key, and names the address of the position
+  that holds the key. The value, the selections, the reads made through
+  handles and links, and the label identifiers of the element slots are
+  all held per key.
+- **A move is a membership change and a change of the index.** It
+  dirties the collection's membership, rebinds the element slots of the
+  keys whose position changed, and changes their index slots. The label
+  identifiers at the new addresses are normally those at the old ones,
+  and then no cone that lists only element slots is evaluated and no
+  label of one is instantiated.
+- **A body that reads the index has this property too.** No key holds
+  the index. A move evaluates again the cones that list the index slot,
+  for the keys whose position changed, and nothing else of the body. The
+  template of a node that reads the index includes the membership the
+  collection iterates (section 3.6).
 - **Keying is the runtime's observation, not the body's.** Deciding which
-  cone instances an element has compares element values. The comparison flows
-  into no element's output, since each output is a function of its own
-  element. It decides which positions share state, which is why the key is
-  salted.
+  cone instances an element has compares element values. The comparison
+  flows into no element's computed output, since each output is a
+  function of its own element. It decides which stored state an
+  occurrence finds: the count of an element is a function of the
+  elements before it that have the same element part. Section 5.5 lists
+  what a reader of a row can see of that.
 - **Derived collections carry their elements' keys.** The elements of a
-  `filter` result are the source's elements, with their keys. The elements
-  of a `map` or `flatMap` result are new values or references and are keyed
-  by the same rule when another body is applied to them. Aggregates and
-  collection indexes hold one contribution per key with a count (sections
-  3.8 and 3.17). `reduce` is the exception: its steps are ordered and are not
-  keyed (section 3.13).
+  `filter` result are the source's elements, with their keys. *Assumed*
+  (section 8, question 91): the count in such a key is the one the
+  element has in the source. The elements of a `map` or `flatMap` result
+  are new values or references and are keyed by the same rule when
+  another body is applied to them. Aggregates and collection indexes hold
+  one contribution per key (sections 3.8 and 3.17). `reduce` is the
+  exception: its steps are ordered and are not keyed (section 3.13).
 
 **Identifiers of things a function body creates.** A site in a body
 (`BodyCall`) can run any number of times. Each occurrence is identified as
@@ -2229,6 +2346,18 @@ definition is what the precision comparison in section 3 rests on. A template
 joins the labels of a set of slots, and each of those labels is the label one
 read contributes to the per-transaction join today.
 
+**The label of a slot of root `index`.** The slot has no stored address:
+its value is the position of the current element, which the runtime
+computes from the order the collection iterates. Its label is defined by
+rule and not by a read. It is the membership that the collection
+iterates, as the table of section 3.2 gives it by `Collection.source`:
+for a collection over a slot, the label of the `enumeration` slot at the
+source's path. A `slot` node that names the slot instantiates to that
+label. The position of an element is a function of the order and the
+membership before it, and the membership the collection iterates covers
+that. *Assumed* (section 8, question 93): no narrower label is formed
+for the elements before the position alone.
+
 **The label of an `identity` slot.** By ruling, a handle that a body passes
 on without reading through it adds nothing of the label of its cell to what
 the body writes. The label stays at the cell and reaches only a reader that
@@ -2245,6 +2374,54 @@ follows the handle. The definition above gives that rule, read as follows.
   `followRef` at the position is a label declared for the reference
   itself, and it is consumed with them. The label says which cell the
   handle names, and under what label that was decided.
+- **The position of a slot of root `element`.** A handler of an element
+  body that is given the handle of its element has that state path bound
+  to a slot of root `element`. By ruling, the callback of a per-element
+  construct is a pattern, and labels flow through it per value (section
+  3.6, "Labels flow per value"): the element has the label of its own
+  slot of the collection and of what that slot holds. So the position
+  that holds the reference is the element's position in the source
+  collection. The slot's label is what a `followRef` read consumes
+  there and at each link crossed below it. It holds nothing of what
+  another position of the collection holds, and nothing of the
+  collection's length or order.
+
+  The runtime of today reads the slot at another position. Each run of
+  an element callback is an instance with an argument document of its
+  own, which holds the element at `element` as a link to the position
+  in the source (`createRunInput` in
+  `runtime/runner/src/builtins/map.ts`). The handler is given the handle
+  from there, so the runtime reads at `element` of the argument document
+  of the element's instance, and the link to the source position and
+  each link below it are links crossed from there. The entries of class
+  `followRef` at that position hold the join of the coordinator's
+  transaction that set the element up (section 3.6, "Today, the
+  argument document of an element"). The compiled path has no argument
+  document per element, and the slot holds none of that join. The
+  template is **tighter** there, deliberately (section 3.1, "The
+  coordinator's join on an element's argument document").
+
+  The `link` entry at `element` holds what the reference to the source
+  position declares, which in the case observed below is the clause the
+  cell of the source list declares. *Assumed* (section 8, question 85):
+  where the slot is `resolved`, or the body reads or writes through the
+  handle, the slot's label holds, in the place of that `link` entry, the
+  label that the declaration of the source collection gives the
+  element, under the rules for a `link` entry below.
+- **The position of a handle an element body closes over.** A handle
+  that the callback of a per-element construct captures is a slot or an
+  output of the enclosing instance, as every captured outer value is
+  (section 3.6). By the same ruling each captured value has its own
+  label, and the slot is read at the captured place: the path of the
+  enclosing instance's argument document, or the state cell, that holds
+  the reference. Its label is the same for every element and holds
+  nothing of the collection. The runtime of today gives a handler of an
+  element body each captured handle from `params` of the element's
+  argument document, which holds one link per captured cell to the path
+  of the enclosing pattern's argument that holds it. The entries of
+  class `followRef` at `params/*` hold the coordinator's join, and a
+  handler that writes through a captured handle consumes them (section
+  3.6). The slot of the compiled path holds none of that join.
 - **The `link` entry of a handle that is only passed on is not in it.**
   The runtime stores, at the position of a link, an entry of origin `link`
   that holds what the reference declares (`prepareBoundaryCommitSteps` in
@@ -2252,8 +2429,33 @@ follows the handle. The definition above gives that rule, read as follows.
   the cell's own, so that entry repeats the label the cell's type
   declares. By the ruling it is the label of the cell and stays out of
   the slot's label where the body neither reads nor writes through the
-  handle. *Assumed* (section 8, question 81): the same holds where the
-  `link` entry holds more than the target's declaration.
+  handle and does not resolve it. *Assumed* (section 8, question 81):
+  the same holds where the `link` entry holds more than the target's
+  declaration.
+- **The `link` entry of a handle the body resolves is in it.** A slot
+  with `resolved` is read at the link: resolution starts from the
+  reference at the position and follows it, and the runtime's
+  transaction makes a `followRef` read of that position, which consumes
+  the `link` entry with the other entries of class `followRef` there.
+  The definition above therefore puts the entry in the slot's label,
+  although the body reads no content through the handle. The case the
+  stage 3 comparison observed is the handler `askToRetire` of
+  `patterns/system/profile-picker/profile-picker.tsx`, which calls
+  `spaceOf(profile)` on the handle of its element and sets a state cell
+  (`spaceOf` in `runtime/runner/src/builder/space-access.ts` calls
+  `resolveAsCell()`). Its transaction reads `element` of the argument
+  document of the element's instance, the position in the list that the
+  link there names, and the link below that position. What it stores
+  for the write has the clause the input list declares, which the `link`
+  entry at `element` holds, and with that entry in the slot the template
+  is **equal**. The same holds for every call that section 3.16 records
+  with a resolved `identity` slot, and for a call it records as
+  journaled, whose slot is not `resolved` and is named by a `dynamic`
+  node of kind `link` or `space`: the run follows the reference there
+  too. `equalLinks` has slots that are not resolved, follows nothing,
+  and makes no read at either position (section 3.16), so a handle that
+  a body only compares with it is treated as one that is only passed on
+  (section 8, question 81).
 - **Nothing of the target document is in it.** The slot is not resolved to
   the cell the reference leads to, and no entry of that cell's document
   joins it: not the `declared` entries that the cell's own type gives it,
@@ -2263,13 +2465,13 @@ follows the handle. The definition above gives that rule, read as follows.
   or at the position (`readConsumesEntry` in
   `runtime/runner/src/cfc/observation-classes.ts`).
 - **A `resolved` slot** joins the `followRef` entries of each further link
-  that resolution follows (section 2.5), and nothing of the cell where
-  resolution ends.
+  that resolution follows (section 2.5), the `link` entry at each of
+  them included, and nothing of the cell where resolution ends.
 - **What brings the target's label in** is a read through the handle: a
   slot whose path continues past the reference, or a `dynamic` node
   (sections 2.5 and 3.10). A body that holds a handle in order to pass it
-  on, to compare it, or to write through it has the `identity` slot in its
-  template and no such read.
+  on, to compare it, to resolve it, or to write through it has the
+  `identity` slot in its template and no such read.
 
 This is **equal** to today in the case the stage 3 comparison observed, in
 `patterns/showcase/battleship/multiplayer/repro-minimal.tsx`. The handler
@@ -2687,7 +2889,7 @@ schema of the path it names (`unwrapOneLevelAndBindToDoc` in
 the read has the integrity of the entries that resolve at the bound address, an
 entry of an enclosing object included, and by the rule above it has none. Fewer
 integrity atoms is looser by the definition of section 3.1. The difference is
-accepted by ruling, and section 3.1 lists it as the fourth exception.
+accepted by ruling, and section 3.1 lists it as the third exception.
 
 **A handle to a position that holds nothing.** An `identity` slot at a
 position of handle type yields a handle whether or not anything is stored
@@ -2845,7 +3047,7 @@ at a path of its own, changes no label. `execution-and-storage.md` chooses
 one state document per key (its §6). The cause is the same in both: the
 element key is a part of the identifier in the first layout and a path
 segment in the second. Two things hold in either, and they hold for
-everything else an element cone stores once per key.
+everything else an element cone stores per key.
 
 - **Each key's state has its own entries.** The state of one key is labeled
   by the table above, instantiated for that element, and in a document
@@ -2861,39 +3063,32 @@ everything else an element cone stores once per key.
   the set of keys under one cone carries that membership label. Under a
   nested element body the keys of the inner collection carry the inner
   collection's membership label, instantiated for the outer element.
-- **Positions that hold one key share what is stored once.** Positions
-  hold one key where they hold equal plain values and the position is not
-  part of the key, or where they link to one cell (section 1.3). Their
-  slots are bound per position and can resolve to different labels. A
-  kept output is stored per position, under that position's
-  label. Everything else an element cone stores is stored once per key
-  (`execution-and-storage.md` §2.5): the state of an operation, the
-  stored request and the result of an effect, a path of the argument of a
-  child or of an instance the cone makes, a side-write, a copied path of
-  a binding or of an inline pattern's parameters, an entry of the cache
-  document, and the record in the instances document. Each is labeled
-  with the join over the positions that hold the key, and the join covers
-  each: the value stored is the one each of those positions computes, and
-  the join is at least the label each position gives it. For bookkeeping, a
-  cache entry and the record of the instances made, the width costs
-  nothing, because no template has a slot for them. For what a slot
-  reads, the join reaches further: an output that reads the result of an
-  effect or of a materializer, a cell a cone side-wrote, or the result of
-  a child, and a handler that reads the copied state of its binding,
-  carry the labels of the other positions that hold an equal element.
-  Today each occurrence of an element has an element run of its own
-  (`listElementKeys` in `runtime/runner/src/builtins/list-element-keys.ts`
-  adds an occurrence count to the key), so this is looser than today
-  where two positions hold an equal element under different labels. It is
-  the third exception of section 3.1, accepted by ruling and **to be
-  revisited**.
+- **What is stored per key carries the label of one position.** A key
+  stands at one position of its collection (section 1.3), and the element
+  slots of the key resolve at that position. Everything an element cone
+  stores is stored per key (`execution-and-storage.md` §2.5): a kept
+  output, the state of an operation, the stored request and the result of
+  an effect, a path of the argument of a child or of an instance the cone
+  makes, a side-write, a copied path of a binding or of an inline
+  pattern's parameters, an entry of the cache document, and the record in
+  the instances document. Each is labeled by its own rule, instantiated
+  for that key. Nothing is stored once for several positions of a
+  collection, so no stored label joins the labels of two positions, and
+  the rule that labels flow per value through the callback of a
+  per-element construct (section 3.6) holds at every position: two
+  positions that hold equal plain values, or links to one cell, under
+  different labels have two keys, and what is stored for each carries
+  the label of its own position alone. In the runtime of today each
+  occurrence of an element has an element run of its own (`listElementKeys`
+  in `runtime/runner/src/builtins/list-element-keys.ts` adds an
+  occurrence count to the key), so the rule is equal to today there.
 
   A stream of a binding of the reactive tier in an element body is per
-  key as well (section 1.3), and an event on it names no position. When
-  an event arrives, each element slot of the handler's state resolves to
-  the join over the positions that hold the key. *Assumed* to fall under
-  the same ruling, which lists what is stored and not this slot (section
-  8, question 35).
+  key as well (section 1.3), and an event on it names one key. When an
+  event arrives, each element slot of the handler's state resolves at
+  the position that holds the key. A handler that closes over the
+  element alone therefore writes under the event and that element, and
+  under nothing of an equal element at another position.
 
 **A stored link that becomes a value.** When an instance stored by the
 current runtime is first written in the compiled layout, a result path that
@@ -2999,12 +3194,13 @@ label of section 2.2, the label of the link, because the code that holds
 the handle did not read through it, and by ruling the label of the
 handle's cell is not in what that code writes. Where the handle is only
 passed on, that label leaves out the `link` entry of the position, which
-repeats the label the cell's type declares (section 2.2). For an entry
+repeats the label the cell's type declares, and where the slot is
+`resolved` it holds that entry (section 2.2). For an entry
 that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Eleven more rules fix what a row of the comparison is.
+expected. Sixteen more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -3039,7 +3235,7 @@ expected. Eleven more rules fix what a row of the comparison is.
   twice: on the template's label without the atom of the kept output, and
   on the label with it. The first classification is the test of the rule
   the row's template follows (section 3.22). The second is the label the
-  design stores. A row of the fourth exception below has, with the atom,
+  design stores. A row of the third exception below has, with the atom,
   the pattern's atom and not the atoms of the stored object, so neither
   integrity holds the other. It is counted as that exception by its first
   classification, and not as a row that cannot be compared.
@@ -3091,8 +3287,9 @@ expected. Eleven more rules fix what a row of the comparison is.
   root `binding` resolves through the binding the event was sent to, and
   each `identity` slot among the inputs of the body's `derive` has the
   label of the link and is not dereferenced (section 2.2). For a handle
-  that the body neither reads nor writes through, that label leaves out
-  the `link` entry of the position. Only an edge
+  that the body neither reads nor writes through, and whose slot is not
+  `resolved`, that label leaves out the `link` entry of the position.
+  Only an edge
   with a `reference` member, whose written value is the reference, is
   joined with what a value read through the stored link consumes, so that
   both sides read one target. The integrity of such a row is that of the
@@ -3125,6 +3322,61 @@ expected. Eleven more rules fix what a row of the comparison is.
   (section 8, question 80). A member of an event that is declared as a
   handle is given a handle or left out, because a plain value there reads
   as a handle that cannot be written.
+- **A binding with a `within` step.** The rule for a write edge holds for
+  a binding of a pattern compiled in (`site` steps alone) and for a
+  binding of an element body (an `element` step) as for a binding with
+  no step. Three things differ, and each is where the run of today
+  stores something, not what a template holds.
+  - **Where the stream is.** A scenario sends an event to the stream
+    that a link at a path of `Binding.result` leads to. The rule of
+    section 1.1, "From a path to a position", is for the layout of the
+    compiled path. The runtime does not store the children of a view
+    node that way. The JSX factory flattens the children it is given
+    when the pattern is built (`children.flat()` in `h` in
+    `runtime/runner/src/builder/h.ts`). The result of a `map` over a
+    cell is no array at that time, so it is one child, at the position
+    the expression is written at, and the stored child holds the
+    assembled array. The stream of element `i` is then at
+    `children/k/i` followed by the rest of the path, where `k` is the
+    position of that child, and not at `children/*` counted from the
+    spread. A `map` over a constant array of the module is evaluated
+    when the pattern is built, its result is an array, and its elements
+    are stored in place among the children, at the positions section
+    1.1 gives. The path does not hold the number of children written
+    before them (section 1.1), so a harness that has the plan and the
+    stored tree alone sends such a binding no event. At a child
+    position that holds the result of a pattern, the runtime's path has
+    `$UI` after the position, by the rule above for such a position. A
+    path below a `select` holds no stream while another branch is
+    selected, and the harness then reads the binding's next path.
+  - **Where a state cell or an output of another instance is.** In the
+    plan a pattern compiled in has no result cell, and what it declares
+    is named by the enclosing instance and the steps of `within`
+    (section 1.3). In the runtime each pattern at a tag or a call, and
+    each run of an element callback, is an instance with a result
+    document of its own. The `internal` metadata of that document lists
+    the cells the instance's body made, and their identifiers derive
+    from the result cell and the name of the declaration
+    (`runtime/runner/src/derived-internal-cell-ids.ts`); its `argument`
+    metadata links to the instance's argument document. The plan has no
+    record that says where the runtime stores the result of a `site`
+    step. The comparison finds the instance among the documents that
+    the stored links lead through from the result to the row's
+    position: the path of the stream for a write edge, and the path of
+    the output for an output.
+  - **Where a slot of root `element` is read.** The template's side
+    reads an `identity` slot that is the handle of the handler's
+    element at the element's position in the source collection, and
+    the slot of a handle the element body closes over at the captured
+    place (section 2.2). The runtime's transaction reads both in the
+    argument document of the element's instance, at `element` and
+    below `params`. The rule "The coordinator's join on an element's
+    argument document", below, says what a row then differs by.
+
+  A write edge whose target is the stream of another binding, as a
+  handler that sends to a stream of its state has, stores nothing at
+  the target and is no row. The write of the handler that the stream
+  reaches belongs to that handler's own event.
 - **An existence entry that an earlier write left.** The runtime's side of
   a row can hold clauses of a write that is not the one the row is about.
   The runtime mints a `derived` entry of class `shape` once, with the join
@@ -3147,6 +3399,71 @@ expected. Eleven more rules fix what a row of the comparison is.
   (section 2.3, "A path that a write edge targets"), so a reader of the
   path consumes the clause in both. The same holds for a row of an
   output.
+- **The coordinator's join on an element's argument document.** This is
+  a deliberate difference from the runtime of today, by the ruling that
+  labels flow per value through the callback of a per-element construct
+  (section 3.6). Today the argument document of an element's instance
+  carries, on every path, the one join of the coordinator's transaction
+  that set the element up, and a handler of the element body is given
+  every handle from that document. Its transaction consumes that join:
+  with the element's handle the entries at `*` and the `link` entry at
+  `element`, and with a captured handle the `followRef` entry at
+  `params/*` (section 3.6, "Today, the argument document of an
+  element"). The template has none of it. So the write row of a handler
+  bound in an element body is **tighter** by each clause of that join
+  that the handler's own slots do not hold: the clauses of the list's
+  own document, and, where the elements are stored in place in that
+  document, the clauses of the other elements. A row is of this kind
+  where every clause that the template lacks is held by an entry of
+  origin `structure` or `link` of the argument document of the
+  element's instance that the event's transaction consumed. It is
+  expected, it is counted as tighter, and it is reported apart, as a
+  row of the rule above is. Unlike that rule it is a narrowing by the
+  rule of the template: a reader of the written path consumes the
+  clause today and does not in the compiled path.
+- **The state a row is read on.** The template of a write edge is
+  evaluated on what is stored before the event is sent, which is what
+  the handler's transaction reads, and the runtime's side is read after
+  the event. Evaluated after the event, a slot of a cell that the
+  handler both reads and writes has the label of the run's own write,
+  which holds every clause the run consumed, and a template that lacks
+  one of the handler's reads compares as equal. A row belongs to the
+  state that the earlier events of the scenario left: with the events
+  sent in another order an event can reach another element or find
+  another value stored, and the row's category can differ for that
+  reason and for no other. A harness that has no access to the write
+  attempts of a transaction, which the runtime releases when the
+  transaction settles, takes as written a target whose value differs
+  after the event. It then does not see a link stored in the place of
+  an equal value, and counts that edge with the writes the run did not
+  make.
+- **A label the runtime fails to read.** The runtime's side of a row is
+  read with every link followed, and such a read can fail: resolution
+  stops at a cycle of links (`resolveLink` in
+  `runtime/runner/src/link-resolution.ts` throws there), and
+  `cfcLabelViewForResolvedCellWithStatus` in
+  `runtime/runner/src/cfc/label-view.ts` then returns what it read
+  before the failure and reports that the read failed. A partial label
+  is not the runtime's label of the path. *Assumed* (section 8,
+  question 88): a row that needs a label the runtime failed to read is
+  not a row of the comparison, and it is counted apart by that reason.
+  A handler can store such a cycle with `set` and `get` alone: what
+  `get` returns for an object is a view of the cell, a `set` of that
+  view stores a link, and two cells that each store what the other
+  returned link to each other.
+- **A written path that holds a link, for an edge with no
+  `reference`.** The rule for a write edge joins the template's side
+  with what a read through the stored link consumes only for an edge
+  with a `reference` member. A run can store a link at the target of an
+  edge that has none: the runtime stores a value that carries a stored
+  address as a link (section 3.14), and a body can write a value that
+  was a reference on this run alone. The runtime's side then has the
+  label of the link's target, and at the written path a `followRef`
+  stamp and no `value` entry, so it has no atom of the run where the
+  template mints the body's. *Assumed* (section 8, question 87): such
+  a row is not a row of the comparison and is counted apart, and where
+  the plan has an edge with `reference` for the same write, that edge's
+  row is the row of the write.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -3159,7 +3476,7 @@ nothing else, because a stored entry does not say which schema declared it.
 | `declared`, in a document that a slot of the template is bound in, or that a reference the output passes on leads to: the argument document of the instance, a cell the argument links to, the document of a state cell, and a cell that a site of a body created | Compared. These are the labels of the places a template reads, which its slots resolve to |
 | `derived` | Compared. The stamp of a run's join |
 | `structure` | Compared. The stamp of a run, as below |
-| `link` | Compared where a slot reads through the link or a write edge targets the handle. Left out of the label of an `identity` slot whose handle the body only passes on: the entry holds what the reference declares, which for a link to a cell repeats the label of the cell's type, and by ruling that label is not in the slot (section 2.2). The stamp of the run that wrote the link is an entry of origin `structure`, and it is compared |
+| `link` | Compared where a slot reads through the link, a write edge targets the handle, or the slot is `resolved`. Left out of the label of an `identity` slot whose handle the body only passes on: the entry holds what the reference declares, which for a link to a cell repeats the label of the cell's type, and by ruling that label is not in the slot (section 2.2). The stamp of the run that wrote the link is an entry of origin `structure`, and it is compared |
 | `minted`, `external-ingest` | Compared. Atoms the runtime or a builtin wrote for a value |
 | `label-metadata` | Not compared. No read of content consumes it; a `labelMetadata` slot resolves to it (section 2.4) |
 | No origin | Compared. An entry written before entries had origins |
@@ -3223,7 +3540,7 @@ runtime's label without the condition's clauses (section 3.5).
 The comparison criterion is the overview's: a template label is **equal or
 tighter, never looser**. Tighter means fewer confidentiality clauses, or more
 integrity atoms. Each rule that is tighter says what the narrowing rests on.
-**There are four exceptions**, all deliberate.
+**There are three exceptions**, all deliberate.
 
 - **The collection index** (section 3.17). A bucket's membership label
   includes the key of every element, where the runtime today stores only
@@ -3236,18 +3553,6 @@ integrity atoms. Each rule that is tighter says what the narrowing rests on.
   read's label. The template does: the error state of the failed body, or
   the outcome of the failed handler, is labeled with the whole footprint
   (section 5.2), that slot included.
-- **What an element body stores once per element key** (section 2.6).
-  Positions that hold equal plain values, or links to one cell, share one
-  key, and their element slots can resolve to different labels. What is
-  stored once for the key carries the join over those positions: the
-  request and the result of an effect, the state of an operation, the
-  argument of a child, a side-write, and the copied state of a binding.
-  Today each occurrence of an element has a run of its own, whose writes
-  carry that occurrence's label alone. An output at one position that
-  reads what is stored once therefore carries the labels of the other
-  positions that hold an equal element. This exception is accepted by
-  ruling and is **to be revisited**: the alternative keys these as
-  per-element state is keyed, by a cell's identity or with the position.
 - **The integrity of a default** (section 2.5). A slot that reads as a default
   has the empty integrity, where today the read has the integrity of the entries
   that resolve at the bound address. Fewer integrity atoms is looser. This
@@ -3586,9 +3891,13 @@ the array literal of the children. So the template of the path
 `props/title` of an element is the template of the expression written
 at the attribute `title`, and the template of `children/0` is that of
 the first child. A child whose type is an array, the assembled result of
-a `map` among them, is a spread child: the factory flattens it into the
+a `map` among them, is a spread child: its elements are stored among the
 children, and the rule for a spread in an array literal gives the
-positions from it on. A fragment is the same record with the fragment's
+positions from it on. That is the layout of the compiled path. The
+factory flattens the arrays it is given when the pattern is built, and
+the result of a `map` over a cell is no array then, so the runtime
+stores it as one child (section 3.1, "A binding with a `within` step").
+A fragment is the same record with the fragment's
 name. The rendered tree under `$UI` is such a construction, and its paths
 are these.
 
@@ -3851,16 +4160,46 @@ template and the same atom, where the runtime mints none: **tighter**.
 - **Membership template.** For a `map` over an input collection, the
   `enumeration` slot of that collection. `map` preserves the domain, so the
   result's membership is its source's.
-- **Index.** A body that uses the index adds the collection's `enumeration`
-  to its element template, because an element's index depends on the order
-  of the others. A callback has no parameter for the whole array
-  (`language-subset.md` §4.4.1). A body that needs the collection captures
-  it by name, and the capture is an ordinary slot, like any other captured
-  outer value.
-- **A child.** A body that instantiates a child puts the position in the
-  key of a plain element (section 1.3). That adds nothing to the element
-  template: the body is not given the position and computes nothing from
-  it.
+- **Index.** A node of the body that reads the index reads the slot of
+  root `index` that names the collection (section 1.3), and has the
+  `slot` node of that slot in its template. The node resolves to the
+  membership the collection iterates (section 2.2), which for a
+  collection over a slot is the collection's `enumeration`, because an
+  element's index depends on the order of the others. A node of the same
+  body that does not read the index lists no such slot and has none of
+  that label, and a callback that declares the index and does not use it
+  adds it to no template. The position is in no key: an element that
+  moves keeps its key, and the nodes that read the index are evaluated
+  again (section 1.3). A callback has no parameter for the
+  whole array (`language-subset.md` §4.4.1). A body that needs the
+  collection captures it by name, and the capture is an ordinary slot,
+  like any other captured outer value.
+- **Labels flow per value.** By ruling, the callback of a per-element
+  construct is a pattern, and labels flow through it per value. Each
+  thing the body is given has its own label. The element has the label
+  of its own slot of the collection and of what that slot holds: the
+  element's root slots and the slots below them, bound to position `i`.
+  The index has the label of its slot, which is the membership the
+  collection iterates, and the whole collection the label of its
+  capture, each only for a node that reads it.
+  Each captured value has the label of its own slot or output of the
+  enclosing instance. A node of the body takes the labels of what it
+  reads and closes over, and nothing of what another node of the same
+  body reads. A node is anything of the body that has a template: an
+  output path, a `computed`, a `lift`, a handler, the argument of a
+  child, the request of an operation. So a handler that closes over the
+  element alone writes under the event and the element (section 3.12),
+  also where another node of the body reads the index. Nothing of
+  another element, and nothing of the collection's length or order,
+  reaches a node that reads neither the index nor the collection. No
+  label is formed for the callback as a whole, and none is stored for an
+  element that a node of its body did not read. Section 2.2 says where
+  the handle of the element and a captured handle are read. No place
+  joins the labels of two positions: a key stands at one position, and
+  what is stored for it carries that position's label (section 2.6).
+- **A child.** A child that the body instantiates is per key (section
+  1.3). That adds nothing to the element template: the body is not given
+  the key and computes nothing from it.
 - **Nothing else.** The label of element `i` does not include any slot of
   element `j`.
 
@@ -3879,11 +4218,12 @@ element are `const`. For a literal written in place, the membership is
 the literal's `enumeration` and each position has the template of the
 expression written there (section 3.4), so the element's root slots
 resolve per position, as labels do (section 1.3). The elements of either
-are plain values unless a position holds a reference, so a state cell in
-the body falls under `collection:shared-element-state` (section 1.3).
+are plain values unless a position holds a reference. A state cell in
+the body is per occurrence, as over any collection (section 1.3).
 
 Element cones are keyed as section 1.3 defines, and the element slots are
-bound per position. The runtime, not the value code, iterates: it evaluates
+bound per key, at the position that holds the key. The runtime, not the
+value code, iterates: it evaluates
 the body's cones once per key with that element's slots, and assembles the
 result. Section 1.4 says which entry of `Plan.outputs` stands for the
 assembled result. Which input element an output position came from is therefore
@@ -3918,6 +4258,69 @@ decomposition and prefers it (§8.5.4.3): "Each **element op** runs in its own t
 reads only its element." The template arrives at the same labels without the
 transactions. Within one element's body, a `computed` that returns several paths
 is **tighter** as in section 3.4.
+
+**Today, the argument document of an element.** What an element's body is
+given is stored in the argument document of the element's instance, and the
+coordinator writes it. `reconcile` in `createMapInstance`
+(`runtime/runner/src/builtins/map.ts`) runs in a transaction of its own and
+sets up each element that has no run in that transaction
+(`Runner.runInTransaction`), which writes the element's argument document.
+`prepareBoundaryCommit` (`runtime/runner/src/cfc/prepare.ts`) computes one
+join for the transaction (`deriveFlowJoin`) and stores it on every path the
+transaction wrote. The prototype measured the result with the runner alone,
+for a callback that declares neither the index nor the array and captures
+two cells:
+
+- **One join on every path.** The argument document
+  `{ element, params: { center, zoom } }` has ten entries of origin
+  `structure`: class `enumerate` and class `shape` at the root and at
+  `params`, and class `followRef`, `shape` and `value` at `*` and at
+  `params/*`. All ten hold the same clauses, the join of the coordinator's
+  transaction. The link at `element` has one entry of origin `link` beside
+  them, with the clause of the schema that the stored link carries
+  (`linkSlotLabel`).
+- **What the join holds.** The coordinator reads the whole raw array of the
+  list once (`listMembershipRead` in
+  `runtime/runner/src/builtins/list-coordinator-plan.ts`). The entries of
+  class `shape` and `enumerate` at the list's own path go to the membership
+  stamp of the result container and stay out of the join. Everything else
+  that read consumes is joined: an entry with no class at the root, which
+  is what a declared clause is, the entries at `*`, the entries at each
+  slot, and the entries of everything stored in place below a slot. Where
+  the slots hold links to a cell per element, the join has the list's
+  declared label and no clause of an element's cell, and the `link` entry
+  at `element` has the element's own. Where the elements are stored in
+  place in the list's document, the join has the labels of every element.
+  A reconcile that a change of the list started also reads the list as a
+  trigger read (`addCfcTriggerReads`, called from `runSchedulerAction` in
+  `runtime/runner/src/scheduler/run.ts`), and its join then has the list's
+  own `shape` and `enumerate` entries as well.
+- **What it does not hold.** `params` holds one link for each captured
+  cell, and the coordinator reads no value of a captured cell, so no
+  label of a captured cell is on an argument document. An element set up
+  by a later reconcile gets the join of that reconcile, and the argument
+  documents of the earlier elements are not written and keep theirs.
+- **What a handler consumes.** A handler `zoom.set(14)` in an element body
+  reads `params/zoom` of its element's argument document and nothing of
+  the element, of another element, or of the list. It consumes the
+  `followRef` entry at `params/*` and so stores the write under the
+  coordinator's join. A handler that passes on a field of its element
+  reads `element` and the field, and consumes the three entries at `*`
+  and the `link` entry at `element` as well. A handler that does both in
+  one body has one join for both writes.
+- **With the index declared.** The argument document also holds `index`,
+  with two entries of origin `derived` under the same join. Removing an
+  earlier element writes `index` of the later elements again and no other
+  path of their argument documents.
+
+The template has none of the coordinator's join, by the ruling that labels
+flow per value. It is **tighter** than today in two ways, both deliberate:
+a handle the body was given carries no join of the coordinator, and no
+label of one element reaches another where the elements are stored in
+place. Section 3.1 has the comparison rule. Not measured: what the
+argument document of an element of `filter` or of `flatMap` holds, what
+changes when the callback declares the array, and the integrity of these
+entries.
 
 ### 3.7 `filter` and `flatMap`
 
@@ -3955,6 +4358,17 @@ binds the element slots of later templates through it. Nothing is reported by
 emitted code and nothing needs
 verifying, and element locality of these operations is a structural fact
 (section 7.3).
+
+**Labels flow per value** through the predicate of a `filter` and the
+body of a `flatMap` as through the callback of a `map` (section 3.6): a
+node of the callback takes the labels of what it reads and closes over,
+the element has the label of its own slot of the source and of what that
+slot holds, and the index has the source's `enumeration` only for a node
+that reads it. The same holds for the callback of every other per-element
+construct: the predicates of section 3.13 and the selector callbacks of
+the aggregates and the indexes. What joins the labels of several elements
+is the structural step, in the membership template above and in the rule
+of each operation, and never the callback.
 
 These follow §8.5.4.2, which separates membership, order and multiplicity
 confidentiality from item content and notes that the two helpers "usually
@@ -4027,12 +4441,13 @@ computed.
   order of the collection where keys tie. The choice is labeled with the
   collection's membership, which includes order (section 3.18), so the
   label covers it. No element key enters the choice.
-- An element with an equal key counts once per position it occupies.
+- Equal elements count once each: each occurrence has a key of its own
+  (section 1.3).
 - A hole contributes nothing.
 
 **Durable state.** An aggregate is an `Operation` of kind `aggregate`. Its
-state holds one contribution per element key with the number of positions
-that hold it, the folded value, and the multiset of label identifiers the
+state holds one contribution per element key, the folded value, and the
+multiset of label identifiers the
 fold joins (section 4.3). A change to one element costs one update. A
 reorder costs nothing for `count`, `sum`, `min` and `max`. For `minBy` and
 `maxBy` it changes the result only where it changes which of the elements
@@ -4262,9 +4677,25 @@ ruling: the link itself carries the label of at least the event.
   holds neither the `link` entry there nor the stamp of the run that wrote
   the link. The slot leaves the `link` entry out and holds the stamp
   (section 2.2). **Equal** for a handler where that stamp has no clause,
-  and looser by the stamp where it has one (section 8, question 81).
+  and looser by the stamp where it has one (section 8, question 81). A
+  handle the body resolves, as the operand of `spaceOf` is, is not only
+  passed on: the transaction reads the position, its join holds the
+  `link` entry and the stamp, and the `resolved` slot holds both
+  (section 2.2). **Equal.**
   **Tighter** for a re-evaluated body and for expression code, where the
   runtime stamps the join of the whole run.
+
+**A handle an element body was given.** A body written in the callback of
+a per-element construct is given the element, and each value the callback
+closes over, under that value's own label (section 3.6, "Labels flow per
+value"). The `identity` slot of the element's handle is read at the
+element's position in the source collection, and the slot of a captured
+handle at the captured place (section 2.2). Neither holds a join over the
+callback or over the collection. So a link such a body writes when it
+passes one of those handles on carries the label of that one link, and in
+a handler the body's template beside it, by the table above. It carries
+nothing of another element and nothing of the collection's length or
+order, unless the body itself reads the index or the collection.
 
 **A reference from a computed input.** A handle or a container that
 reached the body in a value the instance computed has no slot. `passes`,
@@ -4468,7 +4899,12 @@ the label of the link the body was given the handle through, without the
 `link` entry of that position, which repeats what the cell's type declares
 (section 2.2), and it adds nothing of the cell's label to what the body
 writes. No `followRef` observation is made for such a handle today, at the
-position or at the cell. The link a
+position or at the cell. A handle the body resolves without reading
+content through it, by `resolveAsCell()` or by a call that section 3.16
+records with a resolved slot, is followed and not only passed on: a
+`followRef` observation is made today at the position and at each link
+below it, and the `resolved` slot holds the `link` entry of each (section
+2.2). Nothing of the cell where resolution ends joins it. The link a
 body stores when it passes the handle on is labeled all the same, with the
 slot and, in a handler, with the body's template, which holds the label of
 the event (section 3.9, "A handle a body passes on").
@@ -4497,10 +4933,11 @@ handle names (section 2.2). So a write through one handle does not carry
 the label of the cell behind another handle of the body, and a write
 through a handle does not carry the label of what the written cell held.
 The slot of a handle the body writes through keeps the `link` entry of
-its position, which the slot of a handle that is only passed on leaves
-out (section 2.2). That entry repeats what the type of the written cell
-declares, and the runtime's transaction reads the position of a handle it
-writes through, so the template is equal to today there.
+its position, and so does a `resolved` slot. The slot of a handle that is
+only passed on leaves it out (section 2.2). That entry repeats what the
+type of the written cell declares, and the runtime's transaction reads
+the position of a handle it writes through or resolves, so the template
+is equal to today there.
 Where the written value is itself a reference the body passes on, the
 edge's `reference` member records it, and the link written carries the
 label section 3.9 gives it ("A handle a body passes on"): in a handler the
@@ -4855,6 +5292,24 @@ template (section 2.2). The schema's
 declared integrity for the written path, such as an authorship atom for the
 acting principal, is a declared entry and is added as it is today.
 
+**A handler of an element body.** By ruling, the callback of a
+per-element construct is a pattern, and a handler bound in it is a node
+of that pattern with a template of its own (section 3.6, "Labels flow per
+value"). Its state slots are the values it closes over, each with its own
+label: a slot of root `element` for the element or a part of it, and a
+slot or an output of the enclosing instance for a captured outer value. A
+handler that closes over the element alone writes under the event and
+the element. It does so also where another node of the body reads the
+index: the two are independent flows. A handler that closes over a
+captured cell alone, as `zoom.set(14)` does, writes under the event and
+the label of the link to that cell, and under nothing of the element or
+of the collection. A handler is one body with one template (section
+3.9), so a handler with two writes, `center.set(stop.position)` and then
+`zoom.set(14)`, writes both under the join of what it closes over, the
+element included. The runtime of today stores every write of such a
+handler under the coordinator's join as well (section 3.6, "Today, the
+argument document of an element"), and the template is **tighter** by it.
+
 **Today.** The handler's transaction join over the event payload and the
 state it read lands on every written path. The state's schema is narrowed to
 what the body uses, as a `lift`'s argument is. The event's schema is not,
@@ -4937,8 +5392,9 @@ kind.
   collection's assembled output (section 1.4), which the plan then has.
   The source is not the form with `via`: `via` says how the elements of
   a derived collection come from its source, and a scan has no elements
-  of its own. `membership` is the source's membership template, and
-  `bodyUses` is as for a `map`.
+  of its own. `membership` is the source's membership template. A
+  predicate that reads the index reads the slot of root `index` that
+  names this record, as the callback of a `map` does (section 3.6).
 - **The predicate** is the cones of the callback, by the rules of section
   1.4, with slots of root `element` that name this collection. They are
   evaluated per element key. What the callback returns is a per-element
@@ -5000,8 +5456,10 @@ expression.
     key.
   - The `reduce` has a `Collection` of its own, named `reduce`, whose
     source is the receiver, as for a scan. The step cone reads the
-    element through slots of root `element` that name it, and
-    `bodyUses.index` says whether the step uses the index.
+    element through slots of root `element` that name it. A step that
+    uses the index lists the slot of root `index` that names it. The
+    steps are evaluated per position, so the slot's value is the
+    position of the step.
   - The step cone reads the accumulator through a slot with root
     `operation` that names the `reduce` itself, at the empty path. The
     runtime binds it to the accumulator as it stands before the step.
@@ -5541,16 +5999,23 @@ applied to bindings, salt included, and it is what makes a binding legal
 in a body that is re-evaluated. Two bindings to equal records stored in
 two places are two streams, because the addresses differ. A handler that
 has to act on one occurrence among equal copied values needs the index or
-a cell in its state. The same holds in an element body of the reactive
-tier over plain values, where equal elements share one stream unless the
-position is part of the key (section 1.3), and in a function body, where
-a binding is made in an ordinary loop and equal state gives one stream.
+a cell in its state. That holds in a function body, where a binding is
+made in an ordinary loop and equal state gives one stream. It does not
+hold for a binding of the reactive tier in an element body: that binding
+is named by its `name` and `within`, and each occurrence of an element
+has a stream of its own (section 1.3).
 
 The identifier of the stream of a binding made in a function body does
 not hold the place of the `bind` site: no step of `within` and no name
 enters it. A binding made in an element body by a `computed`, or in a
 call compiled into the plan, that holds equal state is therefore the
-same stream for every element and every call.
+same stream for every element and every call. The ruling that everything
+an element body holds is per element key names the body's streams, and
+the ruling on what a handler binding holds gives a binding made in a
+function body no place. The rulings do not say which governs a binding
+that a `computed` or a `lift` written in an element body makes.
+*Assumed* (section 8, question 90): the rule on bindings governs, so two
+occurrences whose computations bind equal state name one stream.
 
 A client cannot read the salt (section 1.3). It cannot name the stream of
 a binding that has a copied path before the server stores a link to it. A
@@ -5931,9 +6396,12 @@ each operand for `value` (`footprint-analysis.md` §3.4).
 and follows no link, so it has no journaled part: in a body as in the
 reactive tier, its record is the plain `identity` slot of each operand.
 `equals` resolves both operands first, which is why its slots are
-resolved. Today `equalLinks` compares the links without a transaction
-(`equalLinks` in `runtime/runner/src/cell.ts`), and the label it joins is
-that of the reads that handed the body the two references.
+resolved. A resolved slot holds the `link` entry of the position it is
+read at, and the slot of an operand of `equalLinks` that the body does
+nothing else with leaves it out (section 2.2). Today `equalLinks`
+compares the links without a transaction (`equalLinks` in
+`runtime/runner/src/cell.ts`), and the label it joins is that of the
+reads that handed the body the two references.
 
 **`resultOwnerOf`.** The call resolves the operand to the document a write
 to it lands in, reads that document's `result` back-link, and with a field
@@ -5995,7 +6463,7 @@ and leave out the verifier reads that flow derivation leaves out today.
 `lookup(k)`, `keys()` and `keyEntries()` read it.
 
 The index is an `Operation` of kind `index`. Its state holds, per element
-key, the index key the key function produced and the number of positions,
+key, the index key the key function produced,
 and per index key the bucket. The per-element key function cones write a
 statically known target, so no materializer is involved.
 
@@ -6444,7 +6912,7 @@ nothing to compare.
 | Link following | A slot whose path crosses the link; `identity` slot plus `dynamic` where the path is not named | Equal |
 | Static side-write | Template of the written expression | Equal or tighter |
 | Write through a handle bound to a value the instance computes | None where the path holds a produced value: the write is refused. Template of the written expression where the path holds a reference, and the write lands at the reference's target | Equal for a reference; a refused write changes no label |
-| A slot that reads as a default (section 2.5) | The slot's confidentiality; the empty integrity | **Looser** on integrity, the fourth exception, by ruling. A slot that reads a stored object whole is equal |
+| A slot that reads as a default (section 2.5) | The slot's confidentiality; the empty integrity | **Looser** on integrity, the third exception, by ruling. A slot that reads a stored object whole is equal |
 | Write through a resolved reference | Template of the written expression, which holds the links the resolution follows; lands where the resolution ends | Equal |
 | Materializer | Today's join on every path it writes, its result included | Equal |
 | Handler | `derive` over event and state footprint | Equal or tighter (an authored event type is read whole today); the second exception applies |
@@ -6454,17 +6922,16 @@ nothing to compare.
 | Child instance | Argument templates in; `child` slots out | Equal |
 | Pattern closure | Join of the capture templates on the factory value; `params` slots inside | Equal |
 | Pattern closure given to a language model as a tool | The label of the model's output on the argument and on the existence of the instance; the instance's own result labels on the result | New |
-| What an element body stores once per element key (section 2.6) | The join over the positions that hold the key | **Looser**, the third exception, where positions that hold an equal element resolve to different labels. To be revisited |
+| What an element body stores per element key (section 2.6) | The template of what is stored, instantiated for the key at the one position that holds it | Equal: today each occurrence of an element has a run of its own |
 | Handler factory value | The handler's own record, plus the factory's `identity` | New |
 | Context reads | `cause`, `labelMetadata`, `identity` slots; `dynamic` for access lists and journaled observations | Equal |
 | `anchorsOf`, `cellFromUrl` parsing, `wish` | References with computed identity; for `wish`, an operation whose result joins its operands and a `dynamic` node of kind `search` | Equal |
 | Stored state that is not an output (section 2.6) | The operation's input, the cone-level join, or the output's label | New |
 
-Four things are looser, and all four are decided: the collection index, a slot
-for a read through a handle on a run that throws before the read, what an
-element body stores once per element key, which is to be revisited, and the
+Three things are looser, and all three are decided: the collection index, a
+slot for a read through a handle on a run that throws before the read, and the
 integrity of a slot that reads as a default (section 3.1). A promoted
-`computed` is not a fifth: by ruling it mints no `TransformedBy` atom for the
+`computed` is not a fourth: by ruling it mints no `TransformedBy` atom for the
 code of its callback, and its kept outputs carry the atom of the pattern
 (section 3.2). Under the assumption of question 71 of section 8, a value that
 a promoted `computed` passes on unchanged to the argument of a child, the
@@ -6575,7 +7042,8 @@ interface TemplateInputs {
   /**
    * Label of a slot, already resolved by address, path and class, with its
    * chain. For an address this transaction or its batch wrote, the label
-   * staged there (section 4.5).
+   * staged there (section 4.5). For a slot of root `index`, the label of
+   * the membership its collection iterates (section 2.2).
    */
   slotLabel(slot: Index): Label;
   /**
@@ -6741,9 +7209,8 @@ value = label id
 
 For a `map` over `n` elements whose body has one template, `n` elements with
 equal slot labels are one memo entry and one stored `*`-child entry. This is
-also what makes the per-position binding of section 1.3 cheap: positions
-that share a key share the value, and positions whose slot labels are equal
-share the label.
+also what makes the binding of element slots per key (section 1.3) cheap:
+keys whose slot labels are equal have one label.
 
 ### 4.4 Constraints
 
@@ -7688,16 +8155,20 @@ deployment documents:
   makes is torn down (section 3.14), which a holder of a link to it can
   see. Whether an evaluation makes an instance is a function of what the
   body read, which the label of the link covers.
-- **A child of a plain element that moved.** Where an element body
-  instantiates a child, the key of a plain element holds the position
-  (section 1.3). An element that moves has a new child, whose state is
-  not the state the child at the earlier position had. A reader of the
-  row can see that, and whether an element moved depends on the order of
-  the other elements, which the row's own label does not hold.
-  *Assumed:* accepted (section 8, question 36). The alternative joins the
-  collection's `enumeration` into every template that reads such a child,
-  which no element result carries today (section 3.6) and which would be
-  a further exception to "equal or tighter".
+- **The state of an occurrence among equal elements.** Elements with the
+  same element part are told apart by their order (section 1.3). Where
+  the first of two is removed, the one that remains has the state of the
+  first, and where an equal element is inserted before another, the
+  inserted one has the state the other had. A reader of a row can see
+  which state the row has, and that depends on which equal elements
+  stand before it, which the row's own label does not hold. The runtime
+  of today does the same for two slots that link to one cell
+  (`listElementKeys` in
+  `runtime/runner/src/builtins/list-element-keys.ts`). *Assumed:*
+  accepted (section 8, question 36). The alternative joins the
+  collection's `enumeration` into every template that reads per-element
+  state, which no element result carries today (section 3.6) and which
+  would be a further exception to "equal or tighter".
 - **A refused send.** A later send of an effect that fails the egress
   check is not made, and the built-in's result takes the error state
   (section 3.14). Whether the check fails is a function of the labels of
@@ -8042,7 +8513,6 @@ T_facts  = derive(by B2)  [ s0  T_titles  dynamic(handle B2.h0) ]
 T_empty  = derive(expression) [ T_facts, const ]
 
 c1       = collection  source: output facts.main   membership: T_facts
-                       bodyUses: { index: false }
 
 T_text   = derive(by B3)  [ m0 m1 m2 m4 ]
 T_isSet  = derive(expression) [ m0 m1 m5 ]
@@ -8453,12 +8923,11 @@ clause any of its slots carries.
 - **Stage 3 of the overview** compares template labels with the labels the
   current runtime computes, over the whole corpus, before any template is
   enforced. That comparison is the test of every row of section 3.22. It expects
-  equal or tighter labels everywhere except in the four cases of section 3.1:
+  equal or tighter labels everywhere except in the three cases of section 3.1:
   for collection indexes it expects the wider membership label of section 3.17,
   for a failed body it expects the labels of the body's static reads through
-  handles, including the ones the run did not reach, for what an element body
-  stores once per element key it expects the join over the positions that hold
-  the key (section 2.6), and for a slot that reads as a default it expects the
+  handles, including the ones the run did not reach, and for a slot that reads
+  as a default it expects the
   empty integrity (section 2.5). For a promoted `computed` it expects an atom
   that names the pattern where the runtime's names the callback, and for a
   value that a pattern passes on to a kept output it expects the pattern's
@@ -8474,17 +8943,21 @@ clause any of its slots carries.
 ## 8. Open questions
 
 The project owner has decided the following, and the sections above state the
-outcomes: equal plain values share their cone instances and never a state
-cell, and a handler bound over them shares one stream (1.3); a per-element
-body over plain values that instantiates a child has the position in its
-key (1.3); the prefix rule (3.13); `some`, `every` and `find` as operations
+outcomes: an element key holds the element's cell identity or its value,
+and the count of earlier occurrences of the same identity or value, so
+equal elements have two keys and share no cone instance, state cell,
+stream, effect or child (1.3); the position is in no element key, also
+where the callback uses the index, the index is given to the nodes of the
+body that read it, and a move evaluates those nodes alone (1.3, 3.6); the
+prefix rule (3.13); `some`, `every`
+and `find` as operations
 (3.13); the wider collection-index label (3.17); a failed constraint on a
 handler's own write rejects the event's transaction, and one on a derived write
 drops that write (4.4); several events are handled in one batch (5.4); the keep
 set is stored in several documents (2.3); a static read through a handle carries
-its label on a run that throws before it (3.1); what an element body stores
-once per element key carries the join over the positions that hold the key,
-the third exception to "equal or tighter", to be revisited (2.6, 3.1); a
+its label on a run that throws before it (3.1); nothing is stored once for
+several positions of a collection, so no stored label joins the labels of
+two positions (2.6, 3.1); a
 conditional read through a handle stays dynamic (2.5, 3.9); a tie in `minBy`,
 `maxBy` and a keyed lookup goes to the first position in source order (3.8,
 3.18); a child replaced under the same
@@ -8515,7 +8988,7 @@ reference reads it through the schema the link holds (2.5); a read of a default
 carries no integrity (2.5, 5.2); integrity is anchored in a stored object as a
 whole, so a slot that reads the object whole keeps its integrity where a default
 fills a property, and a selected property that is a default carries none (2.5);
-the integrity of a default is the fourth exception to "equal or tighter" (3.1);
+the integrity of a default is the third exception to "equal or tighter" (3.1);
 `ifElse` and the container of a `map` do not join the labels their arguments
 declare, and the comparison expects a template tighter than the runtime there
 (3.1, 3.5, 3.6); a write through a handle bound to a value the instance produces
@@ -8524,7 +8997,12 @@ target, and an argument a function body gives to a pattern it instantiates is
 the initial value of the child's stored argument (3.11, 3.15); a handle that a
 body passes on without reading through it adds nothing of the label of its
 cell to what the body writes, and the link the body writes carries the label
-of at least the event (2.2, 3.9, 3.10).
+of at least the event (2.2, 3.9, 3.10); the callback of a per-element
+construct is a pattern, labels flow through it per value, and a node of the
+body takes nothing of what another node reads, of another element, or of the
+collection's length or order unless it reads the index or the collection,
+which is tighter than the join the runtime stores on an element's argument
+document today (2.2, 3.1, 3.6, 3.7, 3.12).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -8568,19 +9046,10 @@ this document made.
     substitution a `value` slot over its subtree. If the language renders a
     record as JavaScript does, only its `shape` is observed, and the slot can
     be narrower.
-11. **An inline record in a stateful element body.** Section 1.3 makes it a
-    compile error to declare a state cell over plain values without the
-    index, and assumes that where the compiler cannot tell (a record-typed
-    input) an inline element fails its cone instances at run time.
-    `language-subset.md`
-    §4.4.1 has the static rule and its diagnostic
-    (`collection:shared-element-state`): it decides "plain value" from the
-    element type and from where the collection comes from, and treats an
-    object-typed element of a list read from an input or a cell as identified
-    by its cell. The run-time failure covers the inline record that rule
-    cannot see. A body that binds a handler and declares no state cell is
-    accepted by ruling, so the diagnostic and the run-time failure concern
-    the state cell alone.
+11. **An inline record in a stateful element body.** Not open: a state
+    cell in an element body is legal over every collection and is per
+    occurrence (section 1.3), so no element is refused at compile time or
+    at run time for being a plain value. The entry keeps its number.
 12. **The cost of handler factory values.** Section 3.21 lists what moves to
     run time. Whether cycle detection and write classification stay useful when
     any cell handed to a handler value counts as written is for the prototype.
@@ -8661,9 +9130,9 @@ this document made.
     document and of the instances document carry the collection's
     membership label (section 2.6); a derived write that a handler body
     reads by address is instantiated ahead of the handler's write edges
-    and not again (section 4.5); and the join over the positions that
-    hold a key covers everything an element cone stores once per key
-    (section 2.6). Its §4.10 derives the identifier of a
+    and not again (section 4.5); and everything an element cone stores
+    is per key and carries the label of the one position that holds the
+    key (section 2.6). Its §4.10 derives the identifier of a
     part document under the secret of the space for every key, its §1.6
     has the early instantiation, and its §6 stores the state of an
     operation in an element body in one document per key. Its §2.8
@@ -8813,9 +9282,9 @@ this document made.
     allocation of an anonymous space such an instance creates is recorded
     under the request's own identifier, as in a handler (section 3.14).
 27. **What is stored once per element key, where positions differ in
-    label.** Not open: it is listed with the settled outcomes above, as the
-    third exception of section 3.1, to be revisited. The entry keeps its
-    number.
+    label.** Not open: no two positions have one key, so nothing is
+    stored once for several positions (sections 1.3 and 2.6). The entry
+    keeps its number.
 28. **A withdrawn write and the writes that used it.** The ruling has a
     conflict on a derived write withdraw that write alone. Section 4.6
     withdraws with it the writes of the transaction that used a value or
@@ -8873,42 +9342,28 @@ this document made.
     back-link from the operation's state document to the requesting
     instance join no label, as the `result` back-link joins none
     (question 17). *Assumed.*
-34. **A state cell in an element body that instantiates a child.** The
-    ruling makes a state cell over plain values a compile error where the
-    body does not use the index. Where the body instantiates a child, the
-    key of a plain element holds the position without the index being
-    used, so the state is per position. *Assumed:* the body is accepted
-    (section 1.3). `language-subset.md` §4.4.1 has to leave such a body
-    out of `collection:shared-element-state`. The alternative keeps the
-    error as worded and has the author use the index.
+34. **A state cell in an element body that instantiates a child.** Not
+    open: a state cell in an element body is legal whatever else the
+    body does (section 1.3). The entry keeps its number.
 35. **The element slots of a handler whose stream several positions
-    share.** A handler bound in an element body over plain values has one
-    stream per key, and an event names no position. *Assumed:* an element
-    slot of the handler's state resolves to the join over the positions
-    that hold the key, under the ruling on what is stored once per element
-    key (sections 1.3 and 2.6). That ruling lists what is stored, and this
-    slot is resolved when an event arrives and is not stored.
-36. **The child of a plain element that moved.** A plain element of a
-    body that instantiates a child has the position in its key, so a move
-    gives it a new child with the state of the new key. A reader of the
-    row can see that, and whether the element moved depends on the order
-    of the other elements. *Assumed:* accepted as a residual (section
-    5.5), and the element template does not join the collection's
-    `enumeration` on that account. The alternative joins it into every
-    template that reads such a child, which would be a further exception
-    to "equal or tighter".
-37. **Which instantiations put the position in the key.** The ruling
-    names a per-element body that instantiates a child. *Assumed:* that
-    is a factory value called in the reactive tier of the body, and also a
-    pattern that a `lift` or a `computed` written in the body
-    instantiates, because its instances are named through the element key
-    as well; an instance a handler requests does not count, and neither
-    does a statically resolved pattern compiled into the body; and where
-    element bodies nest, the position joins the key at every enclosing
-    level at which the element is a plain value (section 1.3).
-    Under the narrower reading, two equal plain elements share the
-    instances a computation in the body makes, and the arguments of those
-    instances carry the join of section 2.6.
+    share.** Not open: no two positions share a stream. Each occurrence
+    has a stream of its own, and an element slot of the handler's state
+    resolves at the position that holds the key (sections 1.3 and 2.6).
+    The entry keeps its number.
+36. **The state of an occurrence among equal elements.** Elements with
+    the same element part are told apart by their order, so which state
+    an occurrence has depends on which equal elements stand before it:
+    where the first of two is removed, the one that remains has the
+    state of the first. A reader of the row can see that. *Assumed:*
+    accepted as a residual (section 5.5), and the element template does
+    not join the collection's `enumeration` on that account. The
+    alternative joins it into every template that reads per-element
+    state, which would be a further exception to "equal or tighter".
+37. **Which instantiations put the position in the key.** Not open: none
+    does. A child of an element body, and an instance that a `lift` or a
+    `computed` written in the body makes, is named through the element
+    key, which separates equal elements without the position (section
+    1.3). The entry keeps its number.
 38. **The label of a refused send.** Section 3.14 gives the error state
     of a built-in whose later send was refused the join of the request's
     joined label, the labels of what was sent and received before, and
@@ -9487,10 +9942,28 @@ this document made.
     which positions are whose. The alternative gives the path a segment
     that names the collection, in the place of `*`.
     `execution-and-storage.md` and `scheduler-and-serving-loop.md` have to
-    agree, since a client resolves the same path to send an event. Not
-    verified: that the prototype can form the address of the state cells
-    of an element body, which a write row of a per-element handler needs
-    as well.
+    agree, since a client resolves the same path to send an event. Three
+    more things the path does not hold, each stated in section 1.1. It
+    does not hold the number of children written before a spread. A `*`
+    whose collection no `element` step of the binding names stands for
+    every position where the callback writes the stream of an outer
+    binding, and for one position where the stream belongs to a member
+    written after a spread, and the path does not tell the two apart. A
+    position below a `select` is a result path and holds the stream
+    under one branch only. Section 1.1 takes each of the three as a
+    result path, because the instance stores the link there. A reader
+    that has the plan and no knowledge of how the array was assembled
+    cannot resolve the first two, as it cannot resolve two collections
+    spread into one array. The prototype lists no path for a binding of
+    two collections spread into one array. The alternative that names
+    the collection in the path resolves these too, if a member written
+    after a spread is given its position among the members written. Not
+    verified: that the prototype can form the
+    address of a state cell that a pattern compiled into an element body
+    declares, which a write edge of a handler bound in such a pattern
+    needs. A state cell of a pattern compiled in under `site` steps
+    alone is found in the run of today as section 3.1 describes ("A
+    binding with a `within` step").
 79. **How much of a handler's template is on a link it writes** (for the
     project owner). By ruling, a handle that a body passes on adds nothing
     of the label of its cell, and the link itself carries the label of at
@@ -9530,7 +10003,12 @@ this document made.
     the stamp of the run that wrote the link is. The runtime's transaction
     reads nothing at such a position, so with the stamp the template can
     be looser than today, and without it the label of which cell was
-    chosen would be lost.
+    chosen would be lost. A handle the body resolves is not only passed
+    on, and its slot holds the entry (section 2.2), which the comparison
+    found equal to today for `spaceOf`. *Assumed* as well: a handle that
+    a body only compares with `equalLinks` is treated as one that is only
+    passed on, because that call follows nothing and reads neither
+    position. The comparison met no such row.
 82. **The event type of an inline handler that declares none** (for the
     project owner). Section 1.5 takes the event type of an inline event
     handler from the annotation of its parameter, or from the type the
@@ -9565,3 +10043,139 @@ this document made.
     label is then tighter than today, and that a path existed under a
     label is no longer recorded at the path, only in the membership
     label of the container.
+84. **A result path of a stream that the elements of a collection hold.**
+    Section 1.1 gives a path with `*` to a stream that a callback writes
+    for every element, and to a stream of a binding of the element body.
+    A third case has no rule: the stream is inside a value that one
+    element of the collection holds, and the tree reaches it through a
+    member of the element, as
+    `renderedExamples.map((example) => <div>{example[UI]}</div>)` over an
+    array literal of the results of patterns compiled in
+    (`patterns/examples/cfc-trusted-component-examples/`). The binding
+    has `site` steps alone, the path passes through a collection the
+    binding is not within, and the stream is at one position of it.
+    *Assumed:* such a binding has no `result` path through the
+    collection, so where the array is at no other path of the result the
+    binding has no `result` member, and no reader finds its stream from
+    the plan. The alternatives: where the source is an array literal and
+    the construct keeps positions, as `map` does, the path has the
+    position of the member in the place of `*`; or the path has `*` and
+    a reader tries each position. `execution-and-storage.md` and
+    `scheduler-and-serving-loop.md` have to agree, as for question 78.
+    The corpus has 208 such bindings, all in that directory.
+85. **The declared label of an element's handle in the compiled path**
+    (for the project owner and the specification change). By ruling the
+    label of a slot of root `element` is read at the element's position
+    in the source collection: the label of its own slot and of what that
+    slot holds, with nothing of the join that the runtime of today
+    stores on the argument document of the element's instance (sections
+    2.2 and 3.6). That settles where the slot is read and that the
+    coordinator's join is not in it. One part of the label is not
+    settled. In a run of today `element` of the argument document holds
+    a link to the position in the source, with a `link` entry that
+    holds what that reference declares, and a handler that resolves the
+    handle, or reads or writes through it, consumes that entry.
+    *Assumed:* where the slot is `resolved` or the body reads or writes
+    through the handle, the slot's label is the `followRef` entries at
+    the position in the source and at each link resolution follows,
+    joined with the label that the declaration of the source collection
+    gives the element, which is what the `link` entry at `element`
+    holds today. That is equal to today for `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx`. Without that
+    part the template of that handler's write has no clause of the input
+    list and mints no atom, which is tighter in confidentiality and
+    looser in integrity. Whether "the label of its own slot" includes
+    that declared label is for the owner. Not stated by any document:
+    which record of the plan holds it, since question 55 assumes no
+    `Slot.declared` on an `identity` slot.
+86. **Per-value flow and the join over the positions that hold one
+    key.** Not open: an element key holds the count of earlier
+    occurrences, so no two positions hold one key, nothing joins the
+    labels of two positions, and the per-value rule holds at every
+    position (sections 1.3, 2.6 and 3.6). The entry keeps its number.
+87. **A written path that holds a link, for an edge with no
+    `reference`.** Section 3.1 joins the template's side of a write row
+    with what a read through the stored link consumes only for an edge
+    with a `reference` member. The prototype met rows where the run
+    stored a link at the target of an edge without one: write 0 of
+    `setDefaultProfile` in
+    `patterns/system/profile-picker/profile-picker.tsx`, whose template
+    has the body's atom where the runtime's label of the path has none,
+    and the edges for a value of two inline handlers of
+    `patterns/examples/map-demo/map-demo.tsx`, where the plan also has
+    an edge with `reference` for the write and that row is equal.
+    *Assumed:* the row of an edge with no `reference` is not compared
+    where the run stored a link at the written path, and is counted
+    apart. The alternative compares it as a row of an edge with
+    `reference` is compared, with the integrity of the value read
+    through the link on both sides, which takes the stored link as the
+    evidence the plan lacks. Not stated by this document: whether one
+    write can have an edge with `reference` and an edge without, as the
+    prototype emits, where the record of section 1.1 has one edge whose
+    `template` applies when the identity check fails.
+88. **A label the runtime fails to read, and a slot whose path crosses
+    a cycle of links.** The comparison reads the runtime's label with
+    every link followed, and the read fails at a cycle of links.
+    *Assumed:* a row that needs such a label is not compared and is
+    counted apart (section 3.1). The same case has no rule in the
+    compiled path: section 2.5 says what a slot whose path crosses a
+    link resolves to, and not what it resolves to where the links form
+    a cycle. *Assumed:* the evaluation that reads the slot fails as a
+    body that throws does, and its outputs take the error state of
+    section 5.2 under their templates. In the runtime of today a read
+    of a cell on such a cycle throws from `resolveLink`, and a read
+    under a schema of a cell that holds a link into the cycle throws
+    from `traverseWithSelector` in `runtime/runner/src/traverse.ts`.
+89. **How far the index reaches in a body that uses it.** Not open: the
+    position is in no element key, also where the callback uses the
+    index. The index is a slot of root `index`, given to the nodes of
+    the body that read it. A move evaluates those nodes alone, and the
+    state cells, streams, effects and children of the body stay with
+    their element (sections 1.3 and 3.6). The entry keeps its number.
+90. **A binding that a computation in an element body makes** (for the
+    project owner). By the ruling on what a handler binding holds, a
+    binding made in a function body is named by the enclosing instance,
+    the handler and what the binding holds, and by no place. By the
+    ruling on element keys, everything an element body holds is per
+    element key, its streams included. For a binding that a `computed`
+    or a `lift` written in an element body makes, the first gives two
+    occurrences that bind equal state one stream, and the second gives
+    them two. *Assumed:* the first governs (section 3.14). The
+    alternative adds the element keys of the enclosing element bodies to
+    the identity of such a stream.
+91. **The key of an element of a `filter` result.** The elements of a
+    `filter` result are the source's elements. The ruling counts earlier
+    occurrences "in the collection", and does not say which collection
+    that is for a body applied to a derived collection whose elements
+    are those of its source. *Assumed:* an element of a `filter` result
+    keeps the key it has in the source, count included, so that the
+    state of a body applied to the result does not depend on which
+    equal elements the predicate dropped (section 1.3). Keys stay
+    distinct, because the result holds a subset of the source's
+    positions. The alternative counts again in the result.
+92. **State and identity that derive from the index.** By ruling, the
+    position is in no element key, and the state, streams and children
+    of a body stay with their element when it moves. Three cases are
+    not settled by that. *Assumed* (section 1.3), for each:
+    - A state cell declared with a value that derives from the index,
+      such as `cell(index)` in an element body, keeps what it holds
+      when its element moves. The declared value is written when the
+      cell is first created and not again. The alternative writes it
+      again on a move, which would discard what a handler wrote.
+    - A cell or a child that a function body written in an element
+      body makes under an explicit cause that holds the index is named
+      by the cause. After a move the cause names another cell or child,
+      and no evaluation makes the one named before. The alternative
+      refuses a cause that derives from the index at compile time.
+    - A binding that a function body in an element body makes, and that
+      copies the index, is a stream named by the copied value, so a
+      move names another stream. Question 90 covers what else names
+      such a stream.
+93. **The label of the index, for the elements before the position.**
+    The index of an element is a function of the order and the
+    membership before the element, and of nothing after it. *Assumed:*
+    the slot of root `index` has the label of the whole membership the
+    collection iterates (section 2.2), which for a stored list is one
+    stored label and has no part per position. The alternative gives
+    the slot, where the membership is a `fold`, the `fold` through the
+    position, as the prefix rule gives a `findIndex` (section 3.13).

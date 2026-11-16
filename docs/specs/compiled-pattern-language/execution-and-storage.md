@@ -795,11 +795,10 @@ export interface ConeHost {
    * schema, and narrows it to the slot's class when the function first
    * asks for it. A slot of class `identity` yields a reference, and a slot
    * of class `shape` or `enumeration` yields only what that class observes
-   * (section 2.4).
+   * (section 2.4). A slot of root `index` yields the position the element
+   * has in the order its collection iterates (section 2.5).
    */
   slot(slot: Index): unknown;
-  /** The index of the element in its collection, when the body uses it. */
-  readonly index?: number;
   /**
    * The value of an output another cone computes, by index into
    * `Plan.outputs`. Legal only for an output an incoming `ConeEdge` names.
@@ -1104,68 +1103,79 @@ in a transaction of its own (section 6.7).
 keys") define the key of an element. This section says what the runtime does
 with it.
 
-For a collection the runtime keeps, per scope key, an **element table**. It
-holds two things.
+For a collection the runtime keeps, per scope key, an **element table**. A
+key stands at one position of the collection, and the table holds, per
+key:
 
-- **Per key:** the cone instances of the body for that key. Positions that
-  hold one key share the value, the selections, and the reads made through
-  handles and links.
-- **Per position:** the key the position holds, the binding of each element
-  slot at that position, which is the address the element was read from
-  and, for a linked element, the chain to its cell, and the label
-  identifiers resolved at those addresses. Labels are per position
-  (`plan-and-label-templates.md` §1.3): two positions that hold equal plain
-  values at two addresses can carry different labels, and the instantiation
-  key of a position is formed from the labels at that position's addresses.
+- the cone instances of the body for that key, with the value, the
+  selections, and the reads made through handles and links;
+- the position that holds the key, and the binding of each element slot at
+  that position, which is the address the element was read from and, for a
+  linked element, the chain to its cell;
+- the label identifiers resolved at those addresses. Two positions that
+  hold equal plain values at two addresses have two keys and can carry
+  different labels, and the instantiation key of each is formed from the
+  labels at its own addresses (`plan-and-label-templates.md` §1.3).
 
-**What is stored once per key.** A kept output of an element cone is
-stored per position, under the label of that position. Everything else an
-element cone stores is stored once per key, and the positions that hold
-the key share it: the state of an operation declared in the body (section
-6), the stored request and the result of an effect (section 6.4), a path
-of the argument of a child or of an instance the cone makes (sections 4.6
-and 2.8), a side-write, a copied path of a binding or of an inline
-pattern's parameters (sections 4.7 and 4.6), and an entry of the cache
-document (section 8.4). The element slots of those positions can resolve
-to different labels. By ruling, what is stored once per key carries the
-join over the positions that hold the key, formed from the label
-identifiers the table holds per position
-(`plan-and-label-templates.md` §2.6 has the rule for every item of this
-list; section 11, request 51). An output at one position that reads such
-a result through a slot then carries the labels of the other positions
-that hold an equal element, which is looser than today. It is the third
-deliberate exception to "equal to or tighter", after the collection index
-and the static handle read on a run that throws before the read. The
-ruling is marked to be revisited.
+**What is stored per key.** Everything an element cone stores is stored
+per key: a kept output, the state of an operation declared in the body
+(section 6), the stored request and the result of an effect (section
+6.4), a path of the argument of a child or of an instance the cone makes
+(sections 4.6 and 2.8), a side-write, a copied path of a binding or of an
+inline pattern's parameters (sections 4.7 and 4.6), and an entry of the
+cache document (section 8.4). Each carries the label its own rule gives
+it, instantiated for the key from the label identifiers at the one
+position that holds the key (`plan-and-label-templates.md` §2.6 has the
+rule for every item of this list; section 11, request 51). Nothing is
+stored once for two positions, and no label is a join over positions.
+Each occurrence of an element has an element run of its own in the
+runtime of today as well (`listElementKeys` in
+`runtime/runner/src/builtins/list-element-keys.ts`), so this is equal to
+today.
 
-Two positions that hold equal plain values share a key only where the key
-holds no position (section 5.3). Where the body uses the index, or
-instantiates a child, each such position has a key of its own, nothing is
-stored once for two positions, and no join is formed.
+**Labels per value.** By ruling, the callback of a per-element construct
+is a pattern, and labels flow through it per value
+(`plan-and-label-templates.md` §3.6). The runtime forms no label for an
+element body as a whole and stores none per element: the element table
+holds label identifiers per key and per slot, and the label of what a
+cone instance or a handler writes is instantiated from the slots that one
+node reads. A node that reads neither the index nor the collection takes
+nothing of another position and nothing of the collection's membership.
+The compiled path has no argument document per element, so nothing
+carries a join of the evaluation that set an element up, as the argument
+document of an element's instance does in the runtime of today. The
+labels of two positions meet nowhere.
 
-**State, handlers and children over plain values.** Three rules decide
-what an element body may hold where a position can hold a plain value.
-`language-subset.md` §4.4.1 has the diagnostic of the first,
-`collection:shared-element-state`.
+**State, handlers and children.** Everything an element body holds is
+per key, and so per occurrence of an element, whether a position holds a
+link or a plain value and whether or not the body uses the index. The
+position is in no key.
 
-- **A state cell.** A body that declares a state cell without using the
-  index is a compile error, by ruling. Two rows that show equal values
-  would share one cell.
-- **A handler.** A body that binds a handler and declares no state cell is
-  accepted, by ruling. Positions that hold equal values share the key, so
-  they bind equal state and share one stream: the binding is made once
-  for the key, the stream's identifier holds the key (section 5.2), and
-  an event sent from either row is an event on that one stream. The
-  handler's element slots then resolve to the join over the positions
-  that hold the key (`scheduler-and-serving-loop.md` §5.1), which is an
-  assumption (`plan-and-label-templates.md` §8, question 35).
-- **A child.** Where the body instantiates a child, the position joins
-  the key of every position that holds a plain value, by ruling, as it
-  does where the body uses the index. Two equal plain elements then have
-  two children, and each factory of
-  `factories.map((F) => F({ ... }))` has a child per position. The
-  paragraph "Children of a body over plain values" below has what a
-  change of the collection does to them.
+- **A state cell.** A body may declare a state cell over every
+  collection. Two rows that show equal values have two keys and a cell
+  each.
+- **A handler.** The binding is made once for each key, and the stream's
+  identifier holds the key (section 5.2), so two rows that show equal
+  values have two streams. An event names one key, and the handler's
+  element slots resolve at the position that holds the key
+  (`scheduler-and-serving-loop.md` §5.1).
+- **The index.** A cone of the body that reads the index lists the slot
+  of root `index` that names the collection
+  (`plan-and-label-templates.md` §1.3), and `host.slot` yields the
+  position that the key stands at. The runtime binds the slot per key
+  from the element table. When a key's position changes, the slot's
+  value changes, the cone instances of that key that list the slot are
+  stale, and no other cone instance of the key is. The state cells, the
+  streams, the operation state and the children under the key stay. An
+  effect whose request holds the index is requested again, and a child's
+  argument path that holds the index is written again, as for any input
+  that changed.
+- **A child.** A child that the body instantiates is named through the
+  key. Two equal elements have two children, and each factory of
+  `factories.map((F) => F({ ... }))` has a child per occurrence. The
+  paragraph
+  "Children of an element body" below has what a change of the
+  collection does to them.
 
 The runtime evaluates a `map` over the collection as follows.
 
@@ -1173,17 +1183,19 @@ The runtime evaluates a `map` over the collection as follows.
    or plain value. This is the runtime's own observation
    (`plan-and-label-templates.md` §1.3) and is the only read of the
    collection the `map` itself makes.
-2. Compute the key of every position. A position that holds a link is keyed
-   by the identity of the cell it links to. A position that holds a plain
-   value is keyed by the salted hash of the value (section 5.3). The index
-   joins the key of every position when `Collection.bodyUses.index` is
-   set. Where it is not and `Collection.bodyUses.child` is set, the index
-   joins the key of each position that holds a plain value, and of no
-   other. Record each position's binding.
+2. Compute the key of every position. The element part of a position that
+   holds a link is the identity of the cell it links to, and that of a
+   position that holds a plain value is the salted hash of the value
+   (section 5.3). The key holds the element part and the number of
+   earlier positions with the same element part. The position is not in
+   the key. Record each key's position and binding. The position is the
+   value of the key's slot of root `index`, for the cones that list it.
 3. For each key not in the table, create its cone instances and evaluate
-   them with the `element` slots bound to that element. Equal keys share
-   one evaluation.
+   them with the `element` slots bound to that element. No two positions
+   have one key, so each position has an evaluation of its own.
 4. For each key in the table whose cone instances are stale, evaluate them.
+   A key whose position changed has stale the cone instances that list
+   the slot of root `index`, and those alone on that account.
 5. For each key in the table that no position holds any more, drop its cone
    instances and its memo entries, and tear down the instances their
    evaluations made (section 2.8) and the children the body has under the
@@ -1201,7 +1213,7 @@ is stored when it is kept.
 The element table is built by evaluation and not when an instance is
 loaded: a plain value's key is a hash of the value, and a collection
 derived by `map` or `flatMap` has positions only once it was evaluated. The
-scheduler registers its per-position entries for element slots from the
+scheduler registers its entries for element slots from the
 table, after the collection's first evaluation and after each change of
 membership (`scheduler-and-serving-loop.md` §3.2).
 
@@ -1218,65 +1230,45 @@ the derived collection is kept.
 Nested element bodies nest tables: the cone instances of an inner body are
 keyed by the outer element's key and then the inner one's, outermost first.
 
-**Children of a body over plain values.**
-`plan-and-label-templates.md` §1.3 says where a body instantiates a
-child, and records it as `Collection.bodyUses.child`: a factory value
-called in the reactive tier of the body, or a pattern that a `lift` or a
-`computed` written in the body instantiates, whose instances are named
-through the body's `within` (section 5.5). The second kind is an
-assumption there (its open question 37). Two things do not count. An
-instance that only a handler requests is identified by no element key.
-And a statically resolved pattern called in the body is compiled into
-the body: the call is no `Child`, the position does not join the key
-because of it, and a state cell it declares is a state cell of the body,
-which `collection:shared-element-state` reports where the body does not
-use the index (`language-subset.md` §4.4.1). Where element bodies nest,
-the member is set on the collection of every `element` step of the
-child's `within`, so the position joins the key at each level at which
-the position holds a plain value.
+**Children of an element body.**
+A body instantiates a child where a factory value is called in the
+reactive tier of the body, or where a `lift` or a `computed` written in
+the body instantiates a pattern, whose instances are named through the
+body's `within` (section 5.5). Two things are not children of the
+element. An instance that only a handler requests is identified by no
+element key. And a statically resolved pattern called in the body is
+compiled into the body: the call is no `Child`, and a state cell it
+declares is a state cell of the body, per key as any other
+(`language-subset.md` §4.4.1).
 
-- **The key.** For a position `i` that holds a plain value, the key is
-  the pair of the salted hash of the value and `i`, the form the key has
-  where the body uses the index (section 5.3). `i` is the position in
-  the collection the body is applied to. A position that holds a link is
-  keyed by the cell alone, as everywhere, so two positions that link to
-  one cell share one child. The decision is made per position, when the
-  key is computed, from what the position holds.
-- **What is per position.** The key is the key of the body's cone
-  instances, so everything the body has for such a position is per
-  position: its cone instances, the child with its documents, a stream
-  a handler bound in the body yields, and the state of an operation
-  declared in the body.
-- **A state cell of the body itself.** Its key holds the position, so
-  the standing rule that a state cell needs a key that is a cell's
-  identity or holds the index is met, and its document is identified per
-  position. *Assumed,* as `plan-and-label-templates.md` §1.3 assumes it
-  (its open question 34): the compiler accepts such a state cell. The
-  ruling on state cells names the use of the index and not the
-  instantiation of a child, so this is a question for the project owner
-  (section 11, question 64).
-- **A reorder.** A value that moves from position `i` to position `j`
-  leaves the key of `i` and enters the key of `j`. The child of a key
-  that no position holds any more is torn down, and a child is set up
-  for each key that entered. A child does not move with its value. Its
-  state cells, the state of its operations and the settled results of
-  its effects are stored under the key that left, and the child at the
-  new position starts without them and requests its effects again. Two
-  positions that exchange equal values change no key.
-- **An insertion.** Every position at or after the inserted one moves by
-  one. Each position among them that holds a plain value gets another
-  key, unless the position before it held an equal value. Their children
-  are torn down and set up again as for a reorder. An insertion at the
-  head of a collection of `n` plain values with no two equal neighbors
-  tears down `n` children and sets up `n + 1`. An element appended at
-  the end changes no other key.
-- **A removal.** The child of the removed position is torn down. Every
-  position after it moves by one and is treated as for an insertion. A
-  removal at the end changes no other key.
+- **The key.** The child's `within` has the `element` step with the key
+  of the body's cone instances (section 5.3): the element part and the
+  occurrence count, and never the position. So
+  everything the body has for an element is under one key: its cone
+  instances, the child with its documents, a stream a handler bound in
+  the body yields, a state cell, and the state of an operation declared
+  in the body.
+- **A reorder.** A key moves with its element, so the child, its state
+  cells, the state of its operations and the settled results of its
+  effects stay with the element. Elements with the same element part
+  are told apart by their order alone: a move that changes the order of
+  two of them changes no key, and the first in the new order has the
+  child of occurrence 0.
+- **An insertion** adds one key, and a child is set up for it. Where the
+  inserted element has the element part of elements already in the
+  collection, the key that enters is the one with the highest count,
+  whatever the position of the insertion, and each of those elements has
+  the child of its place in their order.
+- **A removal.** The child of the key that left is torn down. Where two
+  equal values stand in the collection and the first is removed, the
+  one that remains becomes occurrence 0 and has the child and the state
+  of the first occurrence. The key that left is that of the last
+  occurrence, and its child is the one torn down.
 - **A plain value edited in place** is another key at the same position:
   the child of the earlier value is torn down and a child is set up for
-  the new one. Today's key for an inline value is its position
-  (`plan-and-label-templates.md` §1.3; `listElementKeys` in
+  the new one. In the runtime of today the key of a value stored in
+  place holds the position (`plan-and-label-templates.md` §1.3;
+  `listElementKeys` in
   `runtime/runner/src/builtins/list-element-keys.ts`), so today such a
   child stays and receives the new value as its argument.
 - **Teardown.** A child whose key no position holds is torn down as an
@@ -1287,26 +1279,25 @@ the position holds a plain value.
   document of the enclosing instance lists the children of an element
   body per element key, as it lists the instances a computation made.
 - **A key that returns.** A child set up under a key that was held
-  before, such as a value moved back to its earlier position, is made
+  before, such as a value that was removed and is added again, is made
   again under the identity of the one that was torn down, with the
   outcome section 2.8 gives ("Made again").
 
-An author who needs a child to stay with its element makes the elements
-cells: a position that holds a link keeps its key, and so its child,
-across a reorder, an insertion and a removal.
+An author who needs a child to stay with a record across an edit of the
+record makes the elements cells: a position that holds a link keeps its
+element part when the value behind the link changes.
 
 ### 2.6 What a change re-evaluates
 
 | Change | Made stale | Evaluated when demanded | Written |
 | --- | --- | --- | --- |
-| A slot of one element changes (a field of a message is edited) | The cone instances of that element's key whose last evaluation read the slot, or read the address through a handle or a link | Those cone instances, once | The changed kept paths of the positions that hold the key |
+| A slot of one element changes (a field of a message is edited) | The cone instances of that element's key whose last evaluation read the slot, or read the address through a handle or a link | Those cone instances, once | The changed kept paths of the position that holds the key |
 | A captured outer value changes | Every element's cone instances that read it | All of them | The changed kept paths |
 | A child of a captured outer output changes, and the body reaches that output only through a `pick` | The cone instances whose `pick` chose that child (section 3.3) | Those | Their changed kept paths |
 | An element is appended or inserted | The collection's membership; no existing element's cone | The new key's cone instances | The new positions; for an insertion, the positions after it move in the stored array (section 4.2) |
 | An element is removed | The collection's membership | Nothing | The stored array loses the position, and a part document of the row is deleted (section 4.10) |
-| Elements are reordered | The collection's membership | Nothing, unless the body uses the index or instantiates a child | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
-| The body uses the index and an element moves | The moved elements' cone instances | The moved elements | Their kept paths |
-| The body instantiates a child and a position that holds a plain value moves | Membership: the key of the earlier position leaves and the key of the new position enters (section 2.5) | The new key's cone instances, and the child set up under it when its result is demanded | The position, the documents of the new child, and the mark of the child that was torn down |
+| Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
+| A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
 | A plain value is edited in place | Membership: the old key leaves and a new key enters | The new key | The position |
 
@@ -1484,8 +1475,9 @@ at a `BodyCall` site of kind `instantiate`.
   integrity (`plan-and-label-templates.md` §2.6), and it is a store the runtime
   owns. Where the making cone is an element cone, the document holds one record
   per element key, under the key, and a key derived from a value is the salted
-  one (section 5.3). The record of one key carries the join of section 2.5
-  ("What is stored once per key"), by ruling. The set of keys says which
+  one (section 5.3). The record of one key carries the label of the one
+  position that holds the key (section 2.5, "What is stored per key").
+  The set of keys says which
   elements the collection has, so it carries the collection's instantiated
   membership label (`plan-and-label-templates.md` §2.6, "The state of an
   operation inside an element body").
@@ -1579,14 +1571,14 @@ export interface ReadFingerprint {
   /**
    * The identifier of the label the read consumed, the pointer labels of
    * the slot's chain included. Absent for a read of an element slot, whose
-   * label is per position.
+   * label is held with the position of the key.
    */
   readonly label?: Hash;
   /** The read was made with `sample()` and does not make the entry stale. */
   readonly sampled?: true;
 }
 
-/** The labels of the element slots at one position that holds the key. */
+/** The labels of the element slots at the position that holds the key. */
 export interface PositionLabels {
   /** The address the element was read from at this position. */
   readonly position: string;
@@ -1615,10 +1607,15 @@ export interface MadeInstance {
 
 /** The memo entry of one cone instance. */
 export interface MemoEntry {
-  /** The slots the evaluation read, by slot index. */
+  /**
+   * The slots the evaluation read, by slot index. The entry of a slot of
+   * root `index` has the address of the membership the collection
+   * iterates, the class `value`, and a fingerprint of the position, so
+   * it differs when the key stands at another position.
+   */
   readonly slots: Readonly<Record<Index, ReadFingerprint>>;
-  /** For an element cone: one record per position that holds the key. */
-  readonly positions?: readonly PositionLabels[];
+  /** For an element cone: the record of the position that holds the key. */
+  readonly position?: PositionLabels;
   /**
    * Reads through handles and links, by index into `Plan.dynamicReads`, in
    * the order they were made.
@@ -1667,8 +1664,8 @@ output values, the values of its side-writes, its selections and picks, and
 the label identifiers its reads consumed. The last is what lets the
 preparation form an instantiation key for a kept output without resolving a
 label again. For an element cone the label identifiers of the element slots
-are held per position, so that each position's instantiation key is formed
-from the labels at its own addresses.
+are held with the position that holds the key, so that the instantiation
+key is formed from the labels at that position's addresses.
 
 The trigger reads of a `dynamic` node are not in the entry. They are part of
 the scheduler's instance record, which is not dropped while something
@@ -1682,8 +1679,8 @@ Two further memos exist beside it.
 - **A body memo**, optional. A body with no handles, no writes and no calls
   is a function of its argument, so its result may be memoized by
   `Body.code` and a hash of the argument, across cone instances and across
-  instances. This is what makes equal plain values in two collections cost
-  one call.
+  instances. Equal arguments in two cone instances then cost one call of
+  such a body.
 
 ### 3.2 Keys and fingerprints
 
@@ -1958,10 +1955,17 @@ path has `*` at the position of each enclosing collection, as
 `$UI/children/*/props/onClick` for a row of a `map` spread into the
 root's children, and the link stored at each position is to the stream
 of the element key there (that document's §1.1, "The result paths of a
-binding in an element body", assumed there under its question 78). A
-child position whose value is the result of a pattern compiled into the
-plan holds the callee's tree in place, with no `$UI` level between the
-position and the tree's paths (its §1.1). That document assumes them
+binding in an element body", assumed there under its question 78).
+Where the callback writes the stream of a binding made outside it, the
+binding has one stream and every position of the collection holds a
+link to it. A child position whose value is the result of a pattern
+compiled into the plan holds the callee's tree in place, with no `$UI`
+level between the position and the tree's paths (its §1.1). An element
+of an assembled collection is no child position, also where the
+collection is spread into the children: where the callback returns the
+result of a pattern, the element is that result, with the callee's tree
+below `$UI`, as `$UI/children/*/$UI/props/onClick`. That document
+assumes them
 (its §8, question 53: how fine the entries are, and that the paths of a
 view node are part of the plan),
 and this document assumes the same paths with it. The alternative there
@@ -2192,10 +2196,11 @@ body instantiates (`plan-and-label-templates.md` §3.15).
   old ones at their paths. The old child's state cells are found again
   where the new plan declares a cell under the same name, and are otherwise
   left unreferenced. A child inside an element body has the element key
-  as a step of `within`. Where a position holds a plain value, that key
-  holds the position (section 2.5, "Children of a body over plain
-  values"), and a factory that is itself the element, as in
-  `factories.map((F) => F({ ... }))`, is part of the key: another
+  as a step of `within`, so each occurrence of an element has a child of
+  its own (section 2.5, "Children of an element body"). A factory that is
+  itself the element, as in
+  `factories.map((F) => F({ ... }))`, is the element part of the key:
+  another
   factory at the position is another key, so the earlier child is torn
   down and the new one has a result cell of its own.
 - **A child a handler requested** has a result cell named from the handling
@@ -2273,12 +2278,10 @@ the binding was made.
   the original element. A path so bound reads the default that the
   declaration of the slot has where nothing is stored there, whatever the
   handler's state type declares (section 2.2). In an element body the
-  binding is made once per element key. Positions that hold equal plain
-  values share a key where
-  the body neither uses the index nor instantiates a child, and they
-  then share one stream, by ruling (section 2.5): the two rows hold links
-  to one identifier, and an event from either is an event on that
-  stream. The stream has an identifier (section 5.2), and
+  binding is made once per element key. Each occurrence of an element
+  has a key of its own, so two rows that show equal plain values hold
+  links to two streams (section 2.5), and an event on either names one
+  key. The stream has an identifier (section 5.2), and
   wherever the stream is a kept output, such as an event attribute in the
   rendered tree or an exported stream of the result, the document that
   stores the path holds a link to that identifier.
@@ -2413,7 +2416,10 @@ facts about the current layout.
   cell per element key under the map's container
   (`listElementResultCell` in
   `runtime/runner/src/builtins/list-coordinator-plan.ts`) and runs the
-  callback's pattern into it. The container is a further document.
+  callback's pattern into it. The container is a further document. Each
+  element's instance has an argument document, which the coordinator's
+  transaction writes and which carries that transaction's join on every
+  path (`plan-and-label-templates.md` §3.6).
 - **A document per record written into an array through a cell.** A plain
   object that `set()`, `push()` or `addUnique()` puts into an array becomes
   a document of its own, and the array holds a link to it
@@ -2590,13 +2596,13 @@ createRef({}, {
   cause:  <path>,
 })
 
-step = { element: <collection name>, key: <hashed key>, nth: <ordinal> }
+step = { element: <collection name>, key: <hashed key> }
 ```
 
 - `within` has one step per kept collection whose position the path passes
   through. `key` is the hash of the secret of the space and the element
   key of section 5.3, for every key: a cell's identity is hashed under the
-  secret as a plain value is, and so is the pair with the index
+  secret as a plain value is, with the occurrence count
   (`plan-and-label-templates.md` §2.3). A storage link is part of what is
   stored, and a reader of the document that holds it can see the
   identifier it names: for a row, a reader of the collection's membership.
@@ -2604,11 +2610,10 @@ step = { element: <collection name>, key: <hashed key>, nth: <ordinal> }
   with one derived from a guessed cell. Hashed under the secret, the
   identifier tells such a reader which positions hold the same row before
   and after a change of membership, which the membership label covers,
-  and nothing of the cell or the value the row was computed from. `nth` is
-  present where several positions of the collection hold the same key,
-  and is the ordinal of the position among them. Two rows that show equal
-  plain values share a cone and not a part document, because their labels
-  are per position.
+  and nothing of the cell or the value the row was computed from. No two
+  positions of a collection have one key (section 5.3), so the key names
+  one row, and two rows that show equal plain values have two part
+  documents.
 - `cause` is the path from the innermost row on it, or from the result
   root where there is none, down to the split point. Its segments are
   property names and the indexes of arrays that are not kept collections,
@@ -2841,19 +2846,19 @@ space (section 4.10).
 
 ### 5.3 Element keys and the salt
 
-The `key` of an `element` step is:
+The `key` of an `element` step has an element part and an occurrence
+count.
 
-- for a position that holds a link: the space and identifier of the cell
-  the link resolves to, and its path, without the link's scope;
-- for a position that holds a plain value: the hash of a secret of the
-  space and the canonical form of the value;
-- with the index, where the body uses it: the pair of the above and the
-  index;
-- for a position that holds a plain value, where the body instantiates a
-  child and does not use the index: the pair of the hash above and the
-  index, which is the same form (section 2.5, "Children of a body over
-  plain values"). A position of such a body that holds a link keeps the
-  first form.
+- The element part for a position that holds a link is the space and
+  identifier of the cell the link resolves to, and its path, without the
+  link's scope.
+- The element part for a position that holds a plain value is the hash of
+  a secret of the space and the canonical form of the value.
+- The occurrence count is the number of earlier positions of the
+  collection that have the same element part. It is in every key, so no
+  two positions of a collection have one key.
+- The position is in no key, also where the body uses the index. A cone
+  that reads the index is given it as a slot (section 2.5).
 
 The secret is a runtime secret of the space, minted and read by the runtime
 alone (`ensureRuntimeSecret`, described in
@@ -2885,11 +2890,9 @@ Two consequences.
   server will name. What a client shows for such state before the server's
   result arrives belongs to `scheduler-and-serving-loop.md`.
 
-A state cell over plain values exists only where the position is in the
-key (section 2.5), so the first case is a state cell keyed by a salted
-value hash and an index. A stream of a handler bound over plain values
-exists with or without the position: without it, the key is the salted
-value hash alone, and equal values share the stream.
+A state cell over plain values is keyed by a salted value hash and an
+occurrence count, and so is a stream of a handler bound over plain
+values. Two equal values have two counts, so they share neither.
 
 ### 5.4 Cells and instances a handler invocation creates
 
@@ -3004,7 +3007,9 @@ an instance: createRef({ instance: <ordinal> } | { cause: <cause value> },
   place it was made at (`plan-and-label-templates.md` §1.3 and §3.14). A
   `computed` inside an element body, or inside a compiled-in call, that
   binds one handler to equal state for two element keys or at two sites
-  makes one stream.
+  makes one stream. For two element keys that is *assumed* there, beside
+  the ruling that everything an element body holds is per element key
+  (its §8, question 90).
 - `<bound keys>` holds one key per path of the handler's state, by what
   `Binding.state` records for the path. For a copied path, a scalar or a
   container the body computed, it is the salted hash of what the binding's
@@ -3203,9 +3208,9 @@ there is no key set that would need the collection's membership label.
 The cost is that the number of documents grows with the number of
 elements.
 
-The state of one key is stored once for the positions that hold the key.
-Where those positions resolve to different labels, it carries the join
-over them, by ruling (section 2.5, "What is stored once per key").
+The state of one key belongs to the one position that holds the key, and
+carries the label that position's slots resolve to (section 2.5, "What
+is stored per key").
 
 The keys an aggregate or an index holds contributions for are those of
 the collection the operation folds, and they are paths of the operation's
@@ -3216,8 +3221,8 @@ membership of that collection (section 6.5).
 ### 6.1 Aggregates
 
 - **State.** Per element key: the contribution (a count, a truthiness, a
-  number, a key function's result) and the number of positions that hold
-  the key. The folded value, in the representation the operation needs to
+  number, a key function's result). The folded value, in the
+  representation the operation needs to
   update it in constant time, such as the exact partial sum for `sum`. For
   `minBy` and `maxBy`, the winning key. The multiset of label identifiers
   the fold joins, as a count per identifier
@@ -3245,8 +3250,8 @@ membership of that collection (section 6.5).
 
 ### 6.3 Collection indexes
 
-- **State.** Per element key: the index key the key function produced and
-  the number of positions. Per index key: the bucket, as the element
+- **State.** Per element key: the index key the key function produced.
+  Per index key: the bucket, as the element
   references in source order for `group` mode and the winning reference
   for `key` mode. The set of occupied index keys.
 - **Readers.** `lookup`, `keys` and `keyEntries` read paths of this
@@ -3574,7 +3579,7 @@ record where the plan and the document determine them:
   5.2).
 - A slot with root `element` is bound to the element at the output's
   position, through the collection's source and, for a derived collection,
-  the origins of section 7.3.
+  the origins of section 7.3. A slot with root `index` is that position.
 - A slot with root `event`, `cause` or `binding` belongs to a handler's
   write edge, not to a kept output.
 
@@ -3747,9 +3752,9 @@ cache's state document.
 
 For an element cone the cache document holds one entry per element key,
 under the key (section 8.4), and a key derived from a value is the salted
-one (section 5.3). An entry is stored once for the positions that hold
-its key, so a cached output carries the join of section 2.5 ("What is
-stored once per key") where those positions resolve to different labels.
+one (section 5.3). An entry belongs to the one position that holds its
+key, so a cached output carries the label of that position (section 2.5,
+"What is stored per key").
 The set of keys says which elements the collection has, so it carries
 the collection's instantiated membership label
 (`plan-and-label-templates.md` §2.6, "The state of an operation inside an
@@ -4365,16 +4370,17 @@ about size that this document owns (4.10); an event is routed to an
 instance that is not loaded through a stream index (4.7); a read of a cell
 whose writer is in an instance that is not loaded returns the stored
 value where the basis rows show it current, and loads the instance only
-where they show it stale (1.3, 1.4, 2.4, 3.4); a state cell in an element
-body over plain values that does not use the index is refused, and a
-handler bound there is accepted, with one stream for equal elements (2.5,
-4.7, 5.3); what is stored once per element key carries the join over the
-positions that hold the key, which is the third deliberate exception to
-"equal to or tighter" and is marked to be revisited (2.5, 6); an instance
+where they show it stale (1.3, 1.4, 2.4, 3.4); an element key holds the
+count of earlier occurrences of the same value or identity, so equal
+elements have two keys, and everything an element body holds is per key:
+a state cell in an element body over plain values is legal, and a
+handler bound there has a stream per occurrence (2.5, 4.7, 5.3); nothing
+is stored once for several positions, so no stored label joins the
+labels of two positions (2.5, 6); an instance
 a `lift` or a `computed` makes is identified by the enclosing instance,
 the body, the site and an ordinal or an explicit cause, and such a body
-requests no effect directly (2.8, 5.5); the position joins the element
-key where a body over plain values instantiates a child (2.5, 5.3); an
+requests no effect directly (2.8, 5.5); a child an element body
+instantiates is per element key, without the position (2.5, 5.3); an
 explicit cause in a handler names the same thing on every event, with the
 existence label fixed at first creation (5.4); the scheduler is switched
 per space, so a space is migrated as a whole and holds no instances of
@@ -4428,8 +4434,8 @@ computation makes:
 33. **An instance made again under the identity of one that was torn down**
     (section 2.8). The identity is ruled. With an ordinal as the identity,
     a list that shrinks and grows makes instance number 2 again for
-    another item, and a child of an element body over plain values is
-    made again when its value returns to its position (section 2.5).
+    another item, and a child of an element body is made again when a
+    value that was removed is added again (section 2.5).
     *Assumed:* the
     new instance finds the state cells and operation state stored under
     that identity where they were not deleted yet, as an element whose key
@@ -4475,25 +4481,12 @@ computation makes:
 <!-- The list restarts so that the numbers stay as cited. -->
 
 64. **A state cell in an element body that instantiates a child** (section
-    2.5). Where a body over plain values instantiates a child, the
-    position joins the key by ruling, so a state cell the body itself
-    declares has a key that holds the position, which is what the
-    standing rule for state asks. The ruling that refuses a state cell
-    names a body that does not use the index, and such a body does not
-    use it. *Assumed:* the state cell is accepted, and is stored per
-    position like the child. It is then lost with the child when the
-    element moves. The alternative refuses it unless the body uses the
-    index, which keeps "uses the index" as the one condition an author
-    has to know.
-67. **The cost of a child per position** (section 2.5). An insertion or a
-    removal ahead of `n` plain values tears down and sets up up to `n`
-    children, and each new child requests its effects again and starts
-    with empty state. Today the child of an inline value belongs to the
-    position and receives the new value as its argument. *Assumed:*
-    accepted as what the ruling means, with the advice to make the
-    elements cells. The alternative keys such a position by the
-    position alone, which keeps the child across an edit in place and
-    gives a moved value's child to the value that takes its position.
+    2.5). Not open: a state cell in an element body is legal whatever
+    else the body does, and it is per element key as the child is. The
+    entry keeps its number.
+67. **The cost of a child per position** (section 2.5). Not open: a child
+    is per element key and moves with its element, so an insertion or a
+    removal sets up or tears down one child. The entry keeps its number.
 
 Added by the ruling that the scheduler is switched per space (section 9):
 
@@ -4709,9 +4702,9 @@ label is concerned:
     state is per element key, the layout is this document's choice and
     changes no label, and in a document that held several keys the key set
     would carry the collection's membership label. This document chooses
-    one state document per key (section 6 here). What is stored once per
-    key where positions differ in label carries the join, by ruling
-    (section 2.5 here).
+    one state document per key (section 6 here). The state of one key
+    carries the label of the one position that holds the key (section
+    2.5 here).
 25. **The back-link of a state cell.** Met: a state cell document keeps the
     `result` back-link, which its §3.16 has `resultOwnerOf` read, and
     carries no pattern reference, manifest or setup record.
@@ -4772,16 +4765,15 @@ label is concerned:
     ahead of the handler's write edges. The preparation does not
     instantiate it again, and a label the body stages afterward does not
     enter it.
-51. **What is stored once per key** (section 2.5). Met by its §2.6 and
-    by ruling, which list everything an element cone stores
-    once per key: the state of an operation, the stored request and the
+51. **What is stored per key** (section 2.5). Met by its §2.6, which
+    lists everything an element cone stores per key: a kept output, the
+    state of an operation, the stored request and the
     result of an effect, a path of the argument of a child or of an
     instance the cone makes, a side-write, a copied path of a binding or
     of an inline pattern's parameters, an entry of the cache document,
-    and the record in the instances document. Each carries the join over
-    the positions that hold the key. The join is ruled, as the third
-    deliberate exception to "equal to or tighter", and is to be revisited
-    (section 2.5).
+    and the record in the instances document. A key stands at one
+    position, and each carries the label of that position. No label is a
+    join over positions (section 2.5).
 
 75. **How value code reads the child a dynamic key chose** (section
     2.2). Open, as its question 46. `ConeHost.slot` takes a slot index
@@ -4827,13 +4819,9 @@ label is concerned:
     chain of its own. The memo's fingerprint of the slot is over all of
     them.
 65. **Which element bodies instantiate a child** (sections 2.5 and 5.3).
-    Met by its §1.1, §1.3 and §2.6. `Collection.bodyUses.child` says
-    that a body applied to the collection instantiates a child, for a
-    factory value called in the body's reactive tier and for a pattern a
-    `lift` or a `computed` in the body instantiates. A statically
-    resolved pattern that the compiler compiles into the body does not
-    set the member. Under nested element bodies the member is set on the
-    collection of every `element` step. And its §2.6 gives the record of
+    Met by its §1.3 and §2.6. A child is named through the element key
+    and puts no position in it, so the plan records nothing in the
+    `Collection` for it. Its §2.6 gives the record of
     the children of an element body, which this document lists in the
     instances document per element key, the collection's membership
     label.
@@ -4851,10 +4839,8 @@ To `language-subset.md`:
     that document has no form by which an author writes it (its open
     question 10), so a compiled plan leaves `Cone.cache` absent and the
     runtime decides.
-68. **The names of two diagnostics** (sections 2.5 and 2.8). Met by its
-    §10.3: the error for a state cell in an element body over
-    plain values that does not use the index is
-    `collection:shared-element-state`, and the warning for an
+68. **The name of a diagnostic** (section 2.8). Met by its
+    §10.3: the warning for an
     instantiation inside a loop or a callback of a function body that has
     no `.for(cause)` is `function-body:instantiation-without-cause`.
 27. **Stored source.** Section 9.4 compiles an instance's stored source.

@@ -486,8 +486,9 @@ refused (`collection:callback-parameters`).
   `xs.map(toRow)`. The author writes the arrow,
   `xs.filter((x) => Boolean(x))` and `xs.map((x) => toRow(x))`. A function
   passed by name receives the index and the whole array as its second and
-  third arguments, so whether the index is part of an element's key
-  (below) would depend on a declaration written elsewhere.
+  third arguments, so whether a node reads the index, and with it the
+  label of the collection's order (below), would depend on a declaration
+  written elsewhere.
 - **A third parameter,** which is the whole array.
 - **A default value or a rest element,** on a parameter or inside its
   destructuring pattern. An element is not a constant expression (§4.2).
@@ -516,170 +517,159 @@ results depend on the order of the elements, as `map`'s per-element results
 do not. The label rules are defined in `plan-and-label-templates.md`
 (§3.13) and `builtin-inventory.md`.
 
-**Element keys.** Each element of a `map` has a key. The key is the
+**Element keys.** Each element of a `map` has a key. The key holds the
 element's value when the element is a plain value, and the identity of the
-element's cell when it is not. The body of the callback is one or more
+element's cell when it is not. In both cases it also holds the count of
+earlier occurrences of the same value or identity in the collection, so
+two equal elements have two keys. The position is never in the key, also
+where the callback uses the index.
+The body of the callback is one or more
 cones, and each is evaluated once per element key. A cone as it is
 evaluated for one key is a cone instance (`execution-and-storage.md`,
 Terms and §2.1). An element that moves keeps its cone instances, so
 reordering, inserting into, or removing from a list does not recompute the
-elements that stayed. Stored per-element state from earlier versions of a
+elements that stayed, in almost all cases. Stored per-element state from
+earlier versions of a
 pattern is not preserved by this rule; it is chosen for recomputation
 cost. A key derived from a value is salted with a secret of the space
 before it enters a document identifier, so that an identifier does not
 reveal the value (`plan-and-label-templates.md`, §1.3).
 
-**The index parameter costs the author that property.** The index is part
-of an element's key when the callback declares the index parameter and its
-body uses it. It is also part of the key where a body over plain values
-instantiates a child ("A child per position", below). In no other case
-is it. The cone instances of such a key cannot move:
-inserting at the front of a list of a thousand elements evaluates the body
-again for a thousand keys, where a callback without the index evaluates it
-for one. The compiler reports the use as a hint (`collection:index-keyed`).
-A callback that declares the index and does not use it is keyed without
-it.
+**The index parameter keeps that property.** A callback that declares
+the index parameter and uses it is keyed as any other. The index is given
+to the nodes of the body that read it: a declaration, the returned
+expression, a `computed`, a handler binding, the argument of a child, or
+the request of an effect. When an element moves, the nodes that read the
+index are evaluated again for it, and nothing else of the body is. Its
+state cells, its streams, its effects, and its children stay with it. An
+effect whose request holds the index is requested again, and a child
+whose argument holds the index has that argument path written again, as
+for any input that changed. A handler whose state holds the index is
+given the position its element has when the event arrives.
+
+What the index costs is those evaluations and a label. Inserting at the
+front of a list of a thousand elements evaluates the nodes that read the
+index for a thousand keys, where a callback without the index evaluates
+its body for one. A node that reads the index carries the label of the
+collection's membership and order ("Labels in a callback", below). The
+compiler reports the use as a hint (`collection:index-read`). A callback
+that declares the index and does not use it has neither cost.
 
 **Names inside a callback.** The identifier of a state cell declared inside
 a collection callback derives from the instance, from each compiled-in call
 and each collection callback that encloses the declaration, outermost
 first, and from the cell's name. An enclosing callback contributes the name
 of its collection and the key of the element. So per-element state follows
-the element when the element moves, and does not when the key includes the
-index. The cell's name and the collection's name are given by the naming
+the element when the element moves, also where the body uses the index.
+The cell's name and the collection's name are given by the naming
 rule of [§4.6](#46-captures), and the same derivation names a child
 instance, a durable operation, and the stream of a handler binding declared
 inside a callback (`plan-and-label-templates.md`, §1.3).
 
-**Equal plain values may not share a state cell.** Two elements with the
-same plain value have the same key, so they share their cone instances.
-That is sound for a value, which is a function of the element. It is wrong
-for a state cell: two rows that show `"glazed"` would share one "expanded"
-flag. So the body of a per-element construct (`map`, `filter`, `flatMap`,
-the predicates, and the selector callbacks of the aggregates and indexes)
-over a collection of plain values is refused when it declares a state cell
-without using the index parameter (`collection:shared-element-state`).
+**Equal elements share nothing.** Everything the body of a per-element
+construct holds is per element key, and so per occurrence: its state
+cells, the streams of its handler bindings, its effects, and its
+children. Two rows that show `"glazed"` have an "expanded" flag each. So
+the body of a per-element construct (`map`, `filter`, `flatMap`, the
+predicates, and the selector callbacks of the aggregates and indexes)
+may declare a state cell over any collection, a collection of plain
+values included, with or without the index parameter. A body with no
+state of its own (no handler, no state cell, no effect, no child)
+computes the same values for two equal elements. The design does not
+reuse one outcome for both.
 
-**A handler binding over plain values needs no index.** A body that binds
-a handler, in any of the spellings of §5.2, and declares no state cell is
-accepted. Every path of the handler's state is the element, a value
-computed from the element, or a value captured from outside the callback.
-Two elements with equal values therefore bind the handler to equal state,
-and they share one stream, which handles an event from either row as two
-streams would. A binding made in a function body is one stream on the same
-argument ([§5.2](#52-runtime-calls)).
+Equal elements are told apart by their order alone. Where two equal
+values stand in a list and the first is removed, the one that remains is
+the first occurrence and has the state of the first occurrence. The state
+dropped is that of the last occurrence. An author who needs state that
+stays with one of two equal records gives the records something that
+distinguishes them.
 
-For these rules the checker decides "plain value" statically, from the
-element type and from where the collection comes from.
+**A handler binding in a callback.** A body binds a handler in any of the
+spellings of §5.2. Every path of the handler's state is the element, a
+value computed from the element, or a value captured from outside the
+callback. Each occurrence of an element has a stream of its own, also
+where two elements are equal (`plan-and-label-templates.md`, §1.3). A
+binding made in a function body is named by what it holds and not by
+where it is made, so two bindings there with equal state are one stream
+([§5.2](#52-runtime-calls)).
 
-- **Always plain:** an element type that is a primitive, a literal, `null`,
-  `undefined`, a factory type, or a union of those. A factory value is a
-  reference to a compiled definition (§7.2) and has no cell of its own, so
-  two equal factories in a list have one key.
-- **Never plain:** an element type that is a cell handle type or a pattern
-  instance. Such an element is identified by its cell.
-- **An object, array, or tuple element type** is plain when the program
-  builds the records: the collection is an array literal, a module-scope
-  constant, declared in the module or imported from another module of the
-  program, the result of a tier-R construction such as another `map`
-  that builds object literals, or the result of a standard-library member
-  marked "R" that builds its elements, such as `Object.entries`. It is not
-  plain when the collection is read
-  from the pattern's input or from a cell. A record written into a stored
-  array by `set`, `push`, or `addUnique` is stored as a document of its own
-  and the array holds a link to it (`builtin-inventory.md`, "Element
-  keys"), so such elements are identified by their cells.
-- **The result of a function body** (a `computed` that is not promoted, a
-  `lift`, or an authored function) with such an element type is plain
-  where the body built the records, and not plain where it passes on
-  records it read. A record a body passes on unchanged is kept as a link
-  to where it was read (`footprint-analysis.md`, §3.8), so the elements of
+**Labels in a callback.** By ruling, the callback of a per-element
+construct is a pattern for the label rules, and labels flow through it per
+value. The element has the label of its own slot of the collection and of
+what that slot holds. The index has a label only for a node that reads
+it, and the whole collection only where the body captures it by name.
+Each captured value has its own label. A node of the body, such as a
+`computed`, a handler, or the argument of a child, takes the labels of
+what it reads and closes over, and nothing of what another node of the
+same body reads. So an inline handler that closes
+over the element alone writes under the event and the element, also where
+the same callback shows `index + 1` in another place. An author does not
+have to move a handler out of a callback to keep the label of the list's
+order off what the handler writes (`plan-and-label-templates.md`, §3.6
+and §3.12).
+
+**Plain values and links.** Whether an element is a plain value or a link
+is a fact of the stored collection, and the runtime reads it when it
+computes the key. No rule of the checker depends on it. An author can
+tell which it is from the element type and from where the collection
+comes from.
+
+- A primitive, a literal, `null`, `undefined`, and a factory value are
+  plain values. A factory value is a reference to a compiled definition
+  (§7.2) and has no cell of its own.
+- A cell handle and a pattern instance are identified by their cells.
+- An object, an array, or a tuple is a plain value where the program
+  builds it: in an array literal, in a module-scope constant, in a tier-R
+  construction such as another `map` that builds object literals, in a
+  standard-library member marked "R" that builds its elements, such as
+  `Object.entries`, or in a function body that built the records.
+- A record written into a stored array by `set`, `push`, or `addUnique`
+  is stored as a document of its own, and the array holds a link to it
+  (`builtin-inventory.md`, "Element keys"). A record a function body
+  passes on unchanged is kept as a link to where it was read
+  (`footprint-analysis.md`, §3.8), so the elements of
   `computed(() => { ...; return donuts.filter(isFresh); })` are links to
-  the original records and are identified by their cells. The checker
-  reads this from the body's record: the result is not plain at its
-  element path where `Body.outputs` has a `reference` there, which says
-  that every element is a reference the body was given, and plain where it
-  has none (`plan-and-label-templates.md`, §1.1).
-- **A collection that tier R derives without building elements** has the
-  plainness of its source. The elements of a tier-R `filter` are the
-  source's elements, with their keys (`plan-and-label-templates.md`,
-  §1.3), and `find` yields one of them. A promoted `computed` is its body
-  as a tier-R expression, so its result is classified as that expression
-  is.
-- **A union** of a plain and a non-plain type is plain.
-
-A refused body has two rewrites. Take the index and use it, which puts
-the position in the key at the cost described above. Or make the elements
-cells, by keeping the list in a cell that a handler writes records into,
-or by mapping over a list of records that carry what distinguishes them.
+  the original records. Such elements are identified by their cells.
+- The elements of a tier-R `filter` are the source's elements, with
+  their keys (`plan-and-label-templates.md`, §1.3), and `find` yields one
+  of them.
 
 ```tsx
 // Shown for illustration only.
-// Refused: two "glazed" rows would share `open`.
+// Two "glazed" rows have an `open` cell each.
 const rows = glazes.map((glaze) => {
   const open = new Writable(false);
   return <li onClick={() => open.set(!open.get())}>{glaze}</li>;
 });
 
-// Accepted: the index is in the key.
-const rows = glazes.map((glaze, index) => {
-  const open = new Writable(false);
-  return (
-    <li onClick={() => open.set(!open.get())}>{index + 1}. {glaze}</li>
-  );
-});
-
-// Accepted: a handler binding and no state cell. Two "glazed" rows share
-// one stream, and an event from either chooses "glazed".
+// Two "glazed" rows have a stream each, and an event on either chooses
+// "glazed".
 const buttons = glazes.map((glaze) => (
   <button onClick={chooseGlaze({ order, glaze })}>{glaze}</button>
 ));
 ```
 
-One case is outside what the checker can decide: an input declared with an
-object element type whose stored array holds inline records, because a
-computation elsewhere produced it. The checker treats it as not plain.
-*Assumed:* a body over such a list that declares a state cell without the
-index compiles, and the cone instances of an element that arrives inline
-fail at run time (`plan-and-label-templates.md`, §1.3;
-[§13](#13-open-questions), question 2).
-
-**A child per position.** Where the body of a per-element construct over
-plain values instantiates a child, the position joins the element key, as
-it does when the callback uses the index. So two equal plain elements have
-a child each, with state of its own, and
+**A child per occurrence.** A child that the body of a per-element
+construct instantiates is named through the element key, so each
+occurrence has a child of its own, with state of its own.
 `factories.map((Card) => Card({ donut }))` over a list of factory values
-has a child per position, whether or not two of the factories are equal.
-The plan records it as `Collection.bodyUses.child`, beside
-`Collection.bodyUses.index` (`plan-and-label-templates.md`, §1.1 and
-§1.3, which owns the key). The author pays what the index costs: the cone
-instances of such a body do not move with their elements, and an insertion
-at the front evaluates the body again for every position after it. Where
-per-element constructs nest, the position joins the key at every
-enclosing level whose elements are plain values, so that equal elements
-of the outer collection do not share the inner body's child. *Assumed*
-there with the second way below (its §8, question 37).
+has a child per occurrence, whether or not two of the factories are
+equal. The position is in no key, so a child
+moves with its element (`plan-and-label-templates.md`, §1.3, which owns
+the key).
 
-A body instantiates a child, for this rule, in two ways. The first is the
-ruled one: it calls a pattern factory value in tier R
-([§4.4.2](#442-patterns-and-handlers-as-callees)). The second is
-*assumed,* with `plan-and-label-templates.md` (§8, question 37): a `lift`
-or a `computed` written in the body instantiates a pattern
+A body instantiates a child in two ways. It calls a pattern factory
+value in tier R ([§4.4.2](#442-patterns-and-handlers-as-callees)). Or a
+`lift` or a `computed` written in the body instantiates a pattern
 ([§5.2](#52-runtime-calls)), whose instances are named through the
-element as well. Two things are not children. An instance that only a
-`handler`, an `action`, or an inline event handler makes is identified by
-the handling or by an explicit cause, and by no element key. And a
-statically resolved pattern called in the body is compiled into the
-surrounding instance: it has no result cell of its own, and a state cell
-it declares is a state cell of the body for the rule above.
-
-The position is then part of the key of that body, so a state cell
-declared beside the child has a key per position and is not shared.
-*Assumed,* with `plan-and-label-templates.md` (§8, question 34), the
-built-in inventory, and the footprint analysis: such a body is accepted,
-and `collection:shared-element-state` does not report its state cell.
-Deleting the child from such a body then makes the cell an error
-([§13](#13-open-questions), question 21).
+element as well. Two things are not children of the element. An instance
+that only a `handler`, an `action`, or an inline event handler makes is
+identified by the handling or by an explicit cause, and by no element
+key. And a statically resolved pattern called in the body is compiled
+into the surrounding instance: it has no result cell of its own, and a
+state cell it declares is a state cell of the body, per occurrence as
+any other.
 
 #### 4.4.2 Patterns and handlers as callees
 
@@ -3574,7 +3564,7 @@ none of the other eight.
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
 | `collection:reduce-accumulator` | error | A `reduce` in tier R whose accumulator type is a code type, such as a `Map`, a `Set`, or a function | Accumulate into an object, an array, or a primitive. To fold into a `Map`, write the loop inside `computed(() => ...)` and return data | new |
-| `collection:index-keyed` | hint | A per-element callback uses its index parameter, so its element cones are keyed by position and recompute when elements move (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
+| `collection:index-read` | hint | A per-element callback uses its index parameter, so the nodes that read it are evaluated again for every element whose position changes, and carry the label of the collection's membership and order (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
 | `cell:unsupported-method` | error | A method of the runtime's cell object that the API does not declare (§4.7), such as `asSchema` or `getAsNormalizedFullLink`; also `setSchema`, which the API declares as deprecated. In every tier | The declared method that does the job, or a declared type in place of a re-typing ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)) | new |
 | `cell:collection-method-in-function` | error | `map`, `filter`, or another collection method of §4.7 called on a cell handle in tier F. The compiler does not rewrite the call | One of two corrections. To keep the result reactive, wrap the expression in an inline `pattern(...)` and instantiate it: `pattern(() => cell.map(...))({})`. To process the values the cell holds when the body runs, read first: `cell.get().map(...)`. For an aggregate or an index method (`count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy`), which a JavaScript array does not have, the second correction is `get()` followed by a loop or a JavaScript `reduce` | new |
 | `cell:cause-not-literal` | error | In tier R, the argument of `X.for(cause)` on a cell constructor, or of `h.for(cause)` on a handle, is not a string literal (§4.7) | Write a string literal, which names the cell in place of the variable's name: `Writable.for<number>("count")`. For a cell per element, declare the cell in the body of the collection callback, where the element's key is part of its identifier. A cause computed from data is legal only in a function body | new |
@@ -3610,7 +3600,6 @@ none of the other eight.
 | `function-body:effect-in-computation` | error | An effectful built-in requested in a `lift`, a `computed`, or an `assert`, directly or through an authored function that one of them or tier R calls (§5.2). `query` on a SQLite handle is such a request (§4.7). An effect in the body of a pattern the computation instantiates is not reported. Also a staged change (`grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob`) requested in tier R, directly or through an authored function tier R calls: only a `handler`, an `action`, or an inline event handler requests one (§4.4, §5.2) | Write the effect in a pattern, inline or named, and instantiate the pattern in the computation: `PriceQuote({ url: priceUrl(order) })`, where the body of `PriceQuote` calls `fetchJson`. Or request the effect in the pattern body, with the computed value as its input: `const price = computed(...); const quote = fetchJson({ url: priceUrl(price) });`. For a staged change, in a computation or in tier R: request it in a `handler` or an `action` | new |
 | `function-body:event-context-in-computation` | error | `eventKey()` or `currentPrincipal()` in a `lift`, a `computed`, an `assert`, or the pattern body, directly or through an authored function they call | Read it in the `handler` or `action` and pass or store the value | new (a run-time throw today) |
 | `function-body:wish` | error | A call of `wish` in tier F: in a `handler`, an `action`, an inline event handler, a `lift`, a `computed`, an `assert`, or an authored function, whatever calls it (§5.2). `wish` is a structural built-in of tier R, and a function body has no record for one. *Assumed* (§5.2) | Call `wish` in the pattern body and read its result in the function body: `const profile = wish({ query: "#profile" });`. Where the query depends on a value the body computes, call it in the body of a pattern the function body instantiates | new |
-| `collection:shared-element-state` | error | The body of a per-element construct over a collection of plain values (§4.4.1) declares a state cell without using the index parameter, so elements with equal values would share the cell. A module-scope constant is such a collection whether the module declares it or imports it. A body that binds a handler and declares no state cell is not reported: equal elements bind equal state and share one stream. *Assumed* (§4.4.1): neither is a state cell in a body that instantiates a child, whose key holds the position. A state cell that a statically resolved pattern called in the body declares is a state cell of the body | Declare the index parameter and use it in the body, which puts the position in the element's key. Or make the elements cells: keep the list in a cell that a handler writes records into | new |
 | `function-body:instantiation-without-cause` | warning | A pattern instantiation without `.for(cause)` inside a loop, or inside a function written in the body, such as the callback of a JavaScript `map`, in a `lift`, a `computed`, an `assert`, or an authored function that one of them or tier R calls (§5.2). The instances of such a site are named by the order in which an evaluation makes them. Not reported in a `handler`, an `action`, or an inline event handler, and not for the callback of an inline `pattern(...)`, which is a tier-R body | Give each instance a cause taken from the record it belongs to: `PriceQuote({ url }).for(order.id)`. Without one, removing or inserting a record gives each later instance the argument of another record. Leave the site as it is where the list only grows at its end | new |
 | `verb-result:undeclared-return` | error | A `handler` or `action` without a result type argument returns a plain value from a block body | Declare the result (`action<Event, Result>(...)`, `handler<Event, State, Result>(...)`), or use a bare `return;` | carries |
 | `mergeable-push:read-then-push` | warning | A `handler`, an `action`, or an inline event handler reads a mergeable collection through a cell handle and then appends to it through the same handle, with `push` or `pushAll`. `addUnique` is not reported: it is the merge-safe operation the message names. A `lift` or a `computed` is not reported here: an append in one is `side-write:not-idempotent`. A read or an append in an authored function the body calls counts as the body's (`footprint-analysis.md` §3.6, §6.4). *Assumed* ([§13](#13-open-questions), question 36): which reads count, and whether the append has to depend on the read | Push without reading, or use the merge-safe operation the message names: `addUnique` on the element found with `elementById` for a uniqueness condition, a `set` of the whole value for another append that depends on the content | carries |
@@ -3838,8 +3827,8 @@ counts shown or because the project owner asked for them.
 | A module-scope handler applied to its state inside a `computed` | 16 (3): `patterns/apps/base/person.tsx`, `patterns/apps/base/family-member.tsx`, `patterns/apps/store-mapper/store-mapper.tsx` | Accepted as a handler binding (§5.2). The same form occurs 764 times in pattern bodies |
 | `reduce` | 29 calls, all in function bodies today: 20 with an expression-bodied callback and an initial value, 2 expression-bodied without one, 7 block-bodied | A reactive construct in tier R for the first 20 (§4.4.1). The other 9 stay tier-F code, where `reduce` is ordinary JavaScript |
 | `some`, `every`, `find`, `findIndex` with a callback | 136, 14, 70, and 78 calls, all but 2 `some` in function bodies today | Reactive constructs in tier R (§4.4.1), and ordinary methods in tier F |
-| The index parameter of a `map` callback in a pattern body | Used in 44 of 326 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-keyed` |
-| A handler bound, without the index, in a per-element body over plain values | 7 (7) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx`, `patterns/examples/group-chat-room/group-chat-room.tsx`, and `patterns/system/fabrichat/message-row.tsx`. A further 95 callbacks, over a local constant or a parameter, bind a handler without the index; which of those collections are stored lists, and which have a primitive element type, needs types | Accepted (§4.4.1): equal elements bind equal state and share one stream. No callback in the corpus declares a state cell, so `collection:shared-element-state` refuses nothing in it. How many per-element bodies over plain values instantiate a child, and are therefore keyed by position, was not measured |
+| The index parameter of a `map` callback in a pattern body | Used in 44 of 326 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-read` |
+| A handler bound, without the index, in a per-element body over plain values | 7 (7) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx`, `patterns/examples/group-chat-room/group-chat-room.tsx`, and `patterns/system/fabrichat/message-row.tsx`. A further 95 callbacks, over a local constant or a parameter, bind a handler without the index; which of those collections are stored lists, and which have a primitive element type, needs types | Accepted (§4.4.1): each occurrence of an element has a stream of its own. No callback in the corpus declares a state cell |
 | A value named where the callee declares a cell, or a cell where it declares the value, in an argument written in tier R | 218 arguments of a pattern or of a handler, and about 37 arguments of a `lift` result or of an authored function (prototype) | Accepted for a pattern, a handler, and a `lift` result: the argument is bound by reference (§7.5.2). An argument of an authored function is not covered; how many of the 37 are such was not measured |
 | An optional property of a pattern's input whose type declares a default, used without a test | 503 receivers, 434 of a handle and 69 of a value; 223 arguments that give one to a callee that requires it (prototype). For example `bookmarks.get()` in `patterns/apps/bookmarks/bookmarks.tsx`, `selected.set(option)` in `patterns/product/primitives/option-picker.tsx`, and `logEventHandler({ events, mentioned })` in `patterns/apps/activity-log/activity-log.tsx` | Accepted: the body reads such a property without `undefined` (§7.6.1). Whether every one of the 726 is a property whose type declares a default has to be confirmed by the prototype |
 | A value given where a pattern instantiated in a function body declares a cell | 35 arguments (prototype), for example `Notebook({ title: "New Notebook" })` in `patterns/dev/default-app-ben/default-app-ben.tsx` | Accepted: the value is the initial value of the new instance's argument at that path (§7.5.3) |
@@ -3959,8 +3948,8 @@ the bodies that call it.
 
 ## 12. Recommended syntax changes
 
-Each change keeps today's form valid unless it says otherwise. §12.1,
-§12.8, and §12.9 do say otherwise.
+Each change keeps today's form valid unless it says otherwise. §12.1
+and §12.9 do say otherwise.
 
 ### 12.1 Conditionals and templates are JavaScript
 
@@ -4155,37 +4144,26 @@ The `?` stays: it is what lets a caller leave the property out. The
 default is what lets the body read `glaze` as a `string` without a test
 ([§7.6.1](#761-optional-properties-of-an-input)).
 
-### 12.8 Use the index for a per-element state cell over plain values
+### 12.8 A per-element state cell over plain values needs no index
 
-A per-element body over plain values that declares a state cell takes the
-index and uses it (`collection:shared-element-state`, §4.4.1). The index
-is then part of each element's key, so each position has a cell of its
-own. For a list that does not change, such as a module-scope constant, the
-index costs nothing: no element moves.
+A per-element body over plain values that declares a state cell is
+accepted as written (§4.4.1). Each occurrence of an element has a cell of
+its own, so the author does not take the index to tell two equal elements
+apart, and the elements keep their state when they move.
 
 ```tsx
 // Shown for illustration only.
 const GLAZES = ["plain", "sugar", "chocolate"] as const;
 
-// Before: refused
 const rows = GLAZES.map((glaze) => {
   const open = new Writable(false);
   return <li onClick={() => open.set(!open.get())}>{glaze}</li>;
 });
-
-// After
-const rows = GLAZES.map((glaze, index) => {
-  const open = new Writable(false);
-  return (
-    <li onClick={() => open.set(!open.get())}>{index + 1}. {glaze}</li>
-  );
-});
 ```
 
-No callback in the corpus declares a state cell (§11.4), so no pattern
-changes for this rule today. A body that binds a handler and declares no
-state cell needs no index and stays as written: the corpus has such bodies
-in seven files, FabriChat's quick-reaction buttons among them.
+No callback in the corpus declares a state cell (§11.4). A body that
+binds a handler stays as written as well: the corpus has such bodies in
+seven files, FabriChat's quick-reaction buttons among them.
 
 ### 12.9 Test that a stream is present through a view typed `unknown`
 
@@ -4257,16 +4235,15 @@ Decided by the project owner:
 - compiler trust is unconditional;
 - `ifElse`, `when`, `unless`, and the `str` tag are removed (§4.4.3);
 - a function body may bind a handler and read context (§5.2);
-- a `map` element is keyed by its value or its cell identity (§4.4.1);
+- a `map` element is keyed by its value or its cell identity, and in both
+  cases by the count of earlier occurrences of the same value or identity
+  (§4.4.1);
 - `reduce`, `findIndex`, `some`, `every`, and `find` are reactive
   constructs (§4.4.1);
-- a per-element body over plain values that declares a state cell without
-  using the index is a compile error, and one that binds a handler and
-  declares no state cell is accepted: equal elements bind equal state and
-  share one stream (§4.4.1);
-- where a per-element body over plain values instantiates a child, the
-  position joins the element key, so equal elements have a child each
-  (§4.4.1);
+- everything a per-element body holds is per element key, and so per
+  occurrence: equal elements share no state cell, stream, effect, or
+  child, and a per-element body over plain values may declare a state
+  cell (§4.4.1);
 - the scheduler is switched per space: a space runs the builder path or
   the compiled path and never both (§10; `execution-and-storage.md`, §9);
 - a handle type may hold a handle type, `get()` on the outer handle
@@ -4350,15 +4327,10 @@ use, so that the other numbers stay as other documents cite them.
    handler loads nor the stored schema's compatibility. If it does, the
    fallback is a re-typing operation on cells, whose label rule would need a
    CFC ruling.
-2. **Inline records in a stored list** (to `plan-and-label-templates.md`).
-   The checker treats an object-typed element of a list read from an input
-   or a cell as identified by its cell (§4.4.1). A stored array can still
-   hold inline records, when a computation elsewhere produced it.
-   *Assumed,* as that document's §1.3 has it: a body over such a list that
-   declares a state cell without the index compiles, and the cone
-   instances of an element that arrives inline fail at run time, with the
-   error state of its §5.2. A body that binds a handler and declares no
-   state cell is accepted whatever its elements are.
+2. **Inline records in a stored list.** Not open: no rule depends on
+   whether an element is a plain value or a link, and a state cell in a
+   per-element body is per occurrence over every collection (§4.4.1). The
+   entry keeps its number.
 3. **A pattern closure written in a function body** (to the prototype).
    §4.4.2 allows a pattern closure as a value in tier R only. A handler that
    wants to store a closure over its own locals has no form for it. No
@@ -4469,18 +4441,9 @@ use, so that the other numbers stay as other documents cite them.
     construction in tier R as a primitive operation, and the count of
     §11.3 falls by one.
 21. **A state cell beside a child in a per-element body over plain
-    values** (to the project owner; the continuation plan's question
-    72; `plan-and-label-templates.md`, §8, questions 34 and 37). Where
-    such a body instantiates a child, the position joins the element key
-    (§4.4.1), so a state cell declared in the same body has a key per
-    position and is not shared. *Assumed,* with that document: the body
-    is accepted. Deleting the child then makes the cell an error. The
-    alternative keeps the error as worded and has the author use the
-    index. Two readings are assumed with it. A pattern that a `lift` or
-    a `computed` written in the body instantiates is a child for this
-    rule. A statically resolved pattern called in the body is not: it is
-    compiled into the surrounding instance, and a state cell it declares
-    is reported as a state cell of the body.
+    values.** Not open: a state cell in a per-element body is legal
+    whatever else the body does, and a child is per occurrence without
+    the position (§4.4.1). The entry keeps its number.
 22. **What `key` flattens beyond the ruled case** (to the prototype and
     to `plan-and-label-templates.md`). The ruling gives `key("a")` on a
     `Cell<{ a: Cell<T> }>` the type `Cell<T>`. §4.7 assumes two points

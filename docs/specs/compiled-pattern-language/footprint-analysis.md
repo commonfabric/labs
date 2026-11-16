@@ -139,7 +139,13 @@ entry of `Body.computed`. An entry at the literal itself is an entry of
 
 Three kinds of function are not bodies. The callback of a reactive
 collection method in the reactive tier is compiled against an element slot
-and has label rules of its own. A callback passed to a standard-library method
+and has label rules of its own. By ruling it is a pattern, and labels flow
+through it per value (`plan-and-label-templates.md` §3.6): each body of the
+table that is written in the callback, a handler or a `computed` among
+them, has a footprint of its own over the element slots and the captures
+it reads, and the callback as a whole has none. An observation one body of
+a callback makes, of the index for example, is in no other body's
+footprint. A callback passed to a standard-library method
 inside a body is part of that body. A pattern callback is the reactive tier.
 
 A function written inside a body is part of that body where it is a
@@ -209,7 +215,7 @@ reads that input in full. That is the widening cause W3 of
    into a static entry ([§7.2](#72-static-and-dynamic-reads)).
 
    A run that throws is outside the requirement. That is the second of the
-   four deliberate exceptions to the ruling
+   three deliberate exceptions to the ruling
    (`plan-and-label-templates.md` §3.1). A failed body's error state, and a
    failed handler's outcome, are labeled with the body's template over the
    whole footprint (`plan-and-label-templates.md` §5.2). So a failed run
@@ -838,14 +844,21 @@ nothing of the document the reference leads to, neither the label that
 cell's type declares nor the labels of its content
 (`plan-and-label-templates.md` §2.2, "The label of an `identity` slot").
 One entry at the position is left out for a handle that the body neither
-reads nor writes through: the entry of origin `link`, which holds what the
-reference declares and so repeats the label of the cell's type. The
-runtime makes no `followRef` observation for such a handle today. So
-the table above records the same entry for a handle the body passes on,
-compares, or writes through, and the entry is the same whatever the cell
-holds. Whether the `link` entry is in the entry's label follows from the
-record: it is left out where no write edge and no write envelope of the
-body names the entry and no entry of the body reads below it. The label
+reads nor writes through and does not resolve: the entry of origin `link`,
+which holds what the reference declares and so repeats the label of the
+cell's type. The runtime makes no `followRef` observation for such a
+handle today. A handle the body resolves, by `resolveAsCell()` or as the
+operand of a call such as `spaceOf`, is read at the link: the runtime's
+transaction reads the position, and the `link` entry is in the entry's
+label, although no content is read through the handle. So the table
+above records the same entry for a handle the body passes on, compares,
+resolves, or writes through, and the entry is the same whatever the cell
+holds. Whether the `link` entry is in the entry's label follows
+from the record: it is left out where no write edge and no write envelope
+of the body names the entry, no entry of the body reads below it, the
+entry is not `resolved`, and no `dynamic` node of kind `link` or `space`
+is through it. An operand of `equalLinks` alone leaves it out, because
+that call follows nothing (`plan-and-label-templates.md` §3.16). The label
 of the cell reaches a body only through a hop: `get()`,
 `sample()`, or a read below a `key` chain
 ([§7.1](#71-what-a-body-may-do-with-a-handle)).
@@ -860,6 +873,18 @@ that was read from an input and passed on unchanged. Today such a value
 carries the address it was read from (`annotateWithBackToCellSymbols` in
 `runtime/runner/src/schema.ts`), and a write of it stores a link. This
 document assumes that stays ([§13](#13-open-questions), question 2).
+
+The rule lets two bodies leave a cycle of links. A handler that stores
+what `center.get()` returned of an object in a new record stores a link
+to the cell of `center`, and a handler that then sets `center` to that
+member of the record stores a link back. The prototype's comparison met
+this in `patterns/examples/map-demo/map-demo.tsx`. In the runtime of today
+a read of a cell on such a cycle throws (`resolveLink` in
+`runtime/runner/src/link-resolution.ts`). No document of this design says
+what a slot whose path crosses a cycle of links resolves to
+(`plan-and-label-templates.md` §8, question 88), and the analysis reports
+nothing for it: which links a run stores is not known when the bodies are
+compiled.
 
 **An effect request.** A request keeps the reference rule, although the
 effect serializes what the request holds. The content behind a reference of
@@ -987,7 +1012,12 @@ body returns and writes is `derive` over the whole footprint
 - **It equals today's label.** Today a body is one transaction, and every
   path the transaction writes carries the join of everything it read
   (`plan-and-label-templates.md` §3.1). A per-body label loses nothing
-  against that.
+  against that. For a handler bound in the callback of a per-element
+  construct it is tighter: the handler's transaction today also consumes
+  the join that the `map` coordinator stored on the element's argument
+  document, which no observation of the body accounts for, and by ruling
+  the template has none of it (`plan-and-label-templates.md` §3.6 and
+  §3.12).
 - **Anything finer would rest on the compiler.** A label per result path, or
   per write, needs a dependency analysis of full JavaScript: branches,
   `throw`, loops, closures, and aliasing through mutable locals. A `throw`
@@ -2095,42 +2125,22 @@ releases the child when the node is cancelled. So today too, what a
 computation instantiates belongs to the node that ran it and is kept from
 one evaluation to the next.
 
-**In a per-element body over plain values.** Where a per-element body of
-the reactive tier over plain values instantiates a child, the position
-joins the element key, as it does when the callback uses the index, so
-two equal plain elements have two children
+**In a per-element body.** Everything a per-element body of the reactive
+tier holds is per element key, and so per occurrence of an element, its
+children included: two equal elements have two keys and two children
 (`builtin-inventory.md`, "Element keys"). That rule is about the reactive
 tier, where the analysis does not run. It reaches this analysis through
-`within`: a `lift` or a `computed` written in such an element body has an
+`within`: a `lift` or a `computed` written in an element body has an
 `element` step, and the instances it makes are identified under that
-step's key. The plan records the rule in `Collection.bodyUses.child`
-(`plan-and-label-templates.md` §1.1 and §1.3), and the member is set from
-two sources.
-
-- The compiler of the reactive tier sets it for a factory value called
-  in the reactive tier of the element body. The analysis has no part in
-  that. A statically resolved pattern called there does not set it: the
-  call is compiled into the body and is no child
-  (`plan-and-label-templates.md` §1.3).
-- The analysis determines it for a function body. Where the record of a
-  `lift`, a `computed`, or an authored function called from the reactive
-  tier has an `instantiate` site in `Body.calls`, a site that the summary
-  of an authored function it calls contributes included, and the body's
-  `within` has an `element` step, `bodyUses.child` is set on the
-  collection of each such step, the steps of enclosing element bodies
-  included, as `plan-and-label-templates.md` §1.3 has it for nested
-  bodies. A site in a `handler` or an `action`
-  does not set it: its instance is identified by the handling or by a
-  tag, and by no element key.
-
-*Assumed,* as `plan-and-label-templates.md` §1.3 assumes it: the second
-source counts, so an `instantiate` site in a computation written in a
-per-element body over plain values puts the position in the key as a
-child written in the element body itself does, and two equal plain
-elements do not share the instances such a computation makes
-([§13](#13-open-questions), question 3). The member is set whether or
-not an evaluation reaches the site, since the key of an element cannot
-depend on a run.
+step's key, so the instances of one occurrence are not those of another.
+The position is in no key, and the analysis records nothing in the
+`Collection` for an `instantiate` site (`plan-and-label-templates.md`
+§1.1 and §1.3). A body written in an element body that is given the
+index lists the slot of root `index` that names the collection in
+`Body.reads`, as it lists any other slot the runtime materializes into
+its argument, and is evaluated again for an element that moves. A site
+in a `handler` or an `action` is identified by the handling or by a tag,
+and by no element key.
 
 ### 8.2 Creating a cell
 
@@ -2191,16 +2201,12 @@ causes name two cells. Three things follow for the record.
 Without an explicit cause the site is `identifiedBy: "order"`: the
 identifier derives from the event, as it does today.
 
-**A cell created under the element key over plain values.** A `lift` or a
+**A cell created under the element key.** A `lift` or a
 `computed` written in a per-element body that creates a cell under the
 element key declares a `StateCell` whose `within` has the `element` step.
-Over plain values, equal elements have one key, so they would share that
-cell. A per-element body over plain values that declares a state cell
-without using the index is a compile error
-(`collection:shared-element-state`; `builtin-inventory.md`, "Element
-keys"). *Assumed:* the error covers a cell that a computation
-in the body creates under the element key, since it is a state cell of
-the plan named by that key ([§13](#13-open-questions), question 4).
+Two equal elements have two keys, so each occurrence has a cell of its
+own, over plain values as over links, and such a body is accepted with
+or without the index (`builtin-inventory.md`, "Element keys").
 
 ### 8.3 Requesting an effect
 
@@ -2438,12 +2444,13 @@ compiled in it, the body of a per-element callback included. There every
 path of the handler's state resolves to a slot or an output of the
 instance, and `Binding.state` has no copied path. The analysis runs on the
 hoisted or named handler, whose state paths are slots with root `binding`.
-A per-element body over plain values that binds a handler and declares no
-state cell is accepted without the index. Its binding is named by where
-it is declared, the element key included, so equal elements bind equal
-state and share one stream (`builtin-inventory.md`, "Element keys"). The
+A per-element body that binds a handler is accepted over every
+collection, with or without the index. Its binding is named by where
+it is declared, the element key included, so each occurrence of an
+element has a stream of its own, also where two elements are equal
+(`builtin-inventory.md`, "Element keys"). The
 handler's record is the same for every element, and S1 is not affected:
-the state paths of the shared binding resolve to the same slots.
+the state paths of each binding resolve to slots of its own key.
 
 **Against today.** In each case the rule is equal to today or tighter. It
 is within requirement 2 of §1.4 and is not an exception to it.
@@ -3393,11 +3400,12 @@ creates under an explicit cause is the same cell on every event, and its
 existence label is fixed at first creation. Without an explicit cause an
 identifier minted in a handler derives from the event.
 
-Ruled by the project owner, and written into §8.1, §8.2 and §8.5: a
-per-element body over plain values that declares a state cell without using the
-index is a compile error; one that binds a handler and declares no state
-cell is accepted, and equal elements share one stream; and where such a
-body instantiates a child, the position joins the element key.
+Ruled by the project owner, and written into §8.1, §8.2 and §8.5: an
+element key holds the count of earlier occurrences of the same value or
+identity, so equal elements have two keys; everything a per-element body
+holds is per element key, its state cells, streams, effects and children
+included; and a per-element body over plain values may declare a state
+cell.
 
 ### Needing the project owner
 
@@ -3414,21 +3422,13 @@ body instantiates a child, the position joins the element key.
    stands as today. The alternative, a copy, reads the record in full and
    is wider than today.
 3. **An instantiation by a computation in a per-element body over plain
-   values.** The position joins the element key where a per-element body
-   over plain values instantiates a child. The ruling is stated for the
-   body. A `lift` or a `computed` written in the body can instantiate a
-   pattern too (§8.1). *Assumed:* the position joins the key then as
-   well, so two equal plain elements do not share the instances the
-   computation makes, and the analysis sets `Collection.bodyUses.child`
-   for such a site. The other reading leaves the key as it is, and
-   equal elements share one computation and its instances.
-   `plan-and-label-templates.md` §8, question 37, makes the same
-   assumption.
+   values.** Not open. The instances are named through the element key,
+   which separates equal elements, and the position does not join the
+   key (§8.1). The entry keeps its number.
 4. **A cell a computation creates under the element key over plain
-   values.** Such a cell is a `StateCell` named by the element key
-   (§8.2). *Assumed:* the compile error for a state cell over plain
-   values covers it where the body does not use the index. The other
-   reading accepts it, and equal elements share the cell.
+   values.** Not open. Each occurrence has a key of its own, so the cell
+   is per occurrence and the body is accepted (§8.2). The entry keeps
+   its number.
 
 ### For another document or the prototype
 

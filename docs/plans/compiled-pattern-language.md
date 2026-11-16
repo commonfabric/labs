@@ -73,7 +73,7 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `b739a377dc`, under
+  computes exists at prototype commit `190943404e`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
   no browser. It generates a scenario per module, with a distinct
@@ -92,27 +92,38 @@ next.
   be refused or for a trusted event the harness does not send, and
   the rest by the handler on the generated values or by gaps in the
   crate, the harness, and the generator. Of 234 write edges compared,
-  219 are equal, 15 tighter, and none looser. The 9 tighter that were
-  examined each have a label an earlier event of the scenario left on
-  the shape of the target; the 6 of element bodies are not examined.
-  169 write edges are of a write the run did not make; a sample of 40
+  219 are equal, 15 tighter, and none looser. Of the 15 tighter, 10
+  have a label an earlier event of the scenario left on the shape of
+  the target. In 4, of `examples/map-demo/map-demo.tsx`, a handler of
+  an element body writes a cell it captured, and the stored label
+  holds the join of the `map` coordinator's transaction, which is on
+  every path of the element's argument document and holds the labels
+  of the list's own document (prototype note 261); the template has
+  none of it, by the ruling that labels flow per value through the
+  callback of a per-element construct. In 1 the runtime stored a link with no
+  atom where the template mints the body's.
+  151 write edges are of a write the run did not make; a sample of 40
   found a write of an equal value, a branch not taken on the generated
   values, or a random choice, and no error. The comparison is partial
   in these ways. 208 bindings of patterns reached through elements of
   an array of pattern results have no result path, and 37 write edges
   target the stream of another binding and 52 hold a slot over all
   elements; neither kind is compared. Outputs below the elements of a
-  collection are not compared. Three rows of
-  `examples/map-demo/map-demo.tsx` were looser in confidentiality
-  when the events ran in another order, and a read after one of them
-  threw in `traverseWithSelector`; neither is examined. 53 outputs
+  collection are not compared. With the events sent in the order of
+  the plan, no row is looser either, and one row differs because the
+  event reaches another element. In that order `map-demo.tsx` stores
+  two links that form a cycle, and a read of the cell that holds one
+  of them throws in `traverseWithSelector`
+  (`runtime/runner/src/traverse.ts`) where `resolveLink` reports the
+  cycle; that is a finding against the runtime, reduced to a test that
+  is not committed. 53 outputs
   have no stored value; for 7 of them the template has a clause where
   the runtime stores no label, because an action threw or a
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; notes 241
-  to 251 are not yet written into the documents.
+  lists the places where it found the documents ambiguous; its notes
+  through 261 are written into the documents.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -267,7 +278,7 @@ is relitigated.
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
   rule for a default that is read and not stored, and needs this one.
-  The read has less integrity than today, so it is the fourth
+  The read has less integrity than today, so it is the third
   deliberate exception to "equal to or tighter".
 - Integrity is anchored in an object as a whole. A read of a stored
   object whole carries the object's integrity, also where a default
@@ -302,6 +313,20 @@ is relitigated.
   nothing of the label of its cell to what the body writes. The label
   stays at the cell, as it does for a handle to a cell the body
   created, and reaches only a reader that follows the handle.
+- The callback of a per-element construct is a pattern, and labels
+  flow through it per value. Each thing the body is given has its own
+  label: the element has the label of its own slot of the collection
+  and of what that slot holds, the index and the whole collection
+  have theirs only for a node that reads them, and each
+  captured value has its own. A node of the body takes the labels of
+  what it reads and closes over, and nothing of what another node of
+  the same body reads. So a handler that closes over the element alone
+  writes under the event and the element, also where another node of
+  the body reads the index. Nothing of another element, and nothing
+  of the collection's length or order, reaches a node that reads
+  neither the index nor the collection. This is tighter than the
+  runtime of today, which stores one join of the `map` coordinator's
+  transaction on every path of an element's argument document.
 - `elementById` yields a handle of the element type or `undefined`,
   because the record for a key may never have been written or may have
   been cleared.
@@ -372,16 +397,36 @@ is relitigated.
   fine, and the runtime decides it by a rule about size.
 - A state cell's identifier derives from its cause, with the name taken from
   the assigned variable as the transformer's `.for(...)` does.
-- A `map` element is keyed by its value when it is a plain value and by its
-  cell identity otherwise. The index joins the key only when the callback
-  uses it. A value-derived key is salted with a secret of the space.
-- Equal plain values share a cone for computation only. A per-element body
-  over plain values that declares a state cell without using the index is
-  a compile error. A body that binds a handler and declares no state cell
-  is accepted: equal elements bind equal state, and they share one
-  stream.
-- Where a per-element body over plain values instantiates a child, the
-  position joins the element key, so equal elements have a child each.
+- A `map` element is keyed by its cell identity where the collection
+  holds a reference, and by its value otherwise. In both cases the key
+  also holds the count of earlier occurrences of the same identity or
+  value in the collection, so two equal elements have two keys.
+  The position is never in the key, also where the callback uses the
+  index. The index is given to the nodes of the body that read it, so
+  a move evaluates those nodes alone, and the state, streams, and
+  children of the body stay with their element. A value-derived key
+  is salted with a secret of the space.
+- The label of the index is the label of the collection's own array:
+  its length and which link each slot holds. It holds nothing of what
+  the links point to, which is what a `findIndex` reads and the index
+  does not. It is the label of the whole array, not of the slots up
+  to the element's position.
+- A state cell declared with a value from the index keeps what it
+  holds when its element moves, because the declared value is written
+  at first creation only. A cell or child that a function body makes
+  under an explicit cause that holds the index is named by the cause,
+  so a move names another. A binding of a function body that copies
+  the index is a stream named by the copied value, so a move names
+  another stream.
+- Everything an element body holds is per element key, and so per
+  occurrence: its state cells, its streams, its effects, and its
+  children. Equal elements share nothing. A body with no state of its
+  own (no handler, no declared cell, no effect, no child) could reuse
+  one outcome for equal values; the design does not special-case it.
+  So a per-element body over plain values that declares a state cell
+  is legal, and where two equal values stand in a collection and the
+  first is removed, the state that remains is that of the first
+  occurrence.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -391,11 +436,9 @@ is relitigated.
   absent elements join a bucket's membership label. The second is a read
   through a handle that is static because every run that returns normally
   makes it: a run that throws before the read carries the read's label
-  all the same. The third is what is stored once for an element key (an
-  effect's request and result, operation state, a child's argument, a
-  side-write, a binding's copied state): where positions that hold equal
-  plain values resolve to different labels, it carries the join. The
-  third is to be revisited.
+  all the same. The third is the integrity of a default that is read
+  and not stored. Nothing is stored once for several positions of a
+  collection, so no stored label joins the labels of two positions.
 - A read through a handle at a static place that is conditional stays
   dynamic.
 - `minBy`, `maxBy`, and a keyed lookup break a tie among equal keys by
@@ -652,26 +695,10 @@ assumption.
 **From the rulings of 2026-11-13.** Each is written into the documents
 as an assumption.
 
-72. **A state cell beside a child in a per-element body over plain
-    values** (PL §8 question 34; LS question 21). *Assumed:* accepted,
-    because the key holds the position.
-73. **Which instantiations put the position in the key** (PL question
-    37; FA question 3). *Assumed:* a factory value called in the body's
-    reactive tier, and a pattern a `lift` or `computed` in the body
-    instantiates; not a handler's instance and not a statically resolved
-    pattern; under nested bodies, at every enclosing level over plain
-    values.
-74. **A cell a computation creates under the element key over plain
-    values** (FA question 4). *Assumed:* the compile error covers it
-    where the body does not use the index.
-75. **The element slots of a handler whose stream several positions
-    share** (PL question 35). *Assumed:* they resolve to the join over
-    the positions.
-76. **The child of a plain element that moved** (PL question 36; ES
-    question 67). A child does not move with its value: a reorder tears
-    down the child of each key that left and sets up a new one, and an
-    insertion at the head of n distinct plain values replaces n children.
-    *Assumed:* accepted, with the advice to make the elements cells.
+76. **The state of an occurrence among equal elements** (PL question
+    36). Which state an occurrence has depends on the equal elements
+    before it in the collection, which the label of its own position
+    does not hold. *Assumed:* accepted as a residual.
 77. **The argument of a `.for(tag)` instance on a later event** (PL
     question 39). *Assumed:* not written again. The alternative writes it
     on every event, as a computation does.
@@ -888,6 +915,42 @@ as an assumption.
     a handler emptied carries the clauses its former elements were
     created under. *Assumed:* the compiled path keeps it, equal to
     today. The alternative removes it with the path.
+130. **A result path of a stream that the elements of a collection
+    hold** (PL question 84). A stream inside a value that one element
+    holds, as `example[UI]` over an array of the results of patterns
+    in `patterns/examples/cfc-trusted-component-examples/` (208
+    bindings). *Assumed:* the binding has no result path through the
+    collection, so no reader finds its stream from the plan. The
+    alternatives name the position of the member, or write `*` and
+    have a reader try each position.
+131. **The declared label of an element's handle in the compiled
+    path** (PL question 85). By ruling the handle of an element is
+    read at the element's position in the source collection. Not
+    settled: whether a handle the body resolves, reads through, or
+    writes through also carries the label that the declaration of the
+    source collection gives the element, which the `link` entry at
+    `element` of the argument document holds today. *Assumed:* it
+    does, which is equal to today for `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx`. No record of
+    the plan holds that declared label.
+133. **A written path that holds a link, for a write edge with no
+    reference** (PL question 87). *Assumed:* the row is not compared
+    where the run stored a link at the written path, and is counted
+    apart. Not stated: whether one write can have an edge with a
+    reference and an edge without, as the prototype emits.
+134. **A label the runtime fails to read, and a slot whose path
+    crosses a cycle of links** (PL question 88). *Assumed:* the row
+    is not compared, and in the compiled path the evaluation that
+    reads the slot fails as a body that throws does.
+
+136. **A binding that a computation in an element body makes** (PL
+    question 90). A binding made in a function body is named by what
+    it holds and by no place, and everything an element body holds is
+    per element key. *Assumed:* the first governs, so two occurrences
+    that bind equal state from a `computed` or a `lift` have one
+    stream.
+137. **The key of an element of a `filter` result** (PL question 91).
+    *Assumed:* it keeps the key it has in the source, count included.
 
 ## Open, and not needing the owner
 
@@ -911,9 +974,6 @@ as an assumption.
   the record". A probe showed that a `lift` that returns an input record
   whole keeps the record's full declared type in its argument schema, so
   the sentence may be wrong about the current runtime.
-- **A container bound by reference from an inline plain element that two
-  positions share** has two addresses and one shared evaluation. No
-  document examines it.
 - **Three corrections to the pattern corpus** that the type checker's
   first slice found: `MentionablePiece` in
   `patterns/system/backlinks-index/backlinks-index.tsx` declares an
@@ -967,9 +1027,8 @@ The open questions each document ends with stay where they are.
   mark each figure that needs types or that the measurement did not
   reproduce. The tables of `footprint-analysis.md` §11.3 to §11.5 come
   from that document's own script and cover 1,962 of the 1,966 bodies.
-  How often footprint analysis widens (83 of those 1,962 bodies, 4.2%),
-  and which per-element callbacks run over plain values, need the type
-  checker.
+  How often footprint analysis widens (83 of those 1,962 bodies, 4.2%)
+  needs the type checker.
 - **Factory values depend on pending work.** On this branch a factory can
   be stored but not read back as something callable. Pull request #4687 in
   this repository implements

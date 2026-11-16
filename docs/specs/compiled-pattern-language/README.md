@@ -244,7 +244,21 @@ observation class (value, shape, enumeration, identity, or label metadata).
   subtree, and a key it could not name is the slots at every child.
 - **Arrays:** the body of a `map` is compiled once against an element slot,
   so there is one template per body, not per element. Membership of the
-  collection is its own slot.
+  collection is its own slot. By ruling, the callback of a per-element
+  construct is a pattern, and labels flow through it per value. The
+  element has the label of its own slot of the collection and of what
+  that slot holds, the index and the whole collection have theirs only
+  for a node that reads them, and each captured value has its own.
+  A node of the body takes the labels of what it reads and closes over,
+  and nothing of what another node of the same body reads. So a handler
+  that closes over the element alone writes under the event and the
+  element, also where another node of the body reads the index. Nothing
+  of another element, and nothing of the collection's length or order,
+  reaches a node that reads neither the index nor the collection. This is
+  tighter than the runtime of today, which stores one join of the `map`
+  coordinator's transaction on every path of an element's argument
+  document ([plan format and label templates](plan-and-label-templates.md),
+  §3.6).
 - **Conditionals:** the template of a conditional is the condition's slots
   plus the slots of the branch that was selected. A template depends on a
   value in three places: the branch a conditional selected, the prefix at
@@ -267,7 +281,7 @@ observation class (value, shape, enumeration, identity, or label metadata).
   template, which holds the label of the event (§2.2 and §3.9 there).
 
 A template label is equal to the label the runtime computes today or tighter,
-with four deliberate exceptions
+with three deliberate exceptions
 ([plan format and label templates](plan-and-label-templates.md), §3.1).
 Tighter means fewer confidentiality clauses or more integrity atoms.
 
@@ -277,12 +291,6 @@ Tighter means fewer confidentiality clauses or more integrity atoms.
   that returns normally makes it. A run that throws before the read carries
   the read's label all the same, where today its transaction does not (§3.9
   there).
-- What an element body stores once per element key carries the join over
-  the positions that hold the key, where those positions resolve to
-  different labels: an effect's request and result, the state of an
-  operation, a child's argument, a side-write, and the copied state of a
-  binding. Today each occurrence of an element has a run of its own. This
-  exception is accepted by ruling and is to be revisited (§2.6 there).
 - A read of a default carries no integrity, where today the read has the
   integrity of the entries that resolve at the place. Fewer integrity atoms is
   looser, and the exception is by ruling. Integrity is anchored in a stored
@@ -410,23 +418,26 @@ and, inside the body of an element construct, one element key.
 - The body of an element construct, such as the callback of a `map`, is one
   or more cones, and they are evaluated once per element key
   ([execution and storage](execution-and-storage.md), §2.1 and §2.5). The
-  key is the element's value when the element is a plain value, and the
-  identity of the element's cell when it is not. An element that moves keeps
-  what was evaluated for its key, so reordering a list does not recompute
-  it. The element's index is part of the key when the callback uses the
-  index, and a body that uses it is evaluated again for an element that
-  moves. Where a body over plain values instantiates a child, the position
-  joins the key of each plain element as well, so two equal plain elements
-  have a child each. A key derived from a value is salted with a secret of
-  the space before it enters a document identifier, so that an identifier
-  does not reveal the value
+  key holds the element's value when the element is a plain value, and the
+  identity of the element's cell when it is not. In both cases it also
+  holds the count of earlier occurrences of the same value or identity in
+  the collection, so two equal elements have two keys. The position is
+  never in the key, also where the callback uses the index. An element
+  that moves keeps what was evaluated for its key, and its state cells,
+  streams, effects, and children. The index is a slot given to the nodes
+  of the body that read it, so a move evaluates those nodes alone, and
+  reordering a list recomputes nothing else. A key derived from a value
+  is salted with a secret of the space before it enters a document
+  identifier, so that an identifier does not reveal the value
   ([plan format and label templates](plan-and-label-templates.md), §1.3).
-- Equal plain values have one key and so share one evaluation. They share
-  the value and not the label: each position has the label of the address
-  its element was read from. A body over plain values that declares a state
-  cell without using the index is a compile error, because the two rows
-  would share the cell. A body that binds a handler and declares no state
-  cell is accepted: equal elements bind equal state and share one stream
+- Everything an element body holds is per element key, and so per
+  occurrence: its state cells, its streams, its effects, and its
+  children. Equal elements share nothing, and each has the label of the
+  address it was read from. A body over plain values may declare a state
+  cell. A body with no state of its own could reuse one outcome for equal
+  values, and the design does not special-case it. Where two equal values
+  stand in a collection and the first is removed, the state that remains
+  is that of the first occurrence
   ([language subset](language-subset.md), §4.4.1).
 - A change to one element dirties that element's cones. A membership change
   dirties the container.
@@ -774,9 +785,8 @@ instance like the body of a `map`. A callee that is a factory value is known
 only at run time, so the call creates a child instance with its own plan and
 result cell
 ([plan format and label templates](plan-and-label-templates.md), §3.15).
-Such a child is what puts the position in the element key of a
-per-element body over plain values. A statically resolved callee does
-not, because it is compiled into the body (§1.3 there).
+Inside a per-element body such a child is per element key, so each
+occurrence of an element has a child of its own (§1.3 there).
 
 ## The scheduler
 
@@ -941,14 +951,13 @@ Each stage can be checked before the next begins.
    much of the pattern corpus they accept and how often the analysis gives up.
 3. Emit the plan alongside the transformer's existing output, and compare
    template labels with the labels the runtime computes for the whole corpus.
-   Template labels must be equal or tighter, with the four deliberate
+   Template labels must be equal or tighter, with the three deliberate
    exceptions listed under [Label templates](#label-templates): the
    membership label of a collection index bucket, a static read through
-   a cell handle on a run that throws before the read, what an element
-   body stores once per element key, and, by ruling, the empty integrity
-   of a read of a default
+   a cell handle on a run that throws before the read, and, by ruling,
+   the empty integrity of a read of a default
    ([plan format and label templates](plan-and-label-templates.md), §3.1).
-   The comparison expects these four differences and no other in that
+   The comparison expects these three differences and no other in that
    direction. It compares dereferenced labels, and it expects a template
    to be tighter than the runtime where the runtime joins the labels that
    the arguments of a node declare, as for a conditional and the
@@ -1049,16 +1058,21 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   authored function one of them or the reactive tier calls, and not a
   `handler`, an `action`, or an inline event handler
   ([language subset](language-subset.md), §13, question 26).
-- **Element bodies over plain values.** The rulings leave three things
+- **Element bodies and equal elements.** The rulings leave five things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 34, 35, and 37). Whether a state cell is accepted in a
-  body that instantiates a child, where the key holds the position
-  without the body using the index: assumed accepted. Whether a pattern
-  that a `lift` or a `computed` written in the body instantiates puts the
-  position in the key as a child does, and whether nested bodies do so at
-  every level: assumed for both. And whether the element slots of a
-  handler whose stream several positions share resolve to the join over
-  those positions: assumed.
+  §8, questions 36, 90, 91, 92, and 93). Which state an occurrence has
+  depends on which equal elements stand before it, and a reader of the
+  row can see that: assumed accepted. What becomes of state and identity
+  that the author derives from the index when an element moves: assumed
+  that a state cell keeps what it holds, and that a cell or a child made
+  under an explicit cause that holds the index is named by the cause, so
+  that a move names another. Whether the label of the index is narrowed
+  to the elements before the position: assumed not, so the index has the
+  label of the whole membership the collection iterates. Whether a
+  binding that a `lift` or a `computed` written in an element body makes
+  has a stream per occurrence: assumed not, as a binding made in a
+  function body is named by what it holds. And whether an element of a
+  `filter` result keeps the key it has in the source: assumed.
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not
