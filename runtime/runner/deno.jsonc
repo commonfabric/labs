@@ -44,6 +44,7 @@
     "./hashtags": "./src/hashtags.ts",
     "./profile-suggestion": "./src/profile-suggestion.ts",
     "./space-invites": "./src/space-invites.ts",
+    "./space-links": "./src/space-links.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
     "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",

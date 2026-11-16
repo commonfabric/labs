@@ -4,7 +4,6 @@ import { stub } from "@std/testing/mock";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import {
   buildInviteLink,
-  buildSpaceLink,
   createInviteCredentials,
   INVITE_LINK_SCHEME,
   inviteCodeVerifier,
@@ -13,7 +12,6 @@ import {
   isInviteSecret,
   normalizeInviteHost,
   parseInviteLink,
-  parseSpaceLink,
   SPACE_INVITE_CAPABILITY,
 } from "../space-invites.ts";
 
@@ -344,6 +342,8 @@ describe("space-invites", () => {
       for (
         const other of [
           `${INVITE_LINK_SCHEME}://setup?n=abc123`,
+          // A space link grants nothing and is never an invitation.
+          `${INVITE_LINK_SCHEME}://space?host=https://service.example&space=${space}`,
           // The setup action is never an invitation, whatever it carries.
           `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
           `https://links.example/setup${query}${link.hash}`,
@@ -406,134 +406,6 @@ describe("space-invites", () => {
       expect(refusal(() => parseInviteLink(scheme, { code: "short" }))).toBe(
         "invalid-request",
       );
-    });
-  });
-  describe("space links", () => {
-    const loom = { host: "https://service.example", space };
-    const link = buildSpaceLink("https://links.example", loom);
-    const scheme = `${INVITE_LINK_SCHEME}://space${link.search}`;
-    const withSpace = (value: string) => {
-      const url = new URL(link);
-      url.searchParams.set("space", value);
-      return url.href;
-    };
-
-    it("builds `/space?host&space` on the shell origin, with nothing secret and no fragment", () => {
-      expect(link.origin).toBe("https://links.example");
-      expect(link.pathname).toBe("/space");
-      expect([...link.searchParams.keys()].sort()).toEqual(["host", "space"]);
-      expect(link.searchParams.get("host")).toBe("https://service.example");
-      expect(link.searchParams.get("space")).toBe(space);
-      expect(link.hash).toBe("");
-    });
-    it("returns the same space for the `/space` and `fbrc://space` forms", () => {
-      expect(parseSpaceLink(link)).toEqual(loom);
-      expect(parseSpaceLink(scheme)).toEqual(loom);
-      expect(parseSpaceLink(`http://127.0.0.1:5173/space${link.search}`))
-        .toEqual(loom);
-      expect(
-        parseSpaceLink(
-          buildSpaceLink("http://localhost:8000", {
-            host: "http://localhost:8000/",
-            space,
-          }),
-        ),
-      ).toEqual({ host: "http://localhost:8000", space });
-    });
-    it("is not an invitation, and an invitation is not a space link", () => {
-      expect(parseInviteLink(link)).toBeUndefined();
-      expect(parseInviteLink(scheme)).toBeUndefined();
-      const invite = buildInviteLink("https://links.example", {
-        ...loom,
-        ...createInviteCredentials(),
-      });
-      expect(parseSpaceLink(invite)).toBeUndefined();
-      expect(
-        parseSpaceLink(
-          invite.href.replace(
-            "https://links.example/join",
-            `${INVITE_LINK_SCHEME}://join`,
-          ),
-        ),
-      )
-        .toBeUndefined();
-    });
-    it("returns `undefined` for URLs that name no space", () => {
-      for (
-        const other of [
-          `${INVITE_LINK_SCHEME}://setup?n=abc123`,
-          `${INVITE_LINK_SCHEME}://other${link.search}`,
-          `https://links.example/space/${link.search}`,
-          `https://links.example/piece${link.search}`,
-          // Another site's `/space`, naming no space field.
-          "https://rooms.example/space?id=abc",
-          "https://links.example/space",
-        ]
-      ) {
-        expect(parseSpaceLink(other), other).toBeUndefined();
-      }
-    });
-    it("throws `invalid-link` for a malformed space link", () => {
-      for (
-        const malformed of [
-          `${link.href}#code=x`,
-          `${link.href}#`,
-          `${scheme}#x`,
-          `${link.href}&invite=abc`,
-          `${link.href}&host=https://other.example`,
-          link.href.replace(/&?host=[^&]*/, ""),
-          link.href.replace(/&?space=[^&]*/, ""),
-          withSpace("did:key:short"),
-          withSpace("did:web:example.com"),
-          withSpace(""),
-          link.href.replace("https://", "https://someone@"),
-          `${INVITE_LINK_SCHEME}://space/${link.search}`,
-          `${INVITE_LINK_SCHEME}://space/x${link.search}`,
-          `${INVITE_LINK_SCHEME}://space:5${link.search}`,
-          `${INVITE_LINK_SCHEME}://someone@space${link.search}`,
-          "private input is not a URL",
-        ]
-      ) {
-        expect(refusal(() => parseSpaceLink(malformed)), malformed).toBe(
-          "invalid-link",
-        );
-      }
-    });
-    it("throws `invalid-host` for a service that is not a secure origin", () => {
-      for (
-        const host of [
-          "http://service.example",
-          "https://service.example/path",
-          "not a url",
-        ]
-      ) {
-        const url = new URL(link);
-        url.searchParams.set("host", host);
-        expect(refusal(() => parseSpaceLink(url)), host).toBe("invalid-host");
-        expect(
-          refusal(() =>
-            buildSpaceLink("https://links.example", { host, space })
-          ),
-          host,
-        )
-          .toBe("invalid-host");
-      }
-      expect(
-        refusal(() =>
-          parseSpaceLink(`http://links.example/space${link.search}`)
-        ),
-      )
-        .toBe("invalid-host");
-    });
-    it("refuses to build a link to a malformed space", () => {
-      expect(
-        refusal(() =>
-          buildSpaceLink("https://links.example", {
-            host: loom.host,
-            space: "did:key:short",
-          })
-        ),
-      ).toBe("invalid-request");
     });
   });
   describe("isInviteProfileSuggestion()", () => {
