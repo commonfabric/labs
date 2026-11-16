@@ -51,20 +51,37 @@ export interface RealPushIoOptions {
   readonly signal?: AbortSignal;
 }
 
+/** How the same-named branch on `origin`, as git last fetched or pushed it,
+ * stands against the checked-out commit. */
+export interface PushedBranch {
+  /** The commit `origin`'s branch is at. */
+  readonly commit: string;
+
+  /** How many commits the checkout has that `origin`'s branch does not. */
+  readonly added: number;
+
+  /** How many commits `origin`'s branch has that the checkout does not,
+   * which a push removes from it. */
+  readonly removed: number;
+}
+
 /**
  * Force-pushes the checked-out branch to the same-named branch on `origin`,
  * unless that branch has commits the checked-out branch has never included.
  * The branch `origin` names as its default is never pushed, so the push
- * refuses when `origin` names none. Once the push succeeds, calls
- * `onPushed` with the branch's name and the address of the page the server
- * offers for creating a pull request, or null when it offers none; by
- * default, it opens the page. When git fails, calls `onFailed` with what git
- * printed. Says which branch it pushes, with `io`, before git starts.
- * Returns one line saying how it ended, which ends with what `onPushed`
- * returns, and says the push was aborted when it failed after
- * `signal` aborted; git's own output has been shown by then.
+ * refuses when `origin` names none. When `origin` already has the branch and
+ * there is an `ask`, pushes nothing, and returns what `ask` returns, given
+ * the branch's name and how `origin`'s branch stands; otherwise it pushes,
+ * and returns one line saying how that ended. Says which branch it pushes,
+ * with `io`, before git starts. Once the push succeeds, calls `onPushed` with
+ * the branch's name and the address of the page the server offers for
+ * creating a pull request, or null when it offers none; by default, it opens
+ * the page, and the line it returns ends with what `onPushed` returns. When
+ * git fails, calls `onFailed` with what git printed, and the line it returns
+ * says the push was aborted when it failed after `signal` aborted; git's own
+ * output has been shown by then.
  */
-export async function pushBranch(
+export async function pushBranch<Asked = never>(
   io: PushIo,
   signal?: AbortSignal,
   onPushed: (
@@ -73,7 +90,8 @@ export async function pushBranch(
   ) => Promise<string> | string = (_, url) =>
     url === null ? "" : openPage(io, url),
   onFailed: (output: string) => void = () => {},
-): Promise<string> {
+  ask?: (branch: string, remote: PushedBranch) => Promise<Asked>,
+): Promise<string | Asked> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return "This is not a git repository.";
   const paged = io.pagedGitDir();
@@ -101,6 +119,10 @@ export async function pushBranch(
     return `Rename the branch first. You were about to push your ${main} ` +
       "branch.";
   }
+  if (ask) {
+    const remote = pushedBranch(io.query, branch);
+    if (remote !== null) return await ask(branch, remote);
+  }
   const pushed = `Pushed ${branch} to origin`;
   io.write(`Pushing ${branch} to origin.\n`);
   const push = await io.run([
@@ -119,6 +141,46 @@ export async function pushBranch(
   }
   const then = await onPushed(branch, offeredPullRequestUrl(push.output));
   return then === "" ? `${pushed}.` : `${pushed}. ${then}`;
+}
+
+/**
+ * Returns how `branch` on `origin`, as git last fetched or pushed it, stands
+ * against the checked-out commit, or null when git has never seen `origin`
+ * have it. Throws when git cannot compare the two.
+ */
+export function pushedBranch(
+  git: GitQuery,
+  branch: string,
+): PushedBranch | null {
+  const tracking = `refs/remotes/origin/${branch}`;
+  const commit = git(["rev-parse", "--verify", "--quiet", tracking])?.trim();
+  if (!commit) return null;
+  const counts = /^(\d+)\s+(\d+)$/.exec(
+    git(["rev-list", "--left-right", "--count", `${tracking}...HEAD`])
+      ?.trim() ?? "",
+  );
+  if (counts === null) {
+    throw new Error(`git could not compare ${branch} with origin's`);
+  }
+  return { commit, removed: Number(counts[1]), added: Number(counts[2]) };
+}
+
+/** Returns what pushing `branch`, which `origin` has as `pushed` says,
+ * would do, a sentence per line. */
+export function describePush(branch: string, pushed: PushedBranch): string {
+  const commits = (count: number) =>
+    count === 1 ? "1 commit" : `${count} commits`;
+  const { added, removed } = pushed;
+  const effect = removed > 0
+    ? `Pushing would replace it, removing ${commits(removed)} that this ` +
+      `checkout does not have${
+        added > 0 ? ` and adding ${commits(added)}` : ""
+      }.`
+    : added > 0
+    ? `Pushing would add ${commits(added)} to it.`
+    : "Pushing would leave it as it is.";
+  return `origin already has ${branch}, at ${pushed.commit.slice(0, 12)} ` +
+    `when last fetched or pushed.\n${effect}`;
 }
 
 /** Opens the page at `url` for creating a pull request, and returns a
