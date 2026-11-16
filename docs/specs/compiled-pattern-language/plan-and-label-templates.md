@@ -1538,6 +1538,15 @@ in `Body.reads`, and a handler binding whose state holds the index names
 it in `place`. A node that lists no such slot is not given the index. No
 record says of a whole body that it uses the index.
 
+The slot has the class `value` for every reader. A node that computes
+with the index, one that writes it at a position of what the callback
+returns, and one that gives it to a child or to a sandboxed body read
+the same slot under the same class. The index is a number with no stored
+address (section 2.2), so there is no reference to it that a node could
+pass on in the place of the value, and no narrower class applies. The
+step of a `reduce` and the predicate of a scan read the index the same
+way (section 3.13).
+
 A move therefore changes one input of the keys whose position changed:
 the index slot. The cones that list the slot are stale for those keys
 and are evaluated again, and no other cone of the body is. Evaluation is
@@ -1564,7 +1573,16 @@ from the index changes as what derives from any other input does:
   holds for a cell declared with a value from the index, such as
   `cell(index)` in an element body: the value a declaration gives the
   cell is written when the cell is first created, and is not written
-  again when the index changes.
+  again when the index changes. A `StateCell` record has no member for
+  the value its declaration gives it (section 1.1). *Assumed* (section
+  8, question 97): where a declaration of the reactive tier gives a
+  state cell a value that is not a constant, the plan has a `WriteEdge`
+  with target `state` for it, as it has for the initial value of a
+  cell that a body creates (section 3.14), and the runtime performs
+  that write once, when the cell is first created. The cone that
+  computes the value lists the slots it reads, the index slot among
+  them, and a change of one of them after the cell exists makes no
+  write.
 - **An identity the author derives from the index** follows the index.
   It arises in a function body written in the element body, because a
   cause written in the reactive tier is a string literal
@@ -2382,8 +2400,18 @@ producing template, as section 3.6 gives the element's root slots.
 Section 3.7 gives the label of the array of a derived collection.
 
 The join is a join in the sense of section 3.2. Its confidentiality is
-the join of the parts, and it is the same label for every key of the
-collection, so one transaction forms it once per collection.
+the join of the parts, its integrity is the meet of the integrity of
+the parts, and it is the same label for every key of the collection, so
+one transaction forms it once per collection. No rule gives a position
+an integrity of its own beside that meet.
+
+An entry of origin `link` at a position is not in the second part. It
+holds what the reference at the position declares, which for a link to a
+cell repeats the label of the cell's type ("The `link` entry of a handle
+that is only passed on is not in it", below). That is a label of what
+the link points to, and by the ruling the label of the index holds none
+of it. Where such an entry holds more than the target's declaration, it
+is left out under the assumption of section 8, question 81.
 
 The position of a key is a function of the length of the array and of
 which element part each position holds. For a position that holds a
@@ -2449,13 +2477,23 @@ follows the handle. The definition above gives that rule, read as follows.
   template is **tighter** there, deliberately (section 3.1, "The
   coordinator's join on an element's argument document").
 
-  The `link` entry at `element` holds what the reference to the source
-  position declares, which in the case observed below is the clause the
-  cell of the source list declares. *Assumed* (section 8, question 85):
-  where the slot is `resolved`, or the body reads or writes through the
-  handle, the slot's label holds, in the place of that `link` entry, the
-  label that the declaration of the source collection gives the
-  element, under the rules for a `link` entry below.
+  The link at `element` has an entry of origin `link` only where the
+  schema that the stored link carries has a clause, and the entry then
+  holds that clause (section 3.6). A clause that the source list
+  declares for itself is not on it: such a clause is one entry of origin
+  `declared` at the root of the list's document, with no class, and in
+  the argument document it is in the coordinator's join, on the entries
+  of origin `structure`. So two labels are told apart here. What the
+  reference at the element's position declares is a `link` entry at
+  that position in the source, and a slot that is `resolved` holds it
+  by the rule below. The label that the declaration of the source
+  collection gives the element is no `link` entry, and a `followRef`
+  read at the position does not consume it. *Assumed* (section 8,
+  question 85): where the slot is `resolved`, or the body reads or
+  writes through the handle, the slot's label also holds that declared
+  label: the entries of origin `declared` in the document that holds
+  the element's position, at the position and above it, that a `shape`
+  read at the position consumes.
 - **The position of a handle an element body closes over.** A handle
   that the callback of a per-element construct captures is a slot or an
   output of the enclosing instance, as every captured outer value is
@@ -2494,9 +2532,17 @@ follows the handle. The definition above gives that rule, read as follows.
   `resolveAsCell()`). Its transaction reads `element` of the argument
   document of the element's instance, the position in the list that the
   link there names, and the link below that position. What it stores
-  for the write has the clause the input list declares, which the `link`
-  entry at `element` holds, and with that entry in the slot the template
-  is **equal**. The same holds for every call that section 3.16 records
+  for the write has the clause the input list declares. In the runs the
+  prototype observed, the argument document of the element's instance
+  has no entry of origin `link`, and the clause is on its entries of
+  origin `structure`, the entry of class `followRef` at `*` among them,
+  which is the coordinator's join. So that run does not show a `link`
+  entry consumed, and the template is **equal** there by the assumption
+  of question 85 above, which gives the slot the label the list
+  declares for the element. Without that assumption the template has no
+  clause and mints no atom (section 3.1, "A template with no clause
+  beside the coordinator's join"). The rule of this item holds for every
+  call that section 3.16 records
   with a resolved `identity` slot, and for a call it records as
   journaled, whose slot is not `resolved` and is named by a `dynamic`
   node of kind `link` or `space`: the run follows the reference there
@@ -3454,10 +3500,11 @@ expected. Sixteen more rules fix what a row of the comparison is.
   carries, on every path, the one join of the coordinator's transaction
   that set the element up, and a handler of the element body is given
   every handle from that document. Its transaction consumes that join:
-  with the element's handle the entries at `*` and the `link` entry at
-  `element`, and with a captured handle the `followRef` entry at
-  `params/*` (section 3.6, "Today, the argument document of an
-  element"). The template has none of it. So the write row of a handler
+  with the element's handle the entries at `*`, and the `link` entry at
+  `element` where the link has one, and with a captured handle the
+  `followRef` entry at `params/*` (section 3.6, "Today, the argument
+  document of an element"). The template has none of it. So the write
+  row of a handler
   bound in an element body is **tighter** by each clause of that join
   that the handler's own slots do not hold: the clauses of the list's
   own document, and, where the elements are stored in place in that
@@ -3469,6 +3516,32 @@ expected. Sixteen more rules fix what a row of the comparison is.
   row of the rule above is. Unlike that rule it is a narrowing by the
   rule of the template: a reader of the written path consumes the
   clause today and does not in the compiled path.
+
+  A harness that cannot read what a transaction consumed decides the
+  condition from what is stored. It takes the clauses of every entry of
+  origin `structure` or `link`, at every path, of the argument document
+  of each element instance on the way from the result to the handler's
+  stream, where that way has one instance for each step of the
+  binding's `within`, and it counts a row under this rule where the row
+  is tighter and every clause the template lacks is among them. That
+  can count a row here whose clause the transaction consumed from
+  another entry that holds the same clause.
+- **A template with no clause beside the coordinator's join.** Where
+  every clause of the run's label is one the rule above takes away, the
+  template's label is empty, and a `derive` mints no atom beside an
+  empty label (section 3.2, "When `derive` and `fold` mint"). The run's
+  join is not empty, so the run stores the atom of the handler's body
+  with the write. Such a row is tighter in confidentiality by the
+  coordinator's join and looser in integrity by that one atom. A kept
+  output in the same position carries the pattern's atom all the same;
+  the target of a write edge has no such atom. *Assumed* (section 8,
+  question 96): the row is not a row of the rule above. It is counted
+  apart, and its category stays looser, in integrity alone. The case is
+  a handler bound in an element body that closes over a state cell of
+  the pattern alone, where the list declares clauses. The corpus
+  comparison met no such row. The handler `askToRetire` of
+  `patterns/system/profile-picker/profile-picker.tsx` would be one
+  without the assumption of question 85 (section 2.2).
 - **The state a row is read on.** The template of a write edge is
   evaluated on what is stored before the event is sent, which is what
   the handler's transaction reads, and the runtime's side is read after
@@ -3482,9 +3555,11 @@ expected. Sixteen more rules fix what a row of the comparison is.
   reason and for no other. A harness that has no access to the write
   attempts of a transaction, which the runtime releases when the
   transaction settles, takes as written a target whose value differs
-  after the event. It then does not see a link stored in the place of
-  an equal value, and counts that edge with the writes the run did not
-  make.
+  after the event, or that holds more links on the way from its path to
+  its value than it held before. The second condition finds a link
+  stored in the place of an equal value. A write of an equal value that
+  stores no link is not seen, and that edge is counted with the writes
+  the run did not make.
 - **A label the runtime fails to read.** The runtime's side of a row is
   read with every link followed, and such a read can fail: resolution
   stops at a cycle of links (`resolveLink` in
@@ -3512,6 +3587,18 @@ expected. Sixteen more rules fix what a row of the comparison is.
   a row is not a row of the comparison and is counted apart, and where
   the plan has an edge with `reference` for the same write, that edge's
   row is the row of the write.
+
+  Whether the run stored a link is decided, without the write attempts,
+  by the count of links stored on the way from the path of the target
+  to its value: the edge is not compared where the target holds more
+  after the event than the fewest it held at any earlier point of the
+  scenario. That decision has three limits. A target that held a link
+  when it was first read has that count as its fewest, so a link the
+  run stores again there is not found. A path that the run added below
+  a target, such as a pushed element, is not decided this way, because
+  the runtime stores a pushed object through a link of its own. And a
+  row that needs a label the runtime fails to read is counted under
+  that reason first.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -3843,7 +3930,11 @@ Notes on the integrity column:
   tighter than today down to the empty label, as a test of an absent optional
   field is (section 6.4), mints nothing where the runtime mints beside the
   clauses it holds. Where that value is a kept output it carries the pattern's
-  atom all the same, and where it is interim no label is stored for it.
+  atom all the same, and where it is interim no label is stored for it. Where
+  it is the target of a write edge, the stored value has no atom where the
+  runtime stores one, which is looser in integrity; section 3.1 ("A template
+  with no clause beside the coordinator's join") has the one case found, and
+  how such a row is counted is *assumed* (section 8, question 96).
 - **Witness-bearing atoms.** *Assumed* (section 8, question 67): a `derive` and
   a `fold` mint, beside the atom that holds the identity alone, one atom with
   the identity and an `inputWitness` for each `TransformedBy` atom that every
@@ -4329,7 +4420,12 @@ two cells:
   `params/*`. All ten hold the same clauses, the join of the coordinator's
   transaction. The link at `element` has one entry of origin `link` beside
   them, with the clause of the schema that the stored link carries
-  (`linkSlotLabel`).
+  (`linkSlotLabel`). Where that schema carries no clause the link has no
+  such entry: in the comparison's run of
+  `patterns/system/profile-picker/profile-picker.tsx`, whose input list
+  declares its clause at the root of the list's cell, the argument
+  document of an element has no entry of origin `link`, and the list's
+  clause is on the entries of origin `structure`.
 - **What the join holds.** The coordinator reads the whole raw array of the
   list once (`listMembershipRead` in
   `runtime/runner/src/builtins/list-coordinator-plan.ts`). The entries of
@@ -10074,8 +10170,10 @@ this document made.
     reads nothing at such a position, so with the stamp the template can
     be looser than today, and without it the label of which cell was
     chosen would be lost. A handle the body resolves is not only passed
-    on, and its slot holds the entry (section 2.2), which the comparison
-    found equal to today for `spaceOf`. *Assumed* as well: a handle that
+    on, and its slot holds the entry (section 2.2). The comparison's run
+    of `spaceOf` on the handle of an element stored no such entry, so it
+    is no evidence for or against that (question 85). *Assumed* as well:
+    a handle that
     a body only compares with `equalLinks` is treated as one that is only
     passed on, because that call follows nothing and reads neither
     position. The comparison met no such row.
@@ -10134,30 +10232,58 @@ this document made.
     `scheduler-and-serving-loop.md` have to agree, as for question 78.
     The corpus has 208 such bindings, all in that directory.
 85. **The declared label of an element's handle in the compiled path**
-    (for the project owner and the specification change). By ruling the
-    label of a slot of root `element` is read at the element's position
-    in the source collection: the label of its own slot and of what that
-    slot holds, with nothing of the join that the runtime of today
-    stores on the argument document of the element's instance (sections
-    2.2 and 3.6). That settles where the slot is read and that the
-    coordinator's join is not in it. One part of the label is not
-    settled. In a run of today `element` of the argument document holds
-    a link to the position in the source, with a `link` entry that
-    holds what that reference declares, and a handler that resolves the
-    handle, or reads or writes through it, consumes that entry.
-    *Assumed:* where the slot is `resolved` or the body reads or writes
-    through the handle, the slot's label is the `followRef` entries at
-    the position in the source and at each link resolution follows,
-    joined with the label that the declaration of the source collection
-    gives the element, which is what the `link` entry at `element`
-    holds today. That is equal to today for `askToRetire` of
-    `patterns/system/profile-picker/profile-picker.tsx`. Without that
-    part the template of that handler's write has no clause of the input
-    list and mints no atom, which is tighter in confidentiality and
-    looser in integrity. Whether "the label of its own slot" includes
-    that declared label is for the owner. Not stated by any document:
-    which record of the plan holds it, since question 55 assumes no
-    `Slot.declared` on an `identity` slot.
+    (for the project owner and the specification change). Settled by
+    ruling: the label of a slot of root `element` is read at the
+    element's position in the source collection, as the label of its
+    own slot and of what that slot holds, and the join that the runtime
+    of today stores on the argument document of the element's instance
+    is not in it (sections 2.2 and 3.6). Settled by this document's own
+    rule: an entry of origin `link` at that position, which holds what
+    the reference there declares, is in the label of a slot that is
+    `resolved` or that the body reads or writes through, and out of the
+    label of a handle that is only passed on (section 2.2; question
+    81).
+
+    What remains open is one label: the one that the declaration of the
+    source collection gives the element. A clause that a list declares
+    for itself is stored as one entry of origin `declared` at the root
+    of the list's document, with no class. A read of an element's
+    content consumes it. A `followRef` read of the element's position
+    does not (`readConsumesEntry` in
+    `runtime/runner/src/cfc/observation-classes.ts`), so by the
+    definition of section 2.2 a slot that is `resolved` and not read
+    through does not hold it. In a run of today such a handler stores
+    the clause all the same, and it has it from the coordinator's join
+    alone: in the runs the prototype observed, of `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx` and of a fixture
+    made for the case, the argument document of the element's instance
+    has no entry of origin `link`, and the clause of the list is on its
+    entries of origin `structure`, and on the two `derived` entries at
+    `index` where the callback declares the index. So "the label that
+    the declaration of the source collection gives the element" and
+    "what the `link` entry at `element` holds today" are two labels: in
+    these runs the first has the clause and the second is empty.
+
+    *Assumed:* where the slot is `resolved`, or the body reads or writes
+    through the handle, the slot's label holds the first: the entries of
+    origin `declared` in the document that holds the element's position,
+    at the position and above it, that a `shape` read at the position
+    consumes. With it the write of `askToRetire` is equal to today. The
+    alternative leaves it out, by the definition of section 2.2 and the
+    ruling that nothing of the coordinator's join is in the slot. The
+    template of that write then has no clause of the input list and
+    mints no atom: tighter in confidentiality by the coordinator's
+    join, and looser in integrity by the atom of the handler's body
+    (question 96). Which of the two "the label of its own slot of the
+    collection" means, for a handle that is resolved and not read
+    through, is for the owner.
+
+    Not stated by any document: which record of the plan holds that
+    declared label, since question 55 assumes no `Slot.declared` on an
+    `identity` slot. Not determined by a run: whether a list whose
+    schema declares a clause for its items, and none for itself, gives
+    the stored link at `element` an entry of origin `link`, in which
+    case the two labels above would hold the same clause there.
 86. **Per-value flow and the join over the positions that hold one
     key.** Not open: an element key holds the count of earlier
     occurrences, so no two positions hold one key, nothing joins the
@@ -10255,3 +10381,48 @@ this document made.
     every predicate read. It is formed whole, and it joins nothing for
     a source position the predicate dropped beyond what the membership
     template holds. The entry keeps its number.
+96. **A write row whose template is empty beside the coordinator's
+    join** (for the project owner). Where every clause of what a run
+    stores for a handler's write is of the coordinator's join on an
+    element's argument document, the template has no clause, and a
+    `derive` mints no atom beside an empty label (question 66). The run
+    mints the atom of the handler's body beside its join. The row is
+    tighter in confidentiality, by the ruling on per-value flow, and
+    looser in integrity by one atom. Section 3.2 says the same of a test
+    for an absent optional field and does not say how such a row is
+    counted; a kept output carries the pattern's atom all the same, and
+    the target of a write edge has none. *Assumed:* the row is not
+    counted under "The coordinator's join on an element's argument
+    document" of section 3.1. It is counted apart, as looser in
+    integrity alone, and it is not listed with the deliberate
+    exceptions. The first alternative counts it under that rule, which
+    makes it an exception by ruling to "equal or tighter" on the
+    integrity side. The second mints on every `derive` of a write edge,
+    which is the alternative of question 66 for that case and leaves no
+    such row. The prototype's fixtures have one such row, a handler
+    bound in an element body that closes over a state cell of the
+    pattern alone, over a list that declares two clauses. The corpus
+    comparison has none. Without the assumption of question 85,
+    `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx` is one.
+97. **The value a declaration of the reactive tier gives a state cell.**
+    By ruling a state cell declared with a value from the index keeps
+    what it holds when its element moves, because the declared value is
+    written when the cell is first created and not again (section 1.3).
+    No record of section 1.1 holds that value: `StateCell` has a name,
+    a scope, a `within` and a schema. The prototype emits nothing for
+    it, so in its plans no cone lists the index slot on account of
+    `new Writable(index)` in an element body, and no template gives the
+    label of the stored first value. *Assumed:* a declared value that is
+    not a constant is a `WriteEdge` with target `state`, from the cone
+    that computes it, performed once when the cell is first created, as
+    section 3.14 has it for the initial value of a cell that a body
+    creates. Its template is the label of the stored first value, and a
+    later change of what the cone read writes nothing. A constant has
+    no edge and no label. `execution-and-storage.md` §4.5 writes a
+    state cell's document when the cell is first assigned, so it has to
+    say at which evaluation a cell with such a declared value is
+    created: the first of the instance, or the first for the element
+    key. The alternative refuses, in the reactive tier, a declared
+    value that is not a static initializer, which `language-subset.md`
+    would have to state.
