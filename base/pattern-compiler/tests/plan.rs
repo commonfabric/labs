@@ -1897,10 +1897,7 @@ fn the_membership_of_a_map_a_filter_and_a_flat_map_are_the_templates_of_pl_secti
     // §1.3: "A cone that reads the index lists the slot in `Cone.slots`
     // ... A node that lists no such slot is not given the index."
     let cone = |output: &Value| &plan["cones"][output["cone"].as_u64().unwrap() as usize];
-    assert!(cone(numbered)["slots"]
-        .as_array()
-        .unwrap()
-        .contains(&slot));
+    assert!(cone(numbered)["slots"].as_array().unwrap().contains(&slot));
     assert!(!cone(at(json!(["titles", "*"])))["slots"]
         .as_array()
         .unwrap()
@@ -1961,7 +1958,10 @@ fn a_node_of_an_element_body_that_does_not_read_the_index_has_no_index_slot() {
         .iter()
         .find(|output| output["path"] == json!(["*", "children", "1"]))
         .expect("the output of the element");
-    assert_eq!(template_line(&plan, &row["template"]), "[element  : identity]");
+    assert_eq!(
+        template_line(&plan, &row["template"]),
+        "[element  : identity]"
+    );
     // The handler binding closes over the element and a captured cell.
     let binding = &plan["bindings"][0];
     let lines: Vec<String> = binding["state"]
@@ -1970,7 +1970,10 @@ fn a_node_of_an_element_body_that_does_not_read_the_index_has_no_index_slot() {
         .iter()
         .map(|entry| template_line(&plan, &entry["template"]))
         .collect();
-    assert_eq!(lines, ["[argument chosen : identity]", "[element  : identity]"]);
+    assert_eq!(
+        lines,
+        ["[argument chosen : identity]", "[element  : identity]"]
+    );
 }
 
 #[test]

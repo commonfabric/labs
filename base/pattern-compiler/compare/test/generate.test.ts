@@ -393,7 +393,7 @@ describe("a handler of an element body that resolves the handle of its element",
   // `identity` slot of the handle has `resolved`: the body observes the
   // reference, so the handle is not one that is only passed on (PL §2.2,
   // "A `resolved` slot"; §2.5, "A resolved reference").
-  it("has the label of the links the resolution crosses, and nothing of the coordinator's join", async () => {
+  it("has the label the list declares for its element, and is equal to the run", async () => {
     const { plan, schemas } = await planOf("element-resolved");
     const run = await runScenario({
       program: {
@@ -415,19 +415,20 @@ describe("a handler of an element body that resolves the handle of its element",
     const [row] = run.writes;
     // The run of today reads the handle at `element` of the argument
     // document of the element's instance, whose entries hold the clause
-    // of the list's cell: the coordinator's join. The slot of the plan
-    // is read at the element's position in the list and has none of it
-    // (PL §2.2, "The position of a slot of root `element`"; §3.1, "The
-    // coordinator's join on an element's argument document").
+    // of the list's cell: the coordinator's join, on entries of origin
+    // `structure`. The document has no entry of origin `link`. The slot
+    // of the plan is read at the element's position in the list, and
+    // since the body resolves the handle, its label has "the label that
+    // the declaration of the source collection gives the element" (PL
+    // §2.2; §8, question 85), which is the same clause.
     expect(inputsOf(row.runtime.confidentiality)).toEqual(["input:items"]);
-    expect(inputsOf(row.template.label.confidentiality)).toEqual([]);
-    expect(inputsOf(row.lacking)).toEqual(["input:items"]);
-    expect(row.comparison.confidentiality).toBe("tighter");
-    // With no clause the template mints no atom (PL §3.2, question 66),
-    // and the run's label has the join and the atom of the run.
-    expect(row.comparison.integrity).toBe("looser");
+    expect(inputsOf(row.template.label.confidentiality)).toEqual([
+      "input:items",
+    ]);
+    expect(row.comparison.confidentiality).toBe("equal");
+    expect(row.comparison.integrity).toBe("equal");
     expect(row.byCoordinatorJoin).toBe(false);
-    expect(row.noAtomBesideCoordinatorJoin).toBe(true);
+    expect(row.noAtomBesideCoordinatorJoin).toBe(false);
   });
 });
 

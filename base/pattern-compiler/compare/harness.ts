@@ -1285,6 +1285,34 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
         );
       };
 
+      // "The label that the declaration of the source collection gives
+      // the element" (PL §8, question 85): the entries of origin
+      // `declared` in the document that holds the element's position, at
+      // the position and above it. An entry below the position is the
+      // label of content, which a read through the handle brings in.
+      const declaredForElement = (cell: AnyCell): Label => {
+        const link = resolveLink(
+          runtime,
+          read,
+          cell.getAsNormalizedFullLink(),
+          "top",
+        );
+        const metadata = readStoredCfcMetadata(read, link);
+        if (metadata === undefined) return consumed(undefined, "shape");
+        return consumed(
+          cfcLabelViewFromMetadata({
+            ...metadata,
+            labelMap: {
+              ...metadata.labelMap,
+              entries: metadata.labelMap.entries.filter((entry) =>
+                entry.origin === "declared"
+              ),
+            },
+          }, link.path),
+          "shape",
+        );
+      };
+
       // The clauses of the coordinator's join on the argument documents
       // of the element instances on the way to the row (PL §3.6, "Today,
       // the argument document of an element"): the entries of origin
@@ -1451,9 +1479,12 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
               // of that `link` entry, the label that the declaration of
               // the source collection gives the element" (PL §2.2,
               // assumed under question 85).
-              const declared = passedHandle === "every entry"
+              const held = passedHandle === "every entry"
+                ? undefined
+                : elementHeldAt(slot, context);
+              const declared = held === undefined
                 ? []
-                : [linkDeclaration(elementHeldAt(slot, context))];
+                : [linkDeclaration(held), declaredForElement(cell)];
               // The label of the link: what a `followRef` read at the
               // position that holds the reference consumes, and nothing
               // of the document the reference leads to (PL §2.2, "The

@@ -478,6 +478,16 @@ const count = <T>(items: T[], key: (item: T) => string) => {
   return [...counts.entries()].sort((a, b) => b[1].length - a[1].length);
 };
 
+/**
+ * A shown label with each clause that the generator declared for an input
+ * written as `input:<name>`, without the space it is joined with.
+ */
+const inputNames = (label: string): string =>
+  label.replace(
+    /\{"anyOf":\[(?:\{[^{}]*\},)?"input:(\w+)"(?:,\{[^{}]*\})?\]\}/g,
+    "input:$1",
+  );
+
 const CATEGORIES = [
   "equal",
   "tighter",
@@ -666,7 +676,7 @@ const report = async (file: string) => {
         for (const row of group) {
           console.log(
             `            ${row.module} ${row.path} (binding ${row.binding}) lacks ${
-              row.lacks ?? "no clause"
+              row.lacks === undefined ? "no clause" : inputNames(row.lacks)
             }`,
           );
         }

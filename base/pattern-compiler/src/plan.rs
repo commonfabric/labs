@@ -4990,7 +4990,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             Place::Read(root @ Root::Index(_), at, class) => {
                 let slot = self.slot(root, at, class);
                 entry.insert("place".to_string(), json!({ "slot": slot }));
-                entry.insert("template".to_string(), json!({ "op": "slot", "slot": slot }));
+                entry.insert(
+                    "template".to_string(),
+                    json!({ "op": "slot", "slot": slot }),
+                );
             }
             Place::Accumulator(..) | Place::Read(..) => {
                 if let Some(template) = self.template_of(place, "value") {
