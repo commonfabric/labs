@@ -43,6 +43,10 @@ headlines. Git attributes files have syntax highlighting and a structure tree
 of their patterns and macro definitions. Lean has syntax highlighting and a
 structure tree of namespaces, sections, and declarations, and a project's
 `lean-toolchain` file has highlighting of its own.
+Directive configuration, which covers nginx, Apache httpd, nftables, Netdata
+health alerts, and sysusers.d, has syntax highlighting and a structure tree of
+blocks, sections, and alert entries. Logs, checksums, version files, PID files,
+keys, and short prose files are plain text by name.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -71,8 +75,8 @@ active organization repositories.
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean,
 shell, makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
-and diff support to honest handling of every textual syntax in the active
-`commonfabric` repositories.
+directive configuration, and diff support to honest handling of every textual
+syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -750,8 +754,9 @@ file reconstructed exactly.
 - [ ] Add Git modules and worktree-include syntax.
 - [ ] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
-- [ ] Add systemd units, tmpfiles configuration, and surveyed directive
-  configuration.
+- [ ] Add systemd units.
+- [ ] Add tmpfiles configuration.
+- [x] Add surveyed directive configuration.
 
 Makefiles are implemented ahead of the rest of this stage. An October 20, 2026
 read of the local checkouts of the organization's repositories found 19
@@ -845,6 +850,67 @@ way. Of the 100-kilobyte inputs built to slow the scanner, 20,000 lines that
 each open a bracket expression and a character class that nothing closes take
 7.0 milliseconds to highlight and 15 to parse, and one line of 20,000
 attributes takes 2.0 to highlight.
+
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found 11 `.conf` files, in Infra, gVisor, and Legibility, and they
+hold eight syntaxes: Netdata health alerts and a Netdata collector's YAML in
+Infra, nginx in Infra and gVisor, Apache httpd and OpenSSL configuration in
+gVisor, a systemd drop-in and sysusers.d configuration in Infra, and tmpfiles.d
+configuration in Legibility. The same read found an nftables ruleset in Infra
+and a Clang module map in the `commonfabric-weaver` repository.
+
+nginx, Apache httpd, nftables, Netdata health alerts, and sysusers.d share one
+syntax, which one focused scanner reads as a directive configuration language. A
+statement starts with a directive and ends at the end of its line unless the
+line ends with `\`. A `{` that ends a line opens a block, a `}` that starts a
+line closes one, and only a whole line that starts with `#` is a comment, so a
+regular expression's `{4}` or a `#` in a Netdata description is ordinary text.
+In a file in which at least half of the statement lines end with `;`, as nginx's
+and some nftables rulesets' do, a `;` ends a statement, any `{` or `}` opens or
+closes a block, a `#` after white space, `;`, `{`, or `}` starts a comment, a
+statement continues onto a line that is indented further than its first, as an
+nginx argument list that runs over several lines does, and a quoted string runs
+to its closing quote over as many lines as it takes. A Netdata `key: value` line
+and an Apache section tag start a statement unless the line before ends with
+`\`. A `{` that follows `=` opens a list rather than a block, such as an
+nftables set, as does a block's `{` that a comma follows on its line before any
+`;`, or that a `}` closes later on its line around content without a `;`,
+counting neither quotes nor what follows a `#`. A `{` after `$` or `%` is part
+of a variable reference. The structure tree lists blocks, sections, and the
+entries that top-level Netdata `alarm` and `template` keys start. `nginx.conf`,
+`httpd.conf`, `apache2.conf`, and other `.conf` names that begin with one of
+those words select it, as do `.htaccess`, `.nft`, `nftables.conf`, and `nft`
+shebangs. `.conf` is shared, so another `.conf` file is directive configuration
+only when it does not open with a shebang and its first line other than blank
+lines and `#` or `;` comments starts a Netdata entry, opens an Apache section,
+starts with a sysusers.d `u`, `g`, or `m` line, or starts with a word that
+neither ends with `:` nor holds or precedes `=` and then holds a `;` or a `{`
+that does not follow `$` or `%`. It is YAML when it opens, after blank lines and
+`#` comments, with a `---` document marker or an unindented key with no value
+followed by an indented line or a sequence entry, as the Netdata collector's
+configuration is, INI when its first line other than blank lines and comments
+heads a section other than one a systemd unit opens with, as gVisor's OpenSSL
+configuration does, and JSON when the file opens with `{`. Each of those 11
+files opens in only one of those ways, except the systemd drop-in, which opens
+with a systemd unit's section, and the tmpfiles.d file, which opens in none.
+
+The scanner reconstructs each of the eight directive configuration files
+exactly. Arguments are uncolored unless they are strings, variable references,
+numbers, or booleans, which leaves 36.82 percent of their characters other than
+white space plain. On 100 kilobytes of Infra's nginx configuration and of its
+Netdata alerts, the 95th-percentile full highlight took 3.25 and 4.76
+milliseconds, the document parse 4.84 and 4.74, and the re-color after an edit
+3.51 and 5.40, in two rounds on a machine whose load average was 7 to 13. The
+INI scanner, run beside it as a control, re-colored its own 100 kilobytes in
+2.74 milliseconds at most, close to its recorded figure. All of those are inside
+the maximums for a parser-backed language. Twenty-two inputs built to slow the
+scanner, such as unclosed quotes, blocks, and section tags, runs of tags with no
+space between them, runs of unmatched brackets, `#` banners after a `{`, lines
+that hold a carriage return, and a single line of 50,000 words, were each parsed
+at 100 and 200 kilobytes: doubling the input multiplied the time by 1.1 to 2.4,
+and the slowest took 123 milliseconds at 200 kilobytes. 25,000 nested unclosed
+blocks build a structure tree. The fixtures come from Infra's Netdata alerts and
+gVisor's nginx benchmark configuration.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.
@@ -966,9 +1032,49 @@ passes direct-file and diff fixtures.
 - [ ] Add CSV, TSV, numeric `.dat` tables, and structured JSON log records.
 - [ ] Add Graphviz DOT.
 - [ ] Add Handlebars and generic `.in` templates.
-- [ ] Classify application-specific configuration when it has stable syntax.
-- [ ] Keep prose, logs, checksums, versions, PID files, and opaque task records
+- [x] Classify application-specific configuration when it has stable syntax.
+- [x] Keep prose, logs, checksums, versions, PID files, and opaque task records
   as plain text.
+- [ ] Add Objective-C, jq, and AppleScript, which the November 2026 read found
+  in Infra and Loom.
+
+The November 13, 2026 read of the local checkouts of the organization's
+repositories listed every tracked file with the language `cf view` selects for
+it. Application-specific configuration with a stable syntax uses the language
+whose syntax it shares. Netdata's health alerts are directive configuration and
+its collector configuration is YAML, as Stage 9 describes. sysusers.d
+configuration is directive configuration, and OpenSSL configuration is INI.
+Per-platform copies of a Swift package resolution, such as
+`Package.resolved.android`, Xcode string catalogs (`.xcstrings`), CPU profiles
+(`.cpuprofile`), and Firebase's `.firebaserc` are JSON, and so are `.config` and
+`.lock` files whose source opens a JSON object, which covers the
+`swift-java.config` in `commonfabric-weaver` and a Deno lock file in Loom with a
+name of its own. The plain-text language claims prose (`AUTHORS`,
+`CONTRIBUTORS`, `COPYING`, and `CNAME`), captured output (`.stdout` and `.out`),
+logs and error output (`.log` and `.stderr`) that do not open with a JSON
+object, checksum lists (`SHA256SUMS`, `MD5SUMS`, and those names with a prefix
+such as `GO_`, and `.sha256` and `.sha512` files), version files (`VERSION` and
+uppercase names ending in `_VERSION`, dot files such as `.python-version`,
+`.nvmrc`, and Loom's `protocol-version`), process and port records (`.pid`,
+`.pids`, and `.port`), SSH host key files (`known_hosts`, `ssh_known_hosts`, and
+the `github-known-hosts` files in Infra and `commonfabric-weaver`) and keys and
+certificates (`.pem`, `.crt`, and `.key`), and the empty placeholders `.gitkeep`
+and `.nojekyll`. A name it claims stays plain text whatever shebang or
+declaration its content starts with. A name that only ends in `version`, such as
+a `bump-version` script, is not claimed. Task records with no naming convention,
+such as Loom's generation counters and lock markers and the Beads activity
+record in Run Orchestrator, remain plain text because no language claims their
+names, and a shebang or an XML declaration is the only content that could select
+one. The extensionless task records the survey found in Raia are no longer in
+its tree.
+
+The same read found syntaxes that no stage lists: Objective-C in Infra, jq and
+AppleScript in Loom, a Firestore security rules file, Netlify-style `_redirects`
+and `_headers` files, Vue components, SurrealQL, Google Apps Script, a Clang
+module map, whose `//` and `/* */` comments directive configuration does not
+read, an Xcode project file, and a server-sent event stream fixture. Only the
+first three are in the survey's 24 active repositories, so only they are added
+above.
 
 A November 13, 2026 read of the local checkouts of the organization's
 repositories found Org mode only in gVisor: `cfc-gvisor.org` and
