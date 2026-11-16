@@ -1051,6 +1051,25 @@ is relitigated.
   computation produces as a whole array, an implementation may evaluate
   the whole collection again on each change in place of keeping results
   per element, and the observable result is the same.
+- Every rule, assumption, and question about a per-element construct
+  says which case it is about: an array of references, an array of
+  plain values in place, or the result of another per-element
+  construct.
+- The identity of the cell that a slot of a collection links to is the
+  address the link resolves to: the space, the document, the scope, and
+  the path within the document. Two links into two paths of one
+  document are two elements. What an element body holds is named from
+  the enclosing instance and the key, as the result cell of an element
+  is named today from the result container and the key
+  (`cellIdentityKey` in `runtime/runner/src/builtins/scope-policy.ts`,
+  `listElementKeys` in
+  `runtime/runner/src/builtins/list-element-keys.ts`, and
+  `listElementResultCell` in
+  `runtime/runner/src/builtins/list-coordinator-plan.ts`). The design
+  does not need the links that the runtime of today stores between the
+  arrays that per-element constructs read and write. The causes are
+  computed as they were, in particular where an instance writes several
+  documents.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -1207,7 +1226,12 @@ assumption.
 42. **An instance made again under the identity of one torn down** (ES
     §2.8, question 33). *Assumed:* it finds the stored state where that
     is not yet deleted, as an element whose key returns does. A link to a
-    torn-down instance held elsewhere reads the last stored values.
+    torn-down instance held elsewhere reads the last stored values. For
+    a child of an element body this holds over an array of references,
+    an array of plain values in place, and the result of another
+    per-element construct alike: the key returns when the same resolved
+    address, the same value, or the same upstream key stands in the
+    collection again.
 43. **A failed evaluation of a computation that makes instances** (PL
     §3.14). *Assumed:* the instances of the last evaluation stay, and
     their arguments take the error state.
@@ -1324,7 +1348,13 @@ as an assumption.
 76. **The state of an occurrence among equal elements** (PL question
     36). Which state an occurrence has depends on the equal elements
     before it in the collection, which the label of its own position
-    does not hold. *Assumed:* accepted as a residual.
+    does not hold. *Assumed:* accepted as a residual. It is the same
+    over an array of references, where equal elements are links that
+    resolve to one address, and over an array of plain values in place,
+    where they are equal values. An element of the result of another
+    per-element construct has its upstream key, so its state depends on
+    the equal elements of the first source of the chain and not on
+    equal values in the result.
 77. **The argument of a `.for(tag)` instance on a later event** (PL
     question 39). *Assumed:* not written again. The alternative writes it
     on every event, as a computation does.
@@ -1520,7 +1550,10 @@ as an assumption.
 125. **How a result path of a binding names a position inside an
     element** (PL question 78). *Assumed:* a `*` at the position of
     each enclosing collection. Two collections spread into one array
-    of children are not told apart by the path.
+    of children are not told apart by the path. The path names a
+    position of the stored result, so the question is the same over an
+    array of references, an array of plain values in place, and the
+    result of another per-element construct.
 126. **A schema of the plan and the schema the runtime stores an input
     under** (PL question 80). *Assumed:* the comparison stores inputs
     under the runtime's schema. The documents do not say how a schema
@@ -1550,7 +1583,10 @@ as an assumption.
     bindings). *Assumed:* the binding has no result path through the
     collection, so no reader finds its stream from the plan. The
     alternatives name the position of the member, or write `*` and
-    have a reader try each position.
+    have a reader try each position. The source here is an array
+    written in place in the pattern body, whose members the instance
+    computes: not a stored array of references, and not the result of
+    a per-element construct.
 131. **The declared label of an element's handle in the compiled
     path** (PL question 85). Settled by ruling: the handle of an
     element is read at the element's position in the source
@@ -1573,6 +1609,12 @@ as an assumption.
     (question 138). No record of the plan holds the declared label.
     Not determined by a run: whether a list that declares a clause
     for its items alone gives the link at `element` a `link` entry.
+    The open part is about an array of references, which the observed
+    runs are over. Over an array of plain values in place no link
+    stands below the position, and the assumption gives the handle the
+    same declared label of the list. Over the result of another
+    per-element construct the element's label is what the template of
+    the upstream output gives the position, and nothing is open.
 133. **A written path that holds a link, for a write edge with no
     reference** (PL question 87). *Assumed:* the row is not compared
     where the run stored a link at the written path, and is counted
@@ -1588,7 +1630,11 @@ as an assumption.
     it holds and by no place, and everything an element body holds is
     per element key. *Assumed:* the first governs, so two occurrences
     that bind equal state from a `computed` or a `lift` have one
-    stream.
+    stream. That is the same over an array of references (two links
+    that resolve to one address, passed on), an array of plain values
+    in place (equal copied values), and the result of another
+    per-element construct (two elements with different keys that copy
+    or pass on equal state).
 138. **A write row whose template is empty beside the coordinator's
     join** (PL question 96). Where every clause a run stores for a
     handler's write is of the `map` coordinator's join, the template
@@ -1597,7 +1643,13 @@ as an assumption.
     *Assumed:* it is counted apart as looser in integrity and is not
     among the deliberate exceptions. The alternatives count it as an
     exception by ruling, or mint on every `derive` of a write edge.
-    One fixture has such a row and the corpus has none.
+    One fixture has such a row and the corpus has none. The row arises
+    in all three cases. What the coordinator's join holds today
+    differs: the clauses of the list's own document over an array of
+    references, those of the other elements as well over an array of
+    plain values in place, and, over the result of another per-element
+    construct, which today is an array of links to the upstream
+    elements' result cells, what it holds for an array of references.
 140. **The transaction that creates an instance outside a handler**
     (ES question 77). *Assumed:* one transaction that writes the
     argument and evaluates nothing, so that a new instance settles in
@@ -1614,7 +1666,10 @@ as an assumption, which is what the prototype does.
      `Cone.within` holds the steps of where the cone's code is written,
      and its `element` steps name the collections. Open beside the
      member itself: whether it holds the `site` steps or the
-     collections alone.
+     collections alone. The member does not depend on whether a
+     collection it names is over an array of references, an array of
+     plain values in place, or the result of another per-element
+     construct.
 144. **Who places a stream in a computed value** (ES question 78).
      *Assumed:* the value function, through a fourth function of
      `ConeHost`, and `Binding.result` describes the positions. The
@@ -1628,7 +1683,13 @@ as an assumption, which is what the prototype does.
      after a move. *Assumed:* such a cone stores the value in the
      element's result, and no link to the position, so that the row
      shows the right value once its results have moved with the key.
-     The alternative stores the link and has the move rewrite it.
+     The alternative stores the link and has the move rewrite it. The
+     question is about an array of plain values in place. Over an array
+     of references the result holds the link to the cell, which a move
+     does not change. Over the result of another per-element construct
+     the position of the upstream result is not stable on a move
+     either, and the assumption is extended: the result holds what the
+     upstream position holds, the value or the link to a cell.
 146. **Which cone with side-writes is of which kind** (ES question 80).
      By ruling a cone with a small, fixed set of write targets is an
      ordinary node and one whose write set is dynamic or very large is
@@ -1644,7 +1705,11 @@ as an assumption, which is what the prototype does.
      from, and a `flatMap` can yield several elements for one upstream
      element. *Assumed:* the key is the upstream key together with the
      count of earlier elements that the same upstream element
-     contributed.
+     contributed. This is the case of the result of another per-element
+     construct. The assumption is the same whether a segment holds
+     references or plain values in place; the alternative keys a
+     reference by the address it resolves to and a plain value by its
+     value, under the upstream key.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
 149. **A property default of a place, in a read of an object whole** (PL
@@ -1668,6 +1733,18 @@ as an assumption, which is what the prototype does.
      integrity of a default. The alternative writes the callee's
      defaults at setup, as today, which gives them the integrity of
      that run.
+151. **What "the causes are computed as they were" requires** (PL
+     question 105). By ruling the design does not need the links that
+     today's runtime stores between the arrays per-element constructs
+     read and write, and the causes are computed as they were.
+     *Assumed:* the same inputs and structure of derivation, not
+     identifiers equal byte for byte to today's. Over an array of
+     references the key has today's inputs, the resolved address and
+     the count. Over an array of plain values in place it differs from
+     today's by ruling. Over the result of another per-element
+     construct it is the upstream key, where today's is the address of
+     the upstream element's result cell. The alternative asks for
+     today's identifiers over an array of references.
 
 ## Open, and not needing the owner
 
@@ -1680,7 +1757,9 @@ as an assumption, which is what the prototype does.
   rest on it, and specs pull request #91 refers to a contract rule for a
   language-model effect that no chapter states.
 - **A statically resolved pattern called with `inSpace`** in the reactive
-  tier of an element body is addressed by no document.
+  tier of an element body is addressed by no document. The gap is the
+  same over an array of references, an array of plain values in place,
+  and the result of another per-element construct.
 - **`execution-and-storage.md` leaves two things unspecified:** how the
   arrangement of part documents is computed again when a conflict
   withdraws writes at the commit, after the size rule ran; and how the

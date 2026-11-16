@@ -1390,10 +1390,15 @@ The runtime evaluates a `map` over the collection as follows.
    (`plan-and-label-templates.md` §1.3) and is the only read of the
    collection the `map` itself makes.
 2. Compute the key of every position. The element part of a position that
-   holds a link is the identity of the cell it links to, and that of a
-   position that holds a plain value is the salted hash of the value
-   (section 5.3). The key holds the element part and the number of
-   earlier positions with the same element part. The position is not in
+   holds a link is the identity of the cell it links to, which is the
+   address the link resolves to, the path within the document included,
+   and that of a position that holds a plain value is the salted hash
+   of the value (section 5.3). A position of the result of another
+   per-element construct has the key of the upstream element it came
+   from ("A chain of per-element constructs", section 2.6;
+   `plan-and-label-templates.md` §1.3 names the three cases). The key
+   holds the element part and the number of earlier positions with the
+   same element part. The position is not in
    the key. Record each key's position and binding. The position is the
    value of the key's slot of root `index`, for the cones that list it.
 3. For each key not in the table, create its cone instances and evaluate
@@ -4720,7 +4725,12 @@ computation makes:
     (section 2.8). The identity is ruled. With an ordinal as the identity,
     a list that shrinks and grows makes instance number 2 again for
     another item, and a child of an element body is made again when a
-    value that was removed is added again (section 2.5).
+    value that was removed is added again (section 2.5). For an element
+    body that is the same in the three cases of a source: the key
+    returns when the same value stands in an array of plain values in
+    place again, when a link that resolves to the same address stands
+    in an array of references again, and when the upstream key returns
+    in the result of another per-element construct.
     *Assumed:* the
     new instance finds the state cells and operation state stored under
     that identity where they were not deleted yet, as an element whose key
@@ -4854,7 +4864,14 @@ Added by the ruling that the scheduler is switched per space (section 9):
     move rewrite it to the new position. The assumption departs, for
     this one case, from the rule that a value passed on unchanged is
     stored as a reference (section 2.4), as question 84 does for a
-    write.
+    write. The question is about an array of plain values in place.
+    Over an array of references the result holds the link to the cell,
+    which a move does not change, and nothing is open. Over the result
+    of another per-element construct the position of the upstream
+    result changes on a move as well, and section 2.6 does not state
+    the case. *Assumed* there too: the element's result holds what the
+    upstream position holds, the value or the link to a cell, and no
+    link to the upstream position.
 80. **Which cone with side-writes is of which kind** (section 2.3;
     `scheduler-and-serving-loop.md` §7.1). By ruling a cone with a
     small, fixed set of write targets is an ordinary node whose targets
@@ -5203,7 +5220,11 @@ To the prototype:
 30. **Mixed labels in a kept collection.** Where positions differ in
     label at a path, section 4.3 stores no `*`-child entry there and one
     entry per position. Whether a shared entry for the common part and
-    per-position entries for the rest is smaller needs measurement.
+    per-position entries for the rest is smaller needs measurement. The
+    collection is the stored result of a per-element construct, and the
+    question does not depend on whether its source is an array of
+    references, an array of plain values in place, or the result of
+    another per-element construct.
 31. **Matching calls at migration** (section 9.3). How many compiled-in
     calls in the corpus the matching places, and how much state is stored
     under the ones it cannot.

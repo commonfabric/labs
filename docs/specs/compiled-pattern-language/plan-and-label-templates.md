@@ -1572,7 +1572,10 @@ runtime computes. A key has two parts.
 - The **element part** is computed from the element itself. It is the
   element's **value**, canonicalized and hashed, when the slot holds a
   plain value, and the **identity of the cell** the slot links to, when
-  it holds a link.
+  it holds a link. By ruling that identity is the address the link
+  resolves to: the space, the document, the scope, and the path within
+  the document. Two links into two paths of one document have two
+  element parts, and are two elements.
 - The **occurrence count** is the number of earlier positions of the
   collection whose element part is the same.
 
@@ -1585,6 +1588,66 @@ By ruling an element of a collection that is the result of a per-element
 construct has the key of the upstream element it came from, in the
 place of a key computed from what the result holds ("Derived collections
 carry their elements' keys", below).
+
+**The three cases of a source.** By ruling every rule, assumption and
+question about a per-element construct says which of three cases it is
+about. This document names them as follows.
+
+- **An array of references:** a stored array whose positions hold
+  links. The element part is the address the link resolves to.
+- **An array of plain values in place:** an array whose positions hold
+  the values themselves, either a stored array or one that a `lift` or
+  a `computed` returns whole. The element part is the salted hash of
+  the value.
+- **The result of another per-element construct:** the output of a
+  `map`, a `filter` or a `flatMap` of the plan. An element has the key
+  of the upstream element it came from, whatever the result holds at
+  its position.
+
+One stored array can hold a link at one position and a plain value at
+another, and the first two cases then apply position by position. A
+rule of this document that names no case holds in all three.
+
+**What is named from a key.** By ruling, what an element body holds is
+named from the enclosing instance and the key: the instance, the steps
+of `within`, whose `element` step contributes the collection's name and
+the key, and the `name` of the record, as this section's first
+paragraph has it. The runtime of today names the result cell of an
+element in the same way, from the result container of the construct and
+the key (`listElementResultCell` in
+`runtime/runner/src/builtins/list-coordinator-plan.ts`), and forms the
+key of a slot that holds a link from the link it resolves to, as space,
+document, scope and path, with the occurrence count (`cellIdentityKey`
+in `runtime/runner/src/builtins/scope-policy.ts`, `listElementKeys` in
+`runtime/runner/src/builtins/list-element-keys.ts`). The result
+container of a `map` of today holds a link to the result cell of each
+element (`createMapInstance` in `runtime/runner/src/builtins/map.ts`),
+so a construct of today applied to that result keys an element by the
+address of the upstream element's result cell, which is itself named
+from the upstream container and the upstream key. The owner's words on
+the arrays that per-element constructs read and write are that the
+design does not need those specific links, and that the causes are
+computed as they were, in particular where an instance writes several
+documents. In this design the result of a per-element construct holds
+no link to a result cell per element, and the upstream key reaches the
+downstream body directly ("Derived collections carry their elements'
+keys", below). *Assumed* (section 8, question 105): "computed as they
+were" means the same inputs and the same structure of derivation, and
+not identifiers equal byte for byte to those of today. By case:
+
+- **An array of references.** The key has the inputs of today's key:
+  the resolved address and the count. The name of what the body holds
+  has the enclosing instance and the collection's name where today's
+  has the result container, whose own cause holds the parent cell and
+  the output it is written at.
+- **An array of plain values in place.** The key differs from today's
+  by ruling: the value and its count, where today's holds the position
+  (below).
+- **The result of another per-element construct.** The key is the
+  upstream key, where today's is the address of the upstream element's
+  result cell. Both are functions of the upstream construct and the
+  upstream key, so a change of one upstream element reaches the one
+  downstream element in both.
 
 A link to a plain value is keyed by the cell it links to, so two cells that
 hold equal values have two element parts. A hole has no key, gets no cone
@@ -9780,6 +9843,16 @@ this document made.
     not join the collection's `enumeration` on that account. The
     alternative joins it into every template that reads per-element
     state, which would be a further exception to "equal or tighter".
+    By case: over an array of references the equal elements are
+    positions whose links resolve to one address, and over an array of
+    plain values in place they are positions that hold equal values;
+    the question and the assumption are the same for both. An element
+    of the result of another per-element construct has the key of its
+    upstream element, so its state depends on the equal elements before
+    that one in the first source of the chain, and not on equal values
+    or references in the result; an element that a `flatMap`
+    contributes depends in addition on its place in its segment
+    (question 101).
 37. **Which instantiations put the position in the key.** Not open: none
     does. A child of an element body, and an instance that a `lift` or a
     `computed` written in the body makes, is named through the element
@@ -9848,7 +9921,10 @@ this document made.
     more names. A coarser one, with one cone for the whole callback of
     an element construct, which is what the prototype emits, evaluates
     every declaration of a row when one of its inputs changes. Neither
-    changes a label.
+    changes a label. The partition of an element body is the same in
+    the three cases of section 1.3: over an array of references, over
+    an array of plain values in place, and over the result of another
+    per-element construct.
 45. **A statically resolved pattern on a cycle of calls.** A pattern that
     calls itself in its reactive tier, directly or through other
     statically resolved patterns, cannot be compiled into the enclosing
@@ -9919,7 +9995,11 @@ this document made.
     the prototype. The alternative adds a value to
     `Collection.source.via` for a construct that has the elements of
     its source, so that the element slots bind per position as those of
-    a `filter` result do and no assembled output is needed.
+    a `filter` result do and no assembled output is needed. The case is
+    a scan whose receiver is the result of another per-element
+    construct. A scan over a stored array, of references or of plain
+    values in place, has the array as its source, and the question does
+    not arise there.
 51. **The positions after a spread in an array literal.** Section 3.4
     gives every position from the first spread on the path `*` and one
     template, the join over the spread operands and the members written
@@ -10384,7 +10464,12 @@ this document made.
     declares, which a write edge of a handler bound in such a pattern
     needs. A state cell of a pattern compiled in under `site` steps
     alone is found in the run of today as section 3.1 describes ("A
-    binding with a `within` step").
+    binding with a `within` step"). The question is the same in the
+    three cases of section 1.3. The path names a position of the array
+    the instance stores for the construct's result, and the stream at
+    it is that of the key at that position, whether the source is an
+    array of references, an array of plain values in place, or the
+    result of another per-element construct.
 79. **How much of a handler's template is on a link it writes** (for the
     project owner). By ruling, a handle that a body passes on adds nothing
     of the label of its cell, and the link itself carries the label of at
@@ -10485,7 +10570,13 @@ this document made.
     position of the member in the place of `*`; or the path has `*` and
     a reader tries each position. `execution-and-storage.md` and
     `scheduler-and-serving-loop.md` have to agree, as for question 78.
-    The corpus has 208 such bindings, all in that directory.
+    The corpus has 208 such bindings, all in that directory. The case:
+    the source is an array written in place in the pattern body, whose
+    members are values the instance computes. It is not a stored array
+    of references and not the result of a per-element construct. The
+    question is about the position of a member in that source, so it
+    does not depend on whether a member is stored as a value in place
+    or as a reference to the output that computes it.
 85. **The declared label of an element's handle in the compiled path**
     (for the project owner and the specification change). Settled by
     ruling: the label of a slot of root `element` is read at the
@@ -10539,6 +10630,19 @@ this document made.
     schema declares a clause for its items, and none for itself, gives
     the stored link at `element` an entry of origin `link`, in which
     case the two labels above would hold the same clause there.
+
+    By case. The runs observed, and the part that is open, are over an
+    array of references: the position holds a link, and a handle that
+    is `resolved` follows it. Over an array of plain values in place
+    the position holds the value, in the list's document. No link
+    stands below the position, so no entry of origin `link` exists
+    there, and the assumption gives the slot the same `declared`
+    entries of the list's document, at the position and above it. Over
+    the result of another per-element construct the position is at an
+    output of the instance, the label of the element is what the
+    template of that output gives the position (sections 3.6 and 3.7),
+    and no declaration of a stored list applies, so nothing is open
+    there.
 86. **Per-value flow and the join over the positions that hold one
     key.** Not open: an element key holds the count of earlier
     occurrences, so no two positions hold one key, nothing joins the
@@ -10593,7 +10697,14 @@ this document made.
     occurrences that bind equal state one stream, and the second gives
     them two. *Assumed:* the first governs (section 3.14). The
     alternative adds the element keys of the enclosing element bodies to
-    the identity of such a stream.
+    the identity of such a stream. The question and the assumption are
+    the same in the three cases of section 1.3. What "equal state"
+    means differs: two occurrences over an array of references bind
+    equal state where their links resolve to one address and the body
+    passes that reference on; two over an array of plain values in
+    place where the copied values are equal; and two elements of the
+    result of another per-element construct, whose keys differ without
+    a count, where what the body copies or passes on is equal.
 91. **The key of an element of a `filter` result.** Not open. By
     ruling an element of a collection that is the result of a
     per-element construct is keyed by the key of the upstream element
@@ -10657,7 +10768,16 @@ this document made.
     pattern alone, over a list that declares two clauses. The corpus
     comparison has none. Without the assumption of question 85,
     `askToRetire` of
-    `patterns/system/profile-picker/profile-picker.tsx` is one.
+    `patterns/system/profile-picker/profile-picker.tsx` is one. The
+    row and the assumption are the same in the three cases of section
+    1.3, and what the coordinator's join holds today differs. Over an
+    array of references it holds the clauses of the list's own
+    document. Over an array of plain values in place it holds the
+    clauses of the other elements as well (section 3.1). The result of
+    another per-element construct is, in the runtime of today, an array
+    of links to the result cells of the upstream elements, so the join
+    is that of an array of references, taken over the upstream result
+    container.
 97. **The value a declaration of the reactive tier gives a state cell.**
     Not open. A first value that is a constant is the default of the
     cell's schema: nothing is written when the cell is created, and a
@@ -10683,7 +10803,10 @@ this document made.
     written in, outermost first, which is the `element` steps alone. Not
     determined by this document: whether the member holds the `site`
     steps as well, as assumed here, or the collections alone; and
-    whether `Cone.entry` is unique without it.
+    whether `Cone.entry` is unique without it. The member and the
+    question are the same in the three cases of section 1.3: an
+    `element` step names a collection, whatever the collection's source
+    holds.
 99. **Where a slot of `Body.reads` sits in the body's argument.** Not
     open. Each entry of `Body.reads` is a `ReadInput`: the slot, and
     the path `at` in the body's argument at which the slot's value is
@@ -10708,7 +10831,13 @@ this document made.
      its segment is then another element for a body applied to the
      result. The alternative keys an element of a segment by its own
      identity or value and its count in the segment, under the source
-     element's key.
+     element's key. The case is the result of another per-element
+     construct, the `flatMap`, over a source of any of the three cases.
+     The assumption does not look at what a segment holds: an element
+     of a segment that is a reference and one that is a plain value in
+     place are both keyed by the position in the segment. The
+     alternative keys the first by the address its link resolves to and
+     the second by its value.
 102. **A default of the caller's place and one of the callee, for one
      path.** Not open. By ruling the default read at a position is the
      one declared nearest the end of the chain of places the read
@@ -10745,3 +10874,21 @@ this document made.
      reader further along a chain through the argument document finds a
      stored value where the order of the ruling would give it the
      default of another place.
+105. **What "the causes are computed as they were" requires** (for the
+     project owner). By ruling the design does not need the links that
+     the runtime of today stores between the arrays that per-element
+     constructs read and write, and the causes are computed as they
+     were. *Assumed:* the same inputs and the same structure of
+     derivation, and not identifiers equal byte for byte to today's
+     (section 1.3, "What is named from a key"). Over an array of
+     references the key has today's inputs, the resolved address and
+     the count, and the name of what the body holds has the enclosing
+     instance and the collection's name where today's has the result
+     container. Over an array of plain values in place the key differs
+     from today's by ruling. Over the result of another per-element
+     construct the key is the upstream key, where today's is the
+     address of the upstream element's result cell. The alternative
+     asks for today's identifiers where the inputs are the same, which
+     is the array of references alone, so that per-element state
+     stored there is found again; that would conflict with the ruling
+     that stored per-element state is not carried over.

@@ -1094,16 +1094,26 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   authored function one of them or the reactive tier calls, and not a
   `handler`, an `action`, or an inline event handler
   ([language subset](language-subset.md), §13, question 26).
-- **Element bodies and equal elements.** The rulings leave three things
+- **Element bodies and equal elements.** The rulings leave four things
   open ([plan format and label templates](plan-and-label-templates.md),
-  §8, questions 36, 90, and 101). Which state an occurrence has
-  depends on which equal elements stand before it, and a reader of the
-  row can see that: assumed accepted. Whether a binding that a `lift`
+  §8, questions 36, 90, 101, and 105). By ruling each says which case
+  of a source it is about: an array of references, an array of plain
+  values in place, or the result of another per-element construct
+  (§1.3 there). Which state an occurrence has depends on which equal
+  elements stand before it, and a reader of the row can see that:
+  assumed accepted, for an array of references and an array of plain
+  values in place alike; an element of the result of another
+  per-element construct has its upstream key, so it depends on the
+  equal elements of the first source. Whether a binding that a `lift`
   or a `computed` written in an element body makes has a stream per
-  occurrence: assumed not, as a binding made in a function body is
-  named by what it holds. And which key an element that a `flatMap`
-  contributes has: assumed the key of its source element together with
-  its position in that element's segment.
+  occurrence: assumed not, in all three cases, as a binding made in a
+  function body is named by what it holds. Which key an element that
+  a `flatMap` contributes has: assumed the key of its source element
+  together with its position in that element's segment, whether the
+  segment holds references or plain values. And what it means that
+  the causes of what an element body holds are computed as they were
+  in the runtime of today: assumed the same inputs and structure of
+  derivation, not equal identifiers.
 - **An explicit cause in a handler.** A later event that instantiates
   under a cause an earlier event gave creates nothing. Whether it writes
   the argument it passes is open. *Assumed:* it does not

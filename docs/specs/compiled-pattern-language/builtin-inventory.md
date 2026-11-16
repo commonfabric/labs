@@ -464,7 +464,11 @@ cause of every state cell and durable operation the body declares.
 element by the identity the slot resolves to (`cellIdentityKey` in
 `builtins/scope-policy.ts`) and the count of earlier occurrences of that
 identity, so the same identity twice gets two instances. For a slot that
-holds a link the identity is that of the link's target. For a slot that
+holds a link the identity is the address the link resolves to: the
+space, the document, the scope, and the path within the document. The
+result cell of an element is named from the construct's result
+container and the key (`listElementResultCell` in
+`builtins/list-coordinator-plan.ts`). For a slot that
 holds a plain value in place it is the slot's own address in the list's
 document, the path of the position included
 (`listSlotResolutions` in `builtins/list-coordinator-plan.ts`), so such an
@@ -478,7 +482,23 @@ be recomputed, and that its state moves with it.
 - An element that is a plain value, stored in the list itself, is keyed by
   its value.
 - An element that is not a fixed value, a link to a cell, is keyed by the
-  identity of that cell.
+  identity of that cell. By ruling that identity is the address the
+  link resolves to, the path within the document included, so two
+  links into two paths of one document are two elements.
+- What an element body holds is named from the enclosing instance and
+  the key, as the result cell of an element is named today from the
+  result container and the key. The design does not need the links
+  that the runtime of today stores from a result container to the
+  result cell of each element. The causes are computed as they were,
+  which is assumed to mean the same inputs and structure of derivation
+  and not equal identifiers (`plan-and-label-templates.md` §1.3; its
+  §8, question 105).
+- A rule, an assumption or a question about a per-element construct
+  says which case it is about: an array of references, an array of
+  plain values in place, or the result of another per-element
+  construct. The first three rules of this list are those cases in
+  the order plain values, references, and, below, the result of
+  another construct.
 - In both cases the key also holds the count of earlier occurrences of the
   same value or identity in the collection. Two equal elements have two
   keys, and no two positions have one key.
