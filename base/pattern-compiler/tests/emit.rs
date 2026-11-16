@@ -588,3 +588,49 @@ export const P = pattern<{ pieces: Piece[] }>(({ pieces, [SELF]: self }) => {
     );
     assert!(source(&code).contains("const self = $rt.self;"));
 }
+
+#[test]
+fn a_cone_with_side_writes_records_its_kind_from_the_footprint() {
+    // Ruling Z7, with the tiers of `footprint-analysis.md` §6.3: a cone
+    // whose bodies write named targets alone is `static`, and one with a
+    // body that writes a target reached through data is `materializer`.
+    let (plan, _) = emitted(
+        r#"import { computed, lift, pattern, Writable } from "commonfabric";
+const tally = lift((x: { counts: Writable<Record<string, number>>; flavor: string }) => {
+  x.counts.key(x.flavor).set(1);
+  return x.flavor;
+});
+export const P = pattern<{ value: string; flavor: string }>(({ value, flavor }) => {
+  const log = Writable.of<string[]>([]);
+  const counts = Writable.of<Record<string, number>>({});
+  computed(() => {
+    log.set([...log.get(), value]);
+  });
+  const tallied = tally({ counts, flavor });
+  const plain = computed(() => value.split("").reverse().join(""));
+  return { log, counts, tallied, plain };
+});
+"#,
+        "P",
+    );
+    let kinds: Vec<(String, Value)> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .filter(|cone| !cone["bodies"].as_array().expect("bodies").is_empty())
+        .map(|cone| {
+            (
+                cone["entry"].as_str().expect("an entry").to_string(),
+                cone.get("sideWrites").cloned().unwrap_or(Value::Null),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("statement".to_string(), json!("static")),
+            ("tallied".to_string(), json!("materializer")),
+            ("plain".to_string(), Value::Null),
+        ]
+    );
+}

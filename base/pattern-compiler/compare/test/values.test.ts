@@ -99,4 +99,17 @@ describe("the values of a fixture", () => {
     expect(comparison.differences).toEqual([]);
     expect(comparison.compared).toBe(2);
   });
+
+  it("are equal for cones with side-writes of both kinds", async () => {
+    // Ruling Z7: two cones that write a named cell, one of them demanded
+    // by a path that passes the cell on, and a materializer.
+    const [{ comparison }] = await compareFixtures("side-writes");
+
+    expect(comparison.notExecuted).toBeUndefined();
+    expect(comparison.differences).toEqual([]);
+    expect(comparison.failedEvents).toEqual([]);
+    // Six members of the result and four state cells, after the instance
+    // settled and after the event.
+    expect(comparison.compared).toBe(20);
+  });
 });

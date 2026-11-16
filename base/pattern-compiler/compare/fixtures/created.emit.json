@@ -125,6 +125,7 @@
               "entry": "made",
               "picks": [],
               "selectors": [],
+              "sideWrites": "materializer",
               "slots": [],
               "writes": []
             },

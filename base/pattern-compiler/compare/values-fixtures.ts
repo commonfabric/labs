@@ -53,6 +53,10 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),
   "passed": [{ argument: { secret: "s3cret", items: ["a", "b"] } }],
+  "side-writes": [{
+    argument: { flavor: "mint" },
+    events: [{ binding: 0, event: { to: "b" } }],
+  }],
   "state-declared": [{ argument: { note: "n" } }],
   "created": [{ argument: { note: "n" } }],
   "handler": [{
@@ -90,7 +94,9 @@ const WRITTEN: Record<string, Written[]> = {
  * link to each other, and a read of the whole result of today's run then
  * rejects with a `LinkCycleError` outside the read. `fixtures/state-first.tsx`
  * is not either: it gives a state cell a first value that is not a
- * constant, which today's cell constructor refuses.
+ * constant, which today's cell constructor refuses. Nor is
+ * `fixtures/side-write-undemanded.tsx`: nothing demands its cone with a
+ * side-write, which today's runtime evaluates all the same.
  */
 const GENERATED = [
   "declared-writes",

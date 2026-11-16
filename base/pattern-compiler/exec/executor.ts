@@ -37,7 +37,17 @@ export type Plan = {
   argumentSchema?: string;
   resultSchema?: string;
   slots: { root: Root; path: string[]; observes: string; schema?: string }[];
-  cones: { entry: string; slots: number[]; bodies: number[] }[];
+  cones: {
+    entry: string;
+    slots: number[];
+    bodies: number[];
+    /**
+     * For a cone with side-writes, its kind: `static` where every write
+     * target is one the compiler names, and `materializer` where a target
+     * is reached through data.
+     */
+    sideWrites?: "static" | "materializer";
+  }[];
   outputs: {
     path: string[];
     cone: number;
@@ -177,9 +187,24 @@ type Entry = {
    * elements, each with the key of the element it came from.
    */
   members?: Element[];
+  /**
+   * The cones with static side-writes whose write target the evaluation
+   * read or passed on: each is brought up to date before this entry is
+   * taken as current (ES §2.3, "A cone with side-writes").
+   */
+  writers: Writer[];
+  /** The value of a materializer that has not been evaluated yet. */
+  pending?: boolean;
   evaluatedAt: number;
   changedAt: number;
 };
+
+/** Brings the instances of a side-writing cone up to date. */
+type Writer = (context: Context) => void;
+
+const sameRoot = (a: Root, b: Root): boolean =>
+  a.kind === b.kind && a.cell === b.cell && a.collection === b.collection &&
+  a.handler === b.handler && a.operation === b.operation;
 
 /** What an executed instance counted. */
 export type Counts = {
@@ -435,6 +460,12 @@ export class Host {
   readonly indexes = new Map<number, number>();
   /** The elements of the collection being assembled, with their keys. */
   members: Element[] | undefined;
+  readonly writers: Writer[] = [];
+  /**
+   * When the last cone this evaluation demanded through a write target
+   * had been evaluated: the clock, and how many reads it had made.
+   */
+  demandedAt: { clock: number; reads: number } | undefined;
 
   constructor(
     readonly instance: Instance,
@@ -465,6 +496,7 @@ export class Host {
     const path = slot.path[slot.path.length - 1] === "*" && rest.length === 0
       ? slot.path.slice(0, -1)
       : slot.path;
+    this.demand(slot.root, [...path, ...rest]);
     const found = this.at(
       instance.rootOf(slot.root, this, [...path, ...rest]),
       [...path, ...rest],
@@ -491,7 +523,27 @@ export class Host {
   /** A read of a place that the value code names no slot for. */
   read(root: Root, path: string[]): unknown {
     this.instance.counts.readsWithoutSlot += 1;
+    this.demand(root, path);
     return this.at(this.instance.rootOf(root, this), path);
+  }
+
+  /**
+   * Evaluates first the cones that write, as a static side-write, what a
+   * read of `path` below `root` reads or passes on by reference: the
+   * target of a write edge counts as an output of its cone for demand
+   * (ES §2.3, "A cone with side-writes").
+   */
+  demand(root: Root, path: readonly string[]): void {
+    const writers = this.instance.writersOf(root, path, this.cone);
+    if (writers.length === 0) return;
+    for (const writer of writers) {
+      if (!this.writers.includes(writer)) this.writers.push(writer);
+      writer(this.context);
+    }
+    this.demandedAt = {
+      clock: this.instance.store.clock,
+      reads: this.reads.length,
+    };
   }
 
   /** The value of an entry of `Plan.outputs`. */
@@ -728,6 +780,7 @@ export class Instance {
   readonly #schemas = new Map<string, Schema>();
   readonly #memo = new Map<string, Entry>();
   readonly #open = new Set<string>();
+  readonly #checking = new Set<string>();
   /** The element table of each collection, by the keys around it. */
   readonly #tables = new Map<string, Element[]>();
   /** The state cells that exist, by the identifier of their document. */
@@ -737,6 +790,21 @@ export class Instance {
   #created = 0;
   /** The body whose writes are being counted, while a handler runs. */
   #handling: number | undefined;
+  /** The cones with static side-writes, each with what it writes. */
+  readonly #writers: {
+    cone: number;
+    targets: { root: Root; path: string[] }[];
+    run: Writer;
+  }[] = [];
+  /** The cones whose body is a materializer. */
+  readonly #materializers: Writer[] = [];
+  /** Whether the materializers are being evaluated, after a wave. */
+  #afterWave = false;
+  /**
+   * The cone of each value function evaluated, by its `entry`, and
+   * `result` for the result, in the order the evaluations ended.
+   */
+  readonly trace: string[] = [];
 
   constructor(
     readonly artifact: Artifact,
@@ -757,10 +825,92 @@ export class Instance {
     this.store.create("argument", "argument", this.stored(argument));
     this.store.create("result", "result", undefined);
     this.#load();
+    this.#sideWriters();
     // A state cell of the pattern's own body exists from the start, and
     // one of an element body from when its key enters the element table.
     this.#declare(new Map());
     this.settle();
+  }
+
+  /**
+   * The cones with side-writes, by their kind (ruling Z7). A cone of kind
+   * `static` has the targets of the write edges of its bodies that name a
+   * state cell or the cell of a handle at a slot.
+   */
+  #sideWriters(): void {
+    this.plan.cones.forEach((cone, index) => {
+      if (cone.sideWrites === undefined) return;
+      const run: Writer = (context) => {
+        for (const instance of this.#contextsOf(index, context)) {
+          this.code.values.forEach((value, number) => {
+            if (value.cone !== index || !this.#values.has(number)) return;
+            this.evaluated(number)(instance);
+          });
+        }
+      };
+      if (cone.sideWrites === "materializer") {
+        this.#materializers.push(run);
+        return;
+      }
+      const targets = cone.bodies.flatMap((body) =>
+        this.plan.bodies[body].writes.flatMap(({ target }) => {
+          if (target.kind === "state") {
+            return [{
+              root: { kind: "state", cell: target.cell },
+              path: target.path ?? [],
+            }];
+          }
+          if (target.kind === "handle" && target.slot !== undefined) {
+            const slot = this.plan.slots[target.slot];
+            return [{
+              root: slot.root,
+              path: [...slot.path, ...(target.path ?? [])],
+            }];
+          }
+          return [];
+        })
+      );
+      this.#writers.push({ cone: index, targets, run });
+    });
+  }
+
+  /**
+   * The cones with static side-writes that write at, above or below
+   * `path` of `root`, other than the cone `reader`.
+   */
+  writersOf(
+    root: Root,
+    path: readonly string[],
+    reader: number | undefined,
+  ): Writer[] {
+    if (this.#writers.length === 0) return [];
+    return this.#writers.filter(({ cone, targets }) =>
+      cone !== reader &&
+      targets.some((target) =>
+        sameRoot(target.root, root) &&
+        (matchesPath(target.path, path) || matchesPath(path, target.path))
+      )
+    ).map(({ run }) => run);
+  }
+
+  /**
+   * The element contexts a cone has an instance in, of those that extend
+   * `context`: one for each key of each collection the cone is written
+   * in that `context` does not bind.
+   */
+  #contextsOf(cone: number, context: Context): Context[] {
+    let found: Context[] = [context];
+    for (const collection of this.code.coneWithin[cone] ?? []) {
+      found = found.flatMap((known) => {
+        if (known.has(collection)) return [known];
+        const around = this.#contextKey(this.#outerOf(collection), known);
+        const table = this.#tables.get(`a${collection}|${around}`) ?? [];
+        return table.map((element) =>
+          new Map([...known, [collection, element]])
+        );
+      });
+    }
+    return found;
   }
 
   /** Creates the state cells declared for a context. */
@@ -1186,6 +1336,7 @@ export class Instance {
       reads: [],
       dependencies: [],
       indexes: new Map(),
+      writers: [],
       evaluatedAt: this.store.clock,
       changedAt: this.store.clock,
     };
@@ -1206,7 +1357,18 @@ export class Instance {
     compute: (host: Host) => unknown,
   ): Entry {
     const held = this.#memo.get(key);
-    if (held !== undefined && this.#current(held, context)) return held;
+    if (held !== undefined && !held.pending) {
+      // The check of an entry brings the cones it demanded up to date,
+      // and one of them can demand this entry's cone in turn: a pull that
+      // reaches a check in progress gets what the entry holds.
+      if (this.#checking.has(key)) return held;
+      this.#checking.add(key);
+      try {
+        if (this.#current(held, context)) return held;
+      } finally {
+        this.#checking.delete(key);
+      }
+    }
     if (this.#open.has(key)) {
       // A pull that reaches an evaluation in progress gets what it last
       // had (ES §2.7, "Detection").
@@ -1225,11 +1387,31 @@ export class Instance {
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
     if (kind === "assembly") this.counts.assemblies += 1;
+    if (kind === "value") {
+      this.trace.push(
+        cone === undefined ? "result" : this.plan.cones[cone].entry,
+      );
+    }
     const stored = canonical(this.stored(value));
-    const changed = held === undefined || held.stored !== stored;
+    const changed = held === undefined || held.pending === true ||
+      held.stored !== stored;
+    // What a cone demanded through its write target wrote before the
+    // reads that followed is what those reads saw. A read made before it
+    // that it wrote at is stale, and the entry is evaluated again.
+    const demanded = host.demandedAt;
+    const early = demanded === undefined
+      ? []
+      : host.reads.slice(0, demanded.reads);
+    const staleByDemand = demanded !== undefined &&
+      this.store.changedSince(evaluatedAt, early) &&
+      !this.store.changedSince(demanded.clock, early);
+    const readAt = demanded === undefined || staleByDemand
+      ? evaluatedAt
+      : demanded.clock;
     // A body that wrote a position it read is not evaluated again on
     // account of its own write.
-    const ownWrite = this.store.changedSince(evaluatedAt, host.reads);
+    const ownWrite = !staleByDemand &&
+      this.store.changedSince(readAt, host.reads);
     if (ownWrite) this.counts.staleByOwnWrite += 1;
     if (changed) this.store.clock += 1;
     const entry: Entry = {
@@ -1239,7 +1421,8 @@ export class Instance {
       dependencies: host.dependencies,
       indexes: host.indexes,
       members: host.members,
-      evaluatedAt: ownWrite ? this.store.clock : evaluatedAt,
+      writers: host.writers,
+      evaluatedAt: ownWrite ? this.store.clock : readAt,
       changedAt: changed ? this.store.clock : held.changedAt,
     };
     this.#memo.set(key, entry);
@@ -1250,6 +1433,9 @@ export class Instance {
     for (const [collection, index] of entry.indexes) {
       if (context.get(collection)?.index !== index) return false;
     }
+    // The cones whose write target the entry read or passed on are
+    // brought up to date first, as an upstream output is (ES §2.3).
+    for (const writer of entry.writers) writer(context);
     // A key that moved keeps its entries: nothing of an element is
     // evaluated on a move but what read the index (ES §2.6).
     if (this.store.changedSince(entry.evaluatedAt, entry.reads)) return false;
@@ -1266,14 +1452,24 @@ export class Instance {
     }
     const { cone } = this.code.values[value];
     const within = this.code.coneWithin[cone] ?? [];
-    return (context) =>
-      this.#ensure(
-        `v${value}|${this.#contextKey(within, context)}`,
+    const materializer = this.plan.cones[cone].sideWrites === "materializer";
+    return (context) => {
+      const key = `v${value}|${this.#contextKey(within, context)}`;
+      // A materializer is evaluated after the rest of a wave, and a
+      // reader of its value in the wave gets what it last returned.
+      if (materializer && !this.#afterWave) {
+        const held = this.#memo.get(key) ?? { ...this.#none(), pending: true };
+        this.#memo.set(key, held);
+        return held;
+      }
+      return this.#ensure(
+        key,
         context,
         cone,
         within.length > 0 ? "element" : "value",
         run,
       );
+    };
   }
 
   /** The `element` steps around a collection, outermost first. */
@@ -1418,6 +1614,7 @@ export class Instance {
     let members: (Ref | { value: unknown })[] = [];
     if (source.slot !== undefined) {
       const slot = this.plan.slots[source.slot];
+      host.demand(slot.root, slot.path);
       const base = host.at(this.rootOf(slot.root, host), slot.path);
       if (base instanceof Ref) {
         const located = this.store.locate(base, true, host.reads);
@@ -1510,13 +1707,17 @@ export class Instance {
   }
 
   /**
-   * Evaluates every kept output in the order of `Plan.outputs` (ES §2.3),
-   * and then the result, and stores the result document. A cone of the
-   * pattern's own body with a side-write is evaluated first: a reader of
-   * the cell it writes, the reader of the result among them, has the
-   * writing cone evaluated before it reads (ES §2.3). The step repeats
-   * while an evaluation wrote something, at most as often as a cone
-   * instance is evaluated in one transaction (ES §2.7).
+   * One wave after another: evaluates every kept output in the order of
+   * `Plan.outputs` (ES §2.3), and then the result, and stores the result
+   * document. The executor has no reader, so every kept output and the
+   * result are what is demanded. A cone with static side-writes is
+   * evaluated when something demanded reads its write target or passes
+   * it on by reference, before that reader. A cone whose body is a
+   * materializer is evaluated after the rest of the wave, where an input
+   * of it changed, and what it writes makes its readers stale, which the
+   * next wave evaluates (ES §2.3, "A cone with side-writes"). The waves
+   * repeat while an evaluation wrote something, at most as often as a
+   * cone instance is evaluated in one transaction (ES §2.7).
    */
   settle(): void {
     const none: Context = new Map();
@@ -1524,15 +1725,6 @@ export class Instance {
     if (result === undefined) return;
     for (let pass = 0; pass < MAX_PASSES; pass++) {
       const before = this.store.clock;
-      this.code.values.forEach((value, index) => {
-        if (!value.function || !this.#values.has(index)) return;
-        if ((this.code.coneWithin[value.cone] ?? []).length > 0) return;
-        const writes = this.plan.cones[value.cone].bodies.some((body) =>
-          this.plan.bodies[body].writes.length > 0 ||
-          this.plan.bodies[body].envelopes.length > 0
-        );
-        if (writes) this.evaluated(index)(none);
-      });
       this.plan.outputs.forEach((output, index) => {
         if (!output.kept || output.path.includes("*")) return;
         const value = this.valueOfOutput.get(index);
@@ -1550,6 +1742,12 @@ export class Instance {
         (host) => result.evaluate(host),
       );
       this.store.write(new Ref("result", []), this.stored(entry.value));
+      this.#afterWave = true;
+      try {
+        for (const materializer of this.#materializers) materializer(none);
+      } finally {
+        this.#afterWave = false;
+      }
       this.#declare(none);
       if (this.store.clock === before) break;
     }

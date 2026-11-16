@@ -527,6 +527,11 @@ fn satisfies_contract(chain: &[UiElement], contract: &Value) -> bool {
 struct BodyFact {
     /// Whether the body is a computation whose side-writes are all static.
     side_writes: bool,
+    /// For a computation with side-writes, which of the two kinds of
+    /// ruling Z7 it is, by its tier (FA §6.3): `static` where every write
+    /// target is one the compiler names, and `materializer` where a
+    /// target is reached through data.
+    kind: Option<&'static str>,
     at: u32,
     targets: Vec<Target>,
 }
@@ -4714,6 +4719,16 @@ impl<'a> Emitter<'_, '_, 'a> {
                     Some(tier) => tier == "static side-write",
                     None => record.detail.edges.iter().all(|edge| edge.fixed),
                 },
+            kind: match (computation, record.tier) {
+                (false, _) => None,
+                (true, Some("materializer")) => Some("materializer"),
+                (true, Some("static side-write")) => Some("static"),
+                (true, Some(_)) => None,
+                // An authored function has no tier of its own.
+                (true, None) if record.detail.edges.is_empty() => None,
+                (true, None) if record.detail.edges.iter().all(|edge| edge.fixed) => Some("static"),
+                (true, None) => Some("materializer"),
+            },
             at,
             targets: Vec::new(),
         };
@@ -6223,7 +6238,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             .iter()
             .map(|index| {
                 let cone = &self.cones[*index];
-                json!({
+                let mut record = json!({
                     "entry": cone.entry,
                     "at": { "file": file, "start": cone.at },
                     "slots": cone.slots.iter().collect::<Vec<_>>(),
@@ -6231,7 +6246,22 @@ impl<'a> Emitter<'_, '_, 'a> {
                     "selectors": cone.selectors,
                     "picks": cone.picks,
                     "writes": cone.writes,
-                })
+                });
+                // The kind of a cone with side-writes (ruling Z7): a
+                // materializer where one of its bodies is one, as a body
+                // with one write that is not static is a materializer for
+                // all of its writes (FA §6.3).
+                let kinds: Vec<&str> = cone
+                    .bodies
+                    .iter()
+                    .filter_map(|body| self.body_facts[*body].kind)
+                    .collect();
+                if kinds.contains(&"materializer") {
+                    record["sideWrites"] = json!("materializer");
+                } else if !kinds.is_empty() {
+                    record["sideWrites"] = json!("static");
+                }
+                record
             })
             .collect();
         let slots: Vec<Value> = self
@@ -7638,7 +7668,42 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
     let mut with_computed = 0;
     let mut computed_handles = 0;
     let (mut cones, mut edges, mut write_edges) = (0, 0, 0);
+    // The cones with side-writes by their kind (ruling Z7), each kind by
+    // what its bodies write, and the first values of state cells that a
+    // cone writes once.
+    let mut side_writes: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let (mut cells, mut first_values) = (0, 0);
     for plan in accepted.iter().flat_map(|module| &module.plans) {
+        for cell in plan.plan["stateCells"].as_array().into_iter().flatten() {
+            cells += 1;
+            if cell.get("first").is_some() {
+                first_values += 1;
+            }
+        }
+        for cone in plan.plan["cones"].as_array().into_iter().flatten() {
+            let Some(kind) = cone["sideWrites"].as_str() else {
+                continue;
+            };
+            let mut targets: BTreeSet<&str> = BTreeSet::new();
+            for body in cone["bodies"].as_array().into_iter().flatten() {
+                let body = &plan.plan["bodies"][body.as_u64().unwrap_or(0) as usize];
+                for write in body["writes"].as_array().into_iter().flatten() {
+                    targets.extend(write["target"]["kind"].as_str());
+                }
+                if body["envelopes"]
+                    .as_array()
+                    .is_some_and(|list| !list.is_empty())
+                {
+                    targets.insert("envelope");
+                }
+            }
+            let targets: Vec<&str> = targets.into_iter().collect();
+            let targets = match targets.is_empty() {
+                true => "no write edge".to_string(),
+                false => targets.join("+"),
+            };
+            *side_writes.entry((kind.to_string(), targets)).or_default() += 1;
+        }
         for body in plan.plan["bodies"].as_array().into_iter().flatten() {
             uses += 1;
             if body["computed"]
@@ -7667,6 +7732,25 @@ pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
     ));
     out.push_str(&format!(
         "cones: {cones}; edges: {edges}, {write_edges} through a side-write\n"
+    ));
+    for kind in ["static", "materializer"] {
+        let of_kind: Vec<String> = side_writes
+            .iter()
+            .filter(|((other, _), _)| other == kind)
+            .map(|((_, targets), count)| format!("{targets} {count}"))
+            .collect();
+        let total: usize = side_writes
+            .iter()
+            .filter(|((other, _), _)| other == kind)
+            .map(|(_, count)| count)
+            .sum();
+        out.push_str(&format!(
+            "cones with side-writes of kind `{kind}`: {total}; by the targets of their bodies: {}\n",
+            of_kind.join(", ")
+        ));
+    }
+    out.push_str(&format!(
+        "state cells: {cells}, {first_values} with a first value that a cone writes once\n"
     ));
     // The bindings of a handler in an element body, by whether they have
     // a result path, and those without by reason (PL §1.1, "The result

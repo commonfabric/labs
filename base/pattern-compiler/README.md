@@ -243,6 +243,16 @@ an element on stores the value. `Instance.counts` has the evaluations of cone
 instances of an element body (`elementEvaluations`) and the assemblies of a
 collection (`assemblies`) apart.
 
+A cone with side-writes has its kind in `Cone.sideWrites`, from the tier
+footprint analysis gives its bodies: `static` where every write target is one
+the compiler names, and `materializer` where a target is reached through data.
+The executor evaluates a `static` cone when something it evaluates reads the
+target of one of the cone's write edges or passes that target on by reference,
+before that reader, and not otherwise. It evaluates a `materializer` cone after
+the rest of a wave, where an input of it changed, and what the cone writes makes
+its readers stale for the next wave. `Instance.trace` lists the cones evaluated,
+in order. `plan --corpus` counts the cones of each kind.
+
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's
 own body, after the instance settled and after each event.

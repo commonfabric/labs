@@ -434,3 +434,94 @@ describe("a chain of element constructs", () => {
     expect(instance.counts.assemblies - before.assemblies).toBe(6);
   });
 });
+
+// Ruling Z7 on `fixtures/side-writes.tsx`: a cone with side-writes is of
+// one of two kinds, which `Cone.sideWrites` holds.
+describe("a cone with side-writes", () => {
+  type Result = {
+    last: string;
+    shown: string;
+    tallied: string;
+    counts: Record<string, number>;
+    total: number;
+  };
+
+  it("is demanded through a write target the result passes on by reference", async () => {
+    const instance = new Instance(await artifactOf("side-writes"), {
+      flavor: "mint",
+    });
+
+    // No kept output is computed by `_upper`, and the result reads
+    // nothing of `last`: it holds the cell.
+    expect((instance.result() as Result).last).toBe("A");
+    // The writing cone is evaluated before the result is stored.
+    expect(instance.trace.indexOf("_upper")).toBeLessThan(
+      instance.trace.indexOf("result"),
+    );
+
+    instance.send(0, { to: "b" });
+
+    expect((instance.result() as Result).last).toBe("B");
+  });
+
+  it("is evaluated before a cone that reads its write target", async () => {
+    const instance = new Instance(await artifactOf("side-writes"), {
+      flavor: "mint",
+    });
+
+    expect((instance.result() as Result).shown).toBe("seen a!");
+    expect(instance.trace.indexOf("_marked")).toBeLessThan(
+      instance.trace.indexOf("shown"),
+    );
+    // The reader is evaluated once: it read what the writer had written.
+    expect(instance.trace.filter((entry) => entry === "shown").length).toBe(1);
+
+    instance.send(0, { to: "b" });
+
+    expect((instance.result() as Result).shown).toBe("seen b!");
+  });
+
+  it("is evaluated after the rest of the wave where it is a materializer", async () => {
+    const instance = new Instance(await artifactOf("side-writes"), {
+      flavor: "mint",
+    });
+
+    const result = instance.result() as Result;
+    expect(result.tallied).toBe("mint");
+    expect(result.counts).toEqual({ mint: 4 });
+    expect(result.total).toBe(1);
+    // The materializer runs after the result of the first wave, and what
+    // it wrote makes its reader stale, which a further wave evaluates.
+    const { trace } = instance;
+    expect(trace.indexOf("tallied")).toBeGreaterThan(trace.indexOf("result"));
+    expect(trace.indexOf("total")).toBeLessThan(trace.indexOf("tallied"));
+    expect(trace.filter((entry) => entry === "total").length).toBe(2);
+    expect(trace.filter((entry) => entry === "tallied").length).toBe(1);
+  });
+
+  it("is evaluated again as a materializer when an input changed", async () => {
+    const instance = new Instance(await artifactOf("side-writes"), {
+      flavor: "mint",
+    });
+    const before = instance.trace.length;
+
+    instance.writeArgument(["flavor"], "lime");
+
+    expect((instance.result() as Result).counts).toEqual({ mint: 4, lime: 4 });
+    expect((instance.result() as Result).total).toBe(2);
+    expect(instance.trace.slice(before).filter((entry) => entry === "tallied"))
+      .toEqual(["tallied"]);
+  });
+
+  it("is not evaluated where nothing demanded reads its write target", async () => {
+    const instance = new Instance(await artifactOf("side-write-undemanded"), {
+      note: "n",
+    });
+
+    expect(instance.trace).not.toContain("_copy");
+    expect(instance.stateCells()).toEqual([
+      { name: "unseen", keys: [], value: "" },
+    ]);
+    expect(instance.documents()).toEqual({ "argument": 1, "result": 1 });
+  });
+});
