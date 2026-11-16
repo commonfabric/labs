@@ -3447,8 +3447,9 @@ The supported output switches are:
   `--index` or `--index-root` the object names the command and the index root
   instead of a space, and the expiry.
 - `cf index join --json` and `cf index move-root --json` print
-  `{handle, role, root, signer, joined, storeDir}`; `cf index whoami --json`
-  prints the handle, the role and the signer.
+  `{handle, role, root, signer, joined, storeDir, rootKeptHere}`, where
+  `rootKeptHere` says whether backing up `storeDir` keeps the root key;
+  `cf index whoami --json` prints the handle, the role and the signer.
 - `cf pattern publish --json` prints the publish report. Its `outcome` is
   `published`, with the id, whether it was new, the listing request's outcome
   and the next step, or `blocked`, with nothing published and the next step.

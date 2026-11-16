@@ -187,11 +187,14 @@ export const compileProgram = async (
   program: RuntimeProgram,
   getClient?: PatternIndexClientFactory,
 ): Promise<CompiledPattern> => {
-  if (patternIndexDependencies(sourceFiles(program)).length > 0) {
+  const source = { ...program, files: sourceFiles(program) };
+  if (patternIndexDependencies(source.files).length > 0) {
+    // Composition reads imports off the files it is handed, so it is handed
+    // the source alone: a data file's text names nothing to fetch.
     await composeProgram({
       runtime: runtime as Runtime,
       space,
-      program,
+      program: source,
       getClient,
     });
   }

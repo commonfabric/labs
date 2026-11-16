@@ -301,19 +301,19 @@ export async function moveMembershipRoot(
     signer: options.signer,
     ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
   });
+  // A move whose answer was lost has spent its delegation, so a rerun is
+  // refused in terms that also fit a bad delegation. Only a move this
+  // machine already sent with this very delegation is finished by asking
+  // whether the signer is now the root.
+  const resuming = await store.pendingRootMove() === move.cid;
+  await store.recordPendingRootMove(move.cid);
   let member: PatternIndexMember | undefined;
   try {
     member = await client.moveRoot({
       rootDelegation: toUnpaddedBase64url(options.rootDelegation),
     });
   } catch (error) {
-    // A move that landed without its answer arriving has spent its
-    // delegation, so a rerun is refused; the signer already being a root
-    // is what says it landed. A 409 means the signer roots someone else.
-    const status = (error as { status?: unknown }).status;
-    if (status !== 409) {
-      member = await client.whoami().catch(() => undefined);
-    }
+    if (resuming) member = await client.whoami().catch(() => undefined);
     if (member === undefined) {
       throw new JoinError(
         redeemStatus(error),
@@ -321,12 +321,12 @@ export async function moveMembershipRoot(
       );
     }
   }
-
   await store.recordMembership({
     handle: member.handle,
     role: member.role,
     root: options.signer.did(),
   });
+  await store.recordPendingRootMove(undefined);
   return {
     handle: member.handle,
     role: member.role,

@@ -73,10 +73,11 @@ carries a secret; keep it off the command line). A second machine does not
 redeem another invite: the first runs `cf delegation issue --index --to <DID>`
 and the second `cf index join --chain <file>`. Publish checks the pattern for
 personal details and may rewrite committed files into a general version; when
-`localCheck.status` is `rewritten`, show the person `git diff`.
-`outcome: "blocked"` published nothing, and `next` says why. Republishing from
-the same entry file records a new version of the last one. The rest is in
-`runtime/cli/README.md`, "Publishing to the pattern index".
+`localCheck.applied` is `true`, show the person `git diff`. `outcome: "blocked"`
+published nothing, and `next` says what to do before running it again.
+Publishing the same entry file again after changing its source or packaging
+records a new version of the last one; unchanged source publishes nothing new.
+The rest is in `runtime/cli/README.md`, "Publishing to the pattern index".
 
 **Update deployed pattern (all subsequent iterations):**
 

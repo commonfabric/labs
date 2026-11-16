@@ -227,11 +227,33 @@ describe("access", () => {
         fetchFn: index.fetchFn,
         rootDelegation: move.bytes,
       };
-      await moveMembershipRoot(options);
-      await Deno.remove(join(dir, "membership.json"));
+      // The move lands, but its answer is lost before anything is recorded.
+      const losing: typeof index.fetchFn = async (input, init) => {
+        await index.fetchFn(input, init);
+        throw new TypeError("connection reset");
+      };
+      await expect(moveMembershipRoot({ ...options, fetchFn: losing })).rejects
+        .toThrow();
       const again = await moveMembershipRoot(options);
       expect(again.handle).toBe("p-3");
       expect((await store.membership())!.root).toBe(cfKey.did());
+      expect(await store.pendingRootMove()).toBeUndefined();
+    });
+
+    it("throws for a refused move it did not start before, even where the signer roots a member", async () => {
+      const oldRoot = await Identity.fromPassphrase("access move old root");
+      const index = new FakePatternIndex();
+      index.admit(cfKey.did(), "p-mine");
+      // A delegation from a key that roots no member: the index refuses it.
+      const move = await issueRootMove({ root: oldRoot, to: cfKey.did() });
+      await expect(moveMembershipRoot({
+        baseUrl: BASE,
+        signer: cfKey,
+        store,
+        fetchFn: index.fetchFn,
+        rootDelegation: move.bytes,
+      })).rejects.toThrow("refused the move");
+      expect(await store.membership()).toBeUndefined();
     });
 
     it("throws for an /index delegation, which never moves a root", async () => {

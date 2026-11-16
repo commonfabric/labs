@@ -66,6 +66,7 @@ const PUBLISHED_FORMAT = "commonfabric/pattern-index-published";
 const ROOT_KEY = "root.key";
 const MEMBERSHIP = "membership.json";
 const PUBLISHED = "published.json";
+const PENDING_MOVE = "pending-root-move";
 
 /**
  * The directory every index's store lives under, one subdirectory per index
@@ -219,6 +220,34 @@ export class PatternIndexStore {
         chains: { ...file.chains, [signer]: chain.map(toUnpaddedBase64url) },
       } satisfies MembershipFile,
     );
+  }
+
+  /**
+   * The CID of a root-move delegation this machine sent and has not seen
+   * answered, or `undefined`. A rerun of that same move may find it already
+   * spent, and this is what says the move was this machine's to finish.
+   */
+  async pendingRootMove(): Promise<string | undefined> {
+    await this.#checkPrivate();
+    try {
+      return (await Deno.readTextFile(join(this.#dir, PENDING_MOVE))).trim();
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    }
+  }
+
+  /** Records `cid` as the root move being sent, or clears it with `undefined`. */
+  async recordPendingRootMove(cid: string | undefined): Promise<void> {
+    await this.#ensureDir();
+    const path = join(this.#dir, PENDING_MOVE);
+    if (cid === undefined) {
+      await Deno.remove(path).catch((error) => {
+        if (!isNotFound(error)) throw error;
+      });
+      return;
+    }
+    await Deno.writeTextFile(path, `${cid}\n`, { mode: 0o600 });
   }
 
   /** The id `entryPath` last published as, or `undefined`. */
