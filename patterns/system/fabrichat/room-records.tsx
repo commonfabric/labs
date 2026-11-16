@@ -409,8 +409,9 @@ export const TITLE_KEY = "title";
  * What a room keeps about one of its threads: written only by the handlers
  * that set a thread's title, a send that starts the thread from the send
  * surface and a retitle from `ChatRetitleSurface`, and labeled `authored-by`
- * whoever last set it. A later schema can neither add a writer to the policy
- * nor drop one, so it names every writer the record will have.
+ * whoever last set it. A stored policy keeps every writer it names, whether
+ * or not a later schema lists it, and gains one only where a release admits
+ * it.
  */
 export type StoredThreadInfo = AuthoredByCurrentUser<
   WritePolicyAnyOf<ThreadInfoRecord, [
@@ -569,10 +570,11 @@ const indexesOf = (
 /**
  * The value of `cell`, or `undefined` where it lacks a field its schema
  * requires or holds one of `fields` of a type the schema doesn't accept. A
- * field like that, read through a list holding the value or through the value
- * itself, refuses the whole computation reading it, so the value is read
- * through `cell` alone rather than through the list, and each of `fields`
- * through a cell for that field alone, where it reads as `undefined` instead.
+ * field like that, read as part of the whole list holding the value or of the
+ * whole value, refuses the whole computation reading it. So the value is read
+ * as the value of `cell`, the cell for its element of the list, rather than
+ * off the list's value, and each of `fields` as the value of the cell for
+ * that field, where it reads as `undefined` instead.
  */
 const readableRecord = <T extends object>(
   cell: Cell<T>,
