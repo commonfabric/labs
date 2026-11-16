@@ -1083,6 +1083,11 @@ procedure's step 4. Its two deciding sites, the recording in
   link, into a field the granting module protects after the failed staging is
   refused the grant, since that runtime registers it only from the records, and
   is granted nothing more.
-- Records an earlier transition stamped keep their clause, and the setups
-  that read them keep refusing, until a separate repair. A write-back still
-  re-stamps the root of a record that already carries a clause.
+- Records an earlier transition stamped keep their clause until the load
+  ahead of a setup repairs them (`module-loading.md`, "Repairing a stamped
+  record"): it erases a stamped compiled record and rewrites a stamped source
+  record to the value its identity determines, which lowers a stored label at
+  strict ahead of the specification's ruling. A record it refuses keeps its
+  clause, and a setup that reads it keeps refusing. A write-back still
+  re-stamps the root of a record that already carries a clause, which the next
+  load repairs again.

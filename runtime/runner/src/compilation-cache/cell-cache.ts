@@ -9,6 +9,7 @@ import type {
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { pathsOverlap } from "@commonfabric/memory/v2/path";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
@@ -18,9 +19,10 @@ import { labelMetadataTemplatesFor } from "../cfc/prepare.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
+  type CfcMetadata,
+  type LabelMapEntry,
   runtimeWritePolicyAuthorization,
 } from "../cfc/types.ts";
-import type { CfcMetadata, LabelMapEntry } from "../cfc/types.ts";
 import {
   compilerStackLoaded,
   ensureCompilerStack,
@@ -31,6 +33,7 @@ import {
   resolveModuleImports,
 } from "../harness/module-identity.ts";
 import type { CacheableModule } from "../harness/types.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
 import { formerPatternKey } from "../pattern-key-moves.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
@@ -46,7 +49,6 @@ import {
   deriveModuleRecordFields,
   SOURCE_ROOT_SPECIFIER,
 } from "../sandbox/module-record-compiler.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
 import type { SigilLink, URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { isInternalVerifierRead } from "../storage/reactivity-log.ts";
@@ -2688,9 +2690,9 @@ export async function repairCompileCacheStamps(
 }
 
 /**
- * Helper for {@link repairCompileCacheStamps}, which returns whether every
- * document `tx` read, and every document it wrote, is one of `targets`, its
- * verifier reads and content-addressed documents aside.
+ * Helper for {@link repairCompileCacheStamps}, which returns whether the
+ * documents `tx` read, and the documents it wrote, are each exactly
+ * `targets`, its verifier reads and content-addressed documents aside.
  */
 function readsOnlyWhatItWrites(
   tx: IExtendedStorageTransaction,
@@ -2863,7 +2865,7 @@ async function planStampRepair(
     );
     if (imports === undefined) return "refused";
     repairedClosure.set(identity, { ...doc, imports });
-    if (keepList) repairedLists.set(identity, list as string[]);
+    if (keepList) repairedLists.set(identity, storedStringList(list) ?? []);
     plan.push({
       space,
       id: record.link.id,
@@ -2885,7 +2887,7 @@ async function planStampRepair(
               .getAsLink(),
           })),
           ...(keepList
-            ? { delegatedModuleIdentities: [...(list as string[])] }
+            ? { delegatedModuleIdentities: [...(storedStringList(list) ?? [])] }
             : {}),
         },
         code: doc.code,
@@ -3027,15 +3029,8 @@ function canonicalSourceImports(
     }
   }
   const byKey = (a: ModuleImportRef, b: ModuleImportRef) =>
-    a.specifier < b.specifier
-      ? -1
-      : a.specifier > b.specifier
-      ? 1
-      : a.identity < b.identity
-      ? -1
-      : a.identity > b.identity
-      ? 1
-      : 0;
+    utf8Compare(a.specifier, b.specifier) ||
+    utf8Compare(a.identity, b.identity);
   const packages = doc.imports.filter(isPackageEdge).sort(byKey);
   const roots = [
     ...new Set(
@@ -3043,7 +3038,7 @@ function canonicalSourceImports(
         id !== identity && closure.has(id)
       ),
     ),
-  ].sort().map((id) => ({
+  ].sort(utf8Compare).map((id) => ({
     specifier: `${ROOT_LINK_SPECIFIER}${id}`,
     identity: id,
   }));

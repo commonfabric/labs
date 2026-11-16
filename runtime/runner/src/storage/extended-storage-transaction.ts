@@ -37,6 +37,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
+import { COMPILE_CACHE_REPAIR_WRITER } from "../compilation-cache/writer-identity.ts";
 import {
   type CfcConfidentialityRelease,
   type CfcConfidentialityReleaseByIntent,
@@ -177,7 +178,6 @@ import {
   linkSchemaRefHashes,
 } from "../schema-doc-delivery.ts";
 import { DEFAULT_CELL_SCOPE, normalizeCellScope, scopeRank } from "../scope.ts";
-import { COMPILE_CACHE_REPAIR_WRITER } from "../compilation-cache/writer-identity.ts";
 import type { URI } from "../sigil-types.ts";
 import { spaceCellId, SpaceRootMissingError } from "../space-root-slot.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
