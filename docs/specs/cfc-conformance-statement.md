@@ -963,13 +963,16 @@ regenerated snapshot defines it.
 
 - The merge also requires an appended alternative to hold the same keys as the
   stored one it pairs with, which the proposal does not ask: an over-taint.
-- An unstamped stored alternative stays unstamped. The proposal leaves one open
-  to adoption by a later write (§8.15.1, "Handler-Declared Write Capability");
-  the runtime adopts none, outside a release or in one: a schema that differs
-  from the stored envelope only in its stamps leaves the envelope as stored,
-  and the alternative admits no writer whose own write could adopt it. This is
-  stricter than the proposal, and the alternative authorizes no writer either
-  way.
+- An unstamped stored alternative is adopted wherever the merge runs: a write
+  whose schema restates it stamped, with a file spelling that corresponds,
+  stamps it in that write, whichever writer makes the write, in a release or
+  outside one. The proposal lets only the writer the stamp names bring the
+  stamp over outside a release (§8.15.13, "Release"; §8.15.1,
+  "Handler-Declared Write Capability"), so the runtime admits more there. A
+  write whose schema differs from the stored envelope only in its stamps takes
+  the persist loop's unchanged-envelope shortcut and adopts nothing. No write
+  policy stored in this repository's fixtures or pattern baselines holds an
+  unstamped alternative.
 - A schema declaring an empty list at the position is refused as malformed,
   and one declaring nothing there keeps the stored policy as stored, as the
   proposal has them.
