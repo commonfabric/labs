@@ -237,6 +237,10 @@ struct Computed {
     kept: Vec<Vec<String>>,
     /// The collection the value is the assembled result of.
     collection: Option<usize>,
+    /// The collection whose assembled result the value is on every
+    /// evaluation, passed on unchanged (ruling Z13; PL §1.1,
+    /// `Output.passesCollection`).
+    passes: Option<usize>,
     /// The value is the result of a scan of the collection (PL §3.13),
     /// and not an array of its elements.
     scan: bool,
@@ -933,6 +937,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             cone,
             kept: Vec::new(),
             collection: None,
+            passes: None,
             scan: false,
             template: None,
             element: None,
@@ -3410,9 +3415,19 @@ impl<'a> Emitter<'_, '_, 'a> {
                         // A promoted `computed` is its expression, and
                         // has the expression's template.
                         let mut origin = None;
+                        let mut passes = None;
                         let built = self.build(hint, at, |emitter, _| {
                             let (place, template) =
                                 emitter.one("identity", |emitter| emitter.eval(expression, hint));
+                            // The expression is the assembled result of
+                            // an element construct, or an output that
+                            // passes one on (ruling Z13).
+                            if let Place::Value(value, path) = &place {
+                                let passed = &emitter.values[*value];
+                                if path.is_empty() && !passed.scan {
+                                    passes = passed.collection.or(passed.passes);
+                                }
+                            }
                             origin = emitter.declared_of(&place);
                             emitter.pending_entries = emitter.entries_of(&place);
                             template
@@ -3422,6 +3437,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         }
                         if let Place::Value(value, _) = &built {
                             self.values[*value].origin = origin;
+                            if self.values[*value].collection.is_none() {
+                                self.values[*value].passes = passes;
+                            }
                         }
                         built
                     }
@@ -6194,6 +6212,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if let Some(collection) = value.collection {
                     output.insert("collection".to_string(), json!(collection));
                 }
+                if let (Some(collection), true) = (value.passes, below.is_empty()) {
+                    output.insert("passesCollection".to_string(), json!(collection));
+                }
                 if let Some(template) = &value.template {
                     output.insert("template".to_string(), template.clone());
                 }
@@ -6216,6 +6237,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                             output.remove("template");
                             if star {
                                 output.remove("collection");
+                            }
+                            if star || !at.is_empty() {
+                                output.remove("passesCollection");
                             }
                             if let Some(template) = template {
                                 output.insert("template".to_string(), template.clone());

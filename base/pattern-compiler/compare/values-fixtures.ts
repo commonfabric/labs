@@ -118,6 +118,16 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 5, event: {} },
     ],
   }],
+  "passes-collection": [{
+    argument: {
+      items: [
+        { title: "a", done: false },
+        { title: "b", done: true },
+        { title: "c", done: false },
+      ],
+      tags: ["x", "x", "y"],
+    },
+  }],
   "reduce": [{
     argument: {
       items: [{ title: "a", amount: 3 }, { title: "b", amount: 4 }],

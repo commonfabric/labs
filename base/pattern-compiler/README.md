@@ -254,6 +254,15 @@ deno run -A base/pattern-compiler/exec/run.ts artifact.json argument.json
 deno test -A base/pattern-compiler/exec/test/
 ```
 
+An output whose value is, on every evaluation, the assembled result of an
+element construct passed on unchanged has `passesCollection` in the plan, which
+names the record of the collection (ruling Z13): the crate marks a promoted
+`computed` whose expression is such a result or a marked output. A construct
+whose source is a marked output has the element table of that collection in the
+executor, with the keys of the source elements, whether those are references or
+plain values in place (`compare/fixtures/passes-collection.tsx`). Where the
+output has no mark, the executor keys by what the positions of the output hold.
+
 The executor keys an element of the result of a `map`, a `filter` or a `flatMap`
 by the key of the element it came from, so a change of one element evaluates
 that element's cone instances down a chain of constructs and no other element's.

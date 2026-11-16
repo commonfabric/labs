@@ -1487,6 +1487,111 @@ describe("an element that is a plain value in place", () => {
   });
 });
 
+// Ruling Z13: an output that passes a derived collection on unchanged is
+// the same collection for keying, and the plan marks it
+// (`Output.passesCollection`). `fixtures/passes-collection.tsx` has a
+// `map` over a `computed` that returns the result of a `filter`, twice.
+describe("an output that passes a derived collection on", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  const argument = () => ({
+    pool: {
+      a: { title: "a", done: false },
+      b: { title: "b", done: true },
+      c: { title: "c", done: false },
+    },
+    // References to cells.
+    items: [link("a"), link("b"), link("c")],
+    // Plain values in place, two of them equal.
+    tags: ["x", "x", "y"],
+  });
+  // The cone of the body of the `map` over the marked output of `name`.
+  const keysOf = (instance: Instance, nth: number) => {
+    const maps = instance.plan.collections.flatMap((record, index) =>
+      record.construct === "map" ? [index] : []
+    );
+    const cone = instance.plan.cones.findIndex((record) =>
+      record.within.some((step) => step.element === maps[nth])
+    );
+    return instance.coneInstances(cone).map(([key]) => key).sort();
+  };
+
+  it("is marked in the plan with the collection it passes on", async () => {
+    const { plan } = await artifactOf("passes-collection");
+    const marked = plan.outputs.flatMap((output) =>
+      output.passesCollection === undefined ? [] : [output.passesCollection]
+    );
+
+    expect(marked.map((index) => plan.collections[index].construct)).toEqual([
+      "filter",
+      "filter",
+    ]);
+  });
+
+  it("gives a construct applied to it the keys of the source elements, over references", async () => {
+    const instance = new Instance(
+      await artifactOf("passes-collection"),
+      argument(),
+    );
+
+    expect(instance.result()).toEqual({
+      rows: ["a!", "c!"],
+      words: ["x!", "y!"],
+    });
+    expect(keysOf(instance, 0)).toEqual([
+      'cell:argument:["pool","a"]#0',
+      'cell:argument:["pool","c"]#0',
+    ]);
+  });
+
+  it("gives a construct applied to it the keys of the source elements, over plain values in place", async () => {
+    const instance = new Instance(
+      await artifactOf("passes-collection"),
+      argument(),
+    );
+
+    // The `filter` dropped the first `x`. The one it kept is occurrence
+    // 1 of the source, and that is its key downstream.
+    expect(keysOf(instance, 1)).toEqual(['value:"x"#1', 'value:"y"#0']);
+  });
+
+  it("keys by what the positions hold where the output has no mark, which loses the count", async () => {
+    const artifact = structuredClone(await artifactOf("passes-collection"));
+    for (const output of artifact.plan.outputs) delete output.passesCollection;
+    const instance = new Instance(artifact, argument());
+
+    expect(instance.result()).toEqual({
+      rows: ["a!", "c!"],
+      words: ["x!", "y!"],
+    });
+    // Over references the keys are those of the cells either way.
+    expect(keysOf(instance, 0)).toEqual([
+      'cell:argument:["pool","a"]#0',
+      'cell:argument:["pool","c"]#0',
+    ]);
+    // Over plain values in place the kept `x` is keyed as the first one
+    // of the array the output holds.
+    expect(keysOf(instance, 1)).not.toEqual(['value:"x"#1', 'value:"y"#0']);
+  });
+
+  it("evaluates nothing downstream for an element when the source elements move", async () => {
+    const instance = new Instance(
+      await artifactOf("passes-collection"),
+      argument(),
+    );
+    const before = instance.counts.elementEvaluations;
+
+    instance.writeArgument(["items"], [link("c"), link("b"), link("a")]);
+
+    expect((instance.result() as { rows: string[] }).rows).toEqual([
+      "c!",
+      "a!",
+    ]);
+    expect(instance.counts.elementEvaluations).toBe(before);
+  });
+});
+
 describe("a record a handler writes into a list", () => {
   // `fixtures/list-records.tsx`: `stops` is a list of records and `names`
   // a list of strings, both state cells, and the handler of a row stores

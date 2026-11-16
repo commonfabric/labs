@@ -3865,3 +3865,75 @@ fn a_cone_of_a_pattern_compiled_in_has_the_site_step() {
         vec![json!([{ "element": collection }, { "site": "Row" }]).to_string()]
     );
 }
+
+/// Ruling Z13 (PL §1.1, `Output.passesCollection`; §1.3, "An output that
+/// passes a derived collection on unchanged"): an output whose value is,
+/// on every evaluation, the assembled result of an element construct is
+/// marked with the record of that collection, and a construct applied to
+/// it has that output as its `source`. The mark is the same whether the
+/// upstream source holds references (`items`, by its type records that
+/// may be cells) or plain values in place (`tags`), since the plan does
+/// not say which. An output that passes a marked output on is marked with
+/// the same collection. An output that is the assembled result under one
+/// selection only is not marked (PL §8, question 111, assumed).
+#[test]
+fn an_output_that_passes_a_derived_collection_on_is_marked_with_the_collection() {
+    let plan = plan_of(
+        &program(
+            r#"import { computed, pattern, Writable } from "commonfabric";
+interface Item { title: string; done: boolean }
+export const P = pattern<{ items: Writable<Item[]>; tags: Writable<string[]>; flag: boolean }>(
+  ({ items, tags, flag }) => {
+    const open = computed(() => items.get().filter((item) => !item.done));
+    const again = computed(() => open);
+    const long = computed(() => tags.get().filter((tag) => tag.length > 1));
+    const either = computed(() => flag ? tags.get().filter((tag) => tag !== "x") : tags.get());
+    return {
+      rows: open.map((item) => item.title),
+      more: again.map((item) => item.title),
+      words: long.map((tag) => tag + "!"),
+      some: either.map((tag) => tag + "?"),
+    };
+  },
+);
+"#,
+        ),
+        "P",
+    );
+    let collections = plan["collections"].as_array().expect("collections");
+    let outputs = plan["outputs"].as_array().expect("outputs");
+    // The `filter` of each `computed`, and the `map` applied to it.
+    let filter = |name: &str| -> usize {
+        collections
+            .iter()
+            .position(|record| record["construct"] == "filter" && record["name"] == name)
+            .unwrap_or_else(|| panic!("the filter of `{name}`"))
+    };
+    // The source of the `map` written at `rows`, `more`, `words` and
+    // `some`, in that order.
+    let source_of = |nth: usize| -> &Value {
+        let map = collections
+            .iter()
+            .filter(|record| record["construct"] == "map")
+            .nth(nth)
+            .expect("the map");
+        let output = map["source"]["output"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("the map is over an output: {}", map["source"]));
+        &outputs[output as usize]
+    };
+    assert_eq!(source_of(0)["passesCollection"], json!(filter("open")));
+    assert_eq!(source_of(2)["passesCollection"], json!(filter("long")));
+    // An output that passes a marked output on.
+    assert_eq!(source_of(1)["passesCollection"], json!(filter("open")));
+    // The marked output is not the assembled result itself.
+    assert_eq!(source_of(0)["collection"], Value::Null);
+    // The assembled result under one selection only.
+    assert_eq!(source_of(3)["passesCollection"], Value::Null);
+    // No other output has the mark.
+    let marked = outputs
+        .iter()
+        .filter(|output| !output["passesCollection"].is_null())
+        .count();
+    assert_eq!(marked, 3);
+}

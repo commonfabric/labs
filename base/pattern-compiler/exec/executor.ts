@@ -66,6 +66,12 @@ export type Plan = {
     path: string[];
     cone: number;
     collection?: number;
+    /**
+     * The collection whose assembled result the output is on every
+     * evaluation, passed on unchanged (ruling Z13): a construct over the
+     * output has the element table of that collection.
+     */
+    passesCollection?: number;
     kept: boolean;
     interim?: string;
   }[];
@@ -903,8 +909,6 @@ export class Instance {
   readonly #underKey = new Map<string, Set<string>>();
   /** The element table of each collection, by the keys around it. */
   readonly #tables = new Map<string, Element[]>();
-  /** The elements of an assembled result, with their keys, by the array. */
-  readonly #membersOf = new WeakMap<object, Element[]>();
   /** The state cells that exist, by the identifier of their document. */
   readonly #cells = new Map<string, { cell: number; keys: string[] }>();
   readonly #queue: { stream: StreamRef; event: unknown }[] = [];
@@ -1633,9 +1637,6 @@ export class Instance {
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
     if (kind === "assembly") this.counts.assemblies += 1;
-    if (host.members !== undefined && Array.isArray(value)) {
-      this.#membersOf.set(value, host.members);
-    }
     if (kind === "value") {
       this.trace.push(
         cone === undefined ? "result" : this.plan.cones[cone].entry,
@@ -2018,13 +2019,27 @@ export class Instance {
       const held = source.output !== undefined
         ? host.output(source.output)
         : undefined;
-      // A cone that passes the assembled result of a construct on
-      // unchanged passes its elements on with their keys.
-      const passed = typeof held === "object" && held !== null
-        ? this.#membersOf.get(held)
-        : undefined;
-      if (passed !== undefined) {
-        return passed.map((member, index) => ({ ...member, index }));
+      // An output the plan marks as passing a derived collection on
+      // unchanged is that collection for keying: its elements have the
+      // keys of the collection's elements and the places they came from
+      // (PL §1.3). The mark is checked by the identity of the array the
+      // cone returned with the one that was assembled.
+      const passes = source.output === undefined
+        ? undefined
+        : this.plan.outputs[source.output].passesCollection;
+      if (passes !== undefined) {
+        const upstream = host.dependEntry(this.assembled(passes));
+        if (upstream.value !== held) {
+          throw new Unsupported(
+            "an output marked as passing a collection on that holds another array",
+          );
+        }
+        if (upstream.members !== undefined) {
+          return upstream.members.map((member, index) => ({
+            ...member,
+            index,
+          }));
+        }
       }
       if (held instanceof Ref) return this.#stored(held, host);
       members = (Array.isArray(held) ? held : []).map((member) =>
