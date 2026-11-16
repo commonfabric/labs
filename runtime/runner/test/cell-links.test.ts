@@ -99,7 +99,7 @@ describe("getAsLink method", () => {
     );
     cell.set({ value: 42 });
 
-    const link = toCompactDebugString(cell.toSigilLinkOrNull());
+    const link = toCompactDebugString(cell.toJSON());
     const rendered = `/CellImpl(${link.slice(1, -1)})`;
     expect(toCompactDebugString(cell)).toBe(rendered);
     expect(toCompactDebugString({ held: cell })).toBe(`{held:${rendered}}`);

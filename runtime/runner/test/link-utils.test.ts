@@ -7,6 +7,7 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { JSONSchema, MutableJSONSchemaObj } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -27,6 +28,7 @@ import {
   isSigilLink,
   isWriteRedirectLink,
   KeepAsCell,
+  type NormalizedFullLink,
   type NormalizedLink,
   normalizedLinkKey,
   ownerStreamSchema,
@@ -41,7 +43,10 @@ import {
 } from "../src/link-utils.ts";
 import { areLinksSame } from "../src/link-equality.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
-import { registerSchemaDocument } from "../src/schema-registry.ts";
+import {
+  onSchemaDocumentRegistered,
+  registerSchemaDocument,
+} from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Runtime } from "../src/runtime.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
@@ -2482,6 +2487,155 @@ describe("link-utils", () => {
     it("returns a link whose payload is not a plain record as it is", () => {
       const link = { "/": { [LINK_V1_TAG]: "not a record" } };
       expect(inLinkTextOrder(link as unknown as SigilLink)).toBe(link);
+    });
+  });
+
+  describe("createSigilLinkFromParsedLink() payload", () => {
+    const target = "of:fid1:test-target";
+    const baseId = "of:fid1:test-base";
+    const spaceOne = "did:key:z6MkTestSpaceOne";
+    const spaceTwo = "did:key:z6MkTestSpaceTwo";
+    const fullBase: NormalizedFullLink = {
+      id: baseId,
+      space: spaceTwo,
+      scope: "space",
+      path: [],
+    };
+    const payloadOf = (
+      link: NormalizedLink,
+      options?: Parameters<typeof createSigilLinkFromParsedLink>[1],
+    ): CellLinkRefPayload =>
+      linkRefPayload(createSigilLinkFromParsedLink(link, options));
+    const expectKeysInUtf8Order = (payload: CellLinkRefPayload) => {
+      const keys = Object.keys(payload);
+      expect(keys).toEqual([...keys].sort(utf8Compare));
+    };
+
+    it("builds a link payload whose members are in UTF-8 key order", () => {
+      const full: NormalizedLink = {
+        id: target,
+        space: spaceOne,
+        scope: "user",
+        path: ["a", "0"],
+        schema: { type: "object", properties: { n: { type: "number" } } },
+        overwrite: "redirect",
+      };
+      const everyMember = payloadOf(full, { includeSchema: true });
+      expect(Object.keys(everyMember)).toEqual([
+        "id",
+        "overwrite",
+        "path",
+        "schema",
+        "scope",
+        "space",
+      ]);
+      expectKeysInUtf8Order(payloadOf(full));
+      expectKeysInUtf8Order(payloadOf(full, { base: fullBase }));
+      expectKeysInUtf8Order(
+        payloadOf(full, { base: runtime.getCell(space, "payload-base") }),
+      );
+      expectKeysInUtf8Order(payloadOf(full, {
+        base: { id: target, space: spaceOne, scope: "user", path: [] },
+        includeSchema: true,
+      }));
+      expectKeysInUtf8Order(payloadOf(
+        { ...full, overwrite: undefined },
+        { overwrite: "redirect", includeSchema: true },
+      ));
+
+      setContentAddressedSchemasConfig(false);
+      const inline = payloadOf(full, { includeSchema: true });
+      expect(inline.schema).toEqual(full.schema);
+      expectKeysInUtf8Order(inline);
+    });
+
+    it("leaves out the members a link shares with its base", () => {
+      const link: NormalizedLink = {
+        id: target,
+        space: spaceOne,
+        scope: "user",
+        path: ["a"],
+      };
+      expect(payloadOf(link, {
+        base: { id: target, space: spaceOne, scope: "user", path: [] },
+      })).toEqual({ path: ["a"] });
+      expect(payloadOf(link, {
+        base: { id: baseId, space: spaceOne, scope: "space", path: [] },
+      })).toEqual({ id: target, path: ["a"], scope: "user" });
+      expect(payloadOf(link, { base: fullBase })).toEqual({
+        id: target,
+        path: ["a"],
+        scope: "user",
+        space: spaceOne,
+      });
+    });
+
+    it("keeps an `id` member without a base when the link names no document", () => {
+      const payload = payloadOf({ path: ["b"] });
+      expect("id" in payload).toBe(true);
+      expect(payload.id).toBeUndefined();
+    });
+
+    it("treats a null base as no base", () => {
+      const link: NormalizedLink = {
+        id: target,
+        space: spaceTwo,
+        scope: "space",
+        path: [],
+      };
+      expect(payloadOf(link, { base: null as unknown as NormalizedFullLink }))
+        .toEqual(payloadOf(link));
+      expect(payloadOf(link)).toEqual({
+        id: target,
+        path: [],
+        scope: "space",
+        space: spaceTwo,
+      });
+    });
+
+    it("throws for an unconvertible id or path and registers no schema document", () => {
+      // The schema is one no other case registers, so a document registered
+      // here is one these calls registered.
+
+      const schema: JSONSchema = {
+        type: "object",
+        description: "registered only by the link-payload throw case",
+        properties: { n: { type: "number" } },
+      };
+      let registered = 0;
+      const unsubscribe = onSchemaDocumentRegistered(() => registered++);
+      try {
+        expect(() =>
+          createSigilLinkFromParsedLink(
+            { path: [], schema },
+            { base: fullBase, includeSchema: true },
+          )
+        ).toThrow();
+        const unconvertible = {
+          toString(): string {
+            throw new Error("unconvertible path element");
+          },
+        };
+        expect(() =>
+          createSigilLinkFromParsedLink(
+            {
+              id: target,
+              path: [unconvertible] as unknown as NormalizedLink["path"],
+              schema,
+            },
+            { includeSchema: true },
+          )
+        ).toThrow("unconvertible path element");
+        expect(registered).toBe(0);
+
+        createSigilLinkFromParsedLink(
+          { id: target, path: [], schema },
+          { base: fullBase, includeSchema: true },
+        );
+        expect(registered).toBeGreaterThan(0);
+      } finally {
+        unsubscribe();
+      }
     });
   });
 });

@@ -370,7 +370,14 @@ export function externalizeLinkSchemasInValue<T extends FabricValue>(
 }
 
 /**
- * Creates a sigil link, optionally a write redirect, with shared logic
+ * Creates a sigil link to `link`, optionally a write redirect. Relative to
+ * `options.base`, the link leaves out the id, space and scope it shares with
+ * the base; without one it carries an `id` member even when `link` names no
+ * document. The payload lists its members in the UTF-8 order of their keys
+ * (`id`, `overwrite`, `path`, `schema`, `scope`, `space`), the order hashing
+ * and the stored encoding visit them in, so a frozen payload needs no sorted
+ * copy of its keys kept beside it (`utf8SortedKeysOf()`). Text a link is kept
+ * as is written through `inLinkTextOrder()`, which fixes its own order.
  */
 export function createSigilLinkFromParsedLink(
   link: NormalizedLink,
@@ -383,54 +390,52 @@ export function createSigilLinkFromParsedLink(
     keepAsCell?: KeepAsCell;
   } = {},
 ): SigilLink {
-  // The payload is built in full before the link is made, since a link's
-  // payload is fixed once it is.
-  const reference: CellLinkRefPayload = {
-    path: link.path.map((p) => p.toString()),
-  };
+  // Every member is decided before any is added, so they can be added in key
+  // order. The path and the base are resolved before the schema is, so an
+  // input that throws there registers no schema document.
+  const path = link.path.map((p) => p.toString());
 
-  // Handle base cell for relative references
+  let hasId = true;
+  let id = link.id;
+  let space = link.space ? link.space : undefined;
+  let scope = link.scope ? link.scope : undefined;
   if (options.base) {
     const baseLink = isCell(options.base)
       ? options.base.getAsNormalizedFullLink()
       : options.base;
-
-    // Only include id if it's different from base
-    if (link.id !== baseLink.id) reference.id = toURI(link.id);
-
-    // Only include space if it's different from base
-    if (link.space && link.space !== baseLink.space) {
-      reference.space = link.space;
-    }
-    if (link.scope && link.scope !== baseLink.scope) {
-      reference.scope = link.scope;
-    }
-  } else {
-    reference.id = link.id;
-    if (link.space) reference.space = link.space;
-    if (link.scope) reference.scope = link.scope;
+    hasId = link.id !== baseLink.id;
+    if (hasId) id = toURI(link.id);
+    if (space !== undefined && space === baseLink.space) space = undefined;
+    if (scope !== undefined && scope === baseLink.scope) scope = undefined;
   }
 
   // Include schema if requested. Empty `{}` and JSON Schema `true` are
   // permissive and should not turn links into schema-bearing links.
+  let hasSchema = false;
+  let schema: JSONSchema | undefined;
   if (options.includeSchema && link.schema !== undefined) {
     // Default to keeping streams unless a broader mode was requested.
     const keepAsCell = options.keepAsCell ?? KeepAsCell.OnlyStream;
-    const schema = getContentAddressedSchemasConfig()
+    schema = getContentAddressedSchemasConfig()
       ? externalizeLinkSchema(link.schema, keepAsCell)
       : sanitizeSchemaForLinks(link.schema, keepAsCell);
-    if (isNontrivialSchema(schema)) {
-      reference.schema = schema;
-    }
+    hasSchema = isNontrivialSchema(schema);
   }
 
-  // Option overrides link value
-  if (options.overwrite) {
-    if (options.overwrite === "redirect") reference.overwrite = "redirect";
-    // else: "this" is the default
-  } else if (link.overwrite === "redirect") {
-    reference.overwrite = "redirect";
-  }
+  // The option overrides the link's own value; `this` is the default.
+  const redirect = options.overwrite
+    ? options.overwrite === "redirect"
+    : link.overwrite === "redirect";
+
+  // The payload is built in full before the link is made, since a link's
+  // payload is fixed once it is.
+  const reference: CellLinkRefPayload = {};
+  if (hasId) reference.id = id;
+  if (redirect) reference.overwrite = "redirect";
+  reference.path = path;
+  if (hasSchema) reference.schema = schema;
+  if (scope !== undefined) reference.scope = scope;
+  if (space !== undefined) reference.space = space;
 
   return pinImmutableCell(
     linkRefFrom<CellLinkRefPayload>(reference),
