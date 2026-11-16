@@ -1,6 +1,7 @@
 import { Command, ValidationError } from "@cliffy/command";
 import { decodeDelegationChains } from "@commonfabric/identity";
 import { isDIDKey } from "@commonfabric/identity/did";
+import { PatternIndexError } from "@commonfabric/pattern-index/client";
 
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
@@ -33,6 +34,22 @@ export const requireIdentityPath = (options: { identity?: string }): string => {
   return options.identity;
 };
 
+/**
+ * Rethrows an index refusal of the identity (401 or 403) as what to do about
+ * it; anything else as it is.
+ */
+export const rethrowAsNotMember = (error: unknown): never => {
+  if (
+    error instanceof PatternIndexError &&
+    (error.status === 401 || error.status === 403)
+  ) {
+    throw new Error(
+      "The pattern index does not know this identity as a member: join with your invite link (pipe it to cf index join), or adopt a chain from the machine that joined with cf index join --chain <file>.",
+    );
+  }
+  throw error;
+};
+
 /** Reads the invite link from stdin, so it never reaches shell history. */
 const readLinkFromStdin = async (): Promise<string> => {
   const text = await new Response(Deno.stdin.readable).text();
@@ -49,15 +66,9 @@ export const joinReport = (result: JoinResult): string =>
   [
     result.joined
       ? `Joined the pattern index as ${result.handle}.`
-      : `Already a member of the pattern index as ${result.handle}; ${result.signer} acts for you.`,
-    `Your membership is rooted at a key made for the index alone, kept in ${result.storeDir}. Back that directory up: it is your standing on the index.`,
-    `cf signs as ${result.signer} and presents a chain from that root, renewed automatically.`,
-    `To publish from Loom too, give its instance key a chain: ${
-      cliText(
-        "cf delegation issue --index --to <loom instance DID> --out loom-index.json",
-      )
-    }`,
-    `Next: ${cliText("cf pattern publish ./pattern.tsx")}`,
+      : `Already a member of the pattern index as ${result.handle}.`,
+    `Back up ${result.storeDir}: it holds the key your membership is rooted at, and with it your standing on the index.`,
+    `Next: ${cliText("cf pattern publish <entry file>")}`,
   ].join("\n");
 
 async function join(
@@ -95,7 +106,7 @@ async function whoami(options: IndexOptions): Promise<void> {
     baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
     signer,
   });
-  const member = await client.whoami();
+  const member = await client.whoami().catch(rethrowAsNotMember);
   render(
     options.json
       ? { ...member, signer: signer.did() }

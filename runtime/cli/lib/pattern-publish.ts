@@ -70,7 +70,11 @@ export interface PublishDeps {
 
   client: Pick<
     PatternIndexClient,
-    "getGardenerPrompt" | "publishPattern" | "requestListing" | "getPattern"
+    | "getGardenerPrompt"
+    | "publishPattern"
+    | "requestListing"
+    | "getPattern"
+    | "whoami"
   >;
 
   /** The model, or `undefined` when none is configured. */
@@ -125,24 +129,36 @@ export type ListingReport =
   | { status: "capped"; resetsAt?: string }
   | { status: "failed"; reason: string };
 
-/** What `cf pattern publish` did, as `--json` prints it. */
-export interface PublishReport {
-  patternId: string;
+/**
+ * What `cf pattern publish` did, as `--json` prints it. `outcome` says
+ * whether anything reached the index: `blocked` means the local check found
+ * personal details and a rewrite that removes them which could not be
+ * applied, so nothing was published.
+ */
+export type PublishReport =
+  | {
+    outcome: "published";
+    patternId: string;
 
-  /** False when the index already held this id: nothing was written. */
-  created: boolean;
+    /** False when the index already held this id: nothing was written. */
+    created: boolean;
 
-  /** The author's pseudonym, as the index shows it. */
-  handle?: string;
+    /** The author's pseudonym, as the index shows it. */
+    handle?: string;
 
-  priorPatternId?: string;
-  remixedFrom?: string;
-  localCheck: LocalCheckReport;
-  listing: ListingReport;
+    priorPatternId?: string;
+    remixedFrom?: string;
+    localCheck: LocalCheckReport;
+    listing: ListingReport;
 
-  /** What to do next, in one line. */
-  next: string;
-}
+    /** What to do next, in one line. */
+    next: string;
+  }
+  | {
+    outcome: "blocked";
+    localCheck: LocalCheckReport;
+    next: string;
+  };
 
 /** A refusal before anything was published, phrased for the person. */
 export class PublishError extends Error {
@@ -227,6 +243,7 @@ export async function publishPatternFromDisk(
   const entry = resolve(options.entry);
   const root = resolve(options.root ?? dirname(entry));
   const meta = metadataFor(options, await deps.readTextFile(entry));
+  await requireMembership(deps);
   const original = await deps.compileEntry(entry, root);
   if (original.patternId === undefined) {
     throw new PublishError(
@@ -246,6 +263,17 @@ export async function publishPatternFromDisk(
       publishedMeta = rewrittenMeta;
     },
   );
+  if (localCheck.status === "rewritten" && !localCheck.applied) {
+    // A rewrite that removes what was found exists, and committing is one
+    // step away; publishing the source as it stands would send the index
+    // exactly what the check found.
+    return {
+      outcome: "blocked",
+      localCheck,
+      next:
+        `Commit your edits (or pass --allow-dirty), then run cf pattern publish ${options.entry} again`,
+    };
+  }
   const patternId = published.patternId!;
 
   const lastPublished = await deps.store.lastPublished(entry);
@@ -282,6 +310,7 @@ export async function publishPatternFromDisk(
   const handle = await deps.client.getPattern({ patternId: response.patternId })
     .then((pattern) => pattern.handle, () => undefined);
   return {
+    outcome: "published",
     patternId: response.patternId,
     created: response.created,
     ...(handle !== undefined ? { handle } : {}),
@@ -290,9 +319,37 @@ export async function publishPatternFromDisk(
     localCheck,
     listing,
     next: listing.status === "capped"
-      ? `Run cf pattern publish ${options.entry} again once the cap resets to request the listing; meanwhile open it in a loom with \`/deploy index:${response.patternId}\``
-      : `Open it in a loom with \`/deploy index:${response.patternId}\``,
+      ? `Run cf pattern publish ${options.entry} again once the limit resets to request the listing. Meanwhile ${
+        tryIt(response.patternId)
+      }`
+      : tryIt(response.patternId),
   };
+}
+
+/** How to use a published pattern: from cf, or in a loom. */
+const tryIt = (patternId: string): string =>
+  `deploy it with cf piece new --from-index ${patternId}, or open it in a loom with /deploy index:${patternId}`;
+
+/**
+ * Stops before anything is compiled when the identity acts for no member,
+ * which is what a builder who has not joined yet hits first.
+ *
+ * @throws PublishError naming `cf index join` on a 401 or 403.
+ */
+async function requireMembership(deps: PublishDeps): Promise<void> {
+  try {
+    await deps.client.whoami();
+  } catch (error) {
+    if (
+      error instanceof PatternIndexError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      throw new PublishError(
+        "This identity is not a member of the pattern index: join with your invite link first (pipe it to cf index join), or, if you joined on another machine, adopt a chain from it with cf index join --chain <file>.",
+      );
+    }
+    throw error;
+  }
 }
 
 /** The local check, and the rewrite applied when it is safe to. */
@@ -441,7 +498,7 @@ async function requestListing(
 const listingMeaning = (listing: PatternIndexListing): string => {
   switch (listing) {
     case "pending":
-      return "checking: the index's privacy gardener is reading it";
+      return "checking: the index's privacy check is reading it";
     case "passed":
       return "listed: others can find it";
     case "held":
@@ -455,10 +512,9 @@ const listingMeaning = (listing: PatternIndexListing): string => {
   }
 };
 
-/** The report as lines for a person. */
-export const publishReportLines = (report: PublishReport): string[] => {
+/** The local check's outcome as lines for a person. */
+const checkLines = (check: LocalCheckReport): string[] => {
   const lines: string[] = [];
-  const check = report.localCheck;
   switch (check.status) {
     case "passed":
       lines.push("Local privacy check: passed.");
@@ -478,7 +534,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
         );
       } else {
         lines.push(
-          `Found personal details and a rewrite that removes them, not applied: ${check.notApplied}. Published as it is on disk.`,
+          `Found personal details, and a rewrite that removes them, not applied: ${check.notApplied}.`,
         );
         for (const line of findingLines(check.findings)) lines.push(line);
       }
@@ -486,10 +542,21 @@ export const publishReportLines = (report: PublishReport): string[] => {
     }
     case "held":
       lines.push(
-        "Found personal details the rewrites could not remove; publishing it unlisted. Fix these and publish again:",
+        "Found personal details the rewrites could not remove. Publishing it as it is; the index checks it too and keeps it out of search until these are fixed:",
       );
       for (const line of findingLines(check.findings)) lines.push(line);
       break;
+  }
+  return lines;
+};
+
+/** The report as lines for a person. */
+export const publishReportLines = (report: PublishReport): string[] => {
+  const lines: string[] = [];
+  for (const line of checkLines(report.localCheck)) lines.push(line);
+  if (report.outcome === "blocked") {
+    lines.push(`Nothing was published. Next: ${report.next}.`);
+    return lines;
   }
   lines.push(
     `${report.created ? "Published" : "Already published"} ${report.patternId}${

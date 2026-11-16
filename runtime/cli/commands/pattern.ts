@@ -25,7 +25,11 @@ import {
 import { loadPieces } from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
-import { indexAccessOptions, requireIdentityPath } from "./pattern-index.ts";
+import {
+  indexAccessOptions,
+  requireIdentityPath,
+  rethrowAsNotMember,
+} from "./pattern-index.ts";
 import {
   parseSpaceOptions,
   type PieceCLIOptions,
@@ -140,6 +144,7 @@ async function publish(
       options.json ? report : publishReportLines(report).join("\n"),
       { json: options.json },
     );
+    if (report.outcome === "blocked") Deno.exitCode = 1;
   } finally {
     await pieces.dispose();
   }
@@ -152,7 +157,9 @@ async function mine(
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
   const client = await openPatternIndexClient({ baseUrl, signer });
   const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
-  const { patterns } = await client.listPatterns({ mine: true });
+  const { patterns } = await client.listPatterns({ mine: true }).catch(
+    rethrowAsNotMember,
+  );
   const rows = await mineRows(patterns, (id) => store.entryFor(id));
   render(options.json ? rows : mineLines(rows).join("\n"), {
     json: options.json,
@@ -172,10 +179,12 @@ export const pattern = new Command()
       new Command()
         .description(
           "Publish a pattern to the pattern index and ask for it to be " +
-            "listed. First checks it for personal details with the index's " +
-            "own privacy question, and when it finds some, rewrites it into " +
-            "a general version (specific values lifted into arguments), " +
-            "applying the rewrite only to committed files.",
+            "listed; join first with cf index join. It checks the pattern " +
+            "for personal details with the index's own privacy question, " +
+            "and when it finds some, rewrites it into a general version " +
+            "(specific values lifted into arguments), writing the rewrite " +
+            "over your files only when they are committed, so git diff " +
+            "shows it. Exits 1, publishing nothing, when it cannot.",
         )
         .arguments("<entry:string>")
         .option(
@@ -233,5 +242,5 @@ export const pattern = new Command()
           "held (with the findings to fix) or still being checked, its " +
           "bucket and use counts, and what moves it on.",
       ),
-    ).action(mine),
+    ).alias("ls").action(mine),
   );

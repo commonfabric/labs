@@ -51,7 +51,7 @@ const nextStep = (
     case "not_requested":
       return `unlisted: run ${publish} to request a listing`;
     case "pending":
-      return "checking: the index's privacy gardener is reading it";
+      return "checking: the index's privacy check is reading it";
     case "held":
       return `held: fix the findings, then run ${publish}`;
     case "error":

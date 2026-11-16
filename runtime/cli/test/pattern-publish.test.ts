@@ -10,6 +10,7 @@ import {
   type PublishDeps,
   PublishError,
   publishPatternFromDisk,
+  type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
@@ -84,6 +85,17 @@ const compiledFrom = (program: RuntimeProgram): CompiledPattern => ({
   program,
 });
 
+/** Publishes, failing the test on a blocked outcome. */
+const publishedReport = async (
+  ...args: Parameters<typeof publishPatternFromDisk>
+): Promise<Extract<PublishReport, { outcome: "published" }>> => {
+  const report = await publishPatternFromDisk(...args);
+  if (report.outcome !== "published") {
+    throw new Error(`blocked: ${report.next}`);
+  }
+  return report;
+};
+
 describe("pattern-publish", () => {
   let dir: string;
   let entry: string;
@@ -134,7 +146,7 @@ describe("pattern-publish", () => {
 
   describe("publishPatternFromDisk()", () => {
     it("rewrites a pattern holding a street address, writes it back on a clean tree, publishes it and requests a listing", async () => {
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([FAIL, PASS], [REWRITE])),
       );
@@ -166,7 +178,7 @@ describe("pattern-publish", () => {
     });
 
     it("never prints or reports the value a finding is about", async () => {
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([FAIL, PASS], [REWRITE])),
       );
@@ -176,25 +188,31 @@ describe("pattern-publish", () => {
       expect(publishReportLines(report).join("\n")).toContain("git diff");
     });
 
-    it("publishes as it is on disk, leaving the file alone, when it has uncommitted edits", async () => {
+    it("publishes nothing and leaves the file alone when it has uncommitted edits", async () => {
       dirty = [entry];
       const report = await publishPatternFromDisk(
         { entry },
         depsWith(scripted([FAIL, PASS], [REWRITE])),
       );
 
+      expect(report.outcome).toBe("blocked");
       expect(report.localCheck).toMatchObject({
         status: "rewritten",
         applied: false,
       });
       expect(written.size).toBe(0);
       expect(await Deno.readTextFile(entry)).toBe(SOURCE);
-      expect(report.patternId).toBe("id-original");
+      expect(index.calls.some((call) => call.fn === "publishPattern")).toBe(
+        false,
+      );
+      expect(publishReportLines(report).join("\n")).toContain(
+        "Nothing was published",
+      );
     });
 
     it("writes the rewrite over uncommitted edits with allowDirty", async () => {
       dirty = [entry];
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry, allowDirty: true },
         depsWith(scripted([FAIL, PASS], [REWRITE])),
       );
@@ -203,19 +221,36 @@ describe("pattern-publish", () => {
       expect(await Deno.readTextFile(entry)).toBe(GENERALIZED);
     });
 
-    it("does not write a rewrite outside a git working tree", async () => {
+    it("publishes nothing and writes nothing outside a git working tree", async () => {
       dirty = undefined;
       const report = await publishPatternFromDisk(
         { entry },
         depsWith(scripted([FAIL, PASS], [REWRITE])),
       );
 
-      expect(report.localCheck).toMatchObject({ applied: false });
+      expect(report.outcome).toBe("blocked");
       expect(written.size).toBe(0);
+      expect(index.calls.some((call) => call.fn === "publishPattern")).toBe(
+        false,
+      );
+    });
+
+    it("throws naming cf index join, before compiling, for an identity that is no member", async () => {
+      index = new FakePatternIndex({ privacyPrompt: PRIVACY_PROMPT });
+      let compiled = false;
+      const deps = depsWith(undefined);
+      await expect(publishPatternFromDisk({ entry }, {
+        ...deps,
+        compileEntry: (...args) => {
+          compiled = true;
+          return deps.compileEntry(...args);
+        },
+      })).rejects.toThrow("cf index join");
+      expect(compiled).toBe(false);
     });
 
     it("still publishes, and requests the listing, when both rewrites fail, showing the findings", async () => {
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([FAIL, FAIL, FAIL], [REWRITE, REWRITE])),
       );
@@ -233,7 +268,7 @@ describe("pattern-publish", () => {
     });
 
     it("skips the local check and says so in one line when no LLM is configured", async () => {
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(undefined),
       );
@@ -251,7 +286,7 @@ describe("pattern-publish", () => {
     });
 
     it("skips the local check when the model does not answer", async () => {
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(() => Promise.reject(new Error("HTTP 503"))),
       );
@@ -261,9 +296,9 @@ describe("pattern-publish", () => {
     });
 
     it("names the previous id published from the same entry file as the prior version", async () => {
-      await publishPatternFromDisk({ entry }, depsWith(scripted([PASS], [])));
+      await publishedReport({ entry }, depsWith(scripted([PASS], [])));
       await Deno.writeTextFile(entry, GENERALIZED);
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
       );
@@ -290,7 +325,7 @@ describe("pattern-publish", () => {
         program: { main: "/x.tsx", files: [] },
       });
       await store.recordSource(dir, "id-theirs");
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
       );
@@ -311,7 +346,7 @@ describe("pattern-publish", () => {
         program: { main: "/x.tsx", files: [] },
       });
       await store.recordSource(dir, "id-mine-earlier");
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
       );
@@ -322,7 +357,7 @@ describe("pattern-publish", () => {
 
     it("names no remix for source published unchanged from the pattern it was fetched from", async () => {
       await store.recordSource(dir, "id-original");
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
       );
@@ -338,7 +373,7 @@ describe("pattern-publish", () => {
         capResetsAt: "2026-11-16T00:00:00.000Z",
       });
       index.admit(signer.did(), "p-me");
-      const report = await publishPatternFromDisk(
+      const report = await publishedReport(
         { entry },
         depsWith(scripted([PASS], [])),
       );
