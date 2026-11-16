@@ -34,6 +34,33 @@ export const PATTERN_CATALOG_TAG = "#patternCatalog";
 export type CatalogQuality = "penalized" | "unproven" | "proven";
 
 /**
+ * Where a pattern ranks. `featured` is chosen by a curator; `main` holds
+ * patterns their author has used, ranked by other people's use; `unvetted`
+ * holds patterns nobody has shown working yet.
+ */
+export type CatalogBucket = "featured" | "main" | "unvetted";
+
+/**
+ * Why an entry is not discoverable. Only the pattern's own author sees an
+ * unlisted entry: `draft` until they ask for it to be listed, `checking` while
+ * it is checked for personal details, `held` when the check found something
+ * (`reason` says what, without repeating it), `error` when the check failed
+ * and waits for a re-run.
+ */
+export interface CatalogUnlisted {
+  state: "draft" | "checking" | "held" | "error";
+  reason?: string;
+}
+
+/** How many people have used a pattern, across its versions. */
+export interface CatalogCounts {
+  /** Distinct people who placed it. */
+  people?: number;
+  /** Distinct people who came back to it on a later day. */
+  returning?: number;
+}
+
+/**
  * One published pattern, as the catalog describes it. Every field but
  * `patternId` and `title` may be absent; a caller shows what is there.
  * `title`, `blurb` and `tags` are written by the pattern's author: render them
@@ -50,6 +77,12 @@ export interface CatalogEntry {
   quality?: CatalogQuality;
   /** When the version was published (ISO 8601). */
   createdAt?: string;
+  bucket?: CatalogBucket;
+  /** The author's stable pseudonym, not who they are. */
+  author?: string;
+  /** Present only on the viewer's own entries that others cannot find yet. */
+  unlisted?: CatalogUnlisted;
+  counts?: CatalogCounts;
 }
 
 /**

@@ -59,7 +59,8 @@ The tags are organized into four categories by high nibble:
 | `TAG_OBJECT`      | `0x11` | 17      | plain objects                   |
 | `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` (general)    |
 
-**Primitive tags (`0x2N`)** — leaf value types:
+**Primitive tags (`0x2N`, continued at `0x3N`)** — leaf value types. The
+`0x2N` range is full, so the leaf tags continue at `0x3N`:
 
 | Tag               | Hex    | Decimal | Used for                          |
 |:------------------|:-------|:--------|:----------------------------------|
@@ -79,6 +80,7 @@ The tags are organized into four categories by high nibble:
 | _(retired)_       | `0x2D` | 45      | nothing; never to be reassigned   |
 | `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
 | `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
+| `TAG_QUANT`       | `0x30` | 48      | unit-and-number value (reserved; see Section 4.22); not produced by this implementation |
 
 **Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
 payload of a primitive type with a digest, when doing so shortens the byte
@@ -250,8 +252,9 @@ threshold when deciding which form to emit.
 
 The hashed form applies everywhere this spec encodes a string via the
 `TAG_STRING` layout: standalone strings (this section), `symbol` keys (Section
-4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14), and
-`FabricHash` algorithm tags (Section 4.11).
+4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14),
+`FabricHash` algorithm tags (Section 4.11), and the units of unit-and-number
+values (Section 4.22).
 
 ### 4.5 `bigint`
 
@@ -603,6 +606,53 @@ span and a day holding the same `bigint` are always distinguishable, and from
 `FabricDurationNsec` (`0x2E`), so are spans counted in the two units. See
 `1-fabric-values.md` Section 1.4.14.
 
+### 4.22 Unit-and-number values (reserved)
+
+A unit-and-number value pairs a **unit**, which is a string, with a **value**,
+which is either an integer (a `bigint`) or an IEEE 754 binary64 `number`. This
+implementation produces no such value. This section reserves `TAG_QUANT` and
+fixes the byte stream such a value hashes to, so that neither is ever
+contradicted.
+
+**Units with a dedicated type.** When the unit is exactly one of the four
+strings below and the value is a `bigint`, the value hashes exactly as the
+corresponding type, with that `bigint` as the type's wrapped value:
+
+| Unit           | Hashed as            | Tag                          | Section |
+|:---------------|:---------------------|:-----------------------------|:--------|
+| `epochNsec`    | `FabricEpochNsec`    | `TAG_EPOCH_NSEC` (`0x27`)    | 4.9     |
+| `epochDay`     | `FabricEpochDay`     | `TAG_EPOCH_DAY` (`0x28`)     | 4.10    |
+| `durationNsec` | `FabricDurationNsec` | `TAG_DURATION_NSEC` (`0x2E`) | 4.20    |
+| `durationDay`  | `FabricDurationDay`  | `TAG_DURATION_DAY` (`0x2F`)  | 4.21    |
+
+A value of one of those four types therefore has one hash, whether it is held
+as that type or as a unit-and-number value.
+
+**All other unit-and-number values.** Any other unit, and a `number` value with
+any unit, hash as:
+
+```
+Bytes: TAG_QUANT  UNIT_STRING     VALUE
+       0x30       <string, §4.4>  <bigint, §4.5, or number, §4.3>
+```
+
+- **Unit**: The unit string, encoded as a complete tagged string value per
+  Section 4.4, exactly as a `FabricHash` algorithm tag is (Section 4.11): the
+  direct form for a unit of 64 UTF-8 bytes or fewer, and the hashed form for
+  a longer one.
+- **Value**: The value, fed exactly as it is when it stands alone: a `bigint`
+  per Section 4.5, starting with `TAG_BIGINT`, or a `number` per Section 4.3,
+  starting with `TAG_NUMBER`.
+
+The set of four units with a dedicated type is fixed permanently. Every other
+unit, and every `number` value, always hashes with `TAG_QUANT`, even if a later
+version of the data model gives that unit a type of its own, so that a value's
+hash never changes.
+
+The stream is unambiguous. Each part delimits itself: the unit is
+length-prefixed or a fixed-length digest, and the value carries its own type
+tag. No other value's stream starts with `0x30`.
+
 ---
 
 ## 5. Object Key Sorting
@@ -889,10 +939,10 @@ hashed form.
 
 This rule applies to every string the hasher feeds, including standalone strings
 (Section 4.4), `symbol` keys (Section 4.6), object keys (Section 4.13),
-`FabricInstance` type tags (Section 4.14), and `FabricHash` algorithm tags
-(Section 4.11). The threshold is evaluated per-string independently: an object
-may mix short keys (direct form) and long keys (hashed form) in the same
-key-value sequence.
+`FabricInstance` type tags (Section 4.14), `FabricHash` algorithm tags
+(Section 4.11), and the units of unit-and-number values (Section 4.22). The
+threshold is evaluated per-string independently: an object may mix short keys
+(direct form) and long keys (hashed form) in the same key-value sequence.
 
 ### 7.20 `FabricUnavailable("error", "network", "boom")` and `FabricUnavailable("pending")`
 
@@ -985,6 +1035,32 @@ Full byte stream:
 
 `TAG_DURATION_DAY` (`0x2F`), length 1 (`0x01`), payload `0x07`.
 
+### 7.24 Unit-and-number values
+
+Unit `"m"` with value `3n` is not one of the four units with a dedicated type,
+so it hashes with `TAG_QUANT` (Section 4.22):
+
+```
+30  24 01 6D  26 01 03
+```
+
+- `TAG_QUANT` (`0x30`)
+- Unit (string, §4.4 direct form): `TAG_STRING` (`0x24`), length 1 (`0x01`),
+  UTF-8 byte `6D`
+- Value (`bigint`, §4.5): `TAG_BIGINT` (`0x26`), length 1 (`0x01`), payload
+  `0x03`
+
+Unit `"epochDay"` with the `number` value `42` hashes with `TAG_QUANT` too,
+because its value is a `number`. `"epochDay"` is 8 bytes in UTF-8, and the
+`number` `42` is as in Section 7.4.
+
+```
+30  24 08 65 70 6F 63 68 44 61 79  23 40 45 00 00 00 00 00 00
+```
+
+Unit `"durationDay"` with value `7n` hashes as `FabricDurationDay(7n)`, whose
+stream is `2F 01 07` (Section 7.23).
+
 ---
 
 ## 8. Rejected Values
@@ -1018,6 +1094,7 @@ rejected; they have well-defined byte encodings — see Section 4.3.)
 | `FabricHash` algorithm tag        | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form) |
 | `FabricHash` hash bytes           | unsigned LEB128 | Byte count of raw hash payload   |
 | `FabricInstance` type tag         | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form) |
+| Unit-and-number unit              | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form), prefixed by `TAG_QUANT` |
 | `symbol` registry key             | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form), prefixed by `TAG_SYMBOL` |
 | Object keys                       | string (§4.4)   | Emitted as complete tagged string values (direct or hashed form per key) |
 | Hole run count                    | unsigned LEB128 | Number of consecutive holes      |

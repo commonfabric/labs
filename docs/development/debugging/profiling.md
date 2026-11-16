@@ -1031,3 +1031,35 @@ behind one server span the profile just weighed.
 
 OTEL spans exist behind `OTEL_ENABLED` with a collector to receive them, and are
 the right instrument for a deployed server rather than a local investigation.
+
+### Take a heap profile of a running toolshed
+
+Every isolate of a toolshed, the main thread and each serving worker, runs V8's
+sampling heap profiler from its start, where the process has sys access to
+`inspector` (the release binary, and `-A`). An isolate without it serves
+unsampled: a worker's entry in the manifest carries the error that kept
+sampling from starting, and on the main thread the round fails with that
+error in the log. V8 records the stack of about one
+allocation in every 512 KiB and keeps the record while the object lives, so a
+profile attributes what the heap holds now to the functions that allocated it.
+At that interval the sampling costs nothing measurable. SIGUSR2 writes the
+profiles:
+
+```bash
+kill -USR2 <toolshed pid>
+```
+
+It writes the main thread's profile and each serving worker's into
+`HEAP_PROFILE_DIR` (default `toolshed-heap-profiles` under `TMPDIR`, else under
+`/tmp`), and beside them a manifest, `heap-<pid>-<time>.json`, naming each file
+and the spaces placed on its worker. The log says when the round starts and
+where its manifest is. A second signal during a round is ignored. The directory
+is created readable by the toolshed's user alone, and each file is made so.
+
+Chrome DevTools' Memory panel loads a `.heapprofile` as an allocation sampling
+profile; two taken apart show which code's live allocations grew in between.
+
+A full heap snapshot of a running toolshed is not offered: V8 needed about
+twelve times the heap to build one (6 GB for a 449 MB heap), with the file
+written whole or in chunks alike, so on a host near its memory limit a snapshot
+of a grown process ends it.
