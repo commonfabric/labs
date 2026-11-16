@@ -1862,11 +1862,15 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
   /**
-   * The cell this one's links lead to, typed by the schema the link it
-   * reaches stores where that schema constrains, whatever this cell's own
-   * schema declares beyond a stream it declares and a `default`. A read of it
-   * can return `undefined` where a read of this cell returns the target; read
-   * by key, or re-type it with `asSchema()`, for this cell's own projection.
+   * The cell this one's links lead to. The returned cell takes the nearest
+   * schema a crossed link stores that constrains, whatever this cell's own
+   * schema declares. This cell's schema stays only where it declares a stream
+   * and the stored schema declares nothing but one, and a `default` this cell
+   * declares carries over where the stored schema declares none.
+   *
+   * So a read of the returned cell can return `undefined` where a read of this
+   * cell returns the target. For this cell's own projection, read by key, or
+   * re-type the returned cell with `asSchema()`.
    */
   resolveAsCell(): C;
 
