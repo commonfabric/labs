@@ -3291,3 +3291,404 @@ numbers have gaps.
        label entries against 0 to 2 (note 278). On data of realistic size
        the totals would be dominated by that row, which the corpus totals
        above do not show.
+
+## Value code, an executor, and the values against today's runtime
+
+Notes 281 to 306 are about the value code the crate emits beside a plan
+(`src/emit.rs`, the `emit` command), the executor that runs the two
+(`exec/executor.ts`), and the comparison of the values it computes with those of
+today's runtime (`compare/values.ts`). ES is `execution-and-storage.md`. A note
+that ends with **Needs a ruling** names something the executor could not take
+from the documents and that the owner or the documents author has to decide. The
+other notes record a choice the documents leave open, a defect of the prototype,
+or a result.
+
+281. **The artifact** (PL §1.1, `CompiledPattern`; ES §2.1). PL has a compiled
+     pattern as two addressed things, the plan and the value code, and ES §2.1
+     has the value code as "one emitted JavaScript function per `Cone` record of
+     the plan, named by `Cone.entry` and addressed by `Cone.code`". Neither says
+     what one artifact a compiler writes. The `emit` command prints one JSON
+     record per pattern: the plan, the schema documents the plan names, and a
+     member `code`. `code.modules` has one JavaScript text per module of the
+     program that the plan's code is written in or imports. A text is the body
+     of a function of two parameters, `$rt` and `$exports`. It holds the
+     module's own statements of module scope, with the types removed, each
+     import as a read of another module's exports, each export as a member of
+     `$exports`, and the function of every `pattern(...)` call replaced by
+     `undefined`. After those statements it holds one registration for each
+     function the plan needs from that module. The other members of `code` are
+     what the executor needed beside the plan, and notes 283 to 290 say why each
+     exists. No ruling is needed for the shape itself.
+282. **A function per value, and what a value function returns** (ES §2.2,
+     `ConeResult`). ES has one function per cone that returns the cone's outputs
+     by output index, the branch taken at each selector, the key at each choice
+     point, and the value of each static side-write. The emitter writes one
+     function per value a cone computes (`$rt.value`), and the function returns
+     the value. In the crate's plans a cone has one value that another record
+     refers to in all but the cones of an element body, where the per-element
+     value and the assembled one share a cone, so the two forms hold the same
+     code. The emitter reports no selection and no choice, because the executor
+     instantiates no label and nothing else reads them. It emits no value for
+     `Cone.writes`: a body's side-write goes through the handle the body holds,
+     when the body runs (note 302). These three members of `ConeResult` are not
+     exercised.
+283. **Sandboxed code and value code share the scope of a module.** A body of
+     the function tier names what its module declares: a helper function, a
+     constant, an import. `Body.code` is "content address of the body's source
+     as the loader receives it" (PL §1.1), and no document says in what scope
+     that source is evaluated, or how the value code of a cone reaches a
+     constant of the module it is written in. The emitter puts both into the
+     module's text, after the module's own statements, so a name resolves as it
+     does in the source. One plan can hold code from several modules, a pattern
+     compiled in from another module among them, and each function is registered
+     in the module it is written in. Not a question for the owner, and the
+     documents should say it.
+284. **A cone has no `within`** (PL §1.1, `Cone`; §1.4, "An interim value of an
+     element body"). PL §1.4 says "the cone that computes the entry has the
+     `element` step of the collection in its `within`", and the `Cone` record
+     has no such member. The executor has to know for which element keys a cone
+     instance exists before it evaluates the cone. The slots do not say it: PL
+     §1.4 has "every cone of the body has slots of root `element`, or reads none
+     and is evaluated per element key all the same", and of the 446 cones of an
+     element body in the corpus plans, 38 list no slot of root `element` or
+     `index`. The output paths do not say it either: a path has `*` for a
+     collection and does not name it, and an interim output has no `*`. The
+     artifact holds `code.coneWithin`: for each cone, the collections of the
+     element bodies it is written in, outermost first. **Needs a ruling**: the
+     member PL §1.4 refers to should be in the record.
+285. **Where a slot sits in a body's argument** (PL §1.1, `Body.reads`; ES
+     §2.4). `Body.reads` is a list of slot indexes, "slots the runtime
+     materializes into the body's argument", and ES §2.4 has the runtime build
+     "the slot part from `Body.reads`". A slot has a root and a path in the
+     instance. For a handler the two give the place in the argument: root
+     `event` is the first parameter and root `binding` the second, and the path
+     is the path below it. For a `lift`, a `computed` or an authored function
+     used in the reactive tier, the slot has the root and the path of what the
+     caller passed, `argument/profile/name` for a body whose parameter is `p`
+     and that reads `p.name`. Only `ComputedInput` has an `at`. The artifact
+     holds `code.layouts`: for each use of a body, the path in the argument of
+     each slot of `reads`. The corpus plans have 355 uses of a body that is no
+     handler with 1,093 slots placed this way. **Needs a ruling**: an entry of
+     `Body.reads` needs its place, as an entry of `Body.computed` has.
+286. **The first value of a state cell** (PL §1.1, `StateCell`; §1.3). PL §1.3
+     rules that "the value a declaration gives the cell is written when the cell
+     is first created", and `StateCell` holds a name, a scope, a `within` and a
+     schema. No record holds the value, and no cone computes it: the plan
+     emitter does not evaluate the argument of `Writable.of(...)`. The emitter
+     writes a function per state cell (`$rt.state`), which the executor calls
+     when it makes the cell's document. Of the 1,399 such functions in the
+     corpus, 1,377 are a literal, 19 are another expression that reads no slot,
+     and 3 read a slot. A function that reads a slot reads it through no cone,
+     so no record of the plan lists the read and no template has its label.
+     **Needs a ruling**: where the plan holds the first value, and what the
+     label of a first value that is computed from an input is.
+287. **Constants.** Three kinds of constant reach value code and have no record.
+     - A constant path of the result, such as `[NAME]: "Counter"`.
+       `Plan.outputs` has an entry for a computed path and for a path that
+       passes an input on. PL §1.4 gives the `result` cone "an expression
+       written in the returned object, and a path that passes an input through",
+       and `ConeResult.outputs` is by output index, so a constant path has no
+       index to be returned under. The emitter writes one function for the
+       result, which returns the whole record with the other cones' outputs read
+       through `host.output`.
+     - A constant of the argument of a pattern compiled in. PL §1.1 binds the
+       argument "place by place" to "a slot of the caller, an output of the
+       caller, or a constant". The emitter writes the body of a pattern compiled
+       in as a setup function (`$rt.setup`), called with the constants of the
+       argument, and the value functions it registers close over them.
+     - A constant a handler written in place captures. `Binding.state.place` has
+       `{ constant }`, "held as its value", for a literal and for a module-scope
+       constant the compiler evaluates. The crate evaluates a literal written at
+       the binding, and holds `null` for every other constant: 200 state entries
+       of the corpus plans have `constant: null`. The emitter registers the
+       function of such a handler inside the setup function it is written in
+       (`$rt.handler`), so that the captured name is the one of its scope. The
+       `null` entries are a defect of the crate. The documents should say that
+       the value function of the `result` cone returns the constant paths, and
+       how.
+288. **A path the call of a compiled-in pattern leaves out** (PL §1.1, "The
+     argument of a pattern compiled into another is bound place by place"; ES
+     §2.2). Where the callee declares `symbol: Default<string, "$">` and the
+     call writes no `symbol`, today's runtime reads `"$"`: the callee is an
+     instance with an argument document and a schema. In the compiled path "no
+     slot with root `argument` stands for the callee's own argument", and ES
+     §2.2 gives a path "that resolves to a slot of the instance without a stored
+     link" the default of that slot's schema, which is the caller's. A path the
+     call leaves out resolves to nothing, and no record holds the callee's
+     argument schema: the pattern has no `Child`. The emitter takes the default
+     from the callee's declared argument type and writes it into the setup
+     function. Without it the corpus showed `"undefined420.00"` for `"$420.00"`.
+     Where the call does pass a slot of the caller and nothing is stored there,
+     the executor reads the default of the caller's schema, as ES says, and the
+     callee's default is not applied. **Needs a ruling**: that a path the call
+     leaves out reads the default of the callee's type, and which default a path
+     bound to an empty slot of the caller reads.
+289. **The value of a constructed value that has an entry per path** (PL §3.4;
+     ES §2.2). A rendered tree has one entry of `Plan.outputs` for its container
+     and one for each member that is not constant. `ConeResult` has "the value
+     of each output this cone computes, by output index", and no document says
+     what the value of the container entry is, or whether the function also
+     returns each member under its own index. The emitter's function returns the
+     whole tree once, and the entries below it are paths of that value. The
+     documents should state it.
+290. **The stream of a binding in a computed value** (ES §2.2, "Side-writes are
+     returned, not performed"; PL §1.1, `Binding.result`). A tree holds the
+     stream of a handler at an event attribute. A cone's function "holds no
+     handle", `ConeHost` has no member that yields a stream, and
+     `Binding.result` exists "because the instance has to store a link to the
+     stream at those positions and no other record says where". So either the
+     function leaves the position empty and the runtime fills in the paths of
+     `Binding.result`, or the function places the stream. The emitter adds
+     `host.stream(binding)`, which the function calls at the position. The
+     executor then compares where the stored result holds a stream with the
+     paths `Binding.result` lists. Over the executed corpus modules (note 304),
+     431 stored positions are named by a listed path and 18 are named by none,
+     and of the listed paths without `*`, 315 hold the stream and 12 do not. Of
+     the 18, 14 hold the stream of a binding that has no `result` member, for
+     which the crate found no path, and 4 hold a stream that is an input of the
+     pattern, which no binding stands for. The 12 were not examined. So the
+     listed paths agree with where the value code puts a stream in all but those
+     cases. The runtime still cannot place a stream from `Binding.result` alone:
+     PL says a reader with the plan alone cannot resolve a path with `*` (§8,
+     question 78), and a path below a conditional holds the stream under one
+     selection only. **Needs a ruling**: whether value code places a stream,
+     which `ConeHost` then needs a member for, or the runtime does, and from
+     what.
+291. **An `identity` and a `value` entry at one path of an argument** (ES §2.4,
+     "What the argument holds at a path"). A handler that calls `count.get()`
+     and `count.set(...)` has two slots at `binding/count`, one of each class.
+     ES says "where two entries name one path, the argument holds the form that
+     carries more: `value` before `enumeration`, `enumeration` before `shape`,
+     and a reference stand-in where the only entries are `identity` and
+     `shape`". It does not say what the argument holds for `identity` with
+     `value`. By the wording the value would win, and the body's `count.set`
+     would fail. The executor hands the body the handle: an entry at or below
+     the position of a handle is what a read through the handle gives, and it is
+     not put into the argument. The documents should state it.
+292. **A name a body captures and reads nothing of.** The body
+     `computed(() => { void flag; ... })` names `flag` and reads nothing of it,
+     so its record has no entry for `flag`, and `Body.reads` and `Body.computed`
+     list nothing. The body's code still names it. The emitter binds every name
+     the body captures that the reactive tier declares, and the argument holds
+     nothing at a name with no entry. The documents should say that a body is
+     called with a binding for each name it captures, an empty one included.
+293. **Element keys in the executor** (PL §1.3, "Element keys"; ES §2.5). The
+     element part is "the identity of the cell the slot links to, when it holds
+     a link". The executor's documents hold a link to a path of a document, and
+     it takes the document and the path where the chain of links ends as the
+     identity. It keys a position that holds a plain value by the canonical JSON
+     of the value, with no salt, since it derives no document identifier a
+     client could see. An element of a collection the instance computed is keyed
+     as a link where the computing body passed a stored container on unchanged
+     (note 300) and by its value otherwise. The state cell of an element body
+     has the keys of its `within` in the identifier of its document. No ruling
+     is needed.
+294. **A moved element that is passed on by reference** (ES §2.6; PL §1.3, "A
+     move is a membership change and a change of the index"). ES §2.6 has for
+     "elements are reordered" that nothing is evaluated "unless a cone of the
+     body reads the index", and PL has "no cone that lists only element slots is
+     evaluated". For `tags.map((tag) => <li>{tag}</li>)` over plain values, the
+     cone passes the element on by its `identity` slot, and the row holds a link
+     to the address the element was read from, which is the position:
+     `argument/tags/0`. After a move the key is bound to another position, and
+     the link the row holds names the old one, where another value now is. The
+     executor's first form evaluated nothing, as ES says, and the row of `"a"`
+     showed `"b"` (`exec/test/executor.test.ts`, "keeps an element's state with
+     its value when the element moves"). The executor now records the address
+     each element slot was bound to and evaluates a cone instance again when
+     that address changed. For a position that holds a link the address is the
+     cell's and does not change. **Needs a ruling**: for an element that is a
+     plain value in place, either a cone that passes it on is evaluated again on
+     a move, or the row holds the value and not a link to the position.
+295. **When the document of a state cell is made.** The documents give the
+     identifier of a state cell's document (ES §5.2) and say the declared value
+     is written "when the cell is first created" (PL §1.3). They do not say when
+     that is: when the instance is created, or when a cone first binds a slot to
+     the cell. Today's run has the document of every state cell of the pattern's
+     body after the instance settled. The executor makes the documents of the
+     cells with no `element` step when the instance is created, and those of an
+     element body when the key enters the element table. The documents should
+     state it.
+296. **Which cones are evaluated** (ES §2.3). ES starts "from the demanded
+     outputs whose cone instances are stale, in the order of `Plan.outputs`".
+     The executor has no reader, so it evaluates every kept output and then the
+     result. Three things followed.
+     - A cone with a side-write whose value nothing reads. In
+       `patterns/dev/test/non-idempotent/accumulator.tsx` a `computed` pushes
+       onto a state cell, and the result passes that cell on by reference. No
+       output of the cone is kept, and PL §3.11 excepts "the `identity` slot at
+       the cell's root" from the slots that make an edge, so no edge leads from
+       the writing cone to the `result` cone. A reader of the result reads the
+       cell, and nothing in the plan has the writing cone evaluated before that
+       read. The executor evaluates every cone of the pattern's own body that
+       has a side-write before it stores the result. **Needs a ruling**: what
+       demands a cone whose only effect is a side-write to a cell that the
+       result passes on by reference.
+     - A cone that writes a cell it reads. ES §2.7 makes such a cone instance
+       stale again by its own write, up to the bound of ten evaluations, and
+       then fails it. The executor evaluates it once: 6 evaluations over the
+       executed corpus modules wrote a position they had read. Under ES those
+       cone instances end in the error state. Today's runtime runs each once.
+     - A branch that is not selected. ES §2.2 has "an output used only in the
+       unselected branch of a conditional is not evaluated".
+       `patterns/dev/gideon-tests/test-ifelse-both-branches.tsx` counts the
+       evaluations of both branches of an `ifElse`: today's runtime evaluates
+       both, and the executor the selected one (note 305).
+297. **The container of a `pick`** (ES §2.2, assumed there under question 75).
+     For `example[UI]` over the element of a collection, the cone lists the slot
+     of the chosen child, at `*`, and no slot of the container. The emitter
+     reads the container through that slot, and the executor yields every child
+     for it, as ES assumes. The executed corpus modules have three with such a
+     read. The assumption was enough.
+298. **A handle to a constant** (PL §1.1, `Binding.state.place`; §3.11, "A write
+     through a handle to a value the instance computes"). A pattern compiled in
+     declares `step: Writable<number>`, the call writes `step={5}`, and a
+     handler of the callee calls `step.get()`. The state path resolves to
+     `{ constant: 5 }`, and the body holds a position of handle type there. ES
+     §2.4 gives a handle at "a position of handle type" and speaks of a link or
+     of "the position itself", and a constant has no position. The executor
+     hands the body a handle that reads the constant and refuses a write, as the
+     ruling on a write to a computed value has it. One event of the corpus is
+     refused this way. The documents should say what a handle to a constant is.
+299. **`equals` on a value with no address.** A handler compares an element of a
+     list it read with a record from the event's payload, which the generated
+     event gives as plain data. The executor's first form compared two values
+     with no common address by their content, and removed a card from a pile
+     that today's runtime keeps. It now compares addresses, and a value read
+     from a stored address is never equal to one that was not. PL §3.16 has
+     `equals` as a read of two references after resolution, which agrees.
+300. **A container passed on unchanged** (ES §2.4, "A value passed on unchanged
+     is stored as a reference", assumed there pending question 10 of the
+     continuation plan). `items.get().filter((i) => !i.done)` in a `computed`
+     returns records it read. A later `items.remove(item)`, with `item` an
+     element of a `map` over that result, finds the record only where the
+     elements of the result are references to the records of `items`. The
+     executor gives every container it materializes the address it was read
+     from, and stores a link where a body returns or writes such a container. A
+     write of a list back to its own cell, as
+     `items.set(items.get().toSpliced(i, 1))`, would then store links to the
+     positions the write replaces, and the executor puts the values there
+     instead. The values of the corpus need the rule, so the assumption stands
+     as far as this comparison shows. What a write holds where the reference
+     leads into what the write replaces is not in ES.
+301. **A pattern called inside a cone, and what a cone lists.** Three properties
+     of the crate's plan, each a defect of the prototype and not of the
+     documents.
+     - A pattern compiled in at a call written inside an initializer is
+       evaluated in the caller's cone, where PL §1.4 has "a pattern compiled
+       into the instance is cones by these same rules". The emitter follows the
+       plan: the setup function of such a call runs when the cone is evaluated.
+     - The cone the crate makes for an array written in place lists no slot of
+       what the members hold. The value code of
+       `[First({ ... }), Second({ ... })]` reads state cells of the two patterns
+       through that cone.
+     - `code.unlistedReads` has 76 reads over the 361 corpus patterns that no
+       slot of the reading cone names, 55 of them the result of an operation (a
+       pending effect, which the comparison does not run). At run time the
+       executed modules made 165 reads of a slot the reading cone does not list,
+       141 of them in two modules that hold an array of pattern results, and 29
+       reads by root and path. Every read of an output of another cone was over
+       an edge of `Plan.edges`, and every write of a handler was one a write
+       edge or an envelope of its body covers (291 writes).
+302. **What the executor does not do.** It instantiates no label, checks no
+     constraint, has no transaction log, persists nothing, and runs no effect:
+     the result of an operation reads as pending, and a module with an operation
+     of kind `effect` or `wish` is not run by the comparison. It hands a body
+     the whole value at a `value`, `shape` or `enumeration` slot and narrows
+     none to its class (ES §2.4). It runs a body as plain JavaScript with no
+     sandbox and no budget. It rolls a handler that throws back by restoring the
+     documents. It makes no part document (ES §4.10), no stream document, and
+     one scope instance. It does not instantiate a pattern or bind a handler in
+     a function body (`BodyCall` of kind `instantiate` and `bind`), does not
+     evaluate a `reduce`, and has no `elementById`, `linksOf`, or debug-string
+     built-in. It reads `spaceOf` as the space it is given and has no acting
+     principal. `Cone.writes`, `ConeResult.selections` and `ConeResult.picks`
+     are not used.
+303. **The fixtures.**
+     `deno run -A --no-check
+     base/pattern-compiler/compare/values-fixtures.ts`
+     runs 19 of the 20 fixtures, 23 runs in all, with the scenario the tests of
+     the label comparison write for a fixture where they write one and a
+     generated one otherwise. All 23 are executed, and 122 of 122 compared
+     values are equal. A value is one member of the result or one state cell of
+     the pattern's body, after the instance settled and after each event.
+     `fixtures/link-cycle.tsx` is left out: its handlers make two cells link to
+     each other, and a read of the whole result of today's run rejects with a
+     `LinkCycleError`. One event of `fixtures/handle-passed.tsx` is not handled,
+     because its handler instantiates a pattern. The executor stores two
+     documents for a fixture with no state cell, and one more per state cell.
+304. **The corpus: what is executed.** `values-corpus.ts run` takes the 270
+     modules the crate emits a plan for with no unsupported construct. Today's
+     runtime runs 213 of them, as in note 273. Of the 213, the executor runs
+     186, and 159 of those have every compared value equal and every committed
+     event handled. The other 27 are not executed, by cause:
+
+     | Cause                                                                | Modules |
+     | -------------------------------------------------------------------- | ------: |
+     | The emitter writes no code for a `reduce` in the reactive tier       |       7 |
+     | The value code throws                                                |       6 |
+     | An output that no value function computes                            |       4 |
+     | A handler called in a function body                                  |       2 |
+     | The built-in `toIndentedDebugString`                                 |       2 |
+     | The emitter writes no code for a spread in the argument of a pattern |       1 |
+     | A value that is no plain data                                        |       1 |
+     | The built-in `linksOf`                                               |       1 |
+     | The built-in `toCompactDebugString`                                  |       1 |
+     | The value code does not parse                                        |       1 |
+     | The value code names something it does not bind                      |       1 |
+
+     The first row is the emitter's. The rows that name a built-in, a handler or
+     a pattern called in a function body, and a value that is no plain data, are
+     things the executor does not implement (note 302). The rows "the value code
+     throws", "names something it does not bind" and "does not parse" are not
+     examined one by one, and each is a defect of the prototype until shown
+     otherwise. Of the 269 events today's runtime committed for the executed
+     modules, the executor does not handle 15: 9 call `elementById`, 4
+     instantiate a pattern in the handler, one writes through a handle to a
+     constant (note 298), and one calls `increment` on a value that is no
+     handle.
+305. **The corpus: the values.** Over the executed modules, 4,537 values are
+     compared, 4,472 are equal, and 65 differ, in 24 modules. Three things are
+     made equal before the comparison: the children of a view node are one flat
+     list; a child that is the result of a pattern is compared as its tree,
+     since the compiled path holds the callee's tree in place at a child
+     position (PL §1.1, question 53) where today's run holds the result with the
+     tree under `$UI`; and a time read from the clock is compared as one token.
+     The differing modules, by cause and class:
+
+     | Cause                                                                                                       | Class                                         | Modules | Values |
+     | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------: | -----: |
+     | `dataFile(...)` at module scope, a built-in the executor does not have                                      | Prototype defect                              |       6 |      7 |
+     | An event the executor did not handle (note 304), and what later values show of it                           | Prototype defect                              |       4 |     15 |
+     | A handler factory as a value of the result (PL §3.21), which the executor does not store                    | Prototype defect                              |       1 |      5 |
+     | A check today's JSX factory makes of a `$` attribute and the executor does not                              | Prototype defect                              |       1 |      2 |
+     | A branch that is not selected is not evaluated (ES §2.2), and the pattern counts its evaluations            | Design difference the documents already state |       1 |      5 |
+     | Today's runtime writes a cell in a template literal as `[object Object]`, and the executor writes its value | Today's runtime, not the design               |       1 |      5 |
+     | A read of the acting principal or of an access list, which the executor does not have. Not verified         | Prototype defect, not verified                |       2 |      3 |
+     | Not examined                                                                                                | Not classed                                   |       8 |     23 |
+
+     The eight modules not examined are `examples/todo-list/todo-list.tsx`,
+     `showcase/card-piles/main.tsx`, `examples/map-demo/map-demo.tsx`,
+     `system/agent-run/agent-run.tsx`, `dev/catalog/catalog.tsx`,
+     `examples/cfc-spec-gallery/main.tsx`,
+     `dev/gideon-tests/test-cell-equals.tsx` and
+     `showcase/wordsearch/wordsearch.tsx`.
+
+     No difference is classed as a design gap by itself. The design gaps this
+     round found are in what the executor needed to compute a value at all
+     (notes 284 to 291, 294 and 296), and each of them showed as a wrong value
+     or a failed run before the emitter or the executor supplied what was
+     missing. The causes marked "not examined" are a first reading of the source
+     and the two values, and are not verified.
+306. **Documents.** The executor stores an argument document, a result document,
+     and one document per state cell that exists, and counts a cell a function
+     body creates. Over the 186 executed modules that is 1,302 documents, 7.0
+     per module: 186 argument documents, 186 result documents, 898 state cells,
+     and 32 created cells. Today's runtime stored 9,700 documents for the same
+     modules and scenarios from the compile on, 52.2 per module, the cells the
+     scenario gives its inputs through included (one per top-level input). The
+     executor's count leaves out what ES §4.1 lists and the executor does not
+     make: a part document, the state document of an operation, a stream
+     document, and the instances document. So it is a lower bound on the
+     compiled path's documents for these scenarios, and the derived counts of
+     note 277 are the ones to compare with today's.

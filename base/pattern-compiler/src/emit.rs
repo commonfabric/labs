@@ -1687,7 +1687,18 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 )),
                 JSXChild::ExpressionContainer(container) => {
                     if let Some(expression) = container.expression.as_expression() {
-                        written.push(self.render(expression, Want::Pass));
+                        let code = self.render(expression, Want::Pass);
+                        // The result of a pattern at a child position is
+                        // its tree (PL §1.1).
+                        let result = matches!(
+                            self.place_of(expression),
+                            Some(Place::Record(fields)) if fields.contains_key("$UI")
+                        );
+                        written.push(if result {
+                            format!("$h.at({code}, [\"$UI\"])")
+                        } else {
+                            code
+                        });
                     }
                 }
                 JSXChild::Spread(spread) => {
