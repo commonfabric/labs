@@ -2442,8 +2442,9 @@ Consequences, which later sections rely on:
   a `lift` or a `computed` returns whole. For the second an
   implementation may evaluate the body for the whole collection again
   on each change, in place of keeping results per key, where the
-  observable result is the same: the stored values and labels, and what the state cells,
-  streams, effects and children of each key hold. Aggregates and
+  observable result is the same: the stored values and labels, and
+  what the state cells, streams, effects and children of each key
+  hold. Aggregates and
   collection indexes hold one contribution per key (sections 3.8 and
   3.17). `reduce` is the exception: its steps are ordered and are not
   keyed (section 3.13).
