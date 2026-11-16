@@ -1035,7 +1035,11 @@ the right instrument for a deployed server rather than a local investigation.
 ### Take a heap profile of a running toolshed
 
 Every isolate of a toolshed, the main thread and each serving worker, runs V8's
-sampling heap profiler from its start. V8 records the stack of about one
+sampling heap profiler from its start, where the process has sys access to
+`inspector` (the release binary, and `-A`). An isolate without it serves
+unsampled: a worker's entry in the manifest carries the error that kept
+sampling from starting, and on the main thread the round fails with that
+error in the log. V8 records the stack of about one
 allocation in every 512 KiB and keeps the record while the object lives, so a
 profile attributes what the heap holds now to the functions that allocated it.
 At that interval the sampling costs nothing measurable. SIGUSR2 writes the

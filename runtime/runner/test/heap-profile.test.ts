@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import {
@@ -89,7 +90,7 @@ describe("heap-profile", () => {
           "--no-check",
           "--allow-read",
           `--allow-write=${directory}`,
-          script.pathname,
+          fromFileUrl(script),
           directory,
         ],
         stdout: "piped",
