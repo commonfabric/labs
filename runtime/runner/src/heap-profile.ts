@@ -18,7 +18,11 @@ import { Session } from "@node/inspector";
  */
 export const HEAP_SAMPLING_INTERVAL_BYTES = 512 * 1024;
 
-let sampling: Promise<Session> | undefined;
+/**
+ * This thread's sampler once started, or why it could not start: an isolate
+ * without sys access to "inspector" serves without one.
+ */
+let sampling: Promise<Session | Error> | undefined;
 
 /** Posts `method` to `session` and resolves with its result. */
 function post<T>(
@@ -38,17 +42,23 @@ function post<T>(
 
 /**
  * Starts sampling this thread's heap, once per isolate; a later call does
- * nothing.
+ * nothing. Never rejects: sampling is a diagnostic, and a thread where it
+ * cannot start, as one without sys access to "inspector", goes on without it,
+ * its profile request answering why.
  */
 export function startHeapSampling(): Promise<void> {
   sampling ??= (async () => {
-    const session = new Session();
-    session.connect();
-    await post(session, "HeapProfiler.enable");
-    await post(session, "HeapProfiler.startSampling", {
-      samplingInterval: HEAP_SAMPLING_INTERVAL_BYTES,
-    });
-    return session;
+    try {
+      const session = new Session();
+      session.connect();
+      await post(session, "HeapProfiler.enable");
+      await post(session, "HeapProfiler.startSampling", {
+        samplingInterval: HEAP_SAMPLING_INTERVAL_BYTES,
+      });
+      return session;
+    } catch (error) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
   })();
   return sampling.then(() => undefined);
 }
@@ -58,7 +68,7 @@ export function startHeapSampling(): Promise<void> {
  * DevTools' Memory panel loads) into `directory`, named for the process,
  * `thread` and the time, readable by this process's user alone, and returns
  * the file's path. Sampling goes on. Throws where this thread never started
- * sampling, whose profile would be empty.
+ * sampling, or it could not start, since its profile would be empty.
  */
 export async function writeThreadHeapProfile(
   directory: string,
@@ -70,6 +80,11 @@ export async function writeThreadHeapProfile(
     );
   }
   const session = await sampling;
+  if (session instanceof Error) {
+    throw new Error(
+      `heap sampling could not start on thread ${thread}: ${session.message}`,
+    );
+  }
   const { profile } = await post<{ profile: unknown }>(
     session,
     "HeapProfiler.getSamplingProfile",
