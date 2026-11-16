@@ -11,15 +11,10 @@ export function emitPropertyAccess(
     expression,
     dataFlows,
     context,
-    inSafeContext,
     preferInputBoundWrappers,
   } = params;
   if (!ts.isPropertyAccessExpression(expression)) return undefined;
 
-  // Skip lift-applied wrapping in safe contexts - they don't need it
-  if (inSafeContext) return undefined;
-
-  if (dataFlows.length === 0) return undefined;
   if (
     expression.parent &&
     ts.isCallExpression(expression.parent) &&

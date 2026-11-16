@@ -73,10 +73,9 @@ export function extractLiteralValue(
         item = symbol
           ? extractLiteralValueOfSymbol(symbol, checker, visiting)
           : undefined;
-      } else {
-        // A spread, method, or accessor is not a literal member.
-        return undefined;
       }
+      // A spread, method, or accessor is not a literal member, and leaves
+      // both unset.
       if (name === undefined || !item) return undefined;
       // A member whose value is `undefined` is absent, as it is in the JSON
       // the schema becomes. Defined as an own property: `value[name] =` with

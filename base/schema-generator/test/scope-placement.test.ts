@@ -50,6 +50,44 @@ describe("scope-placement", () => {
     ).toThrow("A scope wrapper cannot be a member of a union.");
   });
 
+  it("accepts boolean branches, which declare no scope", () => {
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        anyOf: [true, false, { type: "string" }],
+        scope: "user",
+      })
+    ).not.toThrow();
+  });
+
+  it("throws for a scope in a branch of a tuple element's slot", () => {
+    // Each `prefixItems` entry is a slot of its own, walked as the root is.
+
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        type: "array",
+        prefixItems: [{ type: "number" }, beside({ type: "string" })],
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        type: "array",
+        prefixItems: [
+          { type: "number" },
+          beside({ type: "string", scope: "user" }),
+        ],
+      })
+    ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  it("throws for a scope in a branch of an array element's slot", () => {
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        type: "array",
+        items: beside({ type: "string", scope: "user" }),
+      })
+    ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
   describe("memberScopeWithin", () => {
     it("returns `undefined` for a scope at a schema's own top level", () => {
       // That scope is the whole value's, which the caller keeps.

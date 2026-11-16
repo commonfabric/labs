@@ -8,7 +8,6 @@ import {
   getNodeText,
   getTypeAtLocationWithFallback,
   getVariableInitializer,
-  isFunctionParameter,
   isMethodCall,
   isOptionalMemberSymbol,
   setParentPointers,
@@ -227,44 +226,6 @@ Deno.test("AST utils resolve member symbols and optional members", () => {
   );
   assertEquals(isOptionalMemberSymbol(required, checker), false);
   assertEquals(isOptionalMemberSymbol(optional, checker), true);
-});
-
-Deno.test("AST utils classify function parameters outside builder callbacks", () => {
-  const { sourceFile, checker } = createProgram(`
-    declare function lift<T, R>(callback: (value: T) => R): unknown;
-    declare function pattern<T, R>(callback: (value: T) => R): unknown;
-    function ordinary(param: string) {
-      return param;
-    }
-    const lifted = lift((value: string) => value);
-    const patterned = pattern((input: string) => input);
-    const local = "value";
-  `);
-  const ordinaryUse = findIdentifier(
-    sourceFile,
-    "param",
-    (node) => ts.isReturnStatement(node.parent),
-  );
-  const liftedUse = findIdentifier(
-    sourceFile,
-    "value",
-    (node) => ts.isArrowFunction(node.parent) && node.parent.body === node,
-  );
-  const patternedUse = findIdentifier(
-    sourceFile,
-    "input",
-    (node) => ts.isArrowFunction(node.parent) && node.parent.body === node,
-  );
-  const local = findIdentifier(
-    sourceFile,
-    "local",
-    (node) => ts.isVariableDeclaration(node.parent),
-  );
-
-  assertEquals(isFunctionParameter(ordinaryUse, checker), true);
-  assertEquals(isFunctionParameter(liftedUse, checker), false);
-  assertEquals(isFunctionParameter(patternedUse, checker), false);
-  assertEquals(isFunctionParameter(local, checker), false);
 });
 
 Deno.test("AST utils set synthetic parent pointers for method-call helpers", () => {

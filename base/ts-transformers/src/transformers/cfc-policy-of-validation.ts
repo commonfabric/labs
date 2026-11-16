@@ -57,7 +57,7 @@ function validatePolicyOf(
     );
     return;
   }
-  if (!isExportedVariable(declaration)) {
+  if (!isExportedVariable(declaration, declaration.name.text)) {
     report(
       context,
       binding,
@@ -98,9 +98,10 @@ function isImportedCfcAuthoringBinding(
   });
 }
 
-function isExportedVariable(declaration: ts.VariableDeclaration): boolean {
-  if (!ts.isIdentifier(declaration.name)) return false;
-  const declarationName = declaration.name.text;
+function isExportedVariable(
+  declaration: ts.VariableDeclaration,
+  declarationName: string,
+): boolean {
   const statement = declaration.parent.parent;
   if (
     ts.isVariableStatement(statement) &&

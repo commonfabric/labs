@@ -21,12 +21,7 @@ import {
   memberScopeWithin,
 } from "../scope-placement.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
-import {
-  cloneSchemaDefinition,
-  getArrayElementInfo,
-  getNativeTypeSchema,
-  safeGetPropertyType,
-} from "../type-utils.ts";
+import { getArrayElementInfo, resolvePropertyType } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
 import { isScopeBrandMember } from "../typescript/scope-brand.ts";
 import { holdsWriterPolicy } from "../typescript/writer-policy.ts";
@@ -273,22 +268,11 @@ export class IntersectionFormatter implements TypeFormatter {
     context: GenerationContext,
   ): MutableJSONSchema {
     const checker = context.typeChecker;
-    const native = getNativeTypeSchema(type, checker);
-    if (native !== undefined) {
-      return cloneSchemaDefinition(native);
-    }
     // An intersection the checker reduces to nothing, as it reduces one whose
     // parts give a discriminant property different literal types, accepts
     // nothing, though the checker may hand it over unreduced as a union's arm.
     if (checker.isTypeAssignableTo(type, checker.getNeverType())) return false;
-    const inter = type as ts.IntersectionType;
-    const parts = inter.types ?? [];
-
-    if (parts.length === 0) {
-      throw new Error(
-        "IntersectionFormatter received empty intersection type",
-      );
-    }
+    const parts = type.isIntersection() ? type.types : [type];
 
     // Filter out "brand-only" and empty object parts before validation.
     // These arise from:
@@ -376,17 +360,10 @@ export class IntersectionFormatter implements TypeFormatter {
   #isBrandOnlyOrEmpty(part: ts.Type, checker: ts.TypeChecker): boolean {
     if ((part.flags & ts.TypeFlags.Object) === 0) return false;
 
-    try {
-      const stringIndex = checker.getIndexTypeOfType(
-        part,
-        ts.IndexKind.String,
-      );
-      const numberIndex = checker.getIndexTypeOfType(
-        part,
-        ts.IndexKind.Number,
-      );
-      if (stringIndex || numberIndex) return false;
-    } catch {
+    if (
+      checker.getIndexTypeOfType(part, ts.IndexKind.String) ||
+      checker.getIndexTypeOfType(part, ts.IndexKind.Number)
+    ) {
       return false;
     }
 
@@ -617,7 +594,7 @@ export class IntersectionFormatter implements TypeFormatter {
     // the schema leaves to `required` to say. Among several other arms it is
     // dropped here, where the union holds no `null` for the non-nullable
     // type to drop as well.
-    const propertyType = safeGetPropertyType(property, intersection, checker);
+    const propertyType = resolvePropertyType(property, intersection, checker);
     const valueType = (property.flags & ts.SymbolFlags.Optional) !== 0 &&
         propertyType.isUnion() &&
         !propertyType.types.some((t) => (t.flags & ts.TypeFlags.Null) !== 0)
@@ -681,8 +658,6 @@ export class IntersectionFormatter implements TypeFormatter {
     schema: MutableJSONSchemaObj,
     docTexts: readonly string[],
   ): MutableJSONSchemaObj {
-    if (!isObjectOrArray(schema)) return schema;
-
     const uniqueDocTexts = docTexts.filter((doc, index, arr) =>
       arr.indexOf(doc) === index
     );
