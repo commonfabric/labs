@@ -32,6 +32,7 @@ import {
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
@@ -750,6 +751,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
+    nonBuiltinWrites: [],
     attributedInitialization: false,
     attributedPieces: [],
     pieceCreators: [],
@@ -878,6 +880,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #markedUndeclarableStores = new Set<string>();
 
+  /** The addresses `CfcTxState.nonBuiltinWrites` holds, so each is held once. */
+  #nonBuiltinWriteKeys = new Set<string>();
+
   /**
    * The stores the runtime owns that outlive the transaction that minted them,
    * shared with every other transaction of the same runtime (`Runtime.edit()`
@@ -987,6 +992,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     bindImmutableCells(this, immutableCells);
     bindImmutableCells(tx, immutableCells);
     this.#cfcInstrumentation = cfcInstrumentation;
+    // A write made on `tx` directly passes none of the write chokepoint
+    // below, so it carries no identity, whatever this transaction's identity
+    // is when it is made. It is an attempted write all the same, so it
+    // retires a standing preparation as one made through the chokepoint does.
+    tx.reportUnmarkedWrites?.((address) =>
+      this.#noteAttemptedWrite(address, { unmarked: true })
+    );
   }
 
   /**
@@ -1922,12 +1934,49 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * cannot borrow a later one). Privileged persistence writes (label maps,
    * `cid:` schema docs) are bookkeeping, not authorship, and are skipped — also
    * keeping the summary stable across prepare, invalidate, and re-prepare.
+   *
+   * A value write `address` names, made under any identity but a builtin's,
+   * is also recorded on its own (`CfcTxState.nonBuiltinWrites`): the
+   * runtime-minted evidence a builtin's write stamps, and the runtime's claim
+   * that no schema declares a policy on a document, stand for what the
+   * builtin wrote, and preparation withholds both where such a write reached.
+   * A later builtin write at the same path does not lift that: a builtin can
+   * read the transaction's view and write it back, so its write is no
+   * evidence that the value is its own choice, and the rule cannot rely on
+   * every builtin guarding what it carries. Each distinct address is
+   * recorded once.
+   *
+   * A write `unmarked` reached the storage transaction beneath this one
+   * without passing its write chokepoint (`reportUnmarkedWrites()`), so it
+   * counts as made under no identity, inside the runtime's privileged
+   * persistence scope too, which writes only through the chokepoint.
    */
-  #noteWriteIdentity(): void {
-    if (this.#privilegedSystemWriteDepth > 0) return;
+  #noteWriteIdentity(
+    address: IMemorySpaceAddress,
+    { unmarked = false }: { unmarked?: boolean } = {},
+  ): void {
+    if (!unmarked && this.#privilegedSystemWriteDepth > 0) return;
+    const current = unmarked
+      ? undefined
+      : this.#cfcState.implementationIdentity;
+    if (current?.kind !== "builtin") {
+      const path = canonicalizeDocumentPath(toDocumentPath(address.path));
+      const scope = normalizeCellScope(address.scope);
+      const key = path === undefined
+        ? undefined
+        : stringTupleKey([address.space, address.id, scope, ...path]);
+      if (key !== undefined && !this.#nonBuiltinWriteKeys.has(key)) {
+        this.#nonBuiltinWriteKeys.add(key);
+        this.#cfcState.nonBuiltinWrites.push(deepFreeze({
+          space: address.space,
+          id: address.id,
+          scope,
+          path: path!,
+        }));
+      }
+    }
     const summary = this.#cfcState.writeIdentity;
     if (summary.multiple) return;
-    const current = this.#cfcState.implementationIdentity;
     if (!summary.sawWrite) {
       summary.sawWrite = true;
       summary.identity = current;
@@ -1936,6 +1985,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (!deepEqual(summary.identity, current)) {
       summary.multiple = true;
       summary.identity = undefined;
+    }
+  }
+
+  /**
+   * Notes an attempted value write at `address` for CFC: it advances the
+   * activity epoch, records its identity (`#noteWriteIdentity()`, which
+   * `unmarked` goes to), and invalidates a standing preparation. A write
+   * leaving the value unchanged is an attempted write too.
+   */
+  #noteAttemptedWrite(
+    address: IMemorySpaceAddress,
+    options?: { unmarked?: boolean },
+  ): void {
+    this.#noteCfcActivity();
+    this.#noteWriteIdentity(address, options);
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("write-after-prepare");
     }
   }
 
@@ -2629,9 +2695,15 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // Acted on rather than measured, so it takes the runtime's mark like the
     // recorders do.
     if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    // The marker is the runtime's claim about what it wrote, so a value
+    // write another identity made on the document falls outside it and is
+    // measured as any writer's is.
     return this.#markedUndeclarableStores.has(
       runtimeOwnedStoreKey(space, id),
-    );
+    ) &&
+      !this.#cfcState.nonBuiltinWrites.some((write) =>
+        write.space === space && write.id === id
+      );
   }
 
   recordCfcConsultedGrant(consulted: ConsultedGrant): void {
@@ -3259,6 +3331,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           : {}),
         ...(this.#cfcState.structureContainers.length > 0
           ? { structureContainers: [...this.#cfcState.structureContainers] }
+          : {}),
+        ...(this.#cfcState.nonBuiltinWrites.length > 0
+          ? { nonBuiltinWrites: [...this.#cfcState.nonBuiltinWrites] }
           : {}),
         implementationIdentity: this.#cfcState.implementationIdentity,
         trustSnapshot: this.#cfcState.trustSnapshot,
@@ -4224,7 +4299,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value = this.#storedLinkSchemaForm(address, value);
     this.#noteCfcActivity();
     this.#noteSystemWrite(address, value, options);
-    this.#noteWriteIdentity();
+    this.#noteWriteIdentity(address);
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("write-after-prepare");
     }
@@ -4253,7 +4328,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value = this.#storedLinkSchemaForm(address, value);
     this.#noteCfcActivity();
     this.#noteSystemWrite(address, value, options);
-    this.#noteWriteIdentity();
+    this.#noteWriteIdentity(address);
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("write-after-prepare");
     }
@@ -4338,13 +4413,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // counts a write that leaves the value unchanged among the attempted
       // writes, and has any write after a preparation invalidate it;
       // `docs/specs/cfc-commit-preparation.md` covers the arrangement.
-      const noteWriteIdentity = () => {
-        this.#noteCfcActivity();
-        this.#noteWriteIdentity();
-        if (this.#cfcState.prepare.status === "prepared") {
-          this.invalidateCfc("write-after-prepare");
-        }
-      };
+      const noteWriteIdentity = (address: IMemorySpaceAddress) =>
+        this.#noteAttemptedWrite(address);
       const refuseMalformedSchemaMeta = (
         address: IMemorySpaceAddress,
         value: FabricValue | undefined,
@@ -4377,7 +4447,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
             const address = toMemorySpaceAddress(write.address);
             const value = storedLinkSchemaForm(address, write.value);
             noteSystemWrite(address, value);
-            noteWriteIdentity();
+            noteWriteIdentity(address);
             if (!write.delete) {
               refuseMalformedSchemaMeta(address, value);
               if (getContentAddressedSchemasConfig()) {
@@ -4390,6 +4460,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
             yield { address, value, delete: write.delete };
           }
         })(),
+        writeChokepointMark(),
       );
       if (result.error) {
         throw toThrowable(result.error);
@@ -4446,12 +4517,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * Drops the records this transaction accumulated for preparation: the
    * write-policy inputs and the identities that recorded them, the
    * dereference traces, trigger reads, structure containers, asserted value
-   * roots, consulted grants and manifests, the observations, and the
-   * preparation that verified them, whose input holds the same records. A
-   * preparation that was invalidated holds its reasons and no input, and
-   * stays for whoever reads why a commit was refused. A transaction that has
-   * settled runs no further gate over the records, so a reference to it that
-   * outlives it, from the piece its start ran in for one, keeps none of them.
+   * roots, the writes made under a non-builtin identity, consulted grants
+   * and manifests, the observations, and the preparation that verified
+   * them, whose input holds the same records. A preparation that was
+   * invalidated holds its reasons and no input, and stays for whoever reads
+   * why a commit was refused. A transaction that has settled runs no further
+   * gate over the records, so a reference to it that outlives it, from the
+   * piece its start ran in for one, keeps none of them.
    * The one reader after settlement is a post-commit effect's release check,
    * so `#commit` releases them only once the effects have flushed, and not at
    * all when a seal destination took the effects over to flush after its wave
@@ -4465,6 +4537,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     state.dereferenceTraces = [];
     state.structureContainers = [];
     state.assertedValueRoots = [];
+    state.nonBuiltinWrites = [];
+    this.#nonBuiltinWriteKeys.clear();
     state.triggerReads = [];
     state.writePolicyInputs = [];
     state.writePolicyInputIdentities = new Map();

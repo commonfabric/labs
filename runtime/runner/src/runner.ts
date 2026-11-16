@@ -14,6 +14,7 @@ import {
   valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { type ACL, aclDocId, aclOwner, isACL } from "@commonfabric/memory/acl";
+import { pathsOverlap } from "@commonfabric/memory/v2/path";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
@@ -13570,14 +13571,6 @@ export class Runner {
     const links: NormalizedFullLink[] = [];
     const seen = new WeakMap<object, Set<string>>();
 
-    const pathsOverlap = (
-      left: readonly string[],
-      right: readonly string[],
-    ): boolean => {
-      const shorter = left.length <= right.length ? left : right;
-      const longer = left.length <= right.length ? right : left;
-      return shorter.every((segment, index) => longer[index] === segment);
-    };
     const shouldCollectPath = (path: readonly string[]): boolean =>
       !writeInputPaths || writeInputPaths.length === 0 ||
       writeInputPaths.some((writePath) => pathsOverlap(path, writePath));

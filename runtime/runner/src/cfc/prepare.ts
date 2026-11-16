@@ -3094,6 +3094,27 @@ const identityForSchemaPath = (
   return undefined;
 };
 
+/**
+ * The payload paths the transaction wrote under an identity other than a
+ * builtin's (`CfcTxState.nonBuiltinWrites`), by target. Runtime-minted
+ * evidence a builtin's schema names at a path one of them overlaps could
+ * stand for a value that identity chose, even where a builtin wrote the path
+ * after it, so `gateRuntimeMintedIntegrity` treats it as an unattributed
+ * write's.
+ */
+const nonBuiltinWritePathsByTarget = (
+  writes: readonly CfcAddress[],
+): Map<string, (readonly string[])[]> => {
+  const result = new Map<string, (readonly string[])[]>();
+  for (const write of writes) {
+    const key = targetKey(write);
+    let paths = result.get(key);
+    if (paths === undefined) result.set(key, paths = []);
+    paths.push(write.path);
+  }
+  return result;
+};
+
 const targetKey = (target: {
   space: MemorySpace;
   id: string;
@@ -12575,6 +12596,7 @@ export function* prepareBoundaryCommitSteps(
     state.writePolicyInputs,
     identityForInput,
   );
+  const nonBuiltinWrites = nonBuiltinWritePathsByTarget(state.nonBuiltinWrites);
   const linkWrites = linkWritesByTarget(state.writePolicyInputs);
   const currentLinkWrites = yield* currentLinkWritesByTarget(tx, linkWrites);
   // S16 flow labels: the per-tx conservative join. In `persist` mode every
@@ -13059,6 +13081,17 @@ export function* prepareBoundaryCommitSteps(
       return undefined;
     };
 
+    // The identity a schema's runtime-minted evidence is gated by at a path:
+    // the schema input's, unless a write another identity made overlaps the
+    // path (`nonBuiltinWritePathsByTarget()`), where it is none.
+    const nonBuiltin = nonBuiltinWrites.get(key) ?? [];
+    const mintingIdentityForPath = (
+      path: readonly string[],
+    ): ImplementationIdentity | undefined =>
+      nonBuiltin.some((written) => pathsOverlap(written, path))
+        ? undefined
+        : identityForSchemaPath(writeAuthorIdentities.get(key), path);
+
     // The stamps this transaction's own schemas name for the values it
     // writes, decided once: floor enforcement and persistence consume the
     // same branch selection and the same author-gated atoms.
@@ -13077,7 +13110,7 @@ export function* prepareBoundaryCommitSteps(
               ),
             ],
           },
-          identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          mintingIdentityForPath(path),
         ).integrity ?? [];
         if (integrity.length === 0) continue;
         valueStamps.push({
@@ -13207,8 +13240,7 @@ export function* prepareBoundaryCommitSteps(
       let floorFailures: WriteFloorFailure[] = [];
       for (const schema of verificationSchemas) {
         const failures = yield* verifyWriteFloor(tx, schema, target, {
-          identityForPath: (path) =>
-            identityForSchemaPath(writeAuthorIdentities.get(key), path),
+          identityForPath: mintingIdentityForPath,
           // A commit that stores none of its payload's claims stores none
           // of its stamps either, so they credit nothing.
           valueStamps: ingestVerificationFailed ? [] : valueStamps,
@@ -13383,7 +13415,7 @@ export function* prepareBoundaryCommitSteps(
               target.space,
               { ...mint, mintValueStamps: false },
             ),
-            identityForSchemaPath(writeAuthorIdentities.get(key), entry.path),
+            mintingIdentityForPath(entry.path),
           );
           const carriedClaims = mint.attributeCurrentPrincipal === false
             ? existingPrincipalClaims.get(
