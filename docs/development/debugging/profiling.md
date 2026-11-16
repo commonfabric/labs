@@ -1031,3 +1031,34 @@ behind one server span the profile just weighed.
 
 OTEL spans exist behind `OTEL_ENABLED` with a collector to receive them, and are
 the right instrument for a deployed server rather than a local investigation.
+
+### Take a heap snapshot
+
+SIGUSR2 to a toolshed writes a V8 heap snapshot of every isolate it runs, for
+finding what holds its memory, whether or not the serving loop runs in
+workers:
+
+```bash
+kill -USR2 <toolshed pid>
+```
+
+It writes the main thread's snapshot, then each serving worker's, one at a
+time, into `HEAP_SNAPSHOT_DIR` (default `toolshed-heap-snapshots` under
+`TMPDIR`, else under `/tmp`), and beside them a manifest,
+`heap-<pid>-<time>.json`, naming each file and the spaces placed on its worker.
+The log says when the round starts and where its manifest is. A second signal
+during a round is ignored.
+
+- Each snapshot stops its thread while V8 writes it, and V8 needs memory beside
+  the heap to write it. The worker's watchdog does not count that silence once
+  the worker says it has begun
+  ([serving-loop.md §2](../../specs/server-side-execution/serving-loop.md)); a
+  main thread writing its own answers no requests meanwhile.
+- A file is about the size of the heap it holds, so the directory wants room
+  for the process's heaps together.
+- A snapshot holds what the isolate held, secrets and people's data among it.
+  The directory is created readable by the toolshed's user alone, and each file
+  is made so once written.
+
+Chrome DevTools' Memory panel loads a `.heapsnapshot`; comparing two taken
+apart shows what grew in between.

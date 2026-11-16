@@ -33,6 +33,7 @@ import {
   type ServingLoopHandle,
   ServingWorkerPool,
   type ServingWorkerPoolOptions,
+  type WorkerHeapSnapshot,
 } from "@commonfabric/runner/executor/serving-worker-host";
 import { ModuleCompilerPool } from "@commonfabric/runner/module-compiler-pool";
 import { openSharedCompileCache } from "@commonfabric/runner/compilation-cache/shared-compile-cache.deno";
@@ -56,6 +57,15 @@ export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle & {
    * where the loop runs on this thread, which the caller collects itself.
    */
   collectedWorkerMemory(): Promise<CollectedWorkerMemory[] | undefined>;
+
+  /**
+   * Has each of the loop's serving workers write a heap snapshot into
+   * `directory`, one after another; `undefined` where the loop runs on this
+   * thread, whose snapshot the caller writes itself.
+   */
+  workerHeapSnapshots(
+    directory: string,
+  ): Promise<WorkerHeapSnapshot[] | undefined>;
 };
 
 let loop: ServingLoop | undefined;
@@ -689,6 +699,7 @@ export function startServerExecutionHost(options: {
       stats: () => worker.stats(),
       diagnostics: () => worker.diagnostics(),
       collectedWorkerMemory: () => worker.collectedMemory(),
+      workerHeapSnapshots: (directory) => worker.heapSnapshots(directory),
       host: undefined,
       // The compile workers close first, so a compile a worker still awaits
       // fails at once rather than holding the pool's close.
@@ -752,6 +763,7 @@ export function startServerExecutionHost(options: {
       diagnostics: () =>
         Promise.resolve(servingLoopDiagnostics(moduleCompiler)),
       collectedWorkerMemory: () => Promise.resolve(undefined),
+      workerHeapSnapshots: () => Promise.resolve(undefined),
       host,
       // The compile worker closes first, so a compile an activation still
       // awaits fails at once rather than holding the host's close.

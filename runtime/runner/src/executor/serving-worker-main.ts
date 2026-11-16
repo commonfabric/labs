@@ -17,6 +17,8 @@ import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
+import { writeThreadHeapSnapshot } from "../heap-snapshot.ts";
+import { threadId } from "@node/worker_threads";
 import { collectedMemory } from "../collected-memory.ts";
 import { openSharedCompileCache } from "../compilation-cache/shared-compile-cache.deno.ts";
 import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
@@ -49,6 +51,12 @@ export type ServingWorkerMainOptions = {
     verb: LifecycleVerbDescriptor,
     serviceIdentity: Identity,
   ) => Promise<LifecycleVerbRun>;
+
+  /**
+   * Writes a heap snapshot of this worker's isolate into `directory` and
+   * returns the file's path; absent, {@link writeThreadHeapSnapshot}.
+   */
+  heapSnapshot?: (directory: string) => string;
 
   /** The serving runtimes' outbound fetch; absent, the platform fetch. */
   fetch?: RuntimeFetch;
@@ -170,6 +178,9 @@ export function serveFromPort(
       // server's thread.
       diagnostics: () => servingLoopDiagnostics(ownCompiler),
       collectedMemory,
+      heapSnapshot: options.heapSnapshot ??
+        ((directory) =>
+          writeThreadHeapSnapshot(directory, `worker-${threadId}`)),
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
       runLifecycleVerb: (space, verb) => {
