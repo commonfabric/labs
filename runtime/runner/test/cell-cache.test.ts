@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { taggedHashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -3326,71 +3326,163 @@ describe("cell-cache", () => {
       expect(await compiledEntryLoads()).toBe(false);
     });
 
-    for (
-      const [what, write] of [
-        [
-          "writes the `exportNames` of the",
-          (tx: IExtendedStorageTransaction) =>
-            record("compiled", tx).key("exportNames").set(["hush"]),
-        ],
-        [
-          "adds a cache-root edge to the",
-          (tx: IExtendedStorageTransaction) => {
-            const raw = record("compiled", tx).getRaw() as {
-              imports: unknown[];
-            };
-            record("compiled", tx).key("imports").set(
-              [...raw.imports, rootLinkOf("compiled")],
+    /**
+     * A write another identity makes to the entry's record of `set` at
+     * `field`, of the value `valueOf` returns from the record as stored in
+     * `tx`, through the cell (which records a write-policy input) or raw
+     * (which records none).
+     */
+    const foreignWrite = (
+      set: "source" | "compiled",
+      field: string,
+      valueOf: (stored: Record<string, unknown>) => FabricValue,
+      how: "through the cell" | "raw",
+    ) =>
+    (tx: IExtendedStorageTransaction) => {
+      const cell = record(set, tx);
+      const value = valueOf(cell.getRaw() as Record<string, unknown>);
+      if (how === "raw") {
+        tx.writeValueOrThrow(cell.key(field).getAsNormalizedFullLink(), value);
+      } else {
+        cell.key(field).set(value);
+      }
+    };
+
+    for (const how of ["through the cell", "raw"] as const) {
+      describe(`for a write another identity makes ${how}`, () => {
+        for (
+          const [what, set, field, valueOf] of [
+            [
+              "writes the `exportNames` of the compiled record",
+              "compiled",
+              "exportNames",
+              () => ["hush"],
+            ],
+            [
+              "adds a cache-root edge to the compiled record",
+              "compiled",
+              "imports",
+              (stored: Record<string, unknown>) => [
+                ...(stored.imports as FabricValue[]),
+                rootLinkOf("compiled") as FabricValue,
+              ],
+            ],
+            [
+              "writes the delegation list of the compiled record",
+              "compiled",
+              "delegatedModuleIdentities",
+              () => ["chosen-identity"],
+            ],
+          ] as const
+        ) {
+          const write = foreignWrite(set, field, valueOf, how);
+
+          it(`leaves a compiled record that no load accepts when another identity ${what}`, async () => {
+            expect(await commitWith(false, write)).toBeUndefined();
+
+            expect(await compiledEntryLoads()).toBe(false);
+          });
+
+          it(`returns a writer-fit misfit from the commit when another identity ${what} after a labeled read`, async () => {
+            const error = await commitWith(true, write);
+
+            expect(error?.message).toContain(
+              "writer-fit confidentiality misfit",
             );
-          },
-        ],
-      ] as const
-    ) {
-      it(`leaves a compiled record that no load accepts when another identity ${what} compiled record`, async () => {
-        expect(await commitWith(false, write)).toBeUndefined();
+          });
+        }
 
-        expect(await compiledEntryLoads()).toBe(false);
-      });
-
-      it(`returns a writer-fit misfit from the commit when another identity ${what} compiled record after a labeled read`, async () => {
-        const error = await commitWith(true, write);
-
-        expect(error?.message).toContain("writer-fit confidentiality misfit");
-      });
-    }
-
-    for (
-      const [what, write] of [
-        [
-          "changes an import specifier of the",
-          (tx: IExtendedStorageTransaction) => {
-            const raw = record("source", tx).getRaw() as {
-              imports: { specifier: string; link: unknown }[];
-            };
-            record("source", tx).key("imports").set(
-              raw.imports.map((edge, index) =>
-                index === 0 ? { ...edge, specifier: "hush" } : edge
-              ),
+        for (
+          const [what, field, valueOf] of [
+            [
+              "changes an import specifier of the source record",
+              "imports",
+              (stored: Record<string, unknown>) =>
+                (stored.imports as { specifier: string; link: FabricValue }[])
+                  .map((edge, index) =>
+                    index === 0 ? { ...edge, specifier: "hush" } : edge
+                  ),
+            ],
+            [
+              "adds a cache-root edge to the source record",
+              "imports",
+              (stored: Record<string, unknown>) => [
+                ...(stored.imports as FabricValue[]),
+                rootLinkOf("source") as FabricValue,
+              ],
+            ],
+            [
+              "writes the annotations of the source record",
+              "annotations",
+              () => ({ leak: "hush" }),
+            ],
+          ] as const
+        ) {
+          it(`returns a writer-fit misfit from the commit when another identity ${what} after a labeled read`, async () => {
+            const error = await commitWith(
+              true,
+              foreignWrite("source", field, valueOf, how),
             );
-          },
-        ],
-        [
-          "adds a cache-root edge to the",
-          (tx: IExtendedStorageTransaction) => {
-            const raw = record("source", tx).getRaw() as {
-              imports: unknown[];
-            };
-            record("source", tx).key("imports").set(
-              [...raw.imports, rootLinkOf("source")],
-            );
-          },
-        ],
-      ] as const
-    ) {
-      it(`returns a writer-fit misfit from the commit when another identity ${what} source record after a labeled read`, async () => {
-        const error = await commitWith(true, write);
 
-        expect(error?.message).toContain("writer-fit confidentiality misfit");
+            expect(error?.message).toContain(
+              "writer-fit confidentiality misfit",
+            );
+          });
+        }
+
+        for (const set of ["source", "compiled"] as const) {
+          it(`stores no identity another identity wrote into the ${set} record's delegation list, on either record`, async () => {
+            // The cache writer unions the lists it finds attested on both
+            // records into both, so a list another identity wrote on one
+            // record would otherwise reach the other under a fresh
+            // attestation.
+
+            const delegated = new Map([[
+              entryIdentity,
+              new Set(["predecessor-identity"]),
+            ]]);
+            const seed = runtime.edit();
+            writeSourceAndCompiledDocs(runtime, space, modules, entryIdentity, {
+              runtimeVersion: RTVER,
+              moduleDelegations: delegated,
+            }, seed);
+            seed.prepareCfc();
+            expect((await seed.commit().settled).error).toBeUndefined();
+
+            const tx = runtime.edit();
+            foreignWrite(
+              set,
+              "delegatedModuleIdentities",
+              () => ["chosen-identity"],
+              how,
+            )(tx);
+            const effective = writeSourceAndCompiledDocs(
+              runtime,
+              space,
+              modules,
+              entryIdentity,
+              { runtimeVersion: RTVER, moduleDelegations: delegated },
+              tx,
+            );
+            tx.prepareCfc();
+            expect((await tx.commit().settled).error).toBeUndefined();
+
+            expect([...(effective.get(entryIdentity) ?? [])]).toEqual([
+              "predecessor-identity",
+            ]);
+            const rtx = runtime.edit();
+            try {
+              for (const other of ["source", "compiled"] as const) {
+                expect(
+                  record(other, rtx).getRaw()?.delegatedModuleIdentities,
+                  other,
+                ).not.toContain("chosen-identity");
+              }
+            } finally {
+              rtx.abort();
+            }
+          });
+        }
       });
     }
 

@@ -28,6 +28,7 @@ import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
 import { formerPatternKey } from "../pattern-key-moves.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { MemorySpace, Runtime } from "../runtime.ts";
+import { normalizeCellScope } from "../scope.ts";
 import {
   isFabricImportSpecifier,
   parseFabricRef,
@@ -1204,7 +1205,10 @@ export function writeSourceDocs(
       // over as stored: an annotation is typically a link to another document,
       // and the raw write below has to keep it a link rather than a copy of
       // what it reads through to.
-      const existingAnnotations = identity === entryIdentity
+      // Not where another identity wrote them in this transaction: what the
+      // cache carries forward it writes as its own.
+      const existingAnnotations = identity === entryIdentity &&
+          !writtenByAnotherIdentity(tx, baseCell, ["annotations"])
         ? baseCell.getRaw()?.annotations
         : undefined;
       const delegatedModuleIdentities = [
@@ -1718,6 +1722,27 @@ function storedBuilderSourceSites(
   return isBuilderSourceSitesV1(sidecar) ? sidecar : undefined;
 }
 
+/**
+ * Whether a value write made under an identity other than a builtin's in
+ * `tx` (`CfcTxState.unattestedWrites`) reached `cell`'s document at a path
+ * that is `path`, holds it, or lies within it.
+ */
+function writtenByAnotherIdentity(
+  tx: IExtendedStorageTransaction,
+  cell: Cell<unknown>,
+  path: readonly string[],
+): boolean {
+  const link = cell.getAsNormalizedFullLink();
+  const scope = normalizeCellScope(link.scope);
+  return tx.getCfcState().unattestedWrites.some((write) =>
+    write.space === link.space && write.id === link.id &&
+    write.scope === scope &&
+    (write.path.length <= path.length
+      ? write.path.every((segment, index) => path[index] === segment)
+      : path.every((segment, index) => write.path[index] === segment))
+  );
+}
+
 /** Whether a cell's persisted CFC label carries `atom` at `path`. */
 function cellCarriesIntegrity(
   cell: Cell<unknown>,
@@ -1775,13 +1800,17 @@ function effectiveModuleDelegationsForWrite(
       const existing = sourceCell.get();
       // Mutable source metadata is authority only when the compiler attested
       // this exact field; the source code/import graph verifies separately.
+      // The attestation is read from the stored label and the list from this
+      // transaction's view, so a list another identity wrote here is not
+      // the one the attestation stands for.
       if (
         cellCarriesIntegrity(
           sourceCell,
           COMPILED_INTEGRITY_ATOM,
           tx,
           SOURCE_DELEGATION_PATH,
-        )
+        ) &&
+        !writtenByAnotherIdentity(tx, sourceCell, SOURCE_DELEGATION_PATH)
       ) {
         candidates.push(existing?.delegatedModuleIdentities);
       }
@@ -1802,7 +1831,7 @@ function effectiveModuleDelegationsForWrite(
           compiledCell,
           COMPILED_INTEGRITY_ATOM,
           tx,
-        )
+        ) && !writtenByAnotherIdentity(tx, compiledCell, [])
       ) {
         candidates.push(existing?.delegatedModuleIdentities);
       }
