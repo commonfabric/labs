@@ -515,8 +515,6 @@ describe("turning a lane's selections into batches", () => {
   });
 
   it("skips the identities inside a chosen unit that were not chosen", () => {
-    // What the unit is expected to cost is what the chosen identities
-    // cost, since the skipped ones do not run.
     const manifest = manifestOf([
       { cost: 3 },
       { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
@@ -530,7 +528,6 @@ describe("turning a lane's selections into batches", () => {
     expect(batches[0]!.units).toEqual([{
       unit: "runtime/bakery/glaze.test.ts",
       skip: ["glaze > browns"],
-      cost: 3,
     }]);
   });
 
@@ -559,19 +556,16 @@ describe("turning a lane's selections into batches", () => {
       )[0]!.units[0]!;
     // A name sharing only its first characters encloses nothing, and a
     // chosen describe runs its hooks without the tests inside it. The
-    // describe around a chosen test runs its hooks too, so the unit costs
-    // them as well.
+    // describe around a chosen test runs its hooks too.
     expect(unitFor("glaze > sets", "icing")).toEqual({
       unit: "runtime/bakery/glaze.test.ts",
       skip: ["glaze > browns", "glazed", "icing > sets", "icing > browns"],
-      cost: 1 + 2 + 16,
     });
   });
 
   it("skips nothing inside a unit its suite declares whole", () => {
     // The runner of such a unit reads no skip list. The batch therefore carries
     // none, and the lane's report of what it ran lists every test in the unit.
-    // The unit is expected to cost what every test in it costs.
 
     const member = suite({
       id: "workspace-unit",
@@ -592,7 +586,7 @@ describe("turning a lane's selections into batches", () => {
       repeats: 1,
     }]);
     expect(batches[0]!.units).toEqual([
-      { unit: "runtime/bakery", skip: [], cost: 9 },
+      { unit: "runtime/bakery", skip: [] },
     ]);
   });
 
@@ -694,7 +688,7 @@ describe("turning a lane's selections into batches", () => {
       ["runtime/bakery", new Set(["glaze > sets", "glaze > cools"])],
     ]);
     expect(unitsForRun(batches[0]!, 2, first)).toEqual([
-      { unit: "runtime/bakery", skip: [], cost: 1 },
+      { unit: "runtime/bakery", skip: [] },
     ]);
   });
 });
@@ -4804,7 +4798,6 @@ describe("the last corners of a lane's bookkeeping", () => {
     expect(batches[0]!.units).toEqual([{
       unit: "runtime/bakery/glaze.test.ts",
       skip: [],
-      cost: 8,
     }]);
   });
 
@@ -6612,7 +6605,7 @@ describe("what a lane does with the batches it was given", () => {
           [{
             batch: {
               suite: marking,
-              units: [{ unit: UNIT, skip: [], cost: 1 }],
+              units: [{ unit: UNIT, skip: [] }],
               runs: new Map([[UNIT, 1]]),
               projected: 1,
             },
@@ -6662,7 +6655,7 @@ describe("what a lane does with the batches it was given", () => {
           [{
             batch: {
               suite: quiet,
-              units: [{ unit: UNIT, skip: [], cost: 1 }],
+              units: [{ unit: UNIT, skip: [] }],
               runs: new Map([[UNIT, 1]]),
               projected: 1,
             },

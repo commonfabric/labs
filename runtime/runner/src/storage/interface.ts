@@ -291,6 +291,19 @@ export type StoredDocumentAddress = {
   scopeKey?: ScopeKey;
 };
 
+/** How a release pass (`IStorageManager.releaseUnreadDocuments()`) runs. */
+export type ReleaseOptions = {
+  /**
+   * Whether the pass completes a release something asked for, such as a
+   * stop: each hold token live as the pass begins, once collected, then asks
+   * for a pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
+   * releases what the token alone kept. Absent, a token's collection asks
+   * for nothing on this pass's account. Closing the manager forgets every
+   * follow-up.
+   */
+  followUpOnCollection?: boolean;
+};
+
 export interface IStorageManager extends IStorageSubscriptionCapability {
   id: string;
 
@@ -779,6 +792,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     context?: () => PendingCommitContext,
   ): void;
 
+  /**
+   * Register a multi-space commit whose later spaces' writes are not yet in
+   * those spaces' replicas. The transaction layer commits such a transaction
+   * one space at a time and hands a space's writes to its replica only once
+   * the server has answered for the spaces before it, so until then a read
+   * of a later space does not see them. `applied` settles once the commit
+   * has handed its last space's writes to that space's replica, or has
+   * stopped short of it. Called synchronously as the commit is issued.
+   */
+  trackMultiSpaceCommitApplying?(applied: Promise<void>): void;
+
+  /**
+   * Settles once every multi-space commit registered with
+   * `trackMultiSpaceCommitApplying()` so far has handed its writes to its
+   * replicas, or stopped; `undefined` when none is still handing them over.
+   */
+  multiSpaceCommitsApplied?(): Promise<void> | undefined;
+
   /** Snapshot pending work without waiting for durability or starting I/O. */
   getDiagnostics?(): StorageDiagnostics;
 
@@ -871,6 +902,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): object;
 
   /**
+   * Calls `observer` when a document's hold token (`holdDocument()`) has been
+   * collected that a pass asked to follow up found live
+   * (`ReleaseOptions.followUpOnCollection`), while it was still that
+   * document's token and its space was open, so that the next
+   * `releaseUnreadDocuments()` can release a document nothing holds any
+   * more. One collection can call it once for each of many tokens. Returns a
+   * cancel that removes it.
+   */
+  subscribeHoldsCollected?(observer: () => void): Cancel;
+
+  /**
    * Adds a way for the manager to learn whether something reads a document;
    * a document any of them reads keeps its watches through
    * `releaseUnreadDocuments()` and stays loaded when its watches go. Returns
@@ -893,7 +935,7 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * loaded or read since the previous call began, which a later call may
    * release.
    */
-  releaseUnreadDocuments?(): Promise<boolean>;
+  releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the

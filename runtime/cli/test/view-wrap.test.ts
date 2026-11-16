@@ -376,6 +376,74 @@ Deno.test("word wrap plan: ANSI prefixes use their visible cells", () => {
   assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 2);
 });
 
+Deno.test("word wrap plan: overstruck punctuation belongs to the prefix", () => {
+  // `man` prints a bold `--` as each character, a backspace, and the
+  // character again; it indents like the plain text it draws.
+  for (const text of ["  -\b--\b- ab cd ef gh", "  -- ab cd ef gh"]) {
+    const plan = buildWrapPlan(
+      parseDocument(text).lines,
+      "ansi",
+      12,
+      new Map(),
+      "word",
+    );
+
+    assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 5, JSON.stringify(text));
+  }
+});
+
+Deno.test("word wrap plan: a backspace drawn on its own is not prefix", () => {
+  const plan = buildWrapPlan(
+    parseDocument("  \bx alpha beta gamma").lines,
+    "pictures",
+    10,
+    new Map(),
+    "word",
+  );
+
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 2);
+});
+
+Deno.test("word wrap plan: an overstrike is classified by the character drawn", () => {
+  // Each pair draws the same text, so it wraps and indents the same way.
+  const cases = [
+    { texts: ["abcd \bxefgh ijkl mnop", "abcdxefgh ijkl mnop"], width: 10 },
+    { texts: ["  o\b- ab cd ef gh", "  - ab cd ef gh"], width: 12 },
+    { texts: ["x\b-abcdefghijklmnop", "-abcdefghijklmnop"], width: 8 },
+  ];
+  for (const { texts, width } of cases) {
+    const [overstruck, plain] = texts.map((text) => {
+      const plan = buildWrapPlan(
+        parseDocument(text).lines,
+        "ansi",
+        width,
+        new Map(),
+        "word",
+      );
+      return Array.from({ length: plan.rowCount }, (_, row) => {
+        const { offset, indentWidth } = wrappedRowAt(plan, row)!;
+        return { offset, indentWidth };
+      });
+    });
+
+    assertEquals(overstruck, plain, JSON.stringify(texts[0]));
+  }
+});
+
+Deno.test("word wrap plan: a hidden run is not prefix whatever its order", () => {
+  for (const text of ["\t\bab cd ef gh ij kl", "\b\tab cd ef gh ij kl"]) {
+    const plan = buildWrapPlan(
+      parseDocument(text).lines,
+      "hidden",
+      12,
+      new Map(),
+      "word",
+    );
+
+    assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 0, JSON.stringify(text));
+  }
+});
+
 Deno.test("word wrap plan: large lines without a usable break stay fixed", () => {
   for (
     const text of [

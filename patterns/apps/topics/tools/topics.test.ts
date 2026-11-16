@@ -20,6 +20,7 @@ import {
   type ProgramRun,
   runProgram,
   searchAction,
+  serverExecutes,
   showAction,
   similarAction,
   stdinText,
@@ -29,6 +30,7 @@ import {
   USAGE,
   writeSession,
 } from "./topics.ts";
+import type { WriteRequest } from "./browser.ts";
 import type { Topic } from "./mirror.ts";
 import {
   BOARD,
@@ -247,6 +249,34 @@ describe("topics command", () => {
     };
   }
 
+  /**
+   * A terminal 100 by 30 that keeps what is written to it in `output`, and
+   * hands its input to `live` once, the first time the view says it is live.
+   */
+  function liveTerminal(
+    live: (keys: ReadableStreamDefaultController<Uint8Array>) => void,
+  ): TopicsDeps["terminal"] {
+    let keys!: ReadableStreamDefaultController<Uint8Array>;
+    let wentLive = false;
+    const input = new ReadableStream<Uint8Array>({
+      start: (controller) => void (keys = controller),
+    });
+    return {
+      write(text: string) {
+        output.push(text);
+        if (!wentLive && text.includes("LIVE")) {
+          wentLive = true;
+          live(keys);
+        }
+      },
+      size: () => ({ columns: 100, rows: 30 }),
+      setRaw() {},
+      input: () => input,
+      on: () => () => {},
+      hold: () => () => {},
+    };
+  }
+
   const deps: TopicsDeps = {
     openDocSource: () => board.open(),
     async openSession() {
@@ -255,21 +285,7 @@ describe("topics command", () => {
     },
     // A terminal whose input closes, ending `watch`, once the view is live.
     get terminal() {
-      let keys!: ReadableStreamDefaultController<Uint8Array>;
-      const input = new ReadableStream<Uint8Array>({
-        start: (controller) => void (keys = controller),
-      });
-      return {
-        write(text: string) {
-          output.push(text);
-          if (text.includes("LIVE")) keys.close();
-        },
-        size: () => ({ columns: 100, rows: 30 }),
-        setRaw() {},
-        input: () => input,
-        on: () => () => {},
-        hold: () => () => {},
-      };
+      return liveTerminal((keys) => keys.close());
     },
     clock: { now: () => Date.UTC(2026, 9, 26, 12), after: () => () => {} },
     timeZone: "UTC",
@@ -1198,6 +1214,74 @@ describe("topics command", () => {
       expect(warnings).toEqual([]);
     });
 
+    it("makes each verb's write through its command, sending a link no label for an empty one", async () => {
+      const requests: WriteRequest[] = [
+        { verb: "new", title: "From the browser", body: "Filed." },
+        { verb: "body", topic: "1", text: "Rewritten." },
+        {
+          verb: "link",
+          topic: "1",
+          url: "https://example.com/a",
+          label: "",
+          kind: "pr",
+        },
+        {
+          verb: "link",
+          topic: "1",
+          url: "https://example.com/b",
+          label: "Fix",
+          kind: "web",
+        },
+        { verb: "unlink", topic: "1", url: "https://example.com/a" },
+        { verb: "mention", topic: "1", other: "2" },
+        { verb: "unmention", topic: "1", other: "2" },
+      ];
+      const reports: string[] = [];
+      for (const [index, request] of requests.entries()) {
+        const outcome = await browseWrite(
+          deps,
+          {},
+          request,
+          "Ian",
+          `topics-verb-${index}`,
+        );
+        reports.push(outcome.result === "written" ? outcome.report : "");
+      }
+
+      expect(reports).toEqual([
+        "Created top/3 (/of:fid1:topic-piece-3).",
+        "Replaced the body of top/1.",
+        "Linked top/1.",
+        "Linked top/1.",
+        "Took back a link of top/1.",
+        "top/1 now mentions top/2.",
+        "top/1 no longer mentions top/2.",
+      ]);
+      expect(calls.map(({ verb, payload }) => [verb, payload])).toEqual([
+        ["addTopic", {
+          title: "From the browser",
+          body: "Filed.",
+          agentName: "Ian",
+        }],
+        ["setBody", { body: "Rewritten.", agentName: "Ian" }],
+        ["addLink", {
+          url: "https://example.com/a",
+          kind: "pr",
+          agentName: "Ian",
+        }],
+        ["addLink", {
+          url: "https://example.com/b",
+          kind: "web",
+          label: "Fix",
+          agentName: "Ian",
+        }],
+        ["removeLink", { url: "https://example.com/a", agentName: "Ian" }],
+        ["mention", { topic: "/of:fid1:topic-piece-2" }],
+        ["unmention", { topic: "/of:fid1:topic-piece-2" }],
+      ]);
+      expect(output).toEqual([]);
+    });
+
     it("says a write whose answer was lost may have landed, and settles it under the same invocation", async () => {
       // The write lands, and its answer comes back unreadable.
       garbled = true;
@@ -1371,6 +1455,84 @@ describe("topics command", () => {
         '`"topic-piece"` names no Topic on this board: it is part of the address',
       );
       expect(drawn).not.toContain("Reproduced with cold oil.");
+    });
+
+    /** Where `browse` keeps what it remembers, for the tester. */
+    function stateFile(): string {
+      return boardFile(
+        { browse: "did:key:z6Mk-tester" },
+        "http://localhost:1",
+        SPACE,
+        BOARD,
+        deps.env,
+      );
+    }
+
+    describe("given a `browse` that fails", () => {
+      /** Makes what `browse` remembers impossible to save: its lock. */
+      async function blockSaving(): Promise<void> {
+        await Deno.mkdir(`${stateFile()}.lock`, { recursive: true });
+      }
+
+      /** A terminal whose input fails once the view is live. */
+      const failingTerminal = () =>
+        liveTerminal((keys) => keys.error(new Error("Terminal gone.")));
+
+      it("throws what saving failed with once the terminal is given back", async () => {
+        await blockSaving();
+
+        await expect(run("browse", "1")).rejects.toThrow(
+          Deno.errors.IsADirectory,
+        );
+        expect(output.join("")).toContain("Reproduced with cold oil.");
+        expect(output.at(-1)).toContain("\x1b[?1049l");
+      });
+
+      it("throws what the view failed with once the terminal is given back", async () => {
+        await expect(
+          main(["browse", "1"], { ...deps, terminal: failingTerminal() }),
+        ).rejects.toThrow("Terminal gone.");
+        expect(output.at(-1)).toContain("\x1b[?1049l");
+        expect(
+          Object.keys(JSON.parse(await Deno.readTextFile(stateFile())).seen),
+        ).toEqual(["1"]);
+      });
+
+      it("throws both failures when the view and saving fail", async () => {
+        await blockSaving();
+        const browsing = main(["browse", "1"], {
+          ...deps,
+          terminal: failingTerminal(),
+        });
+
+        await expect(browsing).rejects.toThrow(AggregateError);
+        await expect(browsing).rejects.toMatchObject({
+          errors: [
+            new Error("Terminal gone."),
+            expect.any(Deno.errors.IsADirectory),
+          ],
+          message: expect.stringMatching(/^Terminal gone\.\n.+/),
+        });
+      });
+    });
+
+    it("makes a comment written in `browse` through its command, once it is saved as pending", async () => {
+      // F2, the text, Control-S to save it, and Control-Q to quit, which
+      // waits for the write, where the input ending would not.
+      const typed = "\x1bOQ" + "Seen it too." + "\x13" + "\x11";
+      await main(["browse", "1", "--agent-name", "Sol"], {
+        ...deps,
+        terminal: liveTerminal((keys) =>
+          keys.enqueue(new TextEncoder().encode(typed))
+        ),
+      });
+      const state = JSON.parse(await Deno.readTextFile(stateFile()));
+
+      expect(calls.map(({ verb, payload }) => [verb, payload])).toEqual([
+        ["addComment", { body: "Seen it too.", agentName: "Sol" }],
+      ]);
+      expect(state.pending).toEqual({});
+      expect(state.drafts).toEqual({});
     });
 
     it("takes back the newest link to an address for `unlink`", async () => {
@@ -1711,6 +1873,59 @@ describe("topics command", () => {
       await expect(run("sync", "--json")).rejects.toThrow(
         "`sync` takes no `--json`.",
       );
+    });
+  });
+
+  describe("serverExecutes()", () => {
+    /** Whether a deployment answering `/api/meta` with `body` runs pieces. */
+    async function executes(body: string): Promise<boolean> {
+      const asked: string[] = [];
+      await using server = Deno.serve(
+        { port: 0, hostname: "127.0.0.1", onListen: () => {} },
+        (request) => {
+          asked.push(new URL(request.url).pathname);
+          return new Response(body);
+        },
+      );
+      const answer = await serverExecutes({
+        apiUrl: `http://127.0.0.1:${server.addr.port}/some/path`,
+        space: SPACE,
+        identity: "",
+        board: BOARD,
+        mirror: "",
+        session: "",
+      });
+      expect(asked).toEqual(["/api/meta"]);
+      return answer;
+    }
+
+    it("returns `true` only for a deployment that publishes server execution on", async () => {
+      expect(
+        await executes(
+          JSON.stringify({ experimental: { serverExecution: true } }),
+        ),
+      ).toBe(true);
+      expect(
+        await executes(
+          JSON.stringify({ experimental: { serverExecution: "yes" } }),
+        ),
+      ).toBe(false);
+      expect(await executes(JSON.stringify({ experimental: [] }))).toBe(false);
+      expect(await executes("[]")).toBe(false);
+    });
+
+    it("returns `false` for a deployment that answers with no JSON, or cannot be reached", async () => {
+      expect(await executes("<html>")).toBe(false);
+      expect(
+        await serverExecutes({
+          apiUrl: "http://127.0.0.1:1",
+          space: SPACE,
+          identity: "",
+          board: BOARD,
+          mirror: "",
+          session: "",
+        }),
+      ).toBe(false);
     });
   });
 

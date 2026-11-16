@@ -1,4 +1,12 @@
-import { computed, NAME, pattern, UI, wish, Writable } from "commonfabric";
+import {
+  computed,
+  type JSXElement,
+  NAME,
+  pattern,
+  UI,
+  wish,
+  Writable,
+} from "commonfabric";
 import { type SummaryIndexEntry } from "../../system/summary-index/summary-index.tsx";
 
 type SummaryIndexResult = {
@@ -6,13 +14,24 @@ type SummaryIndexResult = {
   search: { pattern: unknown; extraParams: { entries: SummaryIndexEntry[] } };
 };
 
-export default pattern<Record<string, never>>((_) => {
-  const query = new Writable("");
+export interface SummaryIndexBrowserInput {
+  /** The index entries to list. */
+  entries: SummaryIndexEntry[];
 
-  const { entries } = wish<SummaryIndexResult>({
-    query: "#summaryIndex",
-  }).result!;
+  /** Text an entry's name or summary has to contain to be listed. */
+  query: Writable<string>;
+}
 
+export interface SummaryIndexTesterOutput {
+  [NAME]: string;
+  [UI]: JSXElement;
+}
+
+/** Lists summary index entries, filtered by the query typed above them. */
+export const SummaryIndexBrowser = pattern<
+  SummaryIndexBrowserInput,
+  SummaryIndexTesterOutput
+>(({ entries, query }) => {
   const filtered = computed(() => {
     const q = query.get().toLowerCase().trim();
     if (!q) return entries;
@@ -83,3 +102,12 @@ export default pattern<Record<string, never>>((_) => {
     ),
   };
 });
+
+export default pattern<Record<string, never>, SummaryIndexTesterOutput>(
+  (_) => {
+    const index = wish<SummaryIndexResult>({ query: "#summaryIndex" });
+    // A space with no summary index lists nothing.
+    const entries = computed(() => index.result?.entries ?? []);
+    return SummaryIndexBrowser({ entries, query: new Writable("") });
+  },
+);

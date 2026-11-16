@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command, ValidationError } from "@cliffy/command";
 import { Table } from "@cliffy/table";
 import { type DIDKey, encodeDelegationChains } from "@commonfabric/identity";
 import { isDIDKey } from "@commonfabric/identity/did";
@@ -10,6 +10,11 @@ import {
   readDelegationChainFile,
 } from "../lib/delegation.ts";
 import { loadIdentity } from "../lib/identity.ts";
+import {
+  type IndexDelegationKind,
+  issueIndexDelegation,
+} from "../lib/index-delegation.ts";
+import { resolvePatternIndexUrl } from "@commonfabric/pattern-index/access";
 import { loadPieces } from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import {
@@ -28,6 +33,14 @@ interface IssueOptions extends PieceCLIOptions {
 
   /** Where to write the chain file; stdout when absent. */
   out?: string;
+
+  /** Delegate pattern-index membership (`/index`) rather than a space. */
+  index?: boolean;
+
+  /** Delegate the single-use `/index/root` that moves the member's root. */
+  indexRoot?: boolean;
+
+  patternIndexUrl?: string;
 }
 
 /** The time a `--expires-in` counts from, read once per command. */
@@ -38,6 +51,13 @@ const nowSeconds = (): number => Math.floor(Date.now() / 1000);
  * space, written to `--out` or stdout.
  */
 async function issue(options: IssueOptions): Promise<void> {
+  if (options.index || options.indexRoot) {
+    if (options.index && options.indexRoot) {
+      throw new ValidationError("Pass --index or --index-root, not both.");
+    }
+    await issueForIndex(options, options.index ? "member" : "root-move");
+    return;
+  }
   const config = parseSpaceOptions(options);
   const expiresAt = options.expiresIn === undefined
     ? undefined
@@ -82,6 +102,55 @@ async function issue(options: IssueOptions): Promise<void> {
   } finally {
     await pieces.dispose();
   }
+}
+
+/**
+ * `cf delegation issue --index`: the chain the key `--to` presents to act for
+ * the person's pattern-index membership, issued by the index-only root kept
+ * on this machine, or behind the identity's own chain where the root lives
+ * elsewhere. `--index-root` writes the single-use delegation that moves the
+ * membership's root to `--to`.
+ */
+async function issueForIndex(
+  options: IssueOptions,
+  kind: IndexDelegationKind,
+): Promise<void> {
+  // A space set by CF_SPACE is ignored rather than refused: an index
+  // delegation is about the membership, and the environment may well name a
+  // space for the person's other commands.
+  const issued = await issueIndexDelegation({
+    kind,
+    baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
+    ...(options.identity === undefined
+      ? {}
+      : { identity: await loadIdentity(options.identity) }),
+    to: options.to,
+    ...(options.expiresIn === undefined
+      ? {}
+      : { expiresAt: nowSeconds() + options.expiresIn }),
+  });
+  const text = encodeDelegationChains([issued.chain]);
+  if (options.out === undefined) {
+    Deno.stdout.writeSync(new TextEncoder().encode(text));
+    return;
+  }
+  await Deno.writeTextFile(options.out, text, { createNew: true });
+  const report = {
+    out: options.out,
+    command: issued.command,
+    root: issued.root,
+    to: options.to,
+    links: issued.chain.length,
+    expires: issued.expires,
+  };
+  render(
+    options.json
+      ? report
+      : `Wrote to ${report.out} a chain of ${report.links} for ${report.command} from the index root ${report.root} ending at ${report.to}, expiring ${
+        expiryText(report.expires)
+      }`,
+    { json: options.json },
+  );
 }
 
 /**
@@ -159,7 +228,28 @@ export const delegation = new Command()
         )
         .option(
           "--expires-in <seconds:integer>",
-          "How long the delegation holds, in seconds; forever by default.",
+          "How long the delegation holds, in seconds; forever by default, " +
+            "and 90 days (the most the index accepts) with --index.",
+        )
+        .option(
+          "--index",
+          "Delegate your pattern-index membership (/index) instead of a " +
+            "space, from the index root kept on this machine; no space.",
+        )
+        .option(
+          "--index-root",
+          "Delegate the single-use /index/root that moves your membership's " +
+            "root to --to, which presents it with cf index move-root.",
+        )
+        .env(
+          "CF_PATTERN_INDEX_URL=<url:string>",
+          "Base URL of the pattern index --index delegates for.",
+          { prefix: "CF_" },
+        )
+        .option(
+          "--pattern-index-url <url:string>",
+          "Base URL of the pattern index --index delegates for; the " +
+            "deployment's by default.",
         )
         .option(
           "--out <path:string>",
@@ -173,6 +263,12 @@ export const delegation = new Command()
               "-i ./me.key -a <url> -s did:key:z6Mk...",
           ),
           "Write the chain the agent key presents to open the space.",
+        )
+        .example(
+          cliText(
+            "cf delegation issue --index --to did:key:z6Mk... --out loom-index.json -i ./me.key",
+          ),
+          "Write the chain a Loom instance key presents to publish as you.",
         )
         .action(issue),
       { global: false },

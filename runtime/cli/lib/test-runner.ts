@@ -112,6 +112,7 @@ import {
   makeMockFetch,
   readFetchMocks,
 } from "./fetch-mock.ts";
+import { installLlmMocks, readLlmMocks } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import {
   multiUserDescriptorMeta,
@@ -1271,6 +1272,13 @@ export async function runTestPattern(
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
 
+  // Language-model mocking: a test opts in by exporting a module-scope
+  // `llmMocks` array, read after compile as `fetchMocks` is. The mocks live in
+  // the language-model client, which the whole process shares, so they are
+  // removed when this function returns, after the runtime and the serving loop
+  // that may have asked for them are gone.
+  using llmMockScope = new DisposableStack();
+
   // On the server-execution arm the memory server has a serving loop beside
   // it, whose runtimes run the handlers this test's events fire. They fetch
   // through the same mock, so a served handler sees the test's `fetchMocks`.
@@ -1531,6 +1539,7 @@ export async function runTestPattern(
     // so the entries must be in place before `runtime.run(...)` below. `main` is the
     // module namespace, so a named `fetchMocks` export is reachable.
     fetchMockEntries = readFetchMocks(main);
+    const llmMocks = readLlmMocks(main);
     readBudgets = parseReadBudgets(main.readBudgets);
 
     // A compile-only run ends here: the program's modules are in the byte
@@ -1565,6 +1574,9 @@ export async function runTestPattern(
       if (readBudgets !== undefined) {
         throw new Error("Read budgets are not supported in multi-user tests");
       }
+      if (llmMocks !== undefined) {
+        throw new Error("`llmMocks` is not supported in multi-user tests");
+      }
       writeLocalPatternCoverage = false;
       return await withPhase(
         ["runTestPattern", "multiUser"],
@@ -1578,6 +1590,8 @@ export async function runTestPattern(
           }),
       );
     }
+
+    if (llmMocks !== undefined) llmMockScope.use(installLlmMocks(llmMocks));
 
     const testPatternFactory = main.default as Pattern;
 

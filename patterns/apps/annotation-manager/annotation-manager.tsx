@@ -59,21 +59,35 @@ const KIND_ICON: Record<AnnotationKind, string> = {
   wish: "✨",
 };
 
-const STATUS_STYLE: Record<AnnotationStatus, string> = {
-  open: "background:#dbeafe;color:#1d4ed8",
-  "in-progress": "background:#fef9c3;color:#854d0e",
-  resolved: "background:#dcfce7;color:#166534",
-  dismissed: "background:#f3f4f6;color:#6b7280",
+const STATUS_COLORS: Record<
+  AnnotationStatus,
+  { background: string; color: string }
+> = {
+  open: { background: "#dbeafe", color: "#1d4ed8" },
+  "in-progress": { background: "#fef9c3", color: "#854d0e" },
+  resolved: { background: "#dcfce7", color: "#166534" },
+  dismissed: { background: "#f3f4f6", color: "#6b7280" },
 };
+
+/** The style of the badge that shows `status`, colored for that status. */
+const badgeStyle = (status: AnnotationStatus | undefined) => ({
+  fontSize: "11px",
+  padding: "2px 6px",
+  borderRadius: "10px",
+  ...STATUS_COLORS[status ?? "open"],
+});
 
 // ===== The Pattern =====
 
 export default pattern<Record<string, never>>((_) => {
   const filter = new Writable<string>("open");
 
+  // Headless: the list renders the candidates itself, so the wish opens no
+  // chooser of its own.
   const { candidates: annotations } = wish<AnnotationPiece>({
     query: "#annotation",
     scope: [".", "~"],
+    headless: true,
   });
 
   const filtered = computed(() => {
@@ -153,21 +167,7 @@ export default pattern<Record<string, never>>((_) => {
                       {KIND_ICON[ann?.kind ?? "note"] ?? "📌"}
                     </span>
                     <cf-cell-link $cell={ann} />
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        padding: "2px 6px",
-                        borderRadius: "10px",
-                        ...(STATUS_STYLE[ann?.status ?? "open"]
-                          ? Object.fromEntries(
-                            STATUS_STYLE[ann?.status ?? "open"]
-                              .split(";")
-                              .filter(Boolean)
-                              .map((s) => s.split(":").map((p) => p.trim())),
-                          )
-                          : {}),
-                      }}
-                    >
+                    <span style={badgeStyle(ann?.status)}>
                       {ann?.status ?? "open"}
                     </span>
                   </cf-hstack>

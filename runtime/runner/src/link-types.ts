@@ -174,6 +174,15 @@ export type NormalizedFullLink = NormalizedLink & {
  */
 export type StoredValuePath = readonly ["value", ...string[]];
 
+/** Throws unless `path` starts with the `value` segment. */
+export function assertStoredValuePath(
+  path: readonly string[],
+): asserts path is StoredValuePath {
+  if (path[0] !== "value") {
+    throw new TypeError(`Not a stored value path: ${JSON.stringify(path)}`);
+  }
+}
+
 export type IMemorySpaceValueAddress = IMemorySpaceAddress & {
   path: StoredValuePath;
 };

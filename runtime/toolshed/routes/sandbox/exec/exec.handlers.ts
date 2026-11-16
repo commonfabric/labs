@@ -1,164 +1,155 @@
+import { decodeBase64 } from "@std/encoding/base64";
+
 import type { AppRouteHandler } from "@/lib/types.ts";
 import type { SandboxExecRoute } from "./exec.routes.ts";
-import env from "@/env.ts";
 
-const SANDBOX_URL = () => env.SANDBOX_SERVICE_URL;
+export interface SandboxExecHandlerDeps {
+  /** Calls the sandbox service. */
+  fetch: typeof fetch;
+  /** The origin of the sandbox service. */
+  sandboxUrl: string;
+  /** The toolshed URL handed to commands as `CF_API_URL`. */
+  toolshedUrl: string;
+}
 
-/** Ensure a sandbox exists, creating it (or restoring from GCS) if needed. */
-async function ensureSandbox(
-  sandboxId: string,
-  signal: AbortSignal,
-): Promise<void> {
-  const res = await fetch(
-    `${SANDBOX_URL()}/v1/sandboxes/${sandboxId}`,
-    { signal },
-  );
-  if (res.ok) return;
+/** The sandbox service reported that the sandbox does not exist. */
+class SandboxNotFoundError extends Error {}
 
-  if (res.status === 404) {
-    const createRes = await fetch(`${SANDBOX_URL()}/v1/sandboxes`, {
+/** Decodes a base64 field of the exec result as UTF-8 text. */
+function decodeOutput(field: string | undefined): string {
+  return field ? new TextDecoder().decode(decodeBase64(field)) : "";
+}
+
+export function createSandboxExecHandlers(deps: SandboxExecHandlerDeps) {
+  /** Ensure a sandbox exists, creating it (or restoring from GCS) if needed. */
+  async function ensureSandbox(
+    sandboxId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const res = await deps.fetch(
+      `${deps.sandboxUrl}/v1/sandboxes/${encodeURIComponent(sandboxId)}`,
+      { signal },
+    );
+    if (res.ok) {
+      await res.body?.cancel();
+      return;
+    }
+
+    if (res.status !== 404) {
+      throw new Error(`Failed to check sandbox: ${res.status} ${await res
+        .text()}`);
+    }
+    await res.body?.cancel();
+
+    const createRes = await deps.fetch(`${deps.sandboxUrl}/v1/sandboxes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: sandboxId, baseImage: "devbox" }),
       signal,
     });
-    if (!createRes.ok) {
-      const text = await createRes.text();
-      // "already exists" means the sandbox is running — not an error
-      if (!text.includes("already exists")) {
-        throw new Error(
-          `Failed to create sandbox: ${createRes.status} ${text}`,
-        );
+    const text = await createRes.text();
+    // "already exists" means the sandbox is running, which is not an error.
+    if (!createRes.ok && !text.includes("already exists")) {
+      throw new Error(`Failed to create sandbox: ${createRes.status} ${text}`);
+    }
+  }
+
+  /** Execute a command in a sandbox, returning decoded stdout/stderr. */
+  async function execInSandbox(
+    sandboxId: string,
+    command: string,
+    cwd: string | undefined,
+    env: Record<string, string>,
+    signal: AbortSignal,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const res = await deps.fetch(
+      `${deps.sandboxUrl}/v1/sandboxes/${encodeURIComponent(sandboxId)}/exec`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cmd: ["bash", "-c", command],
+          cwd: cwd || undefined,
+          env: Object.entries(env).map(([k, v]) => `${k}=${v}`),
+        }),
+        signal,
+      },
+    );
+
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 404) {
+        throw new SandboxNotFoundError(`Sandbox not found: ${text}`);
       }
+      throw new Error(`Exec failed: ${res.status} ${text}`);
     }
-    return;
+
+    // Go's encoding/json encodes []byte as base64.
+    const result = await res.json();
+    return {
+      stdout: decodeOutput(result.stdout),
+      stderr: decodeOutput(result.stderr),
+      exitCode: result.exitCode ?? 0,
+    };
   }
 
-  const text = await res.text();
-  throw new Error(`Failed to check sandbox: ${res.status} ${text}`);
-}
+  const sandboxExec: AppRouteHandler<SandboxExecRoute> = async (c) => {
+    const logger = c.get("logger");
+    const verifiedUserDid = c.get("verifiedUserDid");
+    const {
+      sandboxId,
+      command,
+      workingDirectory,
+      timeout = 300000,
+      environment,
+    } = await c.req.json();
 
-/** Execute a command in a sandbox, returning decoded stdout/stderr. */
-async function execInSandbox(
-  sandboxId: string,
-  command: string,
-  cwd?: string,
-  envVars?: Record<string, string>,
-  signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const envArray = envVars
-    ? Object.entries(envVars).map(([k, v]) => `${k}=${v}`)
-    : undefined;
+    logger.info(
+      { sandboxId, command, verifiedUserDid },
+      "Sandbox exec request",
+    );
 
-  const body: Record<string, unknown> = {
-    cmd: ["bash", "-c", command],
-  };
-  if (cwd) body.cwd = cwd;
-  if (envArray && envArray.length > 0) body.env = envArray;
-
-  const res = await fetch(
-    `${SANDBOX_URL()}/v1/sandboxes/${sandboxId}/exec`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    },
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    if (res.status === 404) {
-      throw Object.assign(new Error(`Sandbox not found: ${text}`), {
-        status: 404,
-      });
-    }
-    throw new Error(`Exec failed: ${res.status} ${text}`);
-  }
-
-  const result = await res.json();
-
-  // Go's encoding/json encodes []byte as base64
-  const stdout = result.stdout ? atob(result.stdout) : "";
-  const stderr = result.stderr ? atob(result.stderr) : "";
-  const exitCode = result.exitCode ?? 0;
-
-  return { stdout, stderr, exitCode };
-}
-
-export const sandboxExec: AppRouteHandler<SandboxExecRoute> = async (c) => {
-  const logger = c.get("logger");
-  const verifiedUserDid = c.get("verifiedUserDid");
-  const payload = await c.req.json();
-  const {
-    sandboxId,
-    command,
-    workingDirectory,
-    timeout = 300000,
-    environment,
-  } = payload;
-
-  logger.info({ sandboxId, command, verifiedUserDid }, "Sandbox exec request");
-
-  // Inject CF_API_URL so `cf` inside sandboxes can reach the toolshed
-  const sandboxToolshedUrl = env.SANDBOX_TOOLSHED_URL || env.API_URL;
-  const mergedEnv: Record<string, string> = {
-    CF_API_URL: sandboxToolshedUrl,
-    ...(environment || {}),
-  };
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  try {
-    // Ensure sandbox exists (lazy create / GCS restore)
-    await ensureSandbox(sandboxId, controller.signal);
+    // CF_API_URL lets `cf` inside the sandbox reach the toolshed.
+    const env: Record<string, string> = {
+      CF_API_URL: deps.toolshedUrl,
+      ...environment,
+    };
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("Sandbox exec timed out", "TimeoutError"),
+        ),
+      timeout,
+    );
+    const signal = controller.signal;
+    const exec = () =>
+      execInSandbox(sandboxId, command, workingDirectory, env, signal);
 
     try {
-      const result = await execInSandbox(
-        sandboxId,
-        command,
-        workingDirectory,
-        mergedEnv,
-        controller.signal,
-      );
+      await ensureSandbox(sandboxId, signal);
+      let result;
+      try {
+        result = await exec();
+      } catch (error) {
+        if (!(error instanceof SandboxNotFoundError)) throw error;
+        logger.warn({ sandboxId }, "Sandbox was reaped, recreating");
+        await ensureSandbox(sandboxId, signal);
+        result = await exec();
+      }
       logger.info(
         { sandboxId, exitCode: result.exitCode },
         "Sandbox exec completed",
       );
       return c.json(result, 200);
-    } catch (err: unknown) {
-      // On exec 404 (sandbox was reaped), recreate and retry once
-      if (
-        err && typeof err === "object" && "status" in err &&
-        (err as { status: number }).status === 404
-      ) {
-        logger.warn({ sandboxId }, "Sandbox was reaped, recreating");
-        await ensureSandbox(sandboxId, controller.signal);
-        const result = await execInSandbox(
-          sandboxId,
-          command,
-          workingDirectory,
-          mergedEnv,
-          controller.signal,
-        );
-        logger.info(
-          { sandboxId, exitCode: result.exitCode },
-          "Sandbox exec completed (after recreate)",
-        );
-        return c.json(result, 200);
-      }
-      throw err;
+    } catch (error) {
+      logger.error({ err: error, sandboxId }, "Sandbox exec failed");
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json({ error: `Exec failed: ${message}` }, 500);
+    } finally {
+      clearTimeout(timer);
     }
-  } catch (error) {
-    logger.error({
-      error: error instanceof Error
-        ? { name: error.name, message: error.message, stack: error.stack }
-        : String(error),
-      sandboxId,
-    }, "Sandbox exec failed");
-    return c.json({ error: `Exec failed: ${(error as Error).message}` }, 500);
-  } finally {
-    clearTimeout(timer);
-  }
-};
+  };
+
+  return { sandboxExec };
+}

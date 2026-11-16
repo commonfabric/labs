@@ -1,26 +1,24 @@
-import { cors } from "@hono/hono/cors";
+import { diskResponseCache } from "./llm.handlers.ts";
+import { createLLMRouter } from "./llm.router.ts";
+import { createModelRegistry } from "./models.ts";
+import env from "@/env.ts";
 
-import * as handlers from "./llm.handlers.ts";
-import * as routes from "./llm.routes.ts";
-import { createRouter } from "@/lib/create-app.ts";
-
-const router = createRouter();
-
-router.use(
-  "/api/ai/llm/*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-    exposeHeaders: ["Content-Length", "X-Disk-Cache", "x-cf-llm-trace-id"],
-    maxAge: 3600,
-    credentials: true,
+/**
+ * The LLM routes this process serves, over the registry its configuration
+ * describes. Building it starts gateway discovery.
+ */
+export default createLLMRouter({
+  models: createModelRegistry({
+    anthropicApiKey: env.CFTS_AI_LLM_ANTHROPIC_API_KEY,
+    groqApiKey: env.CFTS_AI_LLM_GROQ_API_KEY,
+    openaiApiKey: env.CFTS_AI_LLM_OPENAI_API_KEY,
+    googleApplicationCredentials:
+      env.CFTS_AI_LLM_GOOGLE_APPLICATION_CREDENTIALS,
+    googleVertexProject: env.CFTS_AI_LLM_GOOGLE_VERTEX_PROJECT,
+    googleVertexLocation: env.CFTS_AI_LLM_GOOGLE_VERTEX_LOCATION,
+    gatewayUrl: env.CFTS_AI_GATEWAY_URL,
+    fetch: globalThis.fetch,
+    logger: console,
   }),
-);
-
-router
-  .openapi(routes.getModels, handlers.getModels)
-  .openapi(routes.generateText, handlers.generateText)
-  .openapi(routes.generateObject, handlers.generateObject);
-
-export default router;
+  cache: diskResponseCache,
+});

@@ -169,9 +169,8 @@ describe("serving-worker-host", () => {
     await clock.settle();
     expect(warnings("undelivered-events-check-failed")).toBe(failedChecks + 1);
     expect(workers()).toHaveLength(2);
-    expect(started.accessForTestingOnly.placements.get(alpha)?.worker).toBe(
-      workers()[1],
-    );
+    expect(started.accessForTestingOnly.placements.get(alpha)?.worker.port)
+      .toBe(workers()[1]);
   });
 
   it("closes a worker as it would have when the `onWorkerClosed` observer throws", async () => {
@@ -218,8 +217,7 @@ describe("serving-worker-host", () => {
     await clock.settle();
     expect(warnings("worker-teardown-failed")).toBe(failedTeardowns + 1);
     expect(workers()).toHaveLength(2);
-    expect(started.accessForTestingOnly.placements.get(alpha)?.worker).toBe(
-      workers()[1],
-    );
+    expect(started.accessForTestingOnly.placements.get(alpha)?.worker.port)
+      .toBe(workers()[1]);
   });
 });

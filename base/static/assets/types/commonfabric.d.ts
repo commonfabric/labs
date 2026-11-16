@@ -65,9 +65,6 @@ type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
  * the one name its class reports, and the interface is a member of
  * `ConcreteFabricPrimitive`.
  *
- * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: its
- * interface narrows `.schemaType` to `object`, and is not a member.
- *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
  * sandbox is served inlines this text rather than following a specifier out of
@@ -305,9 +302,7 @@ export interface FabricPrimitive {
    * a schema names to admit this value by its class. Every instance of a class
    * reports the same name, which need not be the name of the class.
    */
-  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
-  // `FabricPrimitiveSchemaType`.
-  readonly schemaType: FabricPrimitiveSchemaType | "object";
+  readonly schemaType: FabricPrimitiveSchemaType;
 }
 
 export interface FabricPrimitiveConstructor {
@@ -484,6 +479,16 @@ export interface FabricHashConstructor {
 export declare const FabricHash: FabricHashConstructor;
 
 /**
+ * The state of a `FabricKeyPair` that holds material, which is also its
+ * encoded form: the algorithm name, and the two keys' bytes.
+ */
+export type KeyPairState = {
+  readonly algorithm: string;
+  readonly publicKey: FabricBytes;
+  readonly privateKey: FabricBytes;
+};
+
+/**
  * An immutable asymmetric key pair.
  *
  * An instance either holds handles -- two `CryptoKey`s, whose material this
@@ -497,6 +502,12 @@ export interface FabricKeyPair extends FabricPrimitive {
 
   readonly algorithm: string;
   readonly hasMaterial: boolean;
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * Throws when this instance holds handles.
+   */
+  readonly state: KeyPairState;
 
   /**
    * A `CryptoKeyPair` holding this instance's two keys. The record is a new
@@ -532,37 +543,6 @@ export interface FabricKeyPairConstructor {
 export declare const FabricKeyPair: FabricKeyPairConstructor;
 
 /**
- * An immutable regular expression.
- *
- * The pattern is held as a flavor / source / flags triple rather than as a
- * JS `RegExp`, so that flavors with no JS representation can still be
- * carried. `value` reconstitutes a JS `RegExp` where one exists.
- */
-export interface FabricRegExp extends FabricPrimitive {
-  /** @inheritDoc */
-  readonly schemaType: "object";
-
-  readonly source: string;
-  readonly flags: string;
-  readonly flavor: string;
-
-  /**
-   * A fresh JS `RegExp` equivalent to this value, returned anew on each
-   * call so the internal instance is never aliased out. Throws for a flavor
-   * with no JS `RegExp` representation.
-   */
-  readonly value: RegExp;
-}
-
-export interface FabricRegExpConstructor {
-  new (regex: RegExp): FabricRegExp;
-  new (flavor: string, source: string, flags: string): FabricRegExp;
-  prototype: FabricRegExp;
-}
-
-export declare const FabricRegExp: FabricRegExpConstructor;
-
-/**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
  * transient reasons say the data is on its way; `error` says producing it
  * failed, and is the one reason that carries a kind and a message.
@@ -584,16 +564,41 @@ export type UnavailableErrorKind =
   | "sync";
 
 /**
+ * The state of a `FabricUnavailable`, which is also its encoded form: the
+ * reason; for the `error` reason the kind; and the message when one is
+ * stored. A field that has nothing to say is absent rather than `null`, so
+ * that the state of a transient reason is exactly the reason.
+ */
+export type UnavailableState =
+  /** A transient reason, which carries nothing else. */
+  | { readonly reason: "pending" | "syncing" }
+  /**
+   * The `error` reason, with its kind, and its message when one is stored,
+   * which a message equal to the kind's default never is.
+   */
+  | {
+    readonly reason: "error";
+    readonly errorKind: UnavailableErrorKind;
+    readonly message?: string;
+  };
+
+/**
  * A marker standing in for data that is not available, saying why. It holds
  * no data of its own: the reason, and for the `error` reason the kind of
  * error and a message, are the whole of what it says. Only the `error` reason
  * carries a kind, and it always does; only the `error` reason may carry a
- * message, and `errorMessage` supplies one for its kind when none was given.
- * For the other two reasons every error member is `null`.
+ * message, and `message` supplies one for its kind when none was given. For
+ * the other two reasons every error member is `null`.
  */
 export interface FabricUnavailable extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
+
+  /**
+   * The state, a frozen record: the reason, the kind when there is one, and
+   * the message when one is stored.
+   */
+  readonly state: UnavailableState;
 
   /** Why the data is unavailable. */
   readonly reason: UnavailableReason;
@@ -605,14 +610,14 @@ export interface FabricUnavailable extends FabricPrimitive {
    * The message, when the reason is `error`: the one given at construction,
    * or the kind's default when none was. `null` for a transient reason.
    */
-  readonly errorMessage: string | null;
+  readonly message: string | null;
 
   /**
    * The message as given at construction, with no default supplied: `null`
    * for a transient reason, and for an `error` whose message is its kind's
    * default or was never given.
    */
-  readonly rawErrorMessage: string | null;
+  readonly rawMessage: string | null;
 
   /** Whether the reason is `pending`. */
   isPending(): boolean;
@@ -621,12 +626,12 @@ export interface FabricUnavailable extends FabricPrimitive {
   isSyncing(): boolean;
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
-   * to the non-`null` values the `error` reason always carries.
+   * Whether the reason is `error`, narrowing `errorKind` and `message` to the
+   * non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   };
 
   /**
@@ -640,7 +645,7 @@ export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
     errorKind?: UnavailableErrorKind | null,
-    errorMessage?: string | null,
+    message?: string | null,
   ): FabricUnavailable;
   prototype: FabricUnavailable;
 }
@@ -655,8 +660,6 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  * Union of the concrete `FabricPrimitive` classes this module declares. Every
  * type that ranges over those classes is derived from this one.
  */
-// TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: it is the
-// one class declared here that this union leaves out.
 export type ConcreteFabricPrimitive =
   | FabricBytes
   | FabricDurationDay
@@ -1858,7 +1861,19 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  * Note: Schema-typed overload available via "commonfabric/schema"
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
+  /**
+   * The cell this one's links lead to. The returned cell takes the nearest
+   * schema a crossed link stores that constrains, whatever this cell's own
+   * schema declares. This cell's schema stays only where it declares a stream
+   * and the stored schema declares nothing but one, and a `default` this cell
+   * declares carries over where the stored schema declares none.
+   *
+   * So a read of the returned cell can return `undefined` where a read of this
+   * cell returns the target. For this cell's own projection, read by key, or
+   * re-type the returned cell with `asSchema()`.
+   */
   resolveAsCell(): C;
+
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
 

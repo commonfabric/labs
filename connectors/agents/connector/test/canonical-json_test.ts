@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertNotEquals, assertRejects } from "@std/assert";
 
 import {
   linkRefFrom,
@@ -75,12 +75,16 @@ Deno.test("connector hashes preserve native `FabricValue`s", async () => {
     await hashStableArrayValue(new Date(1)),
   );
   assertNotEquals(
-    await hashStableArrayValue(/first/gi),
-    await hashStableArrayValue(/second/gi),
-  );
-  assertNotEquals(
     await hashStableArrayValue(new Uint8Array([1])),
     await hashStableArrayValue(new Uint8Array([2])),
+  );
+});
+
+Deno.test("connector hashes refuse a `RegExp`, which is no `FabricValue`", async () => {
+  await assertRejects(
+    () => hashStableArrayValue(/first/gi),
+    Error,
+    "not a recognized fabric type",
   );
 });
 

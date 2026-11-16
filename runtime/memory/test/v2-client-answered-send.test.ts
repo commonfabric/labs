@@ -16,6 +16,7 @@ import {
   connect,
   connectionError,
   loopback,
+  SpaceSession,
   type Transport,
 } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
@@ -358,6 +359,100 @@ describe("client", () => {
       expect((await session.transact(commit())).seq).toBe(1);
       // The first mount's open, its restore's, and the second mount's.
       expect(opens).toBe(3);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects a mount whose `session.open` was answered on a replaced connection with its caller's reason, when the caller cancels it just as its session's restore completes", async () => {
+    // The restore completes, and the caller cancels before the mount has
+    // gone on to hand the session out. The cancellation is scheduled from
+    // the restore's own completion, which is the earliest it can follow it.
+
+    const server = serverFor("cancelled-as-restored");
+    const { client } = await clientReplacingConnectionUnderOpen(server);
+    const cancel = new AbortController();
+    const reason = new Error("test cancels the mount");
+    const whenRestored = SpaceSession.prototype.whenRestored;
+    using _restored = stub(
+      SpaceSession.prototype,
+      "whenRestored",
+      function (this: SpaceSession) {
+        const restored = whenRestored.call(this);
+        void restored.then(() => queueMicrotask(() => cancel.abort(reason)));
+        return restored;
+      },
+    );
+    try {
+      const outcome = await client.mount(
+        spaceFor("cancelled-as-restored"),
+        {},
+        testSessionOpenAuthFactory,
+        cancel.signal,
+      ).then((session) => session, (error) => error);
+
+      expect(cancel.signal.aborted).toBe(true);
+      expect(outcome).toBe(reason);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects a mount whose `session.open` was answered before its connection dropped with its caller's reason, when the caller cancels it while the host stays down", async () => {
+    // The answered open's session is restored on the next connection before
+    // the mount hands it out. A host that stays down keeps that wait open,
+    // and the mount's caller must still be able to end it.
+
+    const server = serverFor("cancelled");
+    let down = false;
+    let onRefused = () => {};
+    /** Resolves the next time the client dials the host and finds it down. */
+    const nextRefusal = () =>
+      new Promise<void>((resolve) => {
+        onRefused = resolve;
+      });
+    const { transport } = answeredBeforeSendSettles(
+      server,
+      "session.open",
+      (lose) => {
+        down = true;
+        return Promise.reject(lose());
+      },
+    );
+    const host: Transport = {
+      ...transport,
+      send(payload) {
+        if (!down) return transport.send(payload);
+        const notify = onRefused;
+        onRefused = () => {};
+        notify();
+        return Promise.reject(connectionError("test host is down"));
+      },
+    };
+    const client = await connect({ transport: host });
+    const cancel = new AbortController();
+    const reason = new Error("test cancels the mount");
+    try {
+      // The first dial follows the loss at once, before the open's send has
+      // failed.
+      const dialed = nextRefusal();
+      const mounting = client.mount(
+        spaceFor("cancelled"),
+        {},
+        testSessionOpenAuthFactory,
+        cancel.signal,
+      ).then(() => "mounted", (error) => error);
+      await dialed;
+      // The next dial comes after the client's backoff. By then the mount
+      // has found its open answered, and waits for the connection that
+      // restores its session.
+      await nextRefusal();
+      const dialedAgain = nextRefusal().then(() => "dialed again");
+      cancel.abort(reason);
+
+      expect(await Promise.race([mounting, dialedAgain])).toBe(reason);
     } finally {
       await client.close();
       await server.close();

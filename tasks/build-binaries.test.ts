@@ -698,7 +698,7 @@ Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async ()
       "--allow-net",
       "--allow-write",
       "--allow-run",
-      "--v8-flags=--max-old-space-size=16384",
+      "--v8-flags=--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
     ]);
   } finally {
     await Deno.remove(root, { recursive: true });

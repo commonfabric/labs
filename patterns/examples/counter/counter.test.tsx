@@ -10,8 +10,18 @@
  *
  * Run: deno task cf test patterns/examples/counter/counter.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
+import {
+  findNodeById,
+  fireClick,
+  hasText,
+} from "../../tools/test-support/vnode-helpers.ts";
 import Counter from "./counter.tsx";
+
+/** Whether the counter's result line, which spells its value as an ordinal,
+ * reads `expected`. */
+const resultSays = (view: unknown, expected: string) =>
+  hasText(findNodeById(view, "counter-result"), expected);
 
 export default pattern(() => {
   // Instantiate the counter pattern with default value (0)
@@ -20,17 +30,15 @@ export default pattern(() => {
   // Also test with a non-zero initial value
   const counterStartingAt5 = Counter({ value: 5 });
 
+  // A counter driven through its rendered buttons
+  const counterStartingAt2 = Counter({ value: 2 });
+
   // ==========================================================================
   // Actions - using action() to trigger stream sends
   // ==========================================================================
 
   // Increment once (tests module-scope handler)
   const action_increment = action(() => {
-    counter.increment.send();
-  });
-
-  // Increment again
-  const action_increment_again = action(() => {
     counter.increment.send();
   });
 
@@ -60,9 +68,7 @@ export default pattern(() => {
 
   // Initial state assertions
   const assert_initial_value_is_0 = assert(() => counter.value === 0);
-  const assert_initial_value_is_5 = assert(() =>
-    counterStartingAt5.value === 5
-  );
+  const assert_from_5_is_5 = assert(() => counterStartingAt5.value === 5);
 
   // After first increment
   const assert_value_is_1 = assert(() => counter.value === 1);
@@ -70,23 +76,45 @@ export default pattern(() => {
   // After second increment
   const assert_value_is_2 = assert(() => counter.value === 2);
 
-  // After decrement (back to 1)
-  const assert_value_is_1_again = assert(() => counter.value === 1);
-
   // After decrementing twice more (goes to -1)
   const assert_value_is_negative_1 = assert(() => counter.value === -1);
 
   // Counter starting at 5: after decrement should be 4
   const assert_from_5_is_4 = assert(() => counterStartingAt5.value === 4);
 
-  // Counter starting at 5: after increment should be 5 again
-  const assert_from_5_back_to_5 = assert(() => counterStartingAt5.value === 5);
-
-  // After another increment should be 6
-  const action_increment_to_6 = action(() => {
-    counterStartingAt5.increment.send();
-  });
   const assert_from_5_is_6 = assert(() => counterStartingAt5.value === 6);
+
+  const assert_result_says_0th = assert(() =>
+    resultSays(counter[UI], "Counter is the 0th number")
+  );
+  const assert_result_says_1st = assert(() =>
+    resultSays(counter[UI], "Counter is the 1st number")
+  );
+  const assert_result_says_2nd = assert(() =>
+    resultSays(counter[UI], "Counter is the 2nd number")
+  );
+  const assert_named_after_value = assert(() => counter[NAME] === "Counter: 2");
+
+  // The "+ Increment" button calls the bound handler, and "- Decrement" sends
+  // the action directly.
+  const action_click_increment = action(() =>
+    fireClick(
+      findNodeById(counterStartingAt2[UI], "counter-increment"),
+      "the increment button",
+    )
+  );
+  const assert_clicked_to_3rd = assert(() =>
+    counterStartingAt2.value === 3 &&
+    counterStartingAt2[NAME] === "Counter: 3" &&
+    resultSays(counterStartingAt2[UI], "Counter is the 3rd number")
+  );
+  const action_click_decrement = action(() =>
+    fireClick(
+      findNodeById(counterStartingAt2[UI], "counter-decrement"),
+      "the decrement button",
+    )
+  );
+  const assert_clicked_back_to_2 = assert(() => counterStartingAt2.value === 2);
 
   // ==========================================================================
   // Test Sequence
@@ -95,19 +123,23 @@ export default pattern(() => {
     [TESTS]: [
       // === Test 1: Initial state ===
       { assertion: assert_initial_value_is_0 },
-      { assertion: assert_initial_value_is_5 },
+      { assertion: assert_from_5_is_5 },
+      { assertion: assert_result_says_0th },
 
       // === Test 2: Increment (module-scope handler) ===
       { action: action_increment },
       { assertion: assert_value_is_1 },
+      { assertion: assert_result_says_1st },
 
       // === Test 3: Increment again ===
-      { action: action_increment_again },
+      { action: action_increment },
       { assertion: assert_value_is_2 },
+      { assertion: assert_result_says_2nd },
+      { assertion: assert_named_after_value },
 
       // === Test 4: Decrement (pattern-body action) ===
       { action: action_decrement },
-      { assertion: assert_value_is_1_again },
+      { assertion: assert_value_is_1 },
 
       // === Test 5: Decrement to negative ===
       { action: action_decrement_twice },
@@ -119,14 +151,21 @@ export default pattern(() => {
 
       // === Test 7: Increment back up ===
       { action: action_increment_from_5 },
-      { assertion: assert_from_5_back_to_5 },
+      { assertion: assert_from_5_is_5 },
 
       // === Test 8: Increment past initial value ===
-      { action: action_increment_to_6 },
+      { action: action_increment_from_5 },
       { assertion: assert_from_5_is_6 },
+
+      // === Test 9: The rendered buttons ===
+      { action: action_click_increment },
+      { assertion: assert_clicked_to_3rd },
+      { action: action_click_decrement },
+      { assertion: assert_clicked_back_to_2 },
     ],
     // Expose subjects for debugging
     counter,
     counterStartingAt5,
+    counterStartingAt2,
   };
 });

@@ -29,7 +29,6 @@ import {
   FabricEpochDay,
   FabricEpochNsec,
   FabricHash,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 
@@ -355,8 +354,6 @@ describe("narrowing", () => {
         expect(isKeyableObjectOrArray(new FabricDurationDay(1n))).toBe(false);
         expect(isKeyableObjectOrArray(new FabricUnavailable("pending")))
           .toBe(false);
-        expect(isKeyableObjectOrArray(new FabricRegExp("es2025", "a+", "g")))
-          .toBe(false);
         expect(
           isKeyableObjectOrArray(
             new FabricHash(new Uint8Array([1, 2]), "fid1"),
@@ -486,8 +483,6 @@ describe("narrowing", () => {
         expect(isWalkableObjectOrArray(new FabricDurationNsec(1n))).toBe(false);
         expect(isWalkableObjectOrArray(new FabricDurationDay(1n))).toBe(false);
         expect(isWalkableObjectOrArray(new FabricUnavailable("pending")))
-          .toBe(false);
-        expect(isWalkableObjectOrArray(new FabricRegExp("es2025", "a+", "g")))
           .toBe(false);
         expect(
           isWalkableObjectOrArray(

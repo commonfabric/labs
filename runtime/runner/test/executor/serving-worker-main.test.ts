@@ -42,6 +42,8 @@ describe("serveFromPort()", () => {
       ensureSpaceRoots: false,
       experimental: undefined,
       route: undefined,
+      compileOnHost: undefined,
+      compileCacheDir: undefined,
     };
     await bridge.init(init);
   };

@@ -31,6 +31,7 @@ import {
   recordSurface,
   reportFromText,
   resolveHistory,
+  vanished,
 } from "./build.ts";
 import {
   MANIFEST_SCHEMA_VERSION,
@@ -1150,6 +1151,70 @@ describe("build", () => {
       expect(fold.knows(CI_NAME)).toBe(true);
       expect(fold.knows(`${CI_NAME}2`)).toBe(false);
     });
+
+    it("keeps the orders main recorded a test in, skipped or not, and not a branch's", () => {
+      // What says a test has left a file the tree still holds is `main`
+      // no longer recording it, so a branch that has not taken the change
+      // must not move it, and a run that did not shuffle names no order. A
+      // run of the next day's order runs an earlier tree, so only a push
+      // counts. A skip shows the tree holds the test. The order is the
+      // commit's day rather than the run's, so a run started on 08-19 is
+      // in 08-18's.
+      const branch = context({
+        branch: "fix-writes",
+        commit: "c3",
+        startedAt: "2026-08-20T02:00:00.000Z",
+        shuffleSeed: 20260820,
+      });
+      const tomorrow = context({
+        commit: "c5",
+        startedAt: "2026-08-20T01:30:00.000Z",
+        shuffleSeed: 20260821,
+      });
+      tomorrow.ci!.event = "workflow_run";
+      const folded = foldReports(
+        emptyAggregate("2026-08-19"),
+        [
+          stored(
+            CI_NAME,
+            context({
+              startedAt: "2026-08-19T00:00:00.000Z",
+              shuffleSeed: 20260818,
+            }),
+            [record()],
+          ),
+          stored(`${CI_NAME}3`, branch, [record()]),
+          stored(`${CI_NAME}5`, tomorrow, [record()]),
+          stored(
+            `${CI_NAME}4`,
+            context({ commit: "c4", startedAt: "2026-08-20T01:00:00.000Z" }),
+            [record()],
+          ),
+        ],
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      const state = folded.states.get(KEY)!;
+      expect(state.runsByDay["2026-08-20"]).toBe(3);
+      expect(state.ordersOnMain).toEqual(["2026-08-18"]);
+      const skipped = foldReports(
+        folded.aggregate,
+        [stored(
+          `${CI_NAME}2`,
+          context({
+            commit: "c2",
+            startedAt: "2026-08-20T03:00:00.000Z",
+            shuffleSeed: 20260819,
+          }),
+          [record({ outcome: "skip" })],
+        )],
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      const after = skipped.states.get(KEY)!;
+      expect(after.ordersOnMain).toEqual(["2026-08-18", "2026-08-19"]);
+      expect(after.runsByDay["2026-08-20"]).toBe(3);
+    });
   });
 
   describe("firstDay()", () => {
@@ -1244,6 +1309,27 @@ describe("build", () => {
       aggregate.files[KEY] = UNIT;
       expect(parseAggregate(JSON.stringify(aggregate))?.files)
         .toEqual({ [KEY]: UNIT });
+    });
+
+    it("carries the days main recorded a test, in order, and drops what is not a day", () => {
+      // Which identities a manifest holds is decided from these too, so
+      // one that will not read is read as no run rather than compared.
+      const aggregate = emptyAggregate("2026-08-20");
+      const other = testIdentityKey({ ...record().test, n: "space > reads" });
+      aggregate.states[KEY] = {
+        ...emptyState(),
+        ordersOnMain: ["2026-08-19", "2026-08-18"],
+      };
+      aggregate.states[other] = {
+        ...emptyState(),
+        ordersOnMain: ["yesterday"],
+      };
+      const read = parseAggregate(JSON.stringify(aggregate))!;
+      expect(read.states[KEY]!.ordersOnMain).toEqual([
+        "2026-08-18",
+        "2026-08-19",
+      ]);
+      expect(read.states[other]).toEqual(emptyState());
     });
 
     it("reads an aggregate written before the files as holding none", () => {
@@ -1695,6 +1781,7 @@ describe("build", () => {
         [empty()],
         { suiteLevel: [], unclaimed: [KEY], contested: [] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
       )).toEqual([KEY]);
     });
 
@@ -1709,6 +1796,7 @@ describe("build", () => {
           states: new Map([[KEY, ranOn("2026-08-19")]]),
           surfaces: onFile,
         },
+        new Set(),
       )).toEqual([]);
     });
 
@@ -1720,6 +1808,7 @@ describe("build", () => {
         [empty([{ unit: UNIT, reason: "the surface has not landed" }])],
         { suiteLevel: [], unclaimed: [KEY], contested: [] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
       )).toEqual([]);
     });
 
@@ -1736,6 +1825,7 @@ describe("build", () => {
         [variant],
         { suiteLevel: [], unclaimed: [KEY], contested: [] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
       )).toEqual([KEY]);
     });
 
@@ -1752,6 +1842,7 @@ describe("build", () => {
         }], [UNIT])],
         { suiteLevel: [], unclaimed: [KEY], contested: [] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
       )).toEqual([KEY]);
     });
 
@@ -1764,6 +1855,7 @@ describe("build", () => {
         [empty()],
         { suiteLevel: [], unclaimed: [KEY], contested: [] },
         { states: new Map([[KEY, old]]), surfaces: onFile },
+        new Set(),
       )).toEqual([KEY]);
     });
 
@@ -1775,6 +1867,30 @@ describe("build", () => {
         [empty()],
         { suiteLevel: [], unclaimed: [], contested: [KEY] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
+      )).toEqual([]);
+    });
+
+    it("drops an identity main has stopped recording that nothing records", () => {
+      // A test renamed or deleted in a file the tree still holds is placed
+      // by that file, so it is `main` having stopped recording it that says
+      // it has left.
+      expect(departed(
+        [empty()],
+        { suiteLevel: [], unclaimed: [], contested: [] },
+        { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set([KEY]),
+      )).toEqual([KEY]);
+    });
+
+    it("keeps an identity main has stopped recording that a branch records", () => {
+      // A branch that has not taken the rename goes on running the old
+      // name, and its history is carried until those runs age out.
+      expect(departed(
+        [empty()],
+        { suiteLevel: [], unclaimed: [], contested: [] },
+        { states: new Map([[KEY, ranOn("2026-08-19")]]), surfaces: onFile },
+        new Set([KEY]),
       )).toEqual([]);
     });
 
@@ -1783,6 +1899,7 @@ describe("build", () => {
         [empty()],
         { suiteLevel: [], unclaimed: [], contested: [] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
       )).toEqual([]);
     });
 
@@ -1794,7 +1911,193 @@ describe("build", () => {
         [empty()],
         { suiteLevel: [KEY], unclaimed: [], contested: [] },
         { states: new Map([[KEY, emptyState()]]), surfaces: onFile },
+        new Set(),
       )).toEqual([]);
+    });
+  });
+
+  describe("vanished()", () => {
+    /** The key of a test of `UNIT` named `n`, in configuration `v`. */
+    function named(n: string, v?: string): string {
+      return testIdentityKey({
+        k: "unit",
+        s: "memory",
+        n,
+        ...(v === undefined ? {} : { v }),
+      });
+    }
+
+    /** A state `main` recorded on each of `days`. */
+    function onMain(...days: string[]): IdentityState {
+      return days.length === 0
+        ? emptyState()
+        : { ...emptyState(), ordersOnMain: days };
+    }
+
+    /** The last two days `main` recorded a unit it runs every day. */
+    const RECENT = ["2026-08-18", "2026-08-19"];
+
+    /** Each key placed in `UNIT` of one suite. */
+    function inUnit(keys: readonly string[]) {
+      return new Map(
+        keys.map((key) => [key, {
+          suite: "workspace-unit",
+          unit: UNIT,
+          fromFile: true,
+        }]),
+      );
+    }
+
+    /** What `vanished` finds among `states`, each placed in `UNIT`. */
+    function among(states: Map<string, IdentityState>): string[] {
+      return [...vanished(states, inUnit([...states.keys()]))];
+    }
+
+    it("names a test main last recorded before two later days of its unit", () => {
+      const states = new Map([
+        [named("space > writes"), onMain("2026-08-12", "2026-08-17")],
+        [named("space > records a write"), onMain(...RECENT)],
+      ]);
+      expect(among(states)).toEqual([named("space > writes")]);
+    });
+
+    it("names a test main has not recorded on the last two days of its unit", () => {
+      // Each test keeps only its own last two days, so the two days come
+      // from different tests here.
+      const states = new Map([
+        [named("space > writes"), onMain("2026-08-12")],
+        [named("space > reads"), onMain("2026-08-17", "2026-08-18")],
+        [named("space > lists"), onMain("2026-08-12", "2026-08-19")],
+      ]);
+      expect(among(states)).toEqual([named("space > writes")]);
+    });
+
+    it("names nothing main has missed on only one later day", () => {
+      // Every run of the unit on 08-19 stopped before the test, as an
+      // order-dependent crash makes them all do on one day.
+      const states = new Map([
+        [named("space > writes"), onMain("2026-08-17", "2026-08-18")],
+        [named("space > reads"), onMain(...RECENT)],
+      ]);
+      expect(among(states)).toEqual([]);
+    });
+
+    it("names a test main never recorded while it recorded its unit twice", () => {
+      // The days are kept from the first run that folds them, so this is
+      // also how a name carried from before then reads once `main` has run
+      // its unit on two days.
+      const states = new Map([
+        [named("space > writes"), onMain()],
+        [named("space > reads"), onMain(...RECENT)],
+      ]);
+      expect(among(states)).toEqual([named("space > writes")]);
+      states.set(named("space > reads"), onMain("2026-08-19"));
+      expect(among(states)).toEqual([]);
+    });
+
+    it("names nothing in a unit main recorded whole on its last days", () => {
+      const states = new Map([
+        [named("space > writes"), onMain(...RECENT)],
+        [named("space > reads"), onMain(...RECENT)],
+      ]);
+      expect(among(states)).toEqual([]);
+    });
+
+    it("names nothing main skips while it runs the rest of the unit", () => {
+      // A skip shows the tree holds the test, and a test the tree holds is
+      // not one that has left.
+      const folded = foldReports(
+        emptyAggregate("2026-08-19"),
+        [
+          stored(
+            CI_NAME,
+            context({
+              startedAt: "2026-08-19T00:00:00.000Z",
+              shuffleSeed: 20260819,
+            }),
+            [
+              record({ file: UNIT }),
+            ],
+          ),
+          stored(
+            `${CI_NAME}2`,
+            context({ commit: "c2", shuffleSeed: 20260820 }),
+            [
+              record({ file: UNIT }),
+              record({
+                test: { k: "unit", s: "memory", n: "space > ignored" },
+                outcome: "skip",
+                file: UNIT,
+              }),
+            ],
+          ),
+        ],
+        NO_ALIASES,
+        "2026-08-20",
+      );
+      expect(folded.states.has(named("space > ignored"))).toBe(true);
+      expect([...vanished(folded.states, inUnit([...folded.states.keys()]))])
+        .toEqual([]);
+    });
+
+    it("names nothing in a unit main has not run", () => {
+      const states = new Map([
+        [named("space > writes"), onMain()],
+        [named("space > reads"), onMain()],
+      ]);
+      expect(among(states)).toEqual([]);
+    });
+
+    it("holds a name while main records a test inside it", () => {
+      // A `describe` records for itself only where it fails on its own
+      // account or the runner is told to expect it, so the tests inside
+      // it are what say it is there.
+      const states = new Map([
+        [named("space"), onMain("2026-08-12")],
+        [named("space > writes"), onMain(...RECENT)],
+        [named("space > reads"), onMain("2026-08-12")],
+        [named("store"), onMain("2026-08-12")],
+        [named("store > writes"), onMain("2026-08-12")],
+      ]);
+      expect(among(states).sort()).toEqual([
+        named("space > reads"),
+        named("store"),
+        named("store > writes"),
+      ].sort());
+    });
+
+    it("reads each configuration of a unit apart", () => {
+      // The default configuration's days say nothing about what another
+      // configuration's runs recorded.
+      const states = new Map([
+        [named("space > writes"), onMain(...RECENT)],
+        [named("space > reads"), onMain(...RECENT)],
+        [named("space > serves", "server-execution"), onMain("2026-08-12")],
+      ]);
+      expect(among(states)).toEqual([]);
+    });
+
+    it("reads each unit apart", () => {
+      const states = new Map([
+        [named("space > writes"), onMain("2026-08-12")],
+        [named("space > reads"), onMain(...RECENT)],
+      ]);
+      const surfaces = inUnit([named("space > reads")]);
+      surfaces.set(named("space > writes"), {
+        suite: "workspace-unit",
+        unit: "runtime/memory/test/store.test.ts",
+        fromFile: true,
+      });
+      expect([...vanished(states, surfaces)]).toEqual([]);
+    });
+
+    it("names nothing the topology did not place", () => {
+      const states = new Map([
+        [named("space > writes"), onMain("2026-08-12")],
+        [named("space > reads"), onMain(...RECENT)],
+      ]);
+      expect([...vanished(states, inUnit([named("space > reads")]))])
+        .toEqual([]);
     });
   });
 
@@ -2839,6 +3142,45 @@ describe("history held under a name an alias has since replaced", () => {
       "2026-08-10": 5,
       "2026-08-17": 5,
     });
+  });
+
+  it("moves the days main recorded the old name where those days move", () => {
+    const states = new Map([
+      [testIdentityKey(OLD), {
+        ...either(),
+        ordersOnMain: ["2026-08-08", "2026-08-10"],
+      }],
+      [testIdentityKey(NEW), {
+        ...emptyState(),
+        ordersOnMain: ["2026-08-07", "2026-08-09"],
+      }],
+    ]);
+    resolveHistory(states, {}, RENAMED);
+    expect(states.get(testIdentityKey(NEW))!.ordersOnMain).toEqual([
+      "2026-08-09",
+      "2026-08-10",
+    ]);
+    // `main` has not run the old name since, which is what leaves it out
+    // of the manifest once `main` runs the new one.
+    expect(states.get(testIdentityKey(OLD))!.ordersOnMain).toBeUndefined();
+  });
+
+  it("splits the days main recorded the old name at the alias's date", () => {
+    const states = new Map([
+      [testIdentityKey(OLD), {
+        ...either(),
+        ordersOnMain: ["2026-08-10", "2026-08-16"],
+      }],
+      [testIdentityKey(NEW), { ...emptyState(), ordersOnMain: ["2026-08-17"] }],
+    ]);
+    resolveHistory(states, {}, RENAMED);
+    expect(states.get(testIdentityKey(OLD))!.ordersOnMain).toEqual([
+      "2026-08-16",
+    ]);
+    expect(states.get(testIdentityKey(NEW))!.ordersOnMain).toEqual([
+      "2026-08-10",
+      "2026-08-17",
+    ]);
   });
 
   it("drops the old name once it holds nothing, and gives its file on", () => {

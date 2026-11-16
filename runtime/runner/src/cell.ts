@@ -3,6 +3,7 @@ import type {
   CollectionIndexData,
   CollectionIndexKey,
   CollectionIndexKeyEntry,
+  DID,
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
@@ -120,6 +121,7 @@ import { collectConsumedLabel } from "./cfc/prepare.ts";
 import {
   readStoredCfcMetadata,
   storedCfcMetadataAppliesToPath,
+  StoredCfcMetadataError,
   storesCfcEnvelope,
 } from "./cfc/metadata.ts";
 import { cfcConfidentialityForObservationNode } from "./cfc/observation.ts";
@@ -222,6 +224,7 @@ import {
 } from "./storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
 import { fromURI, toURI } from "./uri-utils.ts";
+import { writtenPrincipalAt } from "./written-principal.ts";
 
 ensureNotRenderThread();
 
@@ -252,9 +255,21 @@ type SinkOptions = {
    * links, as `collectConsumedLabel()` joins them for a transaction, and pass
    * the join to the callback as a third argument. The label metadata is read
    * on the sink's transaction, so a label-only write to anything the read
-   * reached re-fires the sink. Off by default.
+   * reached re-fires the sink. Where a document the read reached stores
+   * labels this build cannot interpret, the callback is handed no join, and
+   * no value or the projection of none, and the sink stays subscribed. Off
+   * by default.
    */
   includeConsumedLabel?: boolean;
+
+  /**
+   * Read the principal the own cell of the sink's value represents
+   * (`writtenPrincipalAt()`) on the sink's transaction, and pass it to the
+   * callback as a fourth argument. The links to that cell and its label are
+   * then dependencies of the sink, so a relink or a relabel runs it again.
+   * Off by default.
+   */
+  includeWrittenPrincipal?: boolean;
 };
 
 /** The labels a sink's read consumed; see `SinkOptions.includeConsumedLabel`. */
@@ -905,6 +920,7 @@ declare module "@commonfabric/api" {
         value: Readonly<T>,
         cfcLabel?: CfcLabelView | undefined,
         consumed?: SinkConsumedLabel,
+        writtenPrincipal?: DID,
       ) => Cancel | undefined | void,
       options?: SinkOptions,
     ): Cancel;
@@ -1485,6 +1501,7 @@ let sinkProjectedOf: <R>(
     value: R,
     cfcLabel?: CfcLabelView | undefined,
     consumed?: SinkConsumedLabel,
+    writtenPrincipal?: DID,
   ) => Cancel | undefined | void,
   options: SinkOptions,
 ) => Cancel;
@@ -4066,6 +4083,7 @@ export class CellImpl<T extends FabricValue>
       value: Readonly<T>,
       cfcLabel?: CfcLabelView | undefined,
       consumed?: SinkConsumedLabel,
+      writtenPrincipal?: DID,
     ) => Cancel | undefined | void,
     options: SinkOptions = {},
   ): Cancel {
@@ -4112,6 +4130,7 @@ export class CellImpl<T extends FabricValue>
       value: R,
       cfcLabel?: CfcLabelView | undefined,
       consumed?: SinkConsumedLabel,
+      writtenPrincipal?: DID,
     ) => Cancel | undefined | void,
     options: SinkOptions,
   ): Cancel {
@@ -4236,6 +4255,15 @@ export class CellImpl<T extends FabricValue>
     }, options);
   }
 
+  /**
+   * The cell this one's links lead to. It comes from link resolution rather
+   * than from a read of the target, so it takes the nearest schema a crossed
+   * link stores that constrains, whatever this cell's own schema declares.
+   * This cell's schema stays only where it declares a stream and the stored
+   * schema declares nothing but one, and a `default` this cell declares
+   * carries over where the stored schema declares none
+   * (`docs/specs/link-schema-precedence.md`, "The read entry").
+   */
   resolveAsCell(): Cell<T> {
     return this.#resolveAsCell("value");
   }
@@ -5417,6 +5445,7 @@ function subscribeToReferencedDocs<T>(
     value: T,
     cfcLabel?: CfcLabelView | undefined,
     consumed?: SinkConsumedLabel,
+    writtenPrincipal?: DID,
   ) => Cancel | undefined | void,
   runtime: Runtime,
   ref: CellViewRef,
@@ -5439,48 +5468,94 @@ function subscribeToReferencedDocs<T>(
       const schema = link.schema;
       const needsTraversal = schema === undefined ||
         ContextualFlowControl.isTrueSchema(schema);
-      // sink() always kicks off sync before subscribing. Preserve that state
-      // on asCell projections created for the callback, just as get() does, so
-      // nested sinks reuse the root query instead of opening one per cut point.
-      const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
-        synced: true,
-      });
-      // A projection reads what it delivers, and those reads are this sink's
-      // dependencies. A sink delivering the value itself hears every change
-      // under it, so the whole of the value is read.
-      if (
-        project === undefined && needsTraversal && newValue !== undefined &&
-        newValue !== null
-      ) {
-        deepTraverse(newValue);
+      const read = (): {
+        delivered: T;
+        cfcLabel: CfcLabelView | undefined;
+        writtenPrincipal: DID | undefined;
+        consumed: SinkConsumedLabel | undefined;
+      } => {
+        // sink() always kicks off sync before subscribing. Preserve that state
+        // on asCell projections created for the callback, just as get() does,
+        // so nested sinks reuse the root query instead of opening one per cut
+        // point.
+        const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
+          synced: true,
+        });
+        // A projection reads what it delivers, and those reads are this sink's
+        // dependencies. A sink delivering the value itself hears every change
+        // under it, so the whole of the value is read.
+        if (
+          project === undefined && needsTraversal && newValue !== undefined &&
+          newValue !== null
+        ) {
+          deepTraverse(newValue);
+        }
+        // Read the label on the SINK's transaction (`tx`), not the child
+        // `extraTx`, so the cfc-metadata read joins this sink's reactive
+        // dependency set: a later label-only write re-fires the sink.
+        // `cfcLabelViewForResolvedCell` is a pure store read that also follows
+        // a link the path crosses part way through, since the label vouching
+        // for a bound value is stored on the document that holds it. It kicks
+        // no cross-space sync: the value read above resolved the same link and
+        // kicked those targets already, and the sink re-fires when they arrive.
+        // `internalVerifierRead` keeps it reactive but out of CFC taint. Raw
+        // here — the worker redacts before it leaves.
+        const cfcLabel = options.includeCfcLabel
+          ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx), {
+            kickCrossSpaceTargets: false,
+          })
+          : undefined;
+        // The projection reads on the sink's transaction, before the consumed
+        // labels are joined, so that both they and the sink's dependencies
+        // cover what it reads: a field the schema leaves untyped holds a value
+        // that reads what it holds only once it is looked at.
+        const delivered = project === undefined ? newValue : project(newValue);
+        // The principal is read on the sink's transaction too, before the
+        // consumed labels are joined, so that what it reads, the links it
+        // follows included, is consumed as well.
+        const writtenPrincipal = options.includeWrittenPrincipal
+          ? writtenPrincipalAt(tx, createCell(runtime, link, tx))
+          : undefined;
+        // Each consumed document's labels are read so that this sink sees
+        // them, as the label above is: a write of a label alone, the value
+        // left as it was, runs the sink again with what it then consumes.
+        const consumed = options.includeConsumedLabel
+          ? collectConsumedLabel(tx, { subscribe: true })
+          : undefined;
+        return {
+          delivered: delivered as T,
+          cfcLabel,
+          writtenPrincipal,
+          consumed,
+        };
+      };
+      let delivered: T;
+      let cfcLabel: CfcLabelView | undefined;
+      let writtenPrincipal: DID | undefined;
+      let consumed: SinkConsumedLabel | undefined;
+      try {
+        ({ delivered, cfcLabel, writtenPrincipal, consumed } = read());
+      } catch (error) {
+        // A read reaching a document whose stored labels this build cannot
+        // interpret fails closed, whether its value read crossed the document
+        // or its labels were joined. A sink that decides on what its read
+        // consumed is handed no labels for it, which it decides on as labels
+        // that could not be read, and the projection of no value. It stays
+        // subscribed to what the read reached before it failed, so a later
+        // write it can interpret runs it again. Any other sink fails.
+        if (
+          !options.includeConsumedLabel ||
+          !(error instanceof StoredCfcMetadataError)
+        ) {
+          throw error;
+        }
+        delivered =
+          (project === undefined ? undefined : project(undefined)) as T;
+        cfcLabel = undefined;
+        writtenPrincipal = undefined;
+        consumed = undefined;
       }
-      // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
-      // so the cfc-metadata read joins this sink's reactive dependency set: a
-      // later label-only write re-fires the sink. `cfcLabelViewForResolvedCell`
-      // is a pure store read that also follows a link the path crosses part
-      // way through, since the label vouching for a bound value is stored on
-      // the document that holds it. It kicks no cross-space sync: the value
-      // read above resolved the same link and kicked those targets already,
-      // and the sink re-fires when they arrive. `internalVerifierRead` keeps
-      // it reactive but out of CFC taint. Raw here — the worker redacts before
-      // it leaves.
-      const cfcLabel = options.includeCfcLabel
-        ? cfcLabelViewForResolvedCell(createCell(runtime, link, tx), {
-          kickCrossSpaceTargets: false,
-        })
-        : undefined;
-      // The projection reads on the sink's transaction, before the consumed
-      // labels are joined, so that both they and the sink's dependencies
-      // cover what it reads: a field the schema leaves untyped holds a value
-      // that reads what it holds only once it is looked at.
-      const delivered = project === undefined ? newValue : project(newValue);
-      // Each consumed document's labels are read so that this sink sees
-      // them, as the label above is: a write of a label alone, the value
-      // left as it was, runs the sink again with what it then consumes.
-      const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx, { subscribe: true })
-        : undefined;
-      sink.cleanup = callback(delivered, cfcLabel, consumed);
+      sink.cleanup = callback(delivered, cfcLabel, consumed, writtenPrincipal);
 
       // no async await here, but that also means no retry. TODO(seefeld): Should
       // we add a retry? So far all sinks are read-only, so they get re-triggered
@@ -6024,8 +6099,8 @@ export function pullProjected<R>(
 /**
  * The cell a write to `cell` lands in, as `resolveAsCell()` resolves one: its
  * write redirects are followed, and a link stored there as the value is not.
- * A host that must tell a value written into a cell from one reached through
- * a link stored there compares this with `cell.resolveAsCell()`.
+ * `writtenPrincipalAt()` compares it with `cell.resolveAsCell()` to tell a
+ * value written into a cell from one reached through a link stored there.
  */
 export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
   return writeTargetOf(requireCellImpl(cell));
@@ -6039,7 +6114,8 @@ export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
  * labels included, runs it again. What the projection reaches is what the
  * subscription depends on: a part of the value it never reads is a part
  * whose change does not run it. A stream holds no value to project, and is
- * refused.
+ * refused. `options` asks for the cell's label and the principal the value's
+ * own cell represents with each value, as `SinkOptions` describes.
  */
 export function sinkProjected<R>(
   cell: Cell<unknown>,
@@ -6048,17 +6124,21 @@ export function sinkProjected<R>(
     value: R,
     consumed: SinkConsumedLabel | undefined,
     cfcLabel: CfcLabelView | undefined,
+    writtenPrincipal: DID | undefined,
   ) => Cancel | undefined | void,
-  options: { includeCfcLabel?: boolean } = {},
+  options: { includeCfcLabel?: boolean; includeWrittenPrincipal?: boolean } =
+    {},
 ): Cancel {
   return sinkProjectedOf(
     requireCellImpl(cell),
     project,
-    (value, cfcLabel, consumed) => callback(value, consumed, cfcLabel),
+    (value, cfcLabel, consumed, writtenPrincipal) =>
+      callback(value, consumed, cfcLabel, writtenPrincipal),
     {
       readOnly: true,
       includeConsumedLabel: true,
       includeCfcLabel: options.includeCfcLabel,
+      includeWrittenPrincipal: options.includeWrittenPrincipal,
     },
   );
 }

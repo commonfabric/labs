@@ -64,6 +64,7 @@ import {
   linkCfcLabelView,
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -79,6 +80,7 @@ import {
   type CfcLabelView,
   ClientNotificationType,
   type GetPatternSourcesRequest,
+  type InitializationData,
   type IPCRemotePost,
   type LoggerErrorMessagesResponse,
   NotificationType,
@@ -103,7 +105,11 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
-import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import {
+  clientScopedKey,
+  ownerClient,
+  type WorkerClient,
+} from "@/backends/worker-client.ts";
 import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
@@ -121,6 +127,9 @@ const cfcSigner = await Identity.fromPassphrase(
   "runtime-processor-cfc-label-tests",
 );
 const testSessionOpenAudience = "did:key:z6Mk-runtime-processor-test-audience";
+// A principal other than `cfcSigner`, whose labels no display of
+// `cfcSigner`'s admits.
+const otherUser = "did:key:z6Mk-runtime-processor-test-other-user";
 
 class SharedV2SessionFactory implements V2Storage.SessionFactory {
   readonly #server: MemoryV2Server.Server;
@@ -5664,42 +5673,119 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("`RuntimeProcessor` cell resolution IPC", () => {
-    it("returns, when asked, where a write to the cell lands beside the cell its links lead to", async () => {
+  describe("`RuntimeProcessor` written principal IPC", () => {
+    /**
+     * A profile in `cfcSigner`'s space whose `picture` field is a write
+     * redirect to a cell of its own holding a picture labeled as representing
+     * `cfcSigner`, `relabel()` storing it again labeled as representing
+     * someone else, and a subscription to the field, asking for the written
+     * principal with `includeWrittenPrincipal`, which returns what it posted.
+     */
+    async function subscribedPicture(includeWrittenPrincipal?: boolean) {
       const { runtime, storageManager } = createRuntime();
-      try {
-        const space = cfcSigner.did();
-        const value = runtime.getCell<number>(space, "resolve-value");
-        const holder = runtime.getCell<unknown>(space, "resolve-holder");
-        const field = runtime.getCell<unknown>(space, "resolve-field");
-        await Promise.all([value.sync(), holder.sync(), field.sync()]);
+      const space = cfcSigner.did();
+      const visitor = (await Identity.fromPassphrase("written-principal ipc"))
+        .did();
+      const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
+      const pictureCell = runtime.getCell<unknown>(space, "ipc-picture");
+      const profile = runtime.getCell(
+        space,
+        "ipc-profile",
+        {
+          type: "object",
+          properties: { picture: { type: "FabricBytes" } },
+        } as const satisfies JSONSchema,
+      );
+      const label = (subject: string) => ({
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: [{ kind: "represents-principal", subject }] },
+          }],
+        },
+      });
+      const commit = async (
+        edit: (tx: IExtendedStorageTransaction) => void,
+      ) => {
         const tx = runtime.edit();
-        value.withTx(tx).set(1);
-        holder.withTx(tx).setRawUntyped(value.getAsLink());
-        field.withTx(tx).setRawUntyped(holder.getAsWriteRedirectLink());
+        writeSeedEnvelopeDoc(tx, space);
+        edit(tx);
         expect((await tx.commit().settled).error).toBeUndefined();
-        const processor = buildProcessor({ runtime });
-        const request = {
-          type: RequestType.CellResolveAsCell,
-          cell: field.getAsNormalizedFullLink(),
-        } as const;
+        await runtime.idle();
+        // The subscription posts from a microtask.
+        await Promise.resolve();
+      };
+      await commit((tx) => {
+        seedStoredEnvelope(
+          tx,
+          { ...pictureCell.getAsNormalizedFullLink(), path: [] },
+          { value: bytes, cfc: label(space) },
+        );
+        profile.withTx(tx).setRawUntyped(
+          { picture: pictureCell.getAsWriteRedirectLink() } as never,
+        );
+      });
+      const posted: Record<string, unknown>[] = [];
+      buildProcessor({ runtime }).handleCellSubscribe({
+        type: RequestType.CellSubscribe,
+        cell: createCellRef(profile.key("picture")),
+        ...(includeWrittenPrincipal && { includeWrittenPrincipal }),
+      }, {
+        id: 1,
+        post: (message) => {
+          posted.push(message as Record<string, unknown>);
+          return true;
+        },
+      });
+      await Promise.resolve();
+      return {
+        posted,
+        bytes,
+        space,
+        visitor,
+        relabel: () =>
+          commit((tx) =>
+            seedStoredEnvelope(
+              tx,
+              { ...pictureCell.getAsNormalizedFullLink(), path: ["cfc"] },
+              label(visitor) as never,
+            )
+          ),
+        [Symbol.asyncDispose]: async () => {
+          await runtime.dispose();
+          await storageManager.close();
+        },
+      };
+    }
 
-        const plain = processor.handleCellResolveAsCell(request);
-        const both = processor.handleCellResolveAsCell({
-          ...request,
-          withWriteTarget: true,
-        });
+    it("posts with each value the principal its own cell represents, and posts again when only that principal changes", async () => {
+      await using picture = await subscribedPicture(true);
+      expect(picture.posted.map(({ value, writtenPrincipal }) => ({
+        value,
+        writtenPrincipal,
+      }))).toEqual([{ value: picture.bytes, writtenPrincipal: picture.space }]);
 
-        expect(plain.writeTarget).toBeUndefined();
-        expect([plain.cell.id, both.cell.id, both.writeTarget?.id]).toEqual([
-          value.getAsNormalizedFullLink().id,
-          value.getAsNormalizedFullLink().id,
-          holder.getAsNormalizedFullLink().id,
-        ]);
-      } finally {
-        await runtime.dispose();
-        await storageManager.close();
-      }
+      await picture.relabel();
+
+      expect(picture.posted.at(-1)).toMatchObject({
+        value: picture.bytes,
+        writtenPrincipal: picture.visitor,
+      });
+      expect(picture.posted).toHaveLength(2);
+    });
+
+    it("posts no principal to a subscription that did not ask for one", async () => {
+      await using picture = await subscribedPicture();
+      await picture.relabel();
+
+      expect(picture.posted.some((message) => "writtenPrincipal" in message))
+        .toBe(false);
+      expect(picture.posted.map(({ value }) => value)).toEqual([
+        picture.bytes,
+      ]);
     });
   });
 
@@ -10155,7 +10241,7 @@ describe("runtime-processor", () => {
           atoms: [],
         } as never;
         expect(await read()).toEqual({
-          refused: { refusedBy: "display-ceiling" },
+          refused: { refusedBy: "display-ceiling", labelSource: "schema" },
         });
       } finally {
         await runtime.dispose();
@@ -10197,18 +10283,25 @@ describe("runtime-processor", () => {
           atoms: [],
         } as never;
         expect(await read()).toEqual({
-          refused: { refusedBy: "display-ceiling" },
+          refused: { refusedBy: "display-ceiling", labelSource: "schema" },
         });
       } finally {
         await runtime.dispose();
       }
     });
 
-    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
-      // The ceiling admits what the acting user may see. A value labeled with
-      // the session's own space is admitted through the exchange rules alone,
-      // which the resolver built for that space applies, and a value labeled
-      // with a resource the ceiling does not name is refused.
+    /**
+     * Initializes a processor from `data` over a memory server that admits
+     * `cfcSigner`, runs `use` with it and a reader of a document `cfcSigner`'s
+     * space holds labeled `atom`, read as a host reads it, and disposes it.
+     */
+    async function initialized(
+      data: Partial<InitializationData>,
+      use: (
+        processor: RuntimeProcessor,
+        labeled: (id: string, atom: unknown) => Promise<CellGetResponse>,
+      ) => Promise<void> | void,
+    ): Promise<void> {
       const space = cfcSigner.did();
       const server = new MemoryV2Server.Server({
         authorizeSessionOpen: () => cfcSigner.did(),
@@ -10224,7 +10317,7 @@ describe("runtime-processor", () => {
           apiUrl: "http://worker.test/",
           identity: cfcSigner.keyPair,
           spaceDid: space,
-          renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] },
+          ...data,
         });
         try {
           const runtime = processor.accessForTestingOnly.runtime;
@@ -10257,15 +10350,7 @@ describe("runtime-processor", () => {
               } as unknown as CellRef,
             });
           };
-
-          expect(await labeled("session-space-note", cfcAtom.space(space)))
-            .toEqual({ value: "value-of-session-space-note" });
-          expect(
-            await labeled(
-              "credential-note",
-              cfcAtom.resource("CredentialSecret"),
-            ),
-          ).toEqual({ refused: { refusedBy: "display-ceiling" } });
+          await use(processor, labeled);
         } finally {
           await processor.dispose();
         }
@@ -10274,7 +10359,78 @@ describe("runtime-processor", () => {
         await storageManager.close();
         await server.close();
       }
+    }
+
+    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
+      // The ceiling admits what the acting user may see. A value labeled with
+      // the session's own space is admitted through the exchange rules alone,
+      // which the resolver built for that space applies, and a value labeled
+      // with a resource the ceiling does not name is refused.
+      const space = cfcSigner.did();
+      await initialized(
+        { renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] } },
+        async (_processor, labeled) => {
+          expect(await labeled("session-space-note", cfcAtom.space(space)))
+            .toEqual({ value: "value-of-session-space-note" });
+          expect(
+            await labeled(
+              "credential-note",
+              cfcAtom.resource("CredentialSecret"),
+            ),
+          ).toEqual({
+            refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+          });
+        },
+      );
     });
+
+    it("decides a host's read under the default display ceiling for the acting principal when the host declares none", async () => {
+      // A display boundary no authored policy covers is fitted against the
+      // default display ceiling (spec §8.10.6), so a host that declares no
+      // ceiling is held to the one the shell declares.
+      await initialized({}, async (processor, labeled) => {
+        expect(processor.accessForTestingOnly.renderConfidentialityCeiling)
+          .toEqual(defaultDisplayCeiling(cfcSigner.did()));
+        expect(await labeled("own-note", cfcAtom.user(cfcSigner.did())))
+          .toEqual({ value: "value-of-own-note" });
+        expect(await labeled("someone-elses-note", cfcAtom.user(otherUser)))
+          .toEqual({
+            refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+          });
+      });
+    });
+
+    it("returns every read as read for a host that declares no ceiling with `null`", async () => {
+      await initialized(
+        { renderConfidentialityCeiling: null },
+        async (processor, labeled) => {
+          expect(processor.accessForTestingOnly.renderConfidentialityCeiling)
+            .toBeUndefined();
+          expect(await labeled("someone-elses-note", cfcAtom.user(otherUser)))
+            .toEqual({ value: "value-of-someone-elses-note" });
+        },
+      );
+    });
+
+    for (
+      const [data, expected] of [
+        [{}, "deny"],
+        [{ renderConfidentialityCeiling: { atoms: [] } }, "deny"],
+        [{ renderDeclassificationPolicy: "allow" }, "allow"],
+      ] as const
+    ) {
+      it(
+        `denies author declassification unless the host allows it, given ${
+          JSON.stringify(data)
+        }`,
+        async () => {
+          await initialized(data, (processor) => {
+            expect(processor.accessForTestingOnly.renderDeclassificationPolicy)
+              .toBe(expected);
+          });
+        },
+      );
+    }
   });
 
   describe("`RuntimeProcessor` vdom mount render policy", () => {
@@ -11384,6 +11540,249 @@ describe("runtime-processor", () => {
           await mounting;
           await runtime.dispose();
         }
+      });
+
+      describe("of a space deleted before its view registers", () => {
+        // A view's registration can be refused because its space was deleted
+        // while the mount waited for it, or before the mount was asked for.
+        // Either way the mount renders the space's deleted placeholder, as a
+        // mount that was up when the deletion landed does, and does not fail.
+
+        /** The refusal a deleted space answers every command with. */
+        const deletedError = (space: string) =>
+          Object.assign(new Error(`Space ${space} is deleted`), {
+            name: "AuthorizationError",
+            deleted: true,
+          });
+
+        /**
+         * A processor whose view registrations settle as the promise
+         * `register` returns does, over a storage that reports the mounted
+         * space deleted once `markDeleted()` has been called.
+         */
+        async function deletedMountState(
+          register: () => Promise<(() => void) | undefined>,
+        ) {
+          const { runtime, link } = await mountState();
+          let deleted = false;
+          const processor = buildProcessor({
+            runtime: {
+              getCellFromLink: runtime.getCellFromLink.bind(runtime),
+              viewScopedReplicationRequested: true,
+              viewReplication: { mount: register },
+              storageManager: {
+                spaceAccessError: (space: string) =>
+                  deleted && space === link.space
+                    ? deletedError(space)
+                    : undefined,
+              },
+            },
+          });
+          return {
+            runtime,
+            link,
+            processor,
+            markDeleted: () => {
+              deleted = true;
+            },
+          };
+        }
+
+        /** Whether `posted` holds a batch that marks a node deleted. */
+        const deletedPlaceholderPosted = (posted: PostedMessage[]) =>
+          posted.some((message) =>
+            message.type === NotificationType.VDomBatch &&
+            (message.ops as { op: string; key?: string }[]).some((op) =>
+              op.op === "set-prop" && op.key === "data-space-deleted"
+            )
+          );
+
+        /**
+         * Has the reconciler of `client`'s mount `mountId` flush the ops it
+         * has queued, which it otherwise does on a microtask.
+         */
+        const flushOps = (
+          processor: ReturnType<typeof buildProcessor>,
+          client: WorkerClient,
+          mountId: number,
+        ) => {
+          const mount = processor.accessForTestingOnly.vdomMounts.get(
+            clientScopedKey(client, mountId),
+          );
+          expect(mount).toBeDefined();
+          mount!.reconciler.flush();
+        };
+
+        it("renders the deleted placeholder when the space is deleted while its view registers", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 41,
+              cell: link,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+            const response = await mounting;
+            flushOps(processor, client, 41);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("renders the deleted placeholder when the space was deleted before the mount was asked for", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() =>
+              Promise.reject(deletedError(link.space))
+            );
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            const response = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 42,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 42);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("renders the deleted placeholder when a deleted space registers no view", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => Promise.resolve(undefined));
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            const response = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 43,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 43);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("releases a placeholder mount when it is unmounted, and mounts the same cell again", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() =>
+              Promise.reject(deletedError(link.space))
+            );
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 44,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 44,
+            }, client);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+
+            posted.length = 0;
+            const again = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 44,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 44);
+
+            expect(again.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 44,
+            }, client);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        /**
+         * Expects a mount whose view registration is refused with `refusal`
+         * to fail with it, leaving no mount behind.
+         */
+        async function expectRefusedMountToFail(refusal: Error) {
+          const { runtime, link, processor } = await deletedMountState(() =>
+            Promise.reject(refusal)
+          );
+          const { client } = testClient(1);
+          try {
+            await expect(processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 45,
+              cell: link,
+            }, client)).rejects.toBe(refusal);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        }
+
+        it("fails a mount whose view registration cannot reach the memory server", async () => {
+          await expectRefusedMountToFail(
+            new Error("the memory server could not be reached"),
+          );
+        });
+
+        it("fails a mount whose view registration is refused without the space being deleted", async () => {
+          await expectRefusedMountToFail(
+            Object.assign(new Error("Access refused"), {
+              name: "AuthorizationError",
+            }),
+          );
+        });
+
+        it("resolves, rendering nothing, a mount unmounted while its view registers when the space is deleted", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 46,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 46,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+
+            await expect(mounting).resolves.toEqual({ rootId: null });
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+            expect(
+              posted.filter((message) =>
+                message.type === NotificationType.VDomBatch
+              ),
+            ).toEqual([]);
+          } finally {
+            await runtime.dispose();
+          }
+        });
       });
 
       it("keeps one client's mount when another mounts under the same mount id", async () => {

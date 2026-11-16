@@ -196,6 +196,10 @@ export const ui = {
   /** Body text inside a modal prompt dialog. */
   dialogText: { fg: C.fg } as Style,
 
+  /** Body text inside a modal prompt dialog that stands out from the rest,
+   * such as what a request asks of the person. */
+  dialogEmphasis: { fg: C.fgBright, bold: true } as Style,
+
   /** A Turbo Vision push-button: dark text on a green face. */
   button: { fg: C.ink, bg: C.button } as Style,
 

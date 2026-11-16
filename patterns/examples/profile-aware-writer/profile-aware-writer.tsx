@@ -15,7 +15,8 @@ type Input = {
   title?: string | Default<"Profile-Aware Writer">;
 };
 
-const handleSend = handler<
+// Takes the trimmed message as the topic, ignoring a blank one.
+export const handleSend = handler<
   { detail: { message: string } },
   { topic: Writable<string> }
 >((event, { topic }) => {

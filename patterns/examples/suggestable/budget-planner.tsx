@@ -8,6 +8,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
+import { promptAbout, totalAmount } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -45,10 +46,13 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
     // state and makes no call until one arrives. A budget with no topic has
     // nothing to break down, so the model is asked only once a caller names
     // what the money is for.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Create a budget breakdown for: ${topic}. Suggest 4-8 spending categories with dollar amounts that sum to exactly $${maxAmount}.`;
-    });
+    const prompt = computed(() =>
+      promptAbout(
+        topic,
+        "Create a budget breakdown for: ",
+        `. Suggest 4-8 spending categories with dollar amounts that sum to exactly $${maxAmount}.`,
+      )
+    );
 
     const response = generateObject<{ items: BudgetItem[] }>({
       system:
@@ -77,13 +81,7 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
 
     const items = computed(() => response.result?.items || []);
 
-    const total = computed(() => {
-      let sum = 0;
-      for (const item of items) {
-        sum += item.amount || 0;
-      }
-      return sum;
-    });
+    const total = computed(() => totalAmount(items));
 
     const remaining = computed(() => (maxAmount || 0) - total);
 

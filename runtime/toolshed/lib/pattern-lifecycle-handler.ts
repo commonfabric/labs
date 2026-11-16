@@ -70,7 +70,6 @@ const deps = (requestSpan: Span): LifecycleDeps => ({
   watchAdmittedCommits: (watcher) => memoryServer.watchAdmittedCommits(watcher),
   logger: {
     warn: (obj, msg) => logger.warn("pattern-lifecycle", () => [msg, obj]),
-    info: (obj, msg) => logger.info("pattern-lifecycle", () => [msg, obj]),
   },
   requestSpan,
 });

@@ -2,7 +2,12 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
-import { mergeCfcSchemaEnvelopes } from "../src/cfc/schema-merge.ts";
+import { droppedStoredClaim } from "../src/cfc/claim-preservation.ts";
+import { CfcEnvelopeStabilityError } from "../src/cfc/envelope-stability-reason.ts";
+import {
+  mergeCfcSchemaEnvelopes,
+  type WritePolicyRelease,
+} from "../src/cfc/schema-merge.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   runtimeWritePolicyAuthorization,
@@ -173,6 +178,117 @@ function fixture() {
     },
   };
 }
+
+/** A write-policy alternative: its writer claim, its contract, and the rest. */
+type Alternative = {
+  writeAuthorizedBy: { __ctWriterIdentityOf: Record<string, unknown> };
+  [key: string]: unknown;
+};
+
+/** `alternative` with its writer's binding as `change` makes it. */
+function rebound(
+  alternative: Alternative,
+  change: (binding: Record<string, unknown>) => Record<string, unknown>,
+): Alternative {
+  return {
+    ...alternative,
+    writeAuthorizedBy: {
+      ...alternative.writeAuthorizedBy,
+      __ctWriterIdentityOf: change({
+        ...alternative.writeAuthorizedBy.__ctWriterIdentityOf,
+      }),
+    },
+  };
+}
+
+/**
+ * Ways an appended alternative can differ from the stored alternative it pairs
+ * with, each made to an alternative that differs from that one only in the
+ * symbol its writer binds, and whether a release may append the result. Only
+ * the symbol and the file its stamped writer claim spells may differ.
+ */
+const APPENDED_VARIANTS: readonly {
+  name: string;
+  admitted: boolean;
+  vary: (paired: Alternative) => Alternative;
+}[] = [
+  // The symbol is what makes the alternative an appended writer: refusing a
+  // change to it would refuse every append.
+  { name: "a writer binding another symbol", admitted: true, vary: (a) => a },
+  // A stamped claim's file is a spelling, which depends on the resolver that
+  // compiled the module, and the stamp already names the module by its
+  // content. Two stamped claims reconcile whatever their files spell, as
+  // `reconcileWriterClaimStamp()` in `schema-merge.ts` states, and a writer is
+  // authorized by its module and binding path alone (`prepare.ts`).
+  {
+    name: "a writer naming another file",
+    admitted: true,
+    vary: (a) => rebound(a, (b) => ({ ...b, file: "/elsewhere.tsx" })),
+  },
+  {
+    name: "a key beside the writer's binding's own",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, extra: true })),
+  },
+  {
+    name: "a legacy stamp beside the writer's module identity",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, bundleId: "legacy" })),
+  },
+  {
+    name: "a writer's binding without its file",
+    admitted: false,
+    vary: (a) => rebound(a, ({ file: _file, ...b }) => b),
+  },
+  {
+    name: "a writer's file that is not a string",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, file: 7 })),
+  },
+  {
+    name: "a writer's binding without its module identity",
+    admitted: false,
+    vary: (a) => rebound(a, ({ moduleIdentity: _module, ...b }) => b),
+  },
+  {
+    name: "a writer's path that is not a list",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, path: "reply" })),
+  },
+  {
+    name: "an empty writer's path",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, path: [] })),
+  },
+  {
+    name: "a writer's path holding a name that is not a string",
+    admitted: false,
+    vary: (a) => rebound(a, (b) => ({ ...b, path: ["reply", 1] })),
+  },
+  {
+    name: "a key beside the writer claim's binding",
+    admitted: false,
+    vary: (a) => ({
+      ...a,
+      writeAuthorizedBy: { ...a.writeAuthorizedBy, extra: true },
+    }),
+  },
+  {
+    name: "a key beside the alternative's own",
+    admitted: false,
+    vary: (a) => ({ ...a, intent: "reply" }),
+  },
+  {
+    name: "a contract no stored alternative names",
+    admitted: false,
+    vary: (a) => ({ ...a, uiContract: contract("Archive") }),
+  },
+  {
+    name: "no contract",
+    admitted: false,
+    vary: ({ uiContract: _contract, ...a }) => a as Alternative,
+  },
+];
 
 /** Runs `body` against a fresh fixture, disposing of it after. */
 async function withFixture(
@@ -734,6 +850,534 @@ describe("cfc-write-policy-any-of", () => {
         policy("send", "Send"),
         policy("edit", "Edit"),
       ]);
+    });
+
+    it("returns the stored alternatives in stored order for a candidate listing them in another order", () => {
+      const merged = mergeCfcSchemaEnvelopes(SCHEMA, {
+        type: "string",
+        ifc: {
+          writePolicyAnyOf: [policy("edit", "Edit"), policy("send", "Send")],
+        },
+      }) as JSONSchemaObj;
+
+      expect(merged.ifc?.writePolicyAnyOf).toEqual([
+        policy("send", "Send"),
+        policy("edit", "Edit"),
+      ]);
+    });
+
+    it("throws when a later schema drops an alternative", () => {
+      expect(() =>
+        mergeCfcSchemaEnvelopes(SCHEMA, {
+          type: "string",
+          ifc: { writePolicyAnyOf: [policy("send", "Send")] },
+        })
+      ).toThrow("writePolicyAnyOf must remain stable");
+    });
+  });
+
+  describe("a write appending an alternative under a release marker", () => {
+    // The stored policy names `send` and `edit`, of `MODULE`. Each case
+    // writes under a schema appending `reply`, of the same module, through
+    // `send`'s action, beside a release marker naming `MODULE`, and then has
+    // `reply` write.
+
+    const EXTENDED: JSONSchemaObj = {
+      type: "string",
+      ifc: {
+        writePolicyAnyOf: [
+          ...SCHEMA.ifc!.writePolicyAnyOf!,
+          policy("reply", "Send"),
+        ],
+      },
+    };
+
+    /** Records the release marker over the protected cell's document. */
+    const markRelease = (
+      runtime: Runtime,
+      tx: IExtendedStorageTransaction,
+      authorized: boolean,
+    ) => {
+      const target = runtime.getCell(signer.did(), "protected-value")
+        .getAsNormalizedFullLink();
+      const input = {
+        kind: "release-program" as const,
+        target: {
+          space: target.space,
+          id: target.id,
+          scope: target.scope,
+          path: [],
+        },
+        modules: [MODULE],
+      };
+      if (authorized) {
+        tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
+      } else {
+        tx.recordCfcWritePolicyInput(input);
+      }
+    };
+
+    it("stores the alternative when the runtime records the marker, and its writer then writes", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema: EXTENDED },
+          (tx) => markRelease(f.runtime, tx, true),
+        );
+        expect(error).toBeUndefined();
+
+        expect(
+          await f.write("reply", "Send", { schema: EXTENDED, value: "again" }),
+        ).toBeUndefined();
+      });
+    });
+
+    it("refuses the write when the marker is recorded without the runtime's authorization", async () => {
+      await withFixture(async (f) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema: EXTENDED },
+          (tx) => markRelease(f.runtime, tx, false),
+        );
+
+        expect(error?.message).toContain(
+          "writePolicyAnyOf must remain stable",
+        );
+        expect(await f.write("reply", "Send", { value: "again" })).toContain(
+          "writePolicyAnyOf",
+        );
+      });
+    });
+
+    describe("an appended alternative against the stored one it pairs with", () => {
+      // Each case appends a variant of `reply` through `send`'s action, as
+      // `APPENDED_VARIANTS` makes it, under the authorized marker.
+
+      /** What the write appending `variant` returns as its error. */
+      const appending = async (
+        f: ReturnType<typeof fixture>,
+        variant: (paired: Alternative) => Alternative,
+      ) => {
+        expect(await f.write("send", "Send")).toBeUndefined();
+        const schema = {
+          type: "string",
+          ifc: {
+            writePolicyAnyOf: [
+              ...SCHEMA.ifc!.writePolicyAnyOf!,
+              variant(policy("reply", "Send") as Alternative),
+            ],
+          },
+        } as JSONSchemaObj;
+        const { error } = await f.writeWithRetry(
+          "send",
+          "Send",
+          { schema },
+          (tx) => markRelease(f.runtime, tx, true),
+        );
+        return error;
+      };
+
+      for (
+        const { name, vary } of APPENDED_VARIANTS.filter((v) => v.admitted)
+      ) {
+        it(`commits the write appending ${name}`, async () => {
+          await withFixture(async (f) => {
+            expect(await appending(f, vary)).toBeUndefined();
+          });
+        });
+      }
+
+      for (
+        const { name, vary } of APPENDED_VARIANTS.filter((v) => !v.admitted)
+      ) {
+        it(`refuses the write appending ${name}`, async () => {
+          await withFixture(async (f) => {
+            expect((await appending(f, vary))?.message).toContain(
+              "the release adds an alternative no stored alternative admits",
+            );
+          });
+        });
+      }
+    });
+  });
+
+  describe("a release appending alternatives", () => {
+    // The stored policy's writers are of the module `old`, which the release
+    // succeeds with `new`, the module it installs. `other` is installed too,
+    // and succeeds nothing.
+
+    const RELEASE: WritePolicyRelease = {
+      installs: (module) => module === "new" || module === "other",
+      succeeds: (successor, predecessor) =>
+        successor === "new" && predecessor === "old",
+    };
+
+    /** An alternative admitting `writer` of `module` through `action`. */
+    function alternative(
+      writer: string,
+      action: string | undefined,
+      module: string | undefined,
+    ) {
+      return {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: {
+            file: "/records.tsx",
+            path: [writer],
+            ...(module === undefined ? {} : { moduleIdentity: module }),
+          },
+        },
+        ...(action === undefined ? {} : { uiContract: contract(action) }),
+      };
+    }
+
+    /** A schema whose one position holds `alternatives`. */
+    function schemaOf(alternatives: unknown[]): JSONSchemaObj {
+      return {
+        type: "string",
+        ifc: { writePolicyAnyOf: alternatives },
+      } as JSONSchemaObj;
+    }
+
+    const STORED = [
+      alternative("send", "Send", "old"),
+      alternative("edit", "Edit", "old"),
+    ];
+
+    /** The candidate restating the stored alternatives, then `added`. */
+    function candidateAdding(...added: unknown[]): JSONSchemaObj {
+      return schemaOf([
+        alternative("edit", "Edit", "new"),
+        ...added,
+        alternative("send", "Send", "new"),
+      ]);
+    }
+
+    /**
+     * What merging `candidate` over the stored policy returns, as part of
+     * `release`, or of no release where it is `null`.
+     */
+    function merge(
+      candidate: JSONSchemaObj,
+      release: WritePolicyRelease | null = RELEASE,
+    ) {
+      return mergeCfcSchemaEnvelopes(schemaOf(STORED), candidate, {
+        ...(release === null ? {} : { writePolicyRelease: release }),
+      }) as JSONSchemaObj;
+    }
+
+    /**
+     * What the keep rule says of `merged` against the stored policy, as part
+     * of `release`, or of no release where it is `null`.
+     */
+    function kept(
+      merged: unknown[],
+      release: WritePolicyRelease | null = RELEASE,
+    ) {
+      return droppedStoredClaim(
+        schemaOf(STORED),
+        schemaOf(merged),
+        undefined,
+        release ?? undefined,
+      );
+    }
+
+    describe("the merge", () => {
+      it("returns the stored alternatives as stored, in stored order, and the appended one after them", () => {
+        const merged = merge(
+          candidateAdding(alternative("reply", "Send", "new")),
+        );
+
+        expect(merged.ifc?.writePolicyAnyOf).toEqual([
+          ...STORED,
+          alternative("reply", "Send", "new"),
+        ]);
+      });
+
+      it("returns an alternative appended from the stored alternatives' own module", () => {
+        const merged = mergeCfcSchemaEnvelopes(
+          schemaOf(STORED),
+          schemaOf([...STORED, alternative("reply", "Send", "old")]),
+          {
+            writePolicyRelease: {
+              installs: (module) => module === "old",
+              succeeds: () => false,
+            },
+          },
+        ) as JSONSchemaObj;
+
+        expect(merged.ifc?.writePolicyAnyOf).toEqual([
+          ...STORED,
+          alternative("reply", "Send", "old"),
+        ]);
+      });
+
+      it("throws for an appended alternative outside a release", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", "new")), null)
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative of a module the release does not install", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", "new")), {
+            ...RELEASE,
+            installs: (module) => module === "other",
+          })
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative of an installed module no stored alternative's lineage includes", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", "other")))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative whose writer carries no stamp", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Send", undefined)))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative naming a contract no stored alternative names", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", "Delete", "new")))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative naming no contract beside stored alternatives that all name one", () => {
+        expect(() =>
+          merge(candidateAdding(alternative("reply", undefined, "new")))
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative carrying a key no stored alternative carries", () => {
+        expect(() =>
+          merge(
+            candidateAdding({
+              ...alternative("reply", "Send", "new"),
+              intent: "reply",
+            }),
+          )
+        ).toThrow(CfcEnvelopeStabilityError);
+      });
+
+      it("throws for an appended alternative whose writer claim binds no symbol", () => {
+        for (
+          const binding of [
+            { moduleIdentity: "new" },
+            { moduleIdentity: "new", file: "/records.tsx", path: [] },
+            { moduleIdentity: "new", file: "/records.tsx", path: "reply" },
+            {
+              moduleIdentity: "new",
+              file: "/records.tsx",
+              path: ["reply"],
+              extra: true,
+            },
+          ]
+        ) {
+          expect(() =>
+            merge(candidateAdding({
+              writeAuthorizedBy: { __ctWriterIdentityOf: binding },
+              uiContract: contract("Send"),
+            }))
+          ).toThrow(CfcEnvelopeStabilityError);
+        }
+      });
+
+      it("throws for a candidate that drops a stored alternative while appending one", () => {
+        expect(() =>
+          merge(
+            schemaOf([
+              alternative("send", "Send", "new"),
+              alternative("reply", "Send", "new"),
+            ]),
+          )
+        ).toThrow("the candidate drops a stored alternative");
+      });
+
+      describe("an artifact pairing taken from two stored alternatives", () => {
+        // `send` is of `a` and `edit` of `b`. The appended alternative is of
+        // `a2`, which succeeds `a` alone, and names `edit`'s contract: its
+        // artifact holds authority only on `Send`, and its contract only
+        // `b`'s lineage pairs.
+
+        const CROSSED_STORED = [
+          alternative("send", "Send", "a"),
+          alternative("edit", "Edit", "b"),
+        ];
+
+        /** What the release says when `a2` succeeds each of `predecessors`. */
+        function releaseSucceeding(
+          ...predecessors: string[]
+        ): WritePolicyRelease {
+          return {
+            installs: (module) => module === "a2",
+            succeeds: (successor, predecessor) =>
+              successor === "a2" && predecessors.includes(predecessor),
+          };
+        }
+
+        const CROSSED = schemaOf([
+          ...CROSSED_STORED,
+          alternative("amend", "Edit", "a2"),
+        ]);
+
+        it("throws", () => {
+          expect(() =>
+            mergeCfcSchemaEnvelopes(schemaOf(CROSSED_STORED), CROSSED, {
+              writePolicyRelease: releaseSucceeding("a"),
+            })
+          ).toThrow(CfcEnvelopeStabilityError);
+        });
+
+        it("returns the appended alternative where its artifact succeeds the one the contract is paired with", () => {
+          const merged = mergeCfcSchemaEnvelopes(
+            schemaOf(CROSSED_STORED),
+            CROSSED,
+            { writePolicyRelease: releaseSucceeding("b") },
+          ) as JSONSchemaObj;
+
+          expect(merged.ifc?.writePolicyAnyOf).toEqual(
+            CROSSED.ifc?.writePolicyAnyOf,
+          );
+        });
+
+        it("refuses the same pairing in the keep rule", () => {
+          expect(
+            droppedStoredClaim(
+              schemaOf(CROSSED_STORED),
+              CROSSED,
+              undefined,
+              releaseSucceeding("a"),
+            ),
+          ).toContain("writePolicyAnyOf");
+          expect(
+            droppedStoredClaim(
+              schemaOf(CROSSED_STORED),
+              CROSSED,
+              undefined,
+              releaseSucceeding("b"),
+            ),
+          ).toBeUndefined();
+        });
+      });
+    });
+
+    describe("the keep rule", () => {
+      it("returns `undefined` for the stored alternatives and one a stored alternative admits", () => {
+        expect(kept([...STORED, alternative("reply", "Send", "new")]))
+          .toBeUndefined();
+      });
+
+      it("returns `undefined` for the stored alternatives in another order", () => {
+        expect(kept([STORED[1], STORED[0]], null)).toBeUndefined();
+      });
+
+      it("returns a refusal for an appended alternative outside a release", () => {
+        expect(
+          kept([...STORED, alternative("reply", "Send", "new")], null),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative of a module the release does not install", () => {
+        expect(
+          kept([...STORED, alternative("reply", "Send", "new")], {
+            ...RELEASE,
+            installs: (module) => module === "other",
+          }),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative of an installed module no stored alternative's lineage includes", () => {
+        expect(kept([...STORED, alternative("reply", "Send", "other")]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative whose writer carries no stamp", () => {
+        expect(kept([...STORED, alternative("reply", "Send", undefined)]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative naming a contract no stored alternative names", () => {
+        expect(kept([...STORED, alternative("reply", "Delete", "new")]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative naming no contract beside stored alternatives that all name one", () => {
+        expect(kept([...STORED, alternative("reply", undefined, "new")]))
+          .toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative carrying a key no stored alternative carries", () => {
+        expect(
+          kept([
+            ...STORED,
+            { ...alternative("reply", "Send", "new"), intent: "reply" },
+          ]),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for an appended alternative whose writer claim binds no symbol", () => {
+        expect(
+          kept([...STORED, {
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { moduleIdentity: "new" },
+            },
+            uiContract: contract("Send"),
+          }]),
+        ).toContain("writePolicyAnyOf");
+      });
+
+      it("returns a refusal for a merged policy that drops a stored alternative", () => {
+        expect(kept([STORED[0], alternative("reply", "Send", "new")]))
+          .toContain("drops the stored writePolicyAnyOf");
+      });
+    });
+
+    describe("an appended alternative against the stored one it pairs with", () => {
+      // Each case appends a variant of `reply`, of `new`, through `send`'s
+      // action, as `APPENDED_VARIANTS` makes it.
+
+      const variants = APPENDED_VARIANTS.map(({ name, admitted, vary }) => ({
+        name,
+        admitted,
+        appended: vary(alternative("reply", "Send", "new") as Alternative),
+      }));
+
+      describe("the merge", () => {
+        for (const { name, appended } of variants.filter((v) => v.admitted)) {
+          it(`returns the stored alternatives and ${name} after them`, () => {
+            expect(merge(candidateAdding(appended)).ifc?.writePolicyAnyOf)
+              .toEqual([...STORED, appended]);
+          });
+        }
+
+        for (const { name, appended } of variants.filter((v) => !v.admitted)) {
+          it(`throws for ${name}`, () => {
+            expect(() => merge(candidateAdding(appended))).toThrow(
+              "the release adds an alternative no stored alternative admits",
+            );
+          });
+        }
+      });
+
+      describe("the keep rule", () => {
+        for (const { name, appended } of variants.filter((v) => v.admitted)) {
+          it(`returns \`undefined\` for ${name}`, () => {
+            expect(kept([...STORED, appended])).toBeUndefined();
+          });
+        }
+
+        for (const { name, appended } of variants.filter((v) => !v.admitted)) {
+          it(`returns a refusal for ${name}`, () => {
+            expect(kept([...STORED, appended])).toContain("writePolicyAnyOf");
+          });
+        }
+      });
     });
   });
 });

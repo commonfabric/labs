@@ -1257,17 +1257,34 @@ export class Client {
     if (answeredOnEpoch !== undefined && this.#staleSince(answeredOnEpoch)) {
       try {
         session.handleDisconnect();
-        await this.restoreConnection();
-        // A reconnect that had not yet taken stock of the client's sessions
-        // when this one was registered has restored it already, or holds it
-        // after a refusal for now. A held session is left to the retry its
-        // hold has scheduled: a restore made here would send its open again
-        // at once, ahead of the backoff the hold keeps.
-        if (session.restorePending && !session.held) await session.restore();
-        // A restore that a permanent denial ended terminated the session
-        // rather than failing; one a refusal for now holds is still pending.
-        await session.whenRestored();
+        // The mount's caller can cancel it here as it can while the open is
+        // made: a host that stays down would otherwise keep a cancelled
+        // mount waiting for it.
+        await runWithAbortSignal(
+          signal,
+          "memory session mount cancelled",
+          async () => {
+            await this.restoreConnection();
+            // A reconnect that had not yet taken stock of the client's
+            // sessions when this one was registered has restored it already,
+            // or holds it after a refusal for now. A held session is left to
+            // the retry its hold has scheduled: a restore made here would
+            // send its open again at once, ahead of the backoff the hold
+            // keeps.
+            if (session.restorePending && !session.held) {
+              await session.restore();
+            }
+            // A restore that a permanent denial ended terminated the session
+            // rather than failing; one a refusal for now holds is still
+            // pending.
+            await session.whenRestored();
+          },
+        );
+        // The caller may have cancelled just as the restore completed, as it
+        // may just as the open is answered.
+        if (signal?.aborted) throw mountCancelled(signal);
       } catch (error) {
+        // No caller is handed this session, so nothing else would close it.
         await session.close().catch(() => undefined);
         throw error;
       }
@@ -3194,8 +3211,12 @@ export class Client {
       return this.#connectionEpoch;
     }
     await this.#reconnect();
-    // #reconnect() resolves without connecting when it gives up on a permanent
-    // handshake failure; surface it here rather than returning as if connected.
+    // `#reconnect()` resolves without connecting when a close ends it, or when
+    // it gives up on a permanent handshake failure. Either is thrown here
+    // rather than returning as if connected.
+    if (this.#closed) {
+      throw new Error("memory client is closed");
+    }
     if (this.#fatalError) {
       throw this.#fatalError;
     }
