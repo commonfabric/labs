@@ -67,8 +67,8 @@ declaring `N/A` requires a reason.
 - **P4 effect completion** — memo miss → outbox → external call →
   completion commit (the derived commit that never passes
   sealing).
-- **P5 recovery / activation** — crash, lease handover, index
-  re-mark, event reprocessing, park/activate.
+- **P5 recovery / activation** — crash, lease handover,
+  recompute on demand, event reprocessing, park/activate.
 - **P6 client lifecycle** — speculation overlay, offline queue,
   reload, push filtering, enact/ack.
 

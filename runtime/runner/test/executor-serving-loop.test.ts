@@ -26,6 +26,7 @@ import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import { resolveSpaceStoreUrl } from "@commonfabric/memory/v2/storage-path";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { markEffectCompletion } from "../src/executor/effect-completion.ts";
 import { decodeMemoryBoundary, resolveScopeKey } from "@commonfabric/memory/v2";
@@ -61,6 +62,18 @@ const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("serving loop service");
 const aliceSigner = await Identity.fromPassphrase("serving loop alice");
 const bobSigner = await Identity.fromPassphrase("serving loop bob");
+
+/** Whether a file exists at `url`. */
+const fileExists = async (url: URL): Promise<boolean> => {
+  try {
+    await Deno.stat(url);
+    return true;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
+
 /** A space nothing in this file opens, so no store for it exists. */
 const foreignSpace = (await Identity.fromPassphrase("serving loop foreign"))
   .did() as MemorySpace;
@@ -476,11 +489,11 @@ describe("stage F serving loop", () => {
    * writes, commits an input while nothing serves the space, and checks
    * that a fresh host serving a viewer recovers it. The rows play no part
    * in that recovery: a fresh serving runtime starts every computation it
-   * materializes as not yet run (serving-loop.md §6).
+   * materializes as not yet run (serving-loop.md §6). Returns the store.
    */
   const recoverAfterRestart = async (
     seedBasis: (raw: Database, inputId: string) => void,
-  ): Promise<void> => {
+  ): Promise<URL> => {
     const rowSchema = {
       type: "object",
       properties: {
@@ -601,6 +614,7 @@ describe("stage F serving loop", () => {
         await viewer.dispose();
         await viewerManager.close();
       }
+      return store;
     } finally {
       cancel();
     }
@@ -611,7 +625,7 @@ describe("stage F serving loop", () => {
     // shape an older build writes: one names the edited input at a seq
     // behind its head, and one names a document in a space that has no
     // store, as a handler writing into another space left.
-    await recoverAfterRestart((raw, inputId) => {
+    const store = await recoverAfterRestart((raw, inputId) => {
       const insert = raw.prepare(
         `INSERT INTO scheduler_basis
            (branch, action, action_scope_key, entity_space, entity,
@@ -631,6 +645,11 @@ describe("stage F serving loop", () => {
         seq: 0,
       });
     });
+
+    // Nothing opened the other space, so no store for it was created.
+    expect(await fileExists(resolveSpaceStoreUrl(store, space))).toBe(true);
+    expect(await fileExists(resolveSpaceStoreUrl(store, foreignSpace)))
+      .toBe(false);
   });
 
   it("recovers an input committed while nothing served the space after the memory server restarts, over a store holding no scheduler_basis rows", async () => {

@@ -42,17 +42,12 @@ import {
   awaitReplica,
 } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { selectForeignStaleInstances } from "../src/executor/space-server.ts";
 import {
   stampWaveRunContext,
   type WaveCommitSink,
 } from "../src/executor/wave.ts";
 import { ACLManager } from "../src/acl-manager.ts";
 import { wish as wishBuiltin } from "../src/builtins/wish.ts";
-import {
-  replaceSchedulerBasisRows,
-  selectForeignBasisRows,
-} from "@commonfabric/memory/v2/scheduler-basis";
 import {
   applyCommit,
   read as readDoc,
@@ -1167,137 +1162,6 @@ describe("Phase 5 cross-space serving", () => {
       await aliceRuntime.dispose();
       await aliceManager.close();
       await enforceServer.close();
-    }
-  });
-
-  it("the activation foreign re-mark judges recorded foreign inputs against their OWN space's head (serving-loop.md §6 step 2; the F5 pin)", async () => {
-    // The re-mark's activation arm fail-degrades to a warn by design
-    // (recovery correctness rides recompute-on-demand), so a breakage
-    // is invisible there — the decision helper carries the test
-    // surface: rows behind their foreign head re-mark, rows AT head do
-    // not, home-scan findings are not double-added, and only foreign
-    // rows are selected at all.
-    const homeEngine = await server.engineForSpace(homeSpace);
-
-    // A real foreign doc with a real head: bob writes it twice.
-    const bobManager = SharedServerStorageManager.connectTo(server, {
-      as: bobSigner,
-    });
-    const bobRuntime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager: bobManager,
-    });
-    try {
-      const doc = bobRuntime.getCell<{ n: number }>(
-        foreignSpace,
-        "f5-foreign-input",
-        undefined,
-      );
-      {
-        const tx = bobRuntime.edit();
-        doc.withTx(tx).set({ n: 1 });
-        expect((await tx.commit().settled).error).toBeUndefined();
-      }
-      await bobRuntime.storageManager.synced();
-      const docId = doc.getAsNormalizedFullLink().id;
-      const foreignEngine = await server.engineForSpace(foreignSpace);
-      const headAtRead = selectDocHead(foreignEngine, {
-        id: docId,
-        scopeKey: "space",
-      });
-      expect(headAtRead).toBeGreaterThan(0);
-
-      // Recorded basis rows on the HOME engine: action-current read the
-      // doc at its current head; action-behind at head-1; action-covered
-      // is already in the home scan's stale set; action-home reads only
-      // a home entity (never selected as foreign).
-      const scope = { branch: "", space: homeSpace };
-      replaceSchedulerBasisRows(homeEngine, {
-        ...scope,
-        action: "action-current",
-        actionScopeKey: "space",
-        rows: [{
-          entitySpace: foreignSpace,
-          entity: docId,
-          entityScopeKey: "space",
-          seq: headAtRead,
-        }],
-      });
-      replaceSchedulerBasisRows(homeEngine, {
-        ...scope,
-        action: "action-behind",
-        actionScopeKey: "space",
-        rows: [{
-          entitySpace: foreignSpace,
-          entity: docId,
-          entityScopeKey: "space",
-          seq: headAtRead - 1,
-        }],
-      });
-      replaceSchedulerBasisRows(homeEngine, {
-        ...scope,
-        action: "action-covered",
-        actionScopeKey: "space",
-        rows: [{
-          entitySpace: foreignSpace,
-          entity: docId,
-          entityScopeKey: "space",
-          seq: headAtRead - 1,
-        }],
-      });
-      replaceSchedulerBasisRows(homeEngine, {
-        ...scope,
-        action: "action-home",
-        actionScopeKey: "space",
-        rows: [{
-          entitySpace: homeSpace,
-          entity: "of:f5-home-entity",
-          entityScopeKey: "space",
-          seq: 1,
-        }],
-      });
-
-      // Only foreign rows are selected, all of them.
-      const foreignRows = selectForeignBasisRows(homeEngine, scope);
-      expect(foreignRows.map((row) => row.action).sort()).toEqual([
-        "action-behind",
-        "action-covered",
-        "action-current",
-      ]);
-
-      const engineFor = (s: MemorySpace) => server.engineForSpace(s);
-
-      // At-head rows do NOT re-mark; behind rows DO; home-scan-covered
-      // rows are not double-added.
-      expect(
-        await selectForeignStaleInstances(homeEngine, scope, engineFor, [
-          { action: "action-covered", actionScopeKey: "space" },
-        ]),
-      ).toEqual([{ action: "action-behind", actionScopeKey: "space" }]);
-
-      // The foreign head MOVES (bob writes again): the at-head row is
-      // now behind and re-marks — the park → foreign-move → reactivate
-      // schedule's decision, judged against the foreign engine.
-      {
-        const tx = bobRuntime.edit();
-        doc.withTx(tx).set({ n: 2 });
-        expect((await tx.commit().settled).error).toBeUndefined();
-      }
-      await bobRuntime.storageManager.synced();
-      expect(
-        selectDocHead(foreignEngine, { id: docId, scopeKey: "space" }),
-      ).toBeGreaterThan(headAtRead);
-      expect(
-        await selectForeignStaleInstances(homeEngine, scope, engineFor, [
-          { action: "action-covered", actionScopeKey: "space" },
-        ]),
-      ).toEqual([
-        { action: "action-behind", actionScopeKey: "space" },
-        { action: "action-current", actionScopeKey: "space" },
-      ]);
-    } finally {
-      await bobRuntime.dispose();
-      await bobManager.close();
     }
   });
 

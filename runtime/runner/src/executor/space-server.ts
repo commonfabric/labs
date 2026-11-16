@@ -180,10 +180,6 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
-import {
-  selectForeignBasisRows,
-  selectStaleBasisInstances,
-} from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/logger";
 import { minOf } from "@commonfabric/collections/math";
 import type { Runtime, RuntimeFetch, ServerRunInfo } from "../runtime.ts";
@@ -707,49 +703,6 @@ export async function awaitDisposeTimeboxed(
       ]);
     },
   );
-}
-
-/**
- * Phase 5's foreign re-mark decision (serving-loop.md §3b's cross-space
- * bullet; §6 step 2): the (action, instance) set whose recorded FOREIGN
- * inputs moved — each basis row whose `entity_space` is not the home
- * space is judged against THAT space's own co-hosted engine's head,
- * exactly like the home scan judges home rows. Returns only instances
- * NOT already in `alreadyStale` (the home scan's findings), in row
- * order. Extracted from the activation scan so the decision is
- * unit-pinned (the F5 fix — the catch in `activate` converts any
- * breakage here into a `basis-foreign-remark-failed` warn, an
- * invisible-by-design degradation, so the helper itself must hold the
- * test surface).
- */
-export async function selectForeignStaleInstances(
-  engine: Engine.Engine,
-  scope: { branch: string; space: string },
-  engineForSpace: (space: MemorySpace) => Promise<Engine.Engine>,
-  alreadyStale: ReadonlyArray<{ action: string; actionScopeKey: string }>,
-): Promise<Array<{ action: string; actionScopeKey: string }>> {
-  const foreignRows = selectForeignBasisRows(engine, scope);
-  const staleKeys = new Set(
-    alreadyStale.map((entry) => `${entry.action}\0${entry.actionScopeKey}`),
-  );
-  const added: Array<{ action: string; actionScopeKey: string }> = [];
-  for (const row of foreignRows) {
-    const key = `${row.action}\0${row.actionScopeKey}`;
-    if (staleKeys.has(key)) continue;
-    const foreignEngine = await engineForSpace(row.entitySpace as MemorySpace);
-    const head = Engine.selectDocHead(foreignEngine, {
-      id: row.entity,
-      scopeKey: row.entityScopeKey,
-    });
-    if (head > row.seq) {
-      staleKeys.add(key);
-      added.push({
-        action: row.action,
-        actionScopeKey: row.actionScopeKey,
-      });
-    }
-  }
-  return added;
 }
 
 /** The well-known never-a-piece id classes excluded from piece demand
@@ -1370,9 +1323,10 @@ export class SpaceServer implements TransactionSealDestination {
    * incidentally. */
   #pendingWaveSeals = 0;
 
-  /** The activation scan's head: records at or below it are covered
-   * by the basis re-mark and never drained (activation filters the
-   * queued feed the same way). Late-arrival accounting keys off it. */
+  /** The store head activation subscribed from: records at or below it
+   * are already in the store the fresh runtime reads, and are never
+   * drained (activation filters the queued feed the same way).
+   * Late-arrival accounting keys off it. */
   #activationScanHead = 0;
 
   /** Exact-once guard for LATE records (seq ≤ inputHead at drain —
@@ -1821,10 +1775,10 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Activate (serving-loop.md §3 "on activate"): acquire the lease (else
-   * park), build the serving runtime, read W, re-mark the dirty frontier
-   * from the basis index, and subscribe from the head the index scan ran
-   * against — the host feeds records from its admission observer, and
-   * records at or below the scan head are covered by the re-mark.
+   * park), build the serving runtime, read W, and subscribe from the
+   * store's head — the host feeds records from its admission observer,
+   * and records at or below that head are already in the store the
+   * serving runtime reads.
    *
    * A SpaceServer serves one tenure: every call resolves as the first one
    * did, so a server that has parked is not activated again. A space's next
@@ -2078,49 +2032,18 @@ export class SpaceServer implements TransactionSealDestination {
     // W = read watermark doc (0 if absent).
     this.#watermark = readWatermarkSeq(engine);
 
-    // Recovery/warm start are the same move (serving-loop.md §6 step 2):
-    // the activation scan computes the stale (action, instance) set
-    // from the basis index and SURFACES it (counted, logged). The scan
-    // does not seed scheduler dirtiness. A fresh runtime holds no
-    // materialized graph to mark, and its recovery CORRECTNESS rides
-    // recompute-on-demand (a demanded pull recomputes regardless). A
-    // runtime kept from an idle park holds one, and is taken only while
-    // the store head is the one its tenure parked at (serving-loop.md §1,
-    // "Parking"), so what its graph holds clean is still current.
+    // Activation subscribes from the store's head (serving-loop.md §6
+    // step 2). A fresh runtime registers every computation it
+    // materializes as not yet run, so the first wave runs each one demand
+    // reaches against the store as it stands. A runtime kept from an idle
+    // park holds a graph, and is taken only while the store head is the
+    // one its tenure parked at and no change reached it since
+    // (serving-loop.md §1, "Parking"), so what that graph holds clean is
+    // still current.
     const scanHead = Engine.serverSeq(engine);
-    const { stale, foreignReadInstances } = selectStaleBasisInstances(
-      engine,
-      { branch: "", space },
-    );
-    // Phase 5's foreign re-mark (serving-loop.md §3b's cross-space
-    // bullet; §6 step 2): recorded FOREIGN inputs are judged against
-    // their own space's co-hosted engine — same surfacing posture as
-    // the home scan (counted and logged; recovery correctness rides
-    // recompute-on-demand over the fresh runtime either way, so a
-    // failed foreign-head resolution degrades to conservative
-    // surfacing, never a wedge).
-    if (foreignReadInstances.length > 0) {
-      try {
-        const foreignStale = await selectForeignStaleInstances(
-          engine,
-          { branch: "", space },
-          (foreignSpace) => this.#options.server.engineForSpace(foreignSpace),
-          stale,
-        );
-        for (const entry of foreignStale) stale.push(entry);
-      } catch (error) {
-        logger.warn("basis-foreign-remark-failed", () => [
-          `${foreignReadInstances.length} basis instance(s) carry ` +
-          "cross-space reads and the foreign re-mark failed; " +
-          "recompute-on-demand covers them (serving-loop.md §6 step 2)",
-          error,
-        ]);
-      }
-    }
     logger.info?.(
       "activate",
-      `space ${space} activated: W=${this.#watermark} scanHead=${scanHead} ` +
-        `staleInstances=${stale.length}`,
+      `space ${space} activated: W=${this.#watermark} scanHead=${scanHead}`,
     );
     // §6 step 4 (Phase 3): undelivered events — stream head past the
     // per-stream eventWatermark — reprocess. The scan is the same

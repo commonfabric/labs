@@ -292,17 +292,18 @@ wave advances.
 - T9.Q5 — Does W advance for this wave if the cascade has not
   quiesced within budget? What does the commit carry then?
 
-### T10 — Crash and recovery: the index-guided re-mark
+### T10 — Crash and recovery: recompute on demand
 
-Purpose: recovery is re-marking, never replay.
+Purpose: recovery is recomputation, never replay.
 Setup: the host crashes mid-wave (after some effect requests left,
 before the wave commit). A deploy brings up a new host.
 
 - T10.Q1 — What survives the crash as correctness-bearing state?
   Complete list, each with citation.
-- T10.Q2 — Activation on the new host: the re-mark rule, exactly —
-  what makes a node dirty, and against what head?
-- T10.Q3 — Why can commit replay NOT substitute for the index?
+- T10.Q2 — Activation on the new host: which computations does the
+  fresh runtime hold as current, and from what head does it
+  subscribe?
+- T10.Q3 — Why is recovery NOT commit replay?
 - T10.Q4 — Which effects re-fire and which are suppressed? What
   external duplicate is possible, and what ruling accepted it?
 - T10.Q5 — Undelivered events at boot: detected how, reprocessed
@@ -690,12 +691,14 @@ these.
 
 ### T10 (COMPLETE)
 - Q1: committed state (incl. `requestHash` memo keys), W,
-  `eventWatermark`, the basis index — and nothing else. [serving-loop
-  §3b, §6; protocol §4; events §4; README §2]
-- Q2: dirty iff a recorded input seq is behind that doc's current
-  head; subscribe from the scan head. [serving-loop §3, §6]
-- Q3: own derived commits are echo-skipped live, so replay cannot
-  re-mark the frontier. [serving-loop §3, §3b, §6]
+  `eventWatermark` — and nothing else. [serving-loop §3b, §6;
+  protocol §4; events §4; README §2]
+- Q2: none — a fresh runtime starts every computation it materializes
+  as not yet run, so the first wave runs each one demand reaches;
+  subscribe from the store's head at activation. [serving-loop §3, §6]
+- Q3: own derived commits are echo-skipped live, so the loop never
+  replays them; recovery recomputes what demand reaches instead.
+  [serving-loop §3, §6]
 - Q4: memo hits suppress; misses re-fire; the external call may
   duplicate — at-least-once RULED, fired-marker REJECTED.
   [serving-loop §4, §6]
@@ -775,9 +778,8 @@ these.
   write into a lease-less space stays parked until its first session
   or event. [serving-loop §1 planes (b)/(d); T11.Q7]
 - Q2: activation acquires the lease (else parks), builds the serving
-  runtime (flag ON, §3e posture), reads W, re-marks the dirty
-  frontier from the basis index, and subscribes from the head the
-  index scan ran against; graph structure loads PER DEMANDED ROOT
+  runtime (flag ON, §3e posture), reads W, and subscribes from the
+  store's head; graph structure loads PER DEMANDED ROOT
   through the auto-load prior art (`ensurePieceRunning` — result-
   metadata chain to the owning result cell, pattern loaded by
   identity, `runtime.start`). There is NO piece-start step, no root

@@ -4148,6 +4148,26 @@ Delta 2026-11-01 — stage L (the lease in memory,
   from another worker's by the holder component its connection names, is
   `runtime/memory/test/v2-explicit-read.test.ts`.
 
+Delta 2026-11-16 — activation stops scanning `scheduler_basis`:
+
+- serving-loop §6 step 2's activation: COVERED, superseding the PARTIAL
+  entry under "Delta 2026-08-05 — stage F lands". Activation subscribes
+  from the store's head and reads no basis rows, home or foreign; a fresh
+  runtime starts every computation it materializes as not yet run, so
+  recovery recomputes what demand reaches.
+  `runtime/runner/test/executor-serving-loop.test.ts` pins recovery of an
+  input committed while nothing served the space, across a restart of the
+  memory server over a file store, with and without `scheduler_basis` rows
+  in the store, and that no store file is created for a space a row
+  names. `runtime/runner/test/executor/space-server-tenure.test.ts` pins
+  that a row naming another space opens no engine for it.
+- The foreign re-mark that Phase 5's entry describes, and its unit pin
+  (the review's F5, `selectForeignStaleInstances` in
+  `executor-cross-space.test.ts`), are retired with the scan. Fan-out
+  stage B's "the basis index at activation" no longer holds: the loop
+  runs the demanded writers not current for a demanding pair by B7's
+  clean bit alone.
+
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
 

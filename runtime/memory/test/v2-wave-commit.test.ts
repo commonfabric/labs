@@ -570,8 +570,8 @@ Deno.test("wave commit: basis-instance keys must be canonical scope keys — a c
   setServerExecutionConfig(true);
   try {
     const holder = withLiveLease(engine);
-    // scheduler_basis rows are ADDRESSING: recovery's re-mark scan
-    // matches storage rows against these instance values, so a
+    // scheduler_basis rows are ADDRESSING: a reader matches storage
+    // rows against these instance values, so a
     // non-canonical key stores a row no canonical key ever matches —
     // a silent liveness hole, refused at the door instead.
     assertThrows(

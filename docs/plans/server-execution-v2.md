@@ -1563,8 +1563,8 @@ Stages, one PR each except C, which is a three-PR train (below):
 - [x] **G — effectful + outbox**: serve `fetch*`, `generate*`,
       `sqlite*` behind request-hash memoization; the outbox; egress
       performed only here (effect authority per README §3.8; quota
-      attribution deferred); recovery = basis-index re-marking,
-      recompute pure nodes, reuse memoized effect results, no replay
+      attribution deferred); recovery = recompute what demand
+      reaches, reuse memoized effect results, no replay
       (serving-loop.md §4–§6). LANDED 2026-08-06: sealed post-commit
       effects defer to the per-space outbox and fire POST-wave-commit;
       the builtins' writebacks — marked with their effect key — commit
@@ -1886,10 +1886,8 @@ Tasks:
       runtime's own foreign loopback session, the scheduler re-runs
       autonomously off storage notifications, and the re-run's seal
       wakes the loop (the §3b server-internal wake — never home
-      input; W stays per home space); activation's basis re-mark
-      judges foreign rows against their own co-hosted engines
-      (serving-loop.md §6 step 2, pinned at the helper —
-      `selectForeignStaleInstances`).
+      input; W stays per home space); activation reads no basis rows,
+      foreign or home (serving-loop.md §6 step 2).
       Foreign SCOPED reads are admitted on the reading actor's own READ
       grant in the target space's access list, the actor's entry or an
       `ANYONE` entry granting READ or more, and refused otherwise —

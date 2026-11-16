@@ -437,9 +437,9 @@ CREATE TABLE IF NOT EXISTS execution_lease (
 -- in place per (action, action_scope_key); never payloads, never per-run
 -- history (payloads or per-run history are the evidence log, FORBIDDEN).
 -- Rows are written INSIDE a wave's derived store transaction — never own
--- commits, never pushed to subscribers, never read at admission. Recovery
--- and warm start are the same move: activation re-marks the dirty frontier
--- by comparing recorded input seqs against current heads. The table starts
+-- commits, never pushed to subscribers, never read at admission. No code
+-- reads the rows: a fresh serving runtime starts every computation it
+-- materializes as not yet run (serving-loop.md §6). The table starts
 -- EMPTY: nothing is backfilled from the dropped observation tables (D10).
 -- The writer is scheduler-basis.ts (stage D), invoked inside a wave's
 -- derived store transaction; nothing invokes it in production until the
@@ -471,8 +471,8 @@ CREATE TABLE IF NOT EXISTS scheduler_basis (
                entity_space, entity, entity_scope_key)
 );
 -- Entity-keyed lookup mirror (implementation detail per serving-loop.md
--- §3b): activation's re-mark scan resolves "who read this doc" without a
--- full-table walk, the successor of idx_scheduler_read_index_lookup.
+-- §3b): resolves "who read this doc" without a full-table walk, the
+-- successor of idx_scheduler_read_index_lookup.
 CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
   ON scheduler_basis (branch, entity_space, entity, entity_scope_key);
 
@@ -2291,10 +2291,8 @@ WHERE substr(payload, 1, 5) <> 'fvj1:'
 // and is easy to leave behind). Satellites drop before the scheduler_
 // observation spine they FK into; scheduler_basis itself is created by INIT.
 // NO BACKFILL (D10): rows keyed by process_generation history cannot be
-// reinterpreted as overwrite-in-place basis state, so a store that had opted
-// into persistentSchedulerState loses warm start once — the first activation
-// re-marks everything dirty and recomputes, exactly what an absent index
-// means.
+// reinterpreted as overwrite-in-place basis state, and the table starts
+// empty, which costs nothing: no code reads it (serving-loop.md §6).
 const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
   database.transaction(() => {
     database.exec(`
@@ -4847,8 +4845,8 @@ export const applyWaveCommit = (
           );
         }
       }
-      // Basis rows are ADDRESSING (recovery's re-mark scan matches
-      // storage rows against these instance values), so their keys meet
+      // Basis rows are ADDRESSING (a reader matches storage rows against
+      // these instance values), so their keys meet
       // the same admission bar as annotated scope keys: a non-canonical
       // key would store rows no canonical key ever matches — a silent
       // liveness hole rather than a loud one. Refused up front, before

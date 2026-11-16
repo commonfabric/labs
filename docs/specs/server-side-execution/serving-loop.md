@@ -274,8 +274,8 @@ carries a piece's computeds into demand once the result document holds
 the link a schema crosses (protocol.md §4's later demand).)*
 The serving loop runs the STALE writers of demanded instances — a
 writer whose instance for a demanding pair never ran at its ratchet,
-or was dirtied since (§3b's per-instance clean bit; the basis index is
-the same predicate at activation) — and those runs' own logged reads
+or was dirtied since (§3b's per-instance clean bit) — and those runs'
+own logged reads
 make their inputs live and current in turn (§3b, one-run-late); a
 demanded instance's writers hold demand (a demand root, §8's liveness
 bracket) while any session tracks the instance and release it when
@@ -760,9 +760,7 @@ on activate(space):
   load graph structure for demanded values + queued events (§1 —
     no piece-start step; undemanded nodes stay unmaterialized)
   W = read watermark doc (0 if absent)
-  re-mark the dirty frontier from the basis index (§3b, §6):
-    a node is dirty iff a recorded input seq is behind that doc's head
-  subscribe(space, from = the head the index scan ran against)
+  subscribe(space, from = the store's head at activation)
   verify the initialization tenure remains live (else dispose and park)
 
 on commits [s..n] arriving (the wave's input batch; commits arriving
@@ -824,9 +822,9 @@ increments the exhaustion counter. A committed exhausted wave contains a
 consistent sealed snapshot; its `derivedThrough` is the prefix-coverage
 head it proved, or the current W when it proved none. Continuation waves
 carry the cascade as dirtiness; W jumps to the top of the pending input
-batch at true quiescence. Crash recovery stays sound because the basis
-index re-marks the truncated dirty frontier (§3b, §6) and memo hits
-suppress effect re-fires.
+batch at true quiescence. Crash recovery stays sound because a fresh
+runtime recomputes what demand reaches (§6) and memo hits suppress
+effect re-fires.
 
 PREFIX COVERAGE — how an exhausted cycle still moves W: input arriving
 while a settle runs lands through the settle's own input barrier, so under
@@ -1083,17 +1081,14 @@ executing:
   retirement).
 - Read sets are authoritative IN MEMORY. Two persisted forms are
   distinguished, and confusing them is how v1 died:
-  1. **The basis index (CORRECTNESS-BEARING for recovery)**: compact
-     rows `(action, entity, seq)` — "output current iff these inputs
-     unchanged since these seqs" — written INSIDE the wave's derived
-     transaction (never own commits; amplification untouched). In-wave
-     reads share the wave's own commit seq. Purpose: recovery and warm
-     start are the SAME move — activation re-marks the dirty frontier
-     by comparing recorded input seqs against current heads (§6), and
-     skips still-current nodes instead of recomputing the world.
-     Recovery DEPENDS on this index (own derived commits are echo-
-     skipped live, so commit replay cannot re-mark the frontier); what
-     keeps it on the right side of the no-payload lesson is its shape:
+  1. **The basis index**: compact rows `(action, entity, seq)` —
+     "output current iff these inputs unchanged since these seqs" —
+     written INSIDE the wave's derived transaction (never own commits;
+     amplification untouched). In-wave reads share the wave's own
+     commit seq. No code reads the rows: recovery starts every
+     computation a fresh runtime materializes as not yet run (§6). What
+     keeps the index on the right side of the no-payload lesson is its
+     shape:
      ids + seqs only, overwritten in place per (action, instance) —
      never payloads,
      never per-run history — and admission never reads it. It is NOT
@@ -1110,10 +1105,10 @@ executing:
      The test between the two: payloads or per-run history ⇒ evidence;
      ids + seqs, overwritten in place per (action, instance) ⇒ basis
      index.
-  W, `eventWatermark`, and the basis index are the correctness-bearing
-  persisted forms; commit REPLAY bears nothing — recovery never replays
-  (§6). Client reload needs none of this: every derived value is
-  committed, so client reload is read-and-render.
+  W and `eventWatermark` are the persisted forms recovery reads;
+  commit REPLAY bears nothing — recovery never replays (§6). Client
+  reload needs none of this: every derived value is committed, so
+  client reload is read-and-render.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables
@@ -1182,14 +1177,12 @@ Rules the shape carries, binding:
   that action in the SAME wave transaction, in both directions
   (narrower-than-stamp and broader-than-stamp), a real row set already
   recorded in the wave under a key never being overwritten by a
-  clearance. Without this the stranded key's rows survive forever and
-  §6's re-mark rule re-dirties a zombie at every activation — a
-  `space`-key zombie has no runnable identity, so it can never
-  overwrite its own rows and never stops being dirty; a departed
-  session's over-keyed rows have none either. Sound by monotonicity at
-  the top hop and within one principal (scopes.md §2 as amended), and
-  for the same reason overwriting is: the rows are a basis cache, not
-  history.
+  clearance. Without this the stranded key's rows survive forever — a
+  `space`-key zombie has no runnable identity, so no run ever
+  overwrites its rows; a departed session's over-keyed rows have none
+  either. Sound by monotonicity at the top hop and within one
+  principal (scopes.md §2 as amended), and for the same reason
+  overwriting is: the rows are a basis cache, not history.
 - **Interim retention is UNBOUNDED, and that is accepted** (S8).
   Rows at `space` and `user:<p>` keys are touched by no session
   retirement, and no execution-context bound exists —
@@ -1243,14 +1236,12 @@ list above; anything that re-derives that list must too.
 
 **NO BACKFILL** (D10). `scheduler_read_index` and
 `scheduler_action_state` rows are NOT migrated into
-`scheduler_basis`. The new table starts empty. A store that had
-opted into `persistentSchedulerState` therefore loses warm start
-ONCE, at the migration — acceptable because the index is a cache:
-the first activation after the migration re-marks everything dirty
-and recomputes, which is exactly what an absent index means (§6). A
-migration that reads old rows would have to reinterpret
-`process_generation` history as overwrite-in-place state, which is
-the reshaping this section already rejected.
+`scheduler_basis`. The new table starts empty, which costs nothing:
+no code reads the index, and a fresh runtime starts every
+computation it materializes as not yet run (§6). A migration that
+reads old rows would have to reinterpret `process_generation`
+history as overwrite-in-place state, which is the reshaping this
+section already rejected.
 
 **Old client / new server compat is already answered** (D11): a
 migrated server advertises no `persistentSchedulerState` capability
@@ -2134,8 +2125,9 @@ For `fetch*`, `generate*`, `sqlite*` (the §3.5 effectful class):
   inject the result-cell dirtiness IN-PROCESS, post-commit — the next
   wave consumes it directly. The subscription's copy of the completion
   commit is an ordinary self-echo and is skipped (§3). A crash between
-  completion commit and consumption is covered by recovery: the basis
-  index shows the consumers stale against the result doc's head (§6).
+  completion commit and consumption is covered by recovery: a fresh
+  runtime starts the consumers as not yet run, so they read the result
+  doc as it stands (§6).
 - **In-flight dedupe**: one outstanding effect per (key, result
   target) per space; the target includes its resolved user/session instance.
   A second miss on the same (key, target) attaches to the in-flight effect.
@@ -2297,17 +2289,15 @@ the durable rows of §5 carry APPENDS, never effect state).
 On activate after crash or deploy:
 
 1. Acquire lease, read watermark W.
-2. Re-mark the dirty frontier from the BASIS INDEX (§3b): a node is
-   dirty iff a recorded input seq is behind that doc's current head.
-   Recovery is index-guided re-marking, NOT commit replay — own derived
-   commits are echo-skipped live (§3), so replay could not re-mark the
-   frontier anyway. Subscribe from the head the index scan ran against;
-   later commits arrive as ordinary input. Rows whose `entity_space` is
-   FOREIGN (§3b's cross-space reads) are judged against that space's
-   own co-hosted engine's head (Phase 5); a failed foreign resolution
-   degrades to surfacing, never a wedge — correctness rides
-   recompute-on-demand either way.
-3. The first wave recomputes the dirty frontier; memo hits suppress
+2. Subscribe from the store's head at activation; commits after it
+   arrive as ordinary input (§3). A fresh runtime registers every
+   computation it materializes as not yet run, so the first wave runs
+   each one demand reaches, against the store as it stands. A runtime
+   kept from an idle park is taken only while the home space's head is
+   the one its tenure parked at and no change reached it since (§1,
+   "Parking"). Recovery is not commit replay: own derived commits are
+   echo-skipped live (§3).
+3. The first wave recomputes what demand reaches; memo hits suppress
    re-firing completed effects; memo misses re-fire effects whose
    results never landed. External effects are therefore at-least-once
    across crash or restart (the request may have left the process
@@ -2702,8 +2692,8 @@ by plan Phase 1 stage C, so a reappearing identifier is a revival, not
 a leftover.
 
 The intentional exception: the basis index tables (§3b — a NEW reduced
-schema of ids + seqs only, overwritten in place; correctness-bearing for
-recovery but never payloads, so NOT the evidence log).
+schema of ids + seqs only, overwritten in place, never payloads, so NOT
+the evidence log).
 
 One tripwire is positive rather than lexical (labs #5569): scheduler
 liveness is maintained incrementally, and NO global rebuild runs on

@@ -3913,7 +3913,7 @@ export class WaveAccumulator
       // node that discovered `user` — the RAGGED case (narrowing below
       // the space→user hop is per principal, scopes.md §2 as amended
       // 2026-08-16): a departed session then leaves rows no run can ever
-      // overwrite, a zombie the re-mark re-dirties at every activation.
+      // overwrite.
       // The stamped key and every BROADER key on the run's own chain
       // (`space`, and `user:<p>` under a session instance) that differ
       // from the true key are cleared with an EMPTY replacement in the
