@@ -74,6 +74,14 @@ describe("console/src/index-view", () => {
     );
   });
 
+  it("renders the owner's DID for a deployment that predates handles", () => {
+    const view = new TestIndexView();
+    const { handle: _handle, ...legacy } = listed({ ownerDid: "did:key:zOld" });
+    view.patterns = [legacy];
+
+    expect(templateText(view.view())).toContain("did:key:zOld");
+  });
+
   it("renders each pattern's listing state and bucket in its own column", () => {
     const view = new TestIndexView();
     view.patterns = [

@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import { PatternIndexStore } from "../src/store.ts";
+import {
+  findIndexedPiece,
+  PatternIndexStore,
+  patternIndexStoreDir,
+  patternIndexStoreRoot,
+} from "../src/store.ts";
 
 const signer = await Identity.fromPassphrase("store signer");
 
@@ -65,6 +70,32 @@ describe("store", () => {
       expect(await store.sourceOf(join(dir, "src", "main.tsx"))).toBe("id-1");
       expect(await store.sourceOf(join(dir, "src", "other.tsx")))
         .toBeUndefined();
+    });
+  });
+
+  describe("patternIndexStoreDir()", () => {
+    it("returns one directory per index host under the store root", () => {
+      const env = (key: string) =>
+        key === "CF_PATTERN_INDEX_HOME" ? "/state/index" : undefined;
+      expect(patternIndexStoreRoot(env)).toBe("/state/index");
+      expect(patternIndexStoreDir("https://index.test:8443/api", env)).toBe(
+        "/state/index/index.test:8443",
+      );
+    });
+  });
+
+  describe("findIndexedPiece()", () => {
+    it("returns the store of whichever index recorded the piece", async () => {
+      const staging = new PatternIndexStore(join(dir, "staging.test"));
+      await new PatternIndexStore(join(dir, "index.test")).recordIndexedPiece(
+        "fid1:other",
+        "id-other",
+      );
+      await staging.recordIndexedPiece("fid1:piece", "id-1");
+      const found = await findIndexedPiece(dir, "fid1:piece");
+      expect(found?.patternId).toBe("id-1");
+      expect(found?.store.dir).toBe(staging.dir);
+      expect(await findIndexedPiece(dir, "fid1:none")).toBeUndefined();
     });
   });
 });

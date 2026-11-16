@@ -30,8 +30,12 @@ export interface IssueIndexDelegationOptions {
   kind: IndexDelegationKind;
   baseUrl: string;
 
-  /** The `cf` identity, used where the root is not kept on this machine. */
-  identity: Identity<DIDKey>;
+  /**
+   * The `cf` identity: the root itself after a root move, or the key that
+   * issues behind its own chain where the root is kept elsewhere. Not
+   * needed where the root key is kept on this machine.
+   */
+  identity?: Identity<DIDKey>;
 
   /** The DID the chain ends at. */
   to: string;
@@ -73,6 +77,8 @@ export async function issueIndexDelegation(
   const kept = await store.rootKey();
   const root = kept !== undefined && kept.did() === membership.root
     ? kept
+    : options.identity?.did() === membership.root
+    ? options.identity
     : undefined;
   if (options.kind === "root-move") {
     if (root === undefined) {
@@ -95,18 +101,24 @@ export async function issueIndexDelegation(
       expires: move.payload.exp,
     };
   }
+  const issuer = root ?? options.identity;
+  if (issuer === undefined) {
+    throw new DelegationError(
+      "The root is not kept on this machine; name the identity that issues behind its chain with --identity",
+    );
+  }
   const held = root !== undefined
     ? []
-    : await chainForSigner(store, options.identity, now);
-  if (root === undefined && held === undefined) {
+    : await chainForSigner(store, issuer, now);
+  if (held === undefined) {
     throw new DelegationError(
-      `${options.identity.did()} holds no chain to issue onward from`,
+      `${issuer.did()} holds no chain to issue onward from`,
     );
   }
   const chain = await issueIndexChain({
-    issuer: root ?? options.identity,
+    issuer,
     to,
-    held: held ?? [],
+    held,
     nowSeconds: now,
     ...(options.expiresAt === undefined
       ? {}
@@ -117,6 +129,6 @@ export async function issueIndexDelegation(
     chain,
     command: INDEX_COMMAND,
     root: checked.root,
-    expires: checked.signerLinkExpires,
+    expires: checked.expires,
   };
 }

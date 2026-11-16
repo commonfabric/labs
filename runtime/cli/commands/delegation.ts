@@ -118,15 +118,12 @@ async function issueForIndex(
   // A space set by CF_SPACE is ignored rather than refused: an index
   // delegation is about the membership, and the environment may well name a
   // space for the person's other commands.
-  if (options.identity === undefined) {
-    throw new ValidationError(
-      "Name the identity cf signs with: pass --identity <keyfile>, or set CF_IDENTITY.",
-    );
-  }
   const issued = await issueIndexDelegation({
     kind,
     baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
-    identity: await loadIdentity(options.identity),
+    ...(options.identity === undefined
+      ? {}
+      : { identity: await loadIdentity(options.identity) }),
     to: options.to,
     ...(options.expiresIn === undefined
       ? {}

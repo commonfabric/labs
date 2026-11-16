@@ -1465,9 +1465,10 @@ and exact-ID reads retain their individual generation records. Event badges
 count only that generation's own events, one badge per event type; the index
 reports how many of each type a pattern collected, not who recorded them. When
 the index supplies inherited evidence, the score separately identifies its
-inherited portion, predecessor, and publication cutoff. `getPattern` is called
-without `includeSource`: this surface shows metadata, schemas, dependencies and
-event counts, and a pattern's source is read through the CLI.
+inherited portion, predecessor, and publication cutoff. Event counts come from
+the listing. Opening a pattern calls `getPattern` without `includeSource` for
+its metadata, schemas and dependencies; a pattern's source is read through the
+CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 

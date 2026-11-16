@@ -83,7 +83,9 @@ export const mineRows = async (
 ): Promise<MinePatternRow[]> => {
   const lineages = new Map<string, PatternIndexListedPattern[]>();
   for (const pattern of patterns) {
-    if (pattern.mine === false) continue;
+    // A deployment that predates `mine` answers every pattern; only one
+    // marked as the caller's is.
+    if (pattern.mine !== true) continue;
     const key = pattern.lineageId ?? pattern.patternId;
     lineages.set(key, [...(lineages.get(key) ?? []), pattern]);
   }

@@ -107,9 +107,13 @@ describe("pattern-mine", () => {
       expect(failed.next).toContain("admin re-run");
     });
 
-    it("leaves out rows the index marks as someone else's", async () => {
+    it("leaves out rows the index marks as someone else's, or does not mark as the caller's", async () => {
+      const { mine: _mine, ...unmarked } = row({ patternId: "y" });
       expect(
-        await mineRows([row({ patternId: "x", mine: false })], noEntry),
+        await mineRows(
+          [row({ patternId: "x", mine: false }), unmarked],
+          noEntry,
+        ),
       ).toEqual([]);
     });
   });

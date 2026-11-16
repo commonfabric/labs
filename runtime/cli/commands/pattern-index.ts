@@ -68,7 +68,9 @@ export const joinReport = (result: JoinResult): string =>
     result.joined
       ? `Joined the pattern index as ${result.handle}.`
       : `Already a member of the pattern index as ${result.handle}.`,
-    `Back up ${result.storeDir}: it holds the key your membership is rooted at, and with it your standing on the index.`,
+    result.rootKeptHere
+      ? `Back up ${result.storeDir}: it holds the key your membership is rooted at, and with it your standing on the index.`
+      : `This machine holds a chain from your membership's root, not the root itself; back up the root where it is kept.`,
     `Next: ${cliText("cf pattern publish <entry file>")}`,
   ].join("\n");
 

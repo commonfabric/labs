@@ -24,13 +24,11 @@ import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
+import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
 import {
-  openPatternIndexClient,
-  resolvePatternIndexUrl,
-} from "@commonfabric/pattern-index/access";
-import {
-  PatternIndexStore,
-  patternIndexStoreDir,
+  findIndexedPiece,
+  type PatternIndexStore,
+  patternIndexStoreRoot,
 } from "@commonfabric/pattern-index/store";
 import {
   ownerReleaseByIntentRequest,
@@ -2735,11 +2733,10 @@ async function recordSavedIndexSource(
   written: readonly string[],
 ): Promise<void> {
   try {
-    const store = new PatternIndexStore(
-      patternIndexStoreDir(resolvePatternIndexUrl(undefined)),
-    );
-    const patternId = await store.indexedPiece(pieceId);
-    if (patternId !== undefined) await store.recordSource(written, patternId);
+    const found = await findIndexedPiece(patternIndexStoreRoot(), pieceId);
+    if (found !== undefined) {
+      await found.store.recordSource(written, found.patternId);
+    }
   } catch (error) {
     console.error(
       `Could not record where this source came from: ${describeFailure(error)}`,

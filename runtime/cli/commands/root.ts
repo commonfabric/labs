@@ -220,7 +220,7 @@ function envStatus(): string {
     // here goes wrong without going missing.
     lines.push(
       `  CF_SPACE    = ${space} (set, no need to pass --space on cell, ` +
-        `piece, wish, acl, deps, space recreate-root)`,
+        `piece, pattern publish, wish, acl, deps, space recreate-root)`,
     );
   }
   return lines.join("\n");
@@ -238,9 +238,9 @@ FIRST TIME SETUP:
   cf id new > claude.key            # Create identity key
   export CF_IDENTITY=./claude.key   # Set default identity
   export CF_API_URL=http://localhost:${ports.toolshed}  # Set default API URL
-  export CF_SPACE=my-space          # Default space for cell, piece, wish, acl,
-                                    # deps and space recreate-root
-                                    # (--space overrides)
+  export CF_SPACE=my-space          # Default space for cell, piece, pattern
+                                    # publish, wish, acl, deps and space
+                                    # recreate-root (--space overrides)
 
 SHELL COMPLETION:
   source <(cf completion zsh)      # add to ~/.zshrc  (bash: completion bash)

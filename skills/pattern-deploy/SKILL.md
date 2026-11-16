@@ -60,19 +60,23 @@ deno task cf piece new patterns/[name]/main.tsx --test patterns/[name]/main.test
 # Output: Created piece bafyreia... <- SAVE this piece ID
 ```
 
-**Publish it to the pattern index** once it works, so others can find it. Once
-per machine, the person joins with the invite link they were given
-(`deno task cf index join <link> --identity cf.key`). Then:
+**Publish it to the pattern index** once it works, so others can find it, with
+the same identity, API URL, space and packaging flags (`--test`, `--datafile`)
+it was deployed with, so the published id is the deployed one:
 
 ```bash
-deno task cf pattern publish patterns/[name]/main.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
+deno task cf pattern publish patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
 ```
 
-It checks the pattern for personal details first and may rewrite it into a
-general version (specific values lifted into arguments); when it does, show the
-person `git diff` and its `localCheck.changes`. Publish again after each change
-worth sharing: it records the new version as a successor of the last. The
-report's `next` says how to open it in a loom.
+The person joins once by piping their invite link to `cf index join` (the link
+carries a secret; keep it off the command line). A second machine does not
+redeem another invite: the first runs `cf delegation issue --index --to <DID>`
+and the second `cf index join --chain <file>`. Publish checks the pattern for
+personal details and may rewrite committed files into a general version; when
+`localCheck.status` is `rewritten`, show the person `git diff`.
+`outcome: "blocked"` published nothing, and `next` says why. Republishing from
+the same entry file records a new version of the last one. The rest is in
+`runtime/cli/README.md`, "Publishing to the pattern index".
 
 **Update deployed pattern (all subsequent iterations):**
 

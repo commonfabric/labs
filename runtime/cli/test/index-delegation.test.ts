@@ -111,6 +111,47 @@ describe("index-delegation", () => {
       })).rejects.toThrow("Only the root moves the root");
     });
 
+    it("issues from the kept root without an identity", async () => {
+      const root = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: root.did(),
+      });
+      const issued = await issueIndexDelegation({
+        kind: "member",
+        baseUrl: BASE,
+        to: loom.did(),
+        store,
+      });
+      expect(issued.root).toBe(root.did());
+    });
+
+    it("issues from the identity when a root move made it the root", async () => {
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: cfKey.did(),
+      });
+      const issued = await issueIndexDelegation({
+        kind: "root-move",
+        baseUrl: BASE,
+        identity: cfKey,
+        to: loom.did(),
+        store,
+      });
+      const move = await decodeDelegation(issued.chain[0]);
+      expect(move.payload.iss).toBe(cfKey.did());
+      const member = await issueIndexDelegation({
+        kind: "member",
+        baseUrl: BASE,
+        identity: cfKey,
+        to: loom.did(),
+        store,
+      });
+      expect(member.chain).toHaveLength(1);
+    });
+
     it("throws before any join", async () => {
       await expect(issueIndexDelegation({
         kind: "member",

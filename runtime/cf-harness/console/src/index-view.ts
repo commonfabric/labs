@@ -216,8 +216,11 @@ export class ConsoleIndexView extends LitElement {
    * Who published a pattern: the pseudonym the index gives its author, and
    * `you` beside it when the caller is that author.
    */
-  #owner(entry: { handle?: string; mine?: boolean }): TemplateResult {
-    return html`${this.#idCell(entry.handle, 14)}${
+  #owner(
+    entry: { handle?: string; ownerDid?: string; mine?: boolean },
+  ): TemplateResult {
+    // A deployment that predates handles names the author by DID instead.
+    return html`${this.#idCell(entry.handle ?? entry.ownerDid, 14)}${
       entry.mine
         ? html`
           <span class="index-mine">you</span>

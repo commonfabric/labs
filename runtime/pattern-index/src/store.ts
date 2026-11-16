@@ -68,35 +68,57 @@ const MEMBERSHIP = "membership.json";
 const PUBLISHED = "published.json";
 
 /**
- * The directory the store for the index at `baseUrl` lives in, from the
- * environment `env` reads.
+ * The directory every index's store lives under, one subdirectory per index
+ * host, from the environment `env` reads.
  *
  * @throws Error when neither `CF_PATTERN_INDEX_HOME`, `XDG_STATE_HOME` nor
  *   `HOME` is set.
  */
-export const patternIndexStoreDir = (
-  baseUrl: string,
+export const patternIndexStoreRoot = (
   env: (key: string) => string | undefined = (key) => Deno.env.get(key),
 ): string => {
-  const host = new URL(baseUrl).host;
   const explicit = env("CF_PATTERN_INDEX_HOME");
-  if (explicit) return resolve(explicit, host);
+  if (explicit) return resolve(explicit);
   const state = env("XDG_STATE_HOME");
-  if (state) return resolve(state, "commonfabric", "pattern-index", host);
+  if (state) return resolve(state, "commonfabric", "pattern-index");
   const home = env("HOME");
   if (home) {
-    return resolve(
-      home,
-      ".local",
-      "state",
-      "commonfabric",
-      "pattern-index",
-      host,
-    );
+    return resolve(home, ".local", "state", "commonfabric", "pattern-index");
   }
   throw new Error(
     "No place to keep pattern index membership: set CF_PATTERN_INDEX_HOME, XDG_STATE_HOME or HOME.",
   );
+};
+
+/** The directory the store for the index at `baseUrl` lives in. */
+export const patternIndexStoreDir = (
+  baseUrl: string,
+  env: (key: string) => string | undefined = (key) => Deno.env.get(key),
+): string => join(patternIndexStoreRoot(env), new URL(baseUrl).host);
+
+/**
+ * The store, among those under `root`, that recorded the piece `pieceId` as
+ * created from a published pattern, and that pattern; `undefined` for none.
+ * A piece remembers the index it came from only through this record.
+ */
+export const findIndexedPiece = async (
+  root: string,
+  pieceId: string,
+): Promise<{ store: PatternIndexStore; patternId: string } | undefined> => {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = await Array.fromAsync(Deno.readDir(root));
+  } catch (error) {
+    if (isNotFound(error)) return undefined;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory) continue;
+    const store = new PatternIndexStore(join(root, entry.name));
+    const patternId = await store.indexedPiece(pieceId);
+    if (patternId !== undefined) return { store, patternId };
+  }
+  return undefined;
 };
 
 const isNotFound = (error: unknown): boolean =>

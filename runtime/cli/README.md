@@ -3376,10 +3376,12 @@ has not changed since it was read (`--allow-dirty` waives the git checks). The
 command then names the kinds of change and the files, never a value, and says to
 review with `git diff`. When a rewrite passes but cannot be written, nothing is
 published and the command exits 1, saying what to do. When no rewrite passes,
-the pattern is published as it is, with the findings shown, and the index's own
-check keeps it out of search until they are fixed. When the LLM call fails, the
-local check is skipped with one line saying so; the index checks every listing
-request either way. `--skip-local-check` skips it on purpose.
+the pattern is published as it is, with the findings shown. The index's own
+check then holds it unlisted until they are fixed: it is in no one else's search
+or listing, and only its author and admins see it listed, though anyone given
+its id can still open it, as with any unlisted pattern. When the LLM call fails,
+the local check is skipped with one line saying so; the index checks every
+listing request either way. `--skip-local-check` skips it on purpose.
 
 A publish names the id last published from the same entry file on this machine
 as its predecessor (`priorPatternId`), so the new version keeps the old one's
