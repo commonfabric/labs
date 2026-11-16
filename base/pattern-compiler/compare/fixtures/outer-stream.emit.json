@@ -65,29 +65,42 @@
               },
               "name": "inc",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "0",
-                  "props",
-                  "onClick"
-                ],
-                [
-                  "$UI",
-                  "children",
-                  "1",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ],
-                [
-                  "$UI",
-                  "children",
-                  "2",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "0",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": []
+                },
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "1",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "every"
+                    }
+                  ]
+                },
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "2",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

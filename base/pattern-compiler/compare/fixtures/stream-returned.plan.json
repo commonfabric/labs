@@ -25,9 +25,12 @@
               },
               "name": "inc",
               "result": [
-                [
-                  "inc"
-                ]
+                {
+                  "path": [
+                    "inc"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

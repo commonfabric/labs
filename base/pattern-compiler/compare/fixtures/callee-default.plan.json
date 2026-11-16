@@ -199,9 +199,12 @@
               },
               "name": "append",
               "result": [
-                [
-                  "append"
-                ]
+                {
+                  "path": [
+                    "append"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -411,10 +414,13 @@
               },
               "name": "append",
               "result": [
-                [
-                  "marked",
-                  "append"
-                ]
+                {
+                  "path": [
+                    "marked",
+                    "append"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -445,10 +451,13 @@
               },
               "name": "append",
               "result": [
-                [
-                  "markedDefaulted",
-                  "append"
-                ]
+                {
+                  "path": [
+                    "markedDefaulted",
+                    "append"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

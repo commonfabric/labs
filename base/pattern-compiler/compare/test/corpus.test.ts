@@ -122,16 +122,24 @@ describe("eventOrder", () => {
     collections: [],
     outputs: [],
     bindings: [
-      { name: "outer", handler: { body: 0 }, result: [["a"]] },
+      {
+        name: "outer",
+        handler: { body: 0 },
+        result: [{ path: ["a"], stars: [] }],
+      },
       {
         name: "inner",
         handler: { body: 1 },
-        result: [["b"]],
+        result: [{ path: ["b"], stars: [] }],
         within: [{ element: 0 }],
       },
       { name: "no path", handler: { body: 2 } },
-      { name: "later", handler: { body: 3 }, result: [["c"]] },
-      { name: "no handler", result: [["d"]] },
+      {
+        name: "later",
+        handler: { body: 3 },
+        result: [{ path: ["c"], stars: [] }],
+      },
+      { name: "no handler", result: [{ path: ["d"], stars: [] }] },
     ],
   };
 

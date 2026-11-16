@@ -95,11 +95,18 @@
               },
               "name": "pick",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "pick"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "pick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -155,11 +162,18 @@
               },
               "name": "finish",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "finish"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "finish"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -189,11 +203,18 @@
               },
               "name": "finishAndRename",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "finishAndRename"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "finishAndRename"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -223,11 +244,18 @@
               },
               "name": "update",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "update"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "update"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -257,11 +285,18 @@
               },
               "name": "toggle",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "toggle"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "toggle"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -291,11 +326,18 @@
               },
               "name": "choose",
               "result": [
-                [
-                  "words",
-                  "*",
-                  "choose"
-                ]
+                {
+                  "path": [
+                    "words",
+                    "*",
+                    "choose"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -338,9 +380,12 @@
               },
               "name": "reverse",
               "result": [
-                [
-                  "reverse"
-                ]
+                {
+                  "path": [
+                    "reverse"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -379,9 +424,12 @@
               },
               "name": "removeFirst",
               "result": [
-                [
-                  "removeFirst"
-                ]
+                {
+                  "path": [
+                    "removeFirst"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -420,9 +468,12 @@
               },
               "name": "addTag",
               "result": [
-                [
-                  "addTag"
-                ]
+                {
+                  "path": [
+                    "addTag"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

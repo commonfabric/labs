@@ -16,9 +16,12 @@
               },
               "name": "select",
               "result": [
-                [
-                  "select"
-                ]
+                {
+                  "path": [
+                    "select"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

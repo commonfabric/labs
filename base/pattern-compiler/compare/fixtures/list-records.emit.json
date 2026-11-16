@@ -75,11 +75,18 @@
               },
               "name": "go",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "go"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "go"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -122,9 +129,12 @@
               },
               "name": "add",
               "result": [
-                [
-                  "add"
-                ]
+                {
+                  "path": [
+                    "add"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -150,9 +160,12 @@
               },
               "name": "append",
               "result": [
-                [
-                  "append"
-                ]
+                {
+                  "path": [
+                    "append"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -178,9 +191,12 @@
               },
               "name": "removeLast",
               "result": [
-                [
-                  "removeLast"
-                ]
+                {
+                  "path": [
+                    "removeLast"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -206,9 +222,12 @@
               },
               "name": "name",
               "result": [
-                [
-                  "name"
-                ]
+                {
+                  "path": [
+                    "name"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

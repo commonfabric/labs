@@ -38,11 +38,14 @@
               },
               "name": "onClick",
               "result": [
-                [
-                  "$UI",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

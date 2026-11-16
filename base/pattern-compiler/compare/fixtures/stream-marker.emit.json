@@ -102,25 +102,39 @@
               },
               "name": "inc",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "0",
-                  "props",
-                  "onClick"
-                ],
-                [
-                  "$UI",
-                  "children",
-                  "1",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ],
-                [
-                  "inc"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "0",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": []
+                },
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "1",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "index": 1,
+                      "kind": "member"
+                    }
+                  ]
+                },
+                {
+                  "path": [
+                    "inc"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -146,15 +160,22 @@
               },
               "name": "pick",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "1",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "1",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -197,15 +218,22 @@
               },
               "name": "pick",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "2",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "2",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -248,15 +276,22 @@
               },
               "name": "pick",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "3",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "3",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {

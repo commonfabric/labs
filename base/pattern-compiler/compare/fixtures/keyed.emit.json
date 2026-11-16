@@ -48,9 +48,12 @@
               },
               "name": "pin",
               "result": [
-                [
-                  "pin"
-                ]
+                {
+                  "path": [
+                    "pin"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -76,9 +79,12 @@
               },
               "name": "unpin",
               "result": [
-                [
-                  "unpin"
-                ]
+                {
+                  "path": [
+                    "unpin"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -104,9 +110,12 @@
               },
               "name": "draft",
               "result": [
-                [
-                  "draft"
-                ]
+                {
+                  "path": [
+                    "draft"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

@@ -1103,12 +1103,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             }
             Expression::ArrayExpression(array) => {
                 let mut members: Vec<String> = Vec::new();
+                let mut spreads = false;
                 for element in &array.elements {
                     match element {
                         ArrayExpressionElement::Elision(_) => members.push(String::new()),
                         ArrayExpressionElement::SpreadElement(spread) => {
                             let code = self.render(&spread.argument, Want::Use);
-                            members.push(format!("...({code} ?? [])"));
+                            members.push(format!("$rt.spread({code})"));
+                            spreads = true;
                         }
                         element => {
                             if let Some(element) = element.as_expression() {
@@ -1117,7 +1119,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         }
                     }
                 }
-                Some(format!("[{}]", members.join(", ")))
+                // An array with a spread is assembled by the runtime,
+                // which then knows the entry each position came from (PL
+                // §1.1, "What a `*` of a result path stands for").
+                Some(if spreads {
+                    format!("$rt.list([{}])", members.join(", "))
+                } else {
+                    format!("[{}]", members.join(", "))
+                })
             }
             Expression::ConditionalExpression(conditional) => {
                 let test = self.render(&conditional.test, Want::Use);
@@ -1743,7 +1752,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     let children =
                         self.in_cone(cone, |rewriter| rewriter.jsx_children(&element.children));
                     self.generator.hoist(format!(
-                        "$rt.value({value}, ($h) => ([{}].flat()));",
+                        "$rt.value({value}, ($h) => ($rt.children([{}])));",
                         children.join(", ")
                     ));
                     self.generator.registered_values.push(value);
@@ -1880,7 +1889,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 }
                 JSXChild::Spread(spread) => {
                     let code = self.render(&spread.expression, Want::Use);
-                    written.push(format!("...({code} ?? [])"));
+                    written.push(format!("$rt.spread({code})"));
                 }
             }
         }

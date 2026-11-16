@@ -16,13 +16,20 @@
               },
               "name": "open",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {

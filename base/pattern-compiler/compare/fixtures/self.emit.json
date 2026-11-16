@@ -54,9 +54,12 @@
               },
               "name": "keep",
               "result": [
-                [
-                  "keep"
-                ]
+                {
+                  "path": [
+                    "keep"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

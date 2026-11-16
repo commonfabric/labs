@@ -80,11 +80,18 @@
               },
               "name": "note",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "note"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "note"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -114,11 +121,18 @@
               },
               "name": "note",
               "result": [
-                [
-                  "labels",
-                  "*",
-                  "note"
-                ]
+                {
+                  "path": [
+                    "labels",
+                    "*",
+                    "note"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -148,9 +162,12 @@
               },
               "name": "add",
               "result": [
-                [
-                  "add"
-                ]
+                {
+                  "path": [
+                    "add"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -176,9 +193,12 @@
               },
               "name": "hide",
               "result": [
-                [
-                  "hide"
-                ]
+                {
+                  "path": [
+                    "hide"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

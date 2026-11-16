@@ -134,8 +134,82 @@ export type Plan = {
        */
       default?: unknown;
     }[];
-    result?: string[][];
+    /**
+     * The paths of the result at which the instance stores a link to the
+     * binding's stream, each with what its `*` stand for (PL §1.1,
+     * `ResultPath`).
+     */
+    result?: ResultPath[];
   }[];
+};
+
+/**
+ * What one `*` of a path of `Binding.result` stands for (PL §1.1,
+ * `ResultStar`; ruling Z21): the positions of a collection for whose
+ * keys the binding has an `element` step, every position of a collection
+ * whose callback writes the stream, the one position of a member written
+ * after a spread, with the number of entries written before it, or the
+ * one element of a collection that holds the stream inside its value.
+ */
+export type ResultStar =
+  | { kind: "element" | "every" | "inside" }
+  | { kind: "member"; index: number };
+
+/** One path of `Binding.result`, with one entry of `stars` for each `*`. */
+export type ResultPath = { path: string[]; stars: ResultStar[] };
+
+/**
+ * Where a position of an array the executor assembled came from: the
+ * entry the array was written with, counted over its members and its
+ * spreads, whether the position is an element of what a spread entry
+ * holds, and for an element of the result of a per-element construct
+ * the element's key.
+ */
+export type Origin = { entry: number; spread: boolean; key?: string };
+
+/** The origin of each position of an array the executor assembled. */
+const origins = new WeakMap<object, readonly Origin[]>();
+
+/** An entry of an array that is written as a spread. */
+class Spread {
+  constructor(readonly values: readonly unknown[]) {}
+}
+
+/**
+ * The array a list of written entries stands for: a member at one
+ * position, and what a spread holds at one position each. With
+ * `children`, an entry that is an array is a spread, as among the
+ * children of a view node. The array has the origin of each position: a
+ * position spread from an array that has origins has the origin it has
+ * there.
+ */
+const assembledFrom = (
+  entries: readonly unknown[],
+  children: boolean,
+): unknown[] => {
+  if (origins.has(entries)) return entries as unknown[];
+  const flat: unknown[] = [];
+  const from: Origin[] = [];
+  for (let entry = 0; entry < entries.length; entry++) {
+    const written = entries[entry];
+    const values = written instanceof Spread
+      ? written.values
+      : children && Array.isArray(written)
+      ? written
+      : undefined;
+    if (values === undefined) {
+      flat.push(written);
+      from.push({ entry, spread: false });
+      continue;
+    }
+    const inner = origins.get(values);
+    values.forEach((value, index) => {
+      flat.push(value);
+      from.push(inner?.[index] ?? { entry, spread: true });
+    });
+  }
+  origins.set(flat, from);
+  return flat;
 };
 
 /** The value code of a plan, as the crate's `emit` command prints it. */
@@ -289,14 +363,71 @@ const declaresHandle = (schema: Schema | undefined, depth: number): boolean => {
 };
 
 /**
- * Whether a path `Binding.result` lists covers a position of the result:
- * segment for segment, with `*` for any element of a collection.
+ * Whether a path with `*` names a position: segment for segment, with
+ * `*` for any index.
  */
-const coversPosition = (listed: readonly string[], path: readonly string[]) =>
+const namesPosition = (listed: readonly string[], path: readonly string[]) =>
   listed.length === path.length &&
   listed.every((segment, index) =>
     segment === path[index] || (segment === "*" && /^\d+$/.test(path[index]))
   );
+
+/**
+ * Whether a path `Binding.result` lists covers a position of the result
+ * for a marker (PL §1.1, "What a `*` of a result path stands for"):
+ * segment for segment, and at each `*` the position has to be of the
+ * kind the path states. `trail` has the origin of each position of
+ * `path` that is a position of an array the executor assembled, and
+ * `keys` the keys of the marker's stream, one for each `element` step
+ * of its binding.
+ *
+ * - `element`: an element of a collection, at the position that holds
+ *   the key of the marker for that step.
+ * - `every` and `inside`: an element of a collection, and no member
+ *   written beside it.
+ * - `member`: the member written at the stated entry, and no element of
+ *   a collection spread before it.
+ */
+export const coversPosition = (
+  listed: ResultPath,
+  path: readonly string[],
+  trail: readonly (Origin | undefined)[],
+  keys: readonly string[],
+): boolean => {
+  if (listed.path.length !== path.length) return false;
+  let star = 0;
+  let step = 0;
+  for (let index = 0; index < path.length; index++) {
+    const segment = listed.path[index];
+    if (segment !== "*") {
+      if (segment !== path[index]) return false;
+      continue;
+    }
+    if (!/^\d+$/.test(path[index])) return false;
+    const stated = listed.stars[star];
+    star += 1;
+    const origin = trail[index];
+    if (stated === undefined || origin === undefined) return false;
+    switch (stated.kind) {
+      case "element": {
+        const key = keys[step];
+        step += 1;
+        if (!origin.spread || key === undefined || origin.key !== key) {
+          return false;
+        }
+        break;
+      }
+      case "every":
+      case "inside":
+        if (!origin.spread) return false;
+        break;
+      case "member":
+        if (origin.spread || origin.entry !== stated.index) return false;
+        break;
+    }
+  }
+  return true;
+};
 
 /**
  * A value in stored form with `value` at a path of it, and with nothing
@@ -760,7 +891,14 @@ export class Host {
     // A marker is read through by nothing: it stays the marker.
     if (value instanceof StreamMarker) return value;
     if (value instanceof Handle) return value.get();
-    if (Array.isArray(value)) return value.map((member) => this.v(member));
+    if (Array.isArray(value)) {
+      // The copy is the array the executor assembled, position for
+      // position.
+      const copy = value.map((member) => this.v(member));
+      const from = origins.get(value);
+      if (from !== undefined) origins.set(copy, from);
+      return copy;
+    }
     if (isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [name, this.v(member)]),
@@ -1197,6 +1335,19 @@ export class Instance {
       or: (value: unknown, fallback: () => unknown) =>
         value === undefined ? fallback() : value,
       h: viewNode,
+      // An array written with a spread, and the children of a tag that
+      // names a pattern: the executor assembles them, and has the entry
+      // each position came from (ruling Z21).
+      spread: (value: unknown) =>
+        new Spread(
+          Array.isArray(value)
+            ? value
+            : value === undefined || value === null
+            ? []
+            : Array.from(value as Iterable<unknown>),
+        ),
+      list: (entries: unknown[]) => assembledFrom(entries, false),
+      children: (entries: unknown[]) => assembledFrom(entries, true),
     };
   }
 
@@ -1995,17 +2146,30 @@ export class Instance {
         const holds = (index: number) => Boolean(host.v(results[index]));
         const numbered = (members: Omit<Element, "index">[]) =>
           members.map((member, index) => ({ ...member, index }));
+        // Each position of the assembled array is an element of the
+        // collection, with its key.
+        const keyed = (array: unknown[]) => {
+          origins.set(
+            array,
+            (host.members ?? []).map(({ key }) => ({
+              entry: 0,
+              spread: true,
+              key,
+            })),
+          );
+          return array;
+        };
         switch (record.construct) {
           case "map":
             host.members = numbered(elements.map(({ key }) => ({
               key,
               source: { entry: this.#perElement(collection, key), at: [] },
             })));
-            return results;
+            return keyed(results);
           case "filter": {
             const kept = elements.filter((_, index) => holds(index));
             host.members = numbered(kept);
-            return kept.map(given);
+            return keyed(kept.map(given));
           }
           case "flatMap": {
             const members: Omit<Element, "index">[] = [];
@@ -2028,7 +2192,7 @@ export class Instance {
               return segment;
             });
             host.members = numbered(members);
-            return flat;
+            return keyed(flat);
           }
           case "some":
             return elements.some((_, index) => holds(index));
@@ -2208,7 +2372,8 @@ export class Instance {
    * Checks the markers in the value of the result against
    * `Binding.result` (PL §1.1, "The listed paths are complete"): each
    * marker has to be at a position that a listed path of its binding
-   * covers. A `*` of a listed path matches any element at that position.
+   * covers. A `*` of a listed path matches a position of the kind the
+   * path states for it (`coversPosition`; ruling Z21).
    * A listed path below a conditional is listed whichever branch is
    * selected, so it matches under either selection. The check is of the
    * positions of the result alone: a reference in the value is not
@@ -2221,22 +2386,29 @@ export class Instance {
     const known = this.#checked.get(entry);
     if (known !== undefined) return known;
     const found: { binding: number; path: string[] }[] = [];
-    const walk = (value: unknown, path: string[]) => {
+    const walk = (
+      value: unknown,
+      path: string[],
+      trail: (Origin | undefined)[],
+    ) => {
       if (value instanceof StreamMarker) {
-        const { binding } = streamOf(value);
+        const { binding, keys } = streamOf(value);
         const listed = this.plan.bindings[binding]?.result ?? [];
-        if (!listed.some((entry) => coversPosition(entry, path))) {
+        if (!listed.some((entry) => coversPosition(entry, path, trail, keys))) {
           found.push({ binding, path });
         }
       } else if (Array.isArray(value)) {
-        value.forEach((member, index) => walk(member, [...path, `${index}`]));
+        const from = origins.get(value);
+        value.forEach((member, index) =>
+          walk(member, [...path, `${index}`], [...trail, from?.[index]])
+        );
       } else if (isRecord(value)) {
         for (const [name, member] of Object.entries(value)) {
-          walk(member, [...path, name]);
+          walk(member, [...path, name], [...trail, undefined]);
         }
       }
     };
-    walk(entry.value, []);
+    walk(entry.value, [], []);
     const failed: string[][] = [];
     for (const position of found) {
       const holder = this.#holderOf(position.path);
@@ -2271,7 +2443,7 @@ export class Instance {
     this.plan.outputs.forEach((output, index) => {
       if (
         !output.kept || output.path.length === 0 ||
-        !coversPosition(output.path, path.slice(0, output.path.length)) ||
+        !namesPosition(output.path, path.slice(0, output.path.length)) ||
         output.path.length > path.length
       ) {
         return;
@@ -2388,7 +2560,8 @@ export class Instance {
       }
     };
     walk(this.store.docs.get("result")?.value, []);
-    const names = coversPosition;
+    const names = (listed: ResultPath, path: string[]) =>
+      namesPosition(listed.path, path);
     const counts = {
       atListedPath: 0,
       atNoListedPath: 0,
@@ -2402,7 +2575,7 @@ export class Instance {
     }
     this.plan.bindings.forEach((record, binding) => {
       for (const listed of record.result ?? []) {
-        if (listed.includes("*")) continue;
+        if (listed.path.includes("*")) continue;
         const held = found.some((entry) =>
           entry.binding === binding && names(listed, entry.path)
         );
@@ -2635,10 +2808,13 @@ const viewNode = (
   props: Record<string, unknown> | null,
   children: unknown[],
 ): unknown => {
+  // A child that is an array is a spread child: the positions of the
+  // stored children are those of its elements.
+  const flat = assembledFrom(children, true);
   if (typeof name === "function") {
-    return name({ ...(props ?? {}), children: children.flat() });
+    return name({ ...(props ?? {}), children: flat });
   }
-  return { type: "vnode", name, props: props ?? {}, children: children.flat() };
+  return { type: "vnode", name, props: props ?? {}, children: flat };
 };
 
 /** A helper that is a host element with the data attribute it sets. */

@@ -83,11 +83,18 @@
               },
               "name": "finish",
               "result": [
-                [
-                  "cards",
-                  "*",
-                  "finish"
-                ]
+                {
+                  "path": [
+                    "cards",
+                    "*",
+                    "finish"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -117,9 +124,12 @@
               },
               "name": "rename_seed",
               "result": [
-                [
-                  "renameSeed"
-                ]
+                {
+                  "path": [
+                    "renameSeed"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -145,9 +155,12 @@
               },
               "name": "bump",
               "result": [
-                [
-                  "bump"
-                ]
+                {
+                  "path": [
+                    "bump"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -173,9 +186,12 @@
               },
               "name": "rename",
               "result": [
-                [
-                  "rename"
-                ]
+                {
+                  "path": [
+                    "rename"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

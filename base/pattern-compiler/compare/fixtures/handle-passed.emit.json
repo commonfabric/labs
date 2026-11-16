@@ -207,9 +207,12 @@
               },
               "name": "join",
               "result": [
-                [
-                  "join"
-                ]
+                {
+                  "path": [
+                    "join"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

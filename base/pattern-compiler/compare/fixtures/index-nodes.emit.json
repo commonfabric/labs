@@ -72,13 +72,20 @@
               },
               "name": "pickAt",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -121,15 +128,22 @@
               },
               "name": "clear",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "*",
-                  "children",
-                  "0",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "*",
+                    "children",
+                    "0",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {

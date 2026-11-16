@@ -3198,7 +3198,7 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
             .unwrap_or_else(|| panic!("no binding {name}"))
     };
     assert_eq!(
-        binding("inc")["result"],
+        paths_of(&binding("inc")["result"]),
         json!([
             ["$UI", "children", "0", "props", "onClick"],
             ["inc"],
@@ -3206,7 +3206,7 @@ export const P = pattern<{ n: Writable<number> }>(({ n }) => {
         ])
     );
     assert_eq!(
-        binding("bump")["result"],
+        paths_of(&binding("bump")["result"]),
         json!([["$UI", "children", "1", "props", "onClick"]])
     );
     assert!(binding("unused").get("result").is_none());
@@ -3298,7 +3298,7 @@ export const P = pattern<{ n: Cell<number> }>(({ n }) => {
     );
     let plan = plan_of(&analysis, "P");
     assert_eq!(
-        plan["bindings"][0]["result"],
+        paths_of(&plan["bindings"][0]["result"]),
         json!([
             ["zeta"],
             ["$UI", "props", "onClick"],
@@ -3405,8 +3405,189 @@ fn results_of(plan: &Value, name: &str) -> Vec<(String, String)> {
         .expect("bindings")
         .iter()
         .filter(|binding| binding["name"] == name)
-        .map(|binding| (binding["within"].to_string(), binding["result"].to_string()))
+        .map(|binding| {
+            (
+                binding["within"].to_string(),
+                paths_of(&binding["result"]).to_string(),
+            )
+        })
         .collect()
+}
+
+/// The paths of a `Binding.result`, without the kinds of their `*`.
+fn paths_of(result: &Value) -> Value {
+    match result.as_array() {
+        Some(entries) => entries.iter().map(|entry| entry["path"].clone()).collect(),
+        None => Value::Null,
+    }
+}
+
+/// The kinds of the `*` of each path of the bindings of `plan` named
+/// `name`, as text: `element`, `every`, `inside`, or `member` with its
+/// index.
+fn stars_of(plan: &Value, name: &str) -> Vec<Vec<String>> {
+    plan["bindings"]
+        .as_array()
+        .expect("bindings")
+        .iter()
+        .filter(|binding| binding["name"] == name)
+        .flat_map(|binding| binding["result"].as_array().cloned().unwrap_or_default())
+        .map(|entry| {
+            let stars = entry["stars"].as_array().expect("stars");
+            let count = entry["path"]
+                .as_array()
+                .expect("a path")
+                .iter()
+                .filter(|segment| *segment == "*")
+                .count();
+            assert_eq!(stars.len(), count, "one entry for each `*` of {entry}");
+            stars
+                .iter()
+                .map(|star| match star.get("index") {
+                    Some(index) => format!("{}:{index}", star["kind"].as_str().expect("a kind")),
+                    None => star["kind"].as_str().expect("a kind").to_string(),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Ruling Z21 (PL §1.1, "What a `*` of a result path stands for"): an
+/// entry of `Binding.result` has, for each `*` of its path and in the
+/// order of the path, the kind of that `*`. `element` is a collection the
+/// binding has an `element` step for. `every` is a collection no step of
+/// the binding names, whose callback writes the stream. `member` is the
+/// one position of a member written after a spread, with the number of
+/// entries written before it. The source is over records in `items`, over
+/// plain values in `tags`, and the result of a `filter` in the third
+/// list: the kinds are the same in the three.
+#[test]
+fn each_star_of_a_result_path_states_what_it_stands_for() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
+  state.count.set(state.count.get() + 1);
+});
+const select = handler<unknown, { title: string; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.title);
+});
+export const P = pattern<{ items: Item[]; tags: string[]; groups: { items: Item[] }[]; count: Writable<number>; chosen: Writable<string> }>(
+  ({ items, tags, groups, count, chosen }) => {
+    const outer = bump({ count });
+    const after = bump({ count });
+    return {
+      [UI]: (
+        <div>
+          <ul>
+            <li>before</li>
+            {items.map((item) => <li onClick={select({ title: item.title, chosen })} />)}
+            text
+            <li onClick={after}>after</li>
+          </ul>
+          <ol>{tags.map((tag) => <li onClick={select({ title: tag, chosen })} />)}</ol>
+          <p>{tags.filter((tag) => tag !== "skip").map((tag) => <i onClick={select({ title: tag, chosen })} />)}</p>
+          <nav>{items.map((item) => <b onClick={outer} />)}</nav>
+          <nav>{tags.map((tag) => <b onClick={outer} />)}</nav>
+          <section>
+            {groups.map((group) => {
+              const first = select({ title: group.items[0].title, chosen });
+              return <ol>{group.items.map((item) => <li onClick={first} />)}</ol>;
+            })}
+          </section>
+        </div>
+      ),
+      rows: [{ pick: after }, ...items.map((item) => ({ pick: outer })), { pick: after }],
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    // Over records, over plain values, and over the result of a `filter`.
+    assert_eq!(
+        stars_of(&plan, "select"),
+        [vec!["element"], vec!["element"], vec!["element"],]
+    );
+    // A binding of the outer body, written in the inner callback: the
+    // outer `*` selects the stream, and every position of the inner
+    // collection holds it.
+    assert_eq!(stars_of(&plan, "first"), [vec!["element", "every"]]);
+    // A binding made outside every body, which a callback writes.
+    assert_eq!(
+        results_of(&plan, "outer")[0].1,
+        concat!(
+            r#"[["$UI","children","3","children","*","props","onClick"],"#,
+            r#"["$UI","children","4","children","*","props","onClick"],"#,
+            r#"["rows","*","pick"]]"#
+        )
+    );
+    assert_eq!(
+        stars_of(&plan, "outer"),
+        [vec!["every"], vec!["every"], vec!["every"]]
+    );
+    // A member written after a spread: three entries are written before
+    // it among the children, a member, the spread and a text, and two in
+    // the array literal. The member before the spread has its index in
+    // the path.
+    assert_eq!(
+        results_of(&plan, "after")[0].1,
+        concat!(
+            r#"[["$UI","children","0","children","*","props","onClick"],"#,
+            r#"["rows","0","pick"],"#,
+            r#"["rows","*","pick"]]"#
+        )
+    );
+    assert_eq!(
+        stars_of(&plan, "after"),
+        [vec!["member:3"], vec![], vec!["member:2"]]
+    );
+}
+
+/// Ruling Z21, kind `inside` (PL §1.1, "The stream is reached through a
+/// member of the element"): one element of a collection that no step of
+/// the binding names holds the stream inside its value. The source is an
+/// array of plain values in place, written as a literal. Over the result
+/// of another per-element construct the binding has the `element` step of
+/// the upstream collection, the downstream collection has the upstream
+/// keys, and the `*` is of kind `element`.
+#[test]
+fn a_star_through_a_member_of_an_element_is_inside_or_element() {
+    let analysis = program(
+        r#"import { Writable, handler, pattern, UI } from "commonfabric";
+interface Item { title: string }
+const bump = handler<unknown, { count: Writable<number> }>((_, state) => {
+  state.count.set(state.count.get() + 1);
+});
+const select = handler<unknown, { item: Item; chosen: Writable<string> }>((_, state) => {
+  state.chosen.set(state.item.title);
+});
+const Story = pattern<{ label: string }>(({ label }) => {
+  const count = Writable.of(0);
+  return { [UI]: <button onClick={bump({ count })}>{label}</button>, count };
+});
+export const P = pattern<{ items: Item[]; chosen: Writable<string> }>(({ items, chosen }) => {
+  const sections = [
+    { label: "one", node: Story({ label: "one" }) },
+    { label: "two", node: Story({ label: "two" }) },
+  ];
+  const rows = items.map((item) => ({ title: item.title, pick: select({ item, chosen }) }));
+  return {
+    [UI]: (
+      <div>
+        <ul>{sections.map((entry) => <li>{entry.node}</li>)}</ul>
+        <p>{rows.map((row) => <i onClick={row.pick}>{row.title}</i>)}</p>
+      </div>
+    ),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    for name in ["bump#1", "bump#2"] {
+        assert_eq!(stars_of(&plan, name), [vec!["inside"]]);
+    }
+    assert_eq!(stars_of(&plan, "select"), [vec!["element"]]);
 }
 
 /// PL §1.1, "The result paths of a binding in an element body": "the path

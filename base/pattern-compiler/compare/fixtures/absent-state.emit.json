@@ -46,9 +46,12 @@
               },
               "name": "note",
               "result": [
-                [
-                  "note"
-                ]
+                {
+                  "path": [
+                    "note"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

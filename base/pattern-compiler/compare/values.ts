@@ -77,6 +77,11 @@ export type ValueComparison = {
   misplaced?: { binding: number; name?: string; path: string[] }[];
   /** The events the executor's handler did not run to its end for. */
   failedEvents: string[];
+  /**
+   * The events the harness did not send to today's runtime, each with the
+   * binding's name and the reason: neither side handled them.
+   */
+  notSent?: string[];
 };
 
 const DEPTH = 40;
@@ -312,7 +317,8 @@ export const compareValues = (
   artifact: Artifact,
   argument: Record<string, unknown>,
   events: { binding: number; event: unknown }[],
-  outcomes: Pick<EventOutcome, "outcome" | "elements">[],
+  outcomes:
+    (Pick<EventOutcome, "outcome" | "elements"> & { reason?: string })[],
   runtime: Values,
 ): ValueComparison => {
   const comparison: ValueComparison = {
@@ -389,6 +395,11 @@ export const compareValues = (
   let sent = 0;
   events.forEach(({ binding, event }, index) => {
     const outcome = outcomes[index];
+    if (outcome?.outcome === "not sent") {
+      (comparison.notSent ??= []).push(
+        `${artifact.plan.bindings[binding]?.name}: ${outcome.reason ?? ""}`,
+      );
+    }
     if (outcome === undefined || outcome.outcome === "not sent") return;
     const theirs = runtime.events[sent];
     sent += 1;

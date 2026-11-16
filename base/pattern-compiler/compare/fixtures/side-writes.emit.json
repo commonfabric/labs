@@ -73,9 +73,12 @@
               },
               "name": "setValue",
               "result": [
-                [
-                  "setValue"
-                ]
+                {
+                  "path": [
+                    "setValue"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

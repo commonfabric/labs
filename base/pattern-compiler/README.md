@@ -351,27 +351,44 @@ stream"). The executor gives it a marker with no member: the code cannot send to
 it or read through it. When the executor stores a value, it writes in the
 marker's place the link to the stream of that binding for the element keys of
 the cone instance that called. For a marker at a position of the result it
-checks that a path of `Binding.result` covers the position, with `*` for any
-element. A marker at a position no listed path covers fails the evaluation that
-stores it (ruling Z19): the kept output that holds the position is not written
-and keeps what was stored for it, which is nothing where nothing was stored, and
-every other output of the result is stored. `Instance.failures` has, for each
-such marker, the output, its path with the index of the element in the place of
-a `*`, the binding, and the position. For a cone of an element body the output
-that fails is that of the element whose row holds the position, and the rows of
-the other elements are stored, over an array of references, over an array of
-plain values in place, and over the result of another per-element construct
-alike. So the crate lists a path for every position at which value code can
-place a stream: also for a member written after a spread, for two collections
-spread into one array, and for a stream inside a value that the elements of a
-collection hold. A stream that is an input of the pattern is a reference like
-any other input, and what passes it on stores a link to its place. A sandboxed
-body that is handed a marker in its computed argument gets a handle to the
-stream, and a stream that a body returns into the result is stored as the link
-to it and checked against no listed path (ruling Z20;
-`compare/fixtures/stream-returned.tsx`). This is the same for an element body
-over an array of references, over an array of plain values in place, and over
-the result of another per-element construct.
+checks that a path of `Binding.result` covers the position. An entry of
+`Binding.result` holds the path and, for each `*` of it, what the `*` stands for
+(`ResultPath.stars`, ruling Z21): `element` for a collection the binding has an
+`element` step for, `every` for a collection whose callback writes the one
+stream of a binding made outside it, `member` for the one position of a member
+written after a spread, with the number of entries written before it, and
+`inside` for a collection of which one element holds the stream inside its
+value. The check accepts a marker at a `*` only at a position of the stated
+kind: for `element` the position that holds the key of the cone instance that
+placed the marker, for `every` and `inside` an element of a collection and no
+member written beside it, and for `member` the member written at that entry. The
+executor knows which it is from how it assembled the array: value code hands it
+the entries of an array that has a spread, and of the children of a view node,
+apart (`$rt.list`, `$rt.spread`, `$rt.children`), and the assembled result of a
+`map`, a `filter` or a `flatMap` has the key of each position
+(`compare/fixtures/star-kinds.tsx`). The harness of the comparison resolves a
+listed path from the plan and the kinds (`streamAt` in `compare/harness.ts`). It
+does not resolve a path through two collections spread into one array, since the
+kind does not say which of the two a `*` stands for. A marker at a position no
+listed path covers fails the evaluation that stores it (ruling Z19): the kept
+output that holds the position is not written and keeps what was stored for it,
+which is nothing where nothing was stored, and every other output of the result
+is stored. `Instance.failures` has, for each such marker, the output, its path
+with the index of the element in the place of a `*`, the binding, and the
+position. For a cone of an element body the output that fails is that of the
+element whose row holds the position, and the rows of the other elements are
+stored, over an array of references, over an array of plain values in place, and
+over the result of another per-element construct alike. So the crate lists a
+path for every position at which value code can place a stream: also for a
+member written after a spread, for two collections spread into one array, and
+for a stream inside a value that the elements of a collection hold. A stream
+that is an input of the pattern is a reference like any other input, and what
+passes it on stores a link to its place. A sandboxed body that is handed a
+marker in its computed argument gets a handle to the stream, and a stream that a
+body returns into the result is stored as the link to it and checked against no
+listed path (ruling Z20; `compare/fixtures/stream-returned.tsx`). This is the
+same for an element body over an array of references, over an array of plain
+values in place, and over the result of another per-element construct.
 
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's

@@ -73,6 +73,23 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { items: [{ title: "a" }, { title: "b" }], tags: ["x", "y"] },
     events: [{ binding: 0, event: { by: 2 } }],
   }],
+  // Ruling Z21: an event for the stream of each binding, which the
+  // harness finds from the kinds of the listed paths.
+  "star-kinds": [{
+    argument: {
+      items: [{ title: "a" }, { title: "b" }],
+      tags: ["x", "y", "z"],
+    },
+    events: [
+      { binding: 0, event: { by: 1 } },
+      { binding: 1, event: { by: 10 } },
+      { binding: 2, event: { by: 100 } },
+      { binding: 3, event: { by: 1000 } },
+      { binding: 3, event: { by: 1000 } },
+      { binding: 4, event: {} },
+      { binding: 5, event: {} },
+    ],
+  }],
   "flat-keys": [{
     argument: {
       groups: [
@@ -336,6 +353,9 @@ if (import.meta.main) {
     }
     for (const failed of comparison.failedEvents) {
       console.log(`    event not handled: ${failed}`);
+    }
+    for (const missed of comparison.notSent ?? []) {
+      console.log(`    event not sent: ${missed}`);
     }
     if (comparison.documents !== undefined) {
       console.log(

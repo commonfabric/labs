@@ -46,11 +46,14 @@
               },
               "name": "mark",
               "result": [
-                [
-                  "$UI",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -413,15 +416,22 @@
               },
               "name": "choose",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "1",
-                  "children",
-                  "*",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "1",
+                    "children",
+                    "*",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -477,16 +487,23 @@
               },
               "name": "mark",
               "result": [
-                [
-                  "$UI",
-                  "children",
-                  "2",
-                  "children",
-                  "*",
-                  "$UI",
-                  "props",
-                  "onClick"
-                ]
+                {
+                  "path": [
+                    "$UI",
+                    "children",
+                    "2",
+                    "children",
+                    "*",
+                    "$UI",
+                    "props",
+                    "onClick"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {

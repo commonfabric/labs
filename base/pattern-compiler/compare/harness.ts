@@ -95,7 +95,14 @@ export type Plan = {
      * The result paths that hold a link to the binding's stream (PL §1.1,
      * `Binding.result`).
      */
-    result?: string[][];
+    result?: {
+      path: string[];
+      /** What each `*` of `path` stands for (PL §1.1, `ResultStar`). */
+      stars: ({ kind: "element" | "every" | "inside" } | {
+        kind: "member";
+        index: number;
+      })[];
+    }[];
     /** The schema of the event's declared type, where the plan has it. */
     eventSchema?: string;
   }[];
@@ -1157,16 +1164,20 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
 
       // Where the run holds the stream of a binding: the path of the
       // result, and for a binding of an element body the element chosen
-      // of each enclosing collection (PL §1.1, "The result paths of a
-      // binding in an element body": "a reader that wants the stream of
-      // one element chooses, for each `*`, a position of the collection
-      // that the matching `element` step names"). The harness chooses the
-      // last position of each collection. PL has the index "in the stored
-      // array ... plus the number of children stored before the spread".
-      // The run of today does not store the children of a view node as
-      // one array: the assembled array of a `map` is one child, at the
-      // position the expression is written at, so the element is at that
-      // position and then at its own.
+      // of each enclosing collection. A listed path states what each of
+      // its `*` stands for (PL §1.1, "What a `*` of a result path stands
+      // for"), and the harness resolves it from the plan: for kind
+      // `element` and `every` it chooses the last position of the
+      // collection, for kind `member` the one position of the member,
+      // and for kind `inside` the position of the collection that holds
+      // the stream at the rest of the path. PL has the index of a
+      // position "in the stored array", for the layout the compiled path
+      // stores. The run of today does not store the children of a view
+      // node as one array: the assembled array of a `map` is one child,
+      // at the position the expression is written at. So among children
+      // a member is at the position its `index` gives, and an element of
+      // a collection is at the position of the assembled array and then
+      // at its own.
       const streamAt = (
         binding: number,
       ): { path: string[]; elements: ElementBinding[] } => {
@@ -1177,19 +1188,13 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
             "a binding whose stream the result does not hold",
           );
         }
-        // The first path the run holds the stream at. A path in a branch
-        // that is not selected, or through a collection with no element,
-        // holds none. A path with no `*` names one position, and is tried
-        // before a path with one, which a reader with the plan alone can
-        // not always resolve (PL §8, question 78).
+        // The first path the run holds the stream at, in the order of
+        // the plan. A path in a branch that is not selected, or through a
+        // collection with no element, holds none.
         let first: unknown;
-        const ordered = [
-          ...paths.filter((streamPath) => !streamPath.includes("*")),
-          ...paths.filter((streamPath) => streamPath.includes("*")),
-        ];
-        for (const streamPath of ordered) {
+        for (const listed of paths) {
           try {
-            return streamAtPath(binding, streamPath);
+            return streamAtPath(binding, listed);
           } catch (error) {
             if (!(error instanceof Unsupported)) throw error;
             first ??= error;
@@ -1199,85 +1204,155 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       };
       const streamAtPath = (
         binding: number,
-        streamPath: string[],
+        listed: NonNullable<
+          NonNullable<Plan["bindings"]>[number]["result"]
+        >[number],
       ): { path: string[]; elements: ElementBinding[] } => {
         const record = plan.bindings?.[binding];
         const steps = (record?.within ?? []).flatMap((step) => {
           const { element } = step as { element?: number };
           return element === undefined ? [] : [element];
         });
-        // A binding made outside every element body may have its stream
-        // in each element of a collection: every position holds the one
-        // stream, and no element is bound. Otherwise each `*` is the
-        // collection of one `element` step, in order.
-        const stars = streamPath.filter((key) => key === "*").length;
-        if (stars !== steps.length && steps.length > 0) {
+        // Each `*` of kind `element` is the collection of one `element`
+        // step, in order.
+        const keyed = listed.stars.filter((star) => star.kind === "element");
+        if (keyed.length !== steps.length) {
           throw new Unsupported(
             "a result path that does not pass through every enclosing collection",
           );
         }
-        const path: string[] = [];
-        const elements: ElementBinding[] = [];
-        let cell = output;
-        streamPath.forEach((key, index) => {
+        const resolve = (
+          index: number,
+          star: number,
+          from: AnyCell,
+          path: string[],
+          elements: ElementBinding[],
+        ): { path: string[]; elements: ElementBinding[] } => {
+          if (index === listed.path.length) {
+            // A position that holds the stream under one selection holds
+            // another value, or none, under the other.
+            if (!isStream(from)) {
+              throw new Unsupported("a result path the run holds no stream at");
+            }
+            return { path, elements };
+          }
+          const key = listed.path[index];
           if (key !== "*") {
+            let cell = from;
+            const at = [...path];
             if (index > 0) {
               const tree = treeOf(cell, key);
-              if (tree !== cell) path.push("$UI");
+              if (tree !== cell) at.push("$UI");
               cell = tree;
             }
-            cell = cell.key(key as never) as AnyCell;
-            path.push(key);
-            return;
+            return resolve(
+              index + 1,
+              star,
+              cell.key(key as never) as AnyCell,
+              [...at, key],
+              elements,
+            );
           }
+          const stated = listed.stars[star];
+          let cell = from;
           let value = valueOf(cell);
-          if (streamPath[index - 1] === "children" && Array.isArray(value)) {
-            const holders = value.flatMap((child, position) =>
+          const at = [...path];
+          const children = listed.path[index - 1] === "children" &&
+            Array.isArray(value);
+          if (stated?.kind === "member") {
+            // Among children the run of today holds a spread child as
+            // one child, so the member is at the position of its entry.
+            // Another array is stored flat, and the plan does not hold
+            // the lengths of the collections spread before the member.
+            if (!children) {
+              throw new Unsupported(
+                "a member written after a spread in an array the run stores flat",
+              );
+            }
+            const position = `${stated.index}`;
+            return resolve(
+              index + 1,
+              star + 1,
+              cell.key(position as never) as AnyCell,
+              [...at, position],
+              elements,
+            );
+          }
+          if (children) {
+            const holders = (value as unknown[]).flatMap((child, position) =>
               Array.isArray(child) ? [position] : []
             );
-            if (holders.length !== 1) {
+            // A `map` over an array written in place runs when the
+            // pattern is built, and the run of today holds its elements
+            // as children of their own: with no assembled array among
+            // the children, the children are the positions for kind
+            // `inside`, which arises over such an array.
+            const inPlace = holders.length === 0 && stated?.kind === "inside";
+            if (holders.length !== 1 && !inPlace) {
+              // The kind does not say which of two collections spread
+              // into one array the `*` stands for (PL §8, question 78).
               throw new Unsupported(
                 holders.length === 0
                   ? "children that hold no assembled array"
                   : "children that hold two assembled arrays",
               );
             }
-            // The path of a member written after a spread is `children/*`
-            // as well (PL §1.1, "From a path to a position"). For a
-            // binding made outside every element body the path does not
-            // say whether its `*` stands for the elements of the
-            // collection or for a member written after it, so where the
-            // run holds a child after the assembled array the harness
-            // resolves no position.
-            if (steps.length === 0 && holders[0] < value.length - 1) {
-              throw new Unsupported(
-                "a path from a spread on that does not say which position " +
-                  "holds the stream",
-              );
+            if (!inPlace) {
+              cell = cell.key(`${holders[0]}` as never) as AnyCell;
+              at.push(`${holders[0]}`);
+              value = valueOf(cell);
             }
-            cell = cell.key(`${holders[0]}` as never) as AnyCell;
-            path.push(`${holders[0]}`);
-            value = valueOf(cell);
           }
           if (!Array.isArray(value) || value.length === 0) {
             throw new Unsupported("an enclosing collection with no element");
           }
-          const position = `${value.length - 1}`;
-          if (steps.length > 0) {
-            elements.push({
-              collection: steps[elements.length],
-              key: position,
-            });
+          const choose = (position: string) =>
+            resolve(
+              index + 1,
+              star + 1,
+              cell.key(position as never) as AnyCell,
+              [...at, position],
+              stated?.kind === "element"
+                ? [...elements, {
+                  collection: steps[elements.length],
+                  key: position,
+                }]
+                : elements,
+            );
+          if (stated?.kind === "inside") {
+            // One element holds the stream inside its value: a position
+            // that holds a stream at the rest of the path. The harness
+            // does not read which binding a stored stream is of. Where
+            // several bindings list this path, as the bindings of two
+            // sites of one pattern do, it takes them to be in the order
+            // of the elements: the binding that is the nth of them has
+            // the nth position that holds a stream.
+            const same = JSON.stringify(listed);
+            const nth = (plan.bindings ?? []).slice(0, binding).filter((
+              other,
+            ) =>
+              (other.result ?? []).some((entry) =>
+                JSON.stringify(entry) === same
+              )
+            ).length;
+            let missed: unknown;
+            let held = 0;
+            for (let position = 0; position < value.length; position++) {
+              try {
+                const found = choose(`${position}`);
+                if (held === nth) return found;
+                held += 1;
+              } catch (error) {
+                if (!(error instanceof Unsupported)) throw error;
+                missed ??= error;
+              }
+            }
+            throw missed ??
+              new Unsupported("a result path the run holds no stream at");
           }
-          cell = cell.key(position as never) as AnyCell;
-          path.push(position);
-        });
-        // A position that holds the stream under one selection holds
-        // another value, or none, under the other.
-        if (!isStream(cell)) {
-          throw new Unsupported("a result path the run holds no stream at");
-        }
-        return { path, elements };
+          return choose(`${value.length - 1}`);
+        };
+        return resolve(0, 0, output, [], []);
       };
 
       // What the evaluation takes as the label of the `identity` slot of a

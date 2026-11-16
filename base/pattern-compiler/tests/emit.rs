@@ -482,7 +482,7 @@ export const P = pattern<{ title: string }>(({ title }) => {
     // The callee reads the children as the output of the value the
     // caller's code computes.
     assert!(
-        text.contains("($h) => ([$rt.h(\"b\", {  }, [$h.slot("),
+        text.contains("($h) => ($rt.children([$rt.h(\"b\", {  }, [$h.slot("),
         "{text}"
     );
     assert_eq!(code["valuesWithoutOutput"], json!([]));
@@ -776,4 +776,37 @@ export const P = pattern<{ items: Item[]; selected: Writable<Item | null> }>(
         text.contains(&format!("$h.equals($h.slot({selected}), $h.slot({item}))")),
         "{text}"
     );
+}
+
+/// Ruling Z21: the runtime "knows which stored position is which from how
+/// it assembled the array" (PL §1.1, "What a `*` of a result path stands
+/// for"). An array literal with a spread is written as a call that is
+/// given each entry apart, and a spread as a value of its own, so the
+/// executor has, for each position, the entry it came from. The spread
+/// collection is over records in the first array and over plain values
+/// in the second.
+#[test]
+fn an_array_with_a_spread_is_given_its_entries_apart() {
+    let (_, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Item { title: string }
+export const P = pattern<{ items: Item[]; tags: string[]; note: string }>(({ items, tags, note }) => {
+  return {
+    rows: [note, ...items.map((item) => item.title), note],
+    labels: [...tags.map((tag) => tag + "!"), note],
+    plain: [note, note],
+  };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    assert!(
+        text.contains("rows: $rt.list([$h.slot(") && text.contains("$rt.spread($h.v($h.output("),
+        "{text}"
+    );
+    assert!(text.contains("labels: $rt.list([$rt.spread("), "{text}");
+    // An array with no spread is an array literal.
+    assert!(text.contains("plain: [$h.slot("), "{text}");
+    assert!(!text.contains("...("), "{text}");
 }

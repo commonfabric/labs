@@ -44,9 +44,12 @@
               },
               "name": "overwrite",
               "result": [
-                [
-                  "overwrite"
-                ]
+                {
+                  "path": [
+                    "overwrite"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -72,9 +75,12 @@
               },
               "name": "seal",
               "result": [
-                [
-                  "seal"
-                ]
+                {
+                  "path": [
+                    "seal"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

@@ -40,9 +40,12 @@
               },
               "name": "record",
               "result": [
-                [
-                  "record"
-                ]
+                {
+                  "path": [
+                    "record"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

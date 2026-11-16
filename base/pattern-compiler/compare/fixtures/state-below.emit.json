@@ -73,11 +73,18 @@
               },
               "name": "retitle",
               "result": [
-                [
-                  "rows",
-                  "*",
-                  "retitle"
-                ]
+                {
+                  "path": [
+                    "rows",
+                    "*",
+                    "retitle"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -107,11 +114,18 @@
               },
               "name": "retitle",
               "result": [
-                [
-                  "labels",
-                  "*",
-                  "retitle"
-                ]
+                {
+                  "path": [
+                    "labels",
+                    "*",
+                    "retitle"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -141,11 +155,18 @@
               },
               "name": "retitle",
               "result": [
-                [
-                  "kept",
-                  "*",
-                  "retitle"
-                ]
+                {
+                  "path": [
+                    "kept",
+                    "*",
+                    "retitle"
+                  ],
+                  "stars": [
+                    {
+                      "kind": "element"
+                    }
+                  ]
+                }
               ],
               "state": [
                 {
@@ -175,9 +196,12 @@
               },
               "name": "retitle",
               "result": [
-                [
-                  "retitle"
-                ]
+                {
+                  "path": [
+                    "retitle"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -203,9 +227,12 @@
               },
               "name": "add",
               "result": [
-                [
-                  "add"
-                ]
+                {
+                  "path": [
+                    "add"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

@@ -40,9 +40,12 @@
               },
               "name": "add",
               "result": [
-                [
-                  "add"
-                ]
+                {
+                  "path": [
+                    "add"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {

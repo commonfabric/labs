@@ -16,9 +16,12 @@
               },
               "name": "keep",
               "result": [
-                [
-                  "keep"
-                ]
+                {
+                  "path": [
+                    "keep"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
@@ -57,9 +60,12 @@
               },
               "name": "go",
               "result": [
-                [
-                  "go"
-                ]
+                {
+                  "path": [
+                    "go"
+                  ],
+                  "stars": []
+                }
               ],
               "state": [
                 {
