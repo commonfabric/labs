@@ -321,7 +321,9 @@ and the other spaces wait no longer than that limit plus a check.
 Moving the other spaces away and letting the run finish would lose nothing,
 but a worker that is inside an action cannot release the leases of its other
 spaces, and a pool that released them for it would have that worker serve
-spaces whose leases it no longer holds. Stopping the run needs neither.
+spaces whose leases it no longer holds. Stopping the run needs neither. The
+owner chose stopping and rerunning on 2026-11-16; the limit's value and what
+starts its count remain open (question 3).
 
 A space that was already alone on its worker stays there, and once one of its
 runs passes the sharing limit that worker takes no other space.
