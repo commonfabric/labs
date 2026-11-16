@@ -963,7 +963,17 @@ Six rules hold for an invocation.
   `plan-and-label-templates.md` §2.5, "A default belongs to the place").
   A path that resolves to a slot of the instance without a stored link,
   as a path of a binding of the reactive tier does, takes the default of
-  that slot's schema in the same way. A read of a default carries no
+  that slot's schema in the same way. Two cases are by ruling. A slot
+  of root `state` whose cell holds nothing reads the default of the
+  cell's schema, which is the first value of the cell where the
+  declaration gives it a constant (section 4.1). And for a pattern
+  compiled into another, a path of the callee's argument that the call
+  leaves out is a constant, the callee's declared default, and a path
+  that the call binds to a slot at which nothing is stored reads the
+  callee's default too; where the place of that slot declares a default
+  of its own, that one is read, which is an assumption of
+  `plan-and-label-templates.md` §1.1 (its §8, question 102). A read of a
+  default carries no
   integrity: where a slot reads as a default, the runtime gives it the
   empty integrity when it instantiates the label, and the
   confidentiality the read consumed. Integrity is anchored in a stored
@@ -1017,24 +1027,44 @@ value code, so the runtime neither discovers read sets nor sorts.
   evaluated again in the same transaction only when a write staged in that
   transaction changed something it had read (section 2.7).
 
-**A cone whose only effect is a side-write.** A cone instance is demanded
-when one of its kept outputs is, or when something demanded reads the
-target of one of its write edges (`scheduler-and-serving-loop.md`,
-"Terms" and §4.1).
-A pattern can pass a state cell on by reference at a path of its result
+**A cone with side-writes.** By ruling a cone with side-writes is of one
+of two kinds.
+
+- **A small, fixed set of targets that the compiler names.** The cone is
+  an ordinary node, and the targets of its write edges count as its
+  outputs for demand. A cone instance is demanded when one of its kept
+  outputs is, or when something demanded reads the target of one of its
+  write edges, or passes that target on by reference
+  (`scheduler-and-serving-loop.md`, "Terms" and §4.3). It is evaluated
+  before the reader is, and before a path that passes the target on is
+  stored.
+- **A write set that is dynamic or very large.** The cone's body is a
+  materializer. It is evaluated eagerly whenever one of its inputs
+  changes, as a rule after the rest of the wave has been evaluated, and
+  its writes make their readers stale, which a further wave evaluates
+  (section 6.7; `scheduler-and-serving-loop.md` §7).
+
+The first kind covers a cone whose only effect is a side-write. A
+pattern can pass a state cell on by reference at a path of its result
 while a cone of the pattern side-writes that cell and has no kept
 output. In `patterns/dev/test/non-idempotent/accumulator.tsx` a
 `computed` pushes onto a state cell, and the result holds the cell. The
 `identity` slot at the root of the cell makes no edge
 (`plan-and-label-templates.md` §3.11), so no edge leads from the writing
-cone to the `result` cone. A reader that demands the result path is
-handed a link and has not read the cell, and no document says that the
-demand on that path is a demand on the cones that write the cell.
-*Assumed* (question 80): it is. A cone of the pattern's own body with a
-side-write to a cell that a kept path passes on by reference is demanded
-when that path is, and is evaluated before the path is stored. The
-prototype's executor has no reader and evaluates every cone of the
-pattern's own body that has a side-write before it stores the result.
+cone to the `result` cone, and a reader that demands the result path is
+handed a link and has not read the cell. The demand on that path is a
+demand on the write edges to the cell all the same: the runtime finds
+them from the address the `identity` slot is bound to, and the writing
+cone is evaluated before the path is stored. The prototype's executor
+has no reader and evaluates every cone of the pattern's own body that
+has a side-write before it stores the result.
+
+*Assumed* (question 80): the compiler decides the kind from the
+footprint, as `footprint-analysis.md` §6.3 has it. A body is of the
+first kind where every write target is a statically named slot, and a
+materializer where a target is reached through data: a `*`, a computed
+path, or a handle read from a value. No number is set for "very large",
+so no count of static targets makes a body a materializer.
 
 Because the value code is the same on the server and on a client, and the
 order depends only on the plan, the demanded outputs and the values, two
@@ -1066,14 +1096,15 @@ runtime:
 6. returns the result to the cone's function, or fails the cone when the
    body threw, exceeded its budget, or returned a value outside its schema.
 
-**Where a slot of `reads` sits in the argument.** For a handler, a slot
-of root `event` is placed below the first parameter and a slot of root
-`binding` below the second, at the slot's path. For another body the root
-and the path of a slot are those of what the caller passed, and do not
-give the place. *Assumed,* with `plan-and-label-templates.md` §1.1 (its
-§8, question 99): the compiler emits the place of each slot of `reads`
-for each use of such a body, and the runtime builds the slot part from
-it.
+**Where a slot of `reads` sits in the argument.** By ruling each entry
+of `Body.reads` holds the path in the body's argument at which the
+slot's value is placed, its member `at`
+(`plan-and-label-templates.md` §1.1, `ReadInput`), and the runtime
+builds the slot part from the entries. For a handler, a slot of root
+`event` is placed below the first parameter and a slot of root `binding`
+below the second, at the slot's path. For another body the root and the
+path of a slot are those of what the caller passed, and the place is the
+entry's `at` alone.
 
 **What the argument holds at a path.** The runtime builds the argument entry
 by entry. What it puts at an entry's path depends on the entry's class, so
@@ -1312,7 +1343,8 @@ position is in no key.
 
 - **A state cell.** A body may declare a state cell over every
   collection. Two rows that show equal values have two keys and a cell
-  each.
+  each. A cell whose first value is a constant has no document for a
+  key until something writes it (section 4.1).
 - **A handler.** The binding is made once for each key, and the stream's
   identifier holds the key (section 5.2), so two rows that show equal
   values have two streams. An event names one key, and the handler's
@@ -1465,7 +1497,7 @@ element part when the value behind the link changes.
 | A child of a captured outer output changes, and the body reaches that output only through a `pick` | The cone instances whose `pick` chose that child (section 3.3) | Those | Their changed kept paths |
 | An element is appended or inserted | The collection's membership; no existing element's cone | The new key's cone instances | The new positions; for an insertion, the positions after it move in the stored array (section 4.2) |
 | An element is removed | The collection's membership | Nothing | The stored array loses the position, and a part document of the row is deleted (section 4.10) |
-| Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index, or passes on by reference a plain value stored in place (below) | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
+| Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index. The runtime moves what each key holds (below) | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
 | A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
 | A plain value is edited in place | Membership: the old key leaves and a new key enters | The new key | The position |
@@ -1478,25 +1510,48 @@ and does not visit the others (section 6.1).
 The cutoff applies at every step: a cone instance whose evaluation produces
 the outputs it produced before does not make its consumers stale.
 
-**A moved element that a cone passes on by reference.** For an element
-that is a plain value stored in place, the address the element is read
-from is its position in the collection's document. A cone that passes
-such an element on through its `identity` slot, as the cone of
-`tags.map((tag) => <li>{tag}</li>)` does, yields a reference to that
-position, and the row stores a link to it. After a move the key is bound
-to another position, and the stored link names the earlier one, where
-another value stands. With nothing evaluated, the row of one value shows
-another: the prototype's executor showed `"b"` in the row of `"a"`.
-*Assumed* (question 79), as the executor has it: the runtime records the
-address each element slot of a cone instance was bound to, and a cone
-instance is stale when the bound address of an `identity` slot it read
-changed. For a position that holds a link the address is the cell's, and
-a move does not change it. The assumption evaluates, on a move, cone
-instances that do not read the index, which the ruling on the index does
-not provide for: by the ruling a move evaluates the nodes that read the
-index alone. It is limited to a cone instance that passes on a plain
-value stored in place. The alternative keeps the ruling's wording and
-has the row hold the value and no link to the position.
+**A moved element.** By ruling, when an element moves the runtime moves
+what the element's key holds to the new position: the stored results of
+its cone instances, which are the kept paths of its row, with their
+labels and provenance. It evaluates nothing for the element, except the
+cone instances that list the slot of root `index`. Evaluating the
+element's cone instances again is permitted, and moving is preferred.
+The state cells, streams, operation state and children of the key are
+named by the key and do not move.
+
+For an element that is a plain value stored in place, the address the
+element is read from is its position in the collection's document. A
+cone that passes such an element on through its `identity` slot, as the
+cone of `tags.map((tag) => <li>{tag}</li>)` does, would yield a
+reference to that position, and a row that stored a link to it would
+name, after a move, a position where another value stands: the
+prototype's executor showed `"b"` in the row of `"a"`. *Assumed*
+(question 79): where a cone passes on an element that is a plain value
+stored in place, the element's result holds the value, and no link to
+the position, because the position is not stable. What the row shows
+after a move is then right, because the results move with the key. For
+a position that holds a link the address is the cell's, a move does not
+change it, and the result holds the link.
+
+**A chain of per-element constructs.** By ruling an element of a
+collection that is the result of a per-element construct is keyed by
+the key of the upstream element it came from
+(`plan-and-label-templates.md` §1.3). The element table of a body
+applied to the result of a `map` or a `filter` therefore has the keys
+of the source of that construct, for the positions the result holds. A
+change of one upstream element makes stale the cone instances of that
+key in each body of the chain, by the first row of the table, and no
+cone instance of another key. For a `flatMap` the key is assumed there
+(its §8, question 101).
+
+**A whole array of plain values from one computation.** Where the
+source of a collection is plain values that one `lift` or `computed`
+returns as a whole array, the runtime may evaluate the body for the
+whole collection again on each change of the array, in place of
+keeping the results of cone instances per key. This is a choice of the
+implementation and is not observable: the stored values and labels are
+those the per-key evaluation gives, and the state cells, streams,
+operation state and children stay per key.
 
 ### 2.7 Side-writes and bounded iteration
 
@@ -2095,20 +2150,34 @@ says how many scope instances exist.
 | Instances document | Which instances the evaluations of the instance's computations made | Section 2.8 | One per scope the making cone instances have |
 | Stream document | The entries of the events appended to one stream, and the stream's `eventWatermark`. It exists once the stream received an event (section 4.7) | The stream's identifier (sections 5.2 and 5.5) | As today |
 
-**When a state cell's document is written.** A state cell whose
-declaration gives it no value has no document until it is first assigned
-(section 4.5). A declaration can give the cell a value, which is written
-when the cell is first created (`plan-and-label-templates.md` §1.3), and
-no document says in which transaction that is. *Assumed* (question 83):
-for a cell with no `element` step in `within`, in the transaction that
-creates the instance where the declared value reads no slot, and
-otherwise in the first transaction that evaluates the cone the value is
-computed in (its §8, question 97); for a cell of an element body, in the
-transaction in which the element key enters the element table (section
-2.5). The prototype's executor makes the document of every state cell at
-those times, with or without a declared value, and the run of today's
-runtime it was compared with has the document of every state cell of the
-pattern's body once the instance has settled.
+**When a state cell's document is written.** A state cell has no
+document until something writes it (section 4.5). By ruling that holds
+for a cell whose declaration gives it a first value that is a constant:
+the constant is the default of the cell's schema, nothing is written
+when the cell is created, and a read of the cell reads the default
+(section 2.2; `plan-and-label-templates.md` §1.3). A handler's
+`set(...)`, or a side-write of a cone, is what first writes such a
+cell. Writing the constant at creation as well is legal and is not
+what this design does.
+
+A first value that is not a constant is computed by a cone and written
+once, through the write edge that `StateCell.first` names, and the
+document exists from that write on. *Assumed* (question 83): the edge
+is performed in the first transaction that evaluates the cone instance
+that computes the value, and only where the cell has no document, so a
+value that a handler wrote before that evaluation stays. The cone is of
+the first kind of section 2.3, so it is demanded when something
+demanded reads the cell or passes it on, and a handler that reads the
+cell has it evaluated before the body runs (section 1.4). For a cell of
+an element body the cone instance is that of the element key.
+
+The compiled path therefore stores fewer state cell documents than a
+runtime that writes every first value. The prototype's executor makes
+the document of every state cell when the instance is created or the
+element key enters the element table, with or without a declared value,
+and the run of today's runtime it was compared with has the document of
+every state cell of the pattern's body once the instance has settled.
+Its document counts are of that behavior and not of this rule.
 
 A cell or a child instance that a handler of the instance created is not
 one of the instance's documents. It is reached through whatever link the
@@ -2357,7 +2426,8 @@ its own:
   are not stored.
 - A state cell it declares is a state cell of the enclosing instance, named
   with the call site and the element keys in its cause (section 5.2). The
-  cell's document is written when the cell is first assigned.
+  cell's document is written when the cell is first written (section
+  4.1).
 - A durable operation it declares is an operation of the enclosing plan,
   named the same way.
 - A handler it binds is a binding of the enclosing plan (section 4.7).
@@ -4762,25 +4832,28 @@ Added by the ruling that the scheduler is switched per space (section 9):
     among the children of a view node and a path below a conditional do
     not determine. In the prototype's corpus run the two agree at 431 of
     449 stored positions, and at 315 of 327 listed paths without `*`.
-79. **A moved element that is passed on by reference** (section 2.6;
-    `plan-and-label-templates.md` §1.3). For a plain value stored in
-    place, a link to the element is a link to its position, which a move
-    gives another value. *Assumed:* a cone instance is stale when the
-    address its `identity` element slot was bound to changed, so a cone
-    that passes such an element on is evaluated again on a move. That is
-    more than the ruling on the index names, which has a move evaluate
-    the nodes that read the index alone. The alternative has the row
-    hold the value and no link to the position, and evaluates nothing.
-80. **What demands a cone whose only effect is a side-write** (section
-    2.3; `scheduler-and-serving-loop.md` §4.1). Where the result passes
-    a cell on by reference and a cone with no kept output writes that
-    cell, no edge and no read leads from the demand on the result to the
-    writing cone before a reader reads the cell. *Assumed:* demand on a
-    kept path that passes a cell on by reference is demand on the cones
-    of the pattern's own body that side-write the cell. The alternative
-    leaves the cone to the first read of the cell, by the existing rule
-    for the target of a write edge, so that the result is stored before
-    the write is made.
+79. **What a cone stores that passes on an element that is a plain
+    value** (section 2.6; `plan-and-label-templates.md` §1.3). By ruling
+    a move moves what the element's key holds and evaluates nothing for
+    the element. For a plain value stored in place, a link to the
+    element is a link to its position, which a move gives another
+    value. *Assumed:* such a cone stores the value in the element's
+    result and no link to the position, so the row is right once its
+    results have moved. The alternative stores the link and has the
+    move rewrite it to the new position. The assumption departs, for
+    this one case, from the rule that a value passed on unchanged is
+    stored as a reference (section 2.4), as question 84 does for a
+    write.
+80. **Which cone with side-writes is of which kind** (section 2.3;
+    `scheduler-and-serving-loop.md` §7.1). By ruling a cone with a
+    small, fixed set of write targets is an ordinary node whose targets
+    count as outputs for demand, and one whose write set is dynamic or
+    very large is evaluated eagerly. *Assumed:* the compiler decides
+    from the footprint, by `footprint-analysis.md` §6.3: the first kind
+    where every write target is a statically named slot, and a
+    materializer where a target is reached through data. The ruling's
+    "very large" has no number, and no bound is set: a body with any
+    number of static targets is of the first kind.
 
 ### 11.2 For another document or the prototype
 
@@ -5150,13 +5223,16 @@ From the prototype's executor, for this document to decide:
     and for the `result` cone the whole returned record, constants
     included. The alternatives return each member under its own index
     as well, and hold the constant paths of the result in the plan.
-83. **When a state cell's document is written** (section 4.1).
-    *Assumed:* for a cell with a declared value, when the instance is
-    created or when the element key enters the element table, and for a
-    declared value that reads a slot at the first evaluation of its
-    cone. A cell with no declared value has no document until it is
-    assigned. It depends on question 97 of
-    `plan-and-label-templates.md`.
+83. **In which transaction a first value that is not a constant is
+    written** (section 4.1). By ruling a state cell whose first value
+    is a constant, or that is declared with no value, has no document
+    until something writes it, and a first value that is not a constant
+    is written once through a write edge. *Assumed:* that edge is
+    performed in the first transaction that evaluates the cone instance
+    that computes the value, and only where the cell has no document.
+    The alternative performs it when the instance is created or the
+    element key enters the element table, which evaluates the cone
+    without demand.
 84. **A written value that holds a reference into what the write
     replaces** (section 2.4). *Assumed:* a member that carries the
     address of a position inside the replaced path, and that the
