@@ -343,6 +343,14 @@ describe("buildProseDecorations", () => {
       expect(hasWidget(decos, 12, 18)).toBe(true);
     });
 
+    it("replaces a <br> with a widget that reports one line break", () => {
+      const state = createState("a<br>b", 0);
+      const decos = buildProseDecorations(state, false);
+      const drawn = decos.find((d) => d.from === 1 && d.to === 5);
+
+      expect(drawn?.value.spec?.widget?.lineBreaks).toBe(1);
+    });
+
     it("shows a <br> as written when the cursor is inside it", () => {
       const state = createState("a<br>b", 3);
       const decos = buildProseDecorations(state, true);

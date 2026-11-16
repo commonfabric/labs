@@ -176,6 +176,14 @@ class LineBreakWidget extends WidgetType {
     span.appendChild(document.createElement("br"));
     return span;
   }
+
+  /**
+   * The one line break the widget draws, which CodeMirror counts when it
+   * estimates the height of a line it has not drawn.
+   */
+  override get lineBreaks() {
+    return 1;
+  }
 }
 
 // Singleton — safe to reuse because the widget holds no instance state, and
