@@ -3133,6 +3133,12 @@ count.
   two positions of a collection have one key.
 - The position is in no key, also where the body uses the index. A cone
   that reads the index is given it as a slot (section 2.5).
+- For a collection that is the result of a per-element construct, the
+  key of an element is, by ruling, the key of the upstream element it
+  came from, and no key is computed from what the result holds
+  (`plan-and-label-templates.md` §1.3). The identifiers of what a body
+  applied to a `map` or a `filter` result holds per element therefore
+  derive from the keys of that construct's source.
 
 The secret is a runtime secret of the space, minted and read by the runtime
 alone (`ensureRuntimeSecret`, described in

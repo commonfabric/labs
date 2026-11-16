@@ -1578,6 +1578,11 @@ the same element part and different counts, so they have two keys. No
 two positions of a collection have one key, and a key stands at one
 position. The position is not in the key.
 
+By ruling an element of a collection that is the result of a per-element
+construct has the key of the upstream element it came from, in the
+place of a key computed from what the result holds ("Derived collections
+carry their elements' keys", below).
+
 A link to a plain value is keyed by the cell it links to, so two cells that
 hold equal values have two element parts. A hole has no key, gets no cone
 instance, and stays a hole. An explicit `undefined` is a plain value. A
@@ -5318,6 +5323,12 @@ slot at the root, which observes whether the cell holds anything, and an
 `identity` slot at a path below the root, which observes a reference the
 write can replace.
 
+The type the second case asks for is the slot's own: `Slot.schema` is
+the type under which the slot's reader observes the path (section 1.5),
+and the case holds where that type has a data type at the handle's
+position. A slot whose type is `unknown` at or above the position stops
+there, as one with a handle type does (section 2.5).
+
 **The two kinds of cone with side-writes, and demand.** By ruling a cone
 with side-writes is of one of two kinds. A cone whose writes go to a
 small, fixed set of targets that the compiler names is an ordinary node:
@@ -5329,9 +5340,11 @@ state cell, and the one at a handle's own position, are excepted above
 from the slots that read what an edge writes, because no write changes
 what they observe, and that exception is about which reader a write
 makes stale. For demand the two slots count: where something demanded
-holds one of them, as a kept path that passes the cell on does, the
-cones with a write edge to the cell are demanded, and are evaluated
-before the path is stored. No `ConeEdge` is listed for it, and the
+passes the cell on through one of them, as a kept path that holds the
+cell does, the cones with a write edge to the cell are demanded, and
+are evaluated before the path is stored. A body that holds the handle
+in order to write through it, and neither reads the cell nor passes it
+on, demands nothing by it. No `ConeEdge` is listed for it, and the
 runtime finds the writer from the bound address
 (`scheduler-and-serving-loop.md` §4.3). A cone whose write set is
 dynamic or very large is the second kind, a materializer ("Writes with
@@ -5339,12 +5352,6 @@ no static target", below). *Assumed*
 (`execution-and-storage.md` §11, question 80): which kind a cone is
 follows from the footprint alone, by `footprint-analysis.md` §6.3, and
 no number of static targets makes a cone a materializer.
-
-The type the second case asks for is the slot's own: `Slot.schema` is
-the type under which the slot's reader observes the path (section 1.5),
-and the case holds where that type has a data type at the handle's
-position. A slot whose type is `unknown` at or above the position stops
-there, as one with a handle type does (section 2.5).
 
 **What the report of a cycle names.** `side-write:cycle`
 (`language-subset.md` §10.3) is computed from `Plan.edges`. It is
@@ -8664,7 +8671,11 @@ value. `m2` to `m5` cross the element's link in the same way (section 2.5),
 and `s3` to `s5` cross the link at `threadInfo`: they observe the list
 the handle leads to.
 
-The listing is a slice. It leaves out the `shape` slots that footprint
+The listing is a slice. A `reads` line names the slot of each entry and
+leaves out the entry's place `at` (section 1.1): for `B0` it is the
+slot's own root and path, and for `B1` to `B4` it is the path below the
+parameter the slot is passed for. The listing also leaves out the
+`shape` slots that footprint
 analysis records at optional positions (`footprint-analysis.md` §12.5).
 Two are at data positions, `event target` and `event attachments`. The
 second is beside `e2`: the body tests whether the list is present and
