@@ -46,9 +46,18 @@ const numbered = (contents: string): string =>
     .join("\n");
 
 /**
+ * The input format {@link renderGardenerInput} renders, as
+ * `getGardenerPrompt` names the one its gardener expects. A prompt that
+ * names another is one this client cannot ask faithfully.
+ */
+export const GARDENER_INPUT_FORMAT = "pattern-json-1";
+
+/**
  * The user message the privacy gardener's prompt describes: one JSON
  * document between `<pattern>` tags, every file line numbered from 1.
- * This must render exactly as the index's gardener renders it.
+ * This renders as the index's gardener renders it; the gardener also fills
+ * in the display name it derives at publish, which a check made before
+ * publishing leaves `null`.
  */
 export const renderGardenerInput = (input: GardenerInput): string => {
   const doc = {
@@ -238,15 +247,18 @@ export interface PrivacyRewrite {
 }
 
 /**
- * Reads a rewrite, keeping only files the pattern has: a rewrite may not
- * add or rename a file, since what reaches disk is decided file by file.
+ * Reads a rewrite. It may replace only the files in `allowed`, the files
+ * the findings name: a rewrite may not add, rename, or reach beyond what was
+ * found, since what reaches disk is decided file by file and the source may
+ * be someone else's, written to steer it. A change it reports for any other
+ * file is dropped from its account.
  *
  * @throws InvalidModelAnswer for an answer that is not the rewrite's shape,
- *   or that names a file the pattern does not have.
+ *   or that replaces a file outside `allowed`.
  */
 export const readPrivacyRewrite = (
   output: unknown,
-  known: ReadonlySet<string>,
+  allowed: ReadonlySet<string>,
 ): PrivacyRewrite => {
   if (!isObjectNotArray(output)) invalid("rewrite object");
   const { files, changes } = output as Record<string, unknown>;
@@ -258,29 +270,50 @@ export const readPrivacyRewrite = (
     ) {
       return invalid(`files[${i}]`);
     }
-    if (!known.has(raw.name)) {
+    if (!allowed.has(raw.name)) {
       throw new InvalidModelAnswer(
-        `the rewrite names a file the pattern does not have: ${raw.name}`,
+        "the rewrite replaces a file no finding names",
       );
     }
     return { name: raw.name, contents: raw.contents };
   });
   const categories = new Set<string>(REWRITE_CATEGORIES);
-  const account = (changes as unknown[]).map((raw, i): RewriteChange => {
+  const account = (changes as unknown[]).flatMap((raw, i): RewriteChange[] => {
     if (
       !isObjectNotArray(raw) || typeof raw.file !== "string" ||
       typeof raw.category !== "string"
     ) {
       return invalid(`changes[${i}]`);
     }
-    return {
+    // The account is printed, so a file name the model made up, which could
+    // carry anything, is not.
+    if (!allowed.has(raw.file)) return [];
+    return [{
       file: raw.file,
       category: (categories.has(raw.category)
         ? raw.category
         : "other") as RewriteCategory,
-    };
+    }];
   });
   return { files: read, changes: account };
+};
+
+/**
+ * The files a rewrite may replace: those the findings name, and `entry` for a
+ * finding about the metadata, which the entry's doc comment carries.
+ */
+const rewritableFiles = (
+  input: GardenerInput,
+  verdict: PrivacyVerdict,
+  entry: string | undefined,
+): Set<string> => {
+  const names = new Set(input.files.map((file) => file.name));
+  const allowed = new Set<string>();
+  for (const finding of verdict.findings) {
+    const file = finding.file ?? entry;
+    if (file !== undefined && names.has(file)) allowed.add(file);
+  }
+  return allowed;
 };
 
 /** Asks for a generalized version of `input` that answers `verdict`. */
@@ -288,6 +321,7 @@ export const rewriteForPrivacy = async (
   input: GardenerInput,
   verdict: PrivacyVerdict,
   generate: ObjectGenerator,
+  entry?: string,
 ): Promise<PrivacyRewrite> =>
   readPrivacyRewrite(
     await generate({
@@ -304,7 +338,7 @@ export const rewriteForPrivacy = async (
       }\n</findings>`,
       schema: REWRITE_SCHEMA,
     }),
-    new Set(input.files.map((file) => file.name)),
+    rewritableFiles(input, verdict, entry),
   );
 
 /** The most rewrites asked for before the pattern is published as it is. */
@@ -356,6 +390,9 @@ export const runPrivacyCheck = async <C>(options: {
   generate: ObjectGenerator;
   recompile: Recompile<C>;
   maxRewrites?: number;
+
+  /** The entry file's name, which a finding about the metadata rewrites. */
+  entry?: string;
 }): Promise<PrivacyCheckOutcome<C>> => {
   const { gardener, generate, recompile } = options;
   const original = await checkPrivacy(gardener, options.input, generate);
@@ -368,7 +405,12 @@ export const runPrivacyCheck = async <C>(options: {
   for (let attempt = 1; attempt <= maxRewrites; attempt++) {
     let rewrite: PrivacyRewrite;
     try {
-      rewrite = await rewriteForPrivacy(current, verdict, generate);
+      rewrite = await rewriteForPrivacy(
+        current,
+        verdict,
+        generate,
+        options.entry,
+      );
     } catch (error) {
       if (!(error instanceof InvalidModelAnswer)) throw error;
       reasons.push(`rewrite ${attempt}: ${error.message}`);
@@ -386,7 +428,14 @@ export const runPrivacyCheck = async <C>(options: {
       continue;
     }
     for (const change of rewrite.changes) changes.push(change);
-    const checked = await checkPrivacy(gardener, next.input, generate);
+    let checked: PrivacyVerdict;
+    try {
+      checked = await checkPrivacy(gardener, next.input, generate);
+    } catch (error) {
+      if (!(error instanceof InvalidModelAnswer)) throw error;
+      reasons.push(`rewrite ${attempt}: its check gave no valid answer`);
+      continue;
+    }
     if (checked.passed) {
       return {
         status: "rewritten",

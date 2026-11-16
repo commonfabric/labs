@@ -120,13 +120,27 @@ describe("privacy", () => {
   });
 
   describe("readPrivacyRewrite()", () => {
-    it("throws for a file the pattern does not have", () => {
+    it("throws for a file no finding names", () => {
       expect(() =>
         readPrivacyRewrite(
-          { files: [{ name: "/new.ts", contents: "" }], changes: [] },
+          { files: [{ name: "/helper.ts", contents: "" }], changes: [] },
           new Set(["/main.tsx"]),
         )
-      ).toThrow("does not have");
+      ).toThrow("no finding names");
+    });
+
+    it("drops a change it reports for a file no finding names", () => {
+      const read = readPrivacyRewrite(
+        {
+          files: [],
+          changes: [
+            { file: "/main.tsx", category: "remove" },
+            { file: "742 Evergreen Terrace", category: "remove" },
+          ],
+        },
+        new Set(["/main.tsx"]),
+      );
+      expect(read.changes).toEqual([{ file: "/main.tsx", category: "remove" }]);
     });
 
     it("returns an unknown change category as other", () => {
@@ -176,14 +190,27 @@ describe("privacy", () => {
     });
 
     it("rewrites again from the first rewrite when it still fails", async () => {
+      const helperFinding = {
+        verdict: "fail",
+        findings: [{
+          file: "/helper.ts",
+          line: 1,
+          category: "other",
+          why: "a constant only one household uses",
+        }],
+        generalizations: [],
+      };
       const second = {
         files: [{ name: "/helper.ts", contents: "export const y = 2;" }],
         changes: [{ file: "/helper.ts", category: "remove" }],
       };
-      const { generate, requests } = scriptedModel([FAIL, FAIL, PASS], [
-        REWRITE,
-        second,
-      ]);
+      const { generate, requests } = scriptedModel(
+        [FAIL, helperFinding, PASS],
+        [
+          REWRITE,
+          second,
+        ],
+      );
       const { recompile } = recompileFrom();
       const outcome = await runPrivacyCheck({
         gardener: GARDENER,
@@ -201,6 +228,66 @@ describe("privacy", () => {
       expect(outcome.changes).toHaveLength(2);
       // The second rewrite starts from the first, not from the original.
       expect(requests[3].user).not.toContain(ADDRESS);
+    });
+
+    it("counts a rewrite that replaces a file no finding names as failed, writing nothing of it", async () => {
+      const reachesFurther = {
+        files: [{ name: "/helper.ts", contents: "export const steal = 1;" }],
+        changes: [],
+      };
+      const { generate } = scriptedModel([FAIL], [
+        reachesFurther,
+        reachesFurther,
+      ]);
+      const { recompile, compiled } = recompileFrom();
+      const outcome = await runPrivacyCheck({
+        gardener: GARDENER,
+        input: INPUT,
+        generate,
+        recompile,
+      });
+      expect(outcome.status).toBe("held");
+      expect(compiled).toEqual([]);
+    });
+
+    it("lets a finding about the metadata rewrite the entry file", async () => {
+      const metadataFinding = {
+        verdict: "fail",
+        findings: [{
+          category: "other",
+          why: "the description names a family",
+        }],
+        generalizations: [],
+      };
+      const { generate } = scriptedModel([metadataFinding, PASS], [REWRITE]);
+      const { recompile } = recompileFrom();
+      const outcome = await runPrivacyCheck({
+        gardener: GARDENER,
+        input: INPUT,
+        generate,
+        recompile,
+        entry: "/main.tsx",
+      });
+      expect(outcome.status).toBe("rewritten");
+    });
+
+    it("counts a rewrite whose check answers malformed as failed, and holds", async () => {
+      const { generate } = scriptedModel([FAIL, { nonsense: true }, FAIL], [
+        REWRITE,
+        REWRITE,
+      ]);
+      const { recompile } = recompileFrom();
+      const outcome = await runPrivacyCheck({
+        gardener: GARDENER,
+        input: INPUT,
+        generate,
+        recompile,
+      });
+      expect(outcome.status).toBe("held");
+      if (outcome.status !== "held") return;
+      expect(outcome.reasons[0]).toBe(
+        "rewrite 1: its check gave no valid answer",
+      );
     });
 
     it("returns held after two rewrites, never recompiling more often", async () => {

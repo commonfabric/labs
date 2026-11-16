@@ -571,6 +571,13 @@ export interface PatternIndexGardenerPromptResponse {
 
   prompt: string;
   outputSchema: JSONSchema;
+
+  /**
+   * The format of the input the prompt describes (`pattern-json-1`); a
+   * client renders that input itself, so one it does not know is one it
+   * cannot ask faithfully. Absent on deployments that predate it.
+   */
+  inputFormat?: string;
 }
 
 /** An admin mints a single-use invite. */
