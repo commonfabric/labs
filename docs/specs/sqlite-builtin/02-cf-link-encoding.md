@@ -82,9 +82,9 @@ so `id`, `space`, and `scope` are always present:
 ```
 
 The members are written in that order, `path`, `id`, `space`, `scope`,
-`overwrite` (`LINK_TEXT_MEMBER_ORDER` in
-[`runtime/runner/src/link-utils.ts`](../../../runtime/runner/src/link-utils.ts),
-through `inLinkTextOrder()`), whatever order the link's payload holds them in.
+`overwrite` (`inLinkTextOrder()` in
+[`runtime/runner/src/link-utils.ts`](../../../runtime/runner/src/link-utils.ts)),
+whatever order the link's payload holds them in.
 SQL compares the column as text (`= ?`, `GROUP BY`), so a row matches a cell
 bound later only when the two strings agree byte for byte, member order
 included.
@@ -112,7 +112,7 @@ Executed during `db.exec`, before the `sqlite` op is recorded onto the commit
    - Resolve it to a `NormalizedFullLink`, build an absolute `SigilLink` via
      `createSigilLinkFromParsedLink(link, { includeSchema: false })` (no base),
      and write it as text with its members in the fixed order `path`, `id`,
-     `space`, `scope`, `overwrite` (`LINK_TEXT_MEMBER_ORDER`), because SQL
+     `space`, `scope`, `overwrite` (`inLinkTextOrder()`), because SQL
      compares the column as text.
 3. For each non-link parameter: if the value is a cell reference → **throw**;
    otherwise pass through as a SQLite scalar.

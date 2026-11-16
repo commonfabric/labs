@@ -450,7 +450,7 @@ export function createSigilLinkFromParsedLink(
  * by a pattern keying data by a stringified cell, so this order is fixed
  * whatever order a payload holds its members in.
  */
-export const LINK_TEXT_MEMBER_ORDER = [
+const LINK_TEXT_MEMBER_ORDER = [
   "path",
   "id",
   "space",
@@ -464,8 +464,9 @@ export const LINK_TEXT_MEMBER_ORDER = [
  * {@link LINK_TEXT_MEMBER_ORDER}, then every other member in the order
  * `link`'s payload holds them, for a link about to be turned into text. A
  * member whose value is `undefined` keeps its place. A link whose payload is
- * not a plain record is returned as it is. A snapshot the link names resolves
- * through the result as it does through `link`.
+ * not a plain record is returned as it is. A snapshot whose id the payload
+ * carries stays pinned through the result; one a relative link reaches only
+ * through its base does not, which text, the result's purpose, never needs.
  */
 export function inLinkTextOrder(link: SigilLink): SigilLink {
   const payload = linkRefPayload(link);

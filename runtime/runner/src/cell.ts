@@ -5183,9 +5183,6 @@ export class CellImpl<T extends FabricValue>
   }
 
   toJSON(): SigilLink | null {
-    // TODO(danfuzz): Remove this method once `value-debug` can correctly
-    // render cells without it.
-    //
     // The JSON protocol's name for the same link, honored by every renderer
     // that walks a value through it -- notably `toCompactDebugString()`, which
     // pattern-test assertion diagnostics render their operands with. Absent
@@ -5193,9 +5190,16 @@ export class CellImpl<T extends FabricValue>
     // reaches the whole runtime, so the rendering carries per-process detail
     // (the runtime's id among it) and reports differently each run.
     //
+    // It is also what `JSON.stringify()` makes of a cell in pattern code,
+    // where `toJSON` is part of every cell type `@commonfabric/api` declares.
+    // A pattern may keep that text, as a key or a value, so the text is the
+    // link's text form, written through `inLinkTextOrder()`, and stays the
+    // same from one build to the next. Rendering may stop depending on this
+    // method once `value-debug` can render cells without it; the method stays
+    // for that text.
+    //
     // It carries no weight on the way to storage: a value bound for storage is
-    // recognized as a cell first, and its link read off it directly. The text
-    // it yields is the link's text form, in `LINK_TEXT_MEMBER_ORDER`.
+    // recognized as a cell first, and its link read off it directly.
     const link = this.toSigilLinkOrNull();
     return link === null ? null : inLinkTextOrder(link);
   }

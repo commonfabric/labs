@@ -2610,7 +2610,7 @@ describe("link-utils", () => {
             { path: [], schema },
             { base: fullBase, includeSchema: true },
           )
-        ).toThrow();
+        ).toThrow("Cannot convert value to URI");
         const unconvertible = {
           toString(): string {
             throw new Error("unconvertible path element");

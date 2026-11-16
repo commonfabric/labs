@@ -91,6 +91,9 @@ describe("getAsLink method", () => {
     // Without the member, rendering a value holding a cell walks the cell's
     // own members into the runtime, so the rendering carries per-process
     // detail -- the runtime's id among it -- and reports differently each run.
+    // The link is spelled out rather than rendered from the cell, so a cell
+    // that stops rendering as its link, or as the members of its text form in
+    // their fixed order, fails here.
     const cell = runtime.getCell<{ value: number }>(
       space,
       "cell-debug-render-test",
@@ -99,8 +102,9 @@ describe("getAsLink method", () => {
     );
     cell.set({ value: 42 });
 
-    const link = toCompactDebugString(cell.toJSON());
-    const rendered = `/CellImpl(${link.slice(1, -1)})`;
+    const rendered =
+      `/CellImpl("/":{"link@1":{path:[],id:"${cell.sourceURI}",` +
+      `space:"${space}",scope:"space"}})`;
     expect(toCompactDebugString(cell)).toBe(rendered);
     expect(toCompactDebugString({ held: cell })).toBe(`{held:${rendered}}`);
   });
