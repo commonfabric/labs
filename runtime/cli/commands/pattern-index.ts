@@ -8,6 +8,8 @@ import {
   type PatternIndexSetSharingSettingsRequest,
   type PatternIndexSharingSettings,
 } from "@commonfabric/pattern-index/client";
+import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
@@ -29,6 +31,21 @@ interface IndexOptions {
   identity?: string;
   patternIndexUrl?: string;
   json?: boolean;
+}
+
+/**
+ * What `cf index` reaches outside the process: the index's transport, the
+ * local membership store, where an invite link is read from, and where the
+ * result goes. Each defaults to the real one.
+ */
+export interface IndexDeps {
+  fetchFn?: PatternIndexFetch;
+
+  /** The membership store, in place of the user's own for the index. */
+  store?: PatternIndexStore;
+
+  stdin?: ReadableStream<Uint8Array>;
+  render?: typeof render;
 }
 
 /** The identity keyfile, or a usage error saying how to name one. */
@@ -58,8 +75,10 @@ export const rethrowAsNotMember = (error: unknown): never => {
 };
 
 /** Reads the invite link from stdin, so it never reaches shell history. */
-const readLinkFromStdin = async (): Promise<string> => {
-  const text = await new Response(Deno.stdin.readable).text();
+const readLinkFromStdin = async (
+  stdin: ReadableStream<Uint8Array> = Deno.stdin.readable,
+): Promise<string> => {
+  const text = await new Response(stdin).text();
   if (text.trim() === "") {
     throw new ValidationError(
       "Pass the invite link, or pipe it on stdin (so it stays out of shell history).",
@@ -80,9 +99,10 @@ export const joinReport = (result: JoinResult): string =>
     `Next: ${cliText("cf pattern publish <entry file>")}`,
   ].join("\n");
 
-async function join(
+export async function join(
   options: IndexOptions & { chain?: string },
   link?: string,
+  { stdin, render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
   const signer = await loadIdentity(requireIdentityPath(options));
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
@@ -101,22 +121,31 @@ async function join(
         `${options.chain} holds ${chains.length} chains; an index chain file holds one.`,
       );
     }
-    result = await adoptIndexChain({ baseUrl, signer, chain: chains[0] });
+    result = await adoptIndexChain({
+      baseUrl,
+      signer,
+      chain: chains[0],
+      ...access,
+    });
   } else {
-    const invite = parseInviteLink(link ?? await readLinkFromStdin());
-    result = await joinPatternIndex({ baseUrl, signer, invite });
+    const invite = parseInviteLink(link ?? await readLinkFromStdin(stdin));
+    result = await joinPatternIndex({ baseUrl, signer, invite, ...access });
   }
-  render(options.json ? result : joinReport(result), { json: options.json });
+  out(options.json ? result : joinReport(result), { json: options.json });
 }
 
-async function whoami(options: IndexOptions): Promise<void> {
+export async function whoami(
+  options: IndexOptions,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
   const signer = await loadIdentity(requireIdentityPath(options));
   const client = await openPatternIndexClient({
     baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
     signer,
+    ...access,
   });
   const member = await client.whoami().catch(rethrowAsNotMember);
-  render(
+  out(
     options.json
       ? { ...member, signer: signer.did() }
       : `${member.handle} (${member.role}), signing as ${signer.did()}`,
@@ -165,26 +194,32 @@ export const sharingLines = (
   ];
 };
 
-async function sharing(
+export async function sharing(
   options: IndexOptions & { selfBuilt?: string },
   state: string | undefined,
+  { render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
   const change = sharingChange(state, options.selfBuilt);
   const signer = await loadIdentity(requireIdentityPath(options));
   const client = await openPatternIndexClient({
     baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
     signer,
+    ...access,
   });
   const settings =
     await (Object.keys(change).length === 0
       ? client.getSharingSettings()
       : client.setSharingSettings(change)).catch(rethrowAsNotMember);
-  render(options.json ? settings : sharingLines(settings).join("\n"), {
+  out(options.json ? settings : sharingLines(settings).join("\n"), {
     json: options.json,
   });
 }
 
-async function admit(options: IndexOptions, did: string): Promise<void> {
+export async function admit(
+  options: IndexOptions,
+  did: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
   if (!isCanonicalEd25519DID(did)) {
     throw new ValidationError(`"${did}" is not an ed25519 did:key.`);
   }
@@ -192,9 +227,10 @@ async function admit(options: IndexOptions, did: string): Promise<void> {
   const client = await openPatternIndexClient({
     baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
     signer,
+    ...access,
   });
   const member = await client.admitKey({ did });
-  render(
+  out(
     options.json
       ? { ...member, did }
       : `Admitted ${did} as ${member.handle} (${member.role}).`,
@@ -202,7 +238,11 @@ async function admit(options: IndexOptions, did: string): Promise<void> {
   );
 }
 
-async function moveRoot(options: IndexOptions, file: string): Promise<void> {
+export async function moveRoot(
+  options: IndexOptions,
+  file: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
   const chains = decodeDelegationChains(await Deno.readTextFile(file));
   if (chains.length !== 1 || chains[0].length !== 1) {
     throw new ValidationError(
@@ -214,8 +254,9 @@ async function moveRoot(options: IndexOptions, file: string): Promise<void> {
     baseUrl: resolvePatternIndexUrl(options.patternIndexUrl),
     signer,
     rootDelegation: chains[0][0],
+    ...access,
   });
-  render(
+  out(
     options.json
       ? result
       : `${result.handle} is now rooted at ${result.root}. Chains issued from the old root no longer work; issue new ones with cf delegation issue --index.`,

@@ -157,6 +157,25 @@ export function offeredPullRequestUrl(output: string): string | null {
   return null;
 }
 
+/**
+ * Decodes `stream` as UTF-8 and passes each piece of text to `write` as it
+ * arrives. An abort of `signal` stops the relay as well as the process writing
+ * the stream, in case a process it started still holds the pipe; the relay
+ * then resolves. Rejects with any other failure to read the stream.
+ */
+export async function relayText(
+  stream: ReadableStream<BufferSource>,
+  write: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    const texts = stream.pipeThrough(new TextDecoderStream(), { signal });
+    for await (const text of texts) write(text);
+  } catch (error) {
+    if (!signal?.aborted) throw error;
+  }
+}
+
 /** The real operations, against the repository at `cwd`. */
 export function realPushIo({
   cwd = Deno.cwd(),
@@ -205,23 +224,14 @@ export function realPushIo({
     run: async (args) => {
       const child = git(args, repoEnv).spawn();
       let output = "";
-      // An abort stops the relays as well as git, in case a process git
-      // started still holds the pipes.
-      const relay = async (stream: ReadableStream<BufferSource>) => {
-        try {
-          const texts = stream.pipeThrough(new TextDecoderStream(), { signal });
-          for await (const text of texts) {
-            write(text);
-            output += text;
-          }
-        } catch (error) {
-          if (!signal?.aborted) throw error;
-        }
+      const shown = (text: string) => {
+        write(text);
+        output += text;
       };
       const [status] = await Promise.all([
         child.status,
-        relay(child.stdout),
-        relay(child.stderr),
+        relayText(child.stdout, shown, signal),
+        relayText(child.stderr, shown, signal),
       ]);
       return { success: status.success, output };
     },

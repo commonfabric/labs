@@ -423,7 +423,7 @@ single `/` roots at the context's space, and neither roots at the context's
 position. The space segment is a DID or a name; a segment holding `:` is a DID,
 and one without is a space name, which a session resolves to a DID — which is
 the rule the CLI already applies to the piece segment (`validatePieceSegment`
-and `namesResolvedParts` in `runtime/cli/lib/llm-friendly-ref.ts`), now applied
+in `runtime/cli/lib/llm-friendly-ref.ts`), now applied
 to both; `parseReferenceParts` itself holds neither segment to a form.
 
 A **context** is a cell address with parts missing — a space, a piece, a path

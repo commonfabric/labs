@@ -25,7 +25,6 @@ import {
   DocumentLoadError,
   getMetaLink,
   type IExtendedStorageTransaction,
-  loadDocument,
   loadProfileCandidates,
   loadProfileOwnerDocuments,
   orderProfileCandidates,
@@ -557,13 +556,11 @@ async function ownRetiredProfiles(
   await root.key("profiles").resolveAsCell().sync();
   await root.key("retiredProfiles").resolveAsCell().sync();
   const listed = profileSpaces(root);
-  const runtime = cellRuntime(root);
   const found: Cell<unknown>[] = [];
   for (const space of profileSpaces(root, "retiredProfiles").keys()) {
     const link = listed.get(space);
     if (link === undefined) continue;
     try {
-      if (!await loadDocument(runtime, link)) continue;
       // A link that is no one's profile, one whose links run in a cycle among
       // them, is left unresolved, since only an own profile is listed.
       if (await isOwnProfile(link, root.space)) {

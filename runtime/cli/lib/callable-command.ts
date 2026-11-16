@@ -66,38 +66,6 @@ export interface CallableCommandExecutionOptions<
   sectionPrefix?: string;
 }
 
-export async function readJsonInputFromStdin(): Promise<unknown> {
-  const reader = Deno.stdin.readable.getReader();
-  const decoder = new TextDecoder();
-  let sawChunk = false;
-  let text = "";
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      sawChunk = true;
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (!sawChunk && text.trim().length === 0) {
-    throw new Error("Expected JSON on stdin for --json");
-  }
-
-  if (text.trim().length === 0) {
-    throw new Error("Expected JSON on stdin for --json");
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error("Invalid JSON on stdin for --json");
-  }
-}
-
 export async function executeCallableCommand<
   TResolved,
   TDeps extends CallableExecutionDeps & ExecInputResolverDeps,

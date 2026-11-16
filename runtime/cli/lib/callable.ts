@@ -1247,13 +1247,15 @@ export async function executeResolvedCallable(
   try {
     await runtime.idle();
     runtime.prepareTxForCommit(tx);
-    await tx.commit().settled;
     // A tool's result cell is durable, so a transaction that wrote one is a
     // write to the space like a handler's is. Neither `commit()` resolving
     // nor a `done` status proves that: an empty transaction commits
     // successfully too. The journal's novelty for this space is what was
-    // actually written, so the receipt follows it.
-    if (transactionWroteTo(tx, resolved.space)) noteWroteTo(resolved.space);
+    // actually written, so the receipt follows it. The journal is read before
+    // the commit, because a committed transaction releases it.
+    const wrote = transactionWroteTo(tx, resolved.space);
+    const committed = await tx.commit().settled;
+    if (wrote && committed.error === undefined) noteWroteTo(resolved.space);
 
     // Drain the tool to a fully settled state — scheduler idle, storage synced,
     // and every in-flight async builtin finished — so the result is final by the

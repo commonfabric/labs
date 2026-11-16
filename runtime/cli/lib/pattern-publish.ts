@@ -587,7 +587,6 @@ async function checkLocally(
           `the LLM at ${deps.modelLabel} did not answer (${error.message})`,
       };
     }
-    if (error instanceof PublishError) throw error;
     return {
       status: "skipped",
       reason: `the local check could not finish (${describeFailure(error)})`,

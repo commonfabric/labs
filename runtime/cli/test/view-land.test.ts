@@ -348,6 +348,15 @@ describe("view-land", () => {
       expect(text.length).toBeLessThan(long.length);
     });
 
+    it("links no address that starts beyond the part of the message that fits", () => {
+      const s = session(true);
+
+      s.showMessage(`At ${url}, ${"then ".repeat(20)}https://x.test/b`);
+
+      expect(links(status(s))).toEqual([[url, url]]);
+      expect(status(s)).not.toContain("x.test");
+    });
+
     it("shows each control character in a message as its picture", () => {
       for (const color of [true, false]) {
         const s = session(color);

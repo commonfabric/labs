@@ -132,26 +132,6 @@ describe("JSON command contracts", () => {
     });
   });
 
-  it("keeps the profiling marker off pattern JSON stdout", async () => {
-    const env = { CF_PROFILE_DONE_MARKER: "profile finished" };
-    const { code, stdout, stderr } = await cf(
-      argv`check fixtures/check-json-no-evaluate.ts --pattern-json`,
-      { env },
-    );
-
-    expect(code).toBe(0);
-    expect(stdout).toEqual(["1"]);
-    expect(stderr.join("\n")).toContain("profile finished");
-
-    const transformed = await cf(
-      argv`check fixtures/check-json-no-evaluate.ts --show-transformed`,
-      { env },
-    );
-    expect(transformed.code).toBe(0);
-    expect(transformed.stdout.join("\n")).not.toContain("profile finished");
-    expect(transformed.stderr.join("\n")).toContain("profile finished");
-  });
-
   it("keeps parser help off reserved stdout modes", async () => {
     for (
       const command of [

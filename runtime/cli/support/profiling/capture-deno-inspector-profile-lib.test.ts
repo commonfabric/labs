@@ -2,9 +2,8 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import {
-  CAPTURE_STOP_SIGNAL,
+  CAPTURE_TARGET_FINISHED_MESSAGE,
   captureDenoInspectorProfile,
-  guardCaptureStopSignal,
   markProfilerStarted,
   markProfileStoppedOnce,
   parseArg,
@@ -192,6 +191,15 @@ class FakeCelestial {
         listener.handleEvent(event);
       }
     }
+  }
+
+  dispatchExecutionContextDestroyed(): void {
+    this.dispatch(
+      "Runtime.executionContextDestroyed",
+      new CustomEvent("Runtime.executionContextDestroyed", {
+        detail: { executionContextId: 1 },
+      }),
+    );
   }
 
   dispatchConsole(...args: Record<string, unknown>[]): void {
@@ -1401,6 +1409,70 @@ describe("capture-deno-inspector-profile helpers", () => {
     });
   });
 
+  it("profiles from a start marker until the inspector reports that the program finished", async () => {
+    await withTempDir(async (tmpDir) => {
+      const celestial = new FakeCelestial();
+      const logs: string[] = [];
+      const errors: string[] = [];
+      const resumed = Promise.withResolvers<void>();
+      const outputPath = `${tmpDir}/profile.cpuprofile`;
+      const done = captureDenoInspectorProfile(
+        [
+          `--output=${outputPath}`,
+          "--summary-pattern=(?!)",
+          "--profile-start-pattern=Usage",
+          "--websocket-url=ws://127.0.0.1:9333/session",
+        ],
+        createCaptureRuntime({ celestial, logs, errors, resumed }),
+      );
+
+      await resumed.promise;
+      // The inspector delivers the program's console messages, then reports
+      // the end of the program, with the profiler start still in flight.
+      celestial.dispatchConsole({ value: "Usage: cf" });
+      celestial.dispatchExecutionContextDestroyed();
+      assertEquals(logs.includes(CAPTURE_TARGET_FINISHED_MESSAGE), true);
+
+      assertEquals(await done, 0, errors.join("\n"));
+      assertEquals(errors, []);
+      assertEquals(celestial.starts, 1);
+      assertEquals(celestial.stops, 1);
+      assertStringIncludes(await Deno.readTextFile(outputPath), '"nodes": []');
+      assertEquals(logs.includes("profile: target-finished"), true);
+    });
+  });
+
+  it("fails when the program finishes without printing the start marker", async () => {
+    await withTempDir(async (tmpDir) => {
+      const celestial = new FakeCelestial();
+      const logs: string[] = [];
+      const errors: string[] = [];
+      const resumed = Promise.withResolvers<void>();
+      const outputPath = `${tmpDir}/profile.cpuprofile`;
+      const done = captureDenoInspectorProfile(
+        [
+          `--output=${outputPath}`,
+          "--profile-start-pattern=NeverPrinted",
+          "--websocket-url=ws://127.0.0.1:9333/session",
+        ],
+        createCaptureRuntime({ celestial, logs, errors, resumed }),
+      );
+
+      await resumed.promise;
+      celestial.dispatchConsole({ value: "Usage: cf" });
+      celestial.dispatchExecutionContextDestroyed();
+      assertEquals(logs.includes(CAPTURE_TARGET_FINISHED_MESSAGE), true);
+
+      assertEquals(await done, 1);
+      assertEquals(celestial.starts, 0);
+      assertEquals(
+        errors,
+        ["profile: Profile start pattern was not observed: NeverPrinted"],
+      );
+      assertEquals(logs.includes("profile: target-finished"), true);
+    });
+  });
+
   it("fails when the websocket closes while resuming before a required profile start marker", async () => {
     await withTempDir(async (tmpDir) => {
       const celestial = new FakeCelestial();
@@ -1525,7 +1597,10 @@ describe("capture-deno-inspector-profile helpers", () => {
 
       assertEquals((caught as Error).message, "runtime unavailable");
       assertEquals(removed, ["SIGINT", "SIGTERM"]);
-      assertEquals(celestial.removedListeners, ["Runtime.consoleAPICalled"]);
+      assertEquals(celestial.removedListeners, [
+        "Runtime.consoleAPICalled",
+        "Runtime.executionContextDestroyed",
+      ]);
       assertEquals(celestial.calls.includes("close"), true);
     });
   });
@@ -1709,30 +1784,5 @@ describe("capture-deno-inspector-profile helpers", () => {
       new TextDecoder().decode(result.stderr),
       "--output is required",
     );
-  });
-
-  it("guards only the capture stop signal, leaving SIGINT for Ctrl-C", () => {
-    const registered: Array<[Deno.Signal, () => void]> = [];
-    guardCaptureStopSignal((signal, handler) => {
-      registered.push([signal, handler]);
-    });
-
-    // Only the stop signal is guarded — SIGINT stays at its default disposition
-    // so an interactive Ctrl-C can still terminate the process.
-    assertEquals(registered.map(([signal]) => signal), [CAPTURE_STOP_SIGNAL]);
-    assertEquals(CAPTURE_STOP_SIGNAL, "SIGTERM");
-    // The guard handler is a no-op: it neither throws nor exits, so a stop
-    // signal arriving after the capture removed its own handlers cannot
-    // terminate the process.
-    for (const [, handler] of registered) {
-      handler();
-    }
-  });
-
-  it("tolerates platforms where signal listeners cannot be registered", () => {
-    // A throwing addSignalListener (signals unsupported) must not propagate.
-    guardCaptureStopSignal(() => {
-      throw new Error("signals unavailable");
-    });
   });
 });

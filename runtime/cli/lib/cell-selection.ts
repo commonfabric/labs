@@ -3288,6 +3288,35 @@ async function sourceRootIsArray(cell: Cell<unknown>): Promise<boolean> {
 }
 
 /**
+ * Helper for {@link selectFromRead}, which returns the elements of `value` that
+ * `selection`'s filter keeps where the selection treats the value as a list —
+ * it filters, or `projectsArrayItems` says its projection reaches into array
+ * items — and `value` itself where it does not.
+ *
+ * The source's shape was decided from an earlier read, and a write landing
+ * between the two can leave something other than an array where a list was
+ * expected; that throws rather than answering an empty list. An unset value is
+ * the empty array, as it is to the runner's list builtins.
+ */
+export function selectedElements(
+  value: unknown,
+  selection: CellSelection,
+  projectsArrayItems: boolean,
+): unknown {
+  const { filter } = selection;
+  if (filter === undefined && !projectsArrayItems) return value;
+  if (value !== undefined && !Array.isArray(value)) {
+    throw filter !== undefined
+      ? new CellSelectionError("--filter can only be applied to an array")
+      : arrayItemProjectionError(selection.projection!.flag);
+  }
+  return (value ?? []).filter((element: unknown) =>
+    filter === undefined ||
+    evaluateSelectionPredicate(filter.predicate, element)
+  );
+}
+
+/**
  * Helper for {@link deriveSelectedValue}, which answers a selection under server
  * execution: the server runs the piece, so the source is read through
  * `readSchema` and the value in hand is shaped here, which starts nothing and
@@ -3305,21 +3334,11 @@ async function selectFromRead(
     sanitizeSchemaForLinks(readSchema, KeepAsCell.OnlyStream),
   );
   const value = await timeSelectionPhase("read", () => read.pull());
-  const { filter } = selection;
-  const isList = filter !== undefined || projection?.projectsArrayItems;
-  if (isList && value !== undefined && !Array.isArray(value)) {
-    throw filter !== undefined
-      ? new CellSelectionError("--filter can only be applied to an array")
-      : arrayItemProjectionError(selection.projection!.flag);
-  }
-  // An unset declared array is the empty array, as it is to the runner's list
-  // builtins.
-  const selected = !isList
-    ? value
-    : Array.from((value ?? []) as unknown[]).filter((element) =>
-      filter === undefined ||
-      evaluateSelectionPredicate(filter.predicate, element)
-    );
+  const selected = selectedElements(
+    value,
+    selection,
+    projection?.projectsArrayItems === true,
+  );
   const implicitArrayTraversal = selection.projection?.kind === "concise";
   const output = projection === undefined ? selected : projectValue(
     selected,

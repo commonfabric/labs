@@ -1,0 +1,1 @@
+{"date":"2026-11-20","from":{"k":"unit","s":"cli","n":"cf profile command actions > profileGetPictureAction() > writes the picture's bytes to the file named"},"to":{"k":"unit","s":"cli","n":"cf profile command actions > profileGetPictureAction() > writes the picture's bytes to the file named, and nothing to standard output"}}

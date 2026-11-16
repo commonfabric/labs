@@ -98,7 +98,6 @@ export function diffSource(
   // The HEAD commit's message region in the given lines, or null. The regions
   // shift as the diff is edited, so they are re-derived from the current text.
   const editableMessage = (lines: readonly string[]): CommitMessage | null => {
-    if (!shownHead) return null;
     for (const m of findCommitMessages(lines)) {
       if (matchesShownHead(m.sha)) return m;
     }
@@ -107,7 +106,6 @@ export function diffSource(
   const representedCommit = (
     lines: readonly string[],
   ): { sha: string } | null => {
-    if (!shownHead) return null;
     for (const commit of findCommitHeaders(lines)) {
       if (matchesShownHead(commit.sha)) return { sha: commit.sha };
     }
@@ -433,10 +431,8 @@ export function diffSource(
         if (before === null) {
           throw new Error(`Could not read ${path}; no files were saved.`);
         }
+        // `changes` holds only files that have a baseline.
         const expected = expectedFiles.get(path);
-        if (expected === undefined) {
-          throw new Error(`No saved baseline exists for ${path}.`);
-        }
         if (before !== expected && before !== contents) {
           throw new Error(
             `${path} changed after this view opened; no files were saved.`,
@@ -1089,14 +1085,7 @@ function expandContext(
     );
   }
   const text = applyExpansion(current, target, up, ctx, k);
-  const newBaseline = applyExpansion(
-    baseline,
-    baseHunk,
-    up,
-    baseCtx,
-    k,
-  );
-  if (text === null || newBaseline === null) return null;
+  const newBaseline = applyExpansion(baseline, baseHunk, up, baseCtx, k);
   if (revealsUnterminatedEof) {
     hunks[index].oldNoTrailingNewline = true;
     hunks[index].newNoTrailingNewline = true;
@@ -1193,7 +1182,6 @@ function expansionLineEndingProvenance(
     }
     const ending = revealed[newSideIndex];
     if (line[0] !== "-") newSideIndex++;
-    if (ending === undefined) return undefined;
     return {
       ending,
       bodyCarriesCrlfEnding: ending === "\r\n" && !diffUsesCrlfTransport,
@@ -1203,7 +1191,6 @@ function expansionLineEndingProvenance(
 
 /** Add Git's marker after context that reaches an unterminated file end. */
 function appendNoNewlineMarker(lines: string[], crlfDiff: boolean): void {
-  if (lines.length === 0) return;
   const transport = crlfDiff ? "\r" : "";
   const marker = `\\ No newline at end of file${transport}`;
   const paired = lines.at(-1)?.startsWith("+") &&
@@ -1292,20 +1279,15 @@ function applyExpansion(
   up: boolean,
   ctx: string[],
   k: number,
-): string | null {
+): string {
   const lines = text.split("\n");
   const h = hunk.headerLine;
   const bodyEnd = hunk.endLine + 1;
   const headerEnding = lines[h].endsWith("\r") ? "\r" : "";
   const headerText = headerEnding ? lines[h].slice(0, -1) : lines[h];
-  const m = headerText.match(
-    /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/,
-  );
-  if (!m) return null;
-  let oldStart = parseInt(m[1], 10);
-  let oldCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
-  let newStart = parseInt(m[3], 10);
-  let newCount = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+  // The parser matched the header, so its ranges end at the first " @@".
+  const suffix = headerText.slice(headerText.indexOf(" @@") + 3);
+  let { oldStart, oldCount, newStart, newCount } = hunk;
   if (up) {
     oldStart += oldCount === 0 ? 1 - k : -k;
     newStart += newCount === 0 ? 1 - k : -k;
@@ -1315,9 +1297,8 @@ function applyExpansion(
   }
   oldCount += k;
   newCount += k;
-  const header = `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${
-    m[5] ?? ""
-  }${headerEnding}`;
+  const header =
+    `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${suffix}${headerEnding}`;
   const out = up
     ? [...lines.slice(0, h), header, ...ctx, ...lines.slice(h + 1)]
     : [
@@ -2145,18 +2126,15 @@ function nearbyLineEnding(
   count: number,
   fallback: Exclude<FileLineEnding, "">,
 ): Exclude<FileLineEnding, ""> {
-  for (const line of lines.slice(start, start + count)) {
-    if (line.ending !== "") return line.ending;
-  }
-  for (let index = start - 1; index >= 0; index--) {
-    const ending = lines[index]?.ending;
-    if (ending) return ending;
-  }
-  for (let index = start + count; index < lines.length; index++) {
-    const ending = lines[index]?.ending;
-    if (ending) return ending;
-  }
-  return fallback;
+  // Only a file's last line lacks an ending, so the nearest ending is on the
+  // range's first line, one of the two lines before it, or the line after it.
+  const nearest = [
+    count > 0 ? lines[start] : undefined,
+    lines[start - 1],
+    lines[start - 2],
+    lines[start + count],
+  ].find((line) => line?.ending);
+  return nearest?.ending || fallback;
 }
 
 function nearbyProvenanceEnding(

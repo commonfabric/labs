@@ -1,6 +1,7 @@
 import { Command } from "@cliffy/command";
 import { basename, dirname } from "@std/path";
 import { LLMClient } from "@commonfabric/llm";
+import type { MemorySpace, Runtime } from "@commonfabric/runner";
 import type { ObjectGenerator } from "@commonfabric/pattern-index/privacy";
 import {
   compileLocalPattern,
@@ -46,11 +47,12 @@ import {
   type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
-import { loadPieces } from "../lib/piece.ts";
+import { loadPieces, type SpaceConfig } from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import {
   indexAccessOptions,
+  type IndexDeps,
   requireIdentityPath,
   rethrowAsNotMember,
 } from "./pattern-index.ts";
@@ -127,6 +129,38 @@ export const gitUncommitted = async (
   return dirty;
 };
 
+/** What `cf pattern share` reads of the connection to the space. */
+export interface PublishConnection {
+  runtime: Runtime;
+  getSpace(): MemorySpace;
+  dispose(): Promise<void>;
+}
+
+/**
+ * What `cf pattern share` reaches outside the process, beyond what
+ * `cf index` does: the connection whose runtime compiles the pattern, and
+ * which files git could restore. Each defaults to the real one.
+ */
+export interface PublishCommandDeps extends Omit<IndexDeps, "stdin"> {
+  loadPieces?: (config: SpaceConfig) => Promise<PublishConnection>;
+  uncommitted?: typeof gitUncommitted;
+}
+
+/**
+ * What `cf pattern publish` reaches beyond what `share` does: the person's
+ * profiles. Defaults to the real ones.
+ */
+export interface PublishNamedDeps extends PublishCommandDeps {
+  listProfiles?: (config: SpaceConfig) => Promise<ListedProfile[]>;
+}
+
+/** The store `cf` keeps for the index at `baseUrl`, unless one is given. */
+const storeFor = (
+  baseUrl: string,
+  store: PatternIndexStore | undefined,
+): PatternIndexStore =>
+  store ?? new PatternIndexStore(patternIndexStoreDir(baseUrl));
+
 /** The model `cf` reaches through its fabric's toolshed. */
 const toolshedGenerator = (apiUrl: string): ObjectGenerator => {
   const client = new LLMClient();
@@ -152,9 +186,16 @@ interface NamedPublishCLIOptions extends PublishCLIOptions {
  * the lineage the share was kept in, once the report is out, so a naming
  * that fails never hides what the share did.
  */
-async function share(
+export async function share(
   options: PublishCLIOptions,
   entry: string,
+  {
+    loadPieces: load = loadPieces,
+    uncommitted = gitUncommitted,
+    render: out = render,
+    fetchFn,
+    store: given,
+  }: PublishCommandDeps = {},
   naming?: (
     client: PatternIndexClient,
     report: Extract<PublishReport, { outcome: "shared" }>,
@@ -163,9 +204,14 @@ async function share(
   const config = parseSpaceOptions(options);
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
   const signer = await loadIdentity(config.identity);
-  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
-  const client = await openPatternIndexClient({ baseUrl, signer, store });
-  const pieces = await loadPieces(config);
+  const store = storeFor(baseUrl, given);
+  const client = await openPatternIndexClient({
+    baseUrl,
+    signer,
+    fetchFn,
+    store,
+  });
+  const pieces = await load(config);
   try {
     const runtime = pieces.runtime;
     const space = pieces.getSpace();
@@ -208,21 +254,21 @@ async function share(
         client,
         generate: toolshedGenerator(config.apiUrl),
         modelLabel: config.apiUrl,
-        uncommitted: gitUncommitted,
+        uncommitted,
         readTextFile: (path) => Deno.readTextFile(path),
         writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
         store,
       },
     );
     if (naming === undefined || report.outcome !== "shared") {
-      render(
+      out(
         options.json ? report : publishReportLines(report).join("\n"),
         { json: options.json },
       );
       if (report.outcome === "blocked") Deno.exitCode = 1;
       return;
     }
-    if (!options.json) render(publishReportLines(report).join("\n"));
+    if (!options.json) out(publishReportLines(report).join("\n"));
     let named: string;
     try {
       named = await naming(client, report);
@@ -232,7 +278,7 @@ async function share(
       }`;
       Deno.exitCode = 1;
     }
-    render(options.json ? { ...report, named } : named, {
+    out(options.json ? { ...report, named } : named, {
       json: options.json,
     });
   } finally {
@@ -247,9 +293,10 @@ async function share(
  * name it shows, and an agent has to have asked the person. Everything that
  * can refuse the naming is checked before anything is shared.
  */
-async function publishNamed(
+export async function publishNamed(
   options: NamedPublishCLIOptions,
   entry: string,
+  deps: PublishNamedDeps = {},
 ): Promise<void> {
   const config = parseSpaceOptions(options);
   const identity = await loadIdentity(config.identity);
@@ -260,7 +307,10 @@ async function publishNamed(
   let proof: string[];
   let chosen: ListedProfile;
   try {
-    const profiles = await listProfiles({ ...config, space: identity.did() });
+    const profiles = await (deps.listProfiles ?? listProfiles)({
+      ...config,
+      space: identity.did(),
+    });
     chosen = chooseProfile(profiles, options.profile);
     if (options.as !== chosen.name) {
       refuse(
@@ -277,7 +327,11 @@ async function publishNamed(
         space: chosen.space,
         piece: chosen.id,
         displayName: chosen.name,
-        delegations: await recordedDelegations(config, chosen.space),
+        delegations: await recordedDelegations(
+          config,
+          chosen.space,
+          deps.loadPieces,
+        ),
       },
       identity.did(),
     );
@@ -287,11 +341,9 @@ async function publishNamed(
     return;
   }
   const sources = slotSources(
-    new PatternIndexStore(
-      patternIndexStoreDir(resolvePatternIndexUrl(options.patternIndexUrl)),
-    ),
+    storeFor(resolvePatternIndexUrl(options.patternIndexUrl), deps.store),
   );
-  await share(options, entry, async (client, report) => {
+  await share(options, entry, deps, async (client, report) => {
     // The lineage the share landed in, which the index may have found by
     // an earlier publication rather than by this file's slot.
     const lineageId = report.lineageId ??
@@ -318,8 +370,9 @@ const slotSources = (store: PatternIndexStore): SlotSources => ({
 async function recordedDelegations(
   config: ReturnType<typeof parseSpaceOptions>,
   space: string,
+  load: (config: SpaceConfig) => Promise<PublishConnection> = loadPieces,
 ): Promise<Uint8Array[]> {
-  const pieces = await loadPieces(config);
+  const pieces = await load(config);
   try {
     return await pieces.runtime.recordedDelegations(space as DIDKey);
   } finally {
@@ -338,12 +391,15 @@ interface IndexCLIOptions {
  * The client for the index `options` names, signing as its identity, and
  * where that index's lineage slots get their inputs.
  */
-async function indexFor(options: IndexCLIOptions) {
+async function indexFor(
+  options: IndexCLIOptions,
+  { fetchFn, store: given }: IndexDeps,
+) {
   const signer = await loadIdentity(requireIdentityPath(options));
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
-  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  const store = storeFor(baseUrl, given);
   return {
-    client: await openPatternIndexClient({ baseUrl, signer, store }),
+    client: await openPatternIndexClient({ baseUrl, signer, fetchFn, store }),
     sources: slotSources(store),
   };
 }
@@ -362,33 +418,35 @@ async function ownerOnly(run: () => Promise<void>): Promise<void> {
   }
 }
 
-async function history(
+export async function history(
   options: IndexCLIOptions,
   entry: string | undefined,
+  { render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
   await ownerOnly(async () => {
-    const { client, sources } = await indexFor(options);
+    const { client, sources } = await indexFor(options, access);
     if (entry === undefined) {
       const { lineages } = await client.listLineages();
-      render(options.json ? lineages : lineageLines(lineages).join("\n"), {
+      out(options.json ? lineages : lineageLines(lineages).join("\n"), {
         json: options.json,
       });
       return;
     }
     const { rows } = await entryHistory(client, absPath(entry), sources);
-    render(options.json ? rows : historyLines(entry, rows).join("\n"), {
+    out(options.json ? rows : historyLines(entry, rows).join("\n"), {
       json: options.json,
     });
   });
 }
 
-async function rollback(
+export async function rollback(
   options: IndexCLIOptions & { force?: boolean },
   entry: string,
   version: string,
+  { render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
   await ownerOnly(async () => {
-    const { client, sources } = await indexFor(options);
+    const { client, sources } = await indexFor(options, access);
     const report = await rollbackEntry(
       absPath(entry),
       version,
@@ -400,19 +458,20 @@ async function rollback(
         writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
       },
     );
-    render(
+    out(
       options.json ? report : rollbackLines(entry, report).join("\n"),
       { json: options.json },
     );
   });
 }
 
-async function unshare(
+export async function unshare(
   options: IndexCLIOptions,
   entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
   await ownerOnly(async () => {
-    const { client, sources } = await indexFor(options);
+    const { client, sources } = await indexFor(options, access);
     const lineage = await lineageForEntry(client, absPath(entry), sources);
     if (lineage === undefined) {
       throw new PatternHistoryError(`No versions of ${entry} are kept.`);
@@ -420,7 +479,7 @@ async function unshare(
     const result = await client.unshareLineage({
       lineageId: lineage.lineageId,
     });
-    render(
+    out(
       options.json
         ? result
         : `${entry} is no longer listed or shared on its own. Anyone holding the id of a version already shared can still open it; cf pattern share shares it again.`,
@@ -429,12 +488,13 @@ async function unshare(
   });
 }
 
-async function unpublish(
+export async function unpublish(
   options: IndexCLIOptions,
   entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
   await ownerOnly(async () => {
-    const { client, sources } = await indexFor(options);
+    const { client, sources } = await indexFor(options, access);
     const lineage = await lineageForEntry(client, absPath(entry), sources);
     if (lineage === undefined) {
       throw new PatternHistoryError(`No versions of ${entry} are kept.`);
@@ -442,7 +502,7 @@ async function unpublish(
     const result = await client.unpublishLineage({
       lineageId: lineage.lineageId,
     });
-    render(
+    out(
       options.json
         ? result
         : result.changed
@@ -453,18 +513,24 @@ async function unpublish(
   });
 }
 
-async function mine(
+export async function mine(
   options: { identity?: string; patternIndexUrl?: string; json?: boolean },
+  { render: out = render, fetchFn, store: given }: IndexDeps = {},
 ): Promise<void> {
   const signer = await loadIdentity(requireIdentityPath(options));
   const baseUrl = resolvePatternIndexUrl(options.patternIndexUrl);
-  const client = await openPatternIndexClient({ baseUrl, signer });
-  const store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  const store = storeFor(baseUrl, given);
+  const client = await openPatternIndexClient({
+    baseUrl,
+    signer,
+    fetchFn,
+    store,
+  });
   const { patterns } = await client.listPatterns({ mine: true }).catch(
     rethrowAsNotMember,
   );
   const rows = await mineRows(patterns, (id) => store.entryFor(id));
-  render(options.json ? rows : mineLines(rows).join("\n"), {
+  out(options.json ? rows : mineLines(rows).join("\n"), {
     json: options.json,
   });
 }

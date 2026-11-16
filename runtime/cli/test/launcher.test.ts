@@ -279,7 +279,6 @@ console.log(JSON.stringify({
   cwd: Deno.cwd().replaceAll("\\\\", "/"),
   configValue: value,
   cfApiUrl: Deno.env.get("CF_API_URL"),
-  cfCliName: Deno.env.get("CF_CLI_NAME"),
   initCwd: Deno.env.get("INIT_CWD"),
   readsInterfaceNetworks: Deno.networkInterfaces().length > 0,
 }));
@@ -324,7 +323,6 @@ console.log(JSON.stringify({
       cwd: expectedCwd,
       configValue: "consumer-config",
       cfApiUrl: "http://example.invalid",
-      cfCliName: "cf",
       initCwd: "/stale/init/cwd",
       readsInterfaceNetworks: true,
     });
@@ -364,9 +362,6 @@ Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
         "--no-run",
       ],
       cwd: "/workspace/consumer",
-      env: {
-        CF_CLI_NAME: "cf",
-      },
     },
   );
 });

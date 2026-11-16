@@ -354,6 +354,32 @@ describe("github", () => {
       });
     });
 
+    it("merges a pull request whose successful answer is not JSON, but rejects such an answer to a creation", async () => {
+      const { send } = fakeFetch(200, "Merged.");
+      const api = githubApi(() => "t0k", send);
+
+      const merged = await api.merge(
+        { repository: "octo/repo", number: 12, method: "merge", sha: "c0ffee" },
+        () => {},
+        new AbortController().signal,
+      );
+
+      expect(merged).toBe("Merged https://github.com/octo/repo/pull/12");
+      await expect(
+        api.create(
+          {
+            repository: "octo/repo",
+            head: "feature",
+            base: "main",
+            title: "Title",
+            body: "",
+          },
+          () => {},
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow("GitHub did not say which pull request it created");
+    });
+
     it("asks GitHub's GraphQL API for the method its page would merge by", async () => {
       const methods = [["SQUASH", "squash"], ["MERGE", "merge"], [
         "REBASE",
