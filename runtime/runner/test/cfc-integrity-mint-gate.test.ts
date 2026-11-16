@@ -367,8 +367,14 @@ describe("CFC integrity mint gate", () => {
           const tx = runtime.edit();
           try {
             setCfcImplementationIdentity(tx, identity);
-            runtime.getCell(signer.did(), "mint-gate-digest", undefined, tx)
-              .set({ note: "written" });
+            // A raw write records no schema input, whose identity the digest
+            // would bind on its own.
+            tx.writeOrThrow({
+              space: signer.did(),
+              id: "of:mint-gate-digest",
+              type: "application/json",
+              path: ["value"],
+            }, { note: "written" });
             setCfcImplementationIdentity(tx, BUILTIN);
             return (tx as ExtendedStorageTransaction).accessForTestingOnly
               .preparedDigest();
