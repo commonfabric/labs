@@ -3742,7 +3742,11 @@ holds, before the server's result arrives.
 
 - A binding of the reactive tier copies nothing, so its stream is named by
   the binding's name and `within` steps. A client derives it, unless an
-  enclosing element key is a salted value hash.
+  enclosing element key is a salted value hash. The client's run of the
+  value code places the marker of `host.stream` where the server's run
+  does, and the client's runtime puts the link to the stream it derived
+  in the marker's place, with the same check against `Binding.result`
+  (`execution-and-storage.md` §2.2).
 - A binding made in a function body whose paths are all links, to cells or
   to containers bound by reference, is named by the identities of those
   cells and the addresses of those containers. A client derives it.

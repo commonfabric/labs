@@ -831,7 +831,7 @@ in place captures.
 
 The runtime invokes a cone's function with one argument, a host object, and
 the function returns a result record. Both are plain data apart from the
-host's four functions.
+host's four functions and the stream markers that one of them returns.
 
 ```ts
 type Index = number;
@@ -863,10 +863,12 @@ export interface ConeHost {
    */
   invoke(body: Index, computed: unknown): unknown;
   /**
-   * A link to the stream of one binding of `Plan.bindings`, for the
-   * element keys this cone instance is evaluated for. The function puts
-   * it at each position of a value it computes where the source writes
-   * the stream. Assumed (section 11, question 78).
+   * A marker for the stream of one binding of `Plan.bindings`. The
+   * function puts it at each position of a value it computes where the
+   * source writes the stream, and can do nothing else with it. When the
+   * runtime stores the value it writes, in the marker's place, the link
+   * to the stream of that binding for the element keys this cone
+   * instance is evaluated for (below).
    */
   stream(binding: Index): unknown;
 }
@@ -899,26 +901,86 @@ slot, keyed by the child's key, and the function reads the one at its
 key. The label is instantiated at the chosen child alone, and the cone
 instance is stale when the chosen child changed (section 3.3).
 
-`stream` is an assumption. A value a cone computes can hold the stream
-of a handler, as a rendered tree does at an event attribute.
+**Value code places a stream.** A value a cone computes can hold the
+stream of a handler, as a rendered tree does at an event attribute.
 `plan-and-label-templates.md` §1.1 lists those positions in
 `Binding.result`, because the instance has to store a link to the stream
 there. The runtime cannot place a stream from the listed paths alone: a
 path with `*` among the children of a view node does not say which
 positions the `*` stands for (its §8, question 78), and a path below a
-conditional holds the stream under one selection only. *Assumed*
-(question 78 of section 11): the value function places the stream, with
-`host.stream`, where the source writes it, and `Binding.result` says
-where that is for a reader of the plan. The alternative has the function
-leave the position empty and the runtime fill in the listed paths, which
-needs a rule for the two cases above. The prototype's executor places
-streams this way, and compared where the stored results of its corpus
-run hold a stream with the listed paths. 431 stored positions are named
-by a listed path and 18 by none. Of the listed paths without `*`, 315
-hold the stream and 12 do not. Of the 18, 14 hold the stream of a binding
-for which the prototype emits no `result` member, and 4 hold a stream
-that is an input of the pattern, which no binding stands for. The 12
-were not examined.
+conditional holds the stream under one selection only. By ruling the
+value function places the stream, and the runtime checks where.
+
+- **The marker.** `host.stream` returns a marker for the binding. The
+  function places the marker in the value it returns, at each position
+  where the source writes the stream. It can do nothing else with it:
+  the marker has no member to send an event with and none to read
+  through. So the rule that a cone's function holds no handle stands
+  ("Side-writes are returned, not performed", below). A marker in an
+  interim output stays a marker, because an interim output is not
+  stored, and a cone that pulls that output can pass it on in turn.
+- **The replacement.** When the runtime stores a value, it writes, in
+  the place of each marker, the link to the stream of the marker's
+  binding. For a binding whose `within` has `element` steps, the stream
+  is the one of the keys that the cone instance that called
+  `host.stream` has at those steps (section 5.2). For a binding with no
+  `element` step, the stream is the binding's one stream, whichever
+  cone instance called.
+- **The check.** For a marker at a position of the instance's result,
+  the runtime checks that the position is one that `Binding.result`
+  lists for the marker's binding. A `*` of a listed path matches any
+  element at that position, counted as
+  `plan-and-label-templates.md` §1.1 has it ("From a path to a
+  position"). A path below a conditional matches under either
+  selection. A marker at a position that no listed path of its binding
+  covers fails the evaluation: the cone instance takes the error state
+  (section 1.7), and no link is stored.
+- **What the list is for.** `Binding.result` stays the statement that
+  the label analysis and a reader of the plan rely on for where a
+  stream of the instance is stored, and it has to be complete.
+  `plan-and-label-templates.md` §1.1 ("The listed paths are complete")
+  says what the compiler owes.
+- **A stream that is an input of the pattern** is no binding of the
+  plan and has no marker. The function receives it as the reference of
+  an `identity` slot and passes it on as any input, and the runtime
+  stores the link by the rule for a value passed on unchanged (section
+  2.4). The check does not apply to it.
+
+The rule is the same for a cone of an element body in the three cases
+of a per-element source: an array of references, an array of plain
+values in place, and the result of another per-element construct. The
+marker is replaced by the link to the stream of the instance's key in
+each, and the three differ only in how the key is computed (section
+2.5).
+
+The prototype's executor places streams with `host.stream`, without
+the marker and the check, and compared where the stored results of its
+corpus run hold a stream with the listed paths. 431 stored positions
+are named by a listed path and 18 by none. Of the listed paths without
+`*`, 315 hold the stream and 12 do not. Of the 18, 14 hold the stream
+of a binding for which the prototype emits no `result` member: under
+the check each fails its evaluation, and the compiler owes a path for
+it. 4 hold a stream that is an input of the pattern, which the check
+does not concern. The 12 were not examined: a listed path below a
+conditional holds no stream while another branch is selected, and a
+path that no selection fills is one the compiler owes not to list,
+which the check does not find.
+
+Three things the ruling does not determine are *assumed* (question 78
+of section 11).
+
+- **A marker stored outside the result.** `Binding.result` lists paths
+  of the result. A marker in the value of a side-write, or at a path of
+  a child's argument that a cone computes, is replaced by the link and
+  is not checked. The label of what is stored there is by the rule of
+  that write (`plan-and-label-templates.md` §3.11 and §3.15).
+- **A marker handed to a sandboxed body.** Where the `computed` argument
+  of `host.invoke` holds a marker at a path that an `identity` entry of
+  `Body.computed` names, the runtime hands the body the reference to
+  the stream, as it hands it any reference at such a path (section
+  2.4).
+- **A listed path that holds no stream under any selection** is not
+  reported at run time.
 
 **An output with entries below it.** A constructed value, such as a
 rendered tree, has an entry of `Plan.outputs` for its container and one
@@ -1009,7 +1071,9 @@ Six rules hold for an invocation.
   runtime decides (`Pick.chosenBy`).
 - **Side-writes are returned, not performed.** The function returns the
   value of each static side-write. The runtime stages the write to the
-  target the `WriteEdge` names. A cone's function holds no handle.
+  target the `WriteEdge` names. A cone's function holds no handle. The
+  marker that `host.stream` returns is no handle: the function can
+  place it in a value and nothing else.
 - **Collection operations are the runtime's.** A cone does not iterate a
   reactive collection. Section 2.5 says what the runtime does.
 
@@ -2262,7 +2326,10 @@ path has `*` at the position of each enclosing collection, as
 `$UI/children/*/props/onClick` for a row of a `map` spread into the
 root's children, and the link stored at each position is to the stream
 of the element key there (that document's §1.1, "The result paths of a
-binding in an element body", assumed there under its question 78).
+binding in an element body", assumed there under its question 78). The
+value function puts the marker of `host.stream` at the position, and the
+runtime stores the link in its place and checks the position against
+these paths (section 2.2).
 Where the callback writes the stream of a binding made outside it, the
 binding has one stream and every position of the collection holds a
 link to it. A child position whose value is the result of a pattern
@@ -4869,14 +4936,26 @@ Added by the ruling that the scheduler is switched per space (section 9):
     a new instance in one transaction where something demands it at
     once. The prototype's derived count of two transactions to settle
     an instance rests on this assumption.
-78. **Who places a stream in a computed value** (section 2.2;
-    `plan-and-label-templates.md` §1.1, `Binding.result`). *Assumed:*
-    the value function places it, through `ConeHost.stream`, and
-    `Binding.result` describes the positions. The alternative has the
-    runtime fill in the paths of `Binding.result`, which a path with `*`
-    among the children of a view node and a path below a conditional do
-    not determine. In the prototype's corpus run the two agree at 431 of
-    449 stored positions, and at 315 of 327 listed paths without `*`.
+78. **What the check of a stream's position covers** (section 2.2;
+    `plan-and-label-templates.md` §1.1, `Binding.result`). Not open: by
+    ruling the value function places a stream, with the marker that
+    `ConeHost.stream` returns, and the runtime writes the link in the
+    marker's place when it stores the value and fails the evaluation
+    where the position is one that no path of `Binding.result` covers.
+    Open are three things the ruling does not determine. *Assumed:* a
+    marker stored outside the result, in a side-write or a computed
+    path of a child's argument, is replaced by the link and not
+    checked, since `Binding.result` lists paths of the result alone;
+    the alternative refuses a marker there, or gives the binding a list
+    for those positions. *Assumed:* a marker at an `identity` path of
+    the argument of a sandboxed body is handed to the body as the
+    reference to the stream; the alternative refuses it. And a listed
+    path that holds no stream under any selection is not found by the
+    check: in the prototype's corpus run 12 of 327 listed paths without
+    `*` hold no stream and were not examined. The three are the same
+    for a cone of an element body over an array of references, over an
+    array of plain values in place, and over the result of another
+    per-element construct.
 79. **What a cone stores that passes on an element that is a plain
     value** (section 2.6; `plan-and-label-templates.md` §1.3). By ruling
     a move moves what the element's key holds and evaluates nothing for

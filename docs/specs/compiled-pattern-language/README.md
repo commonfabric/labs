@@ -191,7 +191,14 @@ The compiler emits two things for a pattern, content-addressed together.
 
 - **Value code:** JavaScript functions, one per dependency cone (defined
   under [Execution](#execution)), plus the sandboxed function bodies. This code
-  computes values and nothing else.
+  computes values and nothing else. Where a value holds the stream of a
+  handler, as a rendered tree does at an event attribute, the function
+  places a marker that the runtime gives it for that binding. The
+  function cannot send to the marker or read through it. When the runtime
+  stores the value it writes the link to the stream in the marker's
+  place, and fails the evaluation where the plan does not list the
+  position for that binding
+  ([execution and storage](execution-and-storage.md), §2.2).
 - **The plan:** data describing the pattern. It holds the input slots and
   their schemas, the label template of each output path, the footprint of each
   function body, the keep set, the causal identity of each state cell, the

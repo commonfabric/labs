@@ -1142,6 +1142,11 @@ export interface Binding {
    * step of `within` names the collection, the path stands for one
    * position per element, and otherwise every position of the
    * collection holds the one stream (below; section 8, question 78).
+   * By ruling the list is complete: it has a path for every position of
+   * the result at which value code can place the stream, and the
+   * runtime fails an evaluation that stores the stream's marker at a
+   * position no listed path covers (below, "The listed paths are
+   * complete").
    */
   readonly result?: readonly Path[];
 }
@@ -1378,12 +1383,17 @@ path stands for a collection, and an `element` step of the binding's
   (`patterns/examples/cfc-trusted-component-examples/`). The stream of a
   binding of one of those patterns is stored inside the one element that
   is that pattern's result, and at no other position of the collection.
-  No rule of the documents forms a path for it: a path with `*` would
-  stand for positions that do not hold the stream. *Assumed* (section 8,
-  question 84): such a binding has no `result` path through the
-  collection. It has the paths at which the result holds the pattern's
-  result without passing through the collection, and no `result` member
-  where there are none.
+  By ruling `Binding.result` is complete, and a marker of the stream
+  stored at a position no listed path covers fails the evaluation
+  ("The listed paths are complete", below), so the binding has a path
+  through the collection. *Assumed* (section 8, question 84): the path
+  has `*` at the collection, as the path of a stream that a callback
+  writes for every element has. The check matches a `*` at any
+  element, so it passes at the one position that holds the stream. The
+  `*` stands here for positions that do not hold the stream as well,
+  and a reader that has the plan alone tries each position. The binding
+  also has the paths at which the result holds the pattern's result
+  without passing through the collection.
 
 **A position below a conditional.** A position that holds the stream
 under one branch of a `select` is a result path of the binding.
@@ -1395,9 +1405,60 @@ is the same for every evaluation, so the path is listed whichever branch
 a run selects. While another branch is selected the position holds what
 that branch has there, which can be nothing or the stream of another
 binding. A reader that finds no link to the stream at one path of
-`result` reads the next. Whether the value function places the stream
-at such a position, or the runtime does from the paths listed here, is
-question 78 of `execution-and-storage.md` (its §2.2).
+`result` reads the next. By ruling the value function places the stream
+at such a position, under the selection whose branch writes it, and the
+runtime does not place it from the paths listed here
+(`execution-and-storage.md` §2.2).
+
+**The listed paths are complete.** By ruling value code places the
+stream of a binding: the value function calls `host.stream` with the
+binding's index and puts the marker it is given at the position
+(`ConeHost.stream`, `execution-and-storage.md` §2.2). When the runtime
+stores the value, it replaces each marker by the link to the stream of
+that binding, for the keys of the cone instance at the `element` steps
+of the binding's `within`, and it checks that the position is one that
+`Binding.result` lists for that binding. A `*` of a listed path matches
+any element of the collection at that position. A path below a
+conditional matches under either selection. A marker at a position that
+no listed path of its binding covers fails the evaluation, and the cone
+instance takes the error state (section 5.2). `Binding.result` is
+therefore what the label analysis and a reader of the plan rely on for
+where a stream of the instance is stored (section 3.1, "A binding with
+a `within` step"), and the compiler owes the following.
+
+- **A path for every position of the result at which value code can
+  place the stream.** That includes a position the stream reaches
+  inside a value that a cone passes on, as a member of an element is
+  (above), and a position below a conditional. A binding whose stream
+  is at a kept path of the result and that has no `result` member is a
+  defect of the compiler under this rule. In the prototype's corpus run
+  14 stored positions hold the stream of a binding with no `result`
+  member (`execution-and-storage.md` §2.2), and an evaluation that
+  stored one of them fails the check.
+- **No path at which no selection stores the stream.** The check is of
+  the markers a run stores, so it does not find a listed path that
+  holds no stream. In the same run 12 listed paths without `*` hold no
+  stream. They were not examined: a path below a conditional whose
+  other branch is selected holds none by the rule above, and a path
+  that no selection fills is one the compiler owes not to list.
+- **Nothing for a stream that is an input of the pattern.** A stream the
+  instance was given is no binding of the plan. The value function
+  receives it as the reference of an `identity` slot, never from
+  `host.stream`, and passes it on as it passes on any input: the stored
+  position holds a link, as for any input passed on by reference, with
+  the label of the `slot` template (section 3.2). No path of
+  `Binding.result` names the
+  position, and the check does not apply, because no marker is stored
+  there. In the same run 4 stored positions hold such a stream.
+
+The rule and what the compiler owes are the same in the three cases of
+section 1.3. A marker of a binding of an element body is replaced by
+the link to the stream of the instance's key, and a position is matched
+at the `*`, whether the collection's source is an array of references,
+an array of plain values in place, or the result of another per-element
+construct. What the check covers for a marker stored outside the
+result is assumed in `execution-and-storage.md` (its §2.2 and question
+78).
 
 *Assumed* (section 8, question 78), since no other rule of the documents
 says how such a path is resolved to one stream:
@@ -1435,11 +1496,11 @@ says how such a path is resolved to one stream:
   that holds the key (section 2.6).
 - **Where the result holds none.** A binding of an element body whose
   stream is at no path of what the callback returns, or whose collection
-  is not a kept part of the result, has no `result` path. So has a
-  binding whose stream the result holds only inside a member of the
-  elements of a collection (above). An event reaches such a stream only
-  through a link stored elsewhere, such as a child's argument or the
-  state of another binding whose handler sends to it.
+  is not a kept part of the result, has no `result` path. An event
+  reaches such a stream only through a link stored elsewhere, such as a
+  child's argument or the state of another binding whose handler sends
+  to it. A binding whose stream the result holds inside a member of the
+  elements of a collection has a path with `*` (above).
 
 This document defines the footprint *record* (`Body.reads`, `computed`,
 `handles`, `writes`, `envelopes`, `outputs`, `calls`, `widenings`). The
@@ -10428,7 +10489,10 @@ this document made.
     of the plan (section 1.1), because the instance has to store a link to the
     stream at those paths and no other record says where, and it lists the
     positions of the rendered tree that hold the stream as well as the other
-    paths of the result. `execution-and-storage.md` has to agree on the paths
+    paths of the result. By ruling the runtime checks each position at
+    which it stores a stream that value code placed against the list,
+    so the list is complete (section 1.1, "The listed paths are
+    complete"). `execution-and-storage.md` has to agree on the paths
     of a view node (question 53). A body has no `eventSchema` member:
     `Binding.eventSchema` holds it for every binding of the handler, and a
     slot of root `event` holds the schema of its path. A reader that needs the
@@ -10596,13 +10660,18 @@ this document made.
     (`patterns/examples/cfc-trusted-component-examples/`). The binding
     has `site` steps alone, the path passes through a collection the
     binding is not within, and the stream is at one position of it.
-    *Assumed:* such a binding has no `result` path through the
-    collection, so where the array is at no other path of the result the
-    binding has no `result` member, and no reader finds its stream from
-    the plan. The alternatives: where the source is an array literal and
-    the construct keeps positions, as `map` does, the path has the
-    position of the member in the place of `*`; or the path has `*` and
-    a reader tries each position. `execution-and-storage.md` and
+    By ruling `Binding.result` is complete, and the runtime fails an
+    evaluation that stores the marker of a stream at a position no
+    listed path covers (section 1.1, "The listed paths are complete").
+    So the binding cannot be left without a path through the
+    collection: the element cone passes the member on with the marker
+    in it, and the stored position has to be listed. *Assumed:* the
+    path has `*` at the collection. The check matches a `*` at any
+    element, and a reader that has the plan alone tries each position.
+    The alternative: where the source is an array literal and the
+    construct keeps positions, as `map` does, the path has the
+    position of the member in the place of `*`, which the check then
+    has to match as a position. `execution-and-storage.md` and
     `scheduler-and-serving-loop.md` have to agree, as for question 78.
     The corpus has 208 such bindings, all in that directory. The case:
     the source is an array written in place in the pattern body, whose

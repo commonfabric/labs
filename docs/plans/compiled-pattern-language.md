@@ -488,12 +488,15 @@ notes 281 to 306. Notes 281 to 302 say what the executor needed that the
 documents did not give, and are written into the documents. Of the
 questions they raised, the place of a slot of `Body.reads`, a path that
 a call leaves out, the first value of a state cell, a moved element,
-a cone with side-writes, and the collections a cone's record lists are
-ruled, and so is which default is read along a chain of places
-([Decided](#decided)). Questions 141, 144 to 147, and 149 to 151
-below, and questions 81 to 84 of `execution-and-storage.md`, are open.
-Of question 141 the member is ruled, and what it holds beside the
-collections is open. Notes 303 to 306 are the results here.
+a cone with side-writes, the collections a cone's record lists, and
+who places a stream in a computed value are ruled, and so is which
+default is read along a chain of places ([Decided](#decided)).
+Questions 141, 144 to 147, and 149 to 151 below, and questions 81 to
+84 of `execution-and-storage.md`, are open. Of question 141 the member
+is ruled, and what it holds beside the collections is open. Of
+question 144 the placing and the check are ruled, and what the check
+covers outside the result is open. Notes 303 to 306 are the results
+here.
 Nothing was timed.
 
 ### What is compared, and what is not
@@ -610,7 +613,7 @@ first reading of the source and the two values and are not verified.
 No difference is classed as a gap of the design by itself. The gaps this
 round found are in what the executor needed in order to compute a value
 at all. Each showed as a wrong value or a failed run before the emitter
-or the executor supplied what was missing. Seven are ruled
+or the executor supplied what was missing. Eight are ruled
 ([Decided](#decided)), and the rest are questions: 141, 144 to 147,
 and 149 to 151 below, and questions 81 to 84 of
 `execution-and-storage.md`.
@@ -638,7 +641,12 @@ The executor counted where its run kept to the plan.
   Of the listed paths without `*`, 315 hold the stream and 12 do not.
   14 of the 18 are of a binding for which the crate found no path, and
   4 hold a stream that is an input of the pattern. The 12 were not
-  examined.
+  examined. By ruling the value code places a stream and the runtime
+  checks the position against `Binding.result`, so the listed paths
+  have to be complete: the 14 are positions the compiler owes a path
+  for, and an evaluation that stored one of them would fail. The 4
+  are no binding's stream, are passed on as any input is, and are not
+  checked.
 - **A cone that writes a cell it reads.** 6 evaluations wrote a
   position they had read. The executor evaluates such a cone instance
   once, as the prototype observed today's runtime to do. By
@@ -784,6 +792,26 @@ is relitigated.
   stale, which a further wave evaluates.
 - Each entry of `Body.reads` holds the path in the body's argument at
   which the slot's value is placed, as an entry of `Body.computed` does.
+- Value code places the stream of a binding in a value it computes. The
+  value function calls `host.stream(binding)`, a function of
+  `ConeHost`, and puts the marker it returns at the position. The
+  marker is inert: the function can place it in the value it returns
+  and can do nothing else with it. It cannot send to it or read through
+  it, so the rule that a cone's function holds no handle stands. When
+  the runtime stores the value, it replaces each marker by the link to
+  the stream of that binding for the element keys of the cone instance,
+  and it checks that the position is one that `Binding.result` lists
+  for that binding. A `*` of a listed path matches any element, and a
+  path below a conditional matches under either selection. A marker at
+  a position that no listed path covers fails the evaluation. So
+  `Binding.result` stays the statement that the label analysis relies
+  on, and the compiler owes its completeness: a path for every position
+  of the result at which value code can place the stream. A stream
+  that is an input of the pattern is no binding's marker. It is passed
+  on as any input is, and the check does not apply to it. The rule is
+  the same in an element body over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct.
 - A handling is identified by the receipt, which leaves the acting
   principal out.
 - An event is routed to an instance that is not loaded through a stream
@@ -1598,10 +1626,14 @@ as an assumption.
     hold** (PL question 84). A stream inside a value that one element
     holds, as `example[UI]` over an array of the results of patterns
     in `patterns/examples/cfc-trusted-component-examples/` (208
-    bindings). *Assumed:* the binding has no result path through the
-    collection, so no reader finds its stream from the plan. The
-    alternatives name the position of the member, or write `*` and
-    have a reader try each position. The source here is an array
+    bindings). By ruling `Binding.result` lists every position of the
+    result at which value code can place the stream, and a marker at
+    a position no listed path covers fails the evaluation, so the
+    binding cannot be left without a path through the collection.
+    *Assumed:* the path is listed with `*` at the collection, which
+    the check matches at any element, and a reader of the plan alone
+    tries each position. The alternative names the position of the
+    member in the place of `*`. The source here is an array
     written in place in the pattern body, whose members the instance
     computes: not a stored array of references, and not the result of
     a per-element construct.
@@ -1694,12 +1726,33 @@ as an assumption, which is what the prototype does.
      of plain values in place, and over the result of another
      per-element construct: a `site` step names a call and no
      collection.
-144. **Who places a stream in a computed value** (ES question 78).
-     *Assumed:* the value function, through a fourth function of
-     `ConeHost`, and `Binding.result` describes the positions. The
-     alternative has the runtime fill in the paths of `Binding.result`,
-     which a path with `*` and a path below a conditional do not
-     determine.
+144. **What the check of a stream's position covers** (ES question
+     78). By ruling value code places a stream with `host.stream`, and
+     the runtime replaces the marker by the link when it stores the
+     value and checks the position against `Binding.result`. The
+     ruling names the positions `Binding.result` lists, which are
+     paths of the result. Three things it does not determine, each
+     *assumed:*
+     - A marker in a value stored outside the result, such as a
+       side-write or a path of a child's argument that a cone
+       computes, is replaced by the link and is not checked, because
+       `Binding.result` lists no such position. The alternative
+       refuses a marker there, or gives `Binding` a list for those
+       positions.
+     - A marker at a path of the argument that a value function gives
+       a sandboxed body is handed to the body as a reference to the
+       stream, as any reference at that path is. The alternative
+       refuses it.
+     - A listed path at which no selection stores the stream is not
+       found by the check, which is of stored markers alone. The
+       compiler owes that it lists no such path, and nothing verifies
+       it. The 12 listed paths of the prototype's run that hold no
+       stream were not examined, so it is not known whether they are
+       below a conditional or are such paths.
+
+     The three are the same in an element body over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct.
 145. **What a cone stores that passes on an element that is a plain
      value** (ES question 79). By ruling a move moves the results of the
      element's key and evaluates nothing for the element. A link to the
