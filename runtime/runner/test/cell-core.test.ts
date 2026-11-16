@@ -671,6 +671,44 @@ describe("Cell", () => {
       argumentLink?.scope,
     );
   });
+
+  it("writes a cell's link in the fixed member order under `JSON.stringify`", () => {
+    // A pattern may key data it keeps by the string a cell stringifies to, so
+    // that string is the one an earlier build wrote, member order included.
+
+    const spaceCell = runtime.getCell(
+      space,
+      "to-json-order-space",
+      undefined,
+      tx,
+    );
+    const userCell = runtime.getCell(
+      space,
+      "to-json-order-user",
+      undefined,
+      tx,
+      "user",
+    );
+    const spaceId = spaceCell.sourceURI;
+    const userId = userCell.sourceURI;
+
+    expect(JSON.stringify(spaceCell)).toBe(
+      `{"/":{"link@1":{"path":[],"id":"${spaceId}","space":"${space}","scope":"space"}}}`,
+    );
+    expect(JSON.stringify({ item: userCell })).toBe(
+      `{"item":{"/":{"link@1":{"path":[],"id":"${userId}","space":"${space}","scope":"user"}}}}`,
+    );
+    expect(JSON.stringify(spaceCell.key("items" as never))).toBe(
+      `{"/":{"link@1":{"path":["items"],"id":"${spaceId}","space":"${space}","scope":"space"}}}`,
+    );
+    expect(JSON.stringify(runtime.getCellFromLink({
+      ...spaceCell.getAsNormalizedFullLink(),
+      path: ["x"],
+      overwrite: "redirect",
+    }))).toBe(
+      `{"/":{"link@1":{"path":["x"],"id":"${spaceId}","space":"${space}","scope":"space","overwrite":"redirect"}}}`,
+    );
+  });
 });
 
 describe("Cell circular references", () => {

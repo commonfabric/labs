@@ -2369,4 +2369,70 @@ describe("link-utils", () => {
       );
     });
   });
+
+  describe("the text form of a link", () => {
+    // Text a link was written as is compared as text wherever it is kept, so
+    // each expected string here is one an earlier build wrote, member order
+    // included.
+
+    const target = "of:fid1:test-target";
+    const baseId = "of:fid1:test-base";
+    const spaceOne = "did:key:z6MkTestSpaceOne";
+    const spaceTwo = "did:key:z6MkTestSpaceTwo";
+    const textOf = (
+      link: NormalizedLink,
+      options?: Parameters<typeof createSigilLinkFromParsedLink>[1],
+    ): string => JSON.stringify(createSigilLinkFromParsedLink(link, options));
+
+    it("writes a link's text form in the fixed member order", () => {
+      expect(textOf({
+        id: target,
+        space: spaceOne,
+        scope: "space",
+        path: ["a", "0"],
+      })).toBe(
+        '{"/":{"link@1":{"path":["a","0"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"space"}}}',
+      );
+      expect(textOf(
+        { id: target, space: spaceOne, scope: "user", path: ["a"] },
+        { base: { id: baseId, space: spaceTwo, scope: "space", path: [] } },
+      )).toBe(
+        '{"/":{"link@1":{"path":["a"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"user"}}}',
+      );
+      expect(textOf(
+        { id: target, space: spaceOne, scope: "space", path: ["a"] },
+        { base: { id: target, space: spaceOne, scope: "space", path: [] } },
+      )).toBe('{"/":{"link@1":{"path":["a"]}}}');
+      expect(textOf({
+        id: target,
+        space: spaceOne,
+        scope: "space",
+        path: ["b"],
+        overwrite: "redirect",
+      })).toBe(
+        '{"/":{"link@1":{"path":["b"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"space","overwrite":"redirect"}}}',
+      );
+      expect(textOf({ path: ["c"] })).toBe('{"/":{"link@1":{"path":["c"]}}}');
+
+      setContentAddressedSchemasConfig(false);
+      expect(textOf({
+        id: target,
+        space: spaceOne,
+        scope: "space",
+        path: [],
+        schema: { type: "string" },
+      }, { includeSchema: true })).toBe(
+        '{"/":{"link@1":{"path":[],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"space","schema":{"type":"string"}}}}',
+      );
+      expect(textOf({
+        id: target,
+        space: spaceOne,
+        scope: "space",
+        path: ["b"],
+        schema: { type: "number" },
+      }, { includeSchema: true, overwrite: "redirect" })).toBe(
+        '{"/":{"link@1":{"path":["b"],"id":"of:fid1:test-target","space":"did:key:z6MkTestSpaceOne","scope":"space","schema":{"type":"number"},"overwrite":"redirect"}}}',
+      );
+    });
+  });
 });

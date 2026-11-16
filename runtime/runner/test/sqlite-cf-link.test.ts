@@ -90,6 +90,51 @@ describe("_cf_link codec", () => {
     expect(decoded!.get()).toEqual({ payload: { n: 42 } });
   });
 
+  it("encodes the stored `_cf_link` string with its members in the order stored rows hold", () => {
+    // SQL compares a `_cf_link` column as text, so a row written by an
+    // earlier build matches a cell bound now only if both strings agree byte
+    // for byte, member order included.
+
+    const spaceCell = runtime.getCell(
+      space,
+      "cf-link-order-space",
+      undefined,
+      tx,
+    );
+    const userCell = runtime.getCell(
+      space,
+      "cf-link-order-user",
+      undefined,
+      tx,
+      "user",
+    );
+    const spaceId = spaceCell.sourceURI;
+    const userId = userCell.sourceURI;
+
+    expect(encodeCfLinkValue(spaceCell)).toBe(
+      `{"/":{"link@1":{"path":[],"id":"${spaceId}","space":"${space}","scope":"space"}}}`,
+    );
+    expect(encodeCfLinkValue(userCell)).toBe(
+      `{"/":{"link@1":{"path":[],"id":"${userId}","space":"${space}","scope":"user"}}}`,
+    );
+    expect(
+      encodeCfLinkValue(spaceCell.key("items" as never).key("0" as never)),
+    ).toBe(
+      `{"/":{"link@1":{"path":["items","0"],"id":"${spaceId}","space":"${space}","scope":"space"}}}`,
+    );
+    expect(encodeCfLinkValue(runtime.getCellFromLink({
+      ...spaceCell.getAsNormalizedFullLink(),
+      path: ["x"],
+      overwrite: "redirect",
+    }))).toBe(
+      `{"/":{"link@1":{"path":["x"],"id":"${spaceId}","space":"${space}","scope":"space","overwrite":"redirect"}}}`,
+    );
+    expect(encodeCfLinkValue(runtime.getImmutableCell(space, { n: 42 })))
+      .toBe(
+        `{"/":{"link@1":{"path":[],"id":"data:application/vnd.common-fabric.data,ZnZqMTp7Im4iOjQyfQ","space":"${space}","scope":"space"}}}`,
+      );
+  });
+
   it("throws when encoding a non-cell value", () => {
     expect(() => encodeCfLinkValue("not a cell")).toThrow();
     expect(() => encodeCfLinkValue(42)).toThrow();
