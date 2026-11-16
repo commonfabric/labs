@@ -936,7 +936,11 @@ value function places the stream, and the runtime checks where.
   position"). A path below a conditional matches under either
   selection. A marker at a position that no listed path of its binding
   covers fails the evaluation: the cone instance takes the error state
-  (section 1.7), and no link is stored.
+  (section 1.7), and no link is stored. A marker can be placed by one
+  cone instance, passed through an interim output, and stored by
+  another. *Assumed* (question 88 of section 11): the cone instance
+  that fails is the one whose output holds the position when the value
+  is stored, and not the one that called `host.stream`.
 - **What the list is for.** `Binding.result` stays the statement that
   the label analysis and a reader of the plan rely on for where a
   stream of the instance is stored, and it has to be complete.
@@ -947,6 +951,13 @@ value function places the stream, and the runtime checks where.
   an `identity` slot and passes it on as any input, and the runtime
   stores the link by the rule for a value passed on unchanged (section
   2.4). The check does not apply to it.
+- **A stream that a function body returns** is no marker either. A
+  sandboxed body that returns a value with the stream of a binding it
+  made, or of one it was handed, returns a reference, and the runtime
+  stores the link as for any reference a body returns (section 2.4). No
+  path of `Binding.result` names the position and the check does not
+  apply, which is *assumed* in `plan-and-label-templates.md` (its §1.1
+  and §8, question 116).
 
 The rule is the same for a cone of an element body in the three cases
 of a per-element source: an array of references, an array of plain
@@ -955,18 +966,46 @@ marker is replaced by the link to the stream of the instance's key in
 each, and the three differ only in how the key is computed (section
 2.5).
 
-The prototype's executor places streams with `host.stream`, without
-the marker and the check, and compared where the stored results of its
-corpus run hold a stream with the listed paths. 431 stored positions
-are named by a listed path and 18 by none. Of the listed paths without
-`*`, 315 hold the stream and 12 do not. Of the 18, 14 hold the stream
-of a binding for which the prototype emits no `result` member: under
-the check each fails its evaluation, and the compiler owes a path for
-it. 4 hold a stream that is an input of the pattern, which the check
-does not concern. The 12 were not examined: a listed path below a
-conditional holds no stream while another branch is selected, and a
-path that no selection fills is one the compiler owes not to list,
-which the check does not find.
+The prototype's executor implements the marker, the replacement and the
+check. Its marker is a frozen object with no member, and the binding and
+the keys it stands for are held where value code does not reach them. It
+makes the check where it stores the result document. Over the 194
+modules its corpus run executes, 683 stored positions hold a stream at a
+listed path, and no evaluation fails the check.
+
+An earlier run, without the marker and the check, compared where the
+stored results hold a stream with the listed paths. By kind, the
+positions that no listed path named were these.
+
+| Kind | Positions | Bindings | Under the rules |
+| --- | ---: | ---: | --- |
+| A member written after a spread among the children of a view node | 6 | 3 | The compiler owes the path (`plan-and-label-templates.md` §1.1, "From a path to a position") |
+| A stream inside a value that the elements of a collection hold, read as `entry.node` | 7 | 5 | The compiler owes the path, as assumed (its §8, question 84) |
+| The same, read as `example[UI]`, where that run stored a record in the place of the stream | 208 | 208 | The same |
+| A stream that is an input of the pattern | 2 | 0 | No binding's stream; not checked |
+| The stream of a binding that a function body makes and returns | 3 | 0 | Assumed allowed and not checked (its §8, question 116) |
+
+The first two rows are 13 positions of a binding that had no path for
+the position. The third row was in no count of that run, because the
+stored result held a record where the stream belongs. The last two rows
+are 5 positions of a stream that no marker stands for. With the marker
+and the check, and before the prototype's compiler listed the paths of
+the first three rows, 12 evaluations in 8 modules failed. The compiler
+lists them, and none fails. The first row is the same whether the
+collection spread before the member is over an array of references, over
+an array of plain values in place, or the result of another per-element
+construct. The second and third rows are of an array of plain values in
+place and of the result of another per-element construct, and do not
+arise over an array of references.
+
+Of the listed paths without `*`, 315 hold the stream when the run ends
+and 12 do not. Each of the 12 is below a conditional whose other branch
+is selected then: 4 held the stream at an earlier point of the run, and
+8 at no point, because no event of the scenario selects the branch. That
+rests on a reading of the source, of the branch that writes the stream
+for 7 of the 12 and of the other branch alone for 5. A path that no
+selection fills is one the compiler owes not to list, which the check
+does not find and a run cannot show.
 
 Three things the ruling does not determine are *assumed* (question 78
 of section 11).
@@ -974,7 +1013,9 @@ of section 11).
 - **A marker stored outside the result.** `Binding.result` lists paths
   of the result. A marker in the value of a side-write, or at a path of
   a child's argument that a cone computes, is replaced by the link and
-  is not checked. The label of what is stored there is by the rule of
+  is not checked. The prototype's executor does so for a marker stored
+  in a state cell or a created cell, and no test of it stores one
+  there. The label of what is stored there is by the rule of
   that write (`plan-and-label-templates.md` §3.11 and §3.15).
 - **A marker handed to a sandboxed body.** Where the `computed` argument
   of `host.invoke` holds a marker at a path that an `identity` entry of
@@ -5161,7 +5202,11 @@ Added by the ruling that the scheduler is switched per space (section 9):
     reference to the stream; the alternative refuses it. And a listed
     path that holds no stream under any selection is not found by the
     check: in the prototype's corpus run 12 of 327 listed paths without
-    `*` hold no stream and were not examined. The three are the same
+    `*` hold no stream when the run ends, and each is below a
+    conditional whose other branch is selected then, by a reading of
+    the source that covers the other branch alone for 5 of them
+    (section 2.2). The prototype's executor does the first two as
+    assumed. The three are the same
     for a cone of an element body over an array of references, over an
     array of plain values in place, and over the result of another
     per-element construct.
@@ -5221,6 +5266,26 @@ Added by the ruling that the scheduler is switched per space (section 9):
     element body in each of the three cases; where the first value is
     the element itself the cell holds the element's value, and over an
     array of plain values in place no reference to the element.
+88. **Which cone instance fails the check of a stream's position**
+    (section 2.2). By ruling a marker at a position that no listed path
+    of its binding covers fails the evaluation. A marker can be placed
+    by one cone instance, passed through an interim output, and stored
+    by another, as where a declaration cone computes a tree and the
+    `result` cone stores it. *Assumed:* the cone instance whose output
+    holds the position when the value is stored fails, by the rule for a
+    failed cone (section 1.7): its outputs take the error state at their
+    paths, also the positions of them that hold no marker, and every
+    other cone instance evaluated for the cause commits. The prototype's
+    executor makes the check where it stores the result document and
+    does not store the result. The alternative fails the cone instance
+    that called `host.stream`, whose value may be right at every other
+    position it is used at. Open with it: what the positions of the
+    stored output that the failure does not concern hold afterwards, the
+    error state as assumed or what was stored before. The same for a
+    cone of an element body over an array of references, over an array
+    of plain values in place, and over the result of another per-element
+    construct: the instance that fails is the one of the key whose
+    output holds the position.
 
 ### 11.2 For another document or the prototype
 

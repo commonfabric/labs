@@ -1454,7 +1454,12 @@ a `site` step adds to the path is decided by the rule for a tag above.
   callee's tree has the segment `$UI` after the place. What the callback
   of an element construct returns is such a place: the element of the
   assembled collection is the callee's result, whether or not the
-  collection is then spread into the children of a view node.
+  collection is then spread into the children of a view node. A branch
+  of a conditional is such a place as well, also where the conditional
+  is itself the child of a view node: the tag is written as an operand
+  of the `select` and not at the child position, the position holds the
+  result that the selected branch yields, and the path has `$UI` after
+  the position.
 
 A result held in a variable has a path for each position the variable is
 written at, by the rule for that position.
@@ -1509,7 +1514,20 @@ path stands for a collection, and an `element` step of the binding's
   `*` stands here for positions that do not hold the stream as well,
   and a reader that has the plan alone tries each position. The binding
   also has the paths at which the result holds the pattern's result
-  without passing through the collection.
+  without passing through the collection. The member can be read with a
+  well-known key, as `example[UI]` is, or by a name, as `entry.node` is.
+  The rule is for two sources. One is an array of plain values in place:
+  an array literal whose members hold the result of a pattern compiled
+  in. The other is the result of another per-element construct whose
+  elements hold the stream of a binding of that construct's body. The
+  binding then has the `element` step of the upstream collection, and
+  the downstream collection has the upstream keys (section 1.3).
+  *Assumed* under the same question: the path has `*` at the downstream
+  collection, and the stream at a position is that of the key the
+  position holds. Over an array of references the plan knows no stream
+  inside an element: what the cell behind a reference holds is no value
+  the instance computes, a stream in it is no binding's marker, and no
+  path is listed for it.
 
 **A position below a conditional.** A position that holds the stream
 under one branch of a `select` is a result path of the binding.
@@ -1537,7 +1555,9 @@ of the binding's `within`, and it checks that the position is one that
 any element of the collection at that position. A path below a
 conditional matches under either selection. A marker at a position that
 no listed path of its binding covers fails the evaluation, and the cone
-instance takes the error state (section 5.2). `Binding.result` is
+instance takes the error state (section 5.2). Which cone instance that
+is, where one placed the marker and another stores it, is assumed in
+`execution-and-storage.md` (its question 88). `Binding.result` is
 therefore what the label analysis and a reader of the plan rely on for
 where a stream of the instance is stored (section 3.1, "A binding with
 a `within` step"), and the compiler owes the following.
@@ -1547,16 +1567,30 @@ a `within` step"), and the compiler owes the following.
   inside a value that a cone passes on, as a member of an element is
   (above), and a position below a conditional. A binding whose stream
   is at a kept path of the result and that has no `result` member is a
-  defect of the compiler under this rule. In the prototype's corpus run
-  14 stored positions hold the stream of a binding with no `result`
-  member (`execution-and-storage.md` §2.2), and an evaluation that
-  stored one of them fails the check.
+  defect of the compiler under this rule. In the prototype's corpus
+  run, while its compiler listed no path for them, 13 stored positions
+  held the stream of a binding at a position no listed path named: 6 of
+  a member written after a spread among the children of a view node,
+  and 7 of a stream inside a value that the elements of a collection
+  hold, read as `entry.node`. At 208 more positions of the second kind,
+  read as `example[UI]`, the run stored a record in the place of the
+  stream, and no count held them (`execution-and-storage.md` §2.2).
+  Under the check 12 evaluations in 8 modules failed. With a path
+  listed for each kind, by the rules above for a member written after a
+  spread and for a member of an element, no evaluation of the run
+  fails.
 - **No path at which no selection stores the stream.** The check is of
   the markers a run stores, so it does not find a listed path that
-  holds no stream. In the same run 12 listed paths without `*` hold no
-  stream. They were not examined: a path below a conditional whose
-  other branch is selected holds none by the rule above, and a path
-  that no selection fills is one the compiler owes not to list.
+  holds no stream. In the same run 12 listed paths without `*`, of 12
+  bindings in 7 modules, hold no stream when the run ends. Each is
+  below a conditional whose other branch is selected then, and holds
+  none by the rule above. 4 of them held the stream at an earlier
+  point of the run. The other 8 held it at no point, because no event
+  of the scenario selects the branch. For 7 of the 12 that rests on a
+  reading of the source of the branch that writes the stream, and for
+  the other 5 on a reading of the other branch alone. A path that no
+  selection fills is one the compiler owes not to list, and a run
+  cannot show one.
 - **Nothing for a stream that is an input of the pattern.** A stream the
   instance was given is no binding of the plan. The value function
   receives it as the reference of an `identity` slot, never from
@@ -1565,16 +1599,31 @@ a `within` step"), and the compiler owes the following.
   the label of the `slot` template (section 3.2). No path of
   `Binding.result` names the
   position, and the check does not apply, because no marker is stored
-  there. In the same run 4 stored positions hold such a stream.
+  there. In the same run 2 stored positions hold such a stream.
+- **Nothing for a stream that a function body returns.** A `lift` or a
+  `computed` can return a value that holds the stream of a binding its
+  body made (section 3.14), or of a binding of the reactive tier that it
+  was handed as a reference. A body is not value code, and what it
+  returns holds a reference and no marker. *Assumed* (section 8,
+  question 116): that is allowed. The runtime stores the link at the
+  position by the rule for a reference a body returns (section 3.9). No
+  path of `Binding.result` names the position, since the compiler does
+  not know where in its result a body puts the stream, and the check
+  does not apply. In the same run 3 stored positions hold such a stream,
+  in `patterns/dev/gideon-tests/computed-array-repro.tsx`, where a
+  `computed` returns rows that each hold a handler written in the body.
 
 The rule and what the compiler owes are the same in the three cases of
 section 1.3. A marker of a binding of an element body is replaced by
 the link to the stream of the instance's key, and a position is matched
 at the `*`, whether the collection's source is an array of references,
 an array of plain values in place, or the result of another per-element
-construct. What the check covers for a marker stored outside the
-result is assumed in `execution-and-storage.md` (its §2.2 and question
-78).
+construct. What the check covers for a marker stored outside the result
+is assumed in `execution-and-storage.md` (its §2.2 and question 78).
+The prototype's executor implements the marker, the replacement and the
+check, with a fixture that binds a handler per element in each of the
+three cases: the stored link has the key of the element in each, and
+without the listed path each fails at the first element.
 
 *Assumed* (section 8, question 78), since no other rule of the documents
 says how such a path is resolved to one stream:
@@ -1585,8 +1634,10 @@ says how such a path is resolved to one stream:
   with a `within` step"), and the two differ. A reader that wants the
   stream of one element chooses, for each `*` whose collection an
   `element` step names, a position of that collection. For a `*` whose
-  collection no `element` step names, every position of the collection
-  holds the stream, and the reader chooses any. The stored path has the
+  collection no `element` step names and whose callback writes the
+  stream of an outer binding, every position of the collection holds
+  the stream, and the reader chooses any. Such a `*` can stand for two
+  other things, which the next item has. The stored path has the
   index of that position in the stored array in the place of the `*`:
   the position in the collection, plus the number of children stored
   before the spread where the array is the children of a view node. The
@@ -1601,7 +1652,20 @@ says how such a path is resolved to one stream:
   assembled the array (section 3.6). The path does not say which
   positions those are, so a reader that has the plan alone cannot
   resolve it. The same holds for a member written after a spread, whose
-  path is `children/*` as well and whose stream is at one position.
+  path is `children/*` as well and whose stream is at one position. So
+  a `*` whose collection no `element` step of the binding names stands
+  for one of three things: every position of a collection whose
+  callback writes the stream of an outer binding; the one position of a
+  member written after a spread; or the one element that holds the
+  stream inside a value (above, "The stream is reached through a member
+  of the element"). The path does not say which. Two things follow. The
+  check accepts a marker of such a binding at any position from the
+  spread on, so it does not find a marker at a wrong one of those
+  positions. And a reader that has the plan alone can resolve the path
+  to a position that holds another stream or none. The three meanings
+  are the same whether the collection that is spread is over an array
+  of references, over an array of plain values in place, or the result
+  of another per-element construct.
 - **From a position to a stream.** The link stored there is to the stream
   of the binding for the element key at that position: the stream named
   by the binding's `name` and `within`, with that key at the `element`
@@ -7438,7 +7502,11 @@ it. The stage 3 comparison expects a wider label for every bucket,
 
 Three constructs yield one child chosen by a value: `minBy` and `maxBy`
 (section 3.8), a `key`-mode `lookup` (section 3.17), and a dynamic key
-`a[k]` in the reactive tier. All are `pick`.
+`a[k]` in the reactive tier. All are `pick`. A member read whose key is
+static in the sense of `language-subset.md` §4.3 is no `pick`, also
+where it is written with brackets: `x[UI]` and `x[NAME]` name the
+segments `$UI` and `$NAME` (section 3.4, "A computed key") and are
+property access (section 3.3).
 
 ```text
 C(pick) = C(choice) ⊔ C(body at the chosen child)
@@ -10905,15 +10973,25 @@ this document made.
     does not hold the number of children written before a spread. A `*`
     whose collection no `element` step of the binding names stands for
     every position where the callback writes the stream of an outer
-    binding, and for one position where the stream belongs to a member
-    written after a spread, and the path does not tell the two apart. A
+    binding, for one position where the stream belongs to a member written
+    after a spread, and for one position where one element holds the
+    stream inside a value (question 84), and the path does not tell the
+    three apart. So the check accepts a marker of such a binding at any
+    position from the spread on, and a reader with the plan alone can
+    resolve the path to a wrong position: the harness of the prototype's
+    comparison sent an event for a binding whose path was that of a member
+    after a spread to the stream of an element. Open with the resolution:
+    whether `Binding.result` says, for such a `*`, which of the three it
+    stands for. *Assumed:* it does not. A
     position below a `select` is a result path and holds the stream
     under one branch only. Section 1.1 takes each of the three as a
     result path, because the instance stores the link there. A reader
     that has the plan and no knowledge of how the array was assembled
     cannot resolve the first two, as it cannot resolve two collections
-    spread into one array. The prototype lists no path for a binding of
-    two collections spread into one array. The alternative that names
+    spread into one array. The prototype lists a path for a member written
+    after a spread and for a binding of two collections spread into one
+    array, in the children of a view node and in an array literal. The
+    alternative that names
     the collection in the path resolves these too, if a member written
     after a spread is given its position among the members written. Not
     verified: that the prototype can form the
@@ -11032,13 +11110,22 @@ this document made.
     position of the member in the place of `*`, which the check then
     has to match as a position. `execution-and-storage.md` and
     `scheduler-and-serving-loop.md` have to agree, as for question 78.
-    The corpus has 208 such bindings, all in that directory. The case:
+    The corpus has 208 such bindings, all in that directory, and 5
+    further bindings whose stream is read through a member of the element
+    by name, as `entry.node`. The prototype lists the path with `*` for
+    both. The case:
     the source is an array written in place in the pattern body, whose
-    members are values the instance computes. It is not a stored array
-    of references and not the result of a per-element construct. The
-    question is about the position of a member in that source, so it
-    does not depend on whether a member is stored as a value in place
-    or as a reference to the output that computes it.
+    members are values the instance computes. It is not a stored array of
+    references. The question is about the position of a member in that
+    source, so it does not depend on whether a member is stored as a
+    value in place or as a reference to the output that computes it. A
+    second source has the same assumption (section 1.1): the result of
+    another per-element construct whose elements hold the stream of a
+    binding of that construct's body. There the position that holds the
+    stream of a key is the position that holds the key, so the
+    alternative for it names no position. Over an array of references the
+    plan lists no path, because a stream behind a reference is no
+    binding's marker.
 85. **The declared label of an element's handle in the compiled path**
     (for the project owner and the specification change). Settled by
     ruling: the label of a slot of root `element` is read at the
@@ -11508,3 +11595,27 @@ this document made.
      key stands there. The case is an array of plain values in place.
      Over an array of references both are references to the cell, and
      nothing is open.
+116. **A stream that a function body returns into the result** (for the
+     project owner). By ruling `Binding.result` lists every position of
+     the result at which value code can place the stream, and the
+     runtime checks the markers it stores against the list. A function
+     body is not value code. A `lift` or a `computed` can return a value
+     that holds the stream of a binding its body made, as a `computed`
+     that returns rows with a handler written in the body does
+     (`patterns/dev/gideon-tests/computed-array-repro.tsx`, 3 stored
+     positions in the prototype's run), and a body that is handed the
+     stream of a binding of the reactive tier and returns it is the same
+     case. What the body returns holds a reference and no marker, and
+     the compiler does not know the path. *Assumed* (section 1.1, "The
+     listed paths are complete"), as the prototype does: it is allowed,
+     the link is stored at the position, no path of `Binding.result`
+     names it, and nothing checks it. The label analysis then has such a
+     stream by the template of the body's output and by no listed path.
+     The alternatives refuse a stream in what a body returns at a kept
+     path of the result, or have the body's record state the paths of
+     its result that can hold a stream. The question does not depend on
+     a per-element construct: the rows of the corpus case are plain
+     values that one `computed` returns as a whole array, and the same
+     holds for a body used in an element body over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct.
