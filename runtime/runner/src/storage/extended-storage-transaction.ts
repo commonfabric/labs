@@ -4491,9 +4491,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * and manifests, the observations, and the preparation that verified
    * them, whose input holds the same records. A preparation that was
    * invalidated holds its reasons and no input, and stays for whoever reads
-   * why a commit was refused. A transaction that has
-   * settled runs no further gate over the records, so a reference to it that
-   * outlives it, from the piece its start ran in for one, keeps none of them.
+   * why a commit was refused. A transaction that has settled runs no further
+   * gate over the records, so a reference to it that outlives it, from the
+   * piece its start ran in for one, keeps none of them.
    * The one reader after settlement is a post-commit effect's release check,
    * so `#commit` releases them only once the effects have flushed, and not at
    * all when a seal destination took the effects over to flush after its wave

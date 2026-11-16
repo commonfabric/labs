@@ -3095,24 +3095,25 @@ const identityForSchemaPath = (
 };
 
 /**
- * The payload paths of `target` that the transaction wrote under an identity
- * other than a builtin's (`CfcTxState.unattestedWrites`). Runtime-minted
+ * The payload paths the transaction wrote under an identity other than a
+ * builtin's (`CfcTxState.unattestedWrites`), by target. Runtime-minted
  * evidence a builtin's schema names at a path one of them overlaps could
  * stand for a value that identity chose, even where a builtin wrote the path
  * after it, so `gateRuntimeMintedIntegrity` treats it as an unattributed
  * write's.
  */
-const unattestedWritePaths = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: URI;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
-): readonly (readonly string[])[] =>
-  tx.getCfcState().unattestedWrites.filter((write) =>
-    sameDocument(write, target)
-  ).map((write) => write.path);
+const unattestedWritePathsByTarget = (
+  writes: readonly CfcAddress[],
+): Map<string, (readonly string[])[]> => {
+  const result = new Map<string, (readonly string[])[]>();
+  for (const write of writes) {
+    const key = targetKey(write);
+    let paths = result.get(key);
+    if (paths === undefined) result.set(key, paths = []);
+    paths.push(write.path);
+  }
+  return result;
+};
 
 const targetKey = (target: {
   space: MemorySpace;
@@ -12588,6 +12589,7 @@ export function* prepareBoundaryCommitSteps(
     state.writePolicyInputs,
     identityForInput,
   );
+  const unattestedWrites = unattestedWritePathsByTarget(state.unattestedWrites);
   const linkWrites = linkWritesByTarget(state.writePolicyInputs);
   const currentLinkWrites = yield* currentLinkWritesByTarget(tx, linkWrites);
   // S16 flow labels: the per-tx conservative join. In `persist` mode every
@@ -13066,8 +13068,8 @@ export function* prepareBoundaryCommitSteps(
 
     // The identity a schema's runtime-minted evidence is gated by at a path:
     // the schema input's, unless a write another identity made overlaps the
-    // path (`unattestedWritePaths()`), where it is none.
-    const unattested = unattestedWritePaths(tx, target);
+    // path (`unattestedWritePathsByTarget()`), where it is none.
+    const unattested = unattestedWrites.get(key) ?? [];
     const mintingIdentityForPath = (
       path: readonly string[],
     ): ImplementationIdentity | undefined =>
