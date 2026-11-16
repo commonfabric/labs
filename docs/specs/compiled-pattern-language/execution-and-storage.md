@@ -833,7 +833,7 @@ in place captures.
 
 The runtime invokes a cone's function with one argument, a host object, and
 the function returns a result record. Both are plain data apart from the
-host's four functions and the stream markers that one of them returns.
+host's functions and the stream markers that one of them returns.
 
 ```ts
 type Index = number;
@@ -873,6 +873,14 @@ export interface ConeHost {
    * instance is evaluated for (below).
    */
   stream(binding: Index): unknown;
+  /**
+   * Whether two references name the same thing: the `equals` of the
+   * source. Each operand is the reference that a slot of class
+   * `identity` or an output yields, and no value. The runtime resolves
+   * the links each holds and compares what they name (below). Assumed
+   * (section 11, question 90).
+   */
+  equals(a: unknown, b: unknown): boolean;
 }
 
 /** What a cone's value function returns. */
@@ -1051,6 +1059,26 @@ of section 11).
   2.4).
 - **A listed path that holds no stream under any selection** is not
   reported at run time.
+
+**Value code compares two references through the host.** `equals(a, b)`
+in the reactive tier compares what its operands name once the links
+they hold are resolved, and its slots are `identity` slots that are
+resolved (`plan-and-label-templates.md` §3.16). A value function holds
+each operand as the reference its slot yields, which it cannot read
+through, so it cannot make the comparison itself. A comparison of the
+operands' values would find two equal plain values to be one element.
+*Assumed* (section 11, question 90): the function calls `host.equals`
+with the two references. The runtime resolves the links each holds,
+and where resolution ends at a reference by key it compares the
+collection, the key and the path, and resolves no key to a position
+(its §1.3). The cone instance depends on the links the resolution
+crossed, and is stale when one of them changes. It does not depend on
+the position a key stands at. The call is the same in an element body
+over an array of references, where an element resolves to its cell;
+over an array of plain values in place, where an element is a
+reference by key; and over the result of another per-element
+construct, where the element is what the upstream element is. The
+prototype's emitter writes the call so, 18 times over its corpus.
 
 **The callee's default for a sandboxed body.** By ruling a path of the
 argument of a pattern compiled in that the call binds to a slot at
@@ -1347,6 +1375,36 @@ argument: it is what a read through the handle returns ("Handles",
 below). A handler that calls `count.get()` and `count.set(...)` has a
 `value` slot and an `identity` slot at the path `count` of its state,
 and is handed the handle.
+
+**Which positions are of handle type.** The rows for `identity` differ
+by the type of the position. For an entry of `reads` that type is
+`Slot.schema` of the entry's slot, which is the type the body declares
+for the formal input at the path: the parameter type of an authored
+function or a `lift`, the event type and the state type of a handler,
+and for a capture of a `computed` the type the checker gives the
+expression (`plan-and-label-templates.md` §1.5, "The schema of a
+slot"). It is not the type of the place the slot is bound to. For a
+body of a pattern compiled in the two can differ: where the caller
+declares a plain array and a body of the callee declares a handle and
+calls `items.get()`, the body is handed a handle. A state path that a
+handler declares with a data type, as `stop: Stop`, holds a reference
+stand-in or, where the body has entries below the path, the form that
+carries more with the reference's address, by the rule for two entries
+at one path. An entry of `computed` has no slot and so no schema.
+*Assumed* (section 11, question 91): the runtime takes the type of
+such a position from the type the body declares at the entry's `at`.
+No record of the plan holds that type.
+
+**An entry below a path that yields nothing.** Where a path of the
+argument is bound to a place that yields nothing, the argument holds
+nothing at the path, also where the body has a further entry at a
+member below it. The runtime makes no record at the path in order to
+place the member: an entry below an absent path is absent, as a read
+of the member through the absent value is. A handler whose state path
+is bound to a value that is `undefined`, and whose body reads a member
+of it behind a test such as `if (!card) return;`, then sees the path
+absent and returns. The same holds for a body used in an element body
+in each of the three cases of a per-element source.
 
 **A captured name with no entry.** A `computed`, or another function
 written in place, is called with a binding for every name of the reactive
@@ -5489,6 +5547,29 @@ Added by the ruling that the scheduler is switched per space (section 9):
     per-element construct over the list, and does not arise over an
     array of plain values in place or over the result of another
     per-element construct, whose elements have no such record.
+90. **How value code compares two references** (section 2.2).
+    `equals` compares what its operands name once their links are
+    resolved (`plan-and-label-templates.md` §3.16), and a value
+    function cannot read through a reference. *Assumed:* `ConeHost`
+    has a member `equals(a, b)` that takes the two references, and the
+    cone instance depends on the links the resolution crossed. The
+    alternative makes `equals` an operation of the plan with an output
+    of its own, which value code reads as it reads any output. The
+    same over an array of references, over an array of plain values in
+    place, where an element is a reference by key and no key is
+    resolved to a position, and over the result of another per-element
+    construct.
+91. **Which record gives the type of a position of a body's argument
+    that no slot names** (section 2.4). Whether an `identity` position
+    holds a handle or a reference stand-in follows from the type the
+    body declares there. For an entry of `Body.reads` that is
+    `Slot.schema`. An entry of `Body.computed` has no schema, and the
+    plan holds no schema of a body's argument. *Assumed:* the runtime
+    takes the type from the body's declared parameter type at the
+    entry's `at`, which the artifact holds beside the plan. The
+    alternative gives `ComputedInput` a schema member. Not about a
+    per-element construct: the same in an element body in each of the
+    three cases.
 
 ### 11.2 For another document or the prototype
 
