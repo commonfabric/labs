@@ -2412,3 +2412,164 @@ numbers have gaps.
      is not seen: write 1 of `keep` in `compare/fixtures/link-cycle.tsx` is
      listed as not made. The harness cannot read the write attempts of the
      transaction, since the runtime releases them when the transaction settles.
+
+## What the argument document of an element of `map` is stamped with
+
+261. **The stamp on an element's argument document, entry by entry** (corrects
+     note 257). Measured with the runner alone, by a probe that is not in the
+     repository. The pattern has one `map` whose callback declares neither
+     `index` nor `array`. Its element body has three handlers: one that writes a
+     captured cell and reads nothing of the element (`zoom.set(14)`), one that
+     passes on a field of the element (`center.set(stop.position)`), and one
+     that does both, as the handler of a stop's button in
+     `examples/map-demo/map-demo.tsx` does. The list holds two elements, A and
+     B. The runtime is made as the comparison harness makes it. The clauses are
+     `a` and `b` for the elements, `pc` and `pz` for the cells of `center` and
+     `zoom`, and `s` for the list.
+
+     A clause declared in a schema cannot set the label of a list apart from the
+     labels of its elements. It is stored as one entry of origin `declared` at
+     the root, with no class, and the coordinator's read of the list consumes it
+     for the slots as it does for the root: with the seeded lists that clause is
+     in the stamp, and the root's clauses of class `enumerate` and `shape` are
+     not. That is how the harness labels an input, so in the harness the one
+     clause of `stops` is the label of the array, of every slot, and of every
+     element. The probe therefore has four lists.
+
+    | List | What a slot holds | How the entries are made |
+    | --- | --- | --- |
+    | links | a link to a cell of the element | by the runtime, from schemas: `s` declared at the root of the list, `a` and `b` at the roots of the two cells. The list's document then has `declared {s}` at the root and an entry of origin `link` at each slot, `{a}` and `{b}` |
+    | seeded links | the same | written entry by entry through the test seam `seedStoredEnvelope`, each with a clause of its own: `declared` at the root; `structure` of class `enumerate` and of class `shape` at the root; `structure` of class `followRef`, `shape` and `value` at `*`; and at each slot `link`, `derived` of class `value`, and `derived` of class `shape`. The elements' cells keep `a` and `b` |
+    | inline | the element's value, in the list's document | by the runtime: one transaction read a cell with `a` and stored slot 0 with `setRaw`, another read a cell with `b` and stored slot 1. The list's document has `derived` entries `{a}` at `0` and `{b}` at `1` and none at the root |
+    | seeded inline | the same | as for seeded links without the `link` entries, and a `derived` entry at `title` of each element |
+
+     A `push` of an object through a cell with no schema gave the object a
+     document of its own and stored a link, so the inline list is stored with
+     `setRaw`.
+
+     **Where the stamp is computed** (read from the code; the observed entries
+     agree with it). `reconcile` in `createMapInstance`
+     (`runtime/runner/src/builtins/map.ts`) runs in a transaction of its own. It
+     sets up each element that has no run with `Runner.runInTransaction` in that
+     transaction, and that call writes the element's argument document.
+     `prepareBoundaryCommit` (`runtime/runner/src/cfc/prepare.ts`) computes one
+     join for the transaction, `deriveFlowJoin`, and stores it on what the
+     transaction wrote: at a written path that holds links alone as entries of
+     origin `structure`, and at a written scalar as entries of origin `derived`.
+     For an argument document `{ element, params: { center, zoom } }` those are
+     ten entries: class `enumerate` and class `shape` at the root and at
+     `params`, and class `followRef`, `shape` and `value` at `*` and at
+     `params/*`. All ten hold the same clauses. This is the stamp. The link at
+     `element` gets one entry of origin `link` beside it, from `linkSlotLabel`,
+     with the clause of the schema that the stored link carries. The reads of
+     the coordinator that enter the join:
+
+     - `listMembershipRead`
+       (`runtime/runner/src/builtins/list-coordinator-plan.ts`) reads the whole
+       raw array of the list once, marked `declaredOnwardRead` with the result
+       container as its target. `deriveFlowJoinImpl` splits what that read
+       consumes. The entries of class `shape` and `enumerate` at the list's own
+       path are kept out of the join and stored in the `enumerate` entry at the
+       root of the result container. Everything else the read consumes is
+       joined: an entry with no class at the root or above it, which is what a
+       declared clause is, and every entry below the root, which are the entries
+       at `*`, the entries at each slot, and the entries of everything stored in
+       place below a slot.
+     - `listSlotResolutions` resolves each slot to the link it ends on. For a
+       slot that holds a link, `listElementLink` parses the stored link, and the
+       resolution probes the root of the target for a further link. The
+       transaction has no read of the slot's own path and no other read of the
+       element's value. For a slot that holds a value, the resolution probes the
+       slot's own path, which is an observation of class `followRef` there.
+     - A reconcile that a change of the list started has the list as a trigger
+       read: `runSchedulerAction` (`runtime/runner/src/scheduler/run.ts`) passes
+       the changed addresses to `addCfcTriggerReads`, and `triggerReadSources`
+       reads each recursively at its own path, without the declaration. In the
+       probe the trigger read was at the root of the list's document for each
+       change it made: a `set` of the list, a `setRaw` of one slot, and a write
+       of the whole document through the test seam. So the join of such a
+       reconcile also has the list's own `shape` and `enumerate` entries. The
+       first reconcile has no trigger read.
+     - The coordinator's reads of its result container are marked
+       `machineryRead`. `params` of an argument document holds one link for each
+       captured cell, to the path of the enclosing pattern's argument that holds
+       it, and the transaction reads no value of a captured cell. A read of an
+       argument document that the transaction writes for the first time finds no
+       stored entry. Where the transaction writes `index` of a stored argument
+       document again, it reads that document, and the entries the document has
+       enter the join.
+
+     **What was observed.** Each row is an assertion of the probe that passes.
+     "Stamp" means the clauses of the ten `structure` entries.
+
+    | Question | List | Observed |
+    | --- | --- | --- |
+    | 1. A's argument document, both elements set up by the first reconcile | links | Stamp `{s}`. `link {a}` at `element`. No entry has `b`, `pc` or `pz`. B's document is the same with `b` for `a` |
+    | | seeded links | Stamp: the `declared` clause of the root, the clauses of class `shape` and `value` at `*`, and the `derived` clauses of both slots, B's included. Not in it: the `enumerate` and `shape` clauses of the root, which are in the `enumerate` entry at the root of the result container and in no other entry of it; the `followRef` clause at `*`; the `link` clauses of the slots. `link {a}` at `element`, the clause of the link's schema and not the clause of the list's `link` entry |
+    | | inline | Stamp `{a, b}` on both documents. No entry at `element` |
+    | | seeded inline | The stamp also has the clause at `title` of B and the `followRef` clause at `*` |
+    | 2. `zoom.set(14)` in A's body | links | The transaction reads one path of A's argument document, `params/zoom`, and no path of B's argument document, of A, of B or of the list. `zoom` gets `derived` entries of class `shape` and `value` with `{pz, s}`: `s` yes, `a` no, `b` no |
+    | | links, with each entry of A's argument document given a clause of its own first | The write consumes one of them: the `followRef` entry at `params/*` |
+    | | seeded links | The entries at `zoom` hold the whole stamp, the `derived` clauses of B's slot included |
+    | | inline | `{a, b, pz}` |
+    | 3. `center.set(stop.position)` in A's body | links | `center` holds a link to `position` of A, with `link {a, s}` and `structure` of class `followRef` `{a, pc, s}`. No entry has `b`. The transaction reads `element`, `element/position` and `params/center` of A's argument document, and `position` of A shallowly. Of the entries of A's argument document it consumes the three at `*`, the `link` entry at `element`, and the `followRef` entry at `params/*` |
+    | The handler that does both | links | `zoom` gets `{a, pc, pz, s}`; `center` gets `link {a, s}` and `followRef` `{a, pc, pz, s}` |
+    | 4. The callback declares `index` | links | The argument document holds `index` as a number, with two more entries, `derived` of class `shape` and of class `value`, that hold the stamp's clauses. The ten entries and the entry at `element` are the same. `zoom.set(14)` consumes the same one entry and neither entry at `index` |
+    | | seeded links, A then removed | One commit writes `index` of B's argument document, 1 to 0, and no other path of its value. The `value` entry at `index` then holds the join of that reconcile beside the clauses it had. Every other entry is unchanged. Without `index` no commit writes B's argument document, and its entries are unchanged |
+    | 6. B added to a list that holds A | seeded links | No commit writes A's argument document, and its entries are those of the first reconcile. The transaction that sets up B neither reads nor writes A's argument document, and its one read of A's value is the probe for a link at the root. B's stamp has the `derived` clauses of A's slot and of its own, and the `enumerate` and `shape` clauses of the list's root, which a stamp of the first reconcile lacks |
+    | | inline | A's stamp stays `{a}`. B's is `{a, b}`. `zoom.set(14)` stores `{a, pz}` in A's body and `{a, b, pz}` in B's |
+
+     Question 5 is answered by the four lists above: with declared clauses the
+     probe used links to separate cells, and with elements stored in place it
+     used entries that the runtime derived or that the test seam wrote.
+
+     **What follows for the independence of elements.** The elements are
+     independent in three ways that were observed. The clause of an element's
+     own document, behind a link, is in no entry of another element's argument
+     document and in no write of another element's handler. Where a slot holds a
+     link, the coordinator reads nothing of the element's document but a probe
+     for a link at its root. And the argument document of an element is not
+     written when another element is added or removed, unless the callback
+     declares `index` and the element's position changed. They are not
+     independent in one way: the stamp is the join of the coordinator's
+     transaction, that transaction reads the list's document whole, and every
+     argument document it writes gets the same stamp. So the stamp of each
+     element set up by one reconcile holds the entries of every slot of the
+     list's document, and with elements stored in place the entries of every
+     element. An element set up later gets the entries of all slots stored at
+     that time, and the earlier elements keep the stamp they have. The stamp
+     reaches a handler that reads nothing of the element, because the handler is
+     given each captured handle from `params` of the argument document and the
+     entry of class `followRef` at `params/*` is part of the stamp.
+     `list-coordinator-plan.ts` says of the read of the list that a child
+     "carries its own slot's label and the selection's, not every element's";
+     with `derived` entries at the slots, the probe observed every slot's.
+
+     **Corrections to note 257.** "The stamp of the run of the `map` that wrote
+     that document" is the join of the coordinator's transaction that set the
+     element up, as above: labels of the list's document, and neither the labels
+     of element documents behind links nor the labels of captured cells. In the
+     harness the clause of `stops` is declared at the root of the list, so the
+     harness cannot say which of the list's entries the stamp took it from. Two
+     facts about the rows were left out. First, the map over `stops` in map-demo
+     is `stops.map((stop, index) => ...)`: it declares `index`, so each argument
+     document there also holds `index` with two `derived` entries, and a change
+     of an element's position writes `index` again; the handlers of the two
+     buttons do not read `index`. The map over `areasOfInterest` declares no
+     `index`. Second, the handler of a stop's button is one body with two
+     writes, `center.set(stop.position)` and `zoom.set(14)`. The first passes on
+     a handle taken from the element, and the transaction has one join, which
+     every write of it stores. So the row of `zoom.set(14)` is not the row of a
+     handler that reads nothing of the element, and its label has what the reads
+     of `element` and of `position` consumed: `a` and `pc` in the row of the
+     probe, where a handler that sets `zoom` alone stores `{pz, s}`. Note 257's
+     account of the three clauses the template lacks, that the entries of the
+     argument document hold them, stands.
+
+     **Not determined.** Whether the harness stores the generated elements of an
+     input list in place or as links. What the integrity of these entries is:
+     the probe compares confidentiality clauses alone. What changes when the
+     callback declares `array`, and what `filter` and `flatMap` store. The
+     comment at the declaration in `deriveFlowJoinImpl` marks the split of the
+     declared read as pending a ruling of the specification (`SPEC-PENDING`), so
+     the rule itself may change.
