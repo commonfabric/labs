@@ -874,6 +874,18 @@ carries the address it was read from (`annotateWithBackToCellSymbols` in
 `runtime/runner/src/schema.ts`), and a write of it stores a link. This
 document assumes that stays ([§13](#13-open-questions), question 2).
 
+The rule lets two bodies leave a cycle of links. A handler that stores
+what `center.get()` returned of an object in a new record stores a link
+to the cell of `center`, and a handler that then sets `center` to that
+member of the record stores a link back. The prototype's comparison met
+this in `patterns/examples/map-demo/map-demo.tsx`. In the runtime of today
+a read of a cell on such a cycle throws (`resolveLink` in
+`runtime/runner/src/link-resolution.ts`). No document of this design says
+what a slot whose path crosses a cycle of links resolves to
+(`plan-and-label-templates.md` §8, question 88), and the analysis reports
+nothing for it: which links a run stores is not known when the bodies are
+compiled.
+
 **An effect request.** A request keeps the reference rule, although the
 effect serializes what the request holds. The content behind a reference of
 a request is read by the transaction that checks the egress ceiling: it

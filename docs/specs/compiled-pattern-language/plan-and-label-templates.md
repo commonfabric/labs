@@ -3189,7 +3189,7 @@ that names a collection, the runtime's side
 is what a read of the container's shape consumes. The runtime's entries are
 separated by origin: the `derived` entries are compared with the template, and a
 difference that the `declared` entries of the static part account for is
-expected. Thirteen more rules fix what a row of the comparison is.
+expected. Sixteen more rules fix what a row of the comparison is.
 
 - **A constructed container.** An output entry that has entries below it is
   compared as an entry that names a collection is: the runtime's side is what
@@ -3410,6 +3410,49 @@ expected. Thirteen more rules fix what a row of the comparison is.
   row of the rule above is. Unlike that rule it is a narrowing by the
   rule of the template: a reader of the written path consumes the
   clause today and does not in the compiled path.
+- **The state a row is read on.** The template of a write edge is
+  evaluated on what is stored before the event is sent, which is what
+  the handler's transaction reads, and the runtime's side is read after
+  the event. Evaluated after the event, a slot of a cell that the
+  handler both reads and writes has the label of the run's own write,
+  which holds every clause the run consumed, and a template that lacks
+  one of the handler's reads compares as equal. A row belongs to the
+  state that the earlier events of the scenario left: with the events
+  sent in another order an event can reach another element or find
+  another value stored, and the row's category can differ for that
+  reason and for no other. A harness that has no access to the write
+  attempts of a transaction, which the runtime releases when the
+  transaction settles, takes as written a target whose value differs
+  after the event. It then does not see a link stored in the place of
+  an equal value, and counts that edge with the writes the run did not
+  make.
+- **A label the runtime fails to read.** The runtime's side of a row is
+  read with every link followed, and such a read can fail: resolution
+  stops at a cycle of links (`resolveLink` in
+  `runtime/runner/src/link-resolution.ts` throws there), and
+  `cfcLabelViewForResolvedCellWithStatus` in
+  `runtime/runner/src/cfc/label-view.ts` then returns what it read
+  before the failure and reports that the read failed. A partial label
+  is not the runtime's label of the path. *Assumed* (section 8,
+  question 88): a row that needs a label the runtime failed to read is
+  not a row of the comparison, and it is counted apart by that reason.
+  A handler can store such a cycle with `set` and `get` alone: what
+  `get` returns for an object is a view of the cell, a `set` of that
+  view stores a link, and two cells that each store what the other
+  returned link to each other.
+- **A written path that holds a link, for an edge with no
+  `reference`.** The rule for a write edge joins the template's side
+  with what a read through the stored link consumes only for an edge
+  with a `reference` member. A run can store a link at the target of an
+  edge that has none: the runtime stores a value that carries a stored
+  address as a link (section 3.14), and a body can write a value that
+  was a reference on this run alone. The runtime's side then has the
+  label of the link's target, and at the written path a `followRef`
+  stamp and no `value` entry, so it has no atom of the run where the
+  template mints the body's. *Assumed* (section 8, question 87): such
+  a row is not a row of the comparison and is counted apart, and where
+  the plan has an edge with `reference` for the same write, that edge's
+  row is the row of the write.
 
 **Which entries are the static part.** *Assumed* (section 8, question 70): the
 static part is separated by the origin of a stored entry (`LabelEntryOrigin` in
@@ -10068,3 +10111,36 @@ this document made.
     second ruling to end the exception, which needs a stream, and
     everything else stored once, per position, as the "to be revisited"
     of the first ruling already considers.
+87. **A written path that holds a link, for an edge with no
+    `reference`.** Section 3.1 joins the template's side of a write row
+    with what a read through the stored link consumes only for an edge
+    with a `reference` member. The prototype met rows where the run
+    stored a link at the target of an edge without one: write 0 of
+    `setDefaultProfile` in
+    `patterns/system/profile-picker/profile-picker.tsx`, whose template
+    has the body's atom where the runtime's label of the path has none,
+    and the edges for a value of two inline handlers of
+    `patterns/examples/map-demo/map-demo.tsx`, where the plan also has
+    an edge with `reference` for the write and that row is equal.
+    *Assumed:* the row of an edge with no `reference` is not compared
+    where the run stored a link at the written path, and is counted
+    apart. The alternative compares it as a row of an edge with
+    `reference` is compared, with the integrity of the value read
+    through the link on both sides, which takes the stored link as the
+    evidence the plan lacks. Not stated by this document: whether one
+    write can have an edge with `reference` and an edge without, as the
+    prototype emits, where the record of section 1.1 has one edge whose
+    `template` applies when the identity check fails.
+88. **A label the runtime fails to read, and a slot whose path crosses
+    a cycle of links.** The comparison reads the runtime's label with
+    every link followed, and the read fails at a cycle of links.
+    *Assumed:* a row that needs such a label is not compared and is
+    counted apart (section 3.1). The same case has no rule in the
+    compiled path: section 2.5 says what a slot whose path crosses a
+    link resolves to, and not what it resolves to where the links form
+    a cycle. *Assumed:* the evaluation that reads the slot fails as a
+    body that throws does, and its outputs take the error state of
+    section 5.2 under their templates. In the runtime of today a read
+    of a cell on such a cycle throws from `resolveLink`, and a read
+    under a schema of a cell that holds a link into the cycle throws
+    from `traverseWithSelector` in `runtime/runner/src/traverse.ts`.
