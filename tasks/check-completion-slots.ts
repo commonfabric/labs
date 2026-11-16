@@ -65,6 +65,10 @@ export const NO_CANDIDATES = new Map<string, string>([
     "space invite receipts:invite-id",
     "an opaque ID from invitation creation or listing",
   ],
+  [
+    "index join:link",
+    "an invite link pasted from elsewhere, and a secret: never offered",
+  ],
   // Values a caller brings from outside the CLI.
   ["acl set:did", "a DID being granted access; nothing here enumerates them"],
   ["acl remove:did", "the same DID, and the same absence of a source"],
@@ -153,6 +157,16 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a DID being delegated to; nothing here enumerates them",
   ],
   ["delegation issue:expires-in", "a delegation lifetime in seconds"],
+  [
+    "pattern publish:description",
+    "prose the caller writes about their pattern",
+  ],
+  ["pattern publish:hashtags", "tags the caller coins for their pattern"],
+  ["pattern publish:keywords", "words the caller coins for their pattern"],
+  [
+    "pattern publish:remixed-from",
+    "a published pattern's id, which a pattern-index search answers",
+  ],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
   [

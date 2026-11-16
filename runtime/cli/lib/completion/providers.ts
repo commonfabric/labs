@@ -962,6 +962,7 @@ function onlyOn(
 /** The commands whose `--root` is the directory their sources resolve against. */
 const ROOT_DIRECTORY_COMMANDS: readonly string[] = [
   "check",
+  "pattern publish",
   "piece new",
   "piece setsrc",
   "piece survey",
@@ -1044,6 +1045,11 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // A delegation chain file, as `cf delegation issue --out` writes one.
   delegations: () =>
     Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  // An index chain file, as `cf delegation issue --index --out` writes one.
+  chain: onlyOn(
+    ["index join"],
+    () => Promise.resolve(directive({ kind: "files", glob: "*.json" })),
+  ),
   // `cf agent runner`: the toolshed it sits beside, the host-owned Loom tool
   // configuration it reads, and the directory its runs' workspaces go under.
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
@@ -1218,6 +1224,7 @@ const ARGUMENT_PROVIDERS: Readonly<
   "profile get-picture:file": () =>
     Promise.resolve(directive({ kind: "files" })),
   "piece new:main": patternFiles,
+  "pattern publish:entry": patternFiles,
   "piece setsrc:main": patternFiles,
   "check:files": patternFiles,
   "test:paths": patternFiles,
