@@ -299,6 +299,39 @@ describe("pattern-publish", () => {
       expect(report.priorPatternId).toBeUndefined();
     });
 
+    it("names one's own pattern the source was fetched from as the prior version, not a remix", async () => {
+      await new PatternIndexClient({
+        baseUrl: "https://index.test",
+        signer,
+        fetchFn: index.fetchFn,
+      }).publishPattern({
+        patternId: "id-mine-earlier",
+        description: "mine",
+        hashtags: [],
+        program: { main: "/x.tsx", files: [] },
+      });
+      await store.recordSource(dir, "id-mine-earlier");
+      const report = await publishPatternFromDisk(
+        { entry },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.priorPatternId).toBe("id-mine-earlier");
+      expect(report.remixedFrom).toBeUndefined();
+    });
+
+    it("names no remix for source published unchanged from the pattern it was fetched from", async () => {
+      await store.recordSource(dir, "id-original");
+      const report = await publishPatternFromDisk(
+        { entry },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.remixedFrom).toBeUndefined();
+      const publish = index.calls.find((call) => call.fn === "publishPattern")!;
+      expect(publish.body).not.toHaveProperty("remixedFrom");
+    });
+
     it("reads the daily cap as when to try again, having published", async () => {
       index = new FakePatternIndex({
         privacyPrompt: PRIVACY_PROMPT,
