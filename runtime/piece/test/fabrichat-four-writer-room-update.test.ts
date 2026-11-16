@@ -8,8 +8,9 @@
  * it comes from), and the room is set up from that stored source, as a
  * runtime loading such a room does. It seeds through that program's own
  * handlers, each from its reviewed gesture: six messages, one of them a
- * reply, a reaction, and a window. Then the room opens, as a person opening it would, and follows
- * `system:system/fabrichat/room.tsx`, which this tree's patterns route serves.
+ * reply, a reaction, and a window. Then the room opens, as a person opening
+ * it would, and follows `system:system/fabrichat/room.tsx`, which this tree's
+ * patterns route serves.
  *
  * The release appends the three writers the stored policy lacks after its
  * four (`docs/specs/cfc-conformance-statement.md` §10), and the room's stored
@@ -797,10 +798,14 @@ describe("fabrichat-four-writer-room-update", () => {
 
       expect(refusals).toEqual([]);
       expect(await reply.key("body").pull()).toEqual({ deleted: true });
+      const [first] = await storedMessages();
+      const docOf = (cell: Cell<unknown>) =>
+        cell.resolveAsCell().getAsNormalizedFullLink().id;
       expect(
         (reply.getRaw() as { replyTo?: { shownIn?: unknown } }).replyTo
           ?.shownIn,
       ).toBe("main");
+      expect(docOf(reply.key("replyTo").key("message"))).toBe(docOf(first));
     });
 
     it("writes nothing for a `closeWindow` naming no open window, under a name an object inherits", async () => {

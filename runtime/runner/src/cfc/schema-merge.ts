@@ -227,11 +227,12 @@ const reconcileWriterClaimStamp = (
   if (!existingStamped && !candidateStamped) {
     return existing;
   }
-  // TODO(danfuzz): Outside a release, a stamped claim adopts an unstamped one
-  // whose spelling corresponds whichever writer's write restates it, where
-  // the proposal lets only the writer the stamp names bring it over (§8.15.13,
-  // "Release"). Refuse the adoption unless `adoptsStamp` vouches for the
-  // stamp, once callers pass it for every adoption.
+  // TODO(danfuzz): Outside a release, a stamped claim, lone or a write
+  // policy's alternative, adopts an unstamped one whose spelling corresponds
+  // whichever writer's write restates it, where the proposal lets only the
+  // writer the stamp names bring it over (§8.15.13, "Release"). Refuse the
+  // adoption unless `adoptsStamp` vouches for the stamp, once callers pass it
+  // for every adoption.
   return existingStamped ? existing : candidate;
 };
 

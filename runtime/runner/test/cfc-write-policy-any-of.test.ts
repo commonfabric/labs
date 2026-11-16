@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import type { FabricValue } from "@commonfabric/api";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
@@ -71,8 +72,8 @@ type WriteOptions = {
   schema?: JSONSchema;
   module?: string;
   initialization?: "setup" | "default" | "seed";
-  value?: string;
-  recordedValue?: string;
+  value?: FabricValue;
+  recordedValue?: FabricValue;
 
   /**
    * Where `schema` applies: to the document itself, or to its `tag` field,
@@ -129,7 +130,7 @@ function fixture() {
       ).key("tag")
       : runtime.getCell<unknown>(signer.did(), "protected-value", schema, tx);
     if (options.link === true) {
-      const source = runtime.getCell<string>(
+      const source = runtime.getCell<FabricValue>(
         signer.did(),
         "linked-value",
         { type: "string" },
@@ -536,45 +537,110 @@ describe("cfc-write-policy-any-of", () => {
         });
       });
 
-      it("adopts a stamp for an unstamped alternative that another writer's write restates stamped, in another order, outside a release", async () => {
-        // TODO(danfuzz): This pins an adoption the proposal refuses: outside
-        // a release, only the writer a stamp names may bring that stamp over
-        // an unstamped claim naming it, and here `send`'s write stamps
-        // `edit`'s alternative, which `edit` then writes through. Flip it
-        // when the merge adopts only as the proposal allows (see the `TODO`
-        // in `reconcileWriterClaimStamp()`).
-
-        await withFixture(async (f) => {
-          expect(await f.write("send", "Send", { schema: unstamped }))
-            .toBeUndefined();
-
-          expect(
-            await f.write("send", "Send", {
-              schema: {
-                type: "string",
-                ifc: {
-                  writePolicyAnyOf: [
-                    policy("edit", "Edit"),
-                    policy("send", "Send"),
-                  ],
-                },
-              },
-              value: "again",
-            }),
-          ).toBeUndefined();
-          expect(
-            storedAlternatives(f.runtime, "protected-value", [], true),
-          ).toEqual(["send/Send@test-module", "edit/Edit@test-module"]);
-          expect(await f.write("edit", "Edit", { value: "edited" }))
-            .toBeUndefined();
-        });
-      });
-
       it("stamps no member for a writer none of them names", async () => {
         await withFixture(async (f) => {
           expect(await f.write("rogue", "Send", { schema: unstamped }))
             .toContain("writePolicyAnyOf failed");
         });
+      });
+    });
+  });
+
+  describe("an unstamped claim another writer's write restates stamped, outside a release", () => {
+    // TODO(danfuzz): These pin an adoption the proposal refuses: outside a
+    // release, only the writer a stamp names may bring that stamp over an
+    // unstamped claim naming it, and here `send`'s write stamps `edit`'s
+    // claim, as an alternative of a write policy and as a lone claim alike.
+    // Each schema restates the claim in a shape the stored envelope does not
+    // cover, so that the merge runs. Flip them when the merge adopts only as
+    // the proposal allows (see the `TODO` in `reconcileWriterClaimStamp()`).
+
+    it("adopts the stamp for an alternative, and its writer then writes", async () => {
+      await withFixture(async (f) => {
+        const unstamped: JSONSchemaObj = {
+          type: "string",
+          ifc: {
+            writePolicyAnyOf: [
+              policy("send", "Send", true),
+              policy("edit", "Edit", true),
+            ],
+          },
+        };
+        expect(await f.write("send", "Send", { schema: unstamped }))
+          .toBeUndefined();
+
+        expect(
+          await f.write("send", "Send", {
+            schema: {
+              type: "string",
+              ifc: {
+                writePolicyAnyOf: [
+                  policy("edit", "Edit"),
+                  policy("send", "Send"),
+                ],
+              },
+            },
+            value: "again",
+          }),
+        ).toBeUndefined();
+        expect(
+          storedAlternatives(f.runtime, "protected-value", [], true),
+        ).toEqual(["send/Send@test-module", "edit/Edit@test-module"]);
+        expect(await f.write("edit", "Edit", { value: "edited" }))
+          .toBeUndefined();
+      });
+    });
+
+    it("adopts the stamp for a lone claim", async () => {
+      await withFixture(async (f) => {
+        /** `send`'s `note` beside `edit`'s `tag`, described by `tagNote`. */
+        const schema = (edit: unknown, tagNote?: string): JSONSchemaObj => ({
+          type: "object",
+          properties: {
+            note: {
+              type: "string",
+              ifc: { writeAuthorizedBy: writerClaim("send") },
+            },
+            tag: {
+              type: "string",
+              ...(tagNote === undefined ? {} : { description: tagNote }),
+              ifc: { writeAuthorizedBy: edit },
+            },
+          } as JSONSchemaObj["properties"],
+        });
+        const tagClaim = () => {
+          const tx = f.runtime.edit();
+          try {
+            const stored = loadStoredCfcEnvelope(
+              tx,
+              f.runtime.getCell(signer.did(), "protected-value")
+                .getAsNormalizedFullLink(),
+            );
+            if (stored.status !== "loaded") {
+              throw new Error(`No stored envelope: ${stored.status}`);
+            }
+            return (cfcSchemaEntries(stored.schema).find((entry) =>
+              entry.path.join("/") === "tag"
+            )?.schema as JSONSchemaObj | undefined)?.ifc?.writeAuthorizedBy;
+          } finally {
+            tx.abort("stored claim read");
+          }
+        };
+        expect(
+          await f.write("send", undefined, {
+            schema: schema(writerClaim("edit", true)),
+            value: { note: "first" },
+          }),
+        ).toBeUndefined();
+        expect(tagClaim()).toEqual(writerClaim("edit", true));
+
+        expect(
+          await f.write("send", undefined, {
+            schema: schema(writerClaim("edit"), "restated"),
+            value: { note: "again" },
+          }),
+        ).toBeUndefined();
+        expect(tagClaim()).toEqual(writerClaim("edit"));
       });
     });
   });

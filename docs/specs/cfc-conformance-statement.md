@@ -963,16 +963,22 @@ regenerated snapshot defines it.
 
 - The merge also requires an appended alternative to hold the same keys as the
   stored one it pairs with, which the proposal does not ask: an over-taint.
-- An unstamped stored alternative is adopted wherever the merge runs: a write
-  whose schema restates it stamped, with a file spelling that corresponds,
-  stamps it in that write, whichever writer makes the write, in a release or
-  outside one. The proposal lets only the writer the stamp names bring the
-  stamp over outside a release (§8.15.13, "Release"; §8.15.1,
-  "Handler-Declared Write Capability"), so the runtime admits more there. A
-  write whose schema differs from the stored envelope only in its stamps takes
-  the persist loop's unchanged-envelope shortcut and adopts nothing. No write
-  policy stored in this repository's fixtures or pattern baselines holds an
-  unstamped alternative.
+- An unstamped stored writer claim, lone or a write policy's alternative, is
+  adopted wherever the merge runs: a write whose schema restates it stamped,
+  with a file spelling that corresponds, stamps it in that write, whichever
+  writer makes the write, in a release or outside one. The proposal lets only
+  the writer the stamp names bring the stamp over outside a release (§8.15.13,
+  "Release"), and asks of the spelling a directory as well as a file name
+  (§8.15.1, "Handler-Declared Write Capability"), so the runtime admits more
+  there. A write whose schema differs from the stored envelope only in its
+  stamps takes the persist loop's unchanged-envelope shortcut and adopts
+  nothing. A compiled pattern's claims are stamped when the compiler mints
+  them: a module compile carries each module's identity
+  (`ModuleCompileRequest.moduleIdentities` in `harness/module-compile.ts`),
+  and the schema transformer refuses to mint a claim for a module it has none
+  for (`schema-generator.ts` in `base/ts-transformers`). So an unstamped claim
+  is stored only from a schema the compiler did not mint, or from data stored
+  before claims were minted stamped.
 - A schema declaring an empty list at the position is refused as malformed,
   and one declaring nothing there keeps the stored policy as stored, as the
   proposal has them.
