@@ -1205,10 +1205,11 @@ export function writeSourceDocs(
       // over as stored: an annotation is typically a link to another document,
       // and the raw write below has to keep it a link rather than a copy of
       // what it reads through to.
-      // Not where another identity wrote them in this transaction: what the
-      // cache carries forward it writes as its own.
-      const existingAnnotations = identity === entryIdentity &&
-          !writtenByAnotherIdentity(tx, baseCell, ["annotations"])
+      // Annotations carry no evidence this write could vouch for, and nothing
+      // reads them as authority, so one another identity wrote in this
+      // transaction gains nothing from the carry: its write leaves the record
+      // measured by writer-fit (`isUndeclarablePolicyStore()`).
+      const existingAnnotations = identity === entryIdentity
         ? baseCell.getRaw()?.annotations
         : undefined;
       const delegatedModuleIdentities = [
@@ -1725,7 +1726,9 @@ function storedBuilderSourceSites(
 /**
  * Whether a value write made under an identity other than a builtin's in
  * `tx` (`CfcTxState.unattestedWrites`) reached `cell`'s document at a path
- * that is `path`, holds it, or lies within it.
+ * that is `path`, holds it, or lies within it. Both are concrete payload
+ * paths, so each segment is compared as written: a `*` is a key here, not
+ * the wildcard a schema path can hold.
  */
 function writtenByAnotherIdentity(
   tx: IExtendedStorageTransaction,

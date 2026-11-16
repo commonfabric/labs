@@ -481,10 +481,14 @@ The strict-only delta is:
   every value write made under an identity other than a builtin's, an
   unattributed or a verified one alike (`CfcTxState.unattestedWrites`), and a
   document such a write reached is measured, marker or not, as any writer's
-  would be. A later builtin write to the same path does not lift that: the
-  cache writer reads the transaction's view of a record and writes it back,
-  carrying its delegation list and annotations forward, so its write is no
-  evidence that the value is its own. So after a labeled read, a pattern's or
+  would be. A later builtin write to the same path does not lift that: a
+  builtin can read the transaction's view and write it back, so its write is
+  no evidence that the value is its own, and the rule cannot rely on every
+  builtin guarding what it carries. The cache writer does guard its
+  delegation-list carry: a list another identity wrote in the transaction is
+  no candidate (`writtenByAnotherIdentity()` in `cell-cache.ts`). The
+  annotations it carries bear no evidence and leave the record measured. So
+  after a labeled read, a pattern's or
   an unattributed host's write of a cache record misfits, whether it comes
   before or after the cache writer's in the transaction, or in a transaction
   of its own. A write made under any builtin identity is the runtime's own and

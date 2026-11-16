@@ -3490,6 +3490,40 @@ describe("cell-cache", () => {
       expect(await commitWith(true, () => {})).toBeUndefined();
     });
 
+    it("keeps an annotation stored before the transaction when another identity writes another one", async () => {
+      // The cache writer carries the record's annotations forward, the other
+      // identity's included: annotations bear no evidence, and that write
+      // leaves the record measured.
+
+      expect(await commitWith(false, () => {})).toBeUndefined();
+      await runtime.patternManager.annotatePattern(
+        entryIdentity,
+        space,
+        "name",
+        { "/": "name-doc-link" },
+      );
+
+      expect(
+        await commitWith(false, () => {}, (tx) => {
+          tx.writeValueOrThrow(
+            record("source", tx).key("annotations").key("other")
+              .getAsNormalizedFullLink(),
+            "chosen",
+          );
+        }),
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      try {
+        expect(record("source", tx).getRaw()?.annotations).toEqual({
+          name: { "/": "name-doc-link" },
+          other: "chosen",
+        });
+      } finally {
+        tx.abort();
+      }
+    });
+
     it("stores an annotation on a source record that holds a flow stamp", async () => {
       // `annotatePattern()` reads the record, and so its stamp, and writes
       // as the cache writer does, which keeps the record's claim.

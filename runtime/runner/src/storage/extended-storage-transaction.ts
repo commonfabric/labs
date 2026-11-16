@@ -1934,10 +1934,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * that no schema declares a policy on a document, stand for what the
    * builtin wrote, and preparation withholds both where such a write reached.
    * A later builtin write at the same path does not lift that: a builtin can
-   * read the transaction's view and write it back, as the compilation cache
-   * carries a record's delegation list and annotations forward, so its write
-   * is no evidence that the value is its own choice. Each distinct address
-   * is recorded once.
+   * read the transaction's view and write it back, so its write is no
+   * evidence that the value is its own choice, and the rule cannot rely on
+   * every builtin guarding what it carries. Each distinct address is
+   * recorded once.
    */
   #noteWriteIdentity(address: IMemorySpaceAddress): void {
     if (this.#privilegedSystemWriteDepth > 0) return;
