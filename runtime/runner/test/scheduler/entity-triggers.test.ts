@@ -9,12 +9,122 @@ import {
   triggerEquivalenceEnabled,
   triggerScanWork,
 } from "../../src/scheduler/entity-triggers.ts";
-import { arraysOverlap } from "../../src/reactive-dependencies.ts";
+import {
+  arraysOverlap,
+  comparePaths,
+} from "../../src/reactive-dependencies.ts";
 import type { Action } from "../../src/scheduler/types.ts";
+
+type Path = readonly string[];
 
 /** An action that does nothing, named so a failure says which one it was. */
 function reader(name: string): Action {
   return ({ [name]: () => {} })[name]!;
+}
+
+/** A xorshift generator over `[0, 1)`, so a seed reproduces its run exactly. */
+function seeded(seed: number): () => number {
+  let state = seed >>> 0 || 1;
+  return () => {
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    return state / 4294967296;
+  };
+}
+
+/** `paths` in ascending order with each path once. */
+function ascending(paths: readonly Path[]): Path[] {
+  return [...paths].sort(comparePaths).filter((path, at, sorted) =>
+    at === 0 || comparePaths(sorted[at - 1]!, path) !== 0
+  );
+}
+
+/** How a seeded run of registrations and removals is shaped. */
+interface DefinitionRun {
+  /** The index under test, made fresh for each seed. */
+  readonly create: () => EntityTriggers;
+
+  /** How many actions the run registers and removes among. */
+  readonly actions: number;
+
+  /** Whether one list in eight repeats a path or comes out of order. */
+  readonly malformed: boolean;
+}
+
+/**
+ * Drives `run` through `steps` seeded registrations and removals and, after
+ * each one, compares what the index returns for a set of writes against what
+ * the overlap definition says of a plain model of every action's reads.
+ *
+ * The writes probed are the root, every registered path, its parent, a child
+ * no read names, and four paths drawn at random. Throws naming the seed, the
+ * step and the write at the first disagreement.
+ */
+function compareWithDefinition(
+  seed: number,
+  steps: number,
+  run: DefinitionRun,
+): void {
+  const random = seeded(seed);
+  const alphabet = ["value", "a", "b", "a/b", "", "10", "9"];
+  const pick = <T>(items: readonly T[]): T =>
+    items[Math.floor(random() * items.length)]!;
+  const randomPath = (): Path =>
+    Array.from({ length: Math.floor(random() * 4) }, () => pick(alphabet));
+  const actions = Array.from(
+    { length: run.actions },
+    (_, index) => reader(`reader-${index}`),
+  );
+  const model = new Map<Action, Path[]>();
+  const triggers = run.create();
+  const where = (step: number, writePath: Path) =>
+    `seed ${seed} step ${step} write ${JSON.stringify(writePath)}`;
+
+  for (let step = 0; step < steps; step++) {
+    const action = pick(actions);
+    if (random() < 0.2) {
+      model.delete(action);
+      triggers.delete(action);
+    } else {
+      const drawn = Array.from(
+        { length: 1 + Math.floor(random() * 6) },
+        randomPath,
+      );
+      const next = ascending(drawn);
+      let list = next;
+      if (run.malformed && random() < 0.125) {
+        list = random() < 0.5 ? [...drawn, drawn[0]!] : drawn.toReversed();
+      }
+      model.set(action, next);
+      triggers.set(action, list);
+    }
+
+    expect(triggers.size, `seed ${seed} step ${step}: size`).toBe(model.size);
+    const probes: Path[] = [[], randomPath(), randomPath(), randomPath()];
+    probes.push(randomPath());
+    for (const paths of model.values()) {
+      for (const path of paths) {
+        probes.push(path, path.slice(0, -1), [...path, "absent"]);
+      }
+    }
+    for (const writePath of probes) {
+      const expected: Record<string, string[]> = {};
+      for (const [action, paths] of model) {
+        const reached = paths.filter((path) => arraysOverlap(path, writePath));
+        if (reached.length > 0) {
+          expected[action.name] = reached.map((path) => JSON.stringify(path));
+        }
+      }
+      const answered: Record<string, string[]> = {};
+      for (const [action, paths] of triggers.matching(writePath)) {
+        answered[action.name] = paths.map((path) => JSON.stringify(path));
+      }
+      expect(answered, where(step, writePath)).toEqual(expected);
+    }
+  }
 }
 
 /** What `matching()` returned, as plain data an expectation can name. */
@@ -282,6 +392,22 @@ describe("EntityTriggers", () => {
       expect(() => triggers.set(action, [["other"]])).toThrow(
         "Registered read `value` is missing from the index.",
       );
+    });
+  });
+
+  describe("against the overlap definition", () => {
+    // A write reaches exactly the reads it overlaps, so every answer the
+    // index gives is checked against `arraysOverlap()` over a plain record of
+    // each action's reads, after every step of a seeded run.
+
+    it("agrees with the definition at production limits, seeds 1 to 40", () => {
+      for (let seed = 1; seed <= 40; seed++) {
+        compareWithDefinition(seed, 60, {
+          create: () => new EntityTriggers(),
+          actions: 12,
+          malformed: false,
+        });
+      }
     });
   });
 
