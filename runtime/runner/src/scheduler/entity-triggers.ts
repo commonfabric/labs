@@ -44,14 +44,6 @@ export function resetTriggerScanWork(): void {
 }
 
 /**
- * How many lists {@link EntityTriggers.set} had to put in ascending order or
- * rid of a repeated path before indexing them. Process-wide. A count above
- * zero is not a fault, since the index repairs the list either way, but it
- * names a caller handing over lists that break their type.
- */
-export const triggerListRepairs = { count: 0 };
-
-/**
  * Whether the every-mutation equivalence verifier runs: on under `ENV=test`
  * and off elsewhere.
  *
@@ -346,13 +338,11 @@ function pathsEqual(
 
 /**
  * `paths` in ascending order under {@link compareRowPaths} with each path once:
- * `paths` itself when it already is, and otherwise a sorted copy, which
- * {@link triggerListRepairs} counts.
+ * `paths` itself when it already is, and otherwise a sorted copy.
  */
 function ascendingOnce(paths: SortedAndCompactPaths): SortedAndCompactPaths {
   for (let i = 1; i < paths.length; i++) {
     if (compareRowPaths(paths[i - 1]!, paths[i]!) >= 0) {
-      triggerListRepairs.count++;
       const sorted = [...paths].sort(compareRowPaths);
       return sorted.filter((path, at) =>
         at === 0 || compareRowPaths(sorted[at - 1]!, path) !== 0

@@ -9,7 +9,6 @@ import {
   EntityTriggers,
   resetTriggerScanWork,
   triggerEquivalenceEnabled,
-  triggerListRepairs,
   triggerScanWork,
 } from "../../src/scheduler/entity-triggers.ts";
 import {
@@ -224,9 +223,10 @@ describe("EntityTriggers", () => {
       });
 
       it("returns an action's matching paths in ascending path order", () => {
-        // Registered out of order, because ascending order is what
-        // `determineTriggeredActions()` reads its groups in and registration
-        // order would satisfy an already-ascending list either way.
+        // Registered out of order, so that the order of the answer has to
+        // come from `set()` putting the list in order and from the row
+        // holding it so, not from the list as handed over. Ascending order is
+        // what `determineTriggeredActions()` reads its groups in.
 
         const triggers = new EntityTriggers();
         triggers.set(reader("several"), [
@@ -376,15 +376,6 @@ describe("EntityTriggers", () => {
         triggers.set(action, []);
         expect(triggers.size).toBe(0);
         expect(matched(triggers, [])).toEqual({});
-      });
-
-      it("counts a list it had to put in order", () => {
-        const triggers = new EntityTriggers();
-        const before = triggerListRepairs.count;
-        triggers.set(reader("sorted"), [["a"], ["b"]]);
-        expect(triggerListRepairs.count).toBe(before);
-        triggers.set(reader("unsorted"), [["b"], ["a"]]);
-        expect(triggerListRepairs.count).toBe(before + 1);
       });
 
       it("rejects a path component that is not a string while the check runs", () => {
