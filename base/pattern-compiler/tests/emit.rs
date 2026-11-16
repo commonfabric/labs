@@ -635,3 +635,65 @@ export const P = pattern<{ value: string; flavor: string }>(({ value, flavor }) 
         ]
     );
 }
+
+#[test]
+fn a_reduce_registers_the_function_of_its_initial_value_and_of_its_step() {
+    // PL §3.13: the step of a `reduce` is a cone the runtime evaluates
+    // once per element, in order, "with the accumulator as a slot of root
+    // `operation`". The plan is the same whether the elements of `items`
+    // are references or plain values in place, and `doubled` is over the
+    // result of another per-element construct.
+    let (plan, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Item { amount: number }
+export const P = pattern<{ items: Item[]; amounts: number[]; bonus: number }>(
+  ({ items, amounts, bonus }) => {
+    const total = items.reduce((sum, item, index) => sum + item.amount * index, bonus);
+    const doubled = amounts.map((amount) => amount * 2).reduce((sum, amount) => sum + amount, 0);
+    return { total, doubled };
+  },
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    let accumulator = plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .position(|slot| {
+            slot["root"] == json!({ "kind": "operation", "operation": 0 })
+                && slot["observes"] == "value"
+        })
+        .expect("the accumulator");
+    let amount = slot(&plan, "element", &["amount"], "value");
+    let index = slot(&plan, "index", &[], "value");
+    let bonus = slot(&plan, "argument", &["bonus"], "identity");
+    let step = plan["operations"][0]["implementation"]["cone"]
+        .as_u64()
+        .expect("the cone of the step");
+    // The cone the `reduce` is written in computes the initial value.
+    let initial = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .position(|cone| {
+            cone["writes"].as_array().is_some_and(|writes| {
+                writes
+                    .iter()
+                    .any(|write| write["target"]["of"] == json!({ "operation": 0 }))
+            })
+        })
+        .expect("the cone of the initial value");
+    assert!(
+        text.contains(&format!(
+            "$rt.reduce(0, {initial}, ($h) => ($h.v($h.slot({bonus}))), {step}, ($h) => (($h.v($h.slot({accumulator})) + ($h.v($h.slot({amount})) * $h.slot({index})))));"
+        )),
+        "{text}"
+    );
+    // The second `reduce` is over the assembled result of the `map`, whose
+    // body is registered as that of any element construct.
+    assert!(text.contains("$rt.element("), "{text}");
+    assert!(text.contains("$rt.reduce(1, "), "{text}");
+    assert_eq!(code["reduces"], json!([0, 1]));
+}

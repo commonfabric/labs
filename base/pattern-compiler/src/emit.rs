@@ -328,6 +328,8 @@ struct Generator<'r, 'm, 'a> {
     registered_values: Vec<usize>,
     registered_elements: Vec<usize>,
     registered_states: Vec<usize>,
+    /// The `reduce` operations whose functions are registered.
+    registered_reduces: Vec<usize>,
     /// For each context of a pattern compiled in: the place a name of
     /// its parameter is bound to, with the default the callee's argument
     /// type declares for the path (ruling Z4).
@@ -607,6 +609,12 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 Self::wanted(want, code)
             }
             Place::Stream(binding) => format!("$h.stream({binding})"),
+            // The accumulator of a `reduce`: the slot of root `operation`
+            // that the cone of the step lists (PL §3.13).
+            Place::Accumulator(operation, path) => {
+                let code = self.slot_code(&Root::Operation(*operation), path, want);
+                Self::wanted(want, code)
+            }
             _ => return None,
         })
     }
@@ -724,6 +732,15 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 }
                 self.place_code(&fact.place, want)
             }
+            Place::Slot(Root::Operation(operation), path) => {
+                // A `reduce` registers the functions of its initial value
+                // and of its step where it is written.
+                if let (true, Expression::CallExpression(call)) = (path.is_empty(), inner) {
+                    self.reduce_construct(call, *operation);
+                }
+                self.place_code(&fact.place, want)
+            }
+            Place::Accumulator(..) => self.place_code(&fact.place, want),
             Place::Slot(..) | Place::Read(..) => self.place_code(&fact.place, want),
             Place::Value(value, path) => {
                 let value = *value;
@@ -760,9 +777,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 }
                 self.compute(inner, value, want)
             }
-            Place::Record(_) | Place::Const | Place::Unknown | Place::Accumulator(..) => {
-                self.structure(inner, want)
-            }
+            Place::Record(_) | Place::Const | Place::Unknown => self.structure(inner, want),
         }
     }
 
@@ -847,6 +862,17 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             for (name, place) in &used.inputs {
                 let formal = used.formals.iter().position(|formal| formal == name);
                 let written = formal.and_then(|index| arguments.get(index).copied());
+                // A `reduce` written as an input registers its functions.
+                // The body reads its result through the slot.
+                if let (Some(written), Place::Slot(Root::Operation(operation), path)) =
+                    (written, place)
+                {
+                    if let (true, Expression::CallExpression(call)) =
+                        (path.is_empty(), unwrap(written))
+                    {
+                        self.reduce_construct(call, *operation);
+                    }
+                }
                 let code = match (written, place) {
                     (_, Place::Slot(..) | Place::Read(..)) => None,
                     (Some(written), _) => Some(self.render(written, Want::Pass)),
@@ -895,19 +921,91 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         self.structure(inner, want)
     }
 
-    /// The per-element function of an element construct, registered
-    /// where the construct is written.
-    fn element_construct(&mut self, call: &CallExpression<'a>, collection: usize) {
+    /// The functions of a `reduce` in the reactive tier, registered where
+    /// it is written: the initial value, which the cone the `reduce` is
+    /// written in computes, and the step, a cone the runtime evaluates
+    /// once per element, in order, with the accumulator as a slot of root
+    /// `operation` (PL §3.13).
+    fn reduce_construct(&mut self, call: &CallExpression<'a>, operation: usize) {
+        let record = &self.generator.plan["operations"][operation];
+        if record["kind"] != json!("reduce")
+            || self.generator.registered_reduces.contains(&operation)
+        {
+            return;
+        }
         let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
             return;
         };
+        if member.property.name != "reduce" {
+            return;
+        }
         let Some(function) = call.arguments.first().and_then(FunctionLike::of_argument) else {
             return;
         };
-        // The receiver is evaluated for the cones it registers. Where it
-        // is an array written in place or a constant, the plan has an
-        // interim output for it (`Collection.source`), which this code
-        // computes.
+        let Some(step) = function.expression_body() else {
+            return;
+        };
+        // The collection of the `reduce` is the one whose element body the
+        // step is written in: the last `element` step of the `within` of
+        // the step's cone (ruling Z10).
+        let Some(step_cone) = record["implementation"]["cone"].as_u64() else {
+            return;
+        };
+        let collection = self.generator.plan["cones"][step_cone as usize]["within"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|step| step["element"].as_u64())
+            .next_back();
+        let Some(collection) = collection else {
+            return;
+        };
+        self.generator.registered_reduces.push(operation);
+        // The cones in the order the plan emitter made them, which the
+        // rewriter names a cone by.
+        let made = |generator: &Generator, cone: usize| {
+            generator
+                .finished
+                .position
+                .iter()
+                .position(|index| *index == cone)
+        };
+        let initial_cone = self.generator.plan["cones"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .position(|cone| {
+                cone["writes"].as_array().is_some_and(|writes| {
+                    writes.iter().any(|write| {
+                        write["target"]["kind"] == json!("request")
+                            && write["target"]["of"] == json!({ "operation": operation })
+                    })
+                })
+            });
+        self.source_of_construct(&member.object, collection as usize);
+        let initial = match (
+            call.arguments.get(1).and_then(Argument::as_expression),
+            initial_cone,
+        ) {
+            (Some(initial), Some(cone)) => {
+                let cone = made(self.generator, cone);
+                let code = self.in_cone(cone, |rewriter| rewriter.render(initial, Want::Use));
+                format!("{}, ($h) => ({code})", initial_cone.unwrap_or(0))
+            }
+            _ => "undefined, undefined".to_string(),
+        };
+        let cone = made(self.generator, step_cone as usize);
+        let code = self.in_cone(cone, |rewriter| rewriter.render(step, Want::Use));
+        self.generator.hoist(format!(
+            "$rt.reduce({operation}, {initial}, {step_cone}, ($h) => ({code}));"
+        ));
+    }
+
+    /// The receiver of an element construct or of a `reduce`, evaluated
+    /// for the cones it registers. Where it is an array written in place
+    /// or a constant, the plan has an interim output for it
+    /// (`Collection.source`), which this code computes.
+    fn source_of_construct(&mut self, object: &Expression<'a>, collection: usize) {
         let source = self.generator.plan["collections"][collection]["source"]["output"]
             .as_u64()
             .and_then(|output| {
@@ -920,22 +1018,33 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             })
             .filter(|value| !self.generator.registered_values.contains(value));
         let written = matches!(
-            self.place_of(&member.object),
+            self.place_of(object),
             None | Some(Place::Record(_) | Place::Const | Place::Unknown)
         );
         match source {
             Some(value) if written => {
                 let cone = Some(self.generator.cone_of(value));
-                let code =
-                    self.in_cone(cone, |rewriter| rewriter.render(&member.object, Want::Pass));
+                let code = self.in_cone(cone, |rewriter| rewriter.render(object, Want::Pass));
                 self.generator
                     .hoist(format!("$rt.value({value}, ($h) => ({code}));"));
                 self.generator.registered_values.push(value);
             }
             _ => {
-                self.in_cone(None, |rewriter| rewriter.render(&member.object, Want::Pass));
+                self.in_cone(None, |rewriter| rewriter.render(object, Want::Pass));
             }
         }
+    }
+
+    /// The per-element function of an element construct, registered
+    /// where the construct is written.
+    fn element_construct(&mut self, call: &CallExpression<'a>, collection: usize) {
+        let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+            return;
+        };
+        let Some(function) = call.arguments.first().and_then(FunctionLike::of_argument) else {
+            return;
+        };
+        self.source_of_construct(&member.object, collection);
         let cone = self
             .generator
             .finished
@@ -2198,7 +2307,6 @@ fn reachable(resolver: &Resolver<'_, '_>, module: usize, found: &mut Vec<usize>)
 pub(crate) fn generate(
     resolver: &Resolver<'_, '_>,
     module: usize,
-    start: u32,
     plan: &Value,
     finished: &Finished,
 ) -> Value {
@@ -2216,6 +2324,7 @@ pub(crate) fn generate(
         registered_values: Vec::new(),
         registered_elements: Vec::new(),
         registered_states: Vec::new(),
+        registered_reduces: Vec::new(),
         defaults: HashMap::new(),
         counter: 0,
     };
@@ -2228,19 +2337,6 @@ pub(crate) fn generate(
     };
     rewriter.generator.setups.insert(0);
     rewriter.setup(0, None);
-    // The step of a `reduce` is a cone the runtime runs once per element
-    // with the accumulator as a slot of root `operation` (PL §3.13). The
-    // emitter writes no function for it.
-    let reduces = plan["operations"].as_array().is_some_and(|operations| {
-        operations
-            .iter()
-            .any(|operation| operation["kind"] == json!("reduce"))
-    });
-    if reduces {
-        rewriter
-            .generator
-            .unsupported("a `reduce` in the reactive tier", module, start);
-    }
     // The handler bodies: one function per body, however many bindings
     // name it.
     let mut handlers: Vec<(usize, HandlerFact)> = finished
@@ -2362,6 +2458,7 @@ pub(crate) fn generate(
         "handlers": handlers,
         "elements": generator.registered_elements,
         "states": generator.registered_states,
+        "reduces": generator.registered_reduces,
         "unlistedReads": generator.unlisted,
         "valuesWithoutOutput": generator.interim,
         "unsupported": unsupported,

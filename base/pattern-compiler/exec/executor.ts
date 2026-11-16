@@ -96,7 +96,13 @@ export type Plan = {
      * a constant. */
     first?: { cone: number; write: number };
   }[];
-  operations: { kind: string; name: string }[];
+  operations: {
+    kind: string;
+    name: string;
+    within?: { element?: number; site?: string }[];
+    /** For a `reduce`: the cone of its step. */
+    implementation?: { cone?: number };
+  }[];
   bindings: {
     name?: string;
     handler: { body?: number };
@@ -522,6 +528,11 @@ export class Host {
   members: Element[] | undefined;
   readonly writers: Writer[] = [];
   /**
+   * For the evaluation of the step of a `reduce`: the operation, and the
+   * value of its accumulator before this element.
+   */
+  accumulator: { operation: number; value: unknown } | undefined;
+  /**
    * When the last cone this evaluation demanded through a write target
    * had been evaluated: the clock, and how many reads it had made.
    */
@@ -839,6 +850,13 @@ export class Instance {
   readonly #values = new Map<number, (host: Host) => unknown>();
   readonly #elements = new Map<number, (host: Host) => unknown>();
   readonly #states = new Map<number, (host: Host) => unknown>();
+  /** The functions of each `reduce` of the reactive tier. */
+  readonly #reduces = new Map<number, {
+    initialCone: number | undefined;
+    initial: ((host: Host) => unknown) | undefined;
+    stepCone: number;
+    step: (host: Host) => unknown;
+  }>();
   /** The function of a handler written in place, by its binding. */
   readonly #handlers = new Map<number, (...given: unknown[]) => unknown>();
   readonly #setups: ((given: unknown, host: Host) => unknown)[] = [];
@@ -1058,6 +1076,15 @@ export class Instance {
       state: (cell: number, run: (host: Host) => unknown) => {
         this.#states.set(cell, run);
       },
+      reduce: (
+        operation: number,
+        initialCone: number | undefined,
+        initial: ((host: Host) => unknown) | undefined,
+        stepCone: number,
+        step: (host: Host) => unknown,
+      ) => {
+        this.#reduces.set(operation, { initialCone, initial, stepCone, step });
+      },
       body: (body: number, run: (...given: unknown[]) => unknown) => {
         this.bodies.set(body, run);
       },
@@ -1195,10 +1222,19 @@ export class Instance {
         host.indexes.set(root.collection ?? -1, element.index);
         return element.index;
       }
-      case "operation":
+      case "operation": {
+        const operation = root.operation ?? -1;
+        if (this.#reduces.has(operation)) {
+          // The accumulator, in the step of the `reduce`, and otherwise
+          // what the `reduce` computed.
+          return host.accumulator?.operation === operation
+            ? host.accumulator.value
+            : host.depend(this.reduced(operation));
+        }
         // No effect runs: the result of an operation is pending.
         this.counts.pendingOperations += 1;
         return { pending: true };
+      }
       default:
         throw new Unsupported(`a slot of root \`${root.kind}\` read by a cone`);
     }
@@ -1661,6 +1697,57 @@ export class Instance {
         run,
         within,
       );
+    };
+  }
+
+  /**
+   * What a `reduce` of the reactive tier computes (PL §3.13): the initial
+   * value, and then the step once per element of the collection of the
+   * `reduce`, in the order the collection iterates, with the accumulator
+   * as the value of the slot of root `operation`. The collection is the
+   * one whose element body the step is written in, the last `element`
+   * step of the `within` of the step's cone. The whole fold is one entry:
+   * it is evaluated again when something a step read changed, or the
+   * membership or the order of the collection.
+   */
+  reduced(operation: number): Lazy {
+    const fold = this.#reduces.get(operation);
+    if (fold === undefined) {
+      throw new Unsupported("a `reduce` that has no function");
+    }
+    const within = this.collectionsOf(fold.stepCone);
+    const collection = within[within.length - 1];
+    const outer = within.slice(0, -1);
+    return (context) => {
+      const key = `r${operation}|${this.#contextKey(outer, context)}`;
+      // The fold is the runtime's step over the collection, as the
+      // assembly of an element construct is, and belongs to no cone.
+      return this.#ensure(key, context, undefined, "assembly", (host) => {
+        const used = (other: Host) => {
+          host.reads.push(...other.reads);
+          host.dependencies.push(...other.dependencies);
+          for (const writer of other.writers) {
+            if (!host.writers.includes(writer)) host.writers.push(writer);
+          }
+        };
+        let value: unknown;
+        if (fold.initial !== undefined) {
+          const first = new Host(this, context, fold.initialCone);
+          value = fold.initial(first);
+          used(first);
+        }
+        for (const element of this.#table(collection, host)) {
+          const step = new Host(
+            this,
+            new Map([...context, [collection, element]]),
+            fold.stepCone,
+          );
+          step.accumulator = { operation, value };
+          value = fold.step(step);
+          used(step);
+        }
+        return value;
+      }, outer);
     };
   }
 

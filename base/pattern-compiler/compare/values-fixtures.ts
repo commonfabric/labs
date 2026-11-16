@@ -88,6 +88,13 @@ const WRITTEN: Record<string, Written[]> = {
       { binding: 1, event: { id: "a" } },
     ],
   }],
+  "reduce": [{
+    argument: {
+      items: [{ title: "a", amount: 3 }, { title: "b", amount: 4 }],
+      amounts: [5, 6, 7],
+      bonus: 1,
+    },
+  }],
   "callee-default": [true, false].map((given) => ({
     argument: { amount: 420, ...(given ? { sign: "kr" } : {}) },
   })),

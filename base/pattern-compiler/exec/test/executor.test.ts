@@ -436,6 +436,70 @@ describe("a chain of element constructs", () => {
   });
 });
 
+// `fixtures/reduce.tsx`: a `reduce` in the reactive tier. The executor
+// evaluates the step once per element, in order, with the accumulator as
+// the value of the slot of root `operation`.
+describe("a `reduce` in the reactive tier", () => {
+  const link = (name: string) => ({
+    $link: { doc: "argument", path: ["pool", name] },
+  });
+  // The elements of `items` are references to cells, and those of
+  // `amounts` are plain values stored in place. `doubled` is over the
+  // result of a `map` of `amounts`.
+  const argument = () => ({
+    pool: { a: { title: "a", amount: 3 }, b: { title: "b", amount: 4 } },
+    items: [link("a"), link("b")],
+    amounts: [5, 6, 7],
+    bonus: 1,
+  });
+  type Sums = { total: number; weighted: number; doubled: number };
+
+  it("folds over references", async () => {
+    const instance = new Instance(await artifactOf("reduce"), argument());
+
+    expect((instance.result() as Sums).total).toBe(7);
+
+    instance.writeArgument(["pool", "b", "amount"], 10);
+
+    expect((instance.result() as Sums).total).toBe(13);
+  });
+
+  it("folds over plain values in place, with the index", async () => {
+    const instance = new Instance(await artifactOf("reduce"), argument());
+
+    // 5 * 0, 6 * 1, 7 * 2.
+    expect((instance.result() as Sums).weighted).toBe(20);
+
+    // The order is part of what the step reads.
+    instance.writeArgument(["amounts"], [7, 6, 5]);
+
+    expect((instance.result() as Sums).weighted).toBe(16);
+  });
+
+  it("folds over the result of another per-element construct", async () => {
+    const instance = new Instance(await artifactOf("reduce"), argument());
+
+    // The initial value is an input of the pattern.
+    expect((instance.result() as Sums).doubled).toBe(37);
+
+    instance.writeArgument(["amounts"], [5, 6]);
+
+    expect((instance.result() as Sums).doubled).toBe(23);
+
+    instance.writeArgument(["bonus"], 0);
+
+    expect((instance.result() as Sums).doubled).toBe(22);
+  });
+
+  it("reads no slot its cones do not list", async () => {
+    const instance = new Instance(await artifactOf("reduce"), argument());
+
+    expect(instance.counts.slotsNotListed).toBe(0);
+    expect(instance.counts.readsWithoutSlot).toBe(0);
+    expect(instance.counts.pendingOperations).toBe(0);
+  });
+});
+
 // `fixtures/keyed.tsx`: the handle methods of a function body that name
 // the record of a key (`elementById`) and change the membership of a list
 // by value (`addUnique`, `removeByValue`), and a cell constructed with

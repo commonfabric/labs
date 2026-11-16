@@ -15,6 +15,7 @@
             }
           ],
           "outputsBelow": [],
+          "reduces": [],
           "states": [],
           "unlistedReads": [],
           "unsupported": [],
@@ -186,6 +187,7 @@
             }
           ],
           "outputsBelow": [],
+          "reduces": [],
           "states": [],
           "unlistedReads": [],
           "unsupported": [],

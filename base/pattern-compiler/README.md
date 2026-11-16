@@ -215,6 +215,14 @@ not a constant (`$rt.state`), and the function of a handler written in place
 (`$rt.handler`). The function of a sandboxed body is registered in the module it
 is written in (`$rt.body`).
 
+A `reduce` in the reactive tier registers two functions where it is written
+(`$rt.reduce`): that of its initial value, in the cone the `reduce` is written
+in, and that of its step, which reads the accumulator as the slot of root
+`operation` its cone lists. The executor evaluates the step once per element of
+the collection the step's cone is written in, in the order the collection
+iterates (`compare/fixtures/reduce.tsx`, over references, over plain values, and
+over the result of a `map`).
+
 A first value of a state cell that is a constant is the default of
 `StateCell.schema`, and no code gives it. Any other first value is computed by a
 cone that has a write edge with target `state`, which `StateCell.first` names.
@@ -229,11 +237,10 @@ event by running the handler's body and evaluating again what read a position
 the body wrote. It instantiates no label, checks no constraint, persists
 nothing, and answers every effect as pending. It does not narrow a slot to its
 observation class, does not instantiate a pattern or bind a handler in a
-function body, and does not evaluate `reduce` or the debug strings. The record
-of a key of a list (`elementById`) is a place of its own, named by the list and
-the key, which has a document once something writes it, and `addUnique` and
-`removeByValue` change the list's membership by reference. From the repository
-root:
+function body, and does not evaluate the debug strings. The record of a key of a
+list (`elementById`) is a place of its own, named by the list and the key, which
+has a document once something writes it, and `addUnique` and `removeByValue`
+change the list's membership by reference. From the repository root:
 
 ```sh
 base/pattern-compiler/target/release/pattern-compiler emit path/to/module.tsx > artifact.json

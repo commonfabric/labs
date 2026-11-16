@@ -7603,7 +7603,7 @@ pub fn emit_module<'a>(
         let (mut plan, unsupported, cycles, flows, finished) = emitter.finish(&parsed.path);
         let schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
         let code = crate::emit::requested()
-            .then(|| crate::emit::generate(resolver, module, *start, &plan, &finished));
+            .then(|| crate::emit::generate(resolver, module, &plan, &finished));
         // The bindings of an element body that have no result path.
         let element_bindings = plan["bindings"]
             .as_array()
