@@ -1111,8 +1111,9 @@ export class PiecesController<T = unknown> {
     if (start && !viewScoped) {
       // start() handles pattern loading and running. It's idempotent - no
       // effect if already running. The pieces the piece's inputs come from
-      // start first, so that a nested instance opened on its own runs
-      // against what its enclosing instance derives.
+      // start first, each following its origin where this open follows the
+      // piece's, so that a nested instance opened on its own runs against
+      // what its enclosing instance derives.
       await timePiecePhase(
         "get.runtime.start",
         () =>
@@ -1120,6 +1121,7 @@ export class PiecesController<T = unknown> {
             this.runtime,
             piece,
             () => this.runtime.start(piece),
+            { followOrigins: reconcile },
           ),
       );
       // A start that was in flight before the pointer moved may have
@@ -2028,10 +2030,14 @@ export class PiecesController<T = unknown> {
    * retained root watch demands server execution, while mounted renderers
    * own local graph registration.
    *
-   * With `awaitSetupCommit`, the start waits for the commit of the setup
-   * writes of the graph it instantiates, and this rejects when that commit
-   * failed, which leaves the piece stopped. Otherwise such a failure reaches
-   * only the runtime's log; see `Runner.startWithCommit()`.
+   * The pieces the piece's inputs come from start first
+   * (`startWithInputSources()`). With `awaitSetupCommit`, the start waits for
+   * the commit of the setup writes of the graph it instantiates, and this
+   * rejects when that commit failed, which leaves the piece stopped.
+   * Otherwise such a failure reaches only the runtime's log; see
+   * `Runner.startWithCommit()`. A piece one of those sources sets up as its
+   * child is running when the start begins, so the start installs nothing
+   * and waits for nothing, as for any piece already running.
    */
   async startPiece<T = unknown>(
     pieceOrId: string | Cell<T>,

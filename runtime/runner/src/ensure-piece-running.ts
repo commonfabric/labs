@@ -22,6 +22,16 @@ const logger = getLogger("ensure-piece-running", {
   level: "debug",
 });
 
+/**
+ * Warns where an open starts a piece without a piece its inputs come from
+ * (`startWithInputSources()`), whose handlers then read what that source
+ * derived last.
+ */
+const openLogger = getLogger("ensure-piece-running.open", {
+  enabled: true,
+  level: "warn",
+});
+
 const MAX_RESULT_LINK_DEPTH = 10;
 
 /**
@@ -92,13 +102,16 @@ async function followResultCellChain(
  * the source it had. Any other source that cannot start leaves `owner` to
  * start on its own, but an argument whose links cannot be read fails
  * `owner`'s start, as a chain of its own that cannot be read does: a handler
- * started without its sources reads what they derived last.
+ * started without its sources reads what they derived last. Each source that
+ * could not start, other than a linked document that is no piece's, is added
+ * to `unstarted` with its verdict.
  */
 async function startInputSources(
   runtime: Runtime,
   owner: OwningRootAddress,
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
+  unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
 ): Promise<EnsurePieceVerdict | undefined> {
   const signal = options?.signal;
   const sources = await inputSourcesOf(runtime, owner, signal);
@@ -123,6 +136,9 @@ async function startInputSources(
     );
     signal?.throwIfAborted();
     if (!verdict.started && verdict.reason === "origin-pending") return verdict;
+    if (!verdict.started && verdict.reason !== "no-pattern-meta") {
+      unstarted?.push({ source, verdict });
+    }
   }
   return undefined;
 }
@@ -624,6 +640,18 @@ export function handlerRunCounts(runtime: Runtime): boolean {
     runtime.servingPosture;
 }
 
+/** Options of {@link startWithInputSources}. */
+export type StartWithInputSourcesOptions = {
+  /**
+   * Follow the origin of each piece the inputs come from before starting it,
+   * as an open that reconciles the opened piece follows that piece's
+   * (`SourceReconciler.reconcile()`), so that neither runs source its origin
+   * has replaced. A follow that fails leaves the source to start on what it
+   * has, as it leaves an opened piece.
+   */
+  followOrigins?: boolean;
+};
+
 /**
  * Starts `piece`, a piece a caller names on its own, as a client's open does,
  * by calling `start`, after starting the pieces its inputs come from where
@@ -631,43 +659,88 @@ export function handlerRunCounts(runtime: Runtime): boolean {
  * ({@link handlerRunCounts}). This is the walk an event's auto-load makes
  * (`EnsurePieceOptions.startInputSources`): a nested instance started on its
  * own runs its handlers against inputs nothing in the runtime derives, and
- * once it runs, no later event starts what it reads from. A source whose
- * graph sets `piece` up as its child starts it there, and `start` is not
- * called, since that would give `piece` a lifetime of its own.
+ * once it runs, no later event starts what it reads from. `start` runs
+ * whether or not a source's graph set `piece` up as its child, so the opened
+ * piece has a lifetime of its own: a source that stops or re-instantiates
+ * leaves it running, as it leaves a piece opened before its sources.
  *
- * Starting the sources is best effort. A source that cannot start, one still
- * owed the follow of its origin, and an argument whose links cannot be read
- * each leave `piece` to `start` alone, so an open fails only where the
- * piece's own start does. Where `runtime`'s runs echo the served ones, or
- * `piece` runs already, this only calls `start`.
+ * Starting the sources is best effort. A source that cannot start, and an
+ * argument whose links cannot be read, each leave `piece` to start without
+ * them, so an open fails only where the piece's own start does; each is
+ * logged as a warning naming the opened piece and the source. Where
+ * `runtime`'s runs echo the served ones, or `piece` runs already, this only
+ * calls `start`.
  *
- * @returns What `start` returns, or `true` where a source set `piece` up as
- *   its child.
+ * @returns What `start` returns.
  */
 export async function startWithInputSources(
   runtime: Runtime,
   piece: Cell<any>,
   start: () => Promise<boolean>,
+  options: StartWithInputSourcesOptions = {},
 ): Promise<boolean> {
   if (handlerRunCounts(runtime) && !runtime.runner.isRunning(piece)) {
     const { space, id, scope } = piece.getAsNormalizedFullLink();
     const root: OwningRootAddress = { space, id, scope };
     try {
-      await startInputSources(
-        runtime,
-        root,
-        { startInputSources: true },
-        new Set([rootKey(root)]),
-      );
+      await startSourcesFollowingOrigins(runtime, root, options);
     } catch (error) {
-      logger.warn("input-sources", () => [
-        `Could not start the pieces the inputs of ${id} come from:`,
+      openLogger.warn("input-sources", () => [
+        `Opened ${id} without the pieces its inputs come from, whose links ` +
+        `could not be read; its handlers read what those derived last:`,
         error,
       ]);
     }
-    if (runtime.runner.isRunning(piece)) return true;
   }
   return await start();
+}
+
+/**
+ * Helper for {@link startWithInputSources}, which starts the pieces the
+ * inputs of the piece at `root` come from. With `followOrigins`, a source
+ * owed the follow of its origin is followed and the walk is made again, once
+ * for each such source, so each starts on what its origin offers.
+ */
+async function startSourcesFollowingOrigins(
+  runtime: Runtime,
+  root: OwningRootAddress,
+  { followOrigins = false }: StartWithInputSourcesOptions,
+): Promise<void> {
+  const followed = new Set<string>();
+  const originFollowed = followOrigins
+    ? (source: OwningRootAddress) => followed.has(rootKey(source))
+    : undefined;
+  while (true) {
+    const unstarted: {
+      source: NormalizedFullLink;
+      verdict: EnsurePieceVerdict;
+    }[] = [];
+    const pending = await startInputSources(
+      runtime,
+      root,
+      {
+        startInputSources: true,
+        ...(originFollowed !== undefined && { originFollowed }),
+      },
+      new Set([rootKey(root)]),
+      unstarted,
+    );
+    const owed = pending?.root;
+    if (owed === undefined || followed.has(rootKey(owed))) {
+      for (const { source, verdict } of unstarted) {
+        openLogger.warn("input-sources", () => [
+          `Opened ${root.id} without ${source.id}, a piece its inputs come ` +
+          `from, which could not start (${verdict.reason ?? "failed"}); ` +
+          `its handlers read what ${source.id} derived last.`,
+        ]);
+      }
+      return;
+    }
+    followed.add(rootKey(owed));
+    await runtime.sourceReconciler.reconcile(
+      runtime.getCellFromLink({ ...owed, path: [] }),
+    );
+  }
 }
 
 /**

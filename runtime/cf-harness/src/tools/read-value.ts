@@ -30,6 +30,7 @@ import {
   type MemorySpace,
   type NormalizedFullLink,
   type Runtime,
+  startWithInputSources,
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForCellFailClosedWithStatus,
@@ -279,7 +280,13 @@ export const readValueTool: HarnessToolDefinition<
             `${entry.token} holds a value its piece derives, and the piece has not run; running it is a side effect this run is not authorized for. A run under a direct command reads it, which runs the piece`,
           );
         }
-        await runtime.startWithCommit(piece);
+        // The pieces its inputs come from start first, as they do for an
+        // open, so a nested instance derives from what they derive now.
+        await startWithInputSources(
+          runtime,
+          piece,
+          () => runtime.startWithCommit(piece),
+        );
         await runtime.idle();
       }
       // A link at the position itself is followed, so a piece's field reads

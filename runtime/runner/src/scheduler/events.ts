@@ -955,10 +955,10 @@ function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
  * pieces its inputs come from (`EnsurePieceOptions.startInputSources`): a
  * stream a nested pattern defines belongs to the nested instance, whose
  * handler reads what the instance enclosing it derives. Any other runtime
- * starts the piece alone. A serving runtime also has the piece's origin followed
- * before its first start of it (`EnsurePieceOptions.originFollowed`, which
- * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
- * opens a piece it serves, so the start is where the piece's source is
+ * starts the piece alone. A serving runtime also has the piece's origin
+ * followed before its first start of it (`EnsurePieceOptions.originFollowed`,
+ * which the serving loop installs as `Runtime.pieceOriginFollowed`): nothing
+ * else opens a piece it serves, so the start is where the piece's source is
  * brought up to date; the pieces its inputs come from are followed the same
  * way before they start. A start a follow is still owed, the piece's own or
  * an input source's, is declined, and the served event it was for is

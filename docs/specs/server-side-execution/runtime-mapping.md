@@ -276,16 +276,22 @@ source it had. An argument whose links cannot be read fails the start
 rather than running the handler over what those pieces derived last. A
 client under server execution runs the handler only as its speculative
 echo, which the served run replaces, so its auto-start starts the nested
-instance alone. A start that names a piece on its own, as a client's open
-and a `cf` command's start of a piece do, starts the pieces its inputs come
-from the same way wherever the runtime's run of a handler counts
-(`startWithInputSources()` in `ensure-piece-running.ts`): once a nested
-instance runs, no event starts its enclosing instance, so a nested
-instance opened alone would run every later event's handler against
-inputs nothing in the runtime derives. That start is best effort: a source
-that cannot start, and an argument whose links cannot be read, leave the
-opened piece to start alone, so an open fails only where the piece's own
-start does.
+instance alone. A start that names a piece on its own, as a client's open,
+a `cf` command's and the agent harness's start of a piece do, starts the
+pieces its inputs come from the same way wherever the runtime's run of a
+handler counts (`startWithInputSources()` in `ensure-piece-running.ts`):
+once a nested instance runs, no event starts its enclosing instance, so a
+nested instance opened alone would run every later event's handler against
+inputs nothing in the runtime derives. An open that follows the opened
+piece's origin follows each of those pieces' origins first. The opened piece
+is started in its own right after them, so it keeps running when one of them
+stops. That start is best effort: a source that cannot start, and an
+argument whose links cannot be read, leave the opened piece to start alone,
+with a warning naming both, so an open fails only where the piece's own
+start does. A serving runtime's demand start passes no
+`startInputSources`: the demand a session hands it reaches the documents
+upstream of what the session watches, the enclosing instance's among them,
+so the demand pass starts that instance itself.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their

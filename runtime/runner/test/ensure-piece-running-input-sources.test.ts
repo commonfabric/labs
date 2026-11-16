@@ -1,16 +1,21 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
   ensurePieceRunningVerdict,
   type OwningRootAddress,
   startWithInputSources,
+  type StartWithInputSourcesOptions,
 } from "../src/ensure-piece-running.ts";
+import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
 import { getMetaLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { systemPatternSource } from "../src/pattern-source-scheme.ts";
+import { getPatternIdentityRef, setPatternSource } from "../src/runner.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -277,77 +282,99 @@ describe("ensure-piece-running", () => {
   });
 
   describe("startWithInputSources()", () => {
-    /**
-     * Opens the nested instance that owns `stream` in a new runtime, with
-     * `experimental`, through `startWithInputSources()`, recording whether it
-     * called `start`, then takes an event on `stream` there, and returns what
-     * the handler recorded, the runtime, and the nested instance's root.
-     */
-    const openThenEvent = async (
+    /** The synced nested instance behind `stream`, as `runtime` holds it. */
+    const nestedOwner = async (
+      runtime: Runtime,
       stream: NormalizedFullLink,
-      experimental?: ExperimentalOptions,
     ) => {
-      const opener = newRuntime(experimental);
-      const owner = opener.getCellFromLink({
-        ...getMetaLink(opener.getCellFromLink(stream), "result")!,
+      const owner = runtime.getCellFromLink({
+        ...getMetaLink(runtime.getCellFromLink(stream), "result")!,
         path: [],
       });
       await owner.sync();
-      let calledStart = false;
-      const started = await startWithInputSources(opener, owner, () => {
-        calledStart = true;
-        return opener.start(owner);
-      });
-      opener.scheduler.queueEvent(stream, {});
-      await opener.idle();
-      const seen = opener.getCell<{ seen?: number }>(
+      return owner;
+    };
+
+    /** What the nested handler last recorded, as `runtime` reads it. */
+    const seenIn = async (runtime: Runtime) => {
+      const seen = runtime.getCell<{ seen?: number }>(
         space,
         ARGUMENT_CAUSE,
         { type: "object", properties: { seen: { type: "number" } } },
       );
       await seen.sync();
-      return {
+      return seen.get().seen;
+    };
+
+    /**
+     * Opens the nested instance that owns `stream` in `opener` through
+     * `startWithInputSources()` with `options`, then takes an event on
+     * `stream` there, and returns what the open returned, the nested
+     * instance, and what the handler recorded.
+     */
+    const openThenEvent = async (
+      opener: Runtime,
+      stream: NormalizedFullLink,
+      options?: StartWithInputSourcesOptions,
+    ) => {
+      const owner = await nestedOwner(opener, stream);
+      const started = await startWithInputSources(
         opener,
         owner,
-        started,
-        calledStart,
-        seen: seen.get().seen,
-      };
+        () => opener.start(owner),
+        options,
+      );
+      opener.scheduler.queueEvent(stream, {});
+      await opener.idle();
+      return { owner, started, seen: await seenIn(opener) };
     };
+
+    /** How many input-source warnings an open has logged so far. */
+    const openWarnings = () =>
+      getLogger("ensure-piece-running.open").countsByKey["input-sources"]
+        ?.warn ?? 0;
 
     it("starts the enclosing piece before a nested piece opened on its own, so a later event's handler reads what the enclosing piece derives now", async () => {
       const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
 
-      const { opener, started, calledStart, seen } = await openThenEvent(
-        stream,
-      );
+      const { started, seen } = await openThenEvent(opener, stream);
 
       expect(seen).toBe(10);
       expect(started).toBe(true);
-      // The enclosing piece's graph set the nested one up as its child.
-      expect(calledStart).toBe(false);
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
         true,
       );
     });
 
+    it("leaves the opened nested piece running when its enclosing piece stops", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const { owner } = await openThenEvent(opener, stream);
+
+      opener.runner.stop(opener.getCellFromLink(enclosing));
+      await opener.idle();
+
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(opener.runner.isRunning(owner)).toBe(true);
+    });
+
     it("starts only the opened piece for a client under server execution, whose run of a handler is an echo", async () => {
       const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime({ serverExecution: true });
 
-      const { opener, owner, started, calledStart } = await openThenEvent(
-        stream,
-        { serverExecution: true },
-      );
+      const { owner, started } = await openThenEvent(opener, stream);
 
       expect(started).toBe(true);
-      expect(calledStart).toBe(true);
       expect(opener.runner.isRunning(owner)).toBe(true);
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
         false,
       );
     });
 
-    it("starts the opened piece on its own where its argument's links cannot be read", async () => {
+    it("starts the opened piece on its own, and warns, where its argument's links cannot be read", async () => {
       const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
       const sync = storageManager.syncCell.bind(storageManager);
       storageManager.syncCell =
@@ -355,13 +382,10 @@ describe("ensure-piece-running", () => {
           cell.getAsNormalizedFullLink().id === enclosing.id
             ? Promise.reject(new Error("the store refused the read"))
             : sync(cell, options)) as typeof storageManager.syncCell;
-
       const opener = newRuntime();
-      const owner = opener.getCellFromLink({
-        ...getMetaLink(opener.getCellFromLink(stream), "result")!,
-        path: [],
-      });
-      await owner.sync();
+      const owner = await nestedOwner(opener, stream);
+      const warned = openWarnings();
+
       const started = await startWithInputSources(
         opener,
         owner,
@@ -373,16 +397,43 @@ describe("ensure-piece-running", () => {
       expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
         false,
       );
+      expect(openWarnings()).toBe(warned + 1);
+    });
+
+    it("warns where a piece its inputs come from cannot start", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const load = opener.patternManager.loadPatternByIdentity.bind(
+        opener.patternManager,
+      );
+      const enclosingRef = getPatternIdentityRef(
+        opener.getCellFromLink(enclosing),
+      );
+      opener.patternManager.loadPatternByIdentity =
+        ((identity, symbol, ...rest) =>
+          symbol === enclosingRef?.symbol
+            ? Promise.resolve(undefined)
+            : load(identity, symbol, ...rest)) as typeof load;
+      const warned = openWarnings();
+
+      const started = await startWithInputSources(
+        opener,
+        owner,
+        () => opener.start(owner),
+      );
+
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(openWarnings()).toBe(warned + 1);
     });
 
     it("calls only `start` for a piece that runs already", async () => {
       const { stream } = await stopAfterInputChanges(PROGRAM);
       const opener = newRuntime();
-      const owner = opener.getCellFromLink({
-        ...getMetaLink(opener.getCellFromLink(stream), "result")!,
-        path: [],
-      });
-      await owner.sync();
+      const owner = await nestedOwner(opener, stream);
       await opener.start(owner);
       const walked: string[] = [];
       const sync = storageManager.syncCell.bind(storageManager);
@@ -402,52 +453,189 @@ describe("ensure-piece-running", () => {
       expect(walked).toEqual([]);
     });
 
-    it("starts two pieces each of whose arguments links to the other's result", async () => {
+    it("starts the enclosing piece once for two opens of a nested piece at the same time", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+
+      const opened = await Promise.all(
+        [0, 1].map(() =>
+          startWithInputSources(opener, owner, () => opener.start(owner))
+        ),
+      );
+      opener.scheduler.queueEvent(stream, {});
+      await opener.idle();
+
+      expect(opened).toEqual([true, true]);
+      expect(await seenIn(opener)).toBe(10);
+      expect(
+        [...opener.runner.cancels.keys()].filter((key) =>
+          key.endsWith(`/${enclosing.id}`)
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("starts each of three pieces whose arguments link in a cycle", async () => {
       const first = newRuntime();
       const compiled = await first.patternManager.compilePattern(PROGRAM, {
         space,
       });
-      const [left, right] = ["left", "right"].map((side) =>
+      const pieces = ["one", "two", "three"].map((name) =>
         first.getCell<{ doubled: number }>(
           space,
-          `input sources ${side} result`,
+          `input sources ${name} result`,
           compiled.resultSchema,
         )
       );
       {
         const tx = first.edit();
-        first.run(tx, compiled, { value: 1 }, left);
-        first.run(tx, compiled, { value: 1 }, right);
+        for (const piece of pieces) {
+          first.run(tx, compiled, { value: 1 }, piece);
+        }
         expect((await tx.commit().settled).error).toBeUndefined();
       }
-      // Each piece's stored argument gains a link to the other's result.
+      // Each piece's stored argument gains a link to the next one's result.
       {
         const tx = first.edit();
-        const storedArgument = (result: typeof left) =>
-          first.getCellFromLink(getMetaLink(result, "argument")!);
-        storedArgument(left).withTx(tx).key("other").set(right);
-        storedArgument(right).withTx(tx).key("other").set(left);
+        pieces.forEach((piece, index) => {
+          first.getCellFromLink(getMetaLink(piece, "argument")!).withTx(tx)
+            .key("other").set(pieces[(index + 1) % pieces.length]);
+        });
         expect((await tx.commit().settled).error).toBeUndefined();
       }
-      first.runner.stop(left);
-      first.runner.stop(right);
+      for (const piece of pieces) first.runner.stop(piece);
       await first.idle();
       await first.storageManager.synced();
 
       const opener = newRuntime();
-      const [openedLeft, openedRight] = [left, right].map((result) =>
-        opener.getCellFromLink(result.getAsNormalizedFullLink())
+      const opened = pieces.map((piece) =>
+        opener.getCellFromLink(piece.getAsNormalizedFullLink())
       );
-      await openedLeft.sync();
+      await opened[0].sync();
       const started = await startWithInputSources(
         opener,
-        openedLeft,
-        () => opener.start(openedLeft),
+        opened[0],
+        () => opener.start(opened[0]),
       );
 
       expect(started).toBe(true);
-      expect(opener.runner.isRunning(openedLeft)).toBe(true);
-      expect(opener.runner.isRunning(openedRight)).toBe(true);
+      expect(opened.map((piece) => opener.runner.isRunning(piece))).toEqual([
+        true,
+        true,
+        true,
+      ]);
+    });
+
+    describe("with an enclosing piece whose origin offers another source", () => {
+      // The enclosing pattern's module, as the patterns route serves it: the
+      // stored one doubles, and the one its origin offers triples.
+      const ROUTE_PATH = "/api/patterns/system/input-sources-outer.tsx";
+      const outerSource = (factor: number) =>
+        PROGRAM.files[0].contents.replace("value * 2", `value * ${factor}`);
+      let root: string;
+
+      beforeEach(async () => {
+        root = await Deno.makeTempDir({ prefix: "input-sources-origin-" });
+        await Deno.mkdir(`${root}/system`);
+        await Deno.writeTextFile(
+          `${root}/system/input-sources-outer.tsx`,
+          outerSource(3),
+        );
+      });
+
+      afterEach(async () => {
+        for (const runtime of runtimes) {
+          await runtime.sourceReconciler.idle();
+          await runtime.patternManager.flushCompileCacheWrites();
+        }
+        await Deno.remove(root, { recursive: true });
+      });
+
+      /** A runtime whose patterns route serves `root`. */
+      const routedRuntime = (): Runtime => {
+        const route = new PatternsRoute(root);
+        const runtime = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager,
+          fetch: async (input, init) =>
+            await route.serve(
+              new Request(
+                input instanceof Request ? input.url : input.toString(),
+                init,
+              ),
+            ) ?? new Response("not found", { status: 404 }),
+        });
+        runtimes.push(runtime);
+        return runtime;
+      };
+
+      /**
+       * `stopAfterInputChanges()` for the stored enclosing source, whose piece
+       * records the `system:` origin the route serves.
+       */
+      const stopAfterInputChangesWithOrigin = async () => {
+        const first = routedRuntime();
+        const compiled = await first.patternManager.compilePattern({
+          main: ROUTE_PATH,
+          files: [{ name: ROUTE_PATH, contents: outerSource(2) }],
+        }, { space });
+        const argument = first.getCell<{ value: number; seen?: number }>(
+          space,
+          ARGUMENT_CAUSE,
+          compiled.argumentSchema,
+        );
+        const result = first.getCell<{ doubled: number }>(
+          space,
+          RESULT_CAUSE,
+          compiled.resultSchema,
+        );
+        {
+          const tx = first.edit();
+          argument.withTx(tx).set({ value: 1 });
+          first.run(tx, compiled, argument, result);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        }
+        expect(
+          (await first.editWithRetry((tx) => {
+            setPatternSource(
+              result,
+              tx,
+              systemPatternSource("system/input-sources-outer.tsx"),
+            );
+          })).error,
+        ).toBeUndefined();
+        await result.pull();
+        expect(result.get().doubled).toBe(2);
+        const stream = result.key("record").resolveAsCell()
+          .getAsNormalizedFullLink();
+        first.runner.stop(result);
+        {
+          const tx = first.edit();
+          argument.withTx(tx).key("value").set(5);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        }
+        await first.idle();
+        await first.storageManager.synced();
+        return stream;
+      };
+
+      it("follows the enclosing piece's origin before starting it, for an open that follows origins", async () => {
+        const stream = await stopAfterInputChangesWithOrigin();
+
+        const { seen } = await openThenEvent(routedRuntime(), stream, {
+          followOrigins: true,
+        });
+
+        expect(seen).toBe(15);
+      });
+
+      it("starts the enclosing piece on its stored source for an open that does not follow origins", async () => {
+        const stream = await stopAfterInputChangesWithOrigin();
+
+        const { seen } = await openThenEvent(routedRuntime(), stream);
+
+        expect(seen).toBe(10);
+      });
     });
   });
 

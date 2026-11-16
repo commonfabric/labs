@@ -101,7 +101,7 @@ describe("fabrichat file store across runtimes", () => {
         opened: { id: string; space: string },
         add: (
           session: MultiRuntimeSession,
-          opened: { id: string; space: string },
+          opened: { id: string; space: string } | undefined,
           requestId: string,
           name: string,
         ) => Promise<unknown>,
@@ -130,11 +130,12 @@ describe("fabrichat file store across runtimes", () => {
       /**
        * A harness whose creator and member each have a profile of their own,
        * and a store the creator's runtime alone created, as one member's
-       * client does in a room, with a file the creator added. Returns the
-       * harness's sessions, the member's identity, the store, the link the
-       * room's record holds to it, and the means to add a file to it.
+       * client does in a room, with a file the creator added unless
+       * `creatorAdds` is `false`. Returns the harness's sessions, the
+       * member's identity, the store, the link the room's record holds to it,
+       * and the means to add a file to it.
        */
-      const storeTheCreatorMade = async () => {
+      const storeTheCreatorMade = async ({ creatorAdds = true } = {}) => {
         const creatorIdentity = await Identity.fromPassphrase(
           "fabrichat-file-store-creator",
           { implementation: "noble" },
@@ -179,13 +180,18 @@ describe("fabrichat file store across runtimes", () => {
 
         // Adds a file whose bytes the store's space holds, as the room's
         // composer does, and returns the store's outcome as `session` reads
-        // it through `opened`.
+        // it through `opened`, or through the room where `opened` is
+        // `undefined`, which leaves the store unopened in `session`.
         const add = async (
           session: MultiRuntimeSession,
-          opened: { id: string; space: string },
+          opened: { id: string; space: string } | undefined,
           requestId: string,
           name: string,
         ) => {
+          const outcome = () =>
+            opened === undefined
+              ? session.read(["fileStore", "requests", requestId])
+              : session.read(["requests", requestId], { piece: opened });
           const blob = photo(name);
           const id = hashOf(blob).toString();
           await session.rawWrite({ id: `cid:${id}`, space }, { value: blob });
@@ -197,15 +203,13 @@ describe("fabrichat file store across runtimes", () => {
             size: 4,
           });
           await harness!.settleUntil(async () =>
-            (await session.read(["requests", requestId], { piece: opened })) !==
-              undefined
+            (await outcome()) !== undefined
           );
-          return await session.read(["requests", requestId], {
-            piece: opened,
-          });
+          return await outcome();
         };
-        await expectAdd(creator, store, add, 0, "Creator");
+        if (creatorAdds) await expectAdd(creator, store, add, 0, "Creator");
         return {
+          creator,
           member,
           memberIdentity,
           store,
@@ -238,6 +242,76 @@ describe("fabrichat file store across runtimes", () => {
           cfc,
         });
         await expectAdd(again, store, add, 1, "Member");
+      });
+
+      /**
+       * Adds a file as `session`, which has never opened the store, and checks
+       * through the room that the store took it as the entry at `index`, with
+       * the profile named `adder` as its adder.
+       */
+      const expectUnopenedAdd = async (
+        session: MultiRuntimeSession,
+        add: Awaited<ReturnType<typeof storeTheCreatorMade>>["add"],
+        index: number,
+        adder: string,
+      ) => {
+        const name = `file-${index}.png`;
+        expect(await add(session, undefined, `add-${index}`, name))
+          .toMatchObject({ status: "done", name });
+        expect(
+          await session.read([
+            "fileStore",
+            "entries",
+            index,
+            "addedBy",
+            "name",
+          ]),
+        ).toBe(adder);
+      };
+
+      /**
+       * Checks that the first add to a store no client has opened, sent by
+       * `session`, is refused as having no profile, which is what the serving
+       * loop does with it: the served `commitAdd` reads a per-user instance of
+       * the store's `#profile` wish that no run has computed for `session`.
+       */
+      const expectServedFirstAddRefused = async (
+        session: MultiRuntimeSession,
+        add: Awaited<ReturnType<typeof storeTheCreatorMade>>["add"],
+      ) => {
+        // TODO(danfuzz): Expect the add to be taken, as it is with server
+        // execution off, once a served handler's per-user inputs are computed
+        // for the event's principal before it runs.
+        expect(await add(session, undefined, "add-0", "file-0.png"))
+          .toMatchObject({
+            status: "refused",
+            code: "not-permitted",
+            reason: "You have no profile yet.",
+          });
+      };
+
+      it("takes the first add of the creator, whose client has never opened the store", async () => {
+        const { creator, add } = await storeTheCreatorMade({
+          creatorAdds: false,
+        });
+
+        if (serverExecution) await expectServedFirstAddRefused(creator, add);
+        else await expectUnopenedAdd(creator, add, 0, "Creator");
+      });
+
+      it("takes the first add of a member to a store no client has opened", async () => {
+        const { member, add } = await storeTheCreatorMade({
+          creatorAdds: false,
+        });
+
+        if (serverExecution) await expectServedFirstAddRefused(member, add);
+        else await expectUnopenedAdd(member, add, 0, "Member");
+      });
+
+      it("takes the first add of a member, whose client has never opened the store", async () => {
+        const { member, add } = await storeTheCreatorMade();
+
+        await expectUnopenedAdd(member, add, 1, "Member");
       });
     });
   }
