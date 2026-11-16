@@ -1520,14 +1520,15 @@ record as today, and the prototype's executor does so.
 - **Its label.** A reader of the list's label does not cover the record
   before it is a member: the label of the list does not extend to the
   record, and a read of the list does not read it. The record has the
-  label of what is written to it and of what its own schema declares, which is the element
-  schema of the list that the handle carries (`elementSchemaFor` in
-  `runtime/runner/src/cell.ts`). A write through the handle is a write
-  to the record. It is not a write at a position of the list, it does
-  not make a reader of the list stale, and it is not labeled as a
-  member of the list. Once a reference to the record is a member, a
-  reader that follows the reference reads the record under the
-  record's label, as it reads any cell behind a reference in an array.
+  label of what is written to it and of what its own schema declares,
+  which is the element schema of the list that the handle carries
+  (`elementSchemaFor` in `runtime/runner/src/cell.ts`). A write
+  through the handle is a write to the record. It is not a write at a
+  position of the list, it does not make a reader of the list stale,
+  and it is not labeled as a member of the list. Once a reference to
+  the record is a member, a reader that follows the reference reads
+  the record under the record's label, as it reads any cell behind a
+  reference in an array.
 
 *Assumed* (section 11, question 89): for the footprint the handle
 stays the handle at `*` below the list, as `footprint-analysis.md` §7

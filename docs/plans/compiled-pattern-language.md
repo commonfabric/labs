@@ -524,8 +524,15 @@ below, and questions 81 to 84 of `execution-and-storage.md`, are open; 158 to
 the executor, to leave undetermined. Of
 question 141 the member is ruled, and what it holds beside the collections is open. Of
 question 144 the placing and the check are ruled, and what the check
-covers outside the result is open. Notes 303 to 306, 321 to 323, and 342 are
-the results here.
+covers outside the result is open. Questions 164 and 165 are ruled:
+which evaluation fails the check of a stream's position, and a stream
+that a function body returns. Questions 42, 125, 147, and 166 are ruled
+in part: what a key that left its collection keeps, what a `*` of a
+result path stands for, the key of an element that a `flatMap`
+contributes, and the record of a key of a list. Each entry says what
+stays open, and question 167 is what the ruling on 166 leaves
+undetermined in the reactive tier. Notes 303 to 306, 321 to 323, and
+342 are the results here.
 Nothing was timed.
 
 Note 324 says what the later round did not keep to and did not verify.
@@ -626,7 +633,8 @@ fixture uses the scenario its label test writes, where it writes one.
   the executor drops the cone instances of a key that left its
   collection, in each of the three cases, and a key that comes back has
   new instances, which are evaluated; it keeps the state cells declared
-  under the key (question 42).
+  under the key, as the ruling on a key that left has it
+  ([Decided](#decided)).
 - **The emitter departs from the documents in three ways** that the
   results depend on. It writes one function per value a cone computes,
   where `execution-and-storage.md` §2.1 has one per cone. A pattern
@@ -717,7 +725,8 @@ which it covers.
   (question 147), and under it such a change of places evaluates
   nothing.
 - **`keyed`.** The record of a key of a list, which is a list of
-  references (question 166).
+  references. The record is a cell of its own, by ruling (question
+  166).
 - **`reduce`.** A fold over an array of references, one over an array of
   plain values in place with the index, and one over the result of a
   `map`. A step that reads an outer input is not compared, because the
