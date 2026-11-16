@@ -64,6 +64,7 @@ import {
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
 import { ExecutionLeases } from "./execution-lease.ts";
+import { HeldDocuments } from "./held-documents.ts";
 import { prepare, type PreparedStatement } from "./prepared-statement.ts";
 import {
   insertExecutionOutboxRows,
@@ -1139,6 +1140,10 @@ export type DocumentCacheDiagnostics = DocumentCacheStats & {
   bytes: number;
   budgetBytes: number;
   maxEntries: number;
+
+  /** Entries in {@link Engine.heldDocuments}: decoded revisions some reader
+   * may still hold, cached or not. */
+  held: number;
 };
 
 export type Engine = {
@@ -1194,6 +1199,15 @@ export type Engine = {
   documentCacheMaxEntries: number;
 
   documentCacheStats: DocumentCacheStats;
+
+  /**
+   * The decoded copy of each durable revision that a reader still holds,
+   * whether or not {@link Engine.documentCache} still caches it. A read that
+   * decodes a revision again takes the held copy instead of its own, so
+   * readers that hold the same revision, such as the memory server's
+   * sessions watching the same documents, hold one copy between them.
+   */
+  heldDocuments: HeldDocuments<EntityDocument>;
 
   /** The coordinator this engine's cache reports to for the bound across
    * engines (the open option of the same name), if it has one. */
@@ -2373,6 +2387,7 @@ export const open = async (
       patchReplays: 0,
       resumes: 0,
     },
+    heldDocuments: new HeldDocuments(),
     ...(documentCacheCoordinator === undefined
       ? {}
       : { documentCacheCoordinator }),
@@ -2390,6 +2405,7 @@ export const documentCacheDiagnostics = (
   bytes: engine.documentCacheBytes,
   budgetBytes: engine.documentCacheBudgetBytes,
   maxEntries: engine.documentCacheMaxEntries,
+  held: engine.heldDocuments.size,
 });
 
 /**
@@ -2435,6 +2451,7 @@ export const close = (engine: Engine): void => {
   engine.documentCacheCoordinator?.removed(engine);
   engine.documentCache.clear();
   engine.documentCacheBytes = 0;
+  engine.heldDocuments.clear();
   engine.database.close();
 };
 
@@ -2858,7 +2875,10 @@ const readStateForScopeKey = (
         // `sqlite` ops are never stored as revisions; unreachable.
         throw new Error(`unexpected stored revision op: ${row.op}`);
     }
-    cacheDocumentForRevision(engine, cacheKey, { document, weight });
+    document = cacheDocumentForRevision(engine, cacheKey, {
+      document,
+      weight,
+    });
   }
 
   return {
@@ -9972,7 +9992,8 @@ const cachedDocumentForRevision = (
 };
 
 /**
- * Remember the document a revision decodes to.
+ * Remember the document a revision decodes to, and return the copy of it
+ * that readers are to be given.
  *
  * `applyCommit()` stages decoded revisions privately for reuse within its
  * transaction. Success publishes those entries; rollback discards them, so
@@ -9987,24 +10008,32 @@ const cachedDocumentForRevision = (
  * whole budget is served but not retained. The engine's coordinator, if it
  * has one, hears of each insertion and trims across engines then, the one
  * moment its total grows.
+ *
+ * A durable revision's copy is the one {@link Engine.heldDocuments} holds, so
+ * a revision decoded again while a reader holds an earlier copy returns that
+ * earlier copy. A staged entry, or one declined inside a transaction, is
+ * returned as decoded: its revision is not durable yet.
  */
 const cacheDocumentForRevision = (
   engine: Engine,
   key: string,
   entry: DocumentCacheEntry,
-): void => {
+): EntityDocument | null => {
   if (engine.stagedDocumentCache !== undefined) {
     engine.stagedDocumentCache.set(key, entry);
-    return;
+    return entry.document;
   }
   if (engine.database.inTransaction) {
-    return;
+    return entry.document;
   }
+  const document = entry.document === null
+    ? null
+    : engine.heldDocuments.intern(key, entry.document);
   // A weight of at least one keeps the byte budget a real bound even for
   // rows with no data (a delete).
   const weight = Math.max(entry.weight, 1);
   if (weight > engine.documentCacheBudgetBytes) {
-    return;
+    return document;
   }
   while (
     engine.documentCache.size > 0 &&
@@ -10013,9 +10042,10 @@ const cacheDocumentForRevision = (
   ) {
     dropOldestDocumentCacheEntry(engine);
   }
-  engine.documentCache.set(key, { document: entry.document, weight });
+  engine.documentCache.set(key, { document, weight });
   engine.documentCacheBytes += weight;
   engine.documentCacheCoordinator?.admitted(engine, weight);
+  return document;
 };
 
 const decodeStoredDocument = (data: string | null): EntityDocument =>

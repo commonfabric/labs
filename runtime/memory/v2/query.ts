@@ -157,7 +157,7 @@ export type TrackedGraphState = {
    * scanned. One entry per delivered version, the schema documents the
    * closure itself delivered included; reused by document key and sequence;
    * every scope, since the state is one identity's; the state's lifetime.
-   * The engine-wide cache of space-scoped scans only seeds it. A `cid:`
+   * The scans shared by decoded document only seed it. A `cid:`
    * document whose entry names its own hash, at the version `entities`
    * holds, is a schema document this state established, closure and all
    * (see `assembleSchemaDocClosures`). */
@@ -1175,37 +1175,36 @@ const entitiesFromTracker = (
   return entities;
 };
 
-// Engine-wide per-version cache of document scans for embedded schema
-// refs, so a version delivered again by ANOTHER session or query is not
-// rescanned. Only canonical `"space"`-scoped snapshots are cached: a
-// user- or session-scoped doc key names different content per principal,
-// and sharing scans across principals could hand one principal's refs to
-// another. Bounded; on overflow the cache clears and repopulates from
-// live deliveries. A refresh does not depend on it: an unchanged
-// version is answered from the graph state's own record
-// (`TrackedGraphState.schemaRefs`), which this cache only seeds.
-const SCHEMA_REF_SCAN_CACHE_MAX_ENTRIES = 4096;
-const schemaRefScanCaches = new WeakMap<
-  Engine.Engine,
-  Map<QueryDocKey, { seq: number; refs: ReadonlySet<string> }>
+// Scans for embedded schema refs, by the decoded document scanned and the id
+// it was scanned under, so that a version another session or query already
+// delivered is not scanned again. What a scan finds depends on nothing else,
+// and the readers of one revision share one decoded copy
+// (`Engine.heldDocuments`), so a scan is shared exactly as widely as the
+// document and goes when the document does. A refresh does not depend on
+// it: an unchanged version is answered from the graph state's own record
+// (`TrackedGraphState.schemaRefs`), which this only seeds.
+const schemaRefScansByDocument = new WeakMap<
+  object,
+  { id: string; refs: ReadonlySet<string> }
 >();
 
-/** This engine's cache of schema-ref scans, created on first use. */
-const schemaRefScanCacheFor = (
-  engine: Engine.Engine,
-): Map<QueryDocKey, { seq: number; refs: ReadonlySet<string> }> => {
-  let cache = schemaRefScanCaches.get(engine);
-  if (cache === undefined) {
-    cache = new Map();
-    schemaRefScanCaches.set(engine, cache);
-  }
-  return cache;
+/** The scan of `snapshot` that another reader of the same decoded document
+ * recorded, if one did. */
+const sharedSchemaRefScan = (
+  key: QueryDocKey,
+  snapshot: EntitySnapshot,
+): ReadonlySet<string> | undefined => {
+  if (snapshot.document === null) return undefined;
+  const shared = schemaRefScansByDocument.get(snapshot.document);
+  return shared?.id === fromDocKey(key).id ? shared.refs : undefined;
 };
 
 // Per-version record of schema documents that verified in this engine's
 // store (`docKey -> seq`), so a document another evaluation already
 // verified costs a read but no re-hash. A version change drops the entry's
-// usefulness by construction (the seq comparison fails).
+// usefulness by construction (the seq comparison fails). Bounded; on
+// overflow the record clears and repopulates from later verifications.
+const VERIFIED_SCHEMA_DOC_CACHE_MAX_ENTRIES = 4096;
 const verifiedSchemaDocCaches = new WeakMap<
   Engine.Engine,
   Map<QueryDocKey, number>
@@ -1234,7 +1233,6 @@ const EMPTY_SCHEMA_REFS: ReadonlySet<string> = new Set();
  * schema no reader can resolve.
  */
 const scanSnapshotSchemaRefs = (
-  engine: Engine.Engine,
   key: QueryDocKey,
   snapshot: EntitySnapshot,
   scans: SchemaRefScans,
@@ -1246,12 +1244,10 @@ const scanSnapshotSchemaRefs = (
   if (own !== undefined && own.seq === snapshot.seq) {
     return own.refs;
   }
-  if ((snapshot.scope ?? DEFAULT_SCOPE) === DEFAULT_SCOPE) {
-    const cached = schemaRefScanCacheFor(engine).get(key);
-    if (cached !== undefined && cached.seq === snapshot.seq) {
-      recordSchemaRefScan(engine, key, snapshot, cached.refs, scans);
-      return cached.refs;
-    }
+  const shared = sharedSchemaRefScan(key, snapshot);
+  if (shared !== undefined) {
+    recordSchemaRefScan(key, snapshot, shared, scans);
+    return shared;
   }
   stats.schemaRefScans += 1;
   const refs = new Set<string>();
@@ -1293,28 +1289,27 @@ const scanSnapshotSchemaRefs = (
     for (const hash of schemaMetaRefHashes(metaForm)) refs.add(hash);
   }
   const result = refs.size === 0 ? EMPTY_SCHEMA_REFS : refs;
-  recordSchemaRefScan(engine, key, snapshot, result, scans);
+  recordSchemaRefScan(key, snapshot, result, scans);
   return result;
 };
 
 /**
- * Records what a scan of `snapshot` finds — in the state's own record
- * always, and in the engine-wide cache when the version is space-scoped, so
- * another session delivering it is spared the scan.
+ * Records what a scan of `snapshot` finds, in the state's own record and by
+ * the decoded document, so another reader of the same copy is spared the
+ * scan.
  */
 const recordSchemaRefScan = (
-  engine: Engine.Engine,
   key: QueryDocKey,
   snapshot: EntitySnapshot,
   refs: ReadonlySet<string>,
   scans: SchemaRefScans,
 ): void => {
-  const entry = { seq: snapshot.seq, refs };
-  scans.set(key, entry);
-  if ((snapshot.scope ?? DEFAULT_SCOPE) !== DEFAULT_SCOPE) return;
-  const cache = schemaRefScanCacheFor(engine);
-  if (cache.size >= SCHEMA_REF_SCAN_CACHE_MAX_ENTRIES) cache.clear();
-  cache.set(key, entry);
+  scans.set(key, { seq: snapshot.seq, refs });
+  if (snapshot.document === null) return;
+  schemaRefScansByDocument.set(snapshot.document, {
+    id: fromDocKey(key).id,
+    refs,
+  });
 };
 
 /**
@@ -1415,7 +1410,7 @@ const assembleSchemaDocClosures = (
   >();
   for (const [key, snapshot] of delivered) {
     const previous = scans.get(key);
-    const refs = scanSnapshotSchemaRefs(engine, key, snapshot, scans, stats);
+    const refs = scanSnapshotSchemaRefs(key, snapshot, scans, stats);
     const previousRefs = previous !== undefined && previous.seq !== snapshot.seq
       ? previous.refs
       : undefined;
@@ -1489,7 +1484,7 @@ const assembleSchemaDocClosures = (
       const { key, snapshot, cached } = loaded.get(hash)!;
       if (!cached) {
         registerSchemaDocument(hash, schema);
-        if (verified.size >= SCHEMA_REF_SCAN_CACHE_MAX_ENTRIES) {
+        if (verified.size >= VERIFIED_SCHEMA_DOC_CACHE_MAX_ENTRIES) {
           verified.clear();
         }
         verified.set(key, snapshot.seq);
@@ -1500,7 +1495,6 @@ const assembleSchemaDocClosures = (
       // later refresh answers the closure's documents without scanning
       // them.
       recordSchemaRefScan(
-        engine,
         key,
         snapshot,
         new Set([hash]),
