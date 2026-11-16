@@ -337,8 +337,8 @@ export interface SlotBinding {
   readonly chain: readonly Address[];
   /**
    * For a slot with root `element`: the key of the element the position
-   * holds. It is a tag. The binding is per position, so two positions that
-   * hold one key have two bindings.
+   * holds. A key stands at one position, so a key has one binding per
+   * element slot.
    */
   readonly elementKey?: string;
   /**
@@ -431,8 +431,8 @@ reads is in no entry and makes no cone instance stale
 (`execution-and-storage.md` §2.2).
 
 **Element slots.** A binding of an element slot is held per slot and
-position, with the element's key as a tag, because labels are per position
-and values are per key (`plan-and-label-templates.md` §1.3). The bindings
+element key, and names the address of the one position that holds the key
+(`plan-and-label-templates.md` §1.3). The bindings
 come from the element table (section 3.2).
 
 **Slots whose path holds `*`.** Such a slot stands for every child of a
@@ -861,7 +861,7 @@ beyond link structure.
    | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to (`plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
    | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves to what the member `place` of its entry of `Binding.state` names: a slot of the instance, an output of the instance, the stream of another binding, or a constant written at the binding (`plan-and-label-templates.md` §1.1). For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
    | `event`, `cause` | The event, for the length of its transaction. No index entry |
-   | `element` | Per position, the address the element was read from, and for a linked element the cell it links to. Bound from the element table, not at load (below) |
+   | `element` | Per element key, the address the element was read from at the position that holds the key, and for a linked element the cell it links to. Bound from the element table, not at load (below) |
 
 **Paths that cross links.** A slot's path is resolved from its root the way
 a read resolves it (`plan-and-label-templates.md` §2.5). Where the value at
@@ -897,20 +897,21 @@ the path read, and it crosses the handle's link. So is a read of an output
 of another instance through a link the plan names
 (`execution-and-storage.md` §4.4).
 
-**Collections.** A collection's element slots are bound per position
+**Collections.** A collection's element slots are bound per element key,
+at the position that holds the key
 (`plan-and-label-templates.md`, §1.3). The bindings are not known when an
 instance is loaded: the key of a plain value is a hash of the value, and a
 collection derived by `map` or `flatMap` has positions only once it was
 evaluated. Cone evaluation builds the element table of a collection when it
 evaluates it (`execution-and-storage.md` §2.5). The table holds, per
-position, the key and the binding of each element slot.
+key, the position and the binding of each element slot.
 
 - After the first evaluation of a collection, and after each change of its
-  membership, the scheduler registers one entry per position and element
+  membership, the scheduler registers one entry per key and element
   slot from the table, tagged with the element's key, and removes the
-  entries of positions that are gone.
-- A change to one element's cell marks the slots of the positions that hold
-  that key dirty and no others.
+  entries of keys that are gone.
+- A change to one element's cell marks the slots of the keys whose
+  element part is that cell dirty and no others.
 - A membership change arrives as a change to the collection's `enumeration`
   slot, which is a slot of the plan and has its entry from load. The
   evaluation it causes rebuilds the table, and the scheduler then replaces
@@ -967,7 +968,7 @@ documents that is one address per row, each behind the link of its row.
   row entry for each (section 10.4).
 - **With `sampled`** the slot has no entries of any kind (section 3.1).
 - **In an element body.** A slot with root `element` whose path holds `*`
-  has one binding per position and child.
+  has one binding per key and child.
 - **Demand and the writer map.** Each child's bound address is looked up
   in the writer map by itself, so demand reaches the writer of each child
   the slot reads and of no other (section 4.3).
@@ -1691,32 +1692,18 @@ in the place of the walk.
 3. For a binding in an element body, the element keys of the row name the
    cone instances the handler's `binding` slots resolve to, and the
    collection's membership is evaluated before the handler body, like any
-   stale cone instance the handler reads, so that the positions that hold
-   the key are known. The stream is per key and not per position, and two
-   positions can hold one key (`plan-and-label-templates.md` §1.3). The
-   handler's element slots are bound at every position that holds the
-   key, and each resolves to the join over those positions. The value is
-   the same at each of them, because they hold equal values or link to
-   one cell, and the label is the join of the labels the positions give.
-   The join is ruled for what is stored once per element key
-   (`execution-and-storage.md` §2.5). It is the third deliberate
-   exception to "equal to or tighter", and is marked to be revisited.
-   *Assumed,* as `plan-and-label-templates.md` §2.6 assumes it (its open
-   question 35): the ruling covers these slots as well, although it
-   lists what is stored, and a slot resolved when an event arrives is
-   not stored. A second ruling has labels flow per value through the
-   callback of a per-element construct, so that a handler that closes
-   over the element alone writes under the event and the element and
-   under nothing of another element or of the collection's length or
-   order (`plan-and-label-templates.md` §3.6 and §3.12). The join here
-   is over the positions that hold the handler's own key and over no
-   other element. Whether it stands beside that ruling where those
-   positions resolve to different labels is question 86 there, and this
-   document keeps the join as that question assumes. By ruling,
-   positions that hold equal plain values in a body that binds a
-   handler, declares no state cell, does not use the index and
-   instantiates no child share one stream, so this step is what an event
-   on such a stream runs through.
+   stale cone instance the handler reads, so that the position that holds
+   the key is known. The stream is per key, and a key stands at one
+   position (`plan-and-label-templates.md` §1.3): two positions that hold
+   equal plain values, or links to one cell, have two keys and two
+   streams. The handler's element slots are bound at the position that
+   holds the key, and each resolves to the value and the label at that
+   position (`execution-and-storage.md` §2.5). By the ruling that labels
+   flow per value through the callback of a per-element construct, a
+   handler that closes over the element alone writes under the event and
+   that element, and under nothing of another element, an equal one
+   included, or of the collection's length or order
+   (`plan-and-label-templates.md` §3.6 and §3.12).
 
 An event that cannot be routed is treated as today.
 
@@ -3669,7 +3656,7 @@ document. Three kinds of thing are affected.
 
 | What | Why a client cannot name it | What the client does until a stored link arrives |
 | --- | --- | --- |
-| A state cell declared in an element body over plain values, which exists only where the position is in the key; the state of an operation declared in such a body; a child instantiated there; and the stream of a handler bound there, which positions that hold equal values share where the position is not in the key (`execution-and-storage.md` §2.5) | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
+| A state cell declared in an element body over plain values; the state of an operation declared in such a body; a child instantiated there; and the stream of a handler bound there (`execution-and-storage.md` §2.5) | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
 | A part document at or below a row of a kept collection | Its identifier is derived under the secret of the space for every key, a cell's identity included (`plan-and-label-templates.md` §2.3) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
 | A binding made in a function body that has a copied path | The stream's identifier holds the salted hash of the copy | The stream is pending. A control the speculative run rendered for it sends nothing until the server's link to the stream arrives. A speculative handler that makes such a binding stores no link to it in its overlay entry |
 
@@ -3962,9 +3949,10 @@ instance that is not loaded returns the stored value where the basis index
 shows it current, and loads the instance only where it shows it stale
 (4.4, 5.3, 10.4); the egress ceiling is checked again on each send a
 language-model built-in makes after its request, and a refused send ends
-the effect with an error state (6.3); what is stored or bound once per
-element key carries the join over the positions that hold the key, which
-is marked to be revisited (5.1); a `lift` or a `computed` requests no
+the effect with an error state (6.3); a stream of a handler bound in an
+element body is per element key, a key stands at one position, and the
+handler's element slots resolve at that position
+(5.1); a `lift` or a `computed` requests no
 effect itself (2.7, 6.1); a handler's pending effect is requested again
 at activation after a restart, with the ceiling checked on the content
 as it is then (2.3, 10.6); this design sets no bound on an effect whose
@@ -4061,13 +4049,11 @@ space, and no space runs the builder path beside the compiled path
     6.2; that document's "The requester of a request"). It extends
     question 45 of the continuation plan. The principal of a completion
     transaction and of a materializer's run is not decided.
-37. **The element slots of a handler whose key two positions hold.**
-    *Assumed:* they are bound at every position that holds the key, and
-    each resolves to the join over those positions (section 5.1), under
-    the ruling on what is stored once per element key, which is marked
-    to be revisited. That ruling lists what is stored, and these slots
-    are resolved when an event arrives. It is question 35 of
-    `plan-and-label-templates.md`.
+37. **The element slots of a handler whose key two positions hold.** Not
+    open: an element key holds the count of earlier occurrences, so no
+    two positions hold one key, and the slots resolve at the one
+    position that holds the key (section 5.1). The entry keeps its
+    number.
 38. **The recovery of a pending effect that a handler requested.** Ruled:
     activation reads the pending-effect rows and runs a request
     transaction for each, which follows the references of the stored

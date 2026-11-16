@@ -307,10 +307,12 @@ These facts hold for every registered built-in and are not repeated per entry.
   `storeWrites`. One result cell per element with cause
   `{ map: container, elementKey }`, each holding a full sub-pattern instance
   started with `runtime.runner.run`. The element key
-  (`listElementKeys`) is the identity of the slot's resolved target plus an
-  occurrence count for a linked slot, and the slot's position for an inline
-  value. A linked element therefore keeps its instance across reordering,
-  and an inline value that shifts gets a new one. An existing element is
+  (`listElementKeys`) is the identity the slot resolves to plus an
+  occurrence count. For a linked slot the identity is the target's, and
+  for a value stored in place it is the slot's own address, which holds
+  the position. A linked element therefore keeps its instance across
+  reordering, and an instance over values stored in place stays at its
+  position. An existing element is
   re-run only when its setup is owed or when the op uses `index` and the
   index changed. Removed elements are released
   (`runtime.runner.releaseChild`), and their documents are not deleted. The
@@ -456,22 +458,32 @@ The element key decides which evaluation an element gets, and it joins the
 cause of every state cell and durable operation the body declares.
 
 **Today.** `listElementKeys` in `builtins/list-element-keys.ts` keys an
-element by the identity of the slot's resolved target when the slot holds a
-link, and by the slot's position in the list when it holds a value. Both
-carry an occurrence count, so the same identity twice gets two instances. A
-plain value that moves therefore gets a new instance, and every plain value
-after an insertion is re-run.
+element by the identity the slot resolves to (`cellIdentityKey` in
+`builtins/scope-policy.ts`) and the count of earlier occurrences of that
+identity, so the same identity twice gets two instances. For a slot that
+holds a link the identity is that of the link's target. For a slot that
+holds a plain value in place it is the slot's own address in the list's
+document, the path of the position included
+(`listSlotResolutions` in `builtins/list-coordinator-plan.ts`), so such an
+element is keyed by its position: an instance stays at its position when
+the values move, and every plain value after an insertion is re-run.
 
 **The rule.** Backward compatibility of stored per-element state is not a
 requirement. The goal is that an entry that moves does not cause the map to
-be recomputed.
+be recomputed, and that its state moves with it.
 
 - An element that is a plain value, stored in the list itself, is keyed by
   its value.
 - An element that is not a fixed value, a link to a cell, is keyed by the
   identity of that cell.
-- The index is part of the key only when the callback takes the index and
-  uses it.
+- In both cases the key also holds the count of earlier occurrences of the
+  same value or identity in the collection. Two equal elements have two
+  keys, and no two positions have one key.
+- The position alone is not in the key. The index is part of the key only
+  when the callback takes the index and uses it.
+
+For a linked slot this is the key of today. For a plain value it differs:
+the value takes the place of the position.
 
 Which elements are plain values follows from how lists are written.
 `diffAndUpdate` in `runtime/runner/src/data-updating.ts` gives a plain
@@ -487,53 +499,41 @@ the element is keyed by the identity of that cell.
 
 **Consequences.**
 
-- *Equal plain values share one cone.* `["glazed", "plain", "glazed"]` has
-  two cones. The body is evaluated once per distinct value, and both
-  positions receive the same result. That is sound because the body is a
-  function of the element, its captures, and the index only when it uses
-  the index.
-- *A state cell over plain values needs the index.* A state cell declared
-  in the body has the cause instance, element key, and name. Rows that
-  show the same plain value would therefore share it: two rows showing
-  `"glazed"` would open together. That sharing is not allowed. A body over
-  plain-value elements that declares a state cell without using the index
-  is a compile error (`collection:shared-element-state` in
-  `language-subset.md` §10.3). The author either uses the index, which
-  puts it in the key, or makes the elements cells, which a list of
-  records written by a handler already is. Sharing a cone for pure
-  computation is unaffected.
-  Whether an element is a plain value is a fact of storage that a type such
-  as `Donut[]` does not state; see open question 5.
-- *A handler bound over plain values is shared.* A body over plain-value
-  elements that binds a handler and declares no state cell is accepted
-  without the index. The stream of the binding is named by where it is
-  declared, the element key included, because a binding made in the
-  reactive tier copies nothing
-  ([A handler binding](#a-handler-binding-made-in-a-body)). Equal elements
-  therefore bind equal state and share one stream: an event from either
-  of two rows that show `"glazed"` is handled with the same state. The
-  compile error above, and its entry in the diagnostic catalog, cover the
-  state cell only.
-- *A child instantiated over plain values has the position in its key.*
-  Where a body over plain-value elements instantiates a child, the
-  position joins the element key, as it does when the callback uses the
-  index. Two equal plain elements then have two children, and a factory
-  element in `factories.map((F) => F({ ... }))` has a child per position.
-  The plan records it in `Collection.bodyUses.child`
-  (`plan-and-label-templates.md` §1.1 and §1.3). A statically resolved
-  pattern called in the body is compiled into the body and is no child,
-  so it does not put the position in the key, and a state cell it
-  declares is a state cell of the body. Under nested bodies the position
-  joins the key at every enclosing level whose elements are plain
-  values, which that document assumes (its §8, question 37). An element
-  that is a link is keyed by its cell alone, so two positions that link
-  to one cell share the child. The cost is the one of using the index:
-  an entry that moves is a new element for that body. *Assumed:* a state
-  cell that such a body declares is accepted, because the position is in
-  the key and no two positions share the cell (open question 14).
-- *The same cell twice shares one cone.* The occurrence count is dropped,
-  for the same reason: two positions that hold the same cell are the same
-  element.
+- *Equal elements share nothing.* `["glazed", "plain", "glazed"]` has
+  three cones. Everything the body holds is per element key, and so per
+  occurrence: its cones, its state cells, its streams, its effects, and
+  its children. A body with no state of its own (no handler, no state
+  cell, no effect, no child) computes the same result for the two
+  `"glazed"` rows and could reuse one outcome for both. The design does
+  not special-case it.
+- *A state cell over plain values is per occurrence.* A state cell
+  declared in the body has the cause instance, element key, and name.
+  Two rows showing `"glazed"` have a cell each and open apart. A body
+  over plain-value elements may declare a state cell with or without the
+  index. Whether an element is a plain value is a fact of storage that a
+  type such as `Donut[]` does not state, and no rule depends on it.
+- *A handler bound in the body has a stream per occurrence.* The stream
+  of the binding is named by where it is declared, the element key
+  included, because a binding made in the reactive tier copies nothing
+  ([A handler binding](#a-handler-binding-made-in-a-body)). Two rows that
+  show `"glazed"` have two streams, and an event on either is handled
+  with the element slots of its own key.
+- *A child instantiated in the body is per occurrence.* The child is
+  named through the element key, so two equal elements have two
+  children, and a factory element in `factories.map((F) => F({ ... }))`
+  has a child per occurrence. The position does not join the key on that
+  account, so a child moves with its element
+  (`plan-and-label-templates.md` §1.3). A statically resolved pattern
+  called in the body is compiled into the body and is no child, and a
+  state cell it declares is a state cell of the body.
+- *The same cell twice is two elements.* Two positions that link to one
+  cell have the same identity and different occurrence counts, as today,
+  and share nothing.
+- *Equal elements are told apart by their order.* Where two equal values
+  stand in a collection and the first is removed, the one that remains
+  is occurrence 0 and has the state of the first occurrence. The state
+  dropped is that of the last occurrence. A move that changes the order
+  of two equal elements changes no key.
 - *A link to a plain value is keyed by the link's target.* Two cells that
   hold equal values are two elements. When the value behind the link
   changes, the cone is dirtied and the key, and with it the state, stays.
@@ -554,29 +554,31 @@ the element is keyed by the identity of that cell.
   (`SQLITE_ROW_SALT`, `resultRowKeys`).
 - *A client cannot read the salt.* A client therefore cannot derive an
   identifier that holds a value-derived key. It cannot name per-element
-  state over plain values, which exists only where the position is also in
-  the key, the stream of a handler bound in a body over plain values, or a
+  state over plain values, the stream of a handler bound in a body over
+  plain values, or a
   handler binding with a copied path, before the server stores a link to
   it. Until that link arrives, what reads such state on a client is
   pending. `scheduler-and-serving-loop.md` owns what a client shows
   meanwhile.
 - *Keying by value is a `value` observation by the runtime, not by the
   body.* Deciding which cone an element belongs to compares element values.
-  The comparison does not flow into any element's output, since each output
-  is a function of its own element.
+  The comparison does not flow into any element's computed output, since
+  each output is a function of its own element. It decides which stored
+  state an occurrence finds (`plan-and-label-templates.md` §5.5).
 
 **The other operations.**
 
 - `filter` and `flatMap` use the same rule for their per-element cones. A
-  predicate or body evaluated once per distinct key is correct for the same
-  reason as in `map`, and the output keeps one entry per input position.
+  predicate or body is evaluated per key, and each input position has a
+  key of its own.
 - The aggregates use the same rule for the per-element contribution that a
-  callback computes (`count(pred)`, `minBy`, `maxBy`), and the fold counts
-  multiplicity: a key that occurs three times contributes three times.
+  callback computes (`count(pred)`, `minBy`, `maxBy`): each occurrence has
+  a key and contributes once, so a value that occurs three times
+  contributes three times.
   Today the tree's leaves list each occurrence separately
   (`aggregateNode`'s leaf key).
 - The collection-index family uses the same rule for key extraction, and
-  keeps input order and multiplicity for the contents of a bucket: a
+  keeps input order for the contents of a bucket: a
   `group` bucket lists an element once per occurrence, in input order,
   which the key alone does not give.
 - *Ties.* `minBy`, `maxBy`, and a lookup in an index in `key` mode break a
@@ -588,22 +590,21 @@ the element is keyed by the identity of that cell.
   so a choice by element key would depend on element values that the
   label of the choice does not hold. A choice by position depends on the
   order of the collection and on the keys that tie, and on no other
-  element value. Two occurrences of one element key are the same element,
-  and the first of them counts. Today a tie goes to the smallest identity
+  element value. Today a tie goes to the smallest identity
   key in an aggregate (`chooseAggregateCandidate` in
   `builtins/aggregate-extremum.ts`) and to the smallest occurrence
   identity in an index (`firstMember`). The fold and the index therefore
-  keep, as part of their state, the first position of each element key.
+  keep, as part of their state, the position of each element key.
 - `reduce` has no per-element cone, because the callback's result depends
   on the accumulator. Its entry says what it stores instead.
 - `findIndex`, `some`, `every`, and `find` use the same rule for their
   predicate.
 
 `plan-and-label-templates.md` §1.3 states the same rule. The plan does not
-record the element part of the key, which the runtime computes from each
-element. It records in `Collection.bodyUses.index` whether a body uses the
-index, and in `Collection.bodyUses.child` whether it instantiates a child,
-which are the two things that put the position in the key. The key joins a cause
+record the element part of the key or the occurrence count, which the
+runtime computes from the elements. It records in
+`Collection.bodyUses.index` whether a body uses the index, which is the
+one thing that puts the position in the key. The key joins a cause
 through the `within` steps of the declaration (`WithinStep` in its §1.1): a
 state cell, an operation, a child, a body, or a binding declared in an
 element body has an `element` step that names the collection, and each
@@ -3435,14 +3436,14 @@ above already reflect them.
   `findIndex`, `some`, `every`, and the choice made by `find` join the
   prefix up to the deciding element and nothing after it.
 - **Element keys.** A plain value is keyed by its value, anything else by
-  the identity of its cell, and the index joins the key only when the
-  callback uses it. Stored per-element state need not stay compatible.
-  A body over plain values that declares a state cell without using the
-  index is an error. A body over plain values that binds a handler and
-  declares no state cell is accepted: equal elements bind equal state and
-  share one stream. Where a body over plain values instantiates a child,
-  the position joins the element key, so two equal plain elements have
-  two children.
+  the identity of its cell, and in both cases by the count of earlier
+  occurrences of the same value or identity, so two equal elements have
+  two keys. The position alone is not in the key, and the index joins the
+  key only when the callback uses it. Stored per-element state need not
+  stay compatible. Everything an element body holds is per element key,
+  and so per occurrence: its state cells, its streams, its effects, and
+  its children. Equal elements share nothing, and a body over plain
+  values may declare a state cell.
 - **Ties among equal keys.** `minBy`, `maxBy`, and a keyed lookup break a
   tie by the first position in the source order of the collection, and
   not by the smallest element key.
@@ -3550,23 +3551,11 @@ with the project owner names its entry in the
    label of a stream bound from a received handler included, and it is
    listed under [Decisions](#decisions). The entry keeps its number
    because other documents cite the entries after it by number.
-5. **Knowing statically that elements are plain values.** The error for
-   a state cell over plain values needs the compiler to know whether a
-   collection's elements are stored inline or as links. A primitive element
-   type is always inline. A record element type is a link when a handler
-   wrote the list, or when a computation passed the records on unchanged,
-   and inline when a computation built the records, and the type does not
-   say which. `language-subset.md` §4.4.1 decides it statically, from the
-   element type and from where the collection comes from: a record-typed
-   collection is plain where the program built its records, which for the
-   result of a body is where the body's record has no reference at the
-   element path, and not plain when it is read from the pattern's input
-   or from a cell. The case
-   that rule cannot decide is a stored array that holds inline records
-   because a computation elsewhere produced it. *Assumed:* the runtime
-   puts the element's cone in an error state there, as
-   `plan-and-label-templates.md` §1.3 says, so that sharing never happens
-   without notice.
+5. **Knowing statically that elements are plain values.** Not open. No
+   rule depends on whether a collection's elements are stored inline or
+   as links: a state cell in an element body is per occurrence over
+   every collection ([Element keys](#element-keys)). The entry keeps its
+   number because other documents cite the entries after it by number.
 6. **Tool calls as instantiation.** A model tool call instantiates a
    pattern with a result cell whose cause is an identifier the model
    supplies, and the dialog's built-in tools let a model read, invoke, and
@@ -3639,13 +3628,7 @@ with the project owner names its entry in the
     listed under [Decisions](#decisions). The entry keeps its number so
     that the entry after it keeps its own.
 14. **A state cell in a body whose key holds the position because the
-    body instantiates a child.** Where a body over plain values
-    instantiates a child, the position joins the element key
-    ([Element keys](#element-keys)). The error for a state cell over
-    plain values is stated for a body that does not use the index, and
-    such a body can instantiate a child without using the index.
-    *Assumed:* its state cell is accepted, because the position is in the
-    key and no two positions share the cell. The other reading keeps the
-    error wherever the source does not use the index. The question is
-    with the project owner (`plan-and-label-templates.md` §8, question
-    34, which makes the same assumption).
+    body instantiates a child.** Not open. A child does not put the
+    position in the key, and a state cell in an element body is legal
+    whatever else the body does ([Element keys](#element-keys)). The
+    entry keeps its number.
