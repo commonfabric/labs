@@ -2133,11 +2133,14 @@ tier, where the analysis does not run. It reaches this analysis through
 `within`: a `lift` or a `computed` written in an element body has an
 `element` step, and the instances it makes are identified under that
 step's key, so the instances of one occurrence are not those of another.
-The position does not join the key on that account, and the analysis
-records nothing in the `Collection` for an `instantiate` site
-(`plan-and-label-templates.md` §1.1 and §1.3). A site in a `handler` or
-an `action` is identified by the handling or by a tag, and by no element
-key.
+The position is in no key, and the analysis records nothing in the
+`Collection` for an `instantiate` site (`plan-and-label-templates.md`
+§1.1 and §1.3). A body written in an element body that is given the
+index lists the slot of root `index` that names the collection in
+`Body.reads`, as it lists any other slot the runtime materializes into
+its argument, and is evaluated again for an element that moves. A site
+in a `handler` or an `action` is identified by the handling or by a tag,
+and by no element key.
 
 ### 8.2 Creating a cell
 

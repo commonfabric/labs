@@ -124,6 +124,13 @@ export type SlotRoot =
   | { readonly kind: "event"; readonly handler: Index }
   /** The current element of a collection (`Plan.collections`). */
   | { readonly kind: "element"; readonly collection: Index }
+  /**
+   * The position of the current element in the order a collection
+   * iterates (`Plan.collections`). A slot with this root has the empty
+   * path and observes `value`. Its label is the membership the collection
+   * iterates (sections 2.2 and 3.6).
+   */
+  | { readonly kind: "index"; readonly collection: Index }
   /** The stored result of a durable operation (`Plan.operations`). */
   | { readonly kind: "operation"; readonly operation: Index }
   /** The result of a child instance (`Plan.children`). */
@@ -283,7 +290,11 @@ export interface Pick {
 /**
  * A collection the instance maps, filters, scans, or folds over. Each
  * construct with a callback has a record of its own (sections 3.6, 3.7,
- * 3.8, 3.13 and 3.17).
+ * 3.8, 3.13 and 3.17). The record holds nothing about element keys: the
+ * element part of a key and its occurrence count follow from the elements
+ * at run time, and the position is in no key (section 1.3). Which nodes
+ * of a body read the index is recorded where each node lists its slots:
+ * a slot of root `index` that names this record.
  */
 export interface Collection {
   /** The name an `element` step refers to it by (section 1.3). */
@@ -335,15 +346,6 @@ export interface Collection {
    * record iterates (section 3.7).
    */
   readonly membership: Template;
-  /**
-   * Whether a body applied to this collection uses the element's index.
-   * Where it does, the position joins the key of every element (section
-   * 1.3). The element part of a key and its occurrence count are not
-   * recorded: they follow from the elements at run time.
-   */
-  readonly bodyUses: {
-    readonly index: boolean;
-  };
 }
 
 /**
@@ -1050,24 +1052,25 @@ export interface Binding {
     readonly capture: "copy" | "link";
     /**
      * For a binding of the reactive tier: what the path resolves to. A
-     * slot of the instance; an output of the instance (`Plan.outputs`); the
-     * stream of another binding of the reactive tier (`Plan.bindings`); the
-     * index of the element in the collection of an enclosing element body
-     * (`Plan.collections`); or a constant written at the binding, which the
+     * slot of the instance, which for the index of the element in the
+     * collection of an enclosing element body is the slot of root `index`
+     * that names that collection; an output of the instance
+     * (`Plan.outputs`); the stream of another binding of the reactive tier
+     * (`Plan.bindings`); or a constant written at the binding, which the
      * plan holds and nothing stores. `template` is the label of the same
-     * place: the `slot` node, the output's template, for an index the
-     * membership that collection iterates (section 3.6), and `const` for
-     * a stream and for a constant. A constant is held as its value,
-     * whether it is written as a literal or as the name of a module-scope
-     * constant, which the compiler evaluates. A path bound to `undefined`
-     * has no entry of `state`. Absent for a binding made in a function
-     * body, whose state document holds the path (section 3.14).
+     * place: the `slot` node, which for a slot of root `index` resolves to
+     * the membership that collection iterates (section 3.6), the output's
+     * template, and `const` for a stream and for a constant. A constant
+     * is held as its value, whether it is written as a literal or as the
+     * name of a module-scope constant, which the compiler evaluates. A
+     * path bound to `undefined` has no entry of `state`. Absent for a
+     * binding made in a function body, whose state document holds the
+     * path (section 3.14).
      */
     readonly place?:
       | { readonly slot: Index }
       | { readonly output: Index }
       | { readonly stream: Index }
-      | { readonly index: Index }
       | { readonly constant: unknown };
     /**
      * For a path bound by reference in a function body: the reference the
@@ -1486,7 +1489,7 @@ runtime computes. A key has two parts.
 Two positions that hold equal plain values, or links to one cell, have
 the same element part and different counts, so they have two keys. No
 two positions of a collection have one key, and a key stands at one
-position. The position alone is not in the key.
+position. The position is not in the key.
 
 A link to a plain value is keyed by the cell it links to, so two cells that
 hold equal values have two element parts. A hole has no key, gets no cone
@@ -1516,36 +1519,70 @@ the identifier. An observer who sees identifiers without reading a link,
 such as one who can list the documents of a space, can then test a guess
 of a low-entropy cause (section 8, question 30).
 
-The position is part of the key in one case: **the body uses the index**
-(`Collection.bodyUses.index`). The position then joins the key of every
-element. Nothing else puts the position in a key. A body that
-instantiates a child does not: the child is named through the body's
-`within`, whose `element` step holds the key, so each occurrence has a
-child of its own, and a factory element in
+The position is in no key, also where the body uses the index. A body
+that instantiates a child does not put it there either: the child is
+named through the body's `within`, whose `element` step holds the key,
+so each occurrence has a child of its own, and a factory element in
 `factories.map((F) => F({ ... }))` has a child per occurrence.
 
-The rule for the index and the ruling that labels flow per value through
-the callback (section 3.6) are both in force, and they differ in how far
-the index reaches. By the first, the position is in the key of the
-element, so a move gives every cone instance, state cell, stream, effect
-and child of the moved element a new key. By the second, a node of the
-body that does not read the index takes nothing of the collection's
-order. The labels agree with both: the position in a key adds no label
-to a node that does not read the index. What the rulings do not settle
-is whether a move evaluates again, and gives new state to, the nodes of
-an index-using body that do not read the index. *Assumed* (section 8,
-question 89): the position joins the key of the whole body, as the first
-ruling is worded.
+**The index is a slot.** A node of the body that reads the index reads a
+slot of root `index` that names the collection (section 1.1). The slot
+has the empty path and the class `value`. Its value is the position that
+the key stands at in the order the collection iterates, and the runtime
+binds it per key, as it binds the element slots. Its label is the
+membership the collection iterates (sections 2.2 and 3.6). A cone that
+reads the index lists the slot in `Cone.slots`, a sandboxed body lists it
+in `Body.reads`, and a handler binding whose state holds the index names
+it in `place`. A node that lists no such slot is not given the index. No
+record says of a whole body that it uses the index.
+
+A move therefore changes one input of the keys whose position changed:
+the index slot. The cones that list the slot are stale for those keys
+and are evaluated again, and no other cone of the body is. Evaluation is
+per cone (section 1.4): a cone that reads the index is evaluated whole,
+and an output of it whose value did not change is not written. The cone
+instances, state cells, streams, effects and children of a moved element
+keep their key, and so their identifiers and what they hold. What derives
+from the index changes as what derives from any other input does:
+
+- **An output** of a cone that lists the slot is computed again and
+  written where it changed.
+- **A handler binding of the reactive tier** copies nothing. A state
+  path that holds the index resolves to the slot when an event is
+  dispatched, so the handler is given the position its element has at
+  that event. The stream is named by `name` and `within` and stays.
+- **An effect whose request holds the index** is an operation named by
+  `name` and `within`, so it stays with its element. A move changes its
+  request, and the effect is requested again, as any effect is whose
+  input changed (section 3.14).
+- **A child whose argument holds the index** is named through `within`
+  and stays. The argument path that holds the index is written again by
+  its write edge (section 3.15).
+- **A state cell** is per key and keeps what it holds. *Assumed*
+  (section 8, question 92): the value a declaration gives the cell is
+  written when the cell is first created, and is not written again when
+  the index changes.
+- **An identity the author derives from the index** follows the index.
+  It arises in a function body written in the element body, because a
+  cause written in the reactive tier is a string literal
+  (`language-subset.md` §4.7). A cell or a child that such a body makes
+  under an explicit cause that holds the index is named by the body's
+  `within` and that cause, and a binding the body makes that copies the
+  index is a stream named by the copied value (section 3.14). After a
+  move the cause, or the copied value, names another cell, child or
+  stream. *Assumed* (section 8, question 92): the explicit cause and the
+  rule for copied values govern here, and "stays with its element" holds
+  for what is named through `within` alone.
 
 The purpose of the rule is that an element that moves keeps its cone
 instances and its state, so reordering a collection recomputes nothing
-in almost all cases. Elements with the same element part are told apart
-by their order alone. A move that changes the order of two of them
-changes no key: the first of them in the new order is occurrence 0 and
-has the state of occurrence 0. Where two equal values stand in a
-collection and the first is removed, the one that remains becomes
-occurrence 0 and has the state of the first occurrence, and the state
-dropped is that of the last occurrence.
+but the cones that read the index. Elements with the same element part
+are told apart by their order alone. A move that changes the order of
+two of them changes no key: the first of them in the new order is
+occurrence 0 and has the state of occurrence 0. Where two equal values
+stand in a collection and the first is removed, the one that remains
+becomes occurrence 0 and has the state of the first occurrence, and the
+state dropped is that of the last occurrence.
 
 Keeping the identifiers of per-element state that is already stored is
 not a goal. The runtime of today forms a key from the identity of the
@@ -1558,11 +1595,20 @@ holds a plain value in place, the slot resolves to its own address in
 the collection's document (`listSlotResolutions` in
 `runtime/runner/src/builtins/list-coordinator-plan.ts`), so the identity
 holds the path of the position. Today such an element is keyed by its
-position: an element run stays at its position when the elements move,
+position alone: an element run stays at its position when the elements move,
 and a value edited in place keeps its run. Under the rule above it is
 keyed by its value and its count, so its cone instances and its state
 move with it, and a value edited in place is a new element. Stored
 per-element documents under today's keys are not found again.
+
+The runtime of today keeps the index out of the key as well.
+`createMapInstance` in `runtime/runner/src/builtins/map.ts` holds one run
+per key. Where the callback uses the index (`usesIndex`) and the index of
+a key changed, it sets the element up again on the result cell the key
+already has, with the new index in the argument. The prototype measured
+that this writes `index` in the element's argument document and no other
+path of it (section 3.6). The rule above agrees with that: the run and
+its state stay, and what reads the index is computed again.
 
 Consequences, which later sections rely on:
 
@@ -1597,15 +1643,17 @@ Consequences, which later sections rely on:
   that holds the key. The value, the selections, the reads made through
   handles and links, and the label identifiers of the element slots are
   all held per key.
-- **A move is a membership change and nothing else.** It dirties the
-  collection's membership and rebinds the element slots of the keys whose
-  position changed. The label identifiers at the new addresses are
-  normally those at the old ones, and then no element is evaluated and no
-  label is instantiated.
-- **An index-using body does not have this property.** Its key holds the
-  index, so a move recomputes the moved elements, and the template of a
-  node that reads the index includes the collection's `enumeration`
-  (section 3.6).
+- **A move is a membership change and a change of the index.** It
+  dirties the collection's membership, rebinds the element slots of the
+  keys whose position changed, and changes their index slots. The label
+  identifiers at the new addresses are normally those at the old ones,
+  and then no cone that lists only element slots is evaluated and no
+  label of one is instantiated.
+- **A body that reads the index has this property too.** No key holds
+  the index. A move evaluates again the cones that list the index slot,
+  for the keys whose position changed, and nothing else of the body. The
+  template of a node that reads the index includes the membership the
+  collection iterates (section 3.6).
 - **Keying is the runtime's observation, not the body's.** Deciding which
   cone instances an element has compares element values. The comparison
   flows into no element's computed output, since each output is a
@@ -2297,6 +2345,18 @@ at that address consumes today**: the entries
 definition is what the precision comparison in section 3 rests on. A template
 joins the labels of a set of slots, and each of those labels is the label one
 read contributes to the per-transaction join today.
+
+**The label of a slot of root `index`.** The slot has no stored address:
+its value is the position of the current element, which the runtime
+computes from the order the collection iterates. Its label is defined by
+rule and not by a read. It is the membership that the collection
+iterates, as the table of section 3.2 gives it by `Collection.source`:
+for a collection over a slot, the label of the `enumeration` slot at the
+source's path. A `slot` node that names the slot instantiates to that
+label. The position of an element is a function of the order and the
+membership before it, and the membership the collection iterates covers
+that. *Assumed* (section 8, question 93): no narrower label is formed
+for the elements before the position alone.
 
 **The label of an `identity` slot.** By ruling, a handle that a body passes
 on without reading through it adds nothing of the label of its cell to what
@@ -4100,11 +4160,17 @@ template and the same atom, where the runtime mints none: **tighter**.
 - **Membership template.** For a `map` over an input collection, the
   `enumeration` slot of that collection. `map` preserves the domain, so the
   result's membership is its source's.
-- **Index.** A node of the body that reads the index has the collection's
-  `enumeration` in its template, because an element's index depends on the
-  order of the others. A node of the same body that does not read the
-  index has none of it, and a callback that declares the index and does
-  not use it adds it to no template. A callback has no parameter for the
+- **Index.** A node of the body that reads the index reads the slot of
+  root `index` that names the collection (section 1.3), and has the
+  `slot` node of that slot in its template. The node resolves to the
+  membership the collection iterates (section 2.2), which for a
+  collection over a slot is the collection's `enumeration`, because an
+  element's index depends on the order of the others. A node of the same
+  body that does not read the index lists no such slot and has none of
+  that label, and a callback that declares the index and does not use it
+  adds it to no template. The position is in no key: an element that
+  moves keeps its key, and the nodes that read the index are evaluated
+  again (section 1.3). A callback has no parameter for the
   whole array (`language-subset.md` §4.4.1). A body that needs the
   collection captures it by name, and the capture is an ordinary slot,
   like any other captured outer value.
@@ -4113,8 +4179,9 @@ template and the same atom, where the runtime mints none: **tighter**.
   thing the body is given has its own label. The element has the label
   of its own slot of the collection and of what that slot holds: the
   element's root slots and the slots below them, bound to position `i`.
-  The index has the collection's `enumeration`, and the whole collection
-  the label of its capture, each only where the callback declares it.
+  The index has the label of its slot, which is the membership the
+  collection iterates, and the whole collection the label of its
+  capture, each only for a node that reads it.
   Each captured value has the label of its own slot or output of the
   enclosing instance. A node of the body takes the labels of what it
   reads and closes over, and nothing of what another node of the same
@@ -5325,8 +5392,9 @@ kind.
   collection's assembled output (section 1.4), which the plan then has.
   The source is not the form with `via`: `via` says how the elements of
   a derived collection come from its source, and a scan has no elements
-  of its own. `membership` is the source's membership template, and
-  `bodyUses` is as for a `map`.
+  of its own. `membership` is the source's membership template. A
+  predicate that reads the index reads the slot of root `index` that
+  names this record, as the callback of a `map` does (section 3.6).
 - **The predicate** is the cones of the callback, by the rules of section
   1.4, with slots of root `element` that name this collection. They are
   evaluated per element key. What the callback returns is a per-element
@@ -5388,8 +5456,10 @@ expression.
     key.
   - The `reduce` has a `Collection` of its own, named `reduce`, whose
     source is the receiver, as for a scan. The step cone reads the
-    element through slots of root `element` that name it, and
-    `bodyUses.index` says whether the step uses the index.
+    element through slots of root `element` that name it. A step that
+    uses the index lists the slot of root `index` that names it. The
+    steps are evaluated per position, so the slot's value is the
+    position of the step.
   - The step cone reads the accumulator through a slot with root
     `operation` that names the `reduce` itself, at the empty path. The
     runtime binds it to the accumulator as it stands before the step.
@@ -6972,7 +7042,8 @@ interface TemplateInputs {
   /**
    * Label of a slot, already resolved by address, path and class, with its
    * chain. For an address this transaction or its batch wrote, the label
-   * staged there (section 4.5).
+   * staged there (section 4.5). For a slot of root `index`, the label of
+   * the membership its collection iterates (section 2.2).
    */
   slotLabel(slot: Index): Label;
   /**
@@ -8442,7 +8513,6 @@ T_facts  = derive(by B2)  [ s0  T_titles  dynamic(handle B2.h0) ]
 T_empty  = derive(expression) [ T_facts, const ]
 
 c1       = collection  source: output facts.main   membership: T_facts
-                       bodyUses: { index: false }
 
 T_text   = derive(by B3)  [ m0 m1 m2 m4 ]
 T_isSet  = derive(expression) [ m0 m1 m5 ]
@@ -8876,7 +8946,10 @@ The project owner has decided the following, and the sections above state the
 outcomes: an element key holds the element's cell identity or its value,
 and the count of earlier occurrences of the same identity or value, so
 equal elements have two keys and share no cone instance, state cell,
-stream, effect or child (1.3); the prefix rule (3.13); `some`, `every`
+stream, effect or child (1.3); the position is in no element key, also
+where the callback uses the index, the index is given to the nodes of the
+body that read it, and a move evaluates those nodes alone (1.3, 3.6); the
+prefix rule (3.13); `some`, `every`
 and `find` as operations
 (3.13); the wider collection-index label (3.17); a failed constraint on a
 handler's own write rejects the event's transaction, and one on a derived write
@@ -10053,20 +10126,12 @@ this document made.
     of a cell on such a cycle throws from `resolveLink`, and a read
     under a schema of a cell that holds a link into the cycle throws
     from `traverseWithSelector` in `runtime/runner/src/traverse.ts`.
-89. **How far the index reaches in a body that uses it** (for the
-    project owner). One ruling has the index join the element key when
-    the callback uses it. Another has labels flow per value through the
-    callback, so that a node that does not read the index takes nothing
-    of the collection's order (section 3.6). The labels agree with both.
-    What differs is the cost and the state: with the position in the key
-    of the whole body, a move evaluates again every cone instance of the
-    moved element and gives it new state cells, streams and children,
-    also for the nodes that do not read the index. *Assumed:* the
-    position joins the key of the whole body (section 1.3). The
-    alternative keeps the position out of the key, gives the index to
-    the nodes that read it as a slot of the collection's `enumeration`,
-    and has a move evaluate those nodes alone, so that state declared in
-    an index-using body stays with its element.
+89. **How far the index reaches in a body that uses it.** Not open: the
+    position is in no element key, also where the callback uses the
+    index. The index is a slot of root `index`, given to the nodes of
+    the body that read it. A move evaluates those nodes alone, and the
+    state cells, streams, effects and children of the body stay with
+    their element (sections 1.3 and 3.6). The entry keeps its number.
 90. **A binding that a computation in an element body makes** (for the
     project owner). By the ruling on what a handler binding holds, a
     binding made in a function body is named by the enclosing instance,
@@ -10088,3 +10153,29 @@ this document made.
     equal elements the predicate dropped (section 1.3). Keys stay
     distinct, because the result holds a subset of the source's
     positions. The alternative counts again in the result.
+92. **State and identity that derive from the index.** By ruling, the
+    position is in no element key, and the state, streams and children
+    of a body stay with their element when it moves. Three cases are
+    not settled by that. *Assumed* (section 1.3), for each:
+    - A state cell declared with a value that derives from the index,
+      such as `cell(index)` in an element body, keeps what it holds
+      when its element moves. The declared value is written when the
+      cell is first created and not again. The alternative writes it
+      again on a move, which would discard what a handler wrote.
+    - A cell or a child that a function body written in an element
+      body makes under an explicit cause that holds the index is named
+      by the cause. After a move the cause names another cell or child,
+      and no evaluation makes the one named before. The alternative
+      refuses a cause that derives from the index at compile time.
+    - A binding that a function body in an element body makes, and that
+      copies the index, is a stream named by the copied value, so a
+      move names another stream. Question 90 covers what else names
+      such a stream.
+93. **The label of the index, for the elements before the position.**
+    The index of an element is a function of the order and the
+    membership before the element, and of nothing after it. *Assumed:*
+    the slot of root `index` has the label of the whole membership the
+    collection iterates (section 2.2), which for a stored list is one
+    stored label and has no part per position. The alternative gives
+    the slot, where the membership is a `fold`, the `fold` through the
+    position, as the prefix rule gives a `findIndex` (section 3.13).

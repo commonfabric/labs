@@ -433,7 +433,10 @@ reads is in no entry and makes no cone instance stale
 **Element slots.** A binding of an element slot is held per slot and
 element key, and names the address of the one position that holds the key
 (`plan-and-label-templates.md` §1.3). The bindings
-come from the element table (section 3.2).
+come from the element table (section 3.2). A slot of root `index` is held
+per slot and element key as well. It has no address: its value is the
+position the table gives the key, and it is dirty when that position
+changed.
 
 **Slots whose path holds `*`.** Such a slot stands for every child of a
 container, as `argument rows/*/price` stands for the price of every row.
@@ -862,6 +865,7 @@ beyond link structure.
    | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves to what the member `place` of its entry of `Binding.state` names: a slot of the instance, an output of the instance, the stream of another binding, or a constant written at the binding (`plan-and-label-templates.md` §1.1). For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
    | `event`, `cause` | The event, for the length of its transaction. No index entry |
    | `element` | Per element key, the address the element was read from at the position that holds the key, and for a linked element the cell it links to. Bound from the element table, not at load (below) |
+   | `index` | Per element key, the position the key stands at in the order the collection iterates, from the element table. It is a value and no address, so it has no index entry: the evaluation that rebuilds the table marks the slot dirty for the keys whose position changed (below) |
 
 **Paths that cross links.** A slot's path is resolved from its root the way
 a read resolves it (`plan-and-label-templates.md` §2.5). Where the value at
@@ -916,8 +920,17 @@ key, the position and the binding of each element slot.
   slot, which is a slot of the plan and has its entry from load. The
   evaluation it causes rebuilds the table, and the scheduler then replaces
   the entries of the positions that changed. An element that moved keeps
-  its key, so its cone instances are not stale, which is the property the
-  element-key rule exists for.
+  its key, so its cone instances that read element slots alone are not
+  stale, which is the property the element-key rule exists for.
+- The position is in no key. A cone that reads the index lists a slot of
+  root `index` (`plan-and-label-templates.md` §1.3). When the rebuilt
+  table gives a key another position, the scheduler marks that slot dirty
+  for the key, and the cone instances of the key that list it are stale.
+  No other cone instance of the key is, and the state cells, streams,
+  operations and children under the key keep their identifiers. A
+  handler binding whose state holds the index resolves that path to the
+  slot when an event is dispatched, so the handler is given the position
+  the element has then.
 - Before a collection is first evaluated in a process, its element slots
   have no entries. A collection that was never evaluated has cone instances
   that are stale anyway. A collection that was evaluated by an earlier

@@ -795,11 +795,10 @@ export interface ConeHost {
    * schema, and narrows it to the slot's class when the function first
    * asks for it. A slot of class `identity` yields a reference, and a slot
    * of class `shape` or `enumeration` yields only what that class observes
-   * (section 2.4).
+   * (section 2.4). A slot of root `index` yields the position the element
+   * has in the order its collection iterates (section 2.5).
    */
   slot(slot: Index): unknown;
-  /** The index of the element in its collection, when the body uses it. */
-  readonly index?: number;
   /**
    * The value of an output another cone computes, by index into
    * `Plan.outputs`. Legal only for an output an incoming `ConeEdge` names.
@@ -1149,7 +1148,8 @@ labels of two positions meet nowhere.
 
 **State, handlers and children.** Everything an element body holds is
 per key, and so per occurrence of an element, whether a position holds a
-link or a plain value and whether or not the body uses the index.
+link or a plain value and whether or not the body uses the index. The
+position is in no key.
 
 - **A state cell.** A body may declare a state cell over every
   collection. Two rows that show equal values have two keys and a cell
@@ -1159,10 +1159,21 @@ link or a plain value and whether or not the body uses the index.
   values have two streams. An event names one key, and the handler's
   element slots resolve at the position that holds the key
   (`scheduler-and-serving-loop.md` §5.1).
+- **The index.** A cone of the body that reads the index lists the slot
+  of root `index` that names the collection
+  (`plan-and-label-templates.md` §1.3), and `host.slot` yields the
+  position that the key stands at. The runtime binds the slot per key
+  from the element table. When a key's position changes, the slot's
+  value changes, the cone instances of that key that list the slot are
+  stale, and no other cone instance of the key is. The state cells, the
+  streams, the operation state and the children under the key stay. An
+  effect whose request holds the index is requested again, and a child's
+  argument path that holds the index is written again, as for any input
+  that changed.
 - **A child.** A child that the body instantiates is named through the
   key. Two equal elements have two children, and each factory of
   `factories.map((F) => F({ ... }))` has a child per occurrence. The
-  position does not join the key on that account. The paragraph
+  paragraph
   "Children of an element body" below has what a change of the
   collection does to them.
 
@@ -1176,13 +1187,15 @@ The runtime evaluates a `map` over the collection as follows.
    holds a link is the identity of the cell it links to, and that of a
    position that holds a plain value is the salted hash of the value
    (section 5.3). The key holds the element part and the number of
-   earlier positions with the same element part. The index joins the key
-   of every position when `Collection.bodyUses.index` is set. Record each
-   key's position and binding.
+   earlier positions with the same element part. The position is not in
+   the key. Record each key's position and binding. The position is the
+   value of the key's slot of root `index`, for the cones that list it.
 3. For each key not in the table, create its cone instances and evaluate
    them with the `element` slots bound to that element. No two positions
    have one key, so each position has an evaluation of its own.
 4. For each key in the table whose cone instances are stale, evaluate them.
+   A key whose position changed has stale the cone instances that list
+   the slot of root `index`, and those alone on that account.
 5. For each key in the table that no position holds any more, drop its cone
    instances and its memo entries, and tear down the instances their
    evaluations made (section 2.8) and the children the body has under the
@@ -1230,7 +1243,7 @@ declares is a state cell of the body, per key as any other
 
 - **The key.** The child's `within` has the `element` step with the key
   of the body's cone instances (section 5.3): the element part and the
-  occurrence count, and the index only where the body uses it. So
+  occurrence count, and never the position. So
   everything the body has for an element is under one key: its cone
   instances, the child with its documents, a stream a handler bound in
   the body yields, a state cell, and the state of an operation declared
@@ -1283,8 +1296,8 @@ element part when the value behind the link changes.
 | A child of a captured outer output changes, and the body reaches that output only through a `pick` | The cone instances whose `pick` chose that child (section 3.3) | Those | Their changed kept paths |
 | An element is appended or inserted | The collection's membership; no existing element's cone | The new key's cone instances | The new positions; for an insertion, the positions after it move in the stored array (section 4.2) |
 | An element is removed | The collection's membership | Nothing | The stored array loses the position, and a part document of the row is deleted (section 4.10) |
-| Elements are reordered | The collection's membership | Nothing, unless the body uses the index | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
-| The body uses the index and an element moves | The moved elements' cone instances | The moved elements | Their kept paths |
+| Elements are reordered | The collection's membership | Nothing, unless a cone of the body reads the index | The stored array is rewritten in the new order: the storage links of rows that are parts, and the values of rows stored in place. Label entries only where the label at a position changed |
+| A cone of the body reads the index and an element moves | The cone instances of the moved keys that list the slot of root `index`. No key changes, and state cells, streams, operation state and children stay | Those cone instances | Their changed kept paths |
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
 | A plain value is edited in place | Membership: the old key leaves and a new key enters | The new key | The position |
 
@@ -1594,7 +1607,12 @@ export interface MadeInstance {
 
 /** The memo entry of one cone instance. */
 export interface MemoEntry {
-  /** The slots the evaluation read, by slot index. */
+  /**
+   * The slots the evaluation read, by slot index. The entry of a slot of
+   * root `index` has the address of the membership the collection
+   * iterates, the class `value`, and a fingerprint of the position, so
+   * it differs when the key stands at another position.
+   */
   readonly slots: Readonly<Record<Index, ReadFingerprint>>;
   /** For an element cone: the record of the position that holds the key. */
   readonly position?: PositionLabels;
@@ -2584,8 +2602,7 @@ step = { element: <collection name>, key: <hashed key> }
 - `within` has one step per kept collection whose position the path passes
   through. `key` is the hash of the secret of the space and the element
   key of section 5.3, for every key: a cell's identity is hashed under the
-  secret as a plain value is, with the occurrence count, and with the
-  index where the key holds it
+  secret as a plain value is, with the occurrence count
   (`plan-and-label-templates.md` §2.3). A storage link is part of what is
   stored, and a reader of the document that holds it can see the
   identifier it names: for a row, a reader of the collection's membership.
@@ -2840,8 +2857,8 @@ count.
 - The occurrence count is the number of earlier positions of the
   collection that have the same element part. It is in every key, so no
   two positions of a collection have one key.
-- Where the body uses the index, the key holds the index as well. Nothing
-  else puts the position in a key.
+- The position is in no key, also where the body uses the index. A cone
+  that reads the index is given it as a slot (section 2.5).
 
 The secret is a runtime secret of the space, minted and read by the runtime
 alone (`ensureRuntimeSecret`, described in
@@ -3562,7 +3579,7 @@ record where the plan and the document determine them:
   5.2).
 - A slot with root `element` is bound to the element at the output's
   position, through the collection's source and, for a derived collection,
-  the origins of section 7.3.
+  the origins of section 7.3. A slot with root `index` is that position.
 - A slot with root `event`, `cause` or `binding` belongs to a handler's
   write edge, not to a kept output.
 

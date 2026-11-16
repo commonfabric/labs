@@ -479,8 +479,9 @@ be recomputed, and that its state moves with it.
 - In both cases the key also holds the count of earlier occurrences of the
   same value or identity in the collection. Two equal elements have two
   keys, and no two positions have one key.
-- The position alone is not in the key. The index is part of the key only
-  when the callback takes the index and uses it.
+- The position is never in the key, also where the callback takes the
+  index and uses it. The index is given to the nodes of the body that
+  read it.
 
 For a linked slot this is the key of today. For a plain value it differs:
 the value takes the place of the position.
@@ -521,8 +522,8 @@ the element is keyed by the identity of that cell.
 - *A child instantiated in the body is per occurrence.* The child is
   named through the element key, so two equal elements have two
   children, and a factory element in `factories.map((F) => F({ ... }))`
-  has a child per occurrence. The position does not join the key on that
-  account, so a child moves with its element
+  has a child per occurrence. The position is in no key, so a child
+  moves with its element
   (`plan-and-label-templates.md` §1.3). A statically resolved pattern
   called in the body is compiled into the body and is no child, and a
   state cell it declares is a state cell of the body.
@@ -542,10 +543,18 @@ the element is keyed by the identity of that cell.
 - *A hole has no key.* It has neither a value nor an identity, gets no
   cone, and stays a hole in the output, as today. An explicit `undefined`
   is a plain value and is keyed as one.
-- *Using the index gives up the goal for that body.* With the index in the
-  key, an entry that moves is a new element: its cone is recomputed and its
-  state cells are new. Today a moved linked element whose body uses the
-  index is re-run in the same instance and keeps its state.
+- *Using the index keeps the goal.* The index is a slot of the plan,
+  with root `index`, that a cone, a body, or a handler binding lists when
+  it reads the index (`plan-and-label-templates.md` §1.3). An entry that
+  moves keeps its key. The cones of its body that list the slot are
+  evaluated again, and no other cone is. Its state cells, streams,
+  effects, and children stay. An effect whose request holds the index is
+  requested again, and a child's argument path that holds the index is
+  written again, as for any input that changed. The runtime of today does
+  the same for the run as a whole: `createMapInstance` in
+  `runtime/runner/src/builtins/map.ts` sets a moved element up again on
+  the result cell its key already has when the callback uses the index
+  (`usesIndex`), and the element keeps its state.
 - *A value-derived key is salted.* A key derived from a value would put
   element content into document identifiers, and an identifier is visible
   to anyone who can see a link, which for a low-entropy confidential value
@@ -602,9 +611,9 @@ the element is keyed by the identity of that cell.
 
 `plan-and-label-templates.md` §1.3 states the same rule. The plan does not
 record the element part of the key or the occurrence count, which the
-runtime computes from the elements. It records in
-`Collection.bodyUses.index` whether a body uses the index, which is the
-one thing that puts the position in the key. The key joins a cause
+runtime computes from the elements. It records nothing about the
+position, which is in no key: a node that reads the index lists the slot
+of root `index` that names the collection. The key joins a cause
 through the `within` steps of the declaration (`WithinStep` in its §1.1): a
 state cell, an operation, a child, a body, or a binding declared in an
 element body has an `element` step that names the collection, and each
@@ -3438,9 +3447,10 @@ above already reflect them.
 - **Element keys.** A plain value is keyed by its value, anything else by
   the identity of its cell, and in both cases by the count of earlier
   occurrences of the same value or identity, so two equal elements have
-  two keys. The position alone is not in the key, and the index joins the
-  key only when the callback uses it. Stored per-element state need not
-  stay compatible. Everything an element body holds is per element key,
+  two keys. The position is never in the key, also where the callback
+  uses the index: the index is given to the nodes of the body that read
+  it, and a move evaluates those nodes alone. Stored per-element state
+  need not stay compatible. Everything an element body holds is per element key,
   and so per occurrence: its state cells, its streams, its effects, and
   its children. Equal elements share nothing, and a body over plain
   values may declare a state cell.

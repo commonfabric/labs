@@ -486,8 +486,9 @@ refused (`collection:callback-parameters`).
   `xs.map(toRow)`. The author writes the arrow,
   `xs.filter((x) => Boolean(x))` and `xs.map((x) => toRow(x))`. A function
   passed by name receives the index and the whole array as its second and
-  third arguments, so whether the index is part of an element's key
-  (below) would depend on a declaration written elsewhere.
+  third arguments, so whether a node reads the index, and with it the
+  label of the collection's order (below), would depend on a declaration
+  written elsewhere.
 - **A third parameter,** which is the whole array.
 - **A default value or a rest element,** on a parameter or inside its
   destructuring pattern. An element is not a constant expression (§4.2).
@@ -520,7 +521,8 @@ do not. The label rules are defined in `plan-and-label-templates.md`
 element's value when the element is a plain value, and the identity of the
 element's cell when it is not. In both cases it also holds the count of
 earlier occurrences of the same value or identity in the collection, so
-two equal elements have two keys. The position alone is not in the key.
+two equal elements have two keys. The position is never in the key, also
+where the callback uses the index.
 The body of the callback is one or more
 cones, and each is evaluated once per element key. A cone as it is
 evaluated for one key is a cone instance (`execution-and-storage.md`,
@@ -533,23 +535,33 @@ cost. A key derived from a value is salted with a secret of the space
 before it enters a document identifier, so that an identifier does not
 reveal the value (`plan-and-label-templates.md`, §1.3).
 
-**The index parameter costs the author that property.** The index is part
-of an element's key when the callback declares the index parameter and its
-body uses it. In no other case is it. The cone instances of such a key
-cannot move:
-inserting at the front of a list of a thousand elements evaluates the body
-again for a thousand keys, where a callback without the index evaluates it
-for one. The compiler reports the use as a hint (`collection:index-keyed`).
-A callback that declares the index and does not use it is keyed without
-it.
+**The index parameter keeps that property.** A callback that declares
+the index parameter and uses it is keyed as any other. The index is given
+to the nodes of the body that read it: a declaration, the returned
+expression, a `computed`, a handler binding, the argument of a child, or
+the request of an effect. When an element moves, the nodes that read the
+index are evaluated again for it, and nothing else of the body is. Its
+state cells, its streams, its effects, and its children stay with it. An
+effect whose request holds the index is requested again, and a child
+whose argument holds the index has that argument path written again, as
+for any input that changed. A handler whose state holds the index is
+given the position its element has when the event arrives.
+
+What the index costs is those evaluations and a label. Inserting at the
+front of a list of a thousand elements evaluates the nodes that read the
+index for a thousand keys, where a callback without the index evaluates
+its body for one. A node that reads the index carries the label of the
+collection's membership and order ("Labels in a callback", below). The
+compiler reports the use as a hint (`collection:index-read`). A callback
+that declares the index and does not use it has neither cost.
 
 **Names inside a callback.** The identifier of a state cell declared inside
 a collection callback derives from the instance, from each compiled-in call
 and each collection callback that encloses the declaration, outermost
 first, and from the cell's name. An enclosing callback contributes the name
 of its collection and the key of the element. So per-element state follows
-the element when the element moves, and does not when the key includes the
-index. The cell's name and the collection's name are given by the naming
+the element when the element moves, also where the body uses the index.
+The cell's name and the collection's name are given by the naming
 rule of [§4.6](#46-captures), and the same derivation names a child
 instance, a durable operation, and the stream of a handler binding declared
 inside a callback (`plan-and-label-templates.md`, §1.3).
@@ -585,12 +597,12 @@ where it is made, so two bindings there with equal state are one stream
 **Labels in a callback.** By ruling, the callback of a per-element
 construct is a pattern for the label rules, and labels flow through it per
 value. The element has the label of its own slot of the collection and of
-what that slot holds. The index has a label only where the callback
-declares the index parameter, and the whole collection only where the
-body captures it by name. Each captured value has its own label. A node
-of the body, such as a `computed`, a handler, or the argument of a child,
-takes the labels of what it reads and closes over, and nothing of what
-another node of the same body reads. So an inline handler that closes
+what that slot holds. The index has a label only for a node that reads
+it, and the whole collection only where the body captures it by name.
+Each captured value has its own label. A node of the body, such as a
+`computed`, a handler, or the argument of a child, takes the labels of
+what it reads and closes over, and nothing of what another node of the
+same body reads. So an inline handler that closes
 over the element alone writes under the event and the element, also where
 the same callback shows `index + 1` in another place. An author does not
 have to move a handler out of a callback to keep the label of the list's
@@ -643,7 +655,7 @@ construct instantiates is named through the element key, so each
 occurrence has a child of its own, with state of its own.
 `factories.map((Card) => Card({ donut }))` over a list of factory values
 has a child per occurrence, whether or not two of the factories are
-equal. The position does not join the key on that account, so a child
+equal. The position is in no key, so a child
 moves with its element (`plan-and-label-templates.md`, §1.3, which owns
 the key).
 
@@ -3552,7 +3564,7 @@ none of the other eight.
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
 | `collection:reduce-accumulator` | error | A `reduce` in tier R whose accumulator type is a code type, such as a `Map`, a `Set`, or a function | Accumulate into an object, an array, or a primitive. To fold into a `Map`, write the loop inside `computed(() => ...)` and return data | new |
-| `collection:index-keyed` | hint | A per-element callback uses its index parameter, so its element cones are keyed by position and recompute when elements move (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
+| `collection:index-read` | hint | A per-element callback uses its index parameter, so the nodes that read it are evaluated again for every element whose position changes, and carry the label of the collection's membership and order (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
 | `cell:unsupported-method` | error | A method of the runtime's cell object that the API does not declare (§4.7), such as `asSchema` or `getAsNormalizedFullLink`; also `setSchema`, which the API declares as deprecated. In every tier | The declared method that does the job, or a declared type in place of a re-typing ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)) | new |
 | `cell:collection-method-in-function` | error | `map`, `filter`, or another collection method of §4.7 called on a cell handle in tier F. The compiler does not rewrite the call | One of two corrections. To keep the result reactive, wrap the expression in an inline `pattern(...)` and instantiate it: `pattern(() => cell.map(...))({})`. To process the values the cell holds when the body runs, read first: `cell.get().map(...)`. For an aggregate or an index method (`count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy`), which a JavaScript array does not have, the second correction is `get()` followed by a loop or a JavaScript `reduce` | new |
 | `cell:cause-not-literal` | error | In tier R, the argument of `X.for(cause)` on a cell constructor, or of `h.for(cause)` on a handle, is not a string literal (§4.7) | Write a string literal, which names the cell in place of the variable's name: `Writable.for<number>("count")`. For a cell per element, declare the cell in the body of the collection callback, where the element's key is part of its identifier. A cause computed from data is legal only in a function body | new |
@@ -3815,7 +3827,7 @@ counts shown or because the project owner asked for them.
 | A module-scope handler applied to its state inside a `computed` | 16 (3): `patterns/apps/base/person.tsx`, `patterns/apps/base/family-member.tsx`, `patterns/apps/store-mapper/store-mapper.tsx` | Accepted as a handler binding (§5.2). The same form occurs 764 times in pattern bodies |
 | `reduce` | 29 calls, all in function bodies today: 20 with an expression-bodied callback and an initial value, 2 expression-bodied without one, 7 block-bodied | A reactive construct in tier R for the first 20 (§4.4.1). The other 9 stay tier-F code, where `reduce` is ordinary JavaScript |
 | `some`, `every`, `find`, `findIndex` with a callback | 136, 14, 70, and 78 calls, all but 2 `some` in function bodies today | Reactive constructs in tier R (§4.4.1), and ordinary methods in tier F |
-| The index parameter of a `map` callback in a pattern body | Used in 44 of 326 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-keyed` |
+| The index parameter of a `map` callback in a pattern body | Used in 44 of 326 callbacks (28 files); none in FabriChat | Accepted, with the hint `collection:index-read` |
 | A handler bound, without the index, in a per-element body over plain values | 7 (7) where the collection is a module-scope constant or a call result, for example `patterns/apps/weekly-calendar/event.tsx`, `patterns/examples/group-chat-room/group-chat-room.tsx`, and `patterns/system/fabrichat/message-row.tsx`. A further 95 callbacks, over a local constant or a parameter, bind a handler without the index; which of those collections are stored lists, and which have a primitive element type, needs types | Accepted (§4.4.1): each occurrence of an element has a stream of its own. No callback in the corpus declares a state cell |
 | A value named where the callee declares a cell, or a cell where it declares the value, in an argument written in tier R | 218 arguments of a pattern or of a handler, and about 37 arguments of a `lift` result or of an authored function (prototype) | Accepted for a pattern, a handler, and a `lift` result: the argument is bound by reference (§7.5.2). An argument of an authored function is not covered; how many of the 37 are such was not measured |
 | An optional property of a pattern's input whose type declares a default, used without a test | 503 receivers, 434 of a handle and 69 of a value; 223 arguments that give one to a callee that requires it (prototype). For example `bookmarks.get()` in `patterns/apps/bookmarks/bookmarks.tsx`, `selected.set(option)` in `patterns/product/primitives/option-picker.tsx`, and `logEventHandler({ events, mentioned })` in `patterns/apps/activity-log/activity-log.tsx` | Accepted: the body reads such a property without `undefined` (§7.6.1). Whether every one of the 726 is a property whose type declares a default has to be confirmed by the prototype |
