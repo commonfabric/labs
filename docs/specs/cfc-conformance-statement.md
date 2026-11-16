@@ -979,9 +979,13 @@ regenerated snapshot defines it.
   for (`schema-generator.ts` in `base/ts-transformers`). So an unstamped claim
   is stored only from a schema the compiler did not mint, or from data stored
   before claims were minted stamped.
-- A schema declaring an empty list at the position is refused as malformed,
-  and one declaring nothing there keeps the stored policy as stored, as the
-  proposal has them.
+- A schema declaring an empty list where the document stores a policy is
+  refused by the merge ("the candidate lists no alternative"), whatever the
+  write touches, and one declaring nothing there keeps the stored policy as
+  stored, as the proposal has them. Where the document stores no policy at the
+  position, an empty list is refused as malformed only by a write that touches
+  the position; a write that leaves it untouched stores the empty list, which
+  then admits no writer there.
 
 ## 11. Writer delegations across a source update (§8.11.3)
 
