@@ -108,7 +108,19 @@ execution observer and decides which worker serves which space:
   not bound buffers outside the heap, so the pool also takes out a worker
   whose heartbeat reports as many megabytes of those as the limit. Both
   checks run at the heartbeat, so a worker can pass the limit for up to one
-  heartbeat interval before it is ended. Either way
+  heartbeat interval before it is ended.
+
+  A process-wide `--max-old-space-size`, which the toolshed's binary, tasks
+  and `start-local-dev.sh` set to 16384 for the main thread, replaces the
+  limit V8 gives each worker. The pool sees that from the `heap_size_limit` a
+  worker's init reports (`heap-limit-overridden`) and holds such a worker to
+  `heapLimitMb` itself: it takes the worker out as one that reached its limit
+  once two heartbeats in a row report a heap of `heapLimitMb` or more. Two,
+  since a heartbeat's heap includes garbage V8 has not collected yet. This
+  check needs the worker's heartbeats, which its timers send between tasks,
+  so a worker that allocates without yielding is bounded only by the process
+  flag and by the watchdog, which ends it after `watchdogLimitMs` of silence.
+  Either way
   the process goes on. The worker's spaces are not placed again as a failed
   worker's are, since a program that grew one heap to the limit grows the
   next, and the limit is the worker's, so the pool learns which space grew
