@@ -485,25 +485,6 @@ const hasLocalDefinitionRef = (schema: JSONSchema): boolean =>
 // keyed on a resolution's root hold for a resolution rooted at the view.
 const inheritedDefsViews = new WeakMap<object, WeakMap<object, JSONSchema>>();
 
-const memoizedInheritedDefsView = (
-  schema: JSONSchemaObj,
-  key: object,
-  mint: () => JSONSchema,
-): JSONSchema => {
-  if (!isDeepFrozen(schema)) return mint();
-  let byMap = inheritedDefsViews.get(schema);
-  if (byMap === undefined) {
-    byMap = new WeakMap();
-    inheritedDefsViews.set(schema, byMap);
-  }
-  let view = byMap.get(key);
-  if (view === undefined) {
-    view = isDeepFrozen(key) ? deepFreeze(mint()) : mint();
-    byMap.set(key, view);
-  }
-  return view;
-};
-
 // The document `cfcSchemaDocumentOf()` minted for a deep-frozen definition
 // map, and the one it hands out for no map at all.
 const definitionDocuments = new WeakMap<object, JSONSchemaObj>();
@@ -561,17 +542,24 @@ export const cfcSchemaWithInheritedDefs = (
 ): JSONSchema => {
   if (
     !isObjectNotArray(inheritedDefinitions) ||
-    !canInheritDefs(schema, inheritedDefinitions) ||
-    (isDeepFrozen(schema) && !hasLocalDefinitionRef(schema))
+    !canInheritDefs(schema, inheritedDefinitions)
   ) {
     return schema;
   }
-  const definitions = inheritedDefinitions;
-  return memoizedInheritedDefsView(
-    schema,
-    definitions,
-    () => ({ ...schema, $defs: definitions }),
-  );
+  if (!isDeepFrozen(schema)) return { ...schema, $defs: inheritedDefinitions };
+  if (!hasLocalDefinitionRef(schema)) return schema;
+  let byMap = inheritedDefsViews.get(schema);
+  if (byMap === undefined) {
+    byMap = new WeakMap();
+    inheritedDefsViews.set(schema, byMap);
+  }
+  let view = byMap.get(inheritedDefinitions);
+  if (view === undefined) {
+    view = { ...schema, $defs: inheritedDefinitions };
+    if (isDeepFrozen(inheritedDefinitions)) deepFreeze(view);
+    byMap.set(inheritedDefinitions, view);
+  }
+  return view;
 };
 
 // Views `definitionBodyWithDefs()` minted for a deep-frozen definition body
