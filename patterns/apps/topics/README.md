@@ -239,14 +239,13 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 - **A reference is a cell, and identity is the only thing compared.** The board
   derives the whole graph once, in `crossrefTable`, from the same topics array
   read under two minimal declared views: one for identity, one for what each
-  topic points at. Matching is a scan of `equals`, because nothing in the
-  pattern API turns a topic reference into a resolved key carrying space, scope,
-  and path. The comparisons come from two passes. Finding the distinct topics,
-  in `distinctByIdentity`, compares each of the board's `n` entries with the
-  distinct entries kept before it, at most `n(n - 1) / 2` comparisons, which
-  grows with the square of the topic count even on a board with no mentions.
-  Each distinct topic's row then checks every source's mentions for that topic,
-  which grows as the number of topics times the number of mentions.
+  topic points at. Identity is what `equals` decides, and two passes ask it.
+  Finding the distinct topics, in `distinctByIdentity`, keys each of the board's
+  `n` entries by `equalsKey`, which two entries share exactly when `equals`
+  matches them, and keeps an entry whose key a set does not hold yet: `n` keys
+  and `n` lookups. Each distinct topic's row then checks every source's mentions
+  for that topic with `equals`, which grows as the number of topics times the
+  number of mentions.
 
   Each topic then does a lookup rather than the join: `backlinksOf` scans the
   pivot for the row whose topic is itself, and takes that row's `mentionedBy`.

@@ -2,6 +2,7 @@ import {
   action,
   Default,
   equals,
+  equalsKey,
   handler,
   lift,
   NAME,
@@ -331,19 +332,23 @@ export function mentionedBy<T extends object>(
  *
  * Identity is `equals`, the comparison `mentionedBy` makes, so two entries that
  * resolve to one document are one topic whether they hold the same link or one
- * holds an alias of it. Nothing in the pattern API turns a `ReadonlyCell` entry
- * into a resolved key carrying space, scope, and path, so each entry is
- * compared with `equals` against the distinct entries kept before it: at most
- * `n(n - 1) / 2` comparisons over `n` entries.
+ * holds an alias of it. Each entry is looked up in a set by its `equalsKey`,
+ * which two entries share exactly when `equals` matches them, so `n` entries
+ * cost `n` keys and `n` lookups.
  */
 export function distinctByIdentity<T extends object>(
   list: readonly (T | undefined)[],
 ): T[] {
+  const seen = new Set<unknown>();
   const distinct: T[] = [];
   for (const entry of list) {
-    if (entry && !distinct.some((kept) => equals(kept, entry))) {
-      distinct.push(entry);
-    }
+    if (!entry) continue;
+    // An entry with no place in the graph has no key, and `equals` matches it
+    // to nothing but itself, which is what holding the entry in the set does.
+    const key = equalsKey(entry) ?? entry;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    distinct.push(entry);
   }
   return distinct;
 }
