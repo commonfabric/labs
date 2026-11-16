@@ -10,7 +10,7 @@ import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 
 import { type Artifact, Instance, Unsupported } from "../exec/executor.ts";
-import { eventSeed, restoreRandom, seedRandom } from "./random.ts";
+import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
   type EventOutcome,
   type Plan,
@@ -410,10 +410,12 @@ export const compareValues = (
     // The seed today's run had for this event (`random.ts`).
     seedRandom(eventSeed(index));
     try {
-      const handled = instance.send(
-        binding,
-        event,
-        (outcome.elements ?? []).map(({ key }) => Number(key)),
+      const handled = drawing(() =>
+        instance.send(
+          binding,
+          event,
+          (outcome.elements ?? []).map(({ key }) => Number(key)),
+        )
       );
       if (!handled.committed) {
         comparison.failedEvents.push(
