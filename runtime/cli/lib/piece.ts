@@ -21,10 +21,17 @@ import {
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { compileIndexedPattern } from "@commonfabric/pattern-index/deploy";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
+import {
+  openPatternIndexClient,
+  resolvePatternIndexUrl,
+} from "./pattern-index-access.ts";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "./pattern-index-store.ts";
 import {
   ownerReleaseByIntentRequest,
   ownerReleaseByIntentSignature,
@@ -582,6 +589,9 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
 
   /** The transport index reads go over, in place of the global `fetch`. */
   patternIndexFetch?: PatternIndexFetch;
+
+  /** The local index membership record, in place of the user's own. */
+  patternIndexStore?: PatternIndexStore;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
   followPieceOnServer?: typeof followPieceOnServer;
@@ -953,16 +963,19 @@ async function getProgramFromIndex(
     runtime: pieces.runtime,
     space: pieces.getSpace(),
     patternId: entry.patternId,
+    // Signs as the identity and presents the chain from the person's index
+    // root when this machine holds one, as every index call from `cf` does.
     getClient: () =>
-      Promise.resolve(
-        new PatternIndexClient({
-          baseUrl: entry.patternIndexUrl,
-          signer,
-          ...(deps.patternIndexFetch === undefined
-            ? {}
-            : { fetchFn: deps.patternIndexFetch }),
-        }),
-      ),
+      openPatternIndexClient({
+        baseUrl: entry.patternIndexUrl,
+        signer,
+        ...(deps.patternIndexFetch === undefined
+          ? {}
+          : { fetchFn: deps.patternIndexFetch }),
+        ...(deps.patternIndexStore === undefined
+          ? {}
+          : { store: deps.patternIndexStore }),
+      }),
   });
   return program;
 }
@@ -2698,6 +2711,7 @@ export async function savePiecePattern(
     );
   }
   await writeSourcePackage(program, outPath);
+  await recordSavedIndexSource(piece.id, outPath);
   // Finding what the source declares parses it, which reaches the compiler.
   // deno-lint-ignore cf-imports/no-inline-module-import
   const { undeclaredDataFileWarning } = await import(
@@ -2705,6 +2719,29 @@ export async function savePiecePattern(
   );
   const warning = undeclaredDataFileWarning(program);
   if (warning !== undefined) console.log(warning);
+}
+
+/**
+ * Where the piece came from the pattern index (`cf piece new --from-index`),
+ * remembers that the source now under `outPath` is that pattern's, so
+ * publishing it again credits the original as `remixedFrom`. Best effort: a
+ * missing or unreadable record costs that credit and nothing else.
+ */
+async function recordSavedIndexSource(
+  pieceId: string,
+  outPath: string,
+): Promise<void> {
+  try {
+    const store = new PatternIndexStore(
+      patternIndexStoreDir(resolvePatternIndexUrl(undefined)),
+    );
+    const patternId = await store.indexedPiece(pieceId);
+    if (patternId !== undefined) await store.recordSource(outPath, patternId);
+  } catch (error) {
+    console.error(
+      `Could not record where this source came from: ${describeFailure(error)}`,
+    );
+  }
 }
 
 /**
