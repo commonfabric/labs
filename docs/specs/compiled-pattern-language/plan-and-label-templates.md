@@ -813,8 +813,12 @@ export interface Cone {
   readonly at: SourcePosition;
   /**
    * Where the cone's code is written. Its `element` steps, outermost
-   * first, name the collections whose element keys an instance of the
-   * cone exists for (section 1.4). Assumed (section 8, question 98).
+   * first, are the collections of the element bodies the cone is written
+   * in. By ruling the runtime takes two things from them: an instance of
+   * the cone exists for each combination of element keys of those
+   * collections, and what an instance holds is kept under those keys
+   * (section 1.4). That the member holds the `site` steps as well is
+   * assumed (section 8, question 98).
    */
   readonly within: readonly WithinStep[];
   /**
@@ -2017,14 +2021,44 @@ of a cone do not say it, because a cone of an element body can list no
 slot of root `element` or `index`: of the 446 cones of an element body in
 the prototype's corpus plans, 38 list none. An output path does not say
 it either: a `*` stands for a collection and does not name it, and an
-interim output has no `*`. The paragraphs below name the `within` of a
-cone for this. *Assumed* (section 8, question 98): `Cone.within` holds
-the steps of where the cone's code is written, as the `within` of a
-declaration does (section 1.3), and an instance of the cone exists for
-each combination of element keys of the collections that its `element`
-steps name, outermost first (`execution-and-storage.md` §2.5). A cone
-written in the pattern body, outside every element body and every
-pattern compiled in, has the empty list.
+interim output has no `*`. By ruling the record of a cone says it:
+`Cone.within` lists the collections of the element bodies the cone is
+written in, outermost first, as its `element` steps. The runtime uses
+the list for two things.
+
+- **Which instances of the cone exist.** One instance exists for each
+  combination of element keys of the listed collections. The runtime
+  makes the instances of a key when the key is added to its collection
+  and drops them when the key is removed
+  (`execution-and-storage.md` §2.5). A cone whose list is empty has one
+  instance, per scope key.
+- **Where what an instance holds is kept.** The outputs of an instance,
+  and the state cells, the streams, the effects and the children of the
+  code the cone is written from, are kept under the keys of the
+  instance. A per-element output is stored at the position that holds
+  the key (below). A `StateCell`, an `Operation`, a `Child` and a
+  `Binding` of the reactive tier that the cone's code declares each
+  have a `within` of their own with the same `element` steps, and are
+  named or stored under the same keys (sections 1.3 and 2.6).
+
+A cone of an element body that lists no slot of root `element` or
+`index` has an instance per key all the same. It is not evaluated once
+with every row using the one value: its instances are named, stored and
+dropped per key as those of every other cone of the body are, and two
+of them can compute equal values. The rule holds in the three cases of
+section 1.3 alike: an `element` step names a collection, and the rule
+does not look at whether the collection's source is an array of
+references, an array of plain values in place, or the result of another
+per-element construct. What differs among the three is how a key is
+computed, which section 1.3 has.
+
+The ruling is on the collections. *Assumed* (section 8, question 98):
+the member holds the steps of where the cone's code is written, as the
+`within` of a declaration does (section 1.3), so it also has a `site`
+step for each pattern compiled in that the code is written in. A `site`
+step names no collection and adds no key, so it changes neither of the
+two uses above. A cone written in the pattern body, outside every
+element body and every pattern compiled in, has the empty list.
 
 **An interim value of an element body.** A value that a declaration
 cone of the callback computes and another cone of the body uses is an
@@ -10792,21 +10826,26 @@ this document made.
     which transaction the edge is performed, which
     `execution-and-storage.md` §4.1 assumes (its question 83). The
     entry keeps its number.
-98. **The `within` of a cone** (for the project owner). Section 1.4
-    refers to the `within` of a cone, and the runtime needs to know for
-    which element keys an instance of a cone exists before it evaluates
-    it. Neither the slots nor the output paths of a cone say it.
-    *Assumed:* `Cone.within` is a member of the record (section 1.1),
-    with the steps of where the cone's code is written, and its
-    `element` steps name the collections. The prototype holds, beside
-    the plan, for each cone the collections of the element bodies it is
-    written in, outermost first, which is the `element` steps alone. Not
-    determined by this document: whether the member holds the `site`
-    steps as well, as assumed here, or the collections alone; and
-    whether `Cone.entry` is unique without it. The member and the
-    question are the same in the three cases of section 1.3: an
-    `element` step names a collection, whatever the collection's source
-    holds.
+98. **What `Cone.within` holds beside the collections** (for the
+    project owner). Not open: `Cone.within` is a member of the record
+    (section 1.1). By ruling it lists the collections of the element
+    bodies the cone is written in, outermost first, and the runtime
+    takes from the list which instances of the cone exist, one for each
+    combination of element keys of those collections, and under which
+    keys the outputs, state cells, streams, effects and children of an
+    instance are kept. A cone of an element body that reads neither the
+    element nor the index has an instance per key all the same (section
+    1.4). Open: the ruling is on the collections, and the prototype
+    holds for each cone the collections alone. *Assumed:* the member
+    holds the steps of where the cone's code is written, so it has the
+    `site` steps as well, as the `within` of a declaration has. The
+    alternative holds the collections alone. Not determined by this
+    document either: whether `Cone.entry` is unique in a plan without
+    the `site` steps. The ruling and the open part are the same in the
+    three cases of section 1.3: an `element` step names a collection,
+    whatever its source holds (an array of references, an array of
+    plain values in place, or the result of another per-element
+    construct), and a `site` step names a call and no collection.
 99. **Where a slot of `Body.reads` sits in the body's argument.** Not
     open. Each entry of `Body.reads` is a `ReadInput`: the slot, and
     the path `at` in the body's argument at which the slot's value is

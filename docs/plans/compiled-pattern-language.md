@@ -488,11 +488,12 @@ notes 281 to 306. Notes 281 to 302 say what the executor needed that the
 documents did not give, and are written into the documents. Of the
 questions they raised, the place of a slot of `Body.reads`, a path that
 a call leaves out, the first value of a state cell, a moved element,
-and a cone with side-writes are ruled, and so is which default is read
-along a chain of places ([Decided](#decided)). Questions 141, 144 to
-147, and 149 to 151 below, and questions 81 to 84 of
-`execution-and-storage.md`, are open. Notes 303 to 306 are the results
-here.
+a cone with side-writes, and the collections a cone's record lists are
+ruled, and so is which default is read along a chain of places
+([Decided](#decided)). Questions 141, 144 to 147, and 149 to 151
+below, and questions 81 to 84 of `execution-and-storage.md`, are open.
+Of question 141 the member is ruled, and what it holds beside the
+collections is open. Notes 303 to 306 are the results here.
 Nothing was timed.
 
 ### What is compared, and what is not
@@ -609,7 +610,7 @@ first reading of the source and the two values and are not verified.
 No difference is classed as a gap of the design by itself. The gaps this
 round found are in what the executor needed in order to compute a value
 at all. Each showed as a wrong value or a failed run before the emitter
-or the executor supplied what was missing. Six are ruled
+or the executor supplied what was missing. Seven are ruled
 ([Decided](#decided)), and the rest are questions: 141, 144 to 147,
 and 149 to 151 below, and questions 81 to 84 of
 `execution-and-storage.md`.
@@ -646,7 +647,10 @@ The executor counted where its run kept to the plan.
   state at the bound of ten evaluations. That is a difference from
   today that the corpus has, and it was not run.
 - **What the plan lacked.** 38 of the 446 cones of an element body list
-  no slot of root `element` or `index` (question 141). 355 uses of a
+  no slot of root `element` or `index`; by ruling the record of a cone
+  lists the collections it is written in, and such a cone has an
+  instance per element key as every other cone of the body has. 355
+  uses of a
   body that is no handler have 1,093 slots whose place in the argument
   the crate's plan does not give; by ruling each entry of `Body.reads`
   holds it. Of 1,399 state cells with a function for their first
@@ -1041,6 +1045,18 @@ is relitigated.
   is legal, and where two equal values stand in a collection and the
   first is removed, the state that remains is that of the first
   occurrence.
+- The record of a cone lists the collections of the element bodies the
+  cone is written in, outermost first (`Cone.within`). The runtime uses
+  the list for two things. The first is which instances of the cone
+  exist: one for each combination of element keys of the listed
+  collections, made when a key is added and dropped when it is removed.
+  The second is where an instance's outputs, state cells, streams,
+  effects, and children are kept: under those keys. A cone of an
+  element body that reads neither the element nor the index has an
+  instance per element key all the same; it is not evaluated once for
+  every row. The rule is the same for an array of references, an array
+  of plain values in place, and the result of another per-element
+  construct.
 - When an element moves, the runtime moves what the element's key
   holds, its stored results included, to the new position. It evaluates
   nothing for the element except the nodes that read the index.
@@ -1662,16 +1678,22 @@ as an assumption.
 **From the prototype's executor.** Each is written into the documents
 as an assumption, which is what the prototype does.
 
-141. **The `within` of a cone** (PL question 98). PL §1.4 refers to
-     it, and nothing else in a plan says for which element keys an
-     instance of a cone exists. *Assumed:*
-     `Cone.within` holds the steps of where the cone's code is written,
-     and its `element` steps name the collections. Open beside the
-     member itself: whether it holds the `site` steps or the
-     collections alone. The member does not depend on whether a
-     collection it names is over an array of references, an array of
-     plain values in place, or the result of another per-element
-     construct.
+141. **What `Cone.within` holds beside the collections** (PL question
+     98). By ruling the record of a cone lists the collections of the
+     element bodies it is written in, outermost first, and the runtime
+     takes from the list which instances of the cone exist and under
+     which keys what they hold is kept. The ruling is on the
+     collections. *Assumed:* the member holds the steps of where the
+     cone's code is written, as the `within` of a declaration does, so
+     it has a `site` step for each pattern compiled in that the code is
+     written in, and its `element` steps are the list the ruling
+     names. The alternative holds the collections alone, as the
+     prototype's artifact does. Open with it: whether `Cone.entry` is
+     unique in a plan without the `site` steps. The question is the
+     same for a collection over an array of references, over an array
+     of plain values in place, and over the result of another
+     per-element construct: a `site` step names a call and no
+     collection.
 144. **Who places a stream in a computed value** (ES question 78).
      *Assumed:* the value function, through a fourth function of
      `ConeHost`, and `Binding.result` describes the positions. The

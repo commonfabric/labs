@@ -91,7 +91,12 @@ The terms of the sibling documents are used unchanged: *instance*, *cone*,
   *label-dirty* (section 3.6).
 - **Cone instance.** One cone of the plan as it is evaluated for one scope
   key and, inside element bodies, one element key per enclosing collection
-  (`execution-and-storage.md`, Terms).
+  (`execution-and-storage.md`, Terms). The enclosing collections are the
+  ones `Cone.within` lists, and an instance exists for each combination
+  of their keys, also for a cone that reads neither the element nor the
+  index (`plan-and-label-templates.md` §1.4). That holds for a
+  collection over an array of references, over an array of plain values
+  in place, and over the result of another per-element construct.
 - **Evaluation.** One run of a cone's value function for one cone instance.
 - **Stale.** A cone instance is stale when something its last evaluation
   read has changed, or when it has never been evaluated. What an evaluation

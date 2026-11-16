@@ -414,7 +414,11 @@ another cone computes has an edge from that cone
 evaluates the cone that computes it, with the cones that cone depends on
 where they are not current, and nothing else, for the value and for the
 label. A **cone instance** is one cone as it is evaluated for one scope key
-and, inside the body of an element construct, one element key.
+and, inside the body of an element construct, one element key. The record
+of a cone lists the collections of the element bodies it is written in,
+and the runtime takes from the list which cone instances exist and under
+which element keys what they hold is kept
+([plan format and label templates](plan-and-label-templates.md), §1.4).
 
 - An output passed to another pattern is a link. When the consumer is pulled,
   the pull extends through the link into the cone of the producing instance
@@ -423,7 +427,11 @@ and, inside the body of an element construct, one element key.
   ([scheduler and serving loop](scheduler-and-serving-loop.md), §9.2).
 - The body of an element construct, such as the callback of a `map`, is one
   or more cones, and they are evaluated once per element key
-  ([execution and storage](execution-and-storage.md), §2.1 and §2.5). The
+  ([execution and storage](execution-and-storage.md), §2.1 and §2.5). That
+  holds for every cone of the body, one that reads neither the element
+  nor the index included, and alike for an array of references, an array
+  of plain values in place, and the result of another per-element
+  construct. The
   key holds the element's value when the element is a plain value, and the
   identity of the element's cell when it is not. In both cases it also
   holds the count of earlier occurrences of the same value or identity in

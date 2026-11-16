@@ -64,8 +64,10 @@ This document adds the following.
   ([scoped cell instances](../scoped-cell-instances.md)).
 - A **cone instance** is one cone of the plan as it is evaluated for one
   scope key and, inside element bodies, one element key per enclosing
-  collection. A cone outside every element body has one cone instance per
-  scope key it is evaluated for.
+  collection. The enclosing collections of a cone are the ones the
+  `element` steps of `Cone.within` name
+  (`plan-and-label-templates.md` §1.4). A cone outside every element
+  body has one cone instance per scope key it is evaluated for.
 - An **evaluation** is one run of a cone's value function for one cone
   instance.
 - A cone instance is **current** when the memo holds an entry for it and
@@ -1312,6 +1314,26 @@ key:
   different labels, and the instantiation key of each is formed from the
   labels at its own addresses (`plan-and-label-templates.md` §1.3).
 
+**Which cones are the body's.** The cones of a collection's body are the
+cones of the plan whose `Cone.within` has the `element` step that names
+the collection (`plan-and-label-templates.md` §1.1 and §1.4). By ruling
+the runtime takes two things from the `element` steps of a cone,
+outermost first. An instance of the cone exists for each combination of
+keys of the collections they name: it is made when a key is added and
+dropped when the key is removed (steps 3 and 5 below). And what the
+instance holds is kept under those keys ("What is stored per key",
+below). The runtime does not decide either from the slots a cone lists.
+A cone of the body that lists no slot of root `element` or `index` has
+an instance per key as every other cone of the body has, and is
+evaluated for each key, also where the instances of two keys read the
+same inputs and compute equal values. The rule is the same whether the
+collection is over an array of references, an array of plain values in
+place, or the result of another per-element construct: the three differ
+in how step 2 computes a key, and in nothing this paragraph says.
+`Cone.within` is assumed to hold `site` steps as well
+(`plan-and-label-templates.md` §8, question 98). They name no
+collection, and the runtime does not use them here.
+
 **What is stored per key.** Everything an element cone stores is stored
 per key: a kept output, the state of an operation declared in the body
 (section 6), the stored request and the result of an effect (section
@@ -1401,8 +1423,9 @@ The runtime evaluates a `map` over the collection as follows.
    same element part. The position is not in
    the key. Record each key's position and binding. The position is the
    value of the key's slot of root `index`, for the cones that list it.
-3. For each key not in the table, create its cone instances and evaluate
-   them with the `element` slots bound to that element. No two positions
+3. For each key not in the table, create its cone instances, one for
+   each cone whose `within` names the collection, and evaluate them
+   with the `element` slots bound to that element. No two positions
    have one key, so each position has an evaluation of its own.
 4. For each key in the table whose cone instances are stale, evaluate them.
    A key whose position changed has stale the cone instances that list
@@ -1439,7 +1462,8 @@ origin from those facts. Section 7.3 says where the facts are stored when
 the derived collection is kept.
 
 Nested element bodies nest tables: the cone instances of an inner body are
-keyed by the outer element's key and then the inner one's, outermost first.
+keyed by the outer element's key and then the inner one's, outermost first,
+which is the order of the `element` steps of `Cone.within`.
 
 **Children of an element body.**
 A body instantiates a child where a factory value is called in the
