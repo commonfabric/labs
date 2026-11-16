@@ -178,7 +178,7 @@ Every environment variable has a flag, and the flag wins:
 
 | Flag                          | Environment                            | Default                               |
 | ----------------------------- | -------------------------------------- | ------------------------------------- |
-| `--port`                      | `CF_HARNESS_CONSOLE_PORT`              | `8100`                                |
+| `--port`                      | `CF_HARNESS_CONSOLE_PORT`              | `8100`; `0` picks a free port         |
 | `--fabric-api-url`            | `CF_HARNESS_FABRIC_API_URL`            | `http://localhost:8000`               |
 | `--fabric-identity`           | `CF_HARNESS_FABRIC_IDENTITY`           | required                              |
 | `--fabric-space`              | `CF_HARNESS_FABRIC_SPACE`              | required, a DID or a legacy name      |
@@ -354,7 +354,7 @@ except the two `/api/browser-host/` routes, which also take the per-turn token
 | `GET`  | `/api/turns/<turnId>/result` | Durable structured result for a completed turn                                          |
 | `GET`  | `/api/events`                | Live and replayed chat events over SSE                                                  |
 | `GET`  | `/api/runs`                  | Run summaries                                                                           |
-| `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, graph, artifacts, and tool outputs                                    |
+| `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, artifacts, and tool outputs                                           |
 | `POST` | `/api/index/call`            | One allowlisted pattern-index read                                                      |
 | `POST` | `/api/index/feedback`        | Records one up or down vote on a pattern in the index                                   |
 | `POST` | `/api/index/retract`         | Retracts an owned generation in favor of its direct successor                           |
@@ -1282,7 +1282,7 @@ Beside them it lists the runs the agent runner made on this machine, read from
 its work root (`--agent-runs-root`, `$CF_HARNESS_HOME/agent-runs` by default):
 an `/ask` job's runs, under `local/<job-id>/artifacts/`, are labelled `/ask`,
 and the runs of an `agent()` built-in, under `<run-key>/artifacts/`, are
-labelled `agent()`. They open, map and graph like the console's own, but no
+labelled `agent()`. They open and map just like the console's own, but no
 session holds them, so they appear here and nowhere else. A run id two roots
 both hold is read from the console's own root first, then from `/ask` jobs, then
 from `agent()` runs. Only checkpoints with the required run-state fields and an

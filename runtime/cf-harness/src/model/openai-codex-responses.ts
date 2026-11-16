@@ -550,7 +550,6 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
       request.transcript,
       request.model,
       OPENAI_CODEX_PROVIDER_ID,
-      OPENAI_CODEX_RESPONSES_LABEL,
       "You are a helpful assistant.",
     );
     if (request.signal?.aborted) throw abortReason(request.signal);

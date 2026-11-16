@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type { JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -211,6 +212,16 @@ describe("search-patterns", () => {
       expect(rendered).not.toContain("type Currency =");
     });
 
+    it("returns undefined for a schema it cannot render, and for no schema", () => {
+      // A schema that contains itself has no finite rendering.
+      const properties: Record<string, JSONSchema> = {};
+      const cyclic: JSONSchema = { type: "object", properties };
+      properties.self = cyclic;
+      expect(patternIndexDeclaredType(cyclic)).toBeUndefined();
+      expect(patternIndexDeclaredType(undefined)).toBeUndefined();
+      expect(patternIndexDeclaredType({ type: "string" })).toBe("string");
+    });
+
     it("adds nothing to a type that names no definition", () => {
       expect(
         patternIndexDeclaredType({
@@ -357,6 +368,21 @@ describe("search-patterns", () => {
     const output = result.output as SearchPatternsToolErrorOutput;
     expect(output.status).toBe("error");
     expect(output.message).toContain("requires tags, text, or both");
+  });
+
+  it("returns an error naming the failure when the pattern index cannot be opened", async () => {
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "search-patterns-test-unavailable",
+      patternIndexClientFactory: () =>
+        Promise.reject(new Error("index offline")),
+    });
+    const result = await engine.invokeBuiltinTool("search_patterns", {
+      tags: ["expenses"],
+    });
+    const output = result.output as SearchPatternsToolErrorOutput;
+    expect(output.status).toBe("error");
+    expect(output.message).toBe("pattern index unavailable: index offline");
   });
 
   it("refuses when the run has no pattern index configured", async () => {

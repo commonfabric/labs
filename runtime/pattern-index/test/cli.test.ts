@@ -235,7 +235,7 @@ describe("cli", () => {
         error:
           response.headers.get("content-type")?.includes("application/json")
             ? "the pattern index answered but did not record the thumbs_up event"
-            : "pattern index recordEvent failed (200)",
+            : "pattern index recordEvent answer is malformed: it is not JSON",
       });
     }
   });

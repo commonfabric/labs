@@ -4,6 +4,15 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { createSession, Identity } from "@commonfabric/identity";
+import { PiecesController } from "@commonfabric/piece/ops";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { CfHarnessEngine } from "../src/engine.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
 import {
   HARNESS_CHAT_PROTOCOL_VERSION,
@@ -36,7 +45,7 @@ import {
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessClientActionRequester } from "../src/client-actions/coordinator.ts";
-import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
+import { createHarnessRunState } from "../src/run-state.ts";
 import type {
   SandboxRuntimeChoice,
   SandboxRuntimeSelection,
@@ -88,6 +97,13 @@ const captureOutputLines = (): {
     lines: () => text.split("\n").filter((line) => line.trim().length > 0),
   };
 };
+
+/** The run state a prompt loop reports when it has run no tool. */
+const idleRunState = () =>
+  createHarnessRunState({
+    currentDir: "/workspace",
+    cfcEnforcementMode: "disabled",
+  });
 
 const runStdioCli = async (
   lines: readonly string[],
@@ -183,7 +199,7 @@ Deno.test("interactive NDJSON transport emits events and responses", async () =>
               finalAssistantText: "Hello from cf-harness.",
               transcript,
               modelTurns: 1,
-              runState: {} as HarnessPromptLoopResult["runState"],
+              runState: idleRunState(),
             };
           },
         }),
@@ -239,7 +255,7 @@ Deno.test("interactive NDJSON transport waits for active turns before close afte
           finalAssistantText: "done",
           transcript,
           modelTurns: 1,
-          runState: {} as HarnessPromptLoopResult["runState"],
+          runState: idleRunState(),
         };
       },
     }),
@@ -399,7 +415,7 @@ Deno.test({
           finalAssistantText: "Persisted over stdio.",
           transcript,
           modelTurns: 1,
-          runState: {} as HarnessPromptLoopResult["runState"],
+          runState: idleRunState(),
         };
       },
     });
@@ -1047,7 +1063,7 @@ Deno.test("interactive NDJSON transport keeps an answer that arrives while its r
               finalAssistantText: "done",
               transcript: [...run.transcript, finalMessage],
               modelTurns: 1,
-              runState: {} as HarnessPromptLoopResult["runState"],
+              runState: idleRunState(),
             };
           },
         }),
@@ -1177,7 +1193,7 @@ Deno.test("interactive NDJSON transport settles typed command and catalog reques
               finalAssistantText: "done",
               transcript: [...run.transcript, finalMessage],
               modelTurns: 1,
-              runState: {} as HarnessPromptLoopResult["runState"],
+              runState: idleRunState(),
             };
           },
         }),
@@ -1839,7 +1855,7 @@ Deno.test("interactive NDJSON transport reports a failed event write as a transp
                     content: "Done.",
                   }],
                   modelTurns: 1,
-                  runState: {} as HarnessPromptLoopResult["runState"],
+                  runState: idleRunState(),
                 }),
             }),
             onEvent,
@@ -2286,7 +2302,7 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
               finalAssistantText: "Hello.",
               transcript: [...options.transcript, finalMessage],
               modelTurns: 1,
-              runState: {} as HarnessPromptLoopResult["runState"],
+              runState: idleRunState(),
             });
           },
         }),
@@ -2356,4 +2372,299 @@ Deno.test("interactive NDJSON transport refuses an answer carrying both an outco
     "ok" in response && !response.ok ? response.error.code : undefined,
     "invalid_request",
   );
+});
+
+describe("interactive-chat-stdio", () => {
+  const request = (
+    requestId: string,
+    method: string,
+    params: Record<string, unknown>,
+  ): string =>
+    JSON.stringify({
+      type: HARNESS_CHAT_REQUEST_TYPE,
+      protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
+      requestId,
+      method,
+      params,
+    });
+
+  const startSession = request("req-start", "start_session", {
+    sessionId: "session-1",
+    workspace: { hostPath: "/workspace" },
+    model: "gpt-test",
+  });
+
+  /** Response codes by request id, `ok` for a success. */
+  const responseCodes = (
+    lines: readonly string[],
+  ): Record<string, string> =>
+    Object.fromEntries(
+      decodeLines(lines).flatMap((envelope) =>
+        "ok" in envelope
+          ? [[envelope.requestId, envelope.ok ? "ok" : envelope.error.code]]
+          : []
+      ),
+    );
+
+  describe("runHarnessInteractiveChatNdjsonTransport()", () => {
+    it("answers well-formed cancel and close requests and refuses malformed ones", async () => {
+      const output: string[] = [];
+      await runHarnessInteractiveChatNdjsonTransport({
+        lines: [
+          startSession,
+          request("req-cancel-bad", "cancel_turn", {
+            sessionId: "session-1",
+            turnId: 7,
+          }),
+          request("req-cancel", "cancel_turn", {
+            sessionId: "session-1",
+            reason: "user",
+          }),
+          request("req-close-bad", "close_session", {
+            sessionId: "session-1",
+            reason: 7,
+          }),
+          request("req-close", "close_session", {
+            sessionId: "session-1",
+            reason: "done",
+          }),
+        ],
+        writeLine: (line) => {
+          output.push(line);
+        },
+        createService: (onEvent) =>
+          new HarnessInteractiveChatService({ onEvent }),
+      });
+      expect(responseCodes(output)).toEqual({
+        "req-start": "ok",
+        "req-cancel-bad": "invalid_request",
+        "req-cancel": "turn_not_found",
+        "req-close-bad": "invalid_request",
+        "req-close": "ok",
+      });
+    });
+
+    it("writes no response for a blank line", async () => {
+      const output: string[] = [];
+      await runHarnessInteractiveChatNdjsonTransport({
+        lines: ["", "   ", startSession],
+        writeLine: (line) => {
+          output.push(line);
+        },
+        createService: (onEvent) =>
+          new HarnessInteractiveChatService({ onEvent }),
+      });
+      expect(
+        decodeLines(output).filter((envelope) => "ok" in envelope),
+      ).toHaveLength(1);
+    });
+
+    it("rejects with the close hook's failure after a clean run", async () => {
+      const output: string[] = [];
+      await expect(runHarnessInteractiveChatNdjsonTransport({
+        lines: [startSession],
+        writeLine: (line) => {
+          output.push(line);
+        },
+        createService: (onEvent) =>
+          new HarnessInteractiveChatService({ onEvent }),
+        closeService: () => {
+          throw new Error("simulated close failure");
+        },
+      })).rejects.toThrow("simulated close failure");
+      expect(responseCodes(output)).toEqual({ "req-start": "ok" });
+    });
+  });
+
+  describe("runHarnessInteractiveChatStdio()", () => {
+    const startTurn = request("req-turn", "start_turn", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      input: { text: "Go" },
+    });
+
+    /**
+     * A real emulated Fabric runtime, and the service options under which a
+     * session's turn opens it, as a turn that runs a pattern does. `released`
+     * lists each release; `onRelease` runs before the runtime is disposed.
+     */
+    const fabricRuntimeTurn = async (
+      onRelease: () => void | Promise<void> = () => {},
+    ) => {
+      const signer = await Identity.fromPassphrase("cf-harness chat stdio");
+      const storage = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: storage,
+      });
+      const dispose = runtime.dispose.bind(runtime);
+      const released: string[] = [];
+      const disposing = stub(runtime, "dispose", async () => {
+        released.push("released");
+        await onRelease();
+        await dispose();
+      });
+      const pieces = new PiecesController(
+        createSession({
+          identity: signer,
+          spaceDid: (await Identity.generate()).did(),
+        }),
+        runtime,
+      );
+      const createPromptLoop: HarnessInteractivePromptLoopFactory = (
+        options,
+      ) => {
+        const engine = new CfHarnessEngine(options);
+        return {
+          runTranscript: async ({ transcript }) => {
+            await engine.fabricSessionFactory?.();
+            return {
+              model: "gpt-test",
+              finalAssistantText: "",
+              transcript: [...transcript],
+              modelTurns: 1,
+              runState: idleRunState(),
+            };
+          },
+        };
+      };
+      return {
+        serviceOptions: {
+          basePromptLoopOptions: {
+            ...INERT_RUNSC,
+            fabricSessionFactory: () => Promise.resolve({ pieces }),
+          },
+          createPromptLoop,
+        },
+        released,
+        /** Disposes of the runtime for real, whoever released it. */
+        cleanup: async () => {
+          disposing.restore();
+          await dispose();
+          await storage.close();
+        },
+      };
+    };
+
+    /** Whether another process could open the store at `dbPath` now. */
+    const storeIsFree = async (dbPath: string): Promise<boolean> => {
+      try {
+        const store = await openSqliteHarnessChatSessionStore({
+          url: toFileUrl(dbPath),
+        });
+        store.close();
+        return true;
+      } catch (error) {
+        if (error instanceof HarnessChatStoreHeldError) {
+          return false;
+        }
+        throw error;
+      }
+    };
+
+    it("releases the Fabric runtime a session's turn opened before it closes the store", async () => {
+      const dir = await Deno.makeTempDir();
+      const dbPath = join(dir, "chat.sqlite");
+      const freeWhileReleasing: boolean[] = [];
+      const fabric = await fabricRuntimeTurn(async () => {
+        freeWhileReleasing.push(await storeIsFree(dbPath));
+      });
+      try {
+        const captured = captureOutputLines();
+        await runHarnessInteractiveChatStdio({
+          ...fabric.serviceOptions,
+          sessionDbPath: dbPath,
+          input: encodeInputLines([startSession, startTurn]),
+          output: captured.output,
+        });
+        expect(responseCodes(captured.lines())).toEqual({
+          "req-start": "ok",
+          "req-turn": "ok",
+        });
+        expect(fabric.released).toEqual(["released"]);
+        // The store was still held while the runtime was released, and is
+        // free once the input has ended.
+        expect(freeWhileReleasing).toEqual([false]);
+        expect(await storeIsFree(dbPath)).toBe(true);
+      } finally {
+        await fabric.cleanup();
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("leaves the Fabric runtimes of a service the caller supplied to the caller", async () => {
+      const fabric = await fabricRuntimeTurn();
+      let service: HarnessInteractiveChatService | undefined;
+      try {
+        const captured = captureOutputLines();
+        await runHarnessInteractiveChatStdio({
+          createService: (onEvent) => {
+            service = new HarnessInteractiveChatService({
+              onEvent,
+              ...fabric.serviceOptions,
+            });
+            return service;
+          },
+          input: encodeInputLines([startSession, startTurn]),
+          output: captured.output,
+        });
+        expect(responseCodes(captured.lines())).toEqual({
+          "req-start": "ok",
+          "req-turn": "ok",
+        });
+        expect(fabric.released).toEqual([]);
+        // The turn did open a runtime, which the caller releases itself.
+        await service?.releaseFabricRuntimes();
+        expect(fabric.released).toEqual(["released"]);
+      } finally {
+        await fabric.cleanup();
+      }
+    });
+
+    it("closes the store and rejects with the failure when a Fabric runtime fails to release", async () => {
+      const dir = await Deno.makeTempDir();
+      const dbPath = join(dir, "chat.sqlite");
+      const fabric = await fabricRuntimeTurn(() => {
+        throw new Error("the fabric went away");
+      });
+      try {
+        const captured = captureOutputLines();
+        await expect(runHarnessInteractiveChatStdio({
+          ...fabric.serviceOptions,
+          sessionDbPath: dbPath,
+          input: encodeInputLines([startSession, startTurn]),
+          output: captured.output,
+        })).rejects.toThrow("the fabric went away");
+        expect(responseCodes(captured.lines())).toEqual({
+          "req-start": "ok",
+          "req-turn": "ok",
+        });
+        expect(await storeIsFree(dbPath)).toBe(true);
+      } finally {
+        await fabric.cleanup();
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("answers a final request that has no trailing newline", async () => {
+      const captured = captureOutputLines();
+      const encoder = new TextEncoder();
+      await runHarnessInteractiveChatStdio({
+        input: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`${startSession}\r\n`));
+            controller.enqueue(
+              encoder.encode(request("req-status", "status", {})),
+            );
+            controller.close();
+          },
+        }),
+        output: captured.output,
+      });
+      expect(responseCodes(captured.lines())).toEqual({
+        "req-start": "ok",
+        "req-status": "ok",
+      });
+    });
+  });
 });

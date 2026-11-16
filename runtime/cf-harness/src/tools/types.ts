@@ -323,11 +323,7 @@ export interface HarnessToolContext {
   resolvePath(path: string): string;
   resolveHostPath(path: string): string;
   resolveHostRootPath(path: string): string;
-  hostPathToWorkspacePath(path: string): string | undefined;
-  isHostPathWithinWorkspace(
-    path: string,
-    options?: { allowMissing?: boolean },
-  ): Promise<boolean>;
+  isHostPathWithinWorkspace(path: string): Promise<boolean>;
   isHostPathWithinArtifactRoot(
     path: string,
     options?: { allowMissing?: boolean },
@@ -340,10 +336,6 @@ export interface HarnessToolContext {
    */
   imageAttachmentSnapshotDir?: string;
 
-  doesHostPathIntersectArtifactRoot(
-    path: string,
-    options?: { allowMissing?: boolean },
-  ): Promise<boolean>;
   setCurrentDir(path: string): void;
   nextOutputId(toolId: string): ToolOutputId;
   now(): string;

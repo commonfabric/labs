@@ -518,7 +518,78 @@ describe("PatternIndexClient", () => {
     const error = await client.searchPatterns({ text: "x" })
       .then(() => undefined, (thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(PatternIndexError);
-    expect((error as PatternIndexError).detail).toContain("not JSON");
+    expect(error).toMatchObject({
+      fn: "searchPatterns",
+      status: 200,
+      message:
+        "pattern index searchPatterns answer is malformed: it is not JSON",
+    });
+  });
+
+  it("refuses a getPattern answer whose program lacks what a program holds, naming what and quoting nothing", async () => {
+    const files = [{ name: "/main.tsx", contents: "SOURCE_MARKER" }];
+    const malformed: [unknown, string][] = [
+      ["SOURCE_MARKER", "program is not an object"],
+      [null, "program is not an object"],
+      [{ files }, "program.main is not a string"],
+      [
+        { main: "/main.tsx", mainExport: 1, files },
+        "program.mainExport is not a string",
+      ],
+      [{ main: "/main.tsx" }, "program.files is not an array"],
+      [
+        { main: "/main.tsx", files: [...files, { name: "/b.tsx" }] },
+        "program.files[1].contents is not a string",
+      ],
+      [
+        { main: "/main.tsx", files: [{ contents: "SOURCE_MARKER" }] },
+        "program.files[0].name is not a string",
+      ],
+      [
+        { main: "/main.tsx", files, sourceRoots: "/" },
+        "program.sourceRoots is not an array of strings",
+      ],
+      [
+        { main: "/main.tsx", files, dataFiles: [7] },
+        "program.dataFiles is not an array of strings",
+      ],
+    ];
+    const { client } = createClient(
+      malformed.map(([program]) =>
+        jsonResponse({ patternId: "pat-1", program })
+      ),
+    );
+    for (const [, problem] of malformed) {
+      const error = await client.getPattern({
+        patternId: "pat-1",
+        includeSource: true,
+      }).then(() => undefined, (thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(PatternIndexError);
+      expect(error).toMatchObject({
+        fn: "getPattern",
+        status: 200,
+        message: `pattern index getPattern answer is malformed: ${problem}`,
+      });
+      expect(error).not.toHaveProperty("detail");
+    }
+  });
+
+  it("answers a getPattern program carrying every optional field it may", async () => {
+    const program = {
+      main: "/main.tsx",
+      mainExport: "pattern",
+      files: [{ name: "/main.tsx", contents: "export default 1;" }],
+      sourceRoots: ["/"],
+      dataFiles: ["/data.json"],
+    };
+    const { client } = createClient([
+      jsonResponse({ patternId: "pat-1", program }),
+    ]);
+    const pattern = await client.getPattern({
+      patternId: "pat-1",
+      includeSource: true,
+    });
+    expect(pattern.program).toEqual(program);
   });
   it("asks for unvetted hits only when the caller does", async () => {
     const { client, requests } = createClient([
