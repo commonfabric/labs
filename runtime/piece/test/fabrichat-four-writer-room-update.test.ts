@@ -51,6 +51,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 
 import { cfcSchemaEntries } from "../../runner/src/cfc/schema-label-view.ts";
+import { parseLink } from "../../runner/src/link-utils.ts";
 import {
   compiledDocKey,
   loadVerifiedSourceClosure,
@@ -398,11 +399,17 @@ describe("fabrichat-four-writer-room-update", () => {
     );
     windowsBefore = windowsDocument();
     // The messages of the window the earlier program wrote, as a client
-    // holding that window names them: each link resolves to its message under
-    // the schema the earlier program stored it with.
-    staleWindow = await room.key("messages").key("windows").key("main").key(
-      "messages",
-    ).asSchema<Cell<unknown>[]>(asCells).pull();
+    // holding that window names them: each by the link the window stores,
+    // under the schema the earlier program stored it with.
+    {
+      const windows = room.key("messages").key("windows").resolveAsCell();
+      const stored = windows.getRaw() as { main: { messages: unknown[] } };
+      staleWindow = stored.main.messages.map((link) => {
+        const parsed = parseLink(link, windows.getAsNormalizedFullLink());
+        expect(parsed).toBeDefined();
+        return runtime.getCellFromLink(parsed!);
+      });
+    }
 
     // The release: the room opens as a person opening it would, follows its
     // origin to this tree's room, and waits for the running room to swap.
