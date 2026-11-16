@@ -2836,18 +2836,16 @@ async function planStampRepair(
     }
     const metadata = record.metadata!;
     const list = record.value.delegatedModuleIdentities;
-    // An attestation counts only in an entry the repair keeps: one in an
-    // entry it removes would go with it, and the list with it.
     const listAttested = metadata.labelMap.entries.some((entry) =>
-      !isStampEntry(entry) && attestsAt(entry, SOURCE_DELEGATION_PATH) &&
-      !holdsConfidentiality(entry)
+      attestsAt(entry, SOURCE_DELEGATION_PATH) && !holdsConfidentiality(entry)
     );
     const keepList = listAttested && Array.isArray(list) && list.length > 0 &&
       list.every((entry) => typeof entry === "string");
     const kept: LabelMapEntry[] = [];
     for (const entry of metadata.labelMap.entries) {
       if (isStampEntry(entry)) {
-        // Removing it would remove an attestation a loader honors.
+        // An attestation counts only in an entry the repair keeps: removing
+        // this one would remove the grant a loader honors.
         if (attestsAt(entry, SOURCE_DELEGATION_PATH)) return "refused";
         continue;
       }
@@ -2941,7 +2939,6 @@ async function planStampRepair(
       const granted = stampedSourceIdentities.has(identity)
         ? repairedLists.get(identity) ?? []
         : source?.metadata?.labelMap.entries.some((entry) =>
-            !isStampEntry(entry) &&
             attestsAt(entry, SOURCE_DELEGATION_PATH)
           )
         ? storedStringList(source.value.delegatedModuleIdentities) ?? []

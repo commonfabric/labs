@@ -298,9 +298,14 @@ describe("cell-cache", () => {
     });
 
     for (
-      const [what, attestation] of [
-        ["also holds a clause", { confidentiality: [space] }],
-        ["holds nothing else", {}],
+      const [what, attestation, compiledStamped] of [
+        ["also holds a clause", { confidentiality: [space] }, false],
+        ["holds nothing else", {}, false],
+        [
+          "also holds a clause, beside a stamped compiled record",
+          { confidentiality: [space] },
+          true,
+        ],
       ] as const
     ) {
       it(`refuses, and erases nothing, where a list's only attestation is in a stamp entry that ${what}`, async () => {
@@ -330,7 +335,7 @@ describe("cell-cache", () => {
             ...rootPairStamp(space),
           ],
         }));
-        await plant(compiled, rootPairStamp(space));
+        if (compiledStamped) await plant(compiled, rootPairStamp(space));
 
         expect(await repair(program.entryIdentity)).toBe("refused");
         expect(stored(compiled).value).toBeDefined();
