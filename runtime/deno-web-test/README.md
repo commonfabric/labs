@@ -72,13 +72,14 @@ and a key a test needs is added there.
 
 ## Focus
 
-The page a run loads its test files into behaves as the focused page for the
-whole run: `document.hasFocus()` is true, and focusing an element fires its
-focus events and sends keys to it. That holds however many files the run has
+In Chrome, the page a run loads its test files into behaves as the focused page
+for the whole run: `document.hasFocus()` is true, and focusing an element fires
+its focus events and sends keys to it. That holds however many files the run has
 loaded before, so a test that focuses an editor or an input passes or fails the
 same wherever the shuffle puts its file. The harness turns on Chrome's focus
 emulation for the page to do this, since Chrome otherwise stops treating the
-page as focused after it has loaded a few files.
+page as focused after it has loaded a few files. A run with `product: "firefox"`
+gets no such emulation, which is Chrome's.
 
 ## Stuck tests
 
