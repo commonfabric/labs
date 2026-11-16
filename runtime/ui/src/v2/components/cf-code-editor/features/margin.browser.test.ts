@@ -72,6 +72,19 @@ function until(editor: CFCodeEditor, holds: () => boolean): Promise<void> {
   });
 }
 
+/**
+ * Resolves once the view's next measurement has written. A change the margin
+ * observes asks for the margin's measurement from a microtask, which runs
+ * before this asks for its own, and a measurement writes in the order it was
+ * asked for, so the margin has written by then.
+ */
+async function afterNextMeasure(view: EditorView): Promise<void> {
+  await Promise.resolve();
+  await new Promise<void>((resolve) =>
+    view.requestMeasure({ read: () => {}, write: () => resolve() })
+  );
+}
+
 /** Whether `element` is drawn level with the text at `offset`. */
 const levelWith = (
   view: EditorView,
@@ -109,6 +122,45 @@ Deno.test("the margin moves a child naming an anchor beside the text there, and 
           late.getBoundingClientRect().bottom,
       ),
     ).toBe(8);
+  } finally {
+    editor.remove();
+  }
+});
+
+Deno.test("the margin returns a child to the column once it no longer names an anchor", async () => {
+  const note = block(30, "late");
+  const { editor, view } = await mount("900px", [block(20), note], {
+    late: lineStart(12),
+  });
+  try {
+    await until(editor, () => levelWith(view, note, lineStart(12)));
+    const column = note.getBoundingClientRect().top -
+      Number.parseFloat(note.style.translate.split(" ")[1]);
+
+    note.removeAttribute("data-anchor");
+    await afterNextMeasure(view);
+
+    expect(note.style.translate).toBe("");
+    expect(note.getBoundingClientRect().top).toBeCloseTo(column, 0);
+  } finally {
+    editor.remove();
+  }
+});
+
+Deno.test("the margin returns a child to the column once the child it moved with is removed", async () => {
+  const anchored = block(30, "late");
+  const follower = block(10);
+  const { editor, view } = await mount("900px", [anchored, follower], {
+    late: lineStart(12),
+  });
+  try {
+    await until(editor, () => levelWith(view, anchored, lineStart(12)));
+    expect(follower.style.translate).not.toBe("");
+
+    anchored.remove();
+    await afterNextMeasure(view);
+
+    expect(follower.style.translate).toBe("");
   } finally {
     editor.remove();
   }
