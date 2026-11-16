@@ -154,10 +154,6 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
     reason: "a project the harness runs to prove it reports a wedged test",
   },
   {
-    path: "tasks/test.ts",
-    reason: "the root `deno task test` runner, named like a test module",
-  },
-  {
     path: "runtime/cli/test/fixtures/",
     reason: "pattern tests the CLI's own tests hand to `cf test`, to check " +
       "what it reports for each",
@@ -771,15 +767,14 @@ export async function check(
   options: CheckOptions,
 ): Promise<{ findings: Finding[]; suites: number }> {
   const suites = await loadTopology(options.root);
-  const findings = checkTree(
-    suites,
-    await candidateSurfaces(options.root),
-    { fixtures: NOT_A_TEST_SURFACE },
-  );
-  const workflows = await workflowRecords(options.root);
-  for (const finding of checkWorkflows(suites, workflows)) {
-    findings.push(finding);
-  }
+  const findings = [
+    ...checkTree(
+      suites,
+      await candidateSurfaces(options.root),
+      { fixtures: NOT_A_TEST_SURFACE },
+    ),
+    ...checkWorkflows(suites, await workflowRecords(options.root)),
+  ];
   if (options.store !== undefined) {
     // Each named path is read on its own, because a path holding nothing
     // is a part of the run the store half did not see, and summing them

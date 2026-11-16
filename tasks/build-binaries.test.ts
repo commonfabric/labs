@@ -23,9 +23,12 @@ import {
   type BinaryName,
   build,
   BUILD_HOST_VARIABLES,
+  buildCli,
   BuildConfig,
   type BuildDependencies,
+  buildShell,
   type BuildSignalApi,
+  buildToolshed,
   computeShippedCompileCacheVersion,
   defaultBuildDependencies,
   embedArgs,
@@ -36,6 +39,7 @@ import {
   revertWorkspace,
   runBuildBinaries,
   runBuildWithSignalCleanup,
+  type RunCommand,
   unusedGrammarDirectories,
 } from "./build-binaries.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
@@ -1092,6 +1096,117 @@ Deno.test("each build step throws naming its output when its command fails", asy
     for (const binary of ["toolshed", "cf"]) {
       assert(!(await exists(config.distPath(binary))), binary);
     }
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+/**
+ * A {@link RunCommand} that succeeds without running anything, and keeps
+ * what it was asked to run. `then` stands in for what the command would
+ * have done.
+ */
+function standInRunner(then: (args: readonly string[]) => Promise<void>) {
+  const asked: Deno.CommandOptions[] = [];
+  const run: RunCommand = async (command, options) => {
+    assertEquals(command, Deno.execPath());
+    asked.push(options);
+    await then(options.args ?? []);
+    return { success: true };
+  };
+  return { asked, run };
+}
+
+/** Runs `step` with what it logs kept rather than printed, and returns it. */
+async function logged(step: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (line: string) => lines.push(line);
+  try {
+    await step();
+  } finally {
+    console.log = log;
+  }
+  return lines;
+}
+
+Deno.test("unusedGrammarDirectories returns every directory of a grammar's package but its parser's, and throws for a grammar in no package", async () => {
+  const root = await Deno.makeTempDir({ prefix: "grammar-package-" });
+  try {
+    await writeFile(`${root}/pkg/package.json`, "{}");
+    await writeFile(`${root}/pkg/wasm/tree-sitter-x.wasm`, "");
+    await writeFile(`${root}/pkg/src/parser.c`, "");
+    await writeFile(`${root}/pkg/README.md`, "");
+    await Deno.mkdir(`${root}/pkg/bindings`);
+    const grammar = (id: string, at: string) => ({
+      id,
+      wasmUrl: () => toFileUrl(at).href,
+    });
+    assertEquals(
+      unusedGrammarDirectories([
+        grammar("x", `${root}/pkg/wasm/tree-sitter-x.wasm`),
+      ]),
+      [`${root}/pkg/bindings`, `${root}/pkg/src`],
+    );
+    assertThrows(
+      () => unusedGrammarDirectories([grammar("y", `${root}/loose/y.wasm`)]),
+      Error,
+      `No package holds the y grammar ${root}/loose/y.wasm`,
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("buildShell moves each build of the shell into the frontend toolshed serves", async () => {
+  const root = await makeFakeRepo();
+  try {
+    const config = new BuildConfig({ root, toolshedFlags: [] });
+    // A frontend from an earlier build, which this one replaces whole.
+    await writeFile(`${config.toolshedShellFrontendPath()}/stale.js`, "");
+    const { asked, run } = standInRunner((args) =>
+      writeFile(`${config.shellOutPath()}/${args.at(-1)}.js`, "")
+    );
+    const lines = await logged(() => buildShell(config, "v7", run));
+    const files = (at: string) =>
+      Array.from(Deno.readDirSync(at)).map((entry) => entry.name);
+    assertEquals(files(config.toolshedShellFrontendPathDev()), ["build.js"]);
+    assertEquals(files(config.toolshedShellFrontendPath()), ["production.js"]);
+    assert(!(await exists(config.shellOutPath())));
+    assertEquals(asked.map((options) => options.args), [
+      ["task", "build"],
+      ["task", "production"],
+    ]);
+    for (const options of asked) {
+      assertEquals(options.cwd, config.shellProjectPath());
+      assertEquals(options.env, { CF_COMPILE_CACHE_RUNTIME_VERSION: "v7" });
+    }
+    assertEquals(lines.at(-1), "Shell app built successfully");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("buildToolshed and buildCli compile their entry points to the dist directory", async () => {
+  const root = await makeFakeRepo();
+  try {
+    const config = new BuildConfig({ root, toolshedFlags: ["--flag"] });
+    const { asked, run } = standInRunner(() => Promise.resolve());
+    const toolshed = await logged(() => buildToolshed(config, run));
+    const cli = await logged(() => buildCli(config, run));
+    const [forToolshed, forCli] = asked;
+    const outputOf = (options: Deno.CommandOptions | undefined) =>
+      options?.args?.[(options.args.indexOf("--output")) + 1];
+    assertEquals(outputOf(forToolshed), config.distPath("toolshed"));
+    assertEquals(forToolshed?.args?.at(-1), config.toolshedEntryPath());
+    assert(forToolshed?.args?.includes("--flag"));
+    assertEquals(forToolshed?.cwd, config.toolshedProjectPath());
+    assertEquals(forToolshed?.env, { OTEL_DENO: "true" });
+    assertEquals(outputOf(forCli), config.distPath("cf"));
+    assertEquals(forCli?.args?.at(-1), config.cliEntryPath());
+    assertEquals(forCli?.cwd, root);
+    assertEquals(toolshed.at(-1), "Toolshed binary built successfully");
+    assertEquals(cli.at(-1), "CLI binary built successfully");
   } finally {
     await Deno.remove(root, { recursive: true });
   }

@@ -20,6 +20,7 @@ import {
   parseContext,
   percentile90,
   readCostsForward,
+  readNewRealTestFailuresForward,
   renameInContext,
   sampledPercentile90,
   sampleDuration,
@@ -124,6 +125,7 @@ describe("score", () => {
           ["c1 a", { day: "nope", identities: ["k"] }],
           ["c1 b", { day: "2026-08-20", identities: ["k", 3] }],
           ["c1 c", { day: "2026-08-20", identities: "k" }],
+          ["c1 d", "2026-08-20"],
         ],
       });
       expect([...back.crowds.keys()]).toEqual(["c1 b"]);
@@ -2411,6 +2413,26 @@ describe("the day a new real test failure is dated to", () => {
       },
     });
     expect(state.prCatches).toBe(2);
+  });
+
+  it("reads forward only the stored days it can count with, and totals those", () => {
+    // What a stored aggregate holds is whatever its JSON says, so the
+    // days are given as parsed JSON.
+    const state = emptyState();
+    state.newRealTestFailureDays = JSON.parse(`{
+      "2026-08-18": { "local": 1, "pr": 2, "main": 0, "sources": ["fix"] },
+      "2026-08-19": [1, 2, 0, []],
+      "2026-08-20": null,
+      "2026-08-21": { "local": -1, "pr": 0, "main": 0, "sources": [] },
+      "someday": { "local": 0, "pr": 5, "main": 0, "sources": [] }
+    }`);
+    readNewRealTestFailuresForward(state);
+    expect(state.newRealTestFailureDays).toEqual({
+      "2026-08-18": { local: 1, pr: 2, main: 0, sources: ["fix"] },
+    });
+    expect([state.localCatches, state.prCatches, state.mainCatches])
+      .toEqual([1, 2, 0]);
+    expect(state.lastCatch).toBe("2026-08-18");
   });
 
   it("dates a new real test failure on main to the first failure the fix ended", () => {

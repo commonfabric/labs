@@ -1,4 +1,10 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertMatch,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
@@ -438,7 +444,10 @@ Deno.test("readTree marks a symlink so paths below it resolve", async () => {
 Deno.test("readTree surfaces a git failure", async () => {
   const root = await Deno.makeTempDir({ prefix: "check-skill-facts-nogit-" });
   try {
-    await assertRejects(() => readTree(root), Error, "`git ls-files` failed");
+    // Two `git ls-files` commands run at once, and either may fail first.
+    const error = await assertRejects(() => readTree(root), Error);
+    assertMatch(error.message, /^`git ls-files [^`]*` failed in /);
+    assertStringIncludes(error.message, ` failed in ${root}: `);
   } finally {
     await Deno.remove(root, { recursive: true });
   }

@@ -43,6 +43,7 @@ import { encodeHex } from "@std/encoding/hex";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { sha256 } from "@commonfabric/content-hash";
 import { utf8Compare } from "@commonfabric/text/utf8";
+import { type Git, gitIn } from "./repository-files.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -282,59 +283,45 @@ export function buildSnapshot(
   };
 }
 
-/** Runs `git` in `directory` and returns its standard output, or throws. */
-async function git(
-  directory: string,
-  args: readonly string[],
-): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args: ["-C", directory, ...args],
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    const message = new TextDecoder().decode(stderr).trim();
-    throw new Error(
-      `\`git ${args.join(" ")}\` failed in ${directory}: ${message}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
-}
-
 /**
  * Reads the chapter files of the `cfc/` directory at `directory` as they
- * stand at `rev` in that checkout's repository, with the commit `rev` names.
+ * stand at `rev` in that checkout's repository, with the commit `rev` names,
+ * running git there through the one `gitAt` gives.
  */
 export async function readChaptersAt(
   directory: string,
   rev: string,
+  gitAt: (directory: string) => Git,
 ): Promise<{ specsCommit: string; chapters: ChapterFile[] }> {
-  const specsCommit = (await git(directory, ["rev-parse", `${rev}^{commit}`]))
-    .trim();
-  const prefix = (await git(directory, ["rev-parse", "--show-prefix"])).trim();
+  const run = gitAt(directory);
+  const specsCommit = (await run("rev-parse", `${rev}^{commit}`)).trim();
+  const prefix = (await run("rev-parse", "--show-prefix")).trim();
   // `--full-tree`: without it `ls-tree` filters its listing by the
   // directory `git -C` runs in, and lists nothing of a tree named outright.
-  const names = (await git(directory, [
+  const names = (await run(
     "ls-tree",
     "--full-tree",
     "--name-only",
     `${specsCommit}:${prefix}`,
-  ])).split("\n").filter((name) => CHAPTER_FILE.test(name));
+  )).split("\n").filter((name) => CHAPTER_FILE.test(name));
   const chapters: ChapterFile[] = [];
   for (const name of names) {
     chapters.push({
       name,
-      text: await git(directory, ["show", `${specsCommit}:${prefix}${name}`]),
+      text: await run("show", `${specsCommit}:${prefix}${name}`),
     });
   }
   return { specsCommit, chapters };
 }
 
-/** The `cfc/` directory of the specs checkout this run reads. */
-function specsDirectory(): string {
-  const configured = Deno.env.get("CF_SPECS_DIR");
+/**
+ * The `cfc/` directory of the specs checkout a run reads: `CF_SPECS_DIR`
+ * where `env` sets it, and `~/src/specs/cfc` otherwise.
+ */
+export function specsDirectory(env: Pick<Deno.Env, "get">): string {
+  const configured = env.get("CF_SPECS_DIR");
   if (configured !== undefined && configured !== "") return configured;
-  const home = Deno.env.get("HOME");
+  const home = env.get("HOME");
   if (home === undefined) {
     throw new Error(
       "Set `CF_SPECS_DIR` to the `cfc/` directory of a specs checkout.",
@@ -344,7 +331,7 @@ function specsDirectory(): string {
 }
 
 /** The revision `--rev` names, or `HEAD`. */
-function revision(args: readonly string[]): string {
+export function revision(args: readonly string[]): string {
   const at = args.indexOf("--rev");
   if (at === -1) return "HEAD";
   const rev = args[at + 1];
@@ -359,22 +346,43 @@ export function renderSnapshot(snapshot: SpecSnapshot): string {
   return `${JSON.stringify(snapshot, null, 2)}\n`;
 }
 
-/** Generates the snapshot and writes it; returns a process exit code. */
-export async function main(args: readonly string[]): Promise<number> {
-  const directory = specsDirectory();
-  const { specsCommit, chapters } = await readChaptersAt(
-    directory,
-    revision(args),
-  );
-  const snapshot = buildSnapshot(specsCommit, chapters);
-  const target = join(REPO_ROOT, SNAPSHOT_PATH);
-  await Deno.writeTextFile(target, renderSnapshot(snapshot));
-  console.log(
-    `Wrote ${SNAPSHOT_PATH}: specs ${specsCommit.slice(0, 8)}, ` +
-      `${snapshot.sections.length} sections, ` +
-      `${snapshot.functions.length} functions.`,
-  );
-  return 0;
+/** What a run reads and where it writes. */
+export interface SnapshotHost {
+  /** The environment `CF_SPECS_DIR` and `HOME` are read from. */
+  readonly env: Pick<Deno.Env, "get">;
+
+  /** Gives a git that runs in the directory it names, the specs checkout. */
+  readonly git: (directory: string) => Git;
+
+  /** The file the snapshot is written to. */
+  readonly target: string;
 }
 
-if (import.meta.main) Deno.exit(await main(Deno.args));
+/** The process's environment, the `git` on its path, and this checkout. */
+const SYSTEM_HOST: SnapshotHost = {
+  env: Deno.env,
+  git: gitIn,
+  target: join(REPO_ROOT, SNAPSHOT_PATH),
+};
+
+/**
+ * Generates the snapshot and writes it to `host.target`; returns the line
+ * reporting what it wrote.
+ */
+export async function main(
+  args: readonly string[],
+  host: SnapshotHost = SYSTEM_HOST,
+): Promise<string> {
+  const { specsCommit, chapters } = await readChaptersAt(
+    specsDirectory(host.env),
+    revision(args),
+    host.git,
+  );
+  const snapshot = buildSnapshot(specsCommit, chapters);
+  await Deno.writeTextFile(host.target, renderSnapshot(snapshot));
+  return `Wrote ${SNAPSHOT_PATH}: specs ${specsCommit.slice(0, 8)}, ` +
+    `${snapshot.sections.length} sections, ` +
+    `${snapshot.functions.length} functions.`;
+}
+
+if (import.meta.main) console.log(await main(Deno.args));

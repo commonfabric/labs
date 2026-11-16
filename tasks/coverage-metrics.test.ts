@@ -212,6 +212,19 @@ Deno.test("collectSourceFiles excludes generated and dependency directories", as
   }
 });
 
+Deno.test("collectSourceFiles throws where a source root cannot be read, rather than counting it as absent", async () => {
+  // A root whose path runs through a file is a root that exists in no
+  // readable form, which is not the same as a root the checkout lacks.
+  const rootDir = await Deno.makeTempFile({ prefix: "coverage-source-test-" });
+  try {
+    await expect(collectSourceFiles(rootDir)).rejects.toThrow(
+      Deno.errors.NotADirectory,
+    );
+  } finally {
+    await Deno.remove(rootDir);
+  }
+});
+
 Deno.test("collectCoverageDebtMetricsFromLcov computes debt from compact reports", async () => {
   const rootDir = await Deno.makeTempDir({ prefix: "coverage-lcov-test-" });
   try {

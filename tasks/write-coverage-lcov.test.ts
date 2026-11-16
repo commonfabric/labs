@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
@@ -563,4 +568,20 @@ Deno.test("collectCoverageProfileFiles returns empty for a missing directory", a
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+Deno.test("collectCoverageProfileFiles surfaces a directory that cannot be read", async () => {
+  // Only a directory that is not there reads as empty. One that is there and
+  // refuses to be read would otherwise drop its profiles from the report.
+  const readDir = (): AsyncIterable<Deno.DirEntry> => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new Deno.errors.PermissionDenied("refused")),
+    }),
+  });
+
+  await assertRejects(
+    () => collectCoverageProfileFiles("/coverage-root", readDir),
+    Deno.errors.PermissionDenied,
+    "refused",
+  );
 });

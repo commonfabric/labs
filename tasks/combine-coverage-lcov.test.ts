@@ -214,6 +214,22 @@ Deno.test("combineCoverageLcov surfaces a non-NotFound read error", async () => 
   }
 });
 
+Deno.test("combineCoverageLcov surfaces an input directory it cannot look up", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "combine-lcov-" });
+  const file = path.join(dir, "not-a-directory");
+  await Deno.writeTextFile(file, "");
+  try {
+    // A path running through a regular file names nothing that can be
+    // looked up, which is a different answer from one that is not there.
+    await assertRejects(
+      () => combineCoverageLcov(path.join(file, "coverage")),
+      Deno.errors.NotADirectory,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("parseArgs reads --key=value flags and ignores other tokens", () => {
   const parsed = parseArgs(["--input-dir=a", "--output=x=y", "stray", "-z"]);
   assertEquals(parsed.get("input-dir"), "a");

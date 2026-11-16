@@ -3,8 +3,10 @@ import { expect } from "@std/expect";
 import {
   baselineKeyOf,
   deletedSince,
+  main,
   unjustifiedDeletions,
 } from "./check-baselines-append-only.ts";
+import { type Git, gitIn } from "./repository-files.ts";
 
 const BASE = "patterns/baselines";
 
@@ -113,13 +115,108 @@ describe("deletedSince", () => {
       await git("mv", moved, "elsewhere.json");
       await git("rm", "-q", removed);
       await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "move");
-      expect(await deletedSince(repo, "base", "deleted")).toEqual([
+      expect(await deletedSince(gitIn(repo), "base", "deleted")).toEqual([
         moved,
         removed,
       ]);
-      expect(await deletedSince(repo, "base", "kept")).toEqual([removed]);
+      expect(await deletedSince(gitIn(repo), "base", "kept")).toEqual([
+        removed,
+      ]);
     } finally {
       await Deno.remove(repo, { recursive: true });
     }
+  });
+});
+
+describe("main()", () => {
+  /**
+   * A git that names `abc123` as the merge base of `base` and `HEAD`, and
+   * `deleted` as the files the change since it deletes, a move counting as a
+   * deletion only where `--no-renames` asks for one.
+   */
+  const gitDeleting = (
+    base: string,
+    deleted: { removed: readonly string[]; moved?: readonly string[] },
+  ): Git =>
+  (...args) => {
+    const asked = args.join(" ");
+    if (asked === `merge-base ${base} HEAD`) return Promise.resolve("abc123\n");
+    const listed = (paths: readonly string[]) =>
+      Promise.resolve(paths.map((path) => `${path}\n`).join(""));
+    const filter = "--diff-filter=D --name-only abc123...HEAD";
+    if (asked === `diff --no-renames ${filter}`) {
+      return listed([...deleted.removed, ...deleted.moved ?? []]);
+    }
+    if (asked === `diff --find-renames ${filter}`) {
+      return listed(deleted.removed);
+    }
+    return Promise.reject(new Error(`unexpected git ${asked}`));
+  };
+
+  it("returns 1 and names each baseline deleted while its pattern stays", async () => {
+    const { code, out, err } = await main(
+      "main",
+      gitDeleting("main", {
+        removed: [
+          `${BASE}/system/home/home.tsx/20260101T000000Z-a.json`,
+          `${BASE}/system/gone.tsx/20260101T000000Z-a.json`,
+          "patterns/system/gone.tsx",
+        ],
+      }),
+    );
+
+    expect(code).toBe(1);
+    expect(out).toBeUndefined();
+    expect(err).toContain(
+      "1 pattern baseline(s) deleted without retiring the pattern:\n\n" +
+        `  ${BASE}/system/home/home.tsx/20260101T000000Z-a.json\n` +
+        "    patterns/system/home/home.tsx still exists.\n",
+    );
+    expect(err).not.toContain("gone.tsx");
+    expect(err).toContain("do not delete the evidence.");
+  });
+
+  it("returns 1 for a baseline whose pattern the change moved rather than retired", async () => {
+    const { code, err } = await main(
+      "main",
+      gitDeleting("main", {
+        removed: [`${BASE}/system/home/home.tsx/20260101T000000Z-a.json`],
+        moved: ["patterns/system/home/home.tsx"],
+      }),
+    );
+
+    expect(code).toBe(1);
+    expect(err).toContain("patterns/system/home/home.tsx still exists.");
+  });
+
+  it("returns 0 and says so for a change that deletes baselines only with their pattern", async () => {
+    expect(
+      await main(
+        "main",
+        gitDeleting("main", {
+          removed: [
+            `${BASE}/system/gone.tsx/20260101T000000Z-a.json`,
+            "patterns/system/gone.tsx",
+          ],
+        }),
+      ),
+    ).toEqual({
+      out: "Pattern baselines are append-only against this base.",
+      code: 0,
+    });
+  });
+
+  it("returns 2 and asks for real history where git finds no merge base", async () => {
+    const { code, out, err } = await main(
+      "nowhere",
+      gitDeleting("main", { removed: [] }),
+    );
+
+    expect(code).toBe(2);
+    expect(out).toBeUndefined();
+    expect(err).toBe(
+      "Could not resolve a merge base against nowhere. This check needs " +
+        "real history — CI must check out with fetch-depth: 0.",
+    );
   });
 });
