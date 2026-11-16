@@ -58,6 +58,12 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
     load: async () => (await import("./ingest.ts")).ingest,
   },
   {
+    name: "pattern",
+    description:
+      "Publish patterns to the pattern index, and see where yours stand.",
+    load: async () => (await import("./pattern.ts")).pattern,
+  },
+  {
     name: "piece",
     description: "Interact with pieces running on a server.",
     load: async () => (await import("./piece.ts")).piece,

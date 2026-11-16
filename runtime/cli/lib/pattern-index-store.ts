@@ -197,6 +197,13 @@ export class PatternIndexStore {
     return (await this.#readPublished()).entries[resolve(entryPath)]?.at(-1);
   }
 
+  /** The entry file that published `patternId` from this machine, if any. */
+  async entryFor(patternId: string): Promise<string | undefined> {
+    const { entries } = await this.#readPublished();
+    return Object.entries(entries).find(([, ids]) => ids.includes(patternId))
+      ?.[0];
+  }
+
   /** Records that `entryPath` published as `patternId`. */
   async recordPublished(entryPath: string, patternId: string): Promise<void> {
     const file = await this.#readPublished();
