@@ -127,7 +127,6 @@ async function publish(
   try {
     const runtime = pieces.runtime;
     const space = pieces.getSpace();
-    const getClient = () => Promise.resolve(client);
     const report = await publishPatternFromDisk(
       {
         entry: absPath(entry),
@@ -161,10 +160,8 @@ async function publish(
           compileLocalPattern(runtime, space, {
             main,
             ...program,
-            getClient,
           }),
-        compileProgram: (program) =>
-          compileProgram(runtime, space, program, getClient),
+        compileProgram: (program) => compileProgram(runtime, space, program),
         client,
         generate: toolshedGenerator(config.apiUrl),
         modelLabel: config.apiUrl,

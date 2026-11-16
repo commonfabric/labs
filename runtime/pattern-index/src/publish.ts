@@ -25,11 +25,7 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import type { JSONSchema } from "@commonfabric/api";
 import type { PatternIndexPublishRequest } from "./client.ts";
-import {
-  composeProgram,
-  type PatternIndexClientFactory,
-  patternIndexDependencies,
-} from "./deploy.ts";
+import { patternIndexDependencies } from "./deploy.ts";
 
 /** What an entry file's doc comment says about the pattern. */
 export interface PatternDocMetadata {
@@ -137,20 +133,16 @@ export interface CompileLocalPatternOptions {
 
   /** The export the program runs; `default` by default. */
   mainExport?: string;
-
-  /**
-   * Reads the published patterns the source imports (`cf:pattern:<id>`), so
-   * its compile resolves them. Without one, a source that imports any fails
-   * to compile.
-   */
-  getClient?: PatternIndexClientFactory;
 }
 
 /**
- * Assembles the program `main` and its relative imports make, makes the
- * published patterns it composes available, and compiles it in `space`.
+ * Assembles the program `main` and its relative imports make, and compiles
+ * it in `space`. A source that imports a published pattern
+ * (`cf:pattern:<id>`) does not assemble: local resolution finds no file
+ * behind the import.
  *
- * @throws whatever the compile throws, quoting the caller's own source.
+ * @throws whatever the assembly or the compile throws, quoting the caller's
+ *   own source.
  */
 export const compileLocalPattern = async (
   runtime: PublishRuntime,
@@ -173,7 +165,7 @@ export const compileLocalPattern = async (
         : { mainExport: options.mainExport }),
     },
   );
-  return await compileProgram(runtime, space, program, options.getClient);
+  return await compileProgram(runtime, space, program);
 };
 
 /**
@@ -185,19 +177,7 @@ export const compileProgram = async (
   runtime: PublishRuntime,
   space: MemorySpace,
   program: RuntimeProgram,
-  getClient?: PatternIndexClientFactory,
 ): Promise<CompiledPattern> => {
-  const source = { ...program, files: sourceFiles(program) };
-  if (patternIndexDependencies(source.files).length > 0) {
-    // Composition reads imports off the files it is handed, so it is handed
-    // the source alone: a data file's text names nothing to fetch.
-    await composeProgram({
-      runtime: runtime as Runtime,
-      space,
-      program: source,
-      getClient,
-    });
-  }
   const pattern = await compileAndSavePattern(runtime as Runtime, program, {
     space,
   });

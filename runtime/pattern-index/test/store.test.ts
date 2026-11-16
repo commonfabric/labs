@@ -71,6 +71,105 @@ describe("store", () => {
       expect(await store.sourceOf(join(dir, "src", "other.tsx")))
         .toBeUndefined();
     });
+
+    it("throws recording a chain before any membership", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      await expect(store.recordChain(signer.did(), [])).rejects.toThrow(
+        "No index membership",
+      );
+    });
+
+    it("returns the root key it created, and none before", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      expect(await store.rootKey()).toBeUndefined();
+      const created = await store.createRootKey();
+      expect((await store.rootKey())?.did()).toBe(created.did());
+    });
+
+    it("returns the pending root move it recorded until it is cleared", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      expect(await store.pendingRootMove()).toBeUndefined();
+      await store.recordPendingRootMove("bafy-move");
+      expect(await store.pendingRootMove()).toBe("bafy-move");
+      await store.recordPendingRootMove(undefined);
+      expect(await store.pendingRootMove()).toBeUndefined();
+      // Clearing what is already clear is not an error.
+      await store.recordPendingRootMove(undefined);
+    });
+
+    it("returns each entry's latest published id and the entry behind any of its ids", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      const entry = join(dir, "src", "main.tsx");
+      expect(await store.lastPublished(entry)).toBeUndefined();
+      await store.recordPublished(entry, "id-1");
+      await store.recordPublished(entry, "id-2");
+      await store.recordPublished(entry, "id-2");
+      expect(await store.lastPublished(entry)).toBe("id-2");
+      expect(await store.entryFor("id-1")).toBe(entry);
+      expect(await store.entryFor("id-none")).toBeUndefined();
+      const published = JSON.parse(
+        await Deno.readTextFile(join(dir, "store", "published.json")),
+      );
+      expect(published.entries[entry]).toEqual(["id-1", "id-2"]);
+    });
+
+    it("throws for a membership record of another shape", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      await Deno.mkdir(store.dir, { mode: 0o700 });
+      await Deno.writeTextFile(
+        join(store.dir, "membership.json"),
+        JSON.stringify({ format: "other" }),
+      );
+      await expect(store.membership()).rejects.toThrow(
+        "not a pattern index membership record",
+      );
+    });
+
+    it("throws for a publish record of another shape", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      await Deno.mkdir(store.dir, { mode: 0o700 });
+      await Deno.writeTextFile(join(store.dir, "published.json"), "[]");
+      await expect(store.lastPublished("x")).rejects.toThrow(
+        "not a pattern index publish record",
+      );
+    });
+
+    it("throws for a record that is not JSON", async () => {
+      const store = new PatternIndexStore(join(dir, "store"));
+      await Deno.mkdir(store.dir, { mode: 0o700 });
+      await Deno.writeTextFile(join(store.dir, "published.json"), "{");
+      await expect(store.indexedPiece("p")).rejects.toThrow("is not JSON");
+    });
+
+    it("throws for a store path that is a file", async () => {
+      const file = join(dir, "file");
+      await Deno.writeTextFile(file, "");
+      await expect(new PatternIndexStore(file).pendingRootMove()).rejects
+        .toThrow("must be a directory");
+    });
+  });
+
+  describe("patternIndexStoreRoot()", () => {
+    it("returns the XDG state directory, then the home state directory", () => {
+      expect(
+        patternIndexStoreRoot((key) =>
+          key === "XDG_STATE_HOME"
+            ? "/xdg"
+            : key === "HOME"
+            ? "/home/u"
+            : undefined
+        ),
+      ).toBe("/xdg/commonfabric/pattern-index");
+      expect(
+        patternIndexStoreRoot((key) => key === "HOME" ? "/home/u" : undefined),
+      ).toBe("/home/u/.local/state/commonfabric/pattern-index");
+    });
+
+    it("throws with no variable to place it by", () => {
+      expect(() => patternIndexStoreRoot(() => undefined)).toThrow(
+        "CF_PATTERN_INDEX_HOME",
+      );
+    });
   });
 
   describe("patternIndexStoreDir()", () => {
@@ -85,6 +184,11 @@ describe("store", () => {
   });
 
   describe("findIndexedPiece()", () => {
+    it("returns undefined for a store root that does not exist", async () => {
+      expect(await findIndexedPiece(join(dir, "absent"), "fid1:p"))
+        .toBeUndefined();
+    });
+
     it("returns the store of whichever index recorded the piece", async () => {
       const staging = new PatternIndexStore(join(dir, "staging.test"));
       await new PatternIndexStore(join(dir, "index.test")).recordIndexedPiece(
